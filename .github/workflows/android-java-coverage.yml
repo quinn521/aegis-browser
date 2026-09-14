@@ -4,19 +4,9 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/android-java-coverage.yml
-      - apps/browser/scripts/android-agent-ui.mjs
-      - apps/browser/scripts/android-agent-ui_test.mjs
-      - apps/browser/scripts/android-ui-driver/**
   push:
     branches:
       - main
-    paths:
-      - .github/workflows/android-java-coverage.yml
-      - apps/browser/scripts/android-agent-ui.mjs
-      - apps/browser/scripts/android-agent-ui_test.mjs
-      - apps/browser/scripts/android-ui-driver/**
   workflow_dispatch:
 
 permissions:
@@ -32,13 +22,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      AEGIS_TESTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      AEGIS_TESTED_SHA: ${{ github.sha }}
+      AEGIS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+      AEGIS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
       EVIDENCE_DIR: ${{ github.workspace }}/.artifacts/android-java-coverage/github-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out exact tested source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.AEGIS_TESTED_SHA }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install Node
@@ -63,6 +56,7 @@ jobs:
         run: |
           node --check apps/browser/scripts/android-agent-ui.mjs
           node --test apps/browser/scripts/android-agent-ui_test.mjs
+          bash -n apps/browser/scripts/run-android-java-coverage-emulator.sh
 
       - name: Fetch fixed JaCoCo and build both helper modes
         run: |
@@ -85,6 +79,16 @@ jobs:
             --output "$EVIDENCE_DIR/build-modes.json"
           install -m 600 "$RUNNER_TEMP/aegis-driver-normal/build.json" "$EVIDENCE_DIR/normal-build.json"
           install -m 600 "$RUNNER_TEMP/aegis-driver-coverage/build.json" "$EVIDENCE_DIR/coverage-build.json"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const context = {
+              eventName: process.env.GITHUB_EVENT_NAME,
+              testedSha: process.env.AEGIS_TESTED_SHA,
+              pullRequestHeadSha: process.env.AEGIS_PR_HEAD_SHA || null,
+              pullRequestBaseSha: process.env.AEGIS_PR_BASE_SHA || null,
+            };
+            fs.writeFileSync(process.env.EVIDENCE_DIR + "/ci-context.json", JSON.stringify(context, null, 2) + "\n");
+          '
 
       - name: Enable KVM for the dedicated emulator
         run: |
@@ -102,20 +106,8 @@ jobs:
           cores: 2
           ram-size: 4096M
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: |
-            adb="$ANDROID_SDK_ROOT/platform-tools/adb"
-            "$adb" -s emulator-5554 wait-for-device
-            test "$("$adb" -s emulator-5554 shell am get-current-user | tr -d '\r')" = '0'
-            "$adb" -s emulator-5554 shell input keyevent KEYCODE_WAKEUP
-            "$adb" -s emulator-5554 shell wm dismiss-keyguard
-            "$adb" -s emulator-5554 shell input keyevent 82
-            node apps/browser/scripts/android-agent-ui.mjs self-test \
-              --adb "$adb" \
-              --serial emulator-5554 \
-              --driver-build "$RUNNER_TEMP/aegis-driver-coverage" \
-              --coverage-output "$EVIDENCE_DIR/coverage" \
-              --output "$EVIDENCE_DIR/self-test.json"
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics -camera-back none
+          script: bash apps/browser/scripts/run-android-java-coverage-emulator.sh
 
       - name: Bind report to exact SHA and scope
         run: |
