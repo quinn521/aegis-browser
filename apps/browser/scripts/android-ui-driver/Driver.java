@@ -188,6 +188,12 @@ public final class Driver extends Instrumentation {
     return root;
   }
 
+  private String activeWindowPackage() {
+    AccessibilityNodeInfo root = automation.getRootInActiveWindow();
+    String value = root == null || root.getPackageName() == null ? "none" : root.getPackageName().toString();
+    return value.matches("[A-Za-z0-9_.]{1,200}") ? value : "unknown";
+  }
+
   private static void requirePackage(AccessibilityNodeInfo node, String target) throws Exception {
     check(node != null && target.contentEquals(node.getPackageName() == null ? "" : node.getPackageName()),
         "前台不是指定验收 App；未读取或操作其他应用");
@@ -294,7 +300,10 @@ public final class Driver extends Instrumentation {
       long deadline = SystemClock.uptimeMillis() + 5000;
       do {
         try { initial = snapshot(HELPER); break; }
-        catch (GuardFailure error) { lastWindowFailure = error.getMessage(); SystemClock.sleep(50); }
+        catch (GuardFailure error) {
+          lastWindowFailure = error.getMessage() + ",activePackage=" + activeWindowPackage();
+          SystemClock.sleep(50);
+        }
       } while (SystemClock.uptimeMillis() < deadline);
       check(initial != null, "自测界面未就绪；" + Fixture.lifecycle() + "；窗口=" + lastWindowFailure);
       String input = find(initial, "label", "中文目标输入");
