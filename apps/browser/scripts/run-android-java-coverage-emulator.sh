@@ -27,6 +27,28 @@ fi
 "$adb" -s "$serial" shell wm dismiss-keyguard
 "$adb" -s "$serial" shell input keyevent 82
 
+# sys.boot_completed can precede the final keyguard/screen transition. Wait for the
+# same fail-closed API 36 state that android-agent-ui.mjs checks again before install.
+emulator_ready=0
+for _ in {1..15}; do
+  if "$adb" -s "$serial" shell dumpsys window policy | node --input-type=module -e '
+    import {parseKeyguard} from "./apps/browser/scripts/verify-android-agent-target.mjs";
+    let dump = "";
+    process.stdin.setEncoding("utf8");
+    for await (const chunk of process.stdin) dump += chunk;
+    const state = parseKeyguard(dump);
+    process.exit(state.known && state.unlocked && state.screenOn ? 0 : 1);
+  '; then
+    emulator_ready=1
+    break
+  fi
+  sleep 1
+done
+if (( emulator_ready != 1 )); then
+  echo 'dedicated emulator did not reach the verified unlocked screen state' >&2
+  exit 1
+fi
+
 # Temporary same-emulator control: prove whether the helper fixtures fail before JaCoCo is present.
 set +e
 node apps/browser/scripts/android-agent-ui.mjs self-test \
