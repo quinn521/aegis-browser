@@ -1,4 +1,4 @@
-# iOS Swift unit-test coverage snapshot — 2026-09-14
+# iOS Swift Simulator test coverage snapshot — 2026-09-14
 
 These badges are manually recorded snapshots from a successful iOS Simulator
 test run, not automatically updated coverage for the current `main` commit.
@@ -28,6 +28,13 @@ their raw `iPhone-coverage.json` / `iPad-coverage.json` xccov reports using the
 repository's existing summarizer; the line counts reproduced exactly.
 
 ## Measurement scope
+
+This is combined unit + UI test coverage. The default Aegis scheme includes
+both `AegisTests` and `AegisUITests` in
+[project.yml](../../apps/ios/project.yml), and the recorded run used
+`test_plan=<scheme-default>`. Both targets contribute to the same xcresult and
+xccov report. No independent unit-only percentage or attribution of covered
+lines to one test target is available from these summaries.
 
 The [Simulator test runner](../../apps/ios/scripts/run-simulator-tests.sh)
 enables code coverage and exports real `xccov` reports. The

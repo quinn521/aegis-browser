@@ -9,7 +9,7 @@ CI includes the mandatory macOS quality job plus Linux/Windows coverage; it is n
 [![iOS Swift iPhone snapshot: 83.57%](assets/badges/swift-iphone-snapshot.svg)](docs/audit/swift-coverage-snapshot-2026-09-14.md)
 [![iOS Swift iPad snapshot: 84.99%](assets/badges/swift-ipad-snapshot.svg)](docs/audit/swift-coverage-snapshot-2026-09-14.md)
 
-Swift unit-test coverage snapshots: **2026-09-14**, tested SHA `66ca5ee` (not current `main` coverage). These are separate iOS Simulator product-line measurements; see [scope and evidence](docs/audit/swift-coverage-snapshot-2026-09-14.md).
+Swift Simulator test coverage snapshots (unit + UI tests): **2026-09-14**, tested SHA `66ca5ee` (not current `main` coverage). These are separate iOS Simulator product-line measurements; no unit-only percentage is available. See [scope and evidence](docs/audit/swift-coverage-snapshot-2026-09-14.md).
 
 GCSA-aegis is a local-first privacy and security browser project with two product lines: the Chromium fork under [`apps/browser`](apps/browser/README.md) and the native iOS browser under [`apps/ios`](apps/ios/README.md). Core capabilities stay inside each browser product; the project does not revive the retired standalone-extension product.
 
