@@ -13,6 +13,7 @@ import android.os.PowerManager;
 import android.os.SystemClock;
 import android.text.InputType;
 import android.util.Base64;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.Button;
@@ -312,6 +313,7 @@ public final class Driver extends Instrumentation {
     Fixture.resetLifecycle();
     Activity activity = startActivitySync(new Intent(getTargetContext(), Fixture.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     try {
+      waitForIdleSync();
       JSONArray results = new JSONArray();
       JSONObject initial = null;
       String lastWindowFailure = "尚未观察";
@@ -379,9 +381,11 @@ public final class Driver extends Instrumentation {
     @Override public void onCreate(Bundle saved) {
       super.onCreate(saved);
       created = true;
+      getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
       LinearLayout layout = new LinearLayout(this);
       layout.setOrientation(LinearLayout.VERTICAL);
       layout.setPadding(24, 48, 24, 24);
+      layout.setFocusableInTouchMode(true);
       TextView title = new TextView(this);
       title.setText("Aegis 验收工具自测（不是浏览器）");
       EditText input = new EditText(this);
@@ -401,6 +405,7 @@ public final class Driver extends Instrumentation {
       layout.addView(button);
       layout.addView(result);
       setContentView(layout);
+      layout.requestFocus();
     }
 
     @Override protected void onResume() {
