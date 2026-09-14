@@ -183,6 +183,7 @@ public final class Driver extends Instrumentation {
   private AccessibilityNodeInfo root(String target) throws Exception {
     unlocked();
     AccessibilityNodeInfo root = automation.getRootInActiveWindow();
+    check(root != null, "没有活动的无障碍窗口");
     requirePackage(root, target);
     return root;
   }
@@ -284,16 +285,18 @@ public final class Driver extends Instrumentation {
   }
 
   private JSONObject selfTest() throws Exception {
+    Fixture.resetLifecycle();
     Activity activity = startActivitySync(new Intent(getTargetContext(), Fixture.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     try {
       JSONArray results = new JSONArray();
       JSONObject initial = null;
+      String lastWindowFailure = "尚未观察";
       long deadline = SystemClock.uptimeMillis() + 5000;
       do {
         try { initial = snapshot(HELPER); break; }
-        catch (GuardFailure error) { SystemClock.sleep(50); }
+        catch (GuardFailure error) { lastWindowFailure = error.getMessage(); SystemClock.sleep(50); }
       } while (SystemClock.uptimeMillis() < deadline);
-      check(initial != null, "自测界面未就绪");
+      check(initial != null, "自测界面未就绪；" + Fixture.lifecycle() + "；窗口=" + lastWindowFailure);
       String input = find(initial, "label", "中文目标输入");
       String text = "帮我总结页面内容：电池续航18小时 🔋";
       perform(HELPER, initial, initial.getString("snapshotSha256"), input, "set-text", text);
@@ -332,8 +335,23 @@ public final class Driver extends Instrumentation {
 
   /** 仅验证 Unicode 输入与原生点击；不伪装成产品界面或模型结果。 */
   public static final class Fixture extends Activity {
+    private static volatile boolean created;
+    private static volatile boolean resumed;
+    private static volatile boolean focused;
+
+    private static void resetLifecycle() {
+      created = false;
+      resumed = false;
+      focused = false;
+    }
+
+    private static String lifecycle() {
+      return "created=" + created + ",resumed=" + resumed + ",focused=" + focused;
+    }
+
     @Override public void onCreate(Bundle saved) {
       super.onCreate(saved);
+      created = true;
       LinearLayout layout = new LinearLayout(this);
       layout.setOrientation(LinearLayout.VERTICAL);
       layout.setPadding(24, 48, 24, 24);
@@ -356,6 +374,16 @@ public final class Driver extends Instrumentation {
       layout.addView(button);
       layout.addView(result);
       setContentView(layout);
+    }
+
+    @Override protected void onResume() {
+      super.onResume();
+      resumed = true;
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+      super.onWindowFocusChanged(hasFocus);
+      focused = hasFocus;
     }
   }
 }
