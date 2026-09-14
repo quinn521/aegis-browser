@@ -1,0 +1,2737 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Mon, 14 Sep 2026 16:06:15 +0800
+Subject: [PATCH] Aegis: persist site toggle transactions
+
+---
+ chrome/browser/aegis/BUILD.gn                 |    1 +
+ chrome/browser/aegis/access/BUILD.gn          |   33 +
+ .../browser/aegis/access/access_rule_store.cc | 1242 +++++++++++++++++
+ .../browser/aegis/access/access_rule_store.h  |  213 +++
+ .../access/access_rule_store_unittest.cc      |  280 ++++
+ .../access/site_proxy_toggle_coordinator.cc   |  264 ++++
+ .../access/site_proxy_toggle_coordinator.h    |  121 ++
+ .../site_proxy_toggle_coordinator_unittest.cc |  494 +++++++
+ .../histograms/metadata/sql/histograms.xml    |    1 +
+ 9 files changed, 2649 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/BUILD.gn
+ create mode 100644 chrome/browser/aegis/access/access_rule_store.cc
+ create mode 100644 chrome/browser/aegis/access/access_rule_store.h
+ create mode 100644 chrome/browser/aegis/access/access_rule_store_unittest.cc
+ create mode 100644 chrome/browser/aegis/access/site_proxy_toggle_coordinator.cc
+ create mode 100644 chrome/browser/aegis/access/site_proxy_toggle_coordinator.h
+ create mode 100644 chrome/browser/aegis/access/site_proxy_toggle_coordinator_unittest.cc
+
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index 0a6c891..f07beb4 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -129,6 +129,7 @@ source_set("aegis") {
+   public_deps = [ ":profile_support" ]
+   deps = [
+     ":model_provider_policy",
++    "access:access_rule_store",
+     "//base",
+     "//chrome/browser:after_startup_task_utils",
+     "//chrome/browser:browser_process",
+diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
+new file mode 100644
+index 0000000..c888272
+--- /dev/null
++++ b/chrome/browser/aegis/access/BUILD.gn
+@@ -0,0 +1,33 @@
++# Copyright 2026 GCSA
++# Intended path: chrome/browser/aegis/access/BUILD.gn
++
++import("//testing/test.gni")
++
++source_set("access_rule_store") {
++  sources = [
++    "access_rule_store.cc",
++    "access_rule_store.h",
++    "site_proxy_toggle_coordinator.cc",
++    "site_proxy_toggle_coordinator.h",
++  ]
++  deps = [
++    "//base",
++    "//components/aegis_access",
++    "//sql",
++  ]
++}
++
++test("access_rule_store_unittests") {
++  sources = [
++    "access_rule_store_unittest.cc",
++    "site_proxy_toggle_coordinator_unittest.cc",
++  ]
++  deps = [
++    ":access_rule_store",
++    "//base/test:run_all_unittests",
++    "//base/test:test_support",
++    "//components/aegis_access",
++    "//sql",
++    "//testing/gtest",
++  ]
++}
+diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
+new file mode 100644
+index 0000000..352cc77
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_rule_store.cc
+@@ -0,0 +1,1242 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/aegis/access/access_rule_store.h"
++
++#include <algorithm>
++#include <cctype>
++#include <limits>
++#include <set>
++#include <string_view>
++#include <utility>
++
++#include "sql/statement.h"
++#include "sql/transaction.h"
++
++namespace aegis::access {
++namespace {
++
++constexpr int kCurrentVersion = 1;
++constexpr int kCompatibleVersion = 1;
++constexpr int kCompleteSchemeMask = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3);
++constexpr size_t kMaxOpaqueIdBytes = 256;
++constexpr size_t kMaxSchemefulSiteBytes = 512;
++
++constexpr char kCreateIdentitySql[] = R"(
++  CREATE TABLE IF NOT EXISTS access_store_identity(
++    singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
++    channel INTEGER NOT NULL,
++    profile_token TEXT NOT NULL
++  ))";
++
++constexpr char kCreateCountersSql[] = R"(
++  CREATE TABLE IF NOT EXISTS access_store_counters(
++    singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
++    operation_sequence INTEGER NOT NULL,
++    policy_generation INTEGER NOT NULL
++  ))";
++
++constexpr char kCreateGroupsSql[] = R"(
++  CREATE TABLE IF NOT EXISTS access_site_groups(
++    storage_partition_token TEXT NOT NULL,
++    site_toggle_id TEXT NOT NULL,
++    canonical_host TEXT NOT NULL,
++    http_top_level_site TEXT NOT NULL,
++    https_top_level_site TEXT NOT NULL,
++    http_member_rule_id TEXT NOT NULL,
++    https_member_rule_id TEXT NOT NULL,
++    revision INTEGER NOT NULL,
++    last_operation_sequence INTEGER NOT NULL,
++    policy_generation INTEGER NOT NULL,
++    PRIMARY KEY(storage_partition_token, site_toggle_id),
++    UNIQUE(storage_partition_token, canonical_host)
++  ))";
++
++constexpr char kCreateRulesSql[] = R"(
++  CREATE TABLE IF NOT EXISTS access_rules(
++    storage_partition_token TEXT NOT NULL,
++    rule_id TEXT NOT NULL,
++    site_toggle_id TEXT NOT NULL DEFAULT '',
++    group_revision INTEGER NOT NULL DEFAULT 0,
++    top_level_site TEXT NOT NULL,
++    exact_host TEXT NOT NULL,
++    schemes_mask INTEGER NOT NULL,
++    port_scope INTEGER NOT NULL,
++    include_subdomains INTEGER NOT NULL,
++    mode INTEGER NOT NULL,
++    proxy_group_id TEXT NOT NULL DEFAULT '',
++    protection_override INTEGER NOT NULL,
++    row_revision INTEGER NOT NULL,
++    last_operation_sequence INTEGER NOT NULL,
++    PRIMARY KEY(storage_partition_token, rule_id)
++  ))";
++
++constexpr char kCreateOperationsSql[] = R"(
++  CREATE TABLE IF NOT EXISTS access_pending_operations(
++    operation_id TEXT PRIMARY KEY NOT NULL,
++    request_fingerprint TEXT NOT NULL,
++    state INTEGER NOT NULL,
++    storage_partition_token TEXT NOT NULL,
++    site_toggle_id TEXT NOT NULL,
++    canonical_host TEXT NOT NULL,
++    http_top_level_site TEXT NOT NULL,
++    https_top_level_site TEXT NOT NULL,
++    http_member_rule_id TEXT NOT NULL,
++    https_member_rule_id TEXT NOT NULL,
++    target_mode INTEGER NOT NULL,
++    proxy_group_id TEXT NOT NULL DEFAULT '',
++    expected_revision INTEGER NOT NULL,
++    target_revision INTEGER NOT NULL,
++    operation_sequence INTEGER NOT NULL,
++    policy_generation INTEGER NOT NULL,
++    service_incarnation INTEGER NOT NULL,
++    route_ready INTEGER NOT NULL DEFAULT 0,
++    publish_started INTEGER NOT NULL DEFAULT 0
++  ))";
++
++constexpr char kCreateContextsSql[] = R"(
++  CREATE TABLE IF NOT EXISTS access_operation_contexts(
++    operation_id TEXT NOT NULL,
++    context_id TEXT NOT NULL,
++    context_incarnation INTEGER NOT NULL,
++    acknowledged INTEGER NOT NULL DEFAULT 0,
++    PRIMARY KEY(operation_id, context_id)
++  ))";
++
++bool IsKnownChannel(aegis_access::ChannelNamespace channel) {
++  return channel == aegis_access::ChannelNamespace::kDev ||
++         channel == aegis_access::ChannelNamespace::kAlpha ||
++         channel == aegis_access::ChannelNamespace::kBeta ||
++         channel == aegis_access::ChannelNamespace::kRelease;
++}
++
++bool FitsSqlInt64(uint64_t value) {
++  return value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
++}
++
++bool IsBounded(std::string_view value, size_t maximum) {
++  return !value.empty() && value.size() <= maximum;
++}
++
++bool IsCanonicalHostLike(std::string_view host) {
++  if (!IsBounded(host, 253) || host.back() == '.') {
++    return false;
++  }
++  const bool bracketed_ipv6 = host.front() == '[' && host.back() == ']';
++  for (unsigned char character : host) {
++    if (character >= 0x80 || std::isspace(character) ||
++        std::isupper(character) || character == '/' || character == '\\' ||
++        character == '@' || character == '?' || character == '#' ||
++        character == '%') {
++      return false;
++    }
++    if (character == ':' && !bracketed_ipv6) {
++      return false;
++    }
++  }
++  if (bracketed_ipv6) {
++    if (host.size() < 4 || host.find(':') == std::string_view::npos) {
++      return false;
++    }
++    return std::ranges::all_of(host.substr(1, host.size() - 2),
++                               [](unsigned char character) {
++                                 return std::isdigit(character) ||
++                                        (character >= 'a' &&
++                                         character <= 'f') ||
++                                        character == ':' || character == '.';
++                               });
++  }
++
++  size_t label_start = 0;
++  while (label_start < host.size()) {
++    const size_t label_end = host.find('.', label_start);
++    const size_t resolved_end =
++        label_end == std::string_view::npos ? host.size() : label_end;
++    const std::string_view label =
++        host.substr(label_start, resolved_end - label_start);
++    if (label.empty() || label.size() > 63 || label.front() == '-' ||
++        label.back() == '-' ||
++        !std::ranges::all_of(label, [](unsigned char character) {
++          return std::islower(character) || std::isdigit(character) ||
++                 character == '-';
++        })) {
++      return false;
++    }
++    label_start = resolved_end + 1;
++  }
++  return true;
++}
++
++bool IsSchemefulSiteLike(std::string_view value, std::string_view scheme) {
++  if (!IsBounded(value, kMaxSchemefulSiteBytes) ||
++      !value.starts_with(scheme)) {
++    return false;
++  }
++  const std::string_view host = value.substr(scheme.size());
++  return IsCanonicalHostLike(host);
++}
++
++int SchemeMask(const std::vector<aegis_access::RequestScheme>& schemes) {
++  int mask = 0;
++  for (aegis_access::RequestScheme scheme : schemes) {
++    switch (scheme) {
++      case aegis_access::RequestScheme::kHttp:
++        mask |= 1 << 0;
++        break;
++      case aegis_access::RequestScheme::kHttps:
++        mask |= 1 << 1;
++        break;
++      case aegis_access::RequestScheme::kWs:
++        mask |= 1 << 2;
++        break;
++      case aegis_access::RequestScheme::kWss:
++        mask |= 1 << 3;
++        break;
++      case aegis_access::RequestScheme::kInvalid:
++        return 0;
++    }
++  }
++  return mask;
++}
++
++std::vector<aegis_access::RequestScheme> CompleteSchemes() {
++  return {aegis_access::RequestScheme::kHttp,
++          aegis_access::RequestScheme::kHttps, aegis_access::RequestScheme::kWs,
++          aegis_access::RequestScheme::kWss};
++}
++
++std::vector<aegis_access::RequestScheme> SchemesFromMask(int mask) {
++  std::vector<aegis_access::RequestScheme> schemes;
++  if (mask & (1 << 0)) {
++    schemes.push_back(aegis_access::RequestScheme::kHttp);
++  }
++  if (mask & (1 << 1)) {
++    schemes.push_back(aegis_access::RequestScheme::kHttps);
++  }
++  if (mask & (1 << 2)) {
++    schemes.push_back(aegis_access::RequestScheme::kWs);
++  }
++  if (mask & (1 << 3)) {
++    schemes.push_back(aegis_access::RequestScheme::kWss);
++  }
++  return schemes;
++}
++
++aegis_access::OwnershipKey RowOwner(
++    const aegis_access::OwnershipKey& store_owner,
++    const std::string& storage_partition_token) {
++  return {store_owner.channel, store_owner.profile_token,
++          storage_partition_token};
++}
++
++bool SameRequest(const SiteToggleRequest& left,
++                 const SiteToggleRequest& right) {
++  std::set<std::pair<std::string, uint64_t>> left_contexts;
++  std::set<std::pair<std::string, uint64_t>> right_contexts;
++  for (const auto& context : left.required_contexts) {
++    left_contexts.emplace(context.context_id, context.incarnation);
++  }
++  for (const auto& context : right.required_contexts) {
++    right_contexts.emplace(context.context_id, context.incarnation);
++  }
++  return left.operation_id == right.operation_id &&
++         left.request_fingerprint == right.request_fingerprint &&
++         left.site_toggle_id == right.site_toggle_id &&
++         left.site == right.site && left.enabled == right.enabled &&
++         left.proxy_group_id == right.proxy_group_id &&
++         left.expected_revision == right.expected_revision &&
++         left.service_incarnation == right.service_incarnation &&
++         left_contexts == right_contexts;
++}
++
++bool IsValidIndependentRule(const IndependentAccessRule& rule) {
++  if (rule.rule_id.empty() || rule.storage_partition_token.empty() ||
++      rule.top_level_site.empty() || rule.exact_host.empty() ||
++      SchemeMask(rule.schemes) == 0 ||
++      rule.ports == aegis_access::PortScope::kInvalid ||
++      rule.mode == aegis_access::AccessMode::kNone ||
++      rule.mode == aegis_access::AccessMode::kInvalid ||
++      rule.protection_override == aegis_access::ProtectionOverride::kInvalid ||
++      rule.row_revision == 0 || rule.last_operation_sequence == 0 ||
++      !FitsSqlInt64(rule.row_revision) ||
++      !FitsSqlInt64(rule.last_operation_sequence)) {
++    return false;
++  }
++  if (rule.mode == aegis_access::AccessMode::kProxy) {
++    return !rule.proxy_group_id.empty();
++  }
++  return rule.proxy_group_id.empty() &&
++         rule.protection_override == aegis_access::ProtectionOverride::kNone;
++}
++
++}  // namespace
++
++bool BrowserConfirmedSite::IsComplete() const {
++  return IsBounded(storage_partition_token, kMaxOpaqueIdBytes) &&
++         IsCanonicalHostLike(canonical_host) &&
++         IsSchemefulSiteLike(http_top_level_site, "http://") &&
++         IsSchemefulSiteLike(https_top_level_site, "https://") &&
++         http_top_level_site.substr(7) == https_top_level_site.substr(8);
++}
++
++AccessRuleStore::AccessRuleStore(base::FilePath database_path,
++                                 aegis_access::OwnershipKey owner,
++                                 bool in_memory)
++    : database_path_(std::move(database_path)),
++      owner_(std::move(owner)),
++      in_memory_(in_memory),
++      database_("AegisAccess") {}
++
++AccessRuleStore::~AccessRuleStore() = default;
++
++bool AccessRuleStore::IsBoundOwnerValid() const {
++  return IsKnownChannel(owner_.channel) && !owner_.profile_token.empty() &&
++         owner_.storage_partition_token.empty();
++}
++
++bool AccessRuleStore::ShouldFail(FailurePointForTesting point) const {
++  return failure_point_for_testing_ == point;
++}
++
++bool AccessRuleStore::Initialize() {
++  if (initialized_) {
++    return true;
++  }
++  if (!IsBoundOwnerValid() || !(in_memory_ ? database_.OpenInMemory()
++                                           : database_.Open(database_path_))) {
++    return false;
++  }
++
++  sql::Transaction transaction(&database_);
++  if (!transaction.Begin() ||
++      !meta_table_.Init(&database_, kCurrentVersion, kCompatibleVersion) ||
++      meta_table_.GetVersionNumber() != kCurrentVersion ||
++      meta_table_.GetCompatibleVersionNumber() > kCompatibleVersion) {
++    database_.Close();
++    return false;
++  }
++
++  const bool has_identity =
++      database_.DoesTableExist("access_store_identity");
++  const bool has_counters =
++      database_.DoesTableExist("access_store_counters");
++  const bool has_groups = database_.DoesTableExist("access_site_groups");
++  const bool has_rules = database_.DoesTableExist("access_rules");
++  const bool has_operations =
++      database_.DoesTableExist("access_pending_operations");
++  const bool has_contexts =
++      database_.DoesTableExist("access_operation_contexts");
++  const bool has_any_access_table =
++      has_identity || has_counters || has_groups || has_rules ||
++      has_operations || has_contexts;
++  const bool has_complete_schema = has_identity && has_counters && has_groups &&
++                                   has_rules && has_operations && has_contexts;
++  if (has_any_access_table && !has_complete_schema) {
++    database_.Close();
++    return false;
++  }
++
++  if (!database_.Execute(kCreateIdentitySql) ||
++      !database_.Execute(kCreateCountersSql) ||
++      !database_.Execute(kCreateGroupsSql) ||
++      !database_.Execute(kCreateRulesSql) ||
++      !database_.Execute(kCreateOperationsSql) ||
++      !database_.Execute(kCreateContextsSql)) {
++    database_.Close();
++    return false;
++  }
++
++  sql::Statement identity(database_.GetUniqueStatement(
++      "SELECT channel,profile_token FROM access_store_identity "
++      "WHERE singleton=1"));
++  if (identity.Step()) {
++    if (identity.ColumnInt(0) != static_cast<int>(owner_.channel) ||
++        identity.ColumnString(1) != owner_.profile_token) {
++      database_.Close();
++      return false;
++    }
++  } else if (!identity.Succeeded()) {
++    database_.Close();
++    return false;
++  } else {
++    sql::Statement insert_identity(database_.GetUniqueStatement(
++        "INSERT INTO access_store_identity(singleton,channel,profile_token) "
++        "VALUES(1,?,?)"));
++    insert_identity.BindInt(0, static_cast<int>(owner_.channel));
++    insert_identity.BindString(1, owner_.profile_token);
++    if (!insert_identity.Run()) {
++      database_.Close();
++      return false;
++    }
++  }
++
++  if (!database_.Execute(
++          "INSERT OR IGNORE INTO access_store_counters"
++          "(singleton,operation_sequence,policy_generation) VALUES(1,0,0)") ||
++      !transaction.Commit()) {
++    database_.Close();
++    return false;
++  }
++  initialized_ = true;
++  return true;
++}
++
++SiteSelectionRecord AccessRuleStore::ReadSiteSelection(
++    const BrowserConfirmedSite& site) {
++  if (!initialized_ || !site.IsComplete()) {
++    return {};
++  }
++
++  sql::Statement pending(database_.GetUniqueStatement(
++      "SELECT 1 FROM access_pending_operations WHERE state=0 AND "
++      "storage_partition_token=? AND canonical_host=? LIMIT 1"));
++  pending.BindString(0, site.storage_partition_token);
++  pending.BindString(1, site.canonical_host);
++  if (pending.Step()) {
++    SiteSelectionRecord result = ReadDurableSiteSelection(site);
++    result.state = SiteSelectionReadState::kRestoring;
++    result.selection = aegis_access::GroupSelection::kUnknown;
++    return result;
++  }
++  if (!pending.Succeeded()) {
++    return {};
++  }
++  return ReadDurableSiteSelection(site);
++}
++
++SiteSelectionRecord AccessRuleStore::ReadDurableSiteSelection(
++    const BrowserConfirmedSite& site) {
++  SiteSelectionRecord result;
++  if (!initialized_ || !site.IsComplete()) {
++    return result;
++  }
++
++  sql::Statement independent_statement(database_.GetUniqueStatement(
++      "SELECT 1 FROM access_rules WHERE storage_partition_token=? AND "
++      "exact_host=? AND site_toggle_id='' LIMIT 1"));
++  independent_statement.BindString(0, site.storage_partition_token);
++  independent_statement.BindString(1, site.canonical_host);
++  result.has_independent_rule = independent_statement.Step();
++  if (!independent_statement.Succeeded()) {
++    return {};
++  }
++
++  sql::Statement group_statement(database_.GetUniqueStatement(
++      "SELECT site_toggle_id,http_top_level_site,https_top_level_site,"
++      "http_member_rule_id,https_member_rule_id,revision,"
++      "last_operation_sequence,policy_generation FROM access_site_groups "
++      "WHERE storage_partition_token=? AND canonical_host=?"));
++  group_statement.BindString(0, site.storage_partition_token);
++  group_statement.BindString(1, site.canonical_host);
++  if (!group_statement.Step()) {
++    if (group_statement.Succeeded()) {
++      sql::Statement orphan_statement(database_.GetUniqueStatement(
++          "SELECT 1 FROM access_rules WHERE storage_partition_token=? AND "
++          "exact_host=? AND site_toggle_id<>'' LIMIT 1"));
++      orphan_statement.BindString(0, site.storage_partition_token);
++      orphan_statement.BindString(1, site.canonical_host);
++      if (orphan_statement.Step()) {
++        result.state = SiteSelectionReadState::kCorrupt;
++        result.selection = aegis_access::GroupSelection::kUnknown;
++        result.validation_error =
++            aegis_access::GroupValidationError::kMissingGroup;
++      } else if (orphan_statement.Succeeded()) {
++        result.state = SiteSelectionReadState::kMissing;
++        result.selection = aegis_access::GroupSelection::kUnknown;
++        result.validation_error =
++            aegis_access::GroupValidationError::kMissingGroup;
++      }
++    }
++    return result;
++  }
++
++  aegis_access::SiteProxyRuleGroup group;
++  group.site_toggle_id = group_statement.ColumnString(0);
++  group.canonical_host = site.canonical_host;
++  group.owner = RowOwner(owner_, site.storage_partition_token);
++  group.http_top_level_site = group_statement.ColumnString(1);
++  group.https_top_level_site = group_statement.ColumnString(2);
++  group.member_rule_ids = {group_statement.ColumnString(3),
++                           group_statement.ColumnString(4)};
++  const int64_t revision = group_statement.ColumnInt64(5);
++  const int64_t operation_sequence = group_statement.ColumnInt64(6);
++  const int64_t policy_generation = group_statement.ColumnInt64(7);
++  group.revision = revision > 0 ? static_cast<uint64_t>(revision) : 0;
++  group.last_operation_sequence =
++      operation_sequence > 0 ? static_cast<uint64_t>(operation_sequence) : 0;
++  result.policy_generation =
++      policy_generation > 0 ? static_cast<uint64_t>(policy_generation) : 0;
++
++  if (group.http_top_level_site != site.http_top_level_site ||
++      group.https_top_level_site != site.https_top_level_site ||
++      group.revision == 0 || group.last_operation_sequence == 0 ||
++      result.policy_generation == 0) {
++    result.state = SiteSelectionReadState::kCorrupt;
++    result.selection = aegis_access::GroupSelection::kUnknown;
++    result.validation_error = aegis_access::GroupValidationError::kInvalidGroup;
++    return result;
++  }
++
++  std::vector<aegis_access::SiteProxyRuleMember> members;
++  sql::Statement member_statement(database_.GetUniqueStatement(
++      "SELECT rule_id,group_revision,top_level_site,exact_host,schemes_mask,"
++      "port_scope,include_subdomains,mode,proxy_group_id,"
++      "protection_override,last_operation_sequence FROM access_rules "
++      "WHERE storage_partition_token=? AND site_toggle_id=? ORDER BY rule_id"));
++  member_statement.BindString(0, site.storage_partition_token);
++  member_statement.BindString(1, group.site_toggle_id);
++  while (member_statement.Step()) {
++    const int schemes_mask = member_statement.ColumnInt(4);
++    if (schemes_mask != kCompleteSchemeMask) {
++      result.state = SiteSelectionReadState::kCorrupt;
++      result.selection = aegis_access::GroupSelection::kUnknown;
++      result.validation_error =
++          aegis_access::GroupValidationError::kSchemesMismatch;
++      return result;
++    }
++    aegis_access::SiteProxyRuleMember member;
++    member.rule_id = member_statement.ColumnString(0);
++    member.owner = group.owner;
++    member.site_toggle_id = group.site_toggle_id;
++    member.group_revision = member_statement.ColumnInt64(1);
++    member.top_level_site = member_statement.ColumnString(2);
++    member.exact_host = member_statement.ColumnString(3);
++    member.schemes = SchemesFromMask(schemes_mask);
++    member.ports =
++        static_cast<aegis_access::PortScope>(member_statement.ColumnInt(5));
++    member.include_subdomains = member_statement.ColumnBool(6);
++    member.mode =
++        static_cast<aegis_access::AccessMode>(member_statement.ColumnInt(7));
++    member.proxy_group_id = member_statement.ColumnString(8);
++    member.protection_override = static_cast<aegis_access::ProtectionOverride>(
++        member_statement.ColumnInt(9));
++    member.last_operation_sequence = member_statement.ColumnInt64(10);
++    members.push_back(std::move(member));
++  }
++  if (!member_statement.Succeeded()) {
++    return {};
++  }
++
++  const aegis_access::GroupValidation validation =
++      aegis_access::ValidateSiteProxyRuleGroup(group.owner, &group, members);
++  result.state = validation.error == aegis_access::GroupValidationError::kNone
++                     ? SiteSelectionReadState::kValid
++                     : SiteSelectionReadState::kCorrupt;
++  result.selection = validation.selection;
++  result.validation_error = validation.error;
++  result.revision = group.revision;
++  result.last_operation_sequence = group.last_operation_sequence;
++  if (validation.selection == aegis_access::GroupSelection::kEnabled &&
++      !members.empty()) {
++    result.proxy_group_id = members[0].proxy_group_id;
++  }
++  return result;
++}
++
++PrepareOperationResult AccessRuleStore::PrepareSiteToggleOperation(
++    const SiteToggleRequest& request) {
++  if (ShouldFail(FailurePointForTesting::kPrepareOperation)) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++  if (!initialized_ ||
++      !IsBounded(request.operation_id, kMaxOpaqueIdBytes) ||
++      !IsBounded(request.request_fingerprint, kMaxOpaqueIdBytes) ||
++      !IsBounded(request.site_toggle_id, kMaxOpaqueIdBytes) ||
++      !request.site.IsComplete() || request.service_incarnation == 0 ||
++      request.required_contexts.empty() ||
++      (request.enabled &&
++       !IsBounded(request.proxy_group_id, kMaxOpaqueIdBytes)) ||
++      (!request.enabled && !request.proxy_group_id.empty()) ||
++      !FitsSqlInt64(request.expected_revision) ||
++      !FitsSqlInt64(request.service_incarnation)) {
++    return {PrepareOperationStatus::kInvalidRequest, std::nullopt};
++  }
++  std::set<std::string> context_ids;
++  for (const auto& context : request.required_contexts) {
++    if (!IsBounded(context.context_id, kMaxOpaqueIdBytes) ||
++        context.incarnation == 0 ||
++        !FitsSqlInt64(context.incarnation) ||
++        !context_ids.insert(context.context_id).second) {
++      return {PrepareOperationStatus::kInvalidRequest, std::nullopt};
++    }
++  }
++
++  if (std::optional<PendingSiteOperation> duplicate =
++          LoadOperation(request.operation_id, false)) {
++    return {
++        SameRequest(duplicate->request, request)
++            ? PrepareOperationStatus::kDuplicate
++            : PrepareOperationStatus::kDuplicateConflict,
++        SameRequest(duplicate->request, request) ? duplicate : std::nullopt};
++  }
++
++  sql::Transaction transaction(&database_);
++  if (!transaction.Begin()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++
++  const SiteSelectionRecord current = ReadDurableSiteSelection(request.site);
++  if (current.state == SiteSelectionReadState::kCorrupt) {
++    return {PrepareOperationStatus::kCorruptState, std::nullopt};
++  }
++  if (current.state == SiteSelectionReadState::kStorageError) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++  if (current.revision != request.expected_revision) {
++    return {PrepareOperationStatus::kRevisionConflict, std::nullopt};
++  }
++
++  if (current.state == SiteSelectionReadState::kValid) {
++    sql::Statement id_statement(database_.GetUniqueStatement(
++        "SELECT site_toggle_id FROM access_site_groups WHERE "
++        "storage_partition_token=? AND canonical_host=?"));
++    id_statement.BindString(0, request.site.storage_partition_token);
++    id_statement.BindString(1, request.site.canonical_host);
++    if (!id_statement.Step() ||
++        id_statement.ColumnString(0) != request.site_toggle_id) {
++      return {id_statement.Succeeded() ? PrepareOperationStatus::kInvalidRequest
++                                       : PrepareOperationStatus::kStorageError,
++              std::nullopt};
++    }
++  }
++
++  sql::Statement toggle_owner(database_.GetUniqueStatement(
++      "SELECT canonical_host FROM access_site_groups WHERE "
++      "storage_partition_token=? AND site_toggle_id=?"));
++  toggle_owner.BindString(0, request.site.storage_partition_token);
++  toggle_owner.BindString(1, request.site_toggle_id);
++  if (toggle_owner.Step() &&
++      toggle_owner.ColumnString(0) != request.site.canonical_host) {
++    return {PrepareOperationStatus::kInvalidRequest, std::nullopt};
++  }
++  if (!toggle_owner.Succeeded()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++
++  sql::Statement pending_toggle_owner(database_.GetUniqueStatement(
++      "SELECT canonical_host FROM access_pending_operations WHERE state=0 "
++      "AND storage_partition_token=? AND site_toggle_id=? LIMIT 1"));
++  pending_toggle_owner.BindString(0, request.site.storage_partition_token);
++  pending_toggle_owner.BindString(1, request.site_toggle_id);
++  if (pending_toggle_owner.Step() &&
++      pending_toggle_owner.ColumnString(0) != request.site.canonical_host) {
++    return {PrepareOperationStatus::kInvalidRequest, std::nullopt};
++  }
++  if (!pending_toggle_owner.Succeeded()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++
++  sql::Statement counters(database_.GetUniqueStatement(
++      "SELECT operation_sequence,policy_generation FROM "
++      "access_store_counters WHERE singleton=1"));
++  if (!counters.Step()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++  const int64_t stored_sequence = counters.ColumnInt64(0);
++  const int64_t stored_generation = counters.ColumnInt64(1);
++  if (stored_sequence < 0 || stored_generation < 0) {
++    return {PrepareOperationStatus::kCorruptState, std::nullopt};
++  }
++  const uint64_t previous_sequence = stored_sequence;
++  const uint64_t previous_generation = stored_generation;
++  if (previous_sequence ==
++          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
++      previous_generation ==
++          static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
++      current.revision ==
++          static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++
++  PendingSiteOperation operation;
++  operation.request = request;
++  operation.owner = RowOwner(owner_, request.site.storage_partition_token);
++  operation.operation_sequence = previous_sequence + 1;
++  operation.policy_generation = previous_generation + 1;
++  operation.required_contexts = request.required_contexts;
++  operation.after_group = {
++      .site_toggle_id = request.site_toggle_id,
++      .canonical_host = request.site.canonical_host,
++      .owner = operation.owner,
++      .http_top_level_site = request.site.http_top_level_site,
++      .https_top_level_site = request.site.https_top_level_site,
++      .member_rule_ids = {request.site_toggle_id + ":http",
++                          request.site_toggle_id + ":https"},
++      .revision = current.revision + 1,
++      .last_operation_sequence = operation.operation_sequence,
++  };
++  const aegis_access::AccessMode target_mode =
++      request.enabled ? aegis_access::AccessMode::kProxy
++                      : aegis_access::AccessMode::kDirect;
++  for (size_t index = 0; index < 2; ++index) {
++    operation.after_members.push_back({
++        .rule_id = operation.after_group.member_rule_ids[index],
++        .owner = operation.owner,
++        .site_toggle_id = request.site_toggle_id,
++        .group_revision = operation.after_group.revision,
++        .top_level_site = index == 0 ? request.site.http_top_level_site
++                                     : request.site.https_top_level_site,
++        .exact_host = request.site.canonical_host,
++        .schemes = CompleteSchemes(),
++        .ports = aegis_access::PortScope::kAllBrowserPermitted,
++        .include_subdomains = false,
++        .mode = target_mode,
++        .proxy_group_id = request.enabled ? request.proxy_group_id : "",
++        .protection_override = aegis_access::ProtectionOverride::kNone,
++        .last_operation_sequence = operation.operation_sequence,
++    });
++  }
++
++  sql::Statement supersede(database_.GetUniqueStatement(
++      "UPDATE access_pending_operations SET state=1 WHERE state=0 AND "
++      "storage_partition_token=? AND canonical_host=?"));
++  supersede.BindString(0, request.site.storage_partition_token);
++  supersede.BindString(1, request.site.canonical_host);
++  if (!supersede.Run()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++
++  sql::Statement insert(database_.GetUniqueStatement(
++      "INSERT INTO access_pending_operations("
++      "operation_id,request_fingerprint,state,storage_partition_token,"
++      "site_toggle_id,canonical_host,http_top_level_site,"
++      "https_top_level_site,http_member_rule_id,https_member_rule_id,"
++      "target_mode,proxy_group_id,expected_revision,target_revision,"
++      "operation_sequence,policy_generation,service_incarnation,route_ready)"
++      " VALUES(?,?,0,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)"));
++  insert.BindString(0, request.operation_id);
++  insert.BindString(1, request.request_fingerprint);
++  insert.BindString(2, request.site.storage_partition_token);
++  insert.BindString(3, request.site_toggle_id);
++  insert.BindString(4, request.site.canonical_host);
++  insert.BindString(5, request.site.http_top_level_site);
++  insert.BindString(6, request.site.https_top_level_site);
++  insert.BindString(7, operation.after_group.member_rule_ids[0]);
++  insert.BindString(8, operation.after_group.member_rule_ids[1]);
++  insert.BindInt(9, static_cast<int>(target_mode));
++  insert.BindString(10, request.proxy_group_id);
++  insert.BindInt64(11, request.expected_revision);
++  insert.BindInt64(12, operation.after_group.revision);
++  insert.BindInt64(13, operation.operation_sequence);
++  insert.BindInt64(14, operation.policy_generation);
++  insert.BindInt64(15, request.service_incarnation);
++  if (!insert.Run()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++
++  for (const auto& context : request.required_contexts) {
++    sql::Statement insert_context(database_.GetUniqueStatement(
++        "INSERT INTO access_operation_contexts("
++        "operation_id,context_id,context_incarnation,acknowledged) "
++        "VALUES(?,?,?,0)"));
++    insert_context.BindString(0, request.operation_id);
++    insert_context.BindString(1, context.context_id);
++    insert_context.BindInt64(2, context.incarnation);
++    if (!insert_context.Run()) {
++      return {PrepareOperationStatus::kStorageError, std::nullopt};
++    }
++  }
++
++  sql::Statement update_counters(database_.GetUniqueStatement(
++      "UPDATE access_store_counters SET operation_sequence=?,"
++      "policy_generation=? WHERE singleton=1"));
++  update_counters.BindInt64(0, operation.operation_sequence);
++  update_counters.BindInt64(1, operation.policy_generation);
++  if (!update_counters.Run() || database_.GetLastChangeCount() != 1 ||
++      !transaction.Commit()) {
++    return {PrepareOperationStatus::kStorageError, std::nullopt};
++  }
++  return {PrepareOperationStatus::kPrepared, std::move(operation)};
++}
++
++std::optional<PendingSiteOperation> AccessRuleStore::LoadPendingOperation(
++    const std::string& operation_id) {
++  return LoadOperation(operation_id, true);
++}
++
++std::optional<PendingSiteOperation> AccessRuleStore::LoadOperation(
++    const std::string& operation_id,
++    bool active_only) {
++  if (!initialized_ || operation_id.empty()) {
++    return std::nullopt;
++  }
++  const char* sql =
++      active_only ? "SELECT request_fingerprint,storage_partition_token,"
++                    "site_toggle_id,canonical_host,http_top_level_site,"
++                    "https_top_level_site,http_member_rule_id,"
++                    "https_member_rule_id,target_mode,proxy_group_id,"
++                    "expected_revision,target_revision,operation_sequence,"
++                    "policy_generation,service_incarnation,route_ready,"
++                    "publish_started "
++                    "FROM access_pending_operations WHERE operation_id=? "
++                    "AND state=0"
++                  : "SELECT request_fingerprint,storage_partition_token,"
++                    "site_toggle_id,canonical_host,http_top_level_site,"
++                    "https_top_level_site,http_member_rule_id,"
++                    "https_member_rule_id,target_mode,proxy_group_id,"
++                    "expected_revision,target_revision,operation_sequence,"
++                    "policy_generation,service_incarnation,route_ready,"
++                    "publish_started "
++                    "FROM access_pending_operations WHERE operation_id=?";
++  sql::Statement statement(database_.GetUniqueStatement(sql));
++  statement.BindString(0, operation_id);
++  if (!statement.Step()) {
++    return std::nullopt;
++  }
++
++  PendingSiteOperation operation;
++  operation.request.operation_id = operation_id;
++  operation.request.request_fingerprint = statement.ColumnString(0);
++  operation.request.site.storage_partition_token = statement.ColumnString(1);
++  operation.request.site_toggle_id = statement.ColumnString(2);
++  operation.request.site.canonical_host = statement.ColumnString(3);
++  operation.request.site.http_top_level_site = statement.ColumnString(4);
++  operation.request.site.https_top_level_site = statement.ColumnString(5);
++  const auto target_mode =
++      static_cast<aegis_access::AccessMode>(statement.ColumnInt(8));
++  if (target_mode != aegis_access::AccessMode::kDirect &&
++      target_mode != aegis_access::AccessMode::kProxy) {
++    return std::nullopt;
++  }
++  operation.request.enabled = target_mode == aegis_access::AccessMode::kProxy;
++  operation.request.proxy_group_id = statement.ColumnString(9);
++  const int64_t expected_revision = statement.ColumnInt64(10);
++  const int64_t target_revision = statement.ColumnInt64(11);
++  const int64_t operation_sequence = statement.ColumnInt64(12);
++  const int64_t policy_generation = statement.ColumnInt64(13);
++  const int64_t service_incarnation = statement.ColumnInt64(14);
++  if (expected_revision < 0 || target_revision <= 0 ||
++      operation_sequence <= 0 || policy_generation <= 0 ||
++      service_incarnation <= 0 ||
++      (operation.request.enabled && operation.request.proxy_group_id.empty()) ||
++      (!operation.request.enabled &&
++       !operation.request.proxy_group_id.empty())) {
++    return std::nullopt;
++  }
++  operation.request.expected_revision = expected_revision;
++  operation.request.service_incarnation = service_incarnation;
++  operation.operation_sequence = operation_sequence;
++  operation.policy_generation = policy_generation;
++  operation.route_ready = statement.ColumnBool(15);
++  operation.publish_started = statement.ColumnBool(16);
++  operation.owner =
++      RowOwner(owner_, operation.request.site.storage_partition_token);
++  operation.after_group = {
++      .site_toggle_id = operation.request.site_toggle_id,
++      .canonical_host = operation.request.site.canonical_host,
++      .owner = operation.owner,
++      .http_top_level_site = operation.request.site.http_top_level_site,
++      .https_top_level_site = operation.request.site.https_top_level_site,
++      .member_rule_ids = {statement.ColumnString(6), statement.ColumnString(7)},
++      .revision = static_cast<uint64_t>(target_revision),
++      .last_operation_sequence = operation.operation_sequence,
++  };
++  for (size_t index = 0; index < 2; ++index) {
++    operation.after_members.push_back({
++        .rule_id = operation.after_group.member_rule_ids[index],
++        .owner = operation.owner,
++        .site_toggle_id = operation.request.site_toggle_id,
++        .group_revision = operation.after_group.revision,
++        .top_level_site = index == 0
++                              ? operation.request.site.http_top_level_site
++                              : operation.request.site.https_top_level_site,
++        .exact_host = operation.request.site.canonical_host,
++        .schemes = CompleteSchemes(),
++        .ports = aegis_access::PortScope::kAllBrowserPermitted,
++        .include_subdomains = false,
++        .mode = target_mode,
++        .proxy_group_id =
++            operation.request.enabled ? operation.request.proxy_group_id : "",
++        .protection_override = aegis_access::ProtectionOverride::kNone,
++        .last_operation_sequence = operation.operation_sequence,
++    });
++  }
++
++  sql::Statement contexts(database_.GetUniqueStatement(
++      "SELECT context_id,context_incarnation,acknowledged FROM "
++      "access_operation_contexts WHERE operation_id=? ORDER BY context_id"));
++  contexts.BindString(0, operation_id);
++  while (contexts.Step()) {
++    const int64_t context_incarnation = contexts.ColumnInt64(1);
++    if (context_incarnation <= 0) {
++      return std::nullopt;
++    }
++    ExecutionContextBinding context{contexts.ColumnString(0),
++                                    static_cast<uint64_t>(context_incarnation)};
++    if (!IsBounded(context.context_id, kMaxOpaqueIdBytes)) {
++      return std::nullopt;
++    }
++    operation.required_contexts.push_back(context);
++    operation.request.required_contexts.push_back(context);
++    if (contexts.ColumnBool(2)) {
++      operation.acknowledged_context_ids.push_back(context.context_id);
++    }
++  }
++  if (!contexts.Succeeded()) {
++    return std::nullopt;
++  }
++  if (!operation.request.site.IsComplete() ||
++      !IsBounded(operation.request.operation_id, kMaxOpaqueIdBytes) ||
++      !IsBounded(operation.request.request_fingerprint, kMaxOpaqueIdBytes) ||
++      !IsBounded(operation.request.site_toggle_id, kMaxOpaqueIdBytes) ||
++      operation.required_contexts.empty() ||
++      aegis_access::ValidateSiteProxyRuleGroup(
++          operation.owner, &operation.after_group, operation.after_members)
++              .error != aegis_access::GroupValidationError::kNone) {
++    return std::nullopt;
++  }
++  return operation;
++}
++
++std::vector<PendingSiteOperation> AccessRuleStore::LoadPendingOperations() {
++  std::vector<PendingSiteOperation> operations;
++  last_pending_load_had_error_ = false;
++  if (!initialized_) {
++    last_pending_load_had_error_ = true;
++    return operations;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "SELECT operation_id FROM access_pending_operations WHERE state=0 "
++      "ORDER BY operation_sequence"));
++  while (statement.Step()) {
++    auto operation = LoadOperation(statement.ColumnString(0), true);
++    if (!operation) {
++      operations.clear();
++      last_pending_load_had_error_ = true;
++      return operations;
++    }
++    operations.push_back(std::move(*operation));
++  }
++  if (!statement.Succeeded()) {
++    operations.clear();
++    last_pending_load_had_error_ = true;
++  }
++  return operations;
++}
++
++std::optional<PendingSiteOperation>
++AccessRuleStore::LoadPendingOperationForSite(
++    const BrowserConfirmedSite& site) {
++  last_pending_load_had_error_ = false;
++  if (!initialized_ || !site.IsComplete()) {
++    return std::nullopt;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "SELECT operation_id FROM access_pending_operations WHERE state=0 AND "
++      "storage_partition_token=? AND canonical_host=? ORDER BY "
++      "operation_sequence DESC LIMIT 1"));
++  statement.BindString(0, site.storage_partition_token);
++  statement.BindString(1, site.canonical_host);
++  if (!statement.Step()) {
++    last_pending_load_had_error_ = !statement.Succeeded();
++    return std::nullopt;
++  }
++  std::optional<PendingSiteOperation> operation =
++      LoadOperation(statement.ColumnString(0), true);
++  last_pending_load_had_error_ = !operation;
++  return operation;
++}
++
++bool AccessRuleStore::MarkRouteReady(const PendingSiteOperation& operation) {
++  if (ShouldFail(FailurePointForTesting::kMarkRouteReady) || !initialized_) {
++    return false;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "UPDATE access_pending_operations SET route_ready=1 WHERE "
++      "operation_id=? AND state=0 AND operation_sequence=? AND "
++      "policy_generation=?"));
++  statement.BindString(0, operation.request.operation_id);
++  statement.BindInt64(1, operation.operation_sequence);
++  statement.BindInt64(2, operation.policy_generation);
++  return statement.Run() && database_.GetLastChangeCount() == 1;
++}
++
++bool AccessRuleStore::MarkPublishStarted(
++    const PendingSiteOperation& operation) {
++  if (ShouldFail(FailurePointForTesting::kMarkPublishStarted) ||
++      !initialized_) {
++    return false;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "UPDATE access_pending_operations SET publish_started=1 WHERE "
++      "operation_id=? AND state=0 AND operation_sequence=? AND "
++      "policy_generation=? AND publish_started=0 AND "
++      "(target_mode=? OR route_ready=1)"));
++  statement.BindString(0, operation.request.operation_id);
++  statement.BindInt64(1, operation.operation_sequence);
++  statement.BindInt64(2, operation.policy_generation);
++  statement.BindInt(3,
++                    static_cast<int>(aegis_access::AccessMode::kDirect));
++  return statement.Run() && database_.GetLastChangeCount() == 1;
++}
++
++bool AccessRuleStore::MarkOperationFailed(
++    const PendingSiteOperation& operation) {
++  if (!initialized_) {
++    return false;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "UPDATE access_pending_operations SET state=3 WHERE operation_id=? "
++      "AND state=0 AND operation_sequence=? AND policy_generation=? AND "
++      "publish_started=0"));
++  statement.BindString(0, operation.request.operation_id);
++  statement.BindInt64(1, operation.operation_sequence);
++  statement.BindInt64(2, operation.policy_generation);
++  return statement.Run() && database_.GetLastChangeCount() == 1;
++}
++
++bool AccessRuleStore::MarkContextAcknowledged(
++    const PendingSiteOperation& operation,
++    const ExecutionContextBinding& context) {
++  if (ShouldFail(FailurePointForTesting::kMarkAcknowledged) || !initialized_) {
++    return false;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "UPDATE access_operation_contexts SET acknowledged=1 WHERE "
++      "operation_id=? AND context_id=? AND context_incarnation=? AND "
++      "EXISTS(SELECT 1 FROM access_pending_operations WHERE operation_id=? "
++      "AND state=0 AND operation_sequence=? AND policy_generation=? AND "
++      "publish_started=1)"));
++  statement.BindString(0, operation.request.operation_id);
++  statement.BindString(1, context.context_id);
++  statement.BindInt64(2, context.incarnation);
++  statement.BindString(3, operation.request.operation_id);
++  statement.BindInt64(4, operation.operation_sequence);
++  statement.BindInt64(5, operation.policy_generation);
++  return statement.Run() && database_.GetLastChangeCount() == 1;
++}
++
++std::optional<PendingSiteOperation>
++AccessRuleStore::RebindOperationForRecovery(
++    const PendingSiteOperation& operation,
++    uint64_t service_incarnation,
++    const std::vector<ExecutionContextBinding>& required_contexts) {
++  if (ShouldFail(FailurePointForTesting::kRebindRecovery) || !initialized_ ||
++      service_incarnation == 0 || !FitsSqlInt64(service_incarnation) ||
++      required_contexts.empty()) {
++    return std::nullopt;
++  }
++  std::set<std::string> context_ids;
++  for (const auto& context : required_contexts) {
++    if (!IsBounded(context.context_id, kMaxOpaqueIdBytes) ||
++        context.incarnation == 0 ||
++        !FitsSqlInt64(context.incarnation) ||
++        !context_ids.insert(context.context_id).second) {
++      return std::nullopt;
++    }
++  }
++
++  sql::Transaction transaction(&database_);
++  if (!transaction.Begin()) {
++    return std::nullopt;
++  }
++  sql::Statement update(database_.GetUniqueStatement(
++      "UPDATE access_pending_operations SET service_incarnation=?,"
++      "route_ready=0,publish_started=0 WHERE operation_id=? AND state=0 AND "
++      "operation_sequence=? AND policy_generation=?"));
++  update.BindInt64(0, service_incarnation);
++  update.BindString(1, operation.request.operation_id);
++  update.BindInt64(2, operation.operation_sequence);
++  update.BindInt64(3, operation.policy_generation);
++  if (!update.Run() || database_.GetLastChangeCount() != 1) {
++    return std::nullopt;
++  }
++
++  sql::Statement delete_contexts(database_.GetUniqueStatement(
++      "DELETE FROM access_operation_contexts WHERE operation_id=?"));
++  delete_contexts.BindString(0, operation.request.operation_id);
++  if (!delete_contexts.Run()) {
++    return std::nullopt;
++  }
++  for (const auto& context : required_contexts) {
++    sql::Statement insert_context(database_.GetUniqueStatement(
++        "INSERT INTO access_operation_contexts("
++        "operation_id,context_id,context_incarnation,acknowledged) "
++        "VALUES(?,?,?,0)"));
++    insert_context.BindString(0, operation.request.operation_id);
++    insert_context.BindString(1, context.context_id);
++    insert_context.BindInt64(2, context.incarnation);
++    if (!insert_context.Run()) {
++      return std::nullopt;
++    }
++  }
++  if (!transaction.Commit()) {
++    return std::nullopt;
++  }
++  return LoadOperation(operation.request.operation_id, true);
++}
++
++CommitOperationStatus AccessRuleStore::CommitOperation(
++    const PendingSiteOperation& expected_operation) {
++  if (ShouldFail(FailurePointForTesting::kCommitOperation) || !initialized_) {
++    return CommitOperationStatus::kStorageError;
++  }
++  sql::Transaction transaction(&database_);
++  if (!transaction.Begin()) {
++    return CommitOperationStatus::kStorageError;
++  }
++  auto loaded = LoadOperation(expected_operation.request.operation_id, true);
++  if (!loaded) {
++    return CommitOperationStatus::kSuperseded;
++  }
++  if (loaded->operation_sequence != expected_operation.operation_sequence ||
++      loaded->policy_generation != expected_operation.policy_generation) {
++    return CommitOperationStatus::kSuperseded;
++  }
++  if (!loaded->publish_started ||
++      (loaded->request.enabled && !loaded->route_ready) ||
++      loaded->required_contexts.empty() ||
++      loaded->acknowledged_context_ids.size() !=
++          loaded->required_contexts.size()) {
++    return CommitOperationStatus::kNotReady;
++  }
++
++  sql::Statement delete_rules(database_.GetUniqueStatement(
++      "DELETE FROM access_rules WHERE storage_partition_token=? AND "
++      "site_toggle_id=?"));
++  delete_rules.BindString(0, loaded->request.site.storage_partition_token);
++  delete_rules.BindString(1, loaded->after_group.site_toggle_id);
++  if (!delete_rules.Run()) {
++    return CommitOperationStatus::kStorageError;
++  }
++  sql::Statement delete_group(database_.GetUniqueStatement(
++      "DELETE FROM access_site_groups WHERE storage_partition_token=? AND "
++      "canonical_host=?"));
++  delete_group.BindString(0, loaded->request.site.storage_partition_token);
++  delete_group.BindString(1, loaded->request.site.canonical_host);
++  if (!delete_group.Run()) {
++    return CommitOperationStatus::kStorageError;
++  }
++
++  sql::Statement insert_group(database_.GetUniqueStatement(
++      "INSERT INTO access_site_groups("
++      "site_toggle_id,storage_partition_token,canonical_host,"
++      "http_top_level_site,https_top_level_site,http_member_rule_id,"
++      "https_member_rule_id,revision,last_operation_sequence,"
++      "policy_generation) VALUES(?,?,?,?,?,?,?,?,?,?)"));
++  insert_group.BindString(0, loaded->after_group.site_toggle_id);
++  insert_group.BindString(1, loaded->request.site.storage_partition_token);
++  insert_group.BindString(2, loaded->after_group.canonical_host);
++  insert_group.BindString(3, loaded->after_group.http_top_level_site);
++  insert_group.BindString(4, loaded->after_group.https_top_level_site);
++  insert_group.BindString(5, loaded->after_group.member_rule_ids[0]);
++  insert_group.BindString(6, loaded->after_group.member_rule_ids[1]);
++  insert_group.BindInt64(7, loaded->after_group.revision);
++  insert_group.BindInt64(8, loaded->operation_sequence);
++  insert_group.BindInt64(9, loaded->policy_generation);
++  if (!insert_group.Run()) {
++    return CommitOperationStatus::kStorageError;
++  }
++
++  for (const auto& member : loaded->after_members) {
++    sql::Statement insert_rule(database_.GetUniqueStatement(
++        "INSERT INTO access_rules("
++        "rule_id,storage_partition_token,site_toggle_id,group_revision,"
++        "top_level_site,exact_host,schemes_mask,port_scope,"
++        "include_subdomains,mode,proxy_group_id,protection_override,"
++        "row_revision,last_operation_sequence) "
++        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
++    insert_rule.BindString(0, member.rule_id);
++    insert_rule.BindString(1, loaded->request.site.storage_partition_token);
++    insert_rule.BindString(2, member.site_toggle_id);
++    insert_rule.BindInt64(3, member.group_revision);
++    insert_rule.BindString(4, member.top_level_site);
++    insert_rule.BindString(5, member.exact_host);
++    insert_rule.BindInt(6, kCompleteSchemeMask);
++    insert_rule.BindInt(7, static_cast<int>(member.ports));
++    insert_rule.BindBool(8, member.include_subdomains);
++    insert_rule.BindInt(9, static_cast<int>(member.mode));
++    insert_rule.BindString(10, member.proxy_group_id);
++    insert_rule.BindInt(11, static_cast<int>(member.protection_override));
++    insert_rule.BindInt64(12, member.group_revision);
++    insert_rule.BindInt64(13, member.last_operation_sequence);
++    if (!insert_rule.Run()) {
++      return CommitOperationStatus::kStorageError;
++    }
++  }
++
++  sql::Statement commit_operation(database_.GetUniqueStatement(
++      "UPDATE access_pending_operations SET state=2 WHERE operation_id=? "
++      "AND state=0 AND operation_sequence=? AND policy_generation=?"));
++  commit_operation.BindString(0, loaded->request.operation_id);
++  commit_operation.BindInt64(1, loaded->operation_sequence);
++  commit_operation.BindInt64(2, loaded->policy_generation);
++  if (!commit_operation.Run() || database_.GetLastChangeCount() != 1 ||
++      !transaction.Commit()) {
++    return CommitOperationStatus::kStorageError;
++  }
++  return CommitOperationStatus::kCommitted;
++}
++
++bool AccessRuleStore::SaveIndependentRule(const IndependentAccessRule& rule) {
++  if (!initialized_ || !IsValidIndependentRule(rule)) {
++    return false;
++  }
++  sql::Statement ownership(database_.GetUniqueStatement(
++      "SELECT site_toggle_id FROM access_rules WHERE "
++      "storage_partition_token=? AND rule_id=?"));
++  ownership.BindString(0, rule.storage_partition_token);
++  ownership.BindString(1, rule.rule_id);
++  if (ownership.Step() && !ownership.ColumnString(0).empty()) {
++    return false;
++  }
++  if (!ownership.Succeeded()) {
++    return false;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "INSERT OR REPLACE INTO access_rules("
++      "rule_id,storage_partition_token,site_toggle_id,group_revision,"
++      "top_level_site,exact_host,schemes_mask,port_scope,"
++      "include_subdomains,mode,proxy_group_id,protection_override,"
++      "row_revision,last_operation_sequence) "
++      "VALUES(?,?,'',0,?,?,?,?,?,?,?,?,?,?)"));
++  statement.BindString(0, rule.rule_id);
++  statement.BindString(1, rule.storage_partition_token);
++  statement.BindString(2, rule.top_level_site);
++  statement.BindString(3, rule.exact_host);
++  statement.BindInt(4, SchemeMask(rule.schemes));
++  statement.BindInt(5, static_cast<int>(rule.ports));
++  statement.BindBool(6, rule.include_subdomains);
++  statement.BindInt(7, static_cast<int>(rule.mode));
++  statement.BindString(8, rule.proxy_group_id);
++  statement.BindInt(9, static_cast<int>(rule.protection_override));
++  statement.BindInt64(10, rule.row_revision);
++  statement.BindInt64(11, rule.last_operation_sequence);
++  return statement.Run();
++}
++
++std::optional<IndependentAccessRule> AccessRuleStore::LoadIndependentRule(
++    const std::string& storage_partition_token,
++    const std::string& rule_id) {
++  if (!initialized_ || storage_partition_token.empty() || rule_id.empty()) {
++    return std::nullopt;
++  }
++  sql::Statement statement(database_.GetUniqueStatement(
++      "SELECT storage_partition_token,top_level_site,exact_host,schemes_mask,"
++      "port_scope,include_subdomains,mode,proxy_group_id,"
++      "protection_override,row_revision,last_operation_sequence FROM "
++      "access_rules WHERE storage_partition_token=? AND rule_id=? AND "
++      "site_toggle_id=''"));
++  statement.BindString(0, storage_partition_token);
++  statement.BindString(1, rule_id);
++  if (!statement.Step()) {
++    return std::nullopt;
++  }
++  IndependentAccessRule rule;
++  rule.rule_id = rule_id;
++  rule.storage_partition_token = statement.ColumnString(0);
++  rule.top_level_site = statement.ColumnString(1);
++  rule.exact_host = statement.ColumnString(2);
++  rule.schemes = SchemesFromMask(statement.ColumnInt(3));
++  rule.ports = static_cast<aegis_access::PortScope>(statement.ColumnInt(4));
++  rule.include_subdomains = statement.ColumnBool(5);
++  rule.mode = static_cast<aegis_access::AccessMode>(statement.ColumnInt(6));
++  rule.proxy_group_id = statement.ColumnString(7);
++  rule.protection_override =
++      static_cast<aegis_access::ProtectionOverride>(statement.ColumnInt(8));
++  rule.row_revision = statement.ColumnInt64(9);
++  rule.last_operation_sequence = statement.ColumnInt64(10);
++  return IsValidIndependentRule(rule) ? std::make_optional(std::move(rule))
++                                      : std::nullopt;
++}
++
++}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_rule_store.h b/chrome/browser/aegis/access/access_rule_store.h
+new file mode 100644
+index 0000000..d40cb4a
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_rule_store.h
+@@ -0,0 +1,213 @@
++// Copyright 2026 GCSA
++
++#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_RULE_STORE_H_
++#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_RULE_STORE_H_
++
++#include <cstdint>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "components/aegis_access/site_proxy_rule_group.h"
++#include "sql/database.h"
++#include "sql/meta_table.h"
++
++namespace aegis::access {
++
++// A site value produced by a browser-owned navigation adapter. This class does
++// not derive a registrable domain and deliberately cannot be constructed from
++// the legacy SiteKeyForHost display helper.
++struct BrowserConfirmedSite {
++  std::string storage_partition_token;
++  std::string canonical_host;
++  std::string http_top_level_site;
++  std::string https_top_level_site;
++
++  bool IsComplete() const;
++
++  friend bool operator==(const BrowserConfirmedSite&,
++                         const BrowserConfirmedSite&) = default;
++};
++
++struct ExecutionContextBinding {
++  std::string context_id;
++  uint64_t incarnation = 0;
++
++  friend bool operator==(const ExecutionContextBinding&,
++                         const ExecutionContextBinding&) = default;
++};
++
++enum class SiteSelectionReadState {
++  kMissing,
++  kValid,
++  kRestoring,
++  kCorrupt,
++  kStorageError,
++};
++
++struct SiteSelectionRecord {
++  SiteSelectionReadState state = SiteSelectionReadState::kStorageError;
++  aegis_access::GroupSelection selection =
++      aegis_access::GroupSelection::kUnknown;
++  aegis_access::GroupValidationError validation_error =
++      aegis_access::GroupValidationError::kInvalidGroup;
++  uint64_t revision = 0;
++  uint64_t last_operation_sequence = 0;
++  uint64_t policy_generation = 0;
++  std::string proxy_group_id;
++  bool has_independent_rule = false;
++};
++
++struct IndependentAccessRule {
++  std::string rule_id;
++  std::string storage_partition_token;
++  std::string top_level_site;
++  std::string exact_host;
++  std::vector<aegis_access::RequestScheme> schemes;
++  aegis_access::PortScope ports = aegis_access::PortScope::kInvalid;
++  bool include_subdomains = false;
++  aegis_access::AccessMode mode = aegis_access::AccessMode::kInvalid;
++  std::string proxy_group_id;
++  aegis_access::ProtectionOverride protection_override =
++      aegis_access::ProtectionOverride::kInvalid;
++  uint64_t row_revision = 0;
++  uint64_t last_operation_sequence = 0;
++};
++
++struct SiteToggleRequest {
++  std::string operation_id;
++  std::string request_fingerprint;
++  std::string site_toggle_id;
++  BrowserConfirmedSite site;
++  bool enabled = false;
++  std::string proxy_group_id;
++  uint64_t expected_revision = 0;
++  uint64_t service_incarnation = 0;
++  std::vector<ExecutionContextBinding> required_contexts;
++};
++
++struct PendingSiteOperation {
++  SiteToggleRequest request;
++  aegis_access::OwnershipKey owner;
++  aegis_access::SiteProxyRuleGroup after_group;
++  std::vector<aegis_access::SiteProxyRuleMember> after_members;
++  uint64_t operation_sequence = 0;
++  uint64_t policy_generation = 0;
++  bool route_ready = false;
++  bool publish_started = false;
++  std::vector<ExecutionContextBinding> required_contexts;
++  std::vector<std::string> acknowledged_context_ids;
++};
++
++enum class PrepareOperationStatus {
++  kPrepared,
++  kDuplicate,
++  kDuplicateConflict,
++  kRevisionConflict,
++  kInvalidRequest,
++  kCorruptState,
++  kStorageError,
++};
++
++struct PrepareOperationResult {
++  PrepareOperationStatus status = PrepareOperationStatus::kStorageError;
++  std::optional<PendingSiteOperation> operation;
++};
++
++enum class CommitOperationStatus {
++  kCommitted,
++  kNotReady,
++  kSuperseded,
++  kStorageError,
++};
++
++class AccessRuleStore {
++ public:
++  // sql::Database is sequence-affine. Construct, initialize, and use this
++  // store on one browser-owned sequence.
++  enum class FailurePointForTesting {
++    kNone,
++    kPrepareOperation,
++    kMarkRouteReady,
++    kMarkPublishStarted,
++    kMarkAcknowledged,
++    kCommitOperation,
++    kRebindRecovery,
++  };
++
++  AccessRuleStore(base::FilePath database_path,
++                  aegis_access::OwnershipKey owner,
++                  bool in_memory = false);
++  AccessRuleStore(const AccessRuleStore&) = delete;
++  AccessRuleStore& operator=(const AccessRuleStore&) = delete;
++  ~AccessRuleStore();
++
++  bool Initialize();
++  bool is_initialized() const { return initialized_; }
++  const aegis_access::OwnershipKey& owner() const { return owner_; }
++
++  SiteSelectionRecord ReadSiteSelection(const BrowserConfirmedSite& site);
++  PrepareOperationResult PrepareSiteToggleOperation(
++      const SiteToggleRequest& request);
++  std::optional<PendingSiteOperation> LoadPendingOperation(
++      const std::string& operation_id);
++  std::optional<PendingSiteOperation> LoadPendingOperationForSite(
++      const BrowserConfirmedSite& site);
++  std::vector<PendingSiteOperation> LoadPendingOperations();
++  bool MarkRouteReady(const PendingSiteOperation& operation);
++  bool MarkPublishStarted(const PendingSiteOperation& operation);
++  bool MarkOperationFailed(const PendingSiteOperation& operation);
++  bool MarkContextAcknowledged(const PendingSiteOperation& operation,
++                               const ExecutionContextBinding& context);
++  std::optional<PendingSiteOperation> RebindOperationForRecovery(
++      const PendingSiteOperation& operation,
++      uint64_t service_incarnation,
++      const std::vector<ExecutionContextBinding>& required_contexts);
++  CommitOperationStatus CommitOperation(const PendingSiteOperation& operation);
++
++  bool last_pending_load_had_error() const {
++    return last_pending_load_had_error_;
++  }
++
++  bool SaveIndependentRule(const IndependentAccessRule& rule);
++  std::optional<IndependentAccessRule> LoadIndependentRule(
++      const std::string& storage_partition_token,
++      const std::string& rule_id);
++
++  void SetFailurePointForTesting(FailurePointForTesting point) {
++    failure_point_for_testing_ = point;
++  }
++  bool ExecuteSqlForTesting(const char* sql) { return database_.Execute(sql); }
++  void CloseDatabaseForTesting() { database_.Close(); }
++
++ private:
++  enum class DurableOperationState {
++    kActive = 0,
++    kSuperseded = 1,
++    kCommitted = 2,
++    kFailed = 3,
++  };
++
++  SiteSelectionRecord ReadDurableSiteSelection(
++      const BrowserConfirmedSite& site);
++  std::optional<PendingSiteOperation> LoadOperation(
++      const std::string& operation_id,
++      bool active_only);
++  bool IsBoundOwnerValid() const;
++  bool ShouldFail(FailurePointForTesting point) const;
++
++  const base::FilePath database_path_;
++  const aegis_access::OwnershipKey owner_;
++  const bool in_memory_;
++  sql::Database database_;
++  sql::MetaTable meta_table_;
++  bool initialized_ = false;
++  bool last_pending_load_had_error_ = false;
++  FailurePointForTesting failure_point_for_testing_ =
++      FailurePointForTesting::kNone;
++};
++
++}  // namespace aegis::access
++
++#endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_RULE_STORE_H_
+diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/browser/aegis/access/access_rule_store_unittest.cc
+new file mode 100644
+index 0000000..7a18782
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_rule_store_unittest.cc
+@@ -0,0 +1,280 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/aegis/access/access_rule_store.h"
++
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "sql/database.h"
++#include "sql/meta_table.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace aegis::access {
++namespace {
++
++aegis_access::OwnershipKey StoreOwner(aegis_access::ChannelNamespace channel =
++                                          aegis_access::ChannelNamespace::kBeta,
++                                      std::string profile = "profile-A") {
++  return {channel, std::move(profile), ""};
++}
++
++BrowserConfirmedSite Site(std::string partition = "partition-A",
++                          std::string host = "news.example") {
++  return {.storage_partition_token = std::move(partition),
++          .canonical_host = std::move(host),
++          .http_top_level_site = "http://news.example",
++          .https_top_level_site = "https://news.example"};
++}
++
++SiteToggleRequest Request(std::string operation_id,
++                          bool enabled,
++                          uint64_t expected_revision = 0) {
++  return {.operation_id = operation_id,
++          .request_fingerprint = "fingerprint-" + operation_id,
++          .site_toggle_id = "toggle-news",
++          .site = Site(),
++          .enabled = enabled,
++          .proxy_group_id = enabled ? "managed-proxy" : "",
++          .expected_revision = expected_revision,
++          .service_incarnation = 7,
++          .required_contexts = {{"default", 11}, {"isolated", 13}}};
++}
++
++void AcknowledgeAndCommit(AccessRuleStore* store,
++                          PendingSiteOperation operation) {
++  if (operation.request.enabled) {
++    ASSERT_TRUE(store->MarkRouteReady(operation));
++    operation.route_ready = true;
++  }
++  ASSERT_TRUE(store->MarkPublishStarted(operation));
++  operation.publish_started = true;
++  for (const auto& context : operation.required_contexts) {
++    ASSERT_TRUE(store->MarkContextAcknowledged(operation, context));
++  }
++  EXPECT_EQ(store->CommitOperation(operation),
++            CommitOperationStatus::kCommitted);
++}
++
++TEST(AccessRuleStoreTest, InMemoryPrepareCommitAndSelectionAreAtomic) {
++  AccessRuleStore store(base::FilePath(), StoreOwner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  EXPECT_EQ(store.ReadSiteSelection(Site()).state,
++            SiteSelectionReadState::kMissing);
++
++  PrepareOperationResult prepared =
++      store.PrepareSiteToggleOperation(Request("enable", true));
++  ASSERT_EQ(prepared.status, PrepareOperationStatus::kPrepared);
++  ASSERT_TRUE(prepared.operation);
++  SiteSelectionRecord restoring = store.ReadSiteSelection(Site());
++  EXPECT_EQ(restoring.state, SiteSelectionReadState::kRestoring);
++  EXPECT_EQ(restoring.selection, aegis_access::GroupSelection::kUnknown);
++
++  AcknowledgeAndCommit(&store, *prepared.operation);
++  SiteSelectionRecord active = store.ReadSiteSelection(Site());
++  EXPECT_EQ(active.state, SiteSelectionReadState::kValid);
++  EXPECT_EQ(active.selection, aegis_access::GroupSelection::kEnabled);
++  EXPECT_EQ(active.revision, 1u);
++  EXPECT_EQ(active.proxy_group_id, "managed-proxy");
++}
++
++TEST(AccessRuleStoreTest, FileDatabaseReopensWithExactOwner) {
++  base::ScopedTempDir temp_dir;
++  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
++  const base::FilePath path = temp_dir.GetPath().AppendASCII("access.db");
++  {
++    AccessRuleStore store(path, StoreOwner());
++    ASSERT_TRUE(store.Initialize());
++    auto prepared = store.PrepareSiteToggleOperation(Request("persist", true));
++    ASSERT_TRUE(prepared.operation);
++    AcknowledgeAndCommit(&store, *prepared.operation);
++  }
++  {
++    AccessRuleStore reopened(path, StoreOwner());
++    ASSERT_TRUE(reopened.Initialize());
++    EXPECT_EQ(reopened.ReadSiteSelection(Site()).selection,
++              aegis_access::GroupSelection::kEnabled);
++  }
++  AccessRuleStore wrong_profile(
++      path, StoreOwner(aegis_access::ChannelNamespace::kBeta, "profile-B"));
++  EXPECT_FALSE(wrong_profile.Initialize());
++  AccessRuleStore wrong_channel(
++      path, StoreOwner(aegis_access::ChannelNamespace::kRelease));
++  EXPECT_FALSE(wrong_channel.Initialize());
++}
++
++TEST(AccessRuleStoreTest, PartitionIsolationAndIndependentRulesSurviveReplace) {
++  AccessRuleStore store(base::FilePath(), StoreOwner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  IndependentAccessRule debug_rule{
++      .rule_id = "debug-reject",
++      .storage_partition_token = "partition-A",
++      .top_level_site = "https://news.example",
++      .exact_host = "news.example",
++      .schemes = {aegis_access::RequestScheme::kHttps},
++      .ports = aegis_access::PortScope::kExplicitSubset,
++      .include_subdomains = false,
++      .mode = aegis_access::AccessMode::kReject,
++      .proxy_group_id = "",
++      .protection_override = aegis_access::ProtectionOverride::kNone,
++      .row_revision = 3,
++      .last_operation_sequence = 9,
++  };
++  ASSERT_TRUE(store.SaveIndependentRule(debug_rule));
++  auto enabled = store.PrepareSiteToggleOperation(Request("enable", true));
++  ASSERT_TRUE(enabled.operation);
++  AcknowledgeAndCommit(&store, *enabled.operation);
++  auto disabled =
++      store.PrepareSiteToggleOperation(Request("disable", false, 1));
++  ASSERT_TRUE(disabled.operation);
++  AcknowledgeAndCommit(&store, *disabled.operation);
++  SiteToggleRequest partition_b = Request("partition-b", true);
++  partition_b.site = Site("partition-B");
++  auto enabled_partition_b = store.PrepareSiteToggleOperation(partition_b);
++  ASSERT_TRUE(enabled_partition_b.operation);
++  AcknowledgeAndCommit(&store, *enabled_partition_b.operation);
++
++  EXPECT_EQ(store.ReadSiteSelection(Site()).selection,
++            aegis_access::GroupSelection::kDisabled);
++  EXPECT_TRUE(store.ReadSiteSelection(Site()).has_independent_rule);
++  EXPECT_TRUE(store.LoadIndependentRule("partition-A", "debug-reject"));
++  EXPECT_EQ(store.ReadSiteSelection(Site("partition-B")).selection,
++            aegis_access::GroupSelection::kEnabled);
++}
++
++TEST(AccessRuleStoreTest, PartialCorruptAndReadErrorsNeverBecomeDisabled) {
++  AccessRuleStore store(base::FilePath(), StoreOwner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  auto prepared = store.PrepareSiteToggleOperation(Request("enable", true));
++  ASSERT_TRUE(prepared.operation);
++  AcknowledgeAndCommit(&store, *prepared.operation);
++  ASSERT_TRUE(store.ExecuteSqlForTesting(
++      "DELETE FROM access_rules WHERE rule_id='toggle-news:https'"));
++  SiteSelectionRecord partial = store.ReadSiteSelection(Site());
++  EXPECT_EQ(partial.state, SiteSelectionReadState::kCorrupt);
++  EXPECT_EQ(partial.selection, aegis_access::GroupSelection::kUnknown);
++
++  store.CloseDatabaseForTesting();
++  SiteSelectionRecord read_error = store.ReadSiteSelection(Site());
++  EXPECT_EQ(read_error.state, SiteSelectionReadState::kStorageError);
++  EXPECT_EQ(read_error.selection, aegis_access::GroupSelection::kUnknown);
++}
++
++TEST(AccessRuleStoreTest, CasDuplicateAndCountersAreMonotonic) {
++  AccessRuleStore store(base::FilePath(), StoreOwner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  auto first = store.PrepareSiteToggleOperation(Request("operation-1", true));
++  ASSERT_EQ(first.status, PrepareOperationStatus::kPrepared);
++  auto duplicate =
++      store.PrepareSiteToggleOperation(Request("operation-1", true));
++  EXPECT_EQ(duplicate.status, PrepareOperationStatus::kDuplicate);
++
++  SiteToggleRequest conflict = Request("operation-1", true);
++  conflict.request_fingerprint = "different";
++  EXPECT_EQ(store.PrepareSiteToggleOperation(conflict).status,
++            PrepareOperationStatus::kDuplicateConflict);
++
++  auto second = store.PrepareSiteToggleOperation(Request("operation-2", false));
++  ASSERT_EQ(second.status, PrepareOperationStatus::kPrepared);
++  EXPECT_GT(second.operation->operation_sequence,
++            first.operation->operation_sequence);
++  EXPECT_GT(second.operation->policy_generation,
++            first.operation->policy_generation);
++  EXPECT_FALSE(store.LoadPendingOperation("operation-1"));
++  EXPECT_TRUE(store.LoadPendingOperation("operation-2"));
++
++  SiteToggleRequest wrong_revision = Request("operation-3", true, 9);
++  EXPECT_EQ(store.PrepareSiteToggleOperation(wrong_revision).status,
++            PrepareOperationStatus::kRevisionConflict);
++}
++
++TEST(AccessRuleStoreTest, RejectsNonCanonicalHostAndToggleIdReuse) {
++  AccessRuleStore store(base::FilePath(), StoreOwner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  SiteToggleRequest uppercase = Request("uppercase", true);
++  uppercase.site.canonical_host = "News.Example";
++  EXPECT_EQ(store.PrepareSiteToggleOperation(uppercase).status,
++            PrepareOperationStatus::kInvalidRequest);
++
++  SiteToggleRequest mismatched_site = Request("mismatched-site", true);
++  mismatched_site.site.https_top_level_site = "https://other.example";
++  EXPECT_EQ(store.PrepareSiteToggleOperation(mismatched_site).status,
++            PrepareOperationStatus::kInvalidRequest);
++
++  auto first = store.PrepareSiteToggleOperation(Request("first", false));
++  ASSERT_TRUE(first.operation);
++  AcknowledgeAndCommit(&store, *first.operation);
++  SiteToggleRequest reused = Request("reused", false);
++  reused.site = {.storage_partition_token = "partition-A",
++                 .canonical_host = "other.example",
++                 .http_top_level_site = "http://other.example",
++                 .https_top_level_site = "https://other.example"};
++  EXPECT_EQ(store.PrepareSiteToggleOperation(reused).status,
++            PrepareOperationStatus::kInvalidRequest);
++}
++
++TEST(AccessRuleStoreTest, PendingAfterImageSurvivesCrashAndReadsRestoring) {
++  base::ScopedTempDir temp_dir;
++  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
++  const base::FilePath path = temp_dir.GetPath().AppendASCII("access.db");
++  uint64_t sequence = 0;
++  {
++    AccessRuleStore store(path, StoreOwner());
++    ASSERT_TRUE(store.Initialize());
++    auto pending = store.PrepareSiteToggleOperation(Request("pending", true));
++    ASSERT_TRUE(pending.operation);
++    sequence = pending.operation->operation_sequence;
++  }
++  AccessRuleStore reopened(path, StoreOwner());
++  ASSERT_TRUE(reopened.Initialize());
++  EXPECT_EQ(reopened.ReadSiteSelection(Site()).state,
++            SiteSelectionReadState::kRestoring);
++  auto recovered = reopened.LoadPendingOperation("pending");
++  ASSERT_TRUE(recovered);
++  EXPECT_EQ(recovered->operation_sequence, sequence);
++  EXPECT_EQ(recovered->after_members.size(), 2u);
++  EXPECT_EQ(recovered->after_members[0].exact_host, "news.example");
++  EXPECT_EQ(recovered->after_members[0].schemes.size(), 4u);
++}
++
++TEST(AccessRuleStoreTest, FutureSchemaAndCorruptFileFailInitialization) {
++  base::ScopedTempDir temp_dir;
++  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
++  const base::FilePath future_path =
++      temp_dir.GetPath().AppendASCII("future.db");
++  {
++    AccessRuleStore store(future_path, StoreOwner());
++    ASSERT_TRUE(store.Initialize());
++  }
++  {
++    sql::Database future_database("AegisAccess");
++    ASSERT_TRUE(future_database.Open(future_path));
++    sql::MetaTable meta;
++    ASSERT_TRUE(meta.Init(&future_database, 99, 99));
++    ASSERT_TRUE(meta.SetVersionNumber(99));
++    ASSERT_TRUE(meta.SetCompatibleVersionNumber(99));
++  }
++  AccessRuleStore future(future_path, StoreOwner());
++  EXPECT_FALSE(future.Initialize());
++
++  const base::FilePath corrupt_path =
++      temp_dir.GetPath().AppendASCII("corrupt.db");
++  ASSERT_TRUE(base::WriteFile(corrupt_path, "not sqlite"));
++  AccessRuleStore corrupt(corrupt_path, StoreOwner());
++  EXPECT_FALSE(corrupt.Initialize());
++
++  const base::FilePath partial_path =
++      temp_dir.GetPath().AppendASCII("partial.db");
++  {
++    AccessRuleStore store(partial_path, StoreOwner());
++    ASSERT_TRUE(store.Initialize());
++  }
++  {
++    sql::Database partial_database("AegisAccess");
++    ASSERT_TRUE(partial_database.Open(partial_path));
++    ASSERT_TRUE(partial_database.Execute("DROP TABLE access_rules"));
++  }
++  AccessRuleStore partial(partial_path, StoreOwner());
++  EXPECT_FALSE(partial.Initialize());
++}
++
++}  // namespace
++}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/site_proxy_toggle_coordinator.cc b/chrome/browser/aegis/access/site_proxy_toggle_coordinator.cc
+new file mode 100644
+index 0000000..4e4775d
+--- /dev/null
++++ b/chrome/browser/aegis/access/site_proxy_toggle_coordinator.cc
+@@ -0,0 +1,264 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/aegis/access/site_proxy_toggle_coordinator.h"
++
++#include <algorithm>
++
++namespace aegis::access {
++namespace {
++
++bool IsProductToggleChannel(aegis_access::ChannelNamespace channel) {
++  return channel == aegis_access::ChannelNamespace::kBeta ||
++         channel == aegis_access::ChannelNamespace::kRelease;
++}
++
++ToggleStartStatus MapPrepareFailure(PrepareOperationStatus status) {
++  switch (status) {
++    case PrepareOperationStatus::kDuplicate:
++      return ToggleStartStatus::kDuplicate;
++    case PrepareOperationStatus::kDuplicateConflict:
++    case PrepareOperationStatus::kInvalidRequest:
++      return ToggleStartStatus::kInvalidRequest;
++    case PrepareOperationStatus::kRevisionConflict:
++      return ToggleStartStatus::kRevisionConflict;
++    case PrepareOperationStatus::kCorruptState:
++      return ToggleStartStatus::kCorruptState;
++    case PrepareOperationStatus::kStorageError:
++      return ToggleStartStatus::kSaveFailed;
++    case PrepareOperationStatus::kPrepared:
++      break;
++  }
++  return ToggleStartStatus::kInvalidRequest;
++}
++
++}  // namespace
++
++SiteProxyToggleCoordinator::SiteProxyToggleCoordinator(
++    AccessRuleStore* store,
++    RoutePreparer* route_preparer,
++    PolicyPublisher* policy_publisher)
++    : store_(store),
++      route_preparer_(route_preparer),
++      policy_publisher_(policy_publisher) {}
++
++SiteProxyToggleCoordinator::~SiteProxyToggleCoordinator() = default;
++
++ToggleStartResult SiteProxyToggleCoordinator::SetSiteProxy(
++    const SiteToggleRequest& request) {
++  if (!store_ || !route_preparer_ || !policy_publisher_ ||
++      !IsProductToggleChannel(store_->owner().channel)) {
++    return {ToggleStartStatus::kRejectedChannel, std::nullopt};
++  }
++  std::optional<PendingSiteOperation> previous =
++      store_->LoadPendingOperationForSite(request.site);
++  if (store_->last_pending_load_had_error()) {
++    policy_publisher_->EnterStoreFailClosed(store_->owner(),
++                                            "pending_journal_corrupt");
++    return {ToggleStartStatus::kCorruptState, std::nullopt};
++  }
++  PrepareOperationResult prepared = store_->PrepareSiteToggleOperation(request);
++  if (prepared.status != PrepareOperationStatus::kPrepared) {
++    return {MapPrepareFailure(prepared.status), std::move(prepared.operation)};
++  }
++
++  if (previous && previous->publish_started) {
++    policy_publisher_->EnterFailClosed(
++        previous->request.site, previous->policy_generation,
++        "published_operation_superseded");
++  }
++
++  if (prepared.operation->request.enabled) {
++    route_preparer_->PrepareRoute(*prepared.operation);
++    return {ToggleStartStatus::kPendingRoute, std::move(prepared.operation)};
++  }
++  if (TryPublishNextReady() == ToggleEventResult::kSaveFailed) {
++    return {ToggleStartStatus::kSaveFailed, std::move(prepared.operation)};
++  }
++  return {ToggleStartStatus::kPendingPublish, std::move(prepared.operation)};
++}
++
++bool SiteProxyToggleCoordinator::EventMatches(
++    const PendingSiteOperation& operation,
++    const OperationEventIdentity& event) {
++  return event.operation_id == operation.request.operation_id &&
++         event.request_fingerprint == operation.request.request_fingerprint &&
++         event.owner == operation.owner &&
++         event.expected_revision == operation.request.expected_revision &&
++         event.policy_generation == operation.policy_generation &&
++         event.operation_sequence == operation.operation_sequence &&
++         event.service_incarnation == operation.request.service_incarnation;
++}
++
++ToggleEventResult SiteProxyToggleCoordinator::OnRouteReady(
++    const RouteReadyEvent& event) {
++  if (!store_ || !policy_publisher_) {
++    return ToggleEventResult::kIgnored;
++  }
++  std::optional<PendingSiteOperation> operation =
++      store_->LoadPendingOperation(event.operation_id);
++  if (!operation || !operation->request.enabled ||
++      !EventMatches(*operation, event)) {
++    return ToggleEventResult::kIgnored;
++  }
++  if (!store_->MarkRouteReady(*operation)) {
++    // The after-image has not been published, so the old committed selection
++    // remains authoritative and no fail-closed transition is necessary.
++    return ToggleEventResult::kSaveFailed;
++  }
++  return TryPublishNextReady();
++}
++
++ToggleEventResult SiteProxyToggleCoordinator::OnRouteFailed(
++    const RouteReadyEvent& event) {
++  if (!store_ || !policy_publisher_) {
++    return ToggleEventResult::kIgnored;
++  }
++  std::optional<PendingSiteOperation> operation =
++      store_->LoadPendingOperation(event.operation_id);
++  if (!operation || !operation->request.enabled ||
++      operation->publish_started || !EventMatches(*operation, event)) {
++    return ToggleEventResult::kIgnored;
++  }
++  if (!store_->MarkOperationFailed(*operation)) {
++    return ToggleEventResult::kSaveFailed;
++  }
++  TryPublishNextReady();
++  return ToggleEventResult::kFailed;
++}
++
++ToggleEventResult SiteProxyToggleCoordinator::TryPublishNextReady() {
++  std::vector<PendingSiteOperation> pending = store_->LoadPendingOperations();
++  if (store_->last_pending_load_had_error()) {
++    policy_publisher_->EnterStoreFailClosed(store_->owner(),
++                                            "pending_journal_corrupt");
++    return ToggleEventResult::kSaveFailed;
++  }
++  if (pending.empty() || pending.front().publish_started ||
++      (pending.front().request.enabled && !pending.front().route_ready)) {
++    return ToggleEventResult::kWaiting;
++  }
++  PendingSiteOperation operation = std::move(pending.front());
++  if (!store_->MarkPublishStarted(operation)) {
++    return ToggleEventResult::kSaveFailed;
++  }
++  operation.publish_started = true;
++  policy_publisher_->PublishPolicy(operation);
++  return ToggleEventResult::kPublished;
++}
++
++ToggleEventResult SiteProxyToggleCoordinator::OnPolicyAcknowledged(
++    const PolicyAckEvent& event) {
++  if (!store_ || !policy_publisher_) {
++    return ToggleEventResult::kIgnored;
++  }
++  std::optional<PendingSiteOperation> operation =
++      store_->LoadPendingOperation(event.operation_id);
++  if (!operation || !operation->publish_started ||
++      !EventMatches(*operation, event)) {
++    return ToggleEventResult::kIgnored;
++  }
++  const auto context = std::ranges::find_if(
++      operation->required_contexts, [&](const ExecutionContextBinding& item) {
++        return item.context_id == event.context_id &&
++               item.incarnation == event.context_incarnation;
++      });
++  if (context == operation->required_contexts.end()) {
++    return ToggleEventResult::kIgnored;
++  }
++  if (std::ranges::find(operation->acknowledged_context_ids,
++                        context->context_id) !=
++      operation->acknowledged_context_ids.end()) {
++    return ToggleEventResult::kWaiting;
++  }
++  if (!store_->MarkContextAcknowledged(*operation, *context)) {
++    policy_publisher_->EnterFailClosed(operation->request.site,
++                                       operation->policy_generation,
++                                       "ack_save_failed");
++    return ToggleEventResult::kSaveFailed;
++  }
++
++  std::optional<PendingSiteOperation> refreshed =
++      store_->LoadPendingOperation(event.operation_id);
++  if (!refreshed) {
++    return ToggleEventResult::kIgnored;
++  }
++  if (refreshed->acknowledged_context_ids.size() !=
++      refreshed->required_contexts.size()) {
++    return ToggleEventResult::kWaiting;
++  }
++
++  switch (store_->CommitOperation(*refreshed)) {
++    case CommitOperationStatus::kCommitted:
++      policy_publisher_->CommitAndRelease(*refreshed);
++      TryPublishNextReady();
++      return ToggleEventResult::kCommitted;
++    case CommitOperationStatus::kNotReady:
++      return ToggleEventResult::kWaiting;
++    case CommitOperationStatus::kSuperseded:
++      return ToggleEventResult::kIgnored;
++    case CommitOperationStatus::kStorageError:
++      policy_publisher_->EnterFailClosed(refreshed->request.site,
++                                         refreshed->policy_generation,
++                                         "commit_save_failed");
++      return ToggleEventResult::kSaveFailed;
++  }
++  return ToggleEventResult::kIgnored;
++}
++
++void SiteProxyToggleCoordinator::RecoverPendingOperations(
++    uint64_t service_incarnation,
++    const std::vector<ExecutionContextBinding>& required_contexts) {
++  if (!store_ || !route_preparer_ || !policy_publisher_) {
++    return;
++  }
++  std::vector<PendingSiteOperation> pending = store_->LoadPendingOperations();
++  if (store_->last_pending_load_had_error()) {
++    policy_publisher_->EnterStoreFailClosed(store_->owner(),
++                                            "pending_journal_corrupt");
++    return;
++  }
++  for (const PendingSiteOperation& operation : pending) {
++    policy_publisher_->EnterFailClosed(operation.request.site,
++                                       operation.policy_generation,
++                                       "pending_operation_recovery");
++    std::optional<PendingSiteOperation> rebound =
++        store_->RebindOperationForRecovery(
++            operation, service_incarnation, required_contexts);
++    if (!rebound) {
++      policy_publisher_->EnterStoreFailClosed(store_->owner(),
++                                              "pending_rebind_failed");
++      return;
++    }
++    if (rebound->request.enabled) {
++      route_preparer_->PrepareRoute(*rebound);
++    }
++  }
++  TryPublishNextReady();
++}
++
++std::string SiteProxyToggleCoordinator::RuntimeKey(
++    const BrowserConfirmedSite& site) {
++  return site.storage_partition_token + "\n" + site.canonical_host;
++}
++
++SiteToggleState SiteProxyToggleCoordinator::GetSiteToggleState(
++    const BrowserConfirmedSite& site) {
++  SiteToggleState state;
++  state.committed =
++      store_ ? store_->ReadSiteSelection(site) : SiteSelectionRecord{};
++  const auto found = runtime_states_.find(RuntimeKey(site));
++  if (found != runtime_states_.end()) {
++    state.runtime_state = found->second;
++  }
++  return state;
++}
++
++void SiteProxyToggleCoordinator::SetRuntimeState(
++    const BrowserConfirmedSite& site,
++    aegis_access::ProxyRuntimeState state) {
++  if (site.IsComplete()) {
++    runtime_states_[RuntimeKey(site)] = state;
++  }
++}
++
++}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/site_proxy_toggle_coordinator.h b/chrome/browser/aegis/access/site_proxy_toggle_coordinator.h
+new file mode 100644
+index 0000000..c550108
+--- /dev/null
++++ b/chrome/browser/aegis/access/site_proxy_toggle_coordinator.h
+@@ -0,0 +1,121 @@
++// Copyright 2026 GCSA
++
++#ifndef CHROME_BROWSER_AEGIS_ACCESS_SITE_PROXY_TOGGLE_COORDINATOR_H_
++#define CHROME_BROWSER_AEGIS_ACCESS_SITE_PROXY_TOGGLE_COORDINATOR_H_
++
++#include <cstdint>
++#include <map>
++#include <string>
++
++#include "chrome/browser/aegis/access/access_rule_store.h"
++#include "components/aegis_access/access_route_types.h"
++
++namespace aegis::access {
++
++struct OperationEventIdentity {
++  std::string operation_id;
++  std::string request_fingerprint;
++  aegis_access::OwnershipKey owner;
++  uint64_t expected_revision = 0;
++  uint64_t policy_generation = 0;
++  uint64_t operation_sequence = 0;
++  uint64_t service_incarnation = 0;
++};
++
++struct RouteReadyEvent : OperationEventIdentity {};
++
++struct PolicyAckEvent : OperationEventIdentity {
++  std::string context_id;
++  uint64_t context_incarnation = 0;
++};
++
++enum class ToggleStartStatus {
++  kPendingRoute,
++  kPendingPublish,
++  kDuplicate,
++  kRejectedChannel,
++  kInvalidRequest,
++  kRevisionConflict,
++  kCorruptState,
++  kSaveFailed,
++};
++
++struct ToggleStartResult {
++  ToggleStartStatus status = ToggleStartStatus::kInvalidRequest;
++  std::optional<PendingSiteOperation> operation;
++};
++
++enum class ToggleEventResult {
++  kIgnored,
++  kWaiting,
++  kPublished,
++  kCommitted,
++  kFailed,
++  kSaveFailed,
++};
++
++class RoutePreparer {
++ public:
++  virtual ~RoutePreparer() = default;
++  virtual void PrepareRoute(const PendingSiteOperation& operation) = 0;
++};
++
++class PolicyPublisher {
++ public:
++  virtual ~PolicyPublisher() = default;
++  virtual void PublishPolicy(const PendingSiteOperation& operation) = 0;
++  virtual void CommitAndRelease(const PendingSiteOperation& operation) = 0;
++  virtual void EnterFailClosed(const BrowserConfirmedSite& site,
++                               uint64_t policy_generation,
++                               const std::string& reason) = 0;
++  virtual void EnterStoreFailClosed(
++      const aegis_access::OwnershipKey& owner,
++      const std::string& reason) = 0;
++};
++
++struct SiteToggleState {
++  SiteSelectionRecord committed;
++  aegis_access::ProxyRuntimeState runtime_state =
++      aegis_access::ProxyRuntimeState::kStopped;
++};
++
++// Coordinates only the trusted Beta/Release website toggle. It intentionally
++// exposes no general debug rule-mutation entry point and performs no real proxy
++// or Network Service integration.
++class SiteProxyToggleCoordinator {
++ public:
++  SiteProxyToggleCoordinator(AccessRuleStore* store,
++                             RoutePreparer* route_preparer,
++                             PolicyPublisher* policy_publisher);
++  SiteProxyToggleCoordinator(const SiteProxyToggleCoordinator&) = delete;
++  SiteProxyToggleCoordinator& operator=(const SiteProxyToggleCoordinator&) =
++      delete;
++  ~SiteProxyToggleCoordinator();
++
++  ToggleStartResult SetSiteProxy(const SiteToggleRequest& request);
++  ToggleEventResult OnRouteReady(const RouteReadyEvent& event);
++  ToggleEventResult OnRouteFailed(const RouteReadyEvent& event);
++  ToggleEventResult OnPolicyAcknowledged(const PolicyAckEvent& event);
++  void RecoverPendingOperations(
++      uint64_t service_incarnation,
++      const std::vector<ExecutionContextBinding>& required_contexts);
++
++  SiteToggleState GetSiteToggleState(const BrowserConfirmedSite& site);
++  void SetRuntimeState(const BrowserConfirmedSite& site,
++                       aegis_access::ProxyRuntimeState state);
++
++ private:
++  static std::string RuntimeKey(const BrowserConfirmedSite& site);
++  static bool EventMatches(const PendingSiteOperation& operation,
++                           const OperationEventIdentity& event);
++  ToggleEventResult TryPublishNextReady();
++
++  AccessRuleStore* const store_;
++  RoutePreparer* const route_preparer_;
++  PolicyPublisher* const policy_publisher_;
++  std::map<std::string, aegis_access::ProxyRuntimeState> runtime_states_;
++};
++
++}  // namespace aegis::access
++
++#endif  // CHROME_BROWSER_AEGIS_ACCESS_SITE_PROXY_TOGGLE_COORDINATOR_H_
+diff --git a/chrome/browser/aegis/access/site_proxy_toggle_coordinator_unittest.cc b/chrome/browser/aegis/access/site_proxy_toggle_coordinator_unittest.cc
+new file mode 100644
+index 0000000..594e291
+--- /dev/null
++++ b/chrome/browser/aegis/access/site_proxy_toggle_coordinator_unittest.cc
+@@ -0,0 +1,494 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/aegis/access/site_proxy_toggle_coordinator.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/files/scoped_temp_dir.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace aegis::access {
++namespace {
++
++aegis_access::OwnershipKey Owner(aegis_access::ChannelNamespace channel =
++                                     aegis_access::ChannelNamespace::kBeta) {
++  return {channel, "profile-A", ""};
++}
++
++BrowserConfirmedSite ConfirmedSite() {
++  return {.storage_partition_token = "default",
++          .canonical_host = "news.example",
++          .http_top_level_site = "http://news.example",
++          .https_top_level_site = "https://news.example"};
++}
++
++SiteToggleRequest ToggleRequest(std::string id,
++                                bool enabled,
++                                uint64_t expected_revision = 0) {
++  return {.operation_id = id,
++          .request_fingerprint = "fingerprint-" + id,
++          .site_toggle_id = "site-news",
++          .site = ConfirmedSite(),
++          .enabled = enabled,
++          .proxy_group_id = enabled ? "proxy-A" : "",
++          .expected_revision = expected_revision,
++          .service_incarnation = 19,
++          .required_contexts = {{"default", 23}, {"media", 29}}};
++}
++
++OperationEventIdentity Identity(const PendingSiteOperation& operation) {
++  return {.operation_id = operation.request.operation_id,
++          .request_fingerprint = operation.request.request_fingerprint,
++          .owner = operation.owner,
++          .expected_revision = operation.request.expected_revision,
++          .policy_generation = operation.policy_generation,
++          .operation_sequence = operation.operation_sequence,
++          .service_incarnation = operation.request.service_incarnation};
++}
++
++RouteReadyEvent RouteEvent(const PendingSiteOperation& operation) {
++  RouteReadyEvent event;
++  static_cast<OperationEventIdentity&>(event) = Identity(operation);
++  return event;
++}
++
++PolicyAckEvent AckEvent(const PendingSiteOperation& operation, size_t index) {
++  PolicyAckEvent event;
++  static_cast<OperationEventIdentity&>(event) = Identity(operation);
++  event.context_id = operation.required_contexts[index].context_id;
++  event.context_incarnation = operation.required_contexts[index].incarnation;
++  return event;
++}
++
++class FakeRoutePreparer final : public RoutePreparer {
++ public:
++  void PrepareRoute(const PendingSiteOperation& operation) override {
++    prepared.push_back(operation);
++  }
++  std::vector<PendingSiteOperation> prepared;
++};
++
++class FakePolicyPublisher final : public PolicyPublisher {
++ public:
++  void PublishPolicy(const PendingSiteOperation& operation) override {
++    published.push_back(operation);
++  }
++  void CommitAndRelease(const PendingSiteOperation& operation) override {
++    released.push_back(operation);
++  }
++  void EnterFailClosed(const BrowserConfirmedSite& site,
++                       uint64_t policy_generation,
++                       const std::string& reason) override {
++    fail_closed_sites.push_back(site);
++    fail_closed_generations.push_back(policy_generation);
++    fail_closed_reasons.push_back(reason);
++  }
++  void EnterStoreFailClosed(const aegis_access::OwnershipKey& owner,
++                            const std::string& reason) override {
++    store_fail_closed_owners.push_back(owner);
++    store_fail_closed_reasons.push_back(reason);
++  }
++
++  std::vector<PendingSiteOperation> published;
++  std::vector<PendingSiteOperation> released;
++  std::vector<BrowserConfirmedSite> fail_closed_sites;
++  std::vector<uint64_t> fail_closed_generations;
++  std::vector<std::string> fail_closed_reasons;
++  std::vector<aegis_access::OwnershipKey> store_fail_closed_owners;
++  std::vector<std::string> store_fail_closed_reasons;
++};
++
++TEST(SiteProxyToggleCoordinatorTest, EnableWaitsForRouteAndEveryMatchingAck) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  ToggleStartResult start =
++      coordinator.SetSiteProxy(ToggleRequest("enable", true));
++  ASSERT_EQ(start.status, ToggleStartStatus::kPendingRoute);
++  ASSERT_TRUE(start.operation);
++  EXPECT_EQ(routes.prepared.size(), 1u);
++  EXPECT_TRUE(policies.published.empty());
++
++  EXPECT_EQ(coordinator.OnRouteReady(RouteEvent(*start.operation)),
++            ToggleEventResult::kPublished);
++  EXPECT_EQ(policies.published.size(), 1u);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*start.operation, 1)),
++            ToggleEventResult::kWaiting);
++  EXPECT_EQ(store.ReadSiteSelection(ConfirmedSite()).state,
++            SiteSelectionReadState::kRestoring);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*start.operation, 0)),
++            ToggleEventResult::kCommitted);
++  EXPECT_EQ(store.ReadSiteSelection(ConfirmedSite()).selection,
++            aegis_access::GroupSelection::kEnabled);
++  ASSERT_EQ(policies.released.size(), 1u);
++  EXPECT_EQ(policies.released[0].request.operation_id, "enable");
++}
++
++TEST(SiteProxyToggleCoordinatorTest, ClosingSkipsPreparationAndCommitsDirect) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  auto enable = coordinator.SetSiteProxy(ToggleRequest("enable", true));
++  ASSERT_TRUE(enable.operation);
++  coordinator.OnRouteReady(RouteEvent(*enable.operation));
++  coordinator.OnPolicyAcknowledged(AckEvent(*enable.operation, 0));
++  coordinator.OnPolicyAcknowledged(AckEvent(*enable.operation, 1));
++
++  auto close = coordinator.SetSiteProxy(ToggleRequest("close", false, 1));
++  ASSERT_EQ(close.status, ToggleStartStatus::kPendingPublish);
++  ASSERT_TRUE(close.operation);
++  EXPECT_EQ(routes.prepared.size(), 1u);
++  EXPECT_EQ(policies.published.size(), 2u);
++  coordinator.OnPolicyAcknowledged(AckEvent(*close.operation, 0));
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*close.operation, 1)),
++            ToggleEventResult::kCommitted);
++  SiteSelectionRecord selection = store.ReadSiteSelection(ConfirmedSite());
++  EXPECT_EQ(selection.selection, aegis_access::GroupSelection::kDisabled);
++  EXPECT_TRUE(selection.proxy_group_id.empty());
++}
++
++TEST(SiteProxyToggleCoordinatorTest,
++     LaterSameSiteOperationSupersedesLateEvents) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  auto earlier = coordinator.SetSiteProxy(ToggleRequest("earlier", true));
++  auto later = coordinator.SetSiteProxy(ToggleRequest("later", false));
++  ASSERT_TRUE(earlier.operation);
++  ASSERT_TRUE(later.operation);
++  EXPECT_GT(later.operation->operation_sequence,
++            earlier.operation->operation_sequence);
++  EXPECT_EQ(coordinator.OnRouteReady(RouteEvent(*earlier.operation)),
++            ToggleEventResult::kIgnored);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*earlier.operation, 0)),
++            ToggleEventResult::kIgnored);
++
++  coordinator.OnPolicyAcknowledged(AckEvent(*later.operation, 1));
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*later.operation, 0)),
++            ToggleEventResult::kCommitted);
++  EXPECT_EQ(store.ReadSiteSelection(ConfirmedSite()).selection,
++            aegis_access::GroupSelection::kDisabled);
++}
++
++TEST(SiteProxyToggleCoordinatorTest,
++     SupersedingPublishedOperationKeepsScopeFailClosed) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  auto earlier = coordinator.SetSiteProxy(ToggleRequest("earlier", false));
++  ASSERT_TRUE(earlier.operation);
++  ASSERT_EQ(policies.published.size(), 1u);
++  auto later = coordinator.SetSiteProxy(ToggleRequest("later", false));
++  ASSERT_TRUE(later.operation);
++  ASSERT_EQ(policies.fail_closed_reasons.size(), 1u);
++  EXPECT_EQ(policies.fail_closed_reasons[0],
++            "published_operation_superseded");
++  ASSERT_EQ(policies.published.size(), 2u);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*earlier.operation, 0)),
++            ToggleEventResult::kIgnored);
++}
++
++TEST(SiteProxyToggleCoordinatorTest, AckBeforePublicationIsIgnored) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  auto start = coordinator.SetSiteProxy(ToggleRequest("enable", true));
++  ASSERT_TRUE(start.operation);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*start.operation, 0)),
++            ToggleEventResult::kIgnored);
++  ASSERT_EQ(coordinator.OnRouteReady(RouteEvent(*start.operation)),
++            ToggleEventResult::kPublished);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*start.operation, 1)),
++            ToggleEventResult::kWaiting);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*start.operation, 0)),
++            ToggleEventResult::kCommitted);
++}
++
++TEST(SiteProxyToggleCoordinatorTest,
++     DifferentSitesPublishInGlobalGenerationOrder) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  SiteToggleRequest first_request = ToggleRequest("first", true);
++  SiteToggleRequest second_request = ToggleRequest("second", false);
++  second_request.site_toggle_id = "site-other";
++  second_request.site.canonical_host = "other.example";
++  second_request.site.http_top_level_site = "http://other.example";
++  second_request.site.https_top_level_site = "https://other.example";
++  auto first = coordinator.SetSiteProxy(first_request);
++  auto second = coordinator.SetSiteProxy(second_request);
++  ASSERT_TRUE(first.operation);
++  ASSERT_TRUE(second.operation);
++  EXPECT_TRUE(policies.published.empty());
++
++  EXPECT_EQ(coordinator.OnRouteReady(RouteEvent(*first.operation)),
++            ToggleEventResult::kPublished);
++  ASSERT_EQ(policies.published.size(), 1u);
++  EXPECT_EQ(policies.published[0].request.operation_id, "first");
++  coordinator.OnPolicyAcknowledged(AckEvent(*first.operation, 0));
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*first.operation, 1)),
++            ToggleEventResult::kCommitted);
++  ASSERT_EQ(policies.published.size(), 2u);
++  EXPECT_EQ(policies.published[1].request.operation_id, "second");
++  EXPECT_LT(policies.published[0].policy_generation,
++            policies.published[1].policy_generation);
++}
++
++TEST(SiteProxyToggleCoordinatorTest, RouteFailureAdvancesPublicationLane) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  SiteToggleRequest second_request = ToggleRequest("second", false);
++  second_request.site_toggle_id = "site-other";
++  second_request.site.canonical_host = "other.example";
++  second_request.site.http_top_level_site = "http://other.example";
++  second_request.site.https_top_level_site = "https://other.example";
++  auto first = coordinator.SetSiteProxy(ToggleRequest("first", true));
++  auto second = coordinator.SetSiteProxy(second_request);
++  ASSERT_TRUE(first.operation);
++  ASSERT_TRUE(second.operation);
++
++  EXPECT_EQ(coordinator.OnRouteFailed(RouteEvent(*first.operation)),
++            ToggleEventResult::kFailed);
++  ASSERT_EQ(policies.published.size(), 1u);
++  EXPECT_EQ(policies.published[0].request.operation_id, "second");
++}
++
++TEST(SiteProxyToggleCoordinatorTest, RejectsWrongOwnerRevisionAndIncarnations) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++  auto start = coordinator.SetSiteProxy(ToggleRequest("enable", true));
++  ASSERT_TRUE(start.operation);
++
++  RouteReadyEvent wrong_service = RouteEvent(*start.operation);
++  ++wrong_service.service_incarnation;
++  EXPECT_EQ(coordinator.OnRouteReady(wrong_service),
++            ToggleEventResult::kIgnored);
++  RouteReadyEvent wrong_owner = RouteEvent(*start.operation);
++  wrong_owner.owner.profile_token = "profile-B";
++  EXPECT_EQ(coordinator.OnRouteReady(wrong_owner), ToggleEventResult::kIgnored);
++  RouteReadyEvent wrong_revision = RouteEvent(*start.operation);
++  ++wrong_revision.expected_revision;
++  EXPECT_EQ(coordinator.OnRouteReady(wrong_revision),
++            ToggleEventResult::kIgnored);
++  RouteReadyEvent wrong_fingerprint = RouteEvent(*start.operation);
++  wrong_fingerprint.request_fingerprint = "not-the-request";
++  EXPECT_EQ(coordinator.OnRouteReady(wrong_fingerprint),
++            ToggleEventResult::kIgnored);
++  RouteReadyEvent wrong_sequence = RouteEvent(*start.operation);
++  ++wrong_sequence.operation_sequence;
++  EXPECT_EQ(coordinator.OnRouteReady(wrong_sequence),
++            ToggleEventResult::kIgnored);
++
++  ASSERT_EQ(coordinator.OnRouteReady(RouteEvent(*start.operation)),
++            ToggleEventResult::kPublished);
++  PolicyAckEvent wrong_context = AckEvent(*start.operation, 0);
++  ++wrong_context.context_incarnation;
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(wrong_context),
++            ToggleEventResult::kIgnored);
++  PolicyAckEvent wrong_generation = AckEvent(*start.operation, 0);
++  ++wrong_generation.policy_generation;
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(wrong_generation),
++            ToggleEventResult::kIgnored);
++}
++
++TEST(SiteProxyToggleCoordinatorTest, SaveFailuresRespectPublishBoundary) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++
++  store.SetFailurePointForTesting(
++      AccessRuleStore::FailurePointForTesting::kPrepareOperation);
++  EXPECT_EQ(
++      coordinator.SetSiteProxy(ToggleRequest("prepare-fail", true)).status,
++      ToggleStartStatus::kSaveFailed);
++  EXPECT_TRUE(routes.prepared.empty());
++  EXPECT_TRUE(policies.published.empty());
++
++  store.SetFailurePointForTesting(
++      AccessRuleStore::FailurePointForTesting::kNone);
++  auto route_save = coordinator.SetSiteProxy(ToggleRequest("route-save", true));
++  ASSERT_TRUE(route_save.operation);
++  store.SetFailurePointForTesting(
++      AccessRuleStore::FailurePointForTesting::kMarkRouteReady);
++  EXPECT_EQ(coordinator.OnRouteReady(RouteEvent(*route_save.operation)),
++            ToggleEventResult::kSaveFailed);
++  EXPECT_TRUE(policies.published.empty());
++  EXPECT_TRUE(policies.fail_closed_sites.empty());
++
++  store.SetFailurePointForTesting(
++      AccessRuleStore::FailurePointForTesting::kNone);
++  auto close =
++      coordinator.SetSiteProxy(ToggleRequest("published-close", false));
++  ASSERT_TRUE(close.operation);
++  store.SetFailurePointForTesting(
++      AccessRuleStore::FailurePointForTesting::kMarkAcknowledged);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*close.operation, 0)),
++            ToggleEventResult::kSaveFailed);
++  ASSERT_EQ(policies.fail_closed_sites.size(), 1u);
++  EXPECT_EQ(policies.fail_closed_reasons.back(), "ack_save_failed");
++}
++
++TEST(SiteProxyToggleCoordinatorTest, CommitFailureAfterPublishFailsClosed) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++  auto close = coordinator.SetSiteProxy(ToggleRequest("close", false));
++  ASSERT_TRUE(close.operation);
++  coordinator.OnPolicyAcknowledged(AckEvent(*close.operation, 0));
++  store.SetFailurePointForTesting(
++      AccessRuleStore::FailurePointForTesting::kCommitOperation);
++  EXPECT_EQ(coordinator.OnPolicyAcknowledged(AckEvent(*close.operation, 1)),
++            ToggleEventResult::kSaveFailed);
++  ASSERT_EQ(policies.fail_closed_sites.size(), 1u);
++  EXPECT_EQ(policies.fail_closed_reasons.back(), "commit_save_failed");
++  EXPECT_EQ(store.ReadSiteSelection(ConfirmedSite()).state,
++            SiteSelectionReadState::kRestoring);
++}
++
++TEST(SiteProxyToggleCoordinatorTest, CrashRecoveryFailsClosedAndResumes) {
++  base::ScopedTempDir temp_dir;
++  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
++  const base::FilePath path = temp_dir.GetPath().AppendASCII("access.db");
++  PendingSiteOperation before_crash;
++  {
++    AccessRuleStore store(path, Owner());
++    ASSERT_TRUE(store.Initialize());
++    FakeRoutePreparer routes;
++    FakePolicyPublisher policies;
++    SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++    auto started = coordinator.SetSiteProxy(ToggleRequest("crash", true));
++    ASSERT_TRUE(started.operation);
++    before_crash = *started.operation;
++  }
++
++  AccessRuleStore reopened(path, Owner());
++  ASSERT_TRUE(reopened.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator recovered(&reopened, &routes, &policies);
++  recovered.RecoverPendingOperations(
++      31, {{"default", 37}, {"media", 41}});
++  EXPECT_EQ(reopened.ReadSiteSelection(ConfirmedSite()).state,
++            SiteSelectionReadState::kRestoring);
++  EXPECT_EQ(routes.prepared.size(), 1u);
++  EXPECT_EQ(routes.prepared[0].request.service_incarnation, 31u);
++  EXPECT_EQ(routes.prepared[0].required_contexts[0].incarnation, 37u);
++  ASSERT_EQ(policies.fail_closed_sites.size(), 1u);
++  EXPECT_EQ(policies.fail_closed_reasons[0], "pending_operation_recovery");
++  EXPECT_EQ(recovered.OnRouteReady(RouteEvent(before_crash)),
++            ToggleEventResult::kIgnored);
++}
++
++TEST(SiteProxyToggleCoordinatorTest, CorruptPendingJournalFailsClosedByStore) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++  ASSERT_TRUE(
++      coordinator.SetSiteProxy(ToggleRequest("broken", true)).operation);
++  ASSERT_TRUE(store.ExecuteSqlForTesting(
++      "UPDATE access_pending_operations SET target_mode=999 WHERE "
++      "operation_id='broken'"));
++
++  coordinator.RecoverPendingOperations(31, {{"default", 37}});
++  ASSERT_EQ(policies.store_fail_closed_reasons.size(), 1u);
++  EXPECT_EQ(policies.store_fail_closed_reasons[0],
++            "pending_journal_corrupt");
++  EXPECT_TRUE(routes.prepared.empty());
++}
++
++TEST(SiteProxyToggleCoordinatorTest,
++     NewToggleCannotSilentlySupersedeCorruptPendingJournal) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++  ASSERT_TRUE(
++      coordinator.SetSiteProxy(ToggleRequest("broken", true)).operation);
++  ASSERT_TRUE(store.ExecuteSqlForTesting(
++      "UPDATE access_pending_operations SET target_mode=999 WHERE "
++      "operation_id='broken'"));
++
++  EXPECT_EQ(
++      coordinator.SetSiteProxy(ToggleRequest("replacement", false)).status,
++      ToggleStartStatus::kCorruptState);
++  ASSERT_EQ(policies.store_fail_closed_reasons.size(), 1u);
++  EXPECT_EQ(policies.store_fail_closed_reasons[0],
++            "pending_journal_corrupt");
++}
++
++TEST(SiteProxyToggleCoordinatorTest, RuntimeFailureDoesNotRewriteSelection) {
++  AccessRuleStore store(base::FilePath(), Owner(), /*in_memory=*/true);
++  ASSERT_TRUE(store.Initialize());
++  FakeRoutePreparer routes;
++  FakePolicyPublisher policies;
++  SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++  auto enable = coordinator.SetSiteProxy(ToggleRequest("enable", true));
++  ASSERT_TRUE(enable.operation);
++  coordinator.OnRouteReady(RouteEvent(*enable.operation));
++  coordinator.OnPolicyAcknowledged(AckEvent(*enable.operation, 0));
++  coordinator.OnPolicyAcknowledged(AckEvent(*enable.operation, 1));
++
++  coordinator.SetRuntimeState(ConfirmedSite(),
++                              aegis_access::ProxyRuntimeState::kOffline);
++  SiteToggleState state = coordinator.GetSiteToggleState(ConfirmedSite());
++  EXPECT_EQ(state.committed.selection, aegis_access::GroupSelection::kEnabled);
++  EXPECT_EQ(state.runtime_state, aegis_access::ProxyRuntimeState::kOffline);
++}
++
++TEST(SiteProxyToggleCoordinatorTest,
++     NarrowCoordinatorRejectsNonProductChannels) {
++  for (aegis_access::ChannelNamespace channel :
++       {aegis_access::ChannelNamespace::kDev,
++        aegis_access::ChannelNamespace::kAlpha,
++        aegis_access::ChannelNamespace::kInvalid}) {
++    AccessRuleStore store(base::FilePath(), Owner(channel),
++                          /*in_memory=*/true);
++    if (channel == aegis_access::ChannelNamespace::kInvalid) {
++      EXPECT_FALSE(store.Initialize());
++      continue;
++    }
++    ASSERT_TRUE(store.Initialize());
++    FakeRoutePreparer routes;
++    FakePolicyPublisher policies;
++    SiteProxyToggleCoordinator coordinator(&store, &routes, &policies);
++    EXPECT_EQ(coordinator.SetSiteProxy(ToggleRequest("toggle", true)).status,
++              ToggleStartStatus::kRejectedChannel);
++  }
++}
++
++}  // namespace
++}  // namespace aegis::access
+diff --git a/tools/metrics/histograms/metadata/sql/histograms.xml b/tools/metrics/histograms/metadata/sql/histograms.xml
+index a5bb0e9..92be637 100644
+--- a/tools/metrics/histograms/metadata/sql/histograms.xml
++++ b/tools/metrics/histograms/metadata/sql/histograms.xml
+@@ -32,6 +32,7 @@ chromium-metrics-reviews@google.com.
+ <variants name="DatabaseTag">
+   <variant name="AccessibilityAnnotator" summary="AccessibilityAnnotator"/>
+   <variant name="Activity" summary="Activity"/>
++  <variant name="AegisAccess" summary="Aegis Browser access rule storage"/>
+   <variant name="AegisAgent" summary="Aegis Browser Agent task storage"/>
+   <variant name="Affiliation" summary="Affiliation"/>
+   <variant name="AggregationService" summary="AggregationService"/>

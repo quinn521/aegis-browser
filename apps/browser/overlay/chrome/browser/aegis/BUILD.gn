@@ -129,6 +129,7 @@ source_set("aegis") {
   public_deps = [ ":profile_support" ]
   deps = [
     ":model_provider_policy",
+    "access:access_rule_store",
     "//base",
     "//chrome/browser:after_startup_task_utils",
     "//chrome/browser:browser_process",
