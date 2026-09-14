@@ -4,7 +4,11 @@
 
 This directory contains the public product architecture, roadmap, research boundaries, product page, and dated local audit records for GCSA-aegis.
 
-> **Current boundary — 2026-08-29:** the combined source contains 67 top-level Chromium patches plus 2 nested V8 patches. The earlier 57-patch diagnostic manifest and 65-patch Agent acceptance are historical snapshots and do not qualify this head. Phase 2 remains a synthetic formal fixture, while Phase 3 is a 13-sample operator-blinded public pilot with recall `1/3`; neither generalizes to broad malicious-JavaScript detection. The project remains release No-Go.
+> **2026-09-14 source update: UI corrections and browser updates：** The source now contains 113 top-level Chromium patches plus 2 nested V8 patches. Local macOS acceptance: Ver 1.1 (018), 32 findings addressed, 18 native tests and 116 UI checks passed; 170 changed messages and translation placeholders checked. Windows/Android device acceptance and a real Release installation remain unverified. No binary or tag is published with this source update. [018 验收记录](ui-copy-acceptance.zh-CN.md)
+
+> **Historical boundary — 2026-09-10:** the Browser Agent v2 candidate source contains 108 top-level Chromium patches plus 2 nested V8 patches and replays exactly to Chromium source tree `319366182c31108e29e62d2f2199aff29a0b86e8`. Platform builds and acceptance remain separate gates; this source identity is not public-release qualification. Phase 2 remains a synthetic formal fixture, while Phase 3 is a 13-sample operator-blinded public pilot with recall `1/3`; neither generalizes to broad malicious-JavaScript detection. The project remains release No-Go.
+
+[2026-09-10 main consolidation and verification](audit/main-consolidation-2026-09-10.md)
 
 ## Start here
 
@@ -16,8 +20,10 @@ This directory contains the public product architecture, roadmap, research bound
 - [Trilingual product page](product.html)
 - [Browser build and verification guide](../apps/browser/README.md)
 - [Native iOS engineering guide](../apps/ios/README.md)
-- [Browser Agent user guide](aegis-browser-agent-v1-user-guide.md)
+- [Browser Agent v2 user guide](aegis-browser-agent-v2-user-guide.md)
+- [Browser Agent v1 historical user guide](aegis-browser-agent-v1-user-guide.md)
 - [Browser Agent architecture](aegis-browser-agent-v1-architecture.md)
+- [Browser Agent v2 architecture and prototype decision](aegis-browser-agent-v2-architecture.md)
 
 ## Status language
 

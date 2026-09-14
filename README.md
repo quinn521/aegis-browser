@@ -4,9 +4,13 @@
 
 GCSA-aegis is a local-first privacy and security browser project with two product lines: the Chromium fork under [`apps/browser`](apps/browser/README.md) and the native iOS browser under [`apps/ios`](apps/ios/README.md). Core capabilities stay inside each browser product; the project does not revive the retired standalone-extension product.
 
-> **Status — 2026-08-29:** the combined source contains 67 top-level Chromium patches plus 2 nested V8 patches. The earlier 57-patch diagnostic manifest and 65-patch Agent acceptance remain historical evidence and do not qualify the combined 67-patch head. The native iOS product remains **SIMULATOR_QUALIFIED** only for its recorded Simulator scope. The project is **release No-Go** pending fresh combined-source build/runtime evidence, trusted attestation, production signing, notarization, installed-distribution acceptance, real-device iOS validation, and a current-source Android package.
+> **2026-09-14 source update: UI corrections and browser updates：** The source now contains 113 top-level Chromium patches plus 2 nested V8 patches. Local macOS acceptance: Ver 1.1 (018), 32 findings addressed, 18 native tests and 116 UI checks passed; 170 changed messages and translation placeholders checked. Windows/Android device acceptance and a real Release installation remain unverified. No binary or tag is published with this source update. [018 验收记录](docs/ui-copy-acceptance.zh-CN.md)
 
-The Agent entry is visible in a regular desktop Profile on normal startup. Model calls, tools, and monitors remain disabled until the user explicitly enables Browser Agent in `chrome://aegis`; WebMCP and transaction submission remain default-off.
+> **Historical status — 2026-09-10:** the Browser Agent v2 candidate contains 108 top-level Chromium patches plus 2 nested V8 patches and replays exactly to Chromium source tree `319366182c31108e29e62d2f2199aff29a0b86e8`. The 57-, 65-, 67-, 95-, and 97-patch records remain historical evidence. The native iOS product remains **SIMULATOR_QUALIFIED** only for its recorded Simulator scope. The project is **release No-Go** pending trusted attestation, production signing, notarization, installed-distribution acceptance, and the separately deferred iOS gates.
+
+[2026-09-10 main consolidation and verification](docs/audit/main-consolidation-2026-09-10.md)
+
+The Agent entry is visible in a regular desktop Profile and on Android. The first task can configure and enable the user-selected model without requiring a separate workflow choice or pre-opened page. WebMCP and transaction submission remain default-off, and final checkout/payment always requires user takeover.
 
 ## Product shape
 

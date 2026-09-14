@@ -4,7 +4,11 @@
 
 本目录保存 GCSA-aegis 的公开产品架构、路线图、研究边界、产品页，以及带日期的本地审计记录。
 
-> **当前边界 — 2026-08-29：** 整合后的源码包含 67 个顶层 Chromium 补丁和 2 个嵌套 V8 补丁。此前的 57 补丁诊断清单和 65 补丁 Agent 验收属于历史快照，不能给当前 HEAD 授予资格。Phase 2 仍是 synthetic formal fixture，Phase 3 是 13 样本 operator-blinded public pilot，召回率为 `1/3`；两者都不能泛化为广义恶意 JavaScript 检测结论。项目整体仍为发行 No-Go。
+> **2026-09-14 源码更新：界面整改与浏览器更新：** 当前源码包含 113 个顶层 Chromium 补丁和 2 个嵌套 V8 补丁。本地 macOS 验收为 Ver 1.1 (018)：32 项整改完成，18 项原生测试、116 项界面回归通过，170 条改动文案及翻译占位符检查通过。Windows/Android 实机及真实 Release 安装尚未验收；本次仅提交源码，不发布二进制或 tag。 [018 验收记录](ui-copy-acceptance.zh-CN.md)
+
+> **历史边界 — 2026-09-10：** Browser Agent v2 候选源码包含 108 个顶层 Chromium 补丁和 2 个嵌套 V8 补丁，可精确重放到 Chromium 提交 源码树 `319366182c31108e29e62d2f2199aff29a0b86e8`。平台构建和验收仍是独立门禁，这个源码身份不代表公开发行合格。Phase 2 仍是 synthetic formal fixture，Phase 3 是 13 样本 operator-blinded public pilot，召回率为 `1/3`；两者都不能泛化为广义恶意 JavaScript 检测结论。项目整体仍为发行 No-Go。
+
+[2026-09-10 main 合并与验证](audit/main-consolidation-2026-09-10.md)
 
 ## 从这里开始
 
@@ -16,8 +20,10 @@
 - [三语产品页](product.html)
 - [Browser 构建与验证指南](../apps/browser/README.zh-CN.md)
 - [原生 iOS 工程指南](../apps/ios/README.zh-CN.md)
-- [Browser Agent 用户指南](aegis-browser-agent-v1-user-guide.zh-CN.md)
+- [Browser Agent v2 用户指南](aegis-browser-agent-v2-user-guide.zh-CN.md)
+- [Browser Agent v1 历史用户指南](aegis-browser-agent-v1-user-guide.zh-CN.md)
 - [Browser Agent 架构](aegis-browser-agent-v1-architecture.zh-CN.md)
+- [Browser Agent v2 架构与原型决策](aegis-browser-agent-v2-architecture.zh-CN.md)
 
 ## 状态用语
 

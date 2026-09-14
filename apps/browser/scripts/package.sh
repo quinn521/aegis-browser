@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Package a distributable GCSA-aegis Mac .app (+ zip/dmg).
 #
-# Expects a non-component build (self-contained Chromium.app).
+# Expects a non-component build (self-contained GCSA Aegis.app).
 # Dev component builds are refused unless ALLOW_COMPONENT_PACKAGE=1.
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -9,7 +9,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 SRC="$CHROMIUM_ROOT/src"
 # Prefer release out dir when present.
 if [[ -z "${OUT_DIR:-}" ]]; then
-  if [[ -d "$SRC/out/AegisRelease/Chromium.app" ]]; then
+  if [[ -d "$SRC/out/AegisRelease/$AEGIS_MAC_APP_BUNDLE_NAME" ]]; then
     OUT="$SRC/out/AegisRelease"
   else
     OUT="$SRC/out/Aegis"
@@ -19,12 +19,13 @@ else
 fi
 
 VERSION="$(read_pinned_value "$VERSION_FILE" 2>/dev/null || echo "0.0.0")"
-APP_VERSION="${AEGIS_PACKAGE_VERSION:-0.1.0}"
+APP_VERSION="${AEGIS_PACKAGE_VERSION:-1.1.0.3}"
 CPU="$(uname -m)"
+[[ "$CPU" == x86_64 ]] && CPU=x64
 STAMP="$(date -u +%Y%m%d)"
 DIST_ROOT="${DIST_DIR:-$ROOT_DIR/dist}"
 PRODUCT_APP_NAME="GCSA-aegis.app"
-BUNDLE_NAME="GCSA-aegis-${APP_VERSION}-chromium-${VERSION}-mac-${CPU}"
+BUNDLE_NAME="GCSA-aegis-${APP_VERSION}-mac-${CPU}"
 STAGE="$DIST_ROOT/$BUNDLE_NAME"
 FORMATS="${PACKAGE_FORMATS:-app,zip,dmg}"
 IDENTITY_ARTIFACTS=()
@@ -53,6 +54,7 @@ if [[ ! -d "$OUT" || -L "$OUT" ]]; then
   exit 1
 fi
 OUT="$(cd "$OUT" && pwd -P)"
+SOURCE_APP="$OUT/$AEGIS_MAC_APP_BUNDLE_NAME"
 case "$OUT" in
   "$SRC"/out/*) ;;
   *)
@@ -65,8 +67,8 @@ BUILD_MANIFEST="${AEGIS_BUILD_MANIFEST:-$OUT/.aegis/build-manifest.json}"
 BUILD_LOCK="$OUT/.aegis/build.lock"
 BUILD_IDENTITY_DIR="$OUT/.aegis"
 
-if [[ ! -d "$OUT/Chromium.app" || -L "$OUT/Chromium.app" ]]; then
-  echo "Missing real source App: $OUT/Chromium.app" >&2
+if [[ ! -d "$SOURCE_APP" || -L "$SOURCE_APP" ]]; then
+  echo "Missing real source App: $SOURCE_APP" >&2
   echo "Build a distributable app first." >&2
   exit 1
 fi
@@ -117,7 +119,7 @@ paths_overlap() {
 manifest_parent="$(cd "$(dirname "$BUILD_MANIFEST")" && pwd -P)"
 canonical_build_manifest="$manifest_parent/$(basename "$BUILD_MANIFEST")"
 for protected_path in \
-  "$SRC" "$OUT" "$OUT/Chromium.app" "$canonical_build_manifest"; do
+  "$SRC" "$OUT" "$SOURCE_APP" "$canonical_build_manifest"; do
   if paths_overlap "$DIST_ROOT" "$protected_path"; then
     echo "DIST_DIR must not overlap source, App, or build identity: $DIST_ROOT" >&2
     exit 1
@@ -167,7 +169,7 @@ build_verification="$(node "$ROOT_DIR/scripts/write-build-identity.mjs" \
   --manifest "$BUILD_MANIFEST" \
   --expected-sha256 "$expected_build_sha" \
   --out-dir "$OUT" \
-  --artifact "$OUT/Chromium.app")"
+  --artifact "$SOURCE_APP")"
 if [[ "${AEGIS_ALLOW_DIRTY_IDENTITY:-0}" != "1" ]]; then
   if ! BUILD_VERIFICATION="$build_verification" node -e '
     const value = JSON.parse(process.env.BUILD_VERIFICATION);
@@ -189,6 +191,23 @@ if [[ -L "$IDENTITY" || -L "$IDENTITY.sha256" ]]; then
   echo "Package identity files must not be symlinks: $IDENTITY" >&2
   exit 1
 fi
+# 安装包名称必须与实际 App 的产品版本一致，避免只改文件名造成重复升级。
+source_product_version="$(python3 - "$SOURCE_APP/Contents/Info.plist" <<'PYVERSION'
+import plistlib
+import sys
+try:
+    with open(sys.argv[1], "rb") as stream:
+        version = plistlib.load(stream).get("AegisProductVersion", "")
+    print(version if isinstance(version, str) else "")
+except Exception:
+    print("")
+PYVERSION
+)"
+if [[ "$source_product_version" != "$APP_VERSION" ]]; then
+  echo "App 产品版本与安装包版本不一致，拒绝打包：App=${source_product_version:-缺失}，包=$APP_VERSION" >&2
+  exit 1
+fi
+
 if [[ -e "$IDENTITY" || -e "$IDENTITY.sha256" ]]; then
   if [[ "${AEGIS_REPLACE_PACKAGE_IDENTITY:-0}" != "1" ]]; then
     echo "Refusing to overwrite existing package identity: $IDENTITY" >&2
@@ -240,9 +259,9 @@ copy_tree() {
 
 if [[ "$component" -eq 1 ]]; then
   # Legacy multi-file package (dev only).
-  copy_tree "$OUT/Chromium.app" "$STAGE/Chromium.app"
+  copy_tree "$SOURCE_APP" "$STAGE/$AEGIS_MAC_APP_BUNDLE_NAME"
   shopt -s nullglob
-  for helper in "$OUT"/Chromium\ Helper*.app; do
+  for helper in "$OUT"/"$AEGIS_MAC_PRODUCT_NAME Helper"*.app; do
     copy_tree "$helper" "$STAGE/$(basename "$helper")"
   done
   for lib in "$OUT"/*.dylib; do
@@ -255,13 +274,13 @@ if [[ "$component" -eq 1 ]]; then
     [[ -d "$OUT/$d" ]] && copy_tree "$OUT/$d" "$STAGE/$d"
   done
   shopt -u nullglob
-  APP_PATH="$STAGE/Chromium.app"
+  APP_PATH="$STAGE/$AEGIS_MAC_APP_BUNDLE_NAME"
   bash "$ROOT_DIR/scripts/sign-chromium-app.sh" "$APP_PATH" "$STAGE"
 else
   # Single self-contained app.
-  copy_tree "$OUT/Chromium.app" "$STAGE/$PRODUCT_APP_NAME"
+  copy_tree "$SOURCE_APP" "$STAGE/$PRODUCT_APP_NAME"
   APP_PATH="$STAGE/$PRODUCT_APP_NAME"
-  # Display name in Finder/Dock (internal helper binaries stay Chromium-named).
+  # Display name in Finder/Dock; the source bundle keeps its branded executable.
   /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName GCSA-aegis" \
     "$APP_PATH/Contents/Info.plist" 2>/dev/null || \
     /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string GCSA-aegis" \
@@ -319,12 +338,12 @@ xattr -cr "./$PRODUCT_APP_NAME" 2>/dev/null || true
 open "./$PRODUCT_APP_NAME"
 EOF
 else
-  cat > "$STAGE/Open GCSA-aegis.command" <<'EOF'
+  cat > "$STAGE/Open GCSA-aegis.command" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "\$(dirname "\$0")"
 xattr -cr . 2>/dev/null || true
-open "./Chromium.app"
+open "./$AEGIS_MAC_APP_BUNDLE_NAME"
 EOF
 fi
 chmod +x "$STAGE/Open GCSA-aegis.command"
@@ -408,7 +427,7 @@ build_verification_after="$(node "$ROOT_DIR/scripts/write-build-identity.mjs" \
   --manifest "$BUILD_MANIFEST" \
   --expected-sha256 "$expected_build_sha" \
   --out-dir "$OUT" \
-  --artifact "$OUT/Chromium.app")"
+  --artifact "$SOURCE_APP")"
 if [[ "$build_verification_after" != "$build_verification" ]]; then
   echo "Build identity changed while packaging; refusing to publish package identity." >&2
   exit 1
