@@ -14,6 +14,7 @@ import android.os.SystemClock;
 import android.text.InputType;
 import android.util.Base64;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
 import android.widget.EditText;
@@ -25,6 +26,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.json.JSONArray;
@@ -189,6 +191,12 @@ public final class Driver extends Instrumentation {
     return root;
   }
 
+  private String activeWindowPackage() {
+    AccessibilityNodeInfo root = automation.getRootInActiveWindow();
+    String value = root == null || root.getPackageName() == null ? "none" : root.getPackageName().toString();
+    return value.matches("[A-Za-z0-9_.]{1,200}") ? value : "unknown";
+  }
+
   private static void requirePackage(AccessibilityNodeInfo node, String target) throws Exception {
     check(node != null && target.contentEquals(node.getPackageName() == null ? "" : node.getPackageName()),
         "前台不是指定验收 App；未读取或操作其他应用");
@@ -286,17 +294,34 @@ public final class Driver extends Instrumentation {
   }
 
   private JSONObject selfTest() throws Exception {
-    Activity activity = startActivitySync(new Intent(getTargetContext(), Fixture.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    Fixture.resetLifecycle();
+    Activity[] fixture = new Activity[1];
+    try {
+      automation.executeAndWaitForEvent(
+          () -> fixture[0] = startActivitySync(
+              new Intent(getTargetContext(), Fixture.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)),
+          event -> event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+              HELPER.contentEquals(event.getPackageName()), 5000);
+    } catch (TimeoutException error) {
+      throw new GuardFailure("自测窗口事件未出现；" + Fixture.lifecycle() + ";activePackage=" + activeWindowPackage());
+    }
+    check(fixture[0] != null, "自测 Activity 未创建");
+    Activity activity = fixture[0];
     try {
       waitForIdleSync();
       JSONArray results = new JSONArray();
       JSONObject initial = null;
+      String lastFailure = "尚未观察";
       long deadline = SystemClock.uptimeMillis() + 5000;
       do {
         try { initial = snapshot(HELPER); break; }
-        catch (GuardFailure error) { SystemClock.sleep(50); }
+        catch (GuardFailure error) {
+          lastFailure = error.getMessage();
+          SystemClock.sleep(50);
+        }
       } while (SystemClock.uptimeMillis() < deadline);
-      check(initial != null, "自测界面未就绪");
+      check(initial != null, "自测界面未就绪；" + Fixture.lifecycle() + ";category=" + lastFailure +
+          ";activePackage=" + activeWindowPackage());
       String input = find(initial, "label", "中文目标输入");
       String text = "帮我总结页面内容：电池续航18小时 🔋";
       perform(HELPER, initial, initial.getString("snapshotSha256"), input, "set-text", text);
@@ -335,8 +360,23 @@ public final class Driver extends Instrumentation {
 
   /** 仅验证 Unicode 输入与原生点击；不伪装成产品界面或模型结果。 */
   public static final class Fixture extends Activity {
+    private static volatile boolean created;
+    private static volatile boolean resumed;
+    private static volatile boolean focused;
+
+    private static void resetLifecycle() {
+      created = false;
+      resumed = false;
+      focused = false;
+    }
+
+    private static String lifecycle() {
+      return "created=" + created + ",resumed=" + resumed + ",focused=" + focused;
+    }
+
     @Override public void onCreate(Bundle saved) {
       super.onCreate(saved);
+      created = true;
       getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
       LinearLayout layout = new LinearLayout(this);
       layout.setOrientation(LinearLayout.VERTICAL);
@@ -362,6 +402,16 @@ public final class Driver extends Instrumentation {
       layout.addView(result);
       setContentView(layout);
       layout.requestFocus();
+    }
+
+    @Override protected void onResume() {
+      super.onResume();
+      resumed = true;
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+      super.onWindowFocusChanged(hasFocus);
+      focused = hasFocus;
     }
   }
 }
