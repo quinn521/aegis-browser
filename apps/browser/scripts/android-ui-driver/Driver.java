@@ -36,13 +36,18 @@ public final class Driver extends Instrumentation {
   private static final String PROFILE = "/data/user/0/app\\.gcsa\\.aegis/aegis-test-user-data-[a-z0-9-]+";
   private UiAutomation automation;
   private JSONObject request;
+  private boolean coverageRequested;
 
   @Override public void onCreate(Bundle arguments) {
     super.onCreate(arguments);
     try {
+      String coverage = arguments.getString("jacoco_coverage", "");
+      check(coverage.isEmpty() || coverage.equals("true"), "coverage 参数无效");
+      coverageRequested = coverage.equals("true");
       String encoded = arguments.getString("request_base64", "");
       check(encoded.length() <= 24000, "验收参数过长");
       request = new JSONObject(new String(Base64.decode(encoded, Base64.DEFAULT), StandardCharsets.UTF_8));
+      check(!coverageRequested || request.optString("action").equals("self-test"), "coverage 只允许工具自测");
     } catch (Exception error) {
       finishResult(null, "验收参数无效");
       return;
@@ -81,18 +86,39 @@ public final class Driver extends Instrumentation {
 
   private void finishResult(JSONObject result, String error) {
     try {
+      byte[] executionData = null;
+      String finalError = error;
+      if (coverageRequested) {
+        try {
+          executionData = coverageExecutionData();
+        } catch (Exception coverageError) {
+          if (finalError == null) finalError = "coverage 导出失败：" + coverageError.getClass().getSimpleName();
+        }
+      }
       if (result == null) result = new JSONObject();
-      result.put("ok", error == null);
+      result.put("ok", finalError == null);
       result.put("runtimeTested", false);
       result.put("releaseEligible", false);
       result.put("qualification", "ui-driver-only");
-      if (error != null) result.put("error", error);
+      if (finalError != null) result.put("error", finalError);
       Bundle output = new Bundle();
       output.putString("aegis_result", Base64.encodeToString(result.toString().getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP));
-      finish(error == null ? Activity.RESULT_OK : Activity.RESULT_CANCELED, output);
+      if (executionData != null) {
+        output.putString("aegis_coverage", Base64.encodeToString(executionData, Base64.NO_WRAP));
+      }
+      finish(finalError == null ? Activity.RESULT_OK : Activity.RESULT_CANCELED, output);
     } catch (Exception ignored) {
       finish(Activity.RESULT_CANCELED, new Bundle());
     }
+  }
+
+  private static byte[] coverageExecutionData() throws Exception {
+    Class<?> runtime = Class.forName("org.jacoco.agent.rt.RT");
+    Object agent = runtime.getMethod("getAgent").invoke(null);
+    Class<?> agentInterface = Class.forName("org.jacoco.agent.rt.IAgent");
+    byte[] data = (byte[]) agentInterface.getMethod("getExecutionData", boolean.class).invoke(agent, false);
+    check(data != null && data.length >= 5 && data.length <= 2 * 1024 * 1024, "coverage 数据大小无效");
+    return data;
   }
 
   private static final class GuardFailure extends Exception {
@@ -250,9 +276,17 @@ public final class Driver extends Instrumentation {
     return found;
   }
 
+  private static void passed(JSONArray results, String id) throws Exception {
+    JSONObject item = new JSONObject();
+    item.put("id", id);
+    item.put("passed", true);
+    results.put(item);
+  }
+
   private JSONObject selfTest() throws Exception {
     Activity activity = startActivitySync(new Intent(getTargetContext(), Fixture.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
     try {
+      JSONArray results = new JSONArray();
       JSONObject initial = null;
       long deadline = SystemClock.uptimeMillis() + 5000;
       do {
@@ -265,19 +299,30 @@ public final class Driver extends Instrumentation {
       perform(HELPER, initial, initial.getString("snapshotSha256"), input, "set-text", text);
       JSONObject edited = snapshot(HELPER);
       find(edited, "text", text);
-      int refused = 0;
+      passed(results, "unicode-input");
+      boolean refused = false;
       try { perform(HELPER, edited, initial.getString("snapshotSha256"), input, "set-text", "不应写入"); }
-      catch (GuardFailure expected) { refused++; }
+      catch (GuardFailure expected) { refused = true; }
+      check(refused, "过期快照没有被拒绝");
+      passed(results, "stale-snapshot-rejected");
+      refused = false;
       try { requirePackage(root(HELPER), BROWSER); }
-      catch (GuardFailure expected) { refused++; }
+      catch (GuardFailure expected) { refused = true; }
+      check(refused, "错误应用没有被拒绝");
+      passed(results, "wrong-package-rejected");
+      refused = false;
       try { perform(HELPER, edited, edited.getString("snapshotSha256"), find(edited, "password", true), "set-text", "不应写入"); }
-      catch (GuardFailure expected) { refused++; }
-      check(refused == 3, "拒绝边界自测未通过");
+      catch (GuardFailure expected) { refused = true; }
+      check(refused, "密码框写入没有被拒绝");
+      passed(results, "password-edit-rejected");
       perform(HELPER, edited, edited.getString("snapshotSha256"), find(edited, "text", "确认中文输入"), "click", "");
       JSONObject finalState = snapshot(HELPER);
       find(finalState, "text", "已收到：" + text);
+      passed(results, "click-updates-result");
       check(!finalState.toString().contains("fixture-password"), "密码框内容没有正确隐藏");
-      finalState.put("selfTestCases", 6);
+      passed(results, "password-value-hidden");
+      finalState.put("selfTestCases", results.length());
+      finalState.put("selfTestResults", results);
       finalState.put("browserTested", false);
       return finalState;
     } finally {
