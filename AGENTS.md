@@ -4,10 +4,10 @@ These model-selection rules apply to tasks in this repository.
 
 | Task | Model and reasoning effort |
 | --- | --- |
-| Normal daily implementation | `gpt-5.6-sol`, `high` |
-| Medium or larger task involving module boundaries, interfaces, or architectural uncertainty | Design with `gpt-6-astra`, `high`, then implement with Sol |
-| Complex state or cross-module implementation | `gpt-5.6-sol`, `xhigh` |
-| Repeated focused debugging does not converge | Escalate to `gpt-5.6-sol`, `xhigh`, and revisit the design |
+| Normal daily implementation | `gpt-6-astra`, `low` |
+| Medium or larger task involving module boundaries, interfaces, or architectural uncertainty | Design with `gpt-6-astra`, `high`, then implement with `gpt-6-astra`, `low` for normal work or `medium` for complex work |
+| Complex state or cross-module implementation | `gpt-6-astra`, `medium` |
+| Repeated focused debugging does not converge | Escalate to `gpt-6-astra`, `medium`, and revisit the design |
 | High-risk design or review | Consider `gpt-6-astra`, `xhigh` |
 | Required independent review | Separate fresh-context `gpt-6-astra`, `high` |
 | Review after fixes | Retain the same reviewer's context and bind re-review to the final HEAD |
