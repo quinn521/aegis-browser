@@ -33,7 +33,9 @@ export const JACOCO_ARTIFACTS = Object.freeze({
 });
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(here, '../../..');
-const sources = ['android-ui-driver/AndroidManifest.xml', 'android-ui-driver/Driver.java'];
+const sources = ['android-ui-driver/AndroidManifest.xml', 'android-ui-driver/Driver.java',
+  'android-ui-driver/jacoco-agent.properties'];
+const coverageConfiguration = sources[2];
 const fail = message => { throw new Error(message); };
 const hash = (file, algorithm = 'sha256') => crypto.createHash(algorithm).update(fs.readFileSync(file)).digest('hex');
 const hashText = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -235,6 +237,7 @@ function build(options) {
   const unsigned = path.join(output, 'unsigned.apk');
   run(tool('aapt2'), ['link', '-I', android, '--manifest', path.join(here, sources[0]), '-o', unsigned]);
   run('/usr/bin/zip', ['-q', unsigned, 'classes.dex'], {cwd: dex});
+  if (coverageEnabled) run('/usr/bin/zip', ['-q', '-j', unsigned, path.join(here, coverageConfiguration)]);
   const aligned = path.join(output, 'aligned.apk');
   run(tool('zipalign'), ['-p', '4', unsigned, aligned]);
   // 临时测试签名只存在仓库外的私有目录，不复用产品密钥，不打印密码。
@@ -256,9 +259,16 @@ function build(options) {
     delete signingEnvironment.AEGIS_QA_SIGN_PASS;
   }
   run(tool('apksigner'), ['verify', '--verbose', apk]);
+  const apkEntries = new Set(run('/usr/bin/unzip', ['-Z1', apk]).trim().split(/\r?\n/));
+  if (apkEntries.has('jacoco-agent.properties') !== coverageEnabled ||
+      (coverageEnabled && run('/usr/bin/unzip', ['-p', apk, 'jacoco-agent.properties']) !==
+        fs.readFileSync(path.join(here, coverageConfiguration), 'utf8'))) {
+    fail('JaCoCo offline 配置没有与 coverage APK 隔离');
+  }
   for (const item of sourceHashes) if (hash(path.join(here, item.file)) !== item.sha256) fail('构建期间验收工具源码改变');
   const coverage = coverageEnabled ? {enabled: true, jacocoVersion: JACOCO_ARTIFACTS.version,
     cliSha256: JACOCO_ARTIFACTS.cli.sha256, runtimeSha256: JACOCO_ARTIFACTS.runtime.sha256,
+    configurationSha256: hash(path.join(here, coverageConfiguration)), output: 'none', dumpOnExit: false,
     dexContainsJacoco: true} : {enabled: false, dexContainsJacoco: false};
   const record = {package: HELPER, buildMode: coverageEnabled ? 'coverage' : 'normal', apkSha256: hash(apk), sourceHashes,
     originalClassFiles: originals, originalClassSetSha256: hashText(JSON.stringify(originals)), repository,
@@ -275,14 +285,20 @@ function driverArtifact(directory) {
   const currentClasses = classHashes(path.join(directory, 'classes-original'));
   const expectedCoverage = record.coverage?.enabled === true ? {enabled: true, jacocoVersion: JACOCO_ARTIFACTS.version,
     cliSha256: JACOCO_ARTIFACTS.cli.sha256, runtimeSha256: JACOCO_ARTIFACTS.runtime.sha256,
+    configurationSha256: hash(path.join(here, coverageConfiguration)), output: 'none', dumpOnExit: false,
     dexContainsJacoco: true} : {enabled: false, dexContainsJacoco: false};
+  const apkEntries = new Set(command('/usr/bin/unzip', ['-Z1', apk]).trim().split(/\r?\n/));
+  const hasCoverageConfiguration = apkEntries.has('jacoco-agent.properties');
   if (record.package !== HELPER || record.apkSha256 !== hash(apk) || record.browserTested !== false ||
       record.repository?.head !== command('git', ['rev-parse', 'HEAD'], {cwd: repositoryRoot}).trim() ||
       JSON.stringify(record.sourceHashes) !== JSON.stringify(sources.map(file => ({file, sha256: hash(path.join(here, file))}))) ||
       JSON.stringify(record.originalClassFiles) !== JSON.stringify(currentClasses) ||
       record.originalClassSetSha256 !== hashText(JSON.stringify(currentClasses)) ||
       JSON.stringify(record.coverage) !== JSON.stringify(expectedCoverage) ||
-      record.coverage.dexContainsJacoco !== hasJacocoMarker(path.join(directory, 'dex/classes.dex'))) {
+      record.coverage.dexContainsJacoco !== hasJacocoMarker(path.join(directory, 'dex/classes.dex')) ||
+      hasCoverageConfiguration !== record.coverage.enabled ||
+      (hasCoverageConfiguration && command('/usr/bin/unzip', ['-p', apk, 'jacoco-agent.properties']) !==
+        fs.readFileSync(path.join(here, coverageConfiguration), 'utf8'))) {
     fail('验收工具与构建、class 或源码记录不符');
   }
   if (record.coverage?.enabled) verifyArtifact(path.join(directory, 'jacoco-cli.jar'), JACOCO_ARTIFACTS.cli);
@@ -306,7 +322,8 @@ function verifyBuildModes(options) {
   const result = {kind: 'aegis-android-java-build-mode-verification', testedSha: normal.record.repository.head,
     sourceHashes: normal.record.sourceHashes, originalClassSetSha256: normal.record.originalClassSetSha256,
     normal: {apkSha256: normal.record.apkSha256, dexContainsJacoco: false},
-    coverage: {apkSha256: coverage.record.apkSha256, dexContainsJacoco: true, jacocoVersion: JACOCO_ARTIFACTS.version},
+    coverage: {apkSha256: coverage.record.apkSha256, dexContainsJacoco: true, jacocoVersion: JACOCO_ARTIFACTS.version,
+      configurationSha256: coverage.record.coverage.configurationSha256, output: 'none', dumpOnExit: false},
     passed: true};
   save(options.output, result);
   console.log(JSON.stringify(result, null, 2));

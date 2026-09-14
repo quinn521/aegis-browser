@@ -63,7 +63,7 @@ node apps/browser/scripts/android-agent-ui.mjs self-test \
   --output /绝对路径/新的自测结果.json
 ```
 
-`javac` 产生的未插桩 class 保存在 `classes-original`；coverage 构建只把插桩副本与 runtime 交给 `d8`。normal DEX 必须没有 JaCoCo probe/runtime marker，coverage DEX 必须包含；两种构建还要有完全相同的源码哈希、原始 class 清单和 checkout HEAD。emulator 返回的真实 exec 使用未插桩 class 生成 `jacoco.xml`，`summary.json` 记录 `Driver.java` 的 covered/missed/total 行计数、由这些计数计算的百分比、exec/XML 哈希和六项具名 fixture。源码字符串扫描或手写 JSON 不能作为 coverage。
+`javac` 产生的未插桩 class 保存在 `classes-original`；coverage 构建只把插桩副本与 runtime 交给 `d8`，并只在 coverage APK 的 classpath 根目录加入 `jacoco-agent.properties`。该配置固定 `output=none` 和 `dumponexit=false`，禁止 JaCoCo 在 Android 根目录写默认 `jacoco.exec`；exec 只由受控 instrumentation 结果从内存导出。normal APK 必须没有此配置以及 JaCoCo probe/runtime marker，coverage APK 必须包含；两种构建还要有完全相同的源码哈希、原始 class 清单和 checkout HEAD。emulator 返回的真实 exec 使用未插桩 class 生成 `jacoco.xml`，`summary.json` 记录 `Driver.java` 的 covered/missed/total 行计数、由这些计数计算的百分比、exec/XML 哈希和六项具名 fixture。源码字符串扫描或手写 JSON 不能作为 coverage。
 
 六项 fixture 固定为 `unicode-input`、`stale-snapshot-rejected`、`wrong-package-rejected`、`password-edit-rejected`、`click-updates-result` 和 `password-value-hidden`。报告始终保留 `browserTested=false`、`runtimeTested=false` 和 `releaseEligible=false`；Java helper coverage 不能证明浏览器 runtime、Chromium 集成或发行状态。
 

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   actionRequest,
   helperApkPath,
@@ -78,6 +79,8 @@ test('JaCoCo 固定为 Maven Central 0.8.14 的已核验工件', () => {
     runtime: ['https://repo.maven.apache.org/maven2/org/jacoco/org.jacoco.agent/0.8.14/org.jacoco.agent-0.8.14-runtime.jar',
       '4bb9b49d4e6c5b042fc7e6b4f1e3e808f7441dde', '3fb76eea65f81bd9415202bab34b6571728841dff1ab8e6bbe81adc2e299face'],
   });
+  assert.equal(fs.readFileSync(new URL('./android-ui-driver/jacoco-agent.properties', import.meta.url), 'utf8'),
+    'output=none\ndumponexit=false\n');
 });
 
 test('coverage exec 必须来自唯一 instrumentation 结果，normal 结果不得夹带', () => {
