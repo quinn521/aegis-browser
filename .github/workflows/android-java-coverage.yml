@@ -55,7 +55,7 @@ jobs:
       - name: Run host protocol tests
         run: |
           node --check apps/browser/scripts/android-agent-ui.mjs
-          node --test apps/browser/scripts/android-agent-ui_test.mjs
+          node --test apps/browser/scripts/android-agent-ui_test.mjs apps/browser/scripts/verify-android-agent-target_test.mjs
           bash -n apps/browser/scripts/run-android-java-coverage-emulator.sh
 
       - name: Fetch fixed JaCoCo and build both helper modes
