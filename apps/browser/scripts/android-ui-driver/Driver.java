@@ -14,6 +14,7 @@ import android.os.SystemClock;
 import android.text.InputType;
 import android.util.Base64;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -188,10 +189,27 @@ public final class Driver extends Instrumentation {
     return root;
   }
 
-  private String activeWindowPackage() {
-    AccessibilityNodeInfo root = automation.getRootInActiveWindow();
-    String value = root == null || root.getPackageName() == null ? "none" : root.getPackageName().toString();
-    return value.matches("[A-Za-z0-9_.]{1,200}") ? value : "unknown";
+  private static String diagnosticValue(CharSequence value) {
+    String text = value == null ? "none" : value.toString();
+    return text.matches("[A-Za-z0-9_.$ /:()#-]{1,200}") ? text : "unknown";
+  }
+
+  private String windowMetadata() throws Exception {
+    JSONArray windows = new JSONArray();
+    for (AccessibilityWindowInfo window : automation.getWindows()) {
+      JSONObject item = new JSONObject();
+      item.put("id", window.getId());
+      item.put("type", window.getType());
+      item.put("layer", window.getLayer());
+      item.put("active", window.isActive());
+      item.put("focused", window.isFocused());
+      item.put("title", diagnosticValue(window.getTitle()));
+      AccessibilityNodeInfo root = window.getRoot();
+      item.put("package", diagnosticValue(root == null ? null : root.getPackageName()));
+      item.put("class", diagnosticValue(root == null ? null : root.getClassName()));
+      windows.put(item);
+    }
+    return windows.toString();
   }
 
   private static void requirePackage(AccessibilityNodeInfo node, String target) throws Exception {
@@ -301,7 +319,7 @@ public final class Driver extends Instrumentation {
       do {
         try { initial = snapshot(HELPER); break; }
         catch (GuardFailure error) {
-          lastWindowFailure = error.getMessage() + ",activePackage=" + activeWindowPackage();
+          lastWindowFailure = error.getMessage() + ",windows=" + windowMetadata();
           SystemClock.sleep(50);
         }
       } while (SystemClock.uptimeMillis() < deadline);
