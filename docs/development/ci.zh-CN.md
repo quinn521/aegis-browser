@@ -14,13 +14,45 @@ mise exec -- node scripts/ci/run-quality.mjs \
   --report-dir ".artifacts/ci/local-$(git rev-parse --short HEAD)"
 ```
 
-入口依次执行工具链预检、`pnpm install --frozen-lockfile`、现有 `pnpm run quality:fast`、修订 4 冻结文件校验、临时副本中的 13 项离线预览检查、CI 门禁回归、工作流验证与源码前后摘要比对。任一阶段非零即整体失败；报告写入被忽略的 `.artifacts/ci/`，不得提交该目录。
+入口依次执行工具链预检、`pnpm install --frozen-lockfile`、`pnpm run quality:fast`、分语言覆盖率生成与校验、许可证元数据记录、修订 4 冻结文件校验、临时副本中的 13 项离线预览检查、CI 门禁回归、工作流验证与源码前后摘要比对。任一阶段非零即整体失败；报告写入被忽略的 `.artifacts/ci/`，不得提交该目录。
+
+## Lint、单元测试与覆盖率口径
+
+根 `pnpm run lint` 使用 ESLint 9 flat config，实际分析 `packages/core/src/**/*.ts` 与 `scripts/ci/**/*.mjs`。它采用 JavaScript/TypeScript recommended 的正确性规则；`tsc --noEmit` 仍由独立 `typecheck` 执行。为了接纳现有代码，例外限制在具体范围：测试文件允许现有 `@ts-nocheck`、精度边界常量与字符串 escape；`privacy/pii.ts` 保留现有正则 escape；`structure-signature.ts` 保留两个空扩展 interface。新增 CI fixture 会证明合法代码退出 0、未定义标识符退出非 0。这里没有把 ESLint 描述成格式化器或完整风格门。
+
+基础 `quality` job 复用一次现有套件，不为覆盖率重跑整套测试。其报告目录包含 `coverage-manifest.json`，各语言分别记录 scope、报告路径、摘要与哈希，`aggregateCoverage` 固定为 `null`：
+
+| 语言 | 本 job 的覆盖范围 | 报告与边界 |
+| --- | --- | --- |
+| TypeScript | `packages/core/src` 的 28 个生产 `.ts`；同次 Vitest 170 项单测 | LCOV、JSON summary、text；所有未执行生产文件仍进分母。Access 的 TS vectors 只校验共享结构，不等价于 C++ 行为覆盖。 |
+| JavaScript | `scripts/ci`、core 工具与 `apps/browser/scripts` 中受控的 Node `.js/.mjs/.cjs` | c8 从同次 Node 子进程的 V8 数据生成报告，并用 `--all` 纳入未执行生产脚本；renderer/WebUI JavaScript 未测。 |
+| C++ | `aegis_access` standalone 的 `access_route_planner.cc` 与 `site_proxy_rule_group.cc` | 同次 487-check native binary 使用匹配 clang/llvm profile 生成 LCOV；完整 Chromium、GURL/SQLite、GN/GTest 和浏览器集成未测。 |
+| Python | `local-pypi-proxy.py` 与两个 Access vector generators | 固定 coverage.py 隔离 venv；复用 proxy 4 项测试和 native 生成器调用，另有两个拒绝 fixture，combine 后生成 XML/JSON/LCOV/text；两个 prototype worker 未测。 |
+| Swift | `apps/ios` 的 25 个产品 Swift 文件 | 独立 `iOS Coverage` workflow 在双 Simulator 上生成 xccov JSON，状态为 `SEPARATE_REPORTING_WORKFLOW`；它不属于当前 macOS 必需门，也不是实机、签名或发布证据，Codacy 转换仍待办。 |
+| Bash / PowerShell | 独立 Linux kcov 与 Windows Pester required jobs | 只代表列明脚本的行为/行覆盖；macOS 专属 shell 分支和真实 Windows UI 仍按报告列为未测。 |
+| Java | `Driver.java` Android instrumentation 验收工具 | 独立 `Android Java Coverage` workflow 在专用 API 36 emulator 上执行六项 fixture 并生成 JaCoCo exec/XML，状态为 `SEPARATE_REPORTING_WORKFLOW`；它不属于 macOS `quality-gate`，也不代表浏览器 Java runtime、真机或发布验收。 |
+
+产品交付仍以 macOS 为第一优先级；`ios-coverage` 只验证仓库中既有 iOS 代码，不改变产品路线图或平台排程。
+
+HTML、CSS、JSON/data 与 GN/GNI 按静态/数据输入单列，不伪造行覆盖率。native 分类仍可对未知产品路径给出 `REVIEW_REQUIRED`；本质量工作不会把它改成 `NOT_APPLICABLE`。
+
+## Codacy Production 准备状态
+
+根 `.codacy.yml` 已按官方 Java glob 语义精确忽略依赖、构建/生成输出与补丁运输文件，未整体排除 `third_party`，因此 `apps/browser/overlay/third_party/aegis*` 中的本仓集成仍可分析。配置文件不能启用 Codacy 工具；工具选择与仓库授权必须在 Codacy UI 完成。
+
+当前状态是：`CONFIG_PREPARED`、`APP_AUTH_PENDING`、`FIRST_ANALYSIS_PENDING`、`COVERAGE_UPLOAD_PENDING`。`APP_AUTH_PENDING` 表示当前 GitHub token 无法核实 Codacy App 安装/授权状态，并不证明已经安装或尚未安装。管理员后续只授权目标 Aegis 仓库，核对 Codacy 项目确实对应 `quinn521/aegis-browser` 的 DEV `main`，再以首次分析显示的精确 SHA 验证身份。
+
+本阶段只生成并上传 CI artifact，不加入 token、coverage upload job 或 Codacy/coverage 徽章。未来上传必须使用短期仓库级 secret，禁止给 fork PR 暴露 secret，并把覆盖报告绑定到实际被测提交：PR `pull_request` CI 测试的是 GitHub 合并候选 M，不是产品分支 H；main push 则绑定 S。本地账号、密码、API token 与仓库 token 均不得进入仓库、日志或公开文档。
 
 待提交工作树可以先运行一次，但提交后必须对最终干净 HEAD 重跑。只有报告的 `inputSource` 与 `finalSource` 相同、`result=PASS`，且最终 HEAD/树与报告绑定时，才是有效的本地证据。修改、rebase、冲突修复或重新生成锁文件后旧证据失效。
 
 ## PR、main 与证据身份
 
-`.github/workflows/quality.yml` 对所有目标为 `main` 的 PR（含 Draft）和 `main` push 运行基础门；普通开发分支不重复执行 push 全量门。固定检查名是 `quality-gate`。它仅在 `quality` 明确为 `success` 时成功，failure、cancelled、skipped、timeout 或缺失均不得放行。
+`.github/workflows/quality.yml` 对所有目标为 `main` 的 PR（含 Draft）和 `main` push 运行 macOS 优先基础门；普通开发分支不重复执行 push 全量门。固定汇总检查名是 `quality-gate`。它仅在 `quality`、`shell-coverage`、`powershell-coverage` 三个必需 job 都明确为 `success` 时成功；failure、cancelled、skipped、timeout 或缺失均不得放行。
+
+`.github/workflows/ios-coverage.yml` 是独立报告 workflow。只有 `apps/ios/**`、共享 Agent Contract v1 向量或该 workflow 自身变化的 PR/main push 才自动运行，也可通过 `workflow_dispatch` 手动生成报告。它继续严格绑定当次 GitHub tested SHA，测试失败仍为非零；当前分支保护只要求 `quality-gate`，因此 iOS 报告不改变 macOS 优先的合并门。
+
+`.github/workflows/android-java-coverage.yml` 也是独立报告 workflow。它构建 normal 与 coverage 两种验收工具以证明普通 APK 不含 JaCoCo，仅在专用 emulator 运行 coverage APK 的六项 fixture，并把 JaCoCo exec/XML、原始 class 摘要与实际 GitHub tested SHA 写入 artifact。固定检查名为 `android-java-coverage`，不并入 macOS `quality-gate`；`browserTested=false` 明确保留工具覆盖率与浏览器 runtime 验收的边界。
 
 报告区分四种身份：
 
@@ -37,7 +69,7 @@ PR 检查测试 M；main push 检查 S。协调者必须从 GitHub API 回读最
 
 首次 CI PR 在保护尚不存在时按分步方式初始化：
 
-1. 本地最终 HEAD 全量通过，并让 Draft PR 的真实托管 `quality` 与 `quality-gate` 成功。
+1. 本地最终 HEAD 全量通过，并让 Draft PR 的三个必需执行 job 与 `quality-gate` 全部成功；涉及 iOS/共享向量时另核同 HEAD 的独立 iOS 报告。
 2. 保存仓库合并设置、main 保护与规则集快照；记录实际 check 名和 GitHub Actions 来源。
 3. 增量启用 PR 必需、严格 base 同步、`quality-gate` 必需、禁止强推/删除以及管理员不可绕过；保留任何更严格旧设置。
 4. 回读设置，确认管理员账号和合并身份不在 bypass 列表。套餐或 API 拒绝时保持阻塞，不关闭必需检查或使用管理员绕过。
