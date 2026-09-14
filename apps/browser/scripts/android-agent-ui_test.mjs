@@ -63,7 +63,8 @@ test('instrumentation 必须明确成功，不能伪称产品或发行通过', (
   }
   assert.throws(() => parseResult(output(good).replace('CODE: -1', 'CODE: 0')));
   assert.throws(() => parseResult(output(good) + output(good)));
-  assert.throws(() => parseResult('INSTRUMENTATION_CODE: -1'));
+  assert.throws(() => parseResult('INSTRUMENTATION_RESULT: shortMsg=Process crashed.\nINSTRUMENTATION_CODE: 0\n'),
+    /"resultKeys":\["shortMsg"\].*"codes":\[0\]/);
 });
 
 test('JaCoCo 固定为 Maven Central 0.8.14 的已核验工件', () => {

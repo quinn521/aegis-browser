@@ -27,9 +27,18 @@ fi
 "$adb" -s "$serial" shell wm dismiss-keyguard
 "$adb" -s "$serial" shell input keyevent 82
 
+set +e
 node apps/browser/scripts/android-agent-ui.mjs self-test \
   --adb "$adb" \
   --serial "$serial" \
   --driver-build "$RUNNER_TEMP/aegis-driver-coverage" \
   --coverage-output "$EVIDENCE_DIR/coverage" \
   --output "$EVIDENCE_DIR/self-test.json"
+status=$?
+set -e
+
+if (( status != 0 )); then
+  # This emulator contains only the dedicated fixture helper; retain its crash class and stack for CI diagnosis.
+  "$adb" -s "$serial" logcat -d -v brief 'AndroidRuntime:E' '*:S' | tail -n 120 >&2 || true
+fi
+exit "$status"

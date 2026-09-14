@@ -128,7 +128,16 @@ export function helperApkPath(output) {
 
 export function parseResult(output) {
   const lines = [...output.matchAll(/^INSTRUMENTATION_RESULT: aegis_result=([A-Za-z0-9+/=]+)\r?$/gm)];
-  if (lines.length !== 1 || lines[0][1].length > 400000) fail('缺少唯一、有界的 UI 结果');
+  if (lines.length !== 1 || lines[0][1].length > 400000) {
+    const keys = prefix => [...output.matchAll(new RegExp('^INSTRUMENTATION_' + prefix + ': ([A-Za-z][A-Za-z0-9_.-]{0,63})=', 'gm'))]
+      .map(match => match[1]).slice(0, 16);
+    const codes = [...output.matchAll(/^INSTRUMENTATION_CODE: (-?\d+)\r?$/gm)]
+      .map(match => Number(match[1])).slice(0, 8);
+    fail('缺少唯一、有界的 UI 结果；instrumentation 协议=' + JSON.stringify({
+      resultKeys: keys('RESULT'), statusKeys: keys('STATUS'), codes,
+      failed: /^INSTRUMENTATION_FAILED:/m.test(output),
+    }));
+  }
   const result = JSON.parse(Buffer.from(lines[0][1], 'base64').toString('utf8'));
   if (result.ok !== true || !/^INSTRUMENTATION_CODE: -1\r?$/m.test(output)) {
     fail(typeof result.error === 'string' ? result.error.slice(0, 240) : 'UI 操作未成功');
