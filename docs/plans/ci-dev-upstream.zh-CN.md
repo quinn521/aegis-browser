@@ -1,5 +1,7 @@
 # DEV 到上游的 CI、审查与自动合并实施方案
 
+> 2026-09-15 流程修订：本文以下为初始设计和历史实施记录，不再作为日常合并操作指令。当前流程以 [同一功能分支验证与上游合并](../development/ci.zh-CN.md#同一功能分支验证与上游合并) 为准：DEV Draft PR 仅验证、不合并；同一 H 提上游；上游 main CI 通过后 DEV main 仅快进同步。旧文中的 DEV 先合并、重新打包导出、管理员一律不可 bypass 等要求已由该指南替代。
+
 日期：2026-09-14（初始设计与观察）。2026-09-15 范围更新：当前只关注 macOS；自动 CI 仅 `quality` 与 `quality-gate`，后者只依赖并严格要求 `quality=success`。Linux/Windows 覆盖率及 iOS/Android 工作流均仅手动运行，不属于当前合并门。Android 与 WinRM 专属套件保留在 `quality:other-platforms` 显式入口；共享与 Mac 测试仍由 `quality:fast` 执行。本文历史 SHA/初始观察保留，当前操作以 [CI 指南](../development/ci.zh-CN.md) 为准。
 
 ## 1. 目标与当前事实

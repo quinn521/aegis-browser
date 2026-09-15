@@ -63,43 +63,41 @@ HTML、CSS、JSON/data 与 GN/GNI 按静态/数据输入单列，不伪造行覆
 - `B`：目标 base 的精确 SHA；
 - `H`：PR 最终 head；
 - `M`：GitHub PR 合并候选，必须恰好以 B/H 为两个父提交；
-- `S`：合并后 DEV main 的实际提交。
+- `S`：上游合并后的实际提交，也是 DEV main 快进同步的目标。
 
 PR 检查测试 M；main push 检查 S。协调者必须从 GitHub API 回读最新 run/job、run attempt、check source、H/B/M/S 和冲突状态，不能仅信任候选代码生成的报告或评论。PR 同步、base 前移、rebase、修复或 run attempt 更新后，旧结果不能转用。
 
 人工补跑只允许在 `main` 上选择精确 `target_sha`，同时提供其精确祖先 `base_sha`。这种 `workflow_dispatch` 结果保留事件类型，不伪装成 PR 或正常 main push 结果。
 
-## 初次启用保护
+## 同一功能分支验证与上游合并
 
-首次 CI PR 在保护尚不存在时按分步方式初始化：
+2026-09-15 起，DEV main 是上游 main 的镜像；开发和验证发生在 Fork 的 `codex/*` 功能分支。废止“先合并 DEV main，再重新打包上游提交”的日常流程。
 
-1. 本地最终 HEAD 全量通过，并让 Draft PR 的`quality` 与 `quality-gate` 全部成功；其他平台报告不属于当前自动门。
-2. 保存仓库合并设置、main 保护与规则集快照；记录实际 check 名和 GitHub Actions 来源。
-3. 增量启用 PR 必需、严格 base 同步、`quality-gate` 必需、禁止强推/删除以及管理员不可绕过；保留任何更严格旧设置。
-4. 回读设置，确认管理员账号和合并身份不在 bypass 列表。套餐或 API 拒绝时保持阻塞，不关闭必需检查或使用管理员绕过。
-5. 独立 reviewer 覆盖最终 H 后由协调任务精确 HEAD 合并；等待 S 的真实 main push run 成功后才允许继续上游导出。
+1. 刷新 origin/main 和 upstream/main；正常情况下两者 SHA 必须相同。从 upstream/main 创建隔离功能分支，个人 AGENTS.md 留本机并通过 Git 本地 exclude 忽略，不进入任何提交。
+2. 运行本地完整质量门和公开历史检查。向 DEV main 提 Draft PR，只用于托管 CI 和独立审查，禁止启用该验证 PR 的 auto-merge，也不合并它。
+3. DEV 最终 H 的检查通过后，用同一个 Fork 分支、同一个 H 向上游 main 提 PR；禁止另行 cherry-pick、squash 或重建导出分支。两边 PR 链接互相记录。
+4. 上游执行自己的 PR CI 和审查。上游 base 前移或修复改变 H 时，在原功能分支处理，并重新核验两边最终 H/B/M。DEV 成功不替代上游 CI。
+5. 只在上游执行最终合并（由上游决定 merge/squash/rebase 方式），记录实际 S 并等待上游 main push CI 成功。不要独立合并 DEV 验证 PR。
+6. 协调者刷新远端，核对 origin/main 是 S 的祖先，且没有未审查的 DEV 独有改动，然后普通推送 S 到 DEV main。禁止日常 force/force-with-lease、同步 PR 的独立 merge commit 或关闭 CI。若保护拒绝，停止并报告，不能偷偷放宽规则。
+7. DEV 当前允许管理员 bypass，因此授权协调者可在已核验上游 S 的情况下执行镜像快进推送；该权限不用于跳过上游审查和 CI。等待 DEV 的真实 main push CI 成功，再关闭尚未自动关闭的 DEV 验证 PR（不合并），保留来源链接。
+8. 刷新两边 refs，验收 SHA 相同、`git rev-list --left-right --count origin/main...upstream/main` 为 `0 0`、文件 diff 为空、两边 S 的 main CI 成功。
 
-GitHub 原生 auto-merge 可保持关闭。当前自动推进由协调任务执行，独立模型 review 是外部证据，并不等同 GitHub 已强制一名独立人类批准。
+若发现已有历史分叉，停止正常快进同步。先核对树差异并备份；一次性历史修复须明确授权，不能伪装为快进，不能每轮重复强推。历史重写产生的 push.before 非祖先失败保留记录；确需人工补跑时用受控 workflow_dispatch 绑定 S 与真实祖先，不伪装成正常 push 成功。
 
-## 上游公开导出
+## 保护与公开历史检查
 
-不要从 DEV main 直接创建携带个人历史的上游分支。以最新 `upstream/main` 新建隔离分支，只应用已经在 DEV 合并且公开允许的差异，然后运行：
+当前约定：DEV main 必须 1 位维护者 Approve，管理员允许 bypass；上游 main 不要求固定数量 Approve，管理员仍受保护约束。两边保留 quality-gate、禁止强推/删除和解决讨论要求。每次操作回读实际配置。仓库 Allow auto-merge 不等于每个 PR 都应启用；DEV 验证 PR 必须关闭 auto-merge。模型 review 不替代测试和 GitHub 必需条件。
+
+功能分支在提交 DEV 验证之前就必须是可公开历史，执行：
 
 ```bash
-node scripts/ci/check-public-diff.mjs \
-  --base upstream/main \
-  --head HEAD
-
+node scripts/ci/check-public-diff.mjs --base upstream/main --head HEAD
 mise exec -- node scripts/ci/run-quality.mjs \
-  --scope full \
-  --base upstream/main \
-  --public-base upstream/main \
-  --report-dir ".artifacts/ci/upstream-$(git rev-parse --short HEAD)"
+  --scope full --base upstream/main --public-base upstream/main \
+  --report-dir ".artifacts/ci/public-$(git rev-parse --short HEAD)"
 ```
 
-导出检查同时检查最终差异和每个新提交的历史，拒绝 `AGENTS.md`、`agent.md` 及大小写变体的新增、修改、删除或重命名；上游 base 中已有但完全未改的同名文件不会误报。不能用 `.gitignore` 掩盖已经跟踪的个人文件，也不能先提交个人文件再在后续提交删除。
-
-上游得到新的 B/H/M，必须重跑本地、托管 CI 和独立 review；DEV 的成功只作为来源映射，不是上游成功。
+检查覆盖最终差异和每个新提交，拒绝个人 AGENTS.md/agent.md 及大小写变体的新增、修改、删除或重命名；上游 base 已有且未变的同名文件不误删。不能先提交个人文件再删除来隐藏历史。
 
 ## Chromium 集成边界与故障分类
 
