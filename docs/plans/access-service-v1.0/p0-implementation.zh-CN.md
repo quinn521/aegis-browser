@@ -207,6 +207,14 @@ Barrier 使用 browser-owned `operation_id + operation_sequence` 管理同一 sc
 
 证据边界：0123 完成的是可独立执行的 BLOCK dispatch barrier 状态机，还未把 barrier 真正接入 `AegisNetThrottle::WillStartRequest`、Navigation/预取/preconnect/Service Worker/BFCache 等 Chromium 派发入口，也未实现执行点 ACK 与 2 秒/5 秒预算。现有 `AegisNetThrottle` 的 `request_initiator`/source-site 仍不能被当作 Access Service 的可信 page ownership；真实接线必须使用 browser-owned document/navigation metadata。646-check PASS 不代表真实浏览器 BLOCK 入口或 G0 PASS。
 
+## 0124：fail-closed dispatch gate 编排
+
+2026-09-16 在 0123 barrier 状态机之上新增纯 C++ `EvaluateAndRegisterRequestForDispatch`。该 gate 固定一个关键顺序：先用 `RequestDispatchBarrierRegistry` 对完整 browser-owned record 做同步 BLOCK 判定，只有明确 `kAllow` 后才允许写入 `RequestOwnershipRegistry`；命中 barrier、record 非法、依赖缺失、重复 request ID 或 Registry 容量耗尽均返回 `kBlock`，不存在“登记失败但仍继续派发”的回退路径。gate 自身不从 renderer/page 字符串构造 owner、document 或 generation，只消费 0115/0121 已冻结的规范化 record。
+
+本 feat 与生产代码同步增加独立 unit 与 regression contract，并提供 `//components/aegis_access:request_dispatch_gate_unittests`。standalone C++20 初轮真实执行为 `PASS: aegis_access native unit (670 checks)`，较 0123 增加 24 条检查；unit 覆盖正常 allow+register、exact BLOCK、malformed record、pending-navigation barrier 与缺失依赖 fail-closed，regression 固定跨 generation barrier 不可绕过、跨 Profile/StoragePartition 不误伤、重复 ID/容量失败不得放行，以及 BLOCK 判定必须先于 Registry mutation。顺序补丁为 `0124-feat-aegis-enforce-request-dispatch-gate.patch`，生成后 SHA-256 为 `9b26f0aae8e9b7f7d37fab0db72fb67a056e19eb74bb602e8006c96e620d4f62`。
+
+证据边界继续收紧：0124 已把“barrier 判定 → ownership 登记 → allow”组合成一个不可跳步的可执行核心，但尚未把它挂到 Chromium `ChromeContentBrowserClient::CreateURLLoaderThrottles` 或其他真实派发入口。固定 Chromium 151 的 browser-side API 已核对可提供 BrowserContext、WebContents、FrameTreeNodeId、navigation id，并可由 RenderFrameHost 取得不可变关联的 StoragePartition；下一 feat 才负责把这些 browser-owned 元数据转换为 `BrowserOwnedRequestMetadata` 和 generation，再调用本 gate。worker/prefetch/preconnect/Service Worker/BFCache 覆盖仍未完成，670-check PASS 不代表真实浏览器 BLOCK runtime 或 G0 PASS。
+
 ## 回滚
 
 本切片尚无运行时入口或数据迁移，回滚其代码、GN/补丁与测试入口的独立提交即可；不删除用户现有文档、凭据、Profile 或构建缓存。后续真实接入单独交付，不能用回滚规划器来清除已持久 PROXY 意图或将其静默变成 DIRECT。
