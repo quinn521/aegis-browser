@@ -51,18 +51,23 @@ bool HasExactlyOneAttributionToken(const RequestOwnershipRecord& record) {
          record.pending_navigation_token.empty();
 }
 
-bool IsValidRecord(const RequestOwnershipRecord& record) {
-  if (record.request_id.empty() || !IsComplete(record.owner) ||
-      !IsComplete(record.generations) || record.exact_host.empty() ||
-      !IsKnown(record.scheme) || record.port == 0) {
-    return false;
-  }
+bool HasValidRequestMetadata(const RequestOwnershipRecord& record) {
+  return !record.request_id.empty() && IsComplete(record.owner) &&
+         IsComplete(record.generations) && !record.exact_host.empty() &&
+         IsKnown(record.scheme) && record.port != 0;
+}
+
+bool HasValidAttribution(const RequestOwnershipRecord& record) {
   if (record.site_ownership_reliable) {
     return !record.top_level_site.empty() &&
            HasExactlyOneAttributionToken(record);
   }
   return record.top_level_site.empty() && record.document_token.empty() &&
          record.pending_navigation_token.empty();
+}
+
+bool IsValidRecord(const RequestOwnershipRecord& record) {
+  return HasValidRequestMetadata(record) && HasValidAttribution(record);
 }
 
 RequestOwnershipStatus ValidateExpected(
