@@ -3,12 +3,8 @@
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {inferPromotionTitle} from './promotion-title.mjs';
 
-const CONVENTIONAL_TYPES = new Set([
-  'build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'release', 'revert', 'style', 'test',
-]);
-const CONVENTIONAL_TITLE = /^(?<type>[a-z][a-z0-9-]*)(?:\((?<scope>[^()\r\n]+)\))?(?<breaking>!)?: (?<subject>\S.*)$/u;
-const PR_NUMBER_SUFFIX = /\s+\(#\d+\)$/u;
 const PROMOTION_BRANCH_PREFIX = 'automation/promote-';
 const README_FILES = ['README.md', 'README.zh-CN.md', 'README.zh-TW.md'];
 const MARKERS = Object.freeze({
@@ -17,12 +13,17 @@ const MARKERS = Object.freeze({
   upstream: '<!-- aegis-promotion-orchestrator:upstream-main -->',
 });
 
-function command(commandName, args, {env = process.env, allowStatuses = [0]} = {}) {
+export {inferPromotionTitle, parseConventionalTitle} from './promotion-title.mjs';
+
+function command(commandName, args, options = {}) {
+  const env = options.env ?? process.env;
+  const allowStatuses = options.allowStatuses ?? [0];
   const result = spawnSync(commandName, args, {encoding: 'utf8', env});
   if (result.error) throw result.error;
   if (!allowStatuses.includes(result.status)) {
     const detail = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
-    throw new Error(`${commandName} ${args.join(' ')} failed with status ${result.status}${detail ? `: ${detail}` : ''}`);
+    const detailSuffix = detail ? `: ${detail}` : '';
+    throw new Error(`${commandName} ${args.join(' ')} failed with status ${result.status}${detailSuffix}`);
   }
   return result;
 }
@@ -51,30 +52,6 @@ export function loadPromotionConfig(env = process.env) {
     forkToken: requireToken('AEGIS_FORK_AUTOMATION_TOKEN', env.AEGIS_FORK_AUTOMATION_TOKEN),
     upstreamToken: requireToken('AEGIS_UPSTREAM_TOKEN', env.AEGIS_UPSTREAM_TOKEN),
   };
-}
-
-function stripPrNumberSuffixes(value) {
-  let current = value;
-  let previous;
-  do {
-    previous = current;
-    current = current.replace(PR_NUMBER_SUFFIX, '').trimEnd();
-  } while (current !== previous);
-  return current;
-}
-
-export function parseConventionalTitle(value) {
-  if (typeof value !== 'string') return null;
-  const normalized = stripPrNumberSuffixes(value.trim());
-  const match = CONVENTIONAL_TITLE.exec(normalized);
-  if (!match?.groups || !CONVENTIONAL_TYPES.has(match.groups.type)) return null;
-  return {title: normalized, type: match.groups.type};
-}
-
-export function inferPromotionTitle(subjects) {
-  const candidates = (subjects ?? []).map(parseConventionalTitle).filter((entry) => entry && entry.type !== 'release');
-  const feature = candidates.findLast((entry) => entry.type === 'feat');
-  return feature?.title ?? candidates.at(-1)?.title ?? null;
 }
 
 export function classifyBranchRelationship({originMain, upstreamMain, originMainAncestor, upstreamMainAncestor}) {
