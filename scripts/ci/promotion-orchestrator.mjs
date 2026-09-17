@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
 const CONVENTIONAL_TYPES = new Set([
@@ -40,6 +38,19 @@ function secretEnv(token) {
 function requireToken(name, token) {
   if (!token) throw new Error(`${name} is required for this promotion transition`);
   return token;
+}
+
+export function loadPromotionConfig(env = process.env) {
+  const personalRepo = env.GITHUB_REPOSITORY;
+  const readToken = env.GH_TOKEN;
+  if (!personalRepo || !readToken) throw new Error('GITHUB_REPOSITORY and GH_TOKEN are required');
+  return {
+    personalRepo,
+    upstreamRepo: env.AEGIS_UPSTREAM_REPOSITORY || 'gcsagroup/aegis-browser',
+    readToken,
+    forkToken: requireToken('AEGIS_FORK_AUTOMATION_TOKEN', env.AEGIS_FORK_AUTOMATION_TOKEN),
+    upstreamToken: requireToken('AEGIS_UPSTREAM_TOKEN', env.AEGIS_UPSTREAM_TOKEN),
+  };
 }
 
 function stripPrNumberSuffixes(value) {
@@ -117,11 +128,17 @@ function ensureRemote(name, url) {
   else git('remote', 'add', name, url);
 }
 
-function refreshBranches(personalRepo, upstreamRepo) {
+function refreshBranches({personalRepo, upstreamRepo, forkToken, upstreamToken}) {
   ensureRemote('origin', `https://github.com/${personalRepo}.git`);
   ensureRemote('upstream', `https://github.com/${upstreamRepo}.git`);
-  git('fetch', '--prune', 'origin', '+refs/heads/main:refs/remotes/origin/main', '+refs/heads/develop:refs/remotes/origin/develop');
-  git('fetch', '--prune', 'upstream', '+refs/heads/main:refs/remotes/upstream/main');
+  setupGitAuth(forkToken);
+  command('git', ['fetch', '--prune', 'origin', '+refs/heads/main:refs/remotes/origin/main', '+refs/heads/develop:refs/remotes/origin/develop'], {
+    env: secretEnv(forkToken),
+  });
+  setupGitAuth(upstreamToken);
+  command('git', ['fetch', '--prune', 'upstream', '+refs/heads/main:refs/remotes/upstream/main'], {
+    env: secretEnv(upstreamToken),
+  });
 }
 
 function sha(ref) {
@@ -171,14 +188,23 @@ function hasMarker(pr, marker) {
   return String(pr?.body ?? '').includes(marker);
 }
 
+function hasBase(pr, branch) {
+  return pr?.base?.ref === branch;
+}
+
+function isPromotionHead(pr, personalRepo) {
+  const branch = String(pr?.head?.ref ?? '');
+  return pr?.head?.repo?.full_name === personalRepo && branch.startsWith(PROMOTION_BRANCH_PREFIX);
+}
+
 function candidatePersonalPull(pr, personalRepo) {
-  if (pr?.base?.ref === 'develop' && isHead(pr, personalRepo, 'main')) return 'sync';
-  if (pr?.base?.ref === 'main' && pr?.head?.repo?.full_name === personalRepo && String(pr?.head?.ref ?? '').startsWith(PROMOTION_BRANCH_PREFIX)) return 'promotion';
+  if (hasBase(pr, 'develop') && isHead(pr, personalRepo, 'main')) return 'sync';
+  if (hasBase(pr, 'main') && isPromotionHead(pr, personalRepo)) return 'promotion';
   return null;
 }
 
 function candidateUpstreamPull(pr, personalRepo) {
-  return pr?.base?.ref === 'main' && isHead(pr, personalRepo, 'main');
+  return hasBase(pr, 'main') && isHead(pr, personalRepo, 'main');
 }
 
 function runGh(args, token) {
@@ -224,24 +250,12 @@ function ensureExistingAutoMerge(repo, pull, token) {
   ensureAutoMerge(repo, pull.number, token);
 }
 
-function bodyFile(body) {
-  const directory = mkdtempSync(join(tmpdir(), 'aegis-promotion-'));
-  const path = join(directory, 'body.md');
-  writeFileSync(path, `${body.trim()}\n`);
-  return {directory, path};
-}
-
-function createPull({repo, base, head, title, body, token}) {
-  const temp = bodyFile(body);
-  try {
-    const output = runGh(['pr', 'create', '--repo', repo, '--base', base, '--head', head, '--title', title, '--body-file', temp.path], token);
-    const url = output.split(/\r?\n/u).findLast((line) => /^https:\/\//u.test(line.trim()))?.trim();
-    const match = /\/pull\/(\d+)$/u.exec(url ?? '');
-    if (!match) throw new Error(`Unable to parse created PR URL from gh output: ${output}`);
-    return {number: Number(match[1]), html_url: url};
-  } finally {
-    rmSync(temp.directory, {recursive: true, force: true});
-  }
+async function createPull({repo, base, head, title, body, token}) {
+  return githubApi(repo, '/pulls', {
+    token,
+    method: 'POST',
+    body: {base, head, title, body: `${body.trim()}\n`},
+  });
 }
 
 function setupGitAuth(token) {
@@ -253,12 +267,21 @@ function pushOrigin(refspec, token) {
   command('git', ['push', 'origin', refspec], {env: secretEnv(token)});
 }
 
-function remoteOriginBranchSha(branch) {
+function remoteOriginBranchSha(branch, token) {
+  setupGitAuth(token);
   const result = command('git', ['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], {
+    env: secretEnv(token),
     allowStatuses: [0, 2],
   });
   if (result.status === 2) return null;
   return result.stdout.trim().split(/\s+/u)[0] || null;
+}
+
+function fetchOriginBranch(branch, token) {
+  setupGitAuth(token);
+  command('git', ['fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], {
+    env: secretEnv(token),
+  });
 }
 
 function promotionSubjects(baseRef, headRef) {
@@ -272,38 +295,67 @@ function promotionTitle(baseRef, headRef) {
   return title;
 }
 
+export function applyReadmeMirror({gitFn = git, commandFn = command} = {}) {
+  gitFn('restore', '--source=upstream/main', '--', ...README_FILES);
+  const changed = commandFn('git', ['diff', '--quiet', '--', ...README_FILES], {allowStatuses: [0, 1]}).status === 1;
+  if (!changed) return false;
+  gitFn('add', '--', ...README_FILES);
+  commandFn('git', [
+    '-c', 'user.name=github-actions[bot]',
+    '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+    'commit', '-m', 'chore(promotion): mirror upstream README',
+  ]);
+  return true;
+}
+
 async function findLatestMatchingPull(repo, personalRepo, {base, branch}, token) {
   const pulls = await listPulls(repo, 'all', token);
   return pulls.find((pr) => pr?.base?.ref === base && isHead(pr, personalRepo, branch)) ?? null;
 }
 
-async function handleExistingPulls(personalRepo, upstreamRepo, forkToken, upstreamToken) {
-  const personalOpen = await listPulls(personalRepo, 'open', forkToken);
+export function inspectOpenPromotionPulls({personalOpen, upstreamOpen, personalRepo, upstreamRepo}) {
   const personalCandidates = personalOpen
     .map((pr) => ({pr, kind: candidatePersonalPull(pr, personalRepo)}))
     .filter((entry) => entry.kind);
-  const upstreamOpen = await listPulls(upstreamRepo, 'open', upstreamToken);
   const upstreamCandidates = upstreamOpen.filter((pr) => candidateUpstreamPull(pr, personalRepo));
-
   const manualPersonal = personalCandidates.find(({pr, kind}) => !hasMarker(pr, MARKERS[kind]));
   if (manualPersonal) {
-    console.log(`Deferred: existing non-automation PR ${personalRepo}#${manualPersonal.pr.number} uses the promotion path`);
-    return true;
+    return {
+      status: 'manual',
+      message: `existing non-automation PR ${personalRepo}#${manualPersonal.pr.number} uses the promotion path`,
+    };
   }
   const manualUpstream = upstreamCandidates.find((pr) => !hasMarker(pr, MARKERS.upstream));
   if (manualUpstream) {
-    console.log(`Deferred: existing non-automation upstream PR ${upstreamRepo}#${manualUpstream.number} uses ${repoOwner(personalRepo)}:main`);
-    return true;
+    return {
+      status: 'manual',
+      message: `existing non-automation upstream PR ${upstreamRepo}#${manualUpstream.number} uses ${repoOwner(personalRepo)}:main`,
+    };
   }
 
   const automation = [
     ...personalCandidates.filter(({pr, kind}) => hasMarker(pr, MARKERS[kind])).map(({pr, kind}) => ({repo: personalRepo, pr, kind})),
     ...upstreamCandidates.filter((pr) => hasMarker(pr, MARKERS.upstream)).map((pr) => ({repo: upstreamRepo, pr, kind: 'upstream'})),
   ];
-  if (automation.length > 1) throw new Error(`Multiple promotion PRs are open: ${automation.map(({repo, pr}) => `${repo}#${pr.number}`).join(', ')}`);
-  if (automation.length === 0) return false;
+  if (automation.length > 1) return {status: 'multiple', automation};
+  if (automation.length === 0) return {status: 'none'};
+  return {status: 'active', active: automation[0]};
+}
 
-  const active = automation[0];
+async function handleExistingPulls(personalRepo, upstreamRepo, forkToken, upstreamToken) {
+  const personalOpen = await listPulls(personalRepo, 'open', forkToken);
+  const upstreamOpen = await listPulls(upstreamRepo, 'open', upstreamToken);
+  const inspection = inspectOpenPromotionPulls({personalOpen, upstreamOpen, personalRepo, upstreamRepo});
+  if (inspection.status === 'manual') {
+    console.log(`Deferred: ${inspection.message}`);
+    return true;
+  }
+  if (inspection.status === 'multiple') {
+    throw new Error(`Multiple promotion PRs are open: ${inspection.automation.map(({repo, pr}) => `${repo}#${pr.number}`).join(', ')}`);
+  }
+  if (inspection.status === 'none') return false;
+
+  const {active} = inspection;
   if (active.kind === 'upstream') {
     await ensureCurrentCopilotReview(active.repo, active.pr, upstreamToken);
   } else {
@@ -319,7 +371,7 @@ async function createMainToDevelopSync(personalRepo, forkToken, originMain) {
   if (closedPullBlocks(existing, originMain)) {
     throw new Error(`Previous main -> develop PR #${existing.number} was closed without merge for ${originMain.slice(0, 12)}`);
   }
-  const pull = createPull({
+  const pull = await createPull({
     repo: personalRepo,
     base: 'develop',
     head: 'main',
@@ -342,25 +394,16 @@ async function createDevelopToMainPromotion(personalRepo, upstreamMain, originDe
 
   const title = promotionTitle('origin/main', 'origin/develop');
   git('switch', '--force-create', branch, 'origin/develop');
-  git('restore', '--source=upstream/main', '--', ...README_FILES);
-  const staged = command('git', ['diff', '--quiet', '--', ...README_FILES], {allowStatuses: [0, 1]});
-  if (staged.status === 1) {
-    git('add', '--', ...README_FILES);
-    command('git', [
-      '-c', 'user.name=github-actions[bot]',
-      '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
-      'commit', '-m', 'chore(promotion): mirror upstream README',
-    ]);
-  }
+  applyReadmeMirror();
   if (command('git', ['diff', '--quiet', 'origin/main', 'HEAD'], {allowStatuses: [0, 1]}).status === 0) {
     console.log('No public tree difference remains after applying the README mirror rule');
     return;
   }
 
   let promotionHead = sha('HEAD');
-  const existingRemoteHead = remoteOriginBranchSha(branch);
+  const existingRemoteHead = remoteOriginBranchSha(branch, forkToken);
   if (existingRemoteHead) {
-    git('fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`);
+    fetchOriginBranch(branch, forkToken);
     if (command('git', ['diff', '--quiet', `origin/${branch}`, 'HEAD'], {allowStatuses: [0, 1]}).status !== 0) {
       throw new Error(`Fail closed: existing ${branch} differs from the expected promotion tree`);
     }
@@ -369,7 +412,7 @@ async function createDevelopToMainPromotion(personalRepo, upstreamMain, originDe
   } else {
     pushOrigin(`HEAD:refs/heads/${branch}`, forkToken);
   }
-  const pull = createPull({
+  const pull = await createPull({
     repo: personalRepo,
     base: 'main',
     head: branch,
@@ -389,7 +432,7 @@ async function createUpstreamPromotion(personalRepo, upstreamRepo, originMain, u
     throw new Error(`Previous upstream PR #${previous.number} was closed without merge for ${originMain.slice(0, 12)}`);
   }
   const title = promotionTitle('upstream/main', 'origin/main');
-  const pull = createPull({
+  const pull = await createPull({
     repo: upstreamRepo,
     base: 'main',
     head: `${owner}:main`,
@@ -401,76 +444,116 @@ async function createUpstreamPromotion(personalRepo, upstreamRepo, originMain, u
   console.log(`Created upstream promotion PR: ${pull.html_url}`);
 }
 
-async function main() {
-  const personalRepo = process.env.GITHUB_REPOSITORY;
-  const upstreamRepo = process.env.AEGIS_UPSTREAM_REPOSITORY || 'gcsagroup/aegis-browser';
-  const readToken = process.env.GH_TOKEN;
-  const forkToken = requireToken('AEGIS_FORK_AUTOMATION_TOKEN', process.env.AEGIS_FORK_AUTOMATION_TOKEN);
-  const upstreamToken = requireToken('AEGIS_UPSTREAM_TOKEN', process.env.AEGIS_UPSTREAM_TOKEN);
-  if (!personalRepo || !readToken) throw new Error('GITHUB_REPOSITORY and GH_TOKEN are required');
+function mainRelationshipIsStable(actual, expected, state) {
+  return actual.state === state
+    && actual.originMain === expected.originMain
+    && actual.upstreamMain === expected.upstreamMain;
+}
 
-  refreshBranches(personalRepo, upstreamRepo);
-  if (await handleExistingPulls(personalRepo, upstreamRepo, forkToken, upstreamToken)) return;
-
-  let relation = branchRelationship();
-
-  if (relation.state === 'diverged') {
-    throw new Error(`Fail closed: personal main ${relation.originMain.slice(0, 12)} and upstream main ${relation.upstreamMain.slice(0, 12)} diverged`);
-  }
-
-  if (relation.state === 'origin-behind') {
-    if (!await requireGreenQuality(upstreamRepo, relation.upstreamMain, upstreamToken)) return;
-    refreshBranches(personalRepo, upstreamRepo);
-    const refreshed = branchRelationship();
-    if (refreshed.state !== 'origin-behind' || refreshed.upstreamMain !== relation.upstreamMain || refreshed.originMain !== relation.originMain) {
-      console.log('Deferred: main relationship changed after upstream quality verification');
-      return;
-    }
-    pushOrigin(`${relation.upstreamMain}:refs/heads/main`, forkToken);
-    console.log(`Fast-forwarded personal main to upstream ${relation.upstreamMain}`);
+async function handleOriginBehind(config, relation, deps) {
+  if (!await deps.requireGreenQuality(config.upstreamRepo, relation.upstreamMain, config.upstreamToken)) return;
+  deps.refreshBranches(config);
+  const refreshed = deps.branchRelationship();
+  if (!mainRelationshipIsStable(refreshed, relation, 'origin-behind')) {
+    deps.log('Deferred: main relationship changed after upstream quality verification');
     return;
   }
+  deps.pushOrigin(`${relation.upstreamMain}:refs/heads/main`, config.forkToken);
+  deps.log(`Fast-forwarded personal main to upstream ${relation.upstreamMain}`);
+}
 
-  if (relation.state === 'origin-ahead') {
-    if (!await requireGreenQuality(personalRepo, relation.originMain, readToken)) return;
-    refreshBranches(personalRepo, upstreamRepo);
-    const refreshed = branchRelationship();
-    if (refreshed.state !== 'origin-ahead' || refreshed.originMain !== relation.originMain || refreshed.upstreamMain !== relation.upstreamMain) {
-      console.log('Deferred: main relationship changed after personal main quality verification');
-      return;
-    }
-    await createUpstreamPromotion(personalRepo, upstreamRepo, refreshed.originMain, refreshed.upstreamMain, upstreamToken);
+async function handleOriginAhead(config, relation, deps) {
+  if (!await deps.requireGreenQuality(config.personalRepo, relation.originMain, config.readToken)) return;
+  deps.refreshBranches(config);
+  const refreshed = deps.branchRelationship();
+  if (!mainRelationshipIsStable(refreshed, relation, 'origin-ahead')) {
+    deps.log('Deferred: main relationship changed after personal main quality verification');
     return;
   }
+  await deps.createUpstreamPromotion(
+    config.personalRepo,
+    config.upstreamRepo,
+    refreshed.originMain,
+    refreshed.upstreamMain,
+    config.upstreamToken,
+  );
+}
 
-  const verifiedMain = relation.originMain;
-  if (!await requireGreenQuality(personalRepo, verifiedMain, readToken)) return;
-  refreshBranches(personalRepo, upstreamRepo);
-  relation = branchRelationship();
-  if (relation.state !== 'same' || relation.originMain !== verifiedMain) {
-    console.log(`Deferred: main relationship changed after personal main quality verification (${relation.state})`);
-    return;
-  }
-  if (!isAncestor('origin/main', 'origin/develop')) {
-    await createMainToDevelopSync(personalRepo, forkToken, relation.originMain);
-    return;
-  }
-
-  let currentDevelop = sha('origin/develop');
+async function handleDevelopPromotion(config, relation, deps) {
+  const currentDevelop = deps.sha('origin/develop');
   if (currentDevelop === relation.originMain) {
-    console.log('No develop changes are waiting for promotion');
+    deps.log('No develop changes are waiting for promotion');
     return;
   }
-  if (!await requireGreenQuality(personalRepo, currentDevelop, readToken)) return;
-  const verifiedDevelop = currentDevelop;
-  refreshBranches(personalRepo, upstreamRepo);
-  relation = branchRelationship();
-  currentDevelop = sha('origin/develop');
-  if (relation.state !== 'same' || currentDevelop !== verifiedDevelop) {
-    console.log(`Deferred: branch state changed during develop quality verification (${relation.state})`);
+  if (!await deps.requireGreenQuality(config.personalRepo, currentDevelop, config.readToken)) return;
+  deps.refreshBranches(config);
+  const refreshed = deps.branchRelationship();
+  const refreshedDevelop = deps.sha('origin/develop');
+  if (refreshed.state !== 'same' || refreshedDevelop !== currentDevelop) {
+    deps.log(`Deferred: branch state changed during develop quality verification (${refreshed.state})`);
     return;
   }
-  await createDevelopToMainPromotion(personalRepo, relation.upstreamMain, currentDevelop, forkToken);
+  await deps.createDevelopToMainPromotion(
+    config.personalRepo,
+    refreshed.upstreamMain,
+    refreshedDevelop,
+    config.forkToken,
+  );
+}
+
+async function handleSameMain(config, relation, deps) {
+  if (!await deps.requireGreenQuality(config.personalRepo, relation.originMain, config.readToken)) return;
+  deps.refreshBranches(config);
+  const refreshed = deps.branchRelationship();
+  if (refreshed.state !== 'same' || refreshed.originMain !== relation.originMain) {
+    deps.log(`Deferred: main relationship changed after personal main quality verification (${refreshed.state})`);
+    return;
+  }
+  if (!deps.isAncestor('origin/main', 'origin/develop')) {
+    await deps.createMainToDevelopSync(config.personalRepo, config.forkToken, refreshed.originMain);
+    return;
+  }
+  await handleDevelopPromotion(config, refreshed, deps);
+}
+
+function handleDiverged(_config, relation) {
+  throw new Error(`Fail closed: personal main ${relation.originMain.slice(0, 12)} and upstream main ${relation.upstreamMain.slice(0, 12)} diverged`);
+}
+
+function defaultPromotionDependencies() {
+  return {
+    refreshBranches,
+    handleExistingPulls,
+    branchRelationship,
+    requireGreenQuality,
+    pushOrigin,
+    createUpstreamPromotion,
+    isAncestor,
+    createMainToDevelopSync,
+    sha,
+    createDevelopToMainPromotion,
+    log: (message) => console.log(message),
+  };
+}
+
+const TRANSITION_HANDLERS = Object.freeze({
+  'origin-behind': handleOriginBehind,
+  'origin-ahead': handleOriginAhead,
+  same: handleSameMain,
+  diverged: handleDiverged,
+});
+
+export async function runPromotionCycle(config, deps = defaultPromotionDependencies()) {
+  deps.refreshBranches(config);
+  if (await deps.handleExistingPulls(config.personalRepo, config.upstreamRepo, config.forkToken, config.upstreamToken)) return;
+  const relation = deps.branchRelationship();
+  const handler = TRANSITION_HANDLERS[relation.state];
+  if (!handler) throw new Error(`Unknown main relationship state: ${relation.state}`);
+  await handler(config, relation, deps);
+}
+
+async function main() {
+  await runPromotionCycle(loadPromotionConfig());
 }
 
 const invoked = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
