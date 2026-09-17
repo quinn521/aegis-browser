@@ -1,5 +1,5 @@
 ---
-applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,scripts/ci/**/*.mjs,.codacy.yml,docs/development/ci.zh-CN.md,docs/github-upstream-ci.zh-CN.md"
+applyTo: ".github/workflows/**/*.yml,.github/workflows/**/*.yaml,.github/copilot-instructions.md,.github/instructions/**/*.instructions.md,scripts/ci/**/*.mjs,.codacy.yml,.mise.toml,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,docs/development/ci.zh-CN.md,docs/github-upstream-ci.zh-CN.md"
 ---
 
 # CI and governance review rules
