@@ -16,6 +16,7 @@
 #include "chrome/common/channel_info.h"
 #include "components/aegis_access/browser_request_metadata_seed.h"
 #include "components/version_info/channel.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
@@ -123,6 +124,9 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
   }
   if (request_frame->GetBrowserContext() != profile) {
     return Error(AccessBrowserRequestMetadataStatus::kBrowserContextMismatch);
+  }
+  if (!request_frame->GetPage().IsPrimary()) {
+    return Error(AccessBrowserRequestMetadataStatus::kInvalidAttribution);
   }
 
   content::StoragePartition* partition = request_frame->GetStoragePartition();

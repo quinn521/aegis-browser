@@ -1,31 +1,57 @@
-From 6ddbb996ba0e4bac2415f2dd8d59fc65f4da3e2f Mon Sep 17 00:00:00 2001
-From: GCSA Aegis <aegis@gcsa.local>
-Date: Wed, 16 Sep 2026 21:26:31 +0800
+From 6e42992d5a9ef801c9a2114448f9d3c347e02fb9 Mon Sep 17 00:00:00 2001
+From: GCSA-aegis <aegis@gcsa.local>
+Date: Thu, 17 Sep 2026 20:19:05 +0800
 Subject: [PATCH] feat(aegis): add browser-owned request metadata adapter
 
 ---
- chrome/browser/aegis/access/BUILD.gn          |  20 ++
- .../access/access_browser_request_adapter.cc  | 208 ++++++++++++++++++
- .../access/access_browser_request_adapter.h   |  57 +++++
+ chrome/browser/aegis/BUILD.gn                 |   7 +-
+ chrome/browser/aegis/access/BUILD.gn          |  21 ++
+ .../access/access_browser_request_adapter.cc  | 212 ++++++++++++++++++
+ .../access/access_browser_request_adapter.h   |  59 +++++
+ ...ess_browser_request_adapter_browsertest.cc |  93 ++++++++
  components/aegis_access/BUILD.gn              |  20 ++
  .../access_route_planner_native_test.cc       |   6 +-
  .../browser_request_metadata_seed.cc          |  88 ++++++++
  .../browser_request_metadata_seed.h           |  65 ++++++
  ...wser_request_metadata_seed_contract_test.h | 156 +++++++++++++
  .../browser_request_metadata_seed_unittest.cc |  29 +++
- 9 files changed, 648 insertions(+), 1 deletion(-)
+ 11 files changed, 754 insertions(+), 2 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_browser_request_adapter.cc
  create mode 100644 chrome/browser/aegis/access/access_browser_request_adapter.h
+ create mode 100644 chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
  create mode 100644 components/aegis_access/browser_request_metadata_seed.cc
  create mode 100644 components/aegis_access/browser_request_metadata_seed.h
  create mode 100644 components/aegis_access/browser_request_metadata_seed_contract_test.h
  create mode 100644 components/aegis_access/browser_request_metadata_seed_unittest.cc
 
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index 0a6c891..109a682 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -230,12 +230,17 @@ if (!is_android) {
+   source_set("browser_tests") {
+     testonly = true
+     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+-    sources = [ "agent/aegis_agent_browsertest.cc" ]
++    sources = [
++      "access/access_browser_request_adapter_browsertest.cc",
++      "agent/aegis_agent_browsertest.cc",
++    ]
+     deps = [
+       ":aegis",
+       ":agent_model_transport",
+       "//base",
+       "//base/test:test_support",
++      "//chrome/browser/aegis/access:access_browser_request_adapter",
++      "//chrome/browser/aegis/access:access_network_context_transport",
+       "//chrome/browser/bookmarks",
+       "//chrome/browser/notifications:test_support",
+       "//chrome/browser/prefs",
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
-index 78bca45..2267b2f 100644
+index 78bca45..ed4c23e 100644
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
-@@ -3,6 +3,26 @@
+@@ -3,6 +3,27 @@
  
  import("//testing/test.gni")
  
@@ -42,6 +68,7 @@ index 78bca45..2267b2f 100644
 +    "//chrome/browser/profiles:profile",
 +    "//chrome/common:channel_info",
 +    "//components/aegis_access",
++    "//components/aegis_access:browser_request_metadata_seed",
 +    "//components/version_info:channel",
 +    "//content/public/browser",
 +    "//net",
@@ -54,10 +81,10 @@ index 78bca45..2267b2f 100644
      "access_network_context_transport.cc",
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chrome/browser/aegis/access/access_browser_request_adapter.cc
 new file mode 100644
-index 0000000..b907b52
+index 0000000..c1cd02d
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_browser_request_adapter.cc
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,212 @@
 +// Copyright 2026 GCSA
 +
 +#include "chrome/browser/aegis/access/access_browser_request_adapter.h"
@@ -76,6 +103,7 @@ index 0000000..b907b52
 +#include "chrome/common/channel_info.h"
 +#include "components/aegis_access/browser_request_metadata_seed.h"
 +#include "components/version_info/channel.h"
++#include "content/public/browser/page.h"
 +#include "content/public/browser/render_frame_host.h"
 +#include "content/public/browser/storage_partition.h"
 +#include "content/public/browser/web_contents.h"
@@ -184,6 +212,9 @@ index 0000000..b907b52
 +  if (request_frame->GetBrowserContext() != profile) {
 +    return Error(AccessBrowserRequestMetadataStatus::kBrowserContextMismatch);
 +  }
++  if (!request_frame->GetPage().IsPrimary()) {
++    return Error(AccessBrowserRequestMetadataStatus::kInvalidAttribution);
++  }
 +
 +  content::StoragePartition* partition = request_frame->GetStoragePartition();
 +  if (!partition) {
@@ -268,10 +299,10 @@ index 0000000..b907b52
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chrome/browser/aegis/access/access_browser_request_adapter.h
 new file mode 100644
-index 0000000..7f88a5f
+index 0000000..df0d467
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_browser_request_adapter.h
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,59 @@
 +// Copyright 2026 GCSA
 +
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_BROWSER_REQUEST_ADAPTER_H_
@@ -317,9 +348,11 @@ index 0000000..7f88a5f
 +// request_initiator/source-site strings and never creates transport state.
 +//
 +// A navigation id takes precedence over the currently committed document so a
-+// navigation cannot inherit the old page's authorization. Requests without a
-+// trusted WebContents/frame are rejected in this slice rather than borrowing an
-+// active tab identity.
++// navigation cannot inherit the old page's authorization. Only frames in the
++// primary Page are eligible; prerender/BFCache/fenced/pending Pages are rejected
++// rather than inheriting the primary page's identity. Requests without a trusted
++// WebContents/frame are rejected in this slice rather than borrowing an active
++// tab identity.
 +AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
 +    Profile* profile,
 +    const base::RepeatingCallback<content::WebContents*()>& wc_getter,
@@ -329,6 +362,105 @@ index 0000000..7f88a5f
 +}  // namespace aegis::access
 +
 +#endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_BROWSER_REQUEST_ADAPTER_H_
+diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc b/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
+new file mode 100644
+index 0000000..fa34447
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
+@@ -0,0 +1,93 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/aegis/access/access_browser_request_adapter.h"
++
++#include <optional>
++
++#include "base/functional/bind.h"
++#include "chrome/browser/aegis/access/access_network_context_transport.h"
++#include "chrome/browser/ui/browser.h"
++#include "chrome/browser/ui/tabs/tab_strip_model.h"
++#include "chrome/test/base/in_process_browser_test.h"
++#include "chrome/test/base/ui_test_utils.h"
++#include "content/public/browser/page.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/prerender_test_util.h"
++#include "url/gurl.h"
++
++namespace aegis::access {
++namespace {
++
++class AccessBrowserRequestAdapterBrowserTest : public InProcessBrowserTest {
++ public:
++  AccessBrowserRequestAdapterBrowserTest()
++      : prerender_helper_(base::BindRepeating(
++            &AccessBrowserRequestAdapterBrowserTest::web_contents,
++            base::Unretained(this))) {}
++  ~AccessBrowserRequestAdapterBrowserTest() override = default;
++
++  void SetUpOnMainThread() override {
++    InProcessBrowserTest::SetUpOnMainThread();
++    ASSERT_TRUE(embedded_test_server()->Start());
++    ASSERT_NE(AccessNetworkContextTransport::GetOrCreate(browser()->profile()),
++              nullptr);
++  }
++
++ protected:
++  content::WebContents* web_contents() {
++    return browser()->tab_strip_model()->GetActiveWebContents();
++  }
++
++  base::RepeatingCallback<content::WebContents*()> WebContentsGetter() {
++    return base::BindRepeating(
++        &AccessBrowserRequestAdapterBrowserTest::web_contents,
++        base::Unretained(this));
++  }
++
++  content::test::PrerenderTestHelper prerender_helper_;
++};
++
++IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
++                       PrimaryPageUsesItsOwnBrowserIdentity) {
++  const GURL primary_url = embedded_test_server()->GetURL("/title1.html");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), primary_url));
++
++  content::RenderFrameHost* primary_frame = web_contents()->GetPrimaryMainFrame();
++  ASSERT_NE(primary_frame, nullptr);
++  ASSERT_TRUE(primary_frame->GetPage().IsPrimary());
++
++  AccessBrowserRequestMetadataResult result = BuildBrowserOwnedRequestMetadata(
++      browser()->profile(), WebContentsGetter(),
++      primary_frame->GetFrameTreeNodeId(), std::nullopt);
++
++  EXPECT_EQ(result.status, AccessBrowserRequestMetadataStatus::kOk);
++  ASSERT_TRUE(result.metadata.has_value());
++  EXPECT_EQ(result.metadata->attribution_kind,
++            aegis_access::RequestAttributionKind::kDocument);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
++                       PrerenderPageCannotInheritPrimaryPageIdentity) {
++  const GURL primary_url = embedded_test_server()->GetURL("/title1.html");
++  const GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), primary_url));
++
++  const content::PrerenderHostId host_id =
++      prerender_helper_.AddPrerender(prerender_url);
++  content::RenderFrameHost* prerender_frame =
++      prerender_helper_.GetPrerenderedMainFrameHost(host_id);
++  ASSERT_NE(prerender_frame, nullptr);
++  ASSERT_FALSE(prerender_frame->GetPage().IsPrimary());
++
++  AccessBrowserRequestMetadataResult result = BuildBrowserOwnedRequestMetadata(
++      browser()->profile(), WebContentsGetter(),
++      prerender_frame->GetFrameTreeNodeId(), std::nullopt);
++
++  EXPECT_EQ(result.status,
++            AccessBrowserRequestMetadataStatus::kInvalidAttribution);
++  EXPECT_FALSE(result.metadata.has_value());
++}
++
++}  // namespace
++}  // namespace aegis::access
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 8978882..af4ecbc 100644
 --- a/components/aegis_access/BUILD.gn
@@ -759,3 +891,6 @@ index 0000000..9a55fbb
 +
 +}  // namespace
 +}  // namespace aegis_access::test
+-- 
+2.54.0 (Apple Git-157)
+

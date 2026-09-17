@@ -7,6 +7,9 @@ ARGS_FILE="$BROWSER_DIR/args/aegis.gn"
 BUILD_SCRIPT="$SCRIPT_DIR/build.sh"
 COMPONENT_BUILD="$BROWSER_DIR/overlay/components/aegis_access/BUILD.gn"
 ACCESS_BUILD="$BROWSER_DIR/overlay/chrome/browser/aegis/access/BUILD.gn"
+AEGIS_BUILD="$BROWSER_DIR/overlay/chrome/browser/aegis/BUILD.gn"
+BROWSER_METADATA_ADAPTER="$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_browser_request_adapter.cc"
+BROWSER_METADATA_BROWSER_TEST="$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc"
 PATCH_FILE="$BROWSER_DIR/patches/0114-feat-aegis-add-access-route-planning-contract.patch"
 MATCHER_PATCH_FILE="$BROWSER_DIR/patches/0115-feat-aegis-add-trusted-policy-context-matching.patch"
 PROXY_ADAPTER_PATCH_FILE="$BROWSER_DIR/patches/0117-feat-aegis-add-fail-closed-proxy-route-adapter.patch"
@@ -18,6 +21,7 @@ TARGETED_CANCEL_PATCH_FILE="$BROWSER_DIR/patches/0122-feat-aegis-add-targeted-re
 DISPATCH_BARRIER_PATCH_FILE="$BROWSER_DIR/patches/0123-feat-aegis-add-request-dispatch-block-barriers.patch"
 DISPATCH_GATE_PATCH_FILE="$BROWSER_DIR/patches/0124-feat-aegis-enforce-request-dispatch-gate.patch"
 BROWSER_METADATA_PATCH_FILE="$BROWSER_DIR/patches/0125-feat-aegis-add-browser-owned-request-metadata-adapter.patch"
+BROWSER_TEST_WIRING_PATCH_FILE="$BROWSER_DIR/patches/0060-feat-aegis-add-browser-agent-side-panel-and-entry-po.patch"
 SERIES_FILE="$BROWSER_DIR/patches/series"
 STORE_CONTRACT_TEST="$SCRIPT_DIR/access-rule-store-contract_test.sh"
 TARGET="//components/aegis_access:aegis_access_unittests"
@@ -64,6 +68,21 @@ rg -Fq 'test("browser_request_metadata_seed_unittests")' "$COMPONENT_BUILD" ||
   fail "overlay does not define the browser metadata seed unit/regression test"
 rg -Fq 'source_set("access_browser_request_adapter")' "$ACCESS_BUILD" ||
   fail "overlay does not define the browser-owned Access request adapter"
+rg -Fq '"//components/aegis_access:browser_request_metadata_seed",' "$ACCESS_BUILD" ||
+  fail "browser-owned adapter must directly depend on metadata seed target"
+rg -Fq 'request_frame->GetPage().IsPrimary()' "$BROWSER_METADATA_ADAPTER" ||
+  fail "browser-owned adapter must reject non-primary Pages"
+rg -Fq '"access/access_browser_request_adapter_browsertest.cc",' "$AEGIS_BUILD" ||
+  fail "Aegis browser_tests must compile the browser metadata regression"
+rg -Fq '"//chrome/browser/aegis/access:access_browser_request_adapter",' "$AEGIS_BUILD" ||
+  fail "Aegis browser_tests must directly depend on the browser metadata adapter"
+rg -Fq 'PrerenderPageCannotInheritPrimaryPageIdentity' "$BROWSER_METADATA_BROWSER_TEST" ||
+  fail "browser metadata regression must cover prerender identity isolation"
+rg -Fq 'AccessBrowserRequestMetadataStatus::kInvalidAttribution' \
+  "$BROWSER_METADATA_BROWSER_TEST" ||
+  fail "prerender regression must assert fail-closed attribution"
+rg -Fq '"//chrome/browser/aegis:browser_tests",' "$BROWSER_TEST_WIRING_PATCH_FILE" ||
+  fail "chrome browser_tests must include the existing Aegis browser_tests target"
 rg -Fq '+test("aegis_access_unittests")' "$PATCH_FILE" ||
   fail "patch 0114 does not deliver the independent access test"
 rg -Fq '+    "access_policy_evaluator.cc",' "$MATCHER_PATCH_FILE" ||
@@ -133,13 +152,23 @@ rg -Fq 'RunRequestDispatchGateRegressionTests' "$DISPATCH_GATE_PATCH_FILE" ||
   fail "patch 0124 does not carry dispatch gate regression coverage"
 rg -Fq 'BuildBrowserOwnedRequestMetadata' "$BROWSER_METADATA_PATCH_FILE" ||
   fail "patch 0125 does not deliver the browser-owned metadata adapter"
+rg -Fq 'request_frame->GetPage().IsPrimary()' "$BROWSER_METADATA_PATCH_FILE" ||
+  fail "patch 0125 does not reject non-primary Pages"
+rg -Fq '"//components/aegis_access:browser_request_metadata_seed",' \
+  "$BROWSER_METADATA_PATCH_FILE" ||
+  fail "patch 0125 does not carry the direct metadata seed dependency"
+rg -Fq 'PrerenderPageCannotInheritPrimaryPageIdentity' \
+  "$BROWSER_METADATA_PATCH_FILE" ||
+  fail "patch 0125 does not carry the prerender browser regression"
 rg -Fq 'RunBrowserRequestMetadataSeedUnitTests' "$BROWSER_METADATA_PATCH_FILE" ||
   fail "patch 0125 does not carry browser metadata unit coverage"
 rg -Fq 'RunBrowserRequestMetadataSeedRegressionTests' "$BROWSER_METADATA_PATCH_FILE" ||
   fail "patch 0125 does not carry browser metadata regression coverage"
-if rg -Fq 'request_initiator' \
-  "$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_browser_request_adapter.cc"; then
+if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
+fi
+if rg -Fq 'seed_input.request_initiator' "$BROWSER_METADATA_PATCH_FILE"; then
+  fail "patch 0125 must not trust renderer request_initiator"
 fi
 [[ "$(rg -F -c '0114-feat-aegis-add-access-route-planning-contract.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "patch 0114 must appear once in series"

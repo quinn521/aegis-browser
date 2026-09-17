@@ -43,9 +43,11 @@ struct AccessBrowserRequestMetadataResult {
 // request_initiator/source-site strings and never creates transport state.
 //
 // A navigation id takes precedence over the currently committed document so a
-// navigation cannot inherit the old page's authorization. Requests without a
-// trusted WebContents/frame are rejected in this slice rather than borrowing an
-// active tab identity.
+// navigation cannot inherit the old page's authorization. Only frames in the
+// primary Page are eligible; prerender/BFCache/fenced/pending Pages are rejected
+// rather than inheriting the primary page's identity. Requests without a trusted
+// WebContents/frame are rejected in this slice rather than borrowing an active
+// tab identity.
 AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
     Profile* profile,
     const base::RepeatingCallback<content::WebContents*()>& wc_getter,
