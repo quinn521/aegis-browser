@@ -13,6 +13,7 @@
 class Profile;
 
 namespace content {
+class StoragePartition;
 class WebContents;
 }
 
@@ -26,6 +27,7 @@ enum class AccessBrowserRequestMetadataStatus {
   kBrowserContextMismatch,
   kMissingTrustedFrame,
   kMissingStoragePartition,
+  kUnconfiguredPartition,
   kInvalidPartitionPath,
   kInvalidOwner,
   kInvalidAttribution,
@@ -54,6 +56,16 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
     const base::RepeatingCallback<content::WebContents*()>& wc_getter,
     content::FrameTreeNodeId frame_tree_node_id,
     std::optional<int64_t> navigation_id);
+
+// Builds browser-owned Profile-only metadata for a background Worker request
+// only when the caller can supply the exact StoragePartition that owns the
+// NetworkContext. The partition must already be configured by this Profile's
+// Access transport. No WebContents, frame, top-level site, or renderer-provided
+// initiator is consulted, so the resulting context cannot match site-scoped
+// rules.
+AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileRequestMetadata(
+    Profile* profile,
+    content::StoragePartition* partition);
 
 }  // namespace aegis::access
 
