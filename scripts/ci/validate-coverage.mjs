@@ -60,23 +60,66 @@ export function parseCoverageSummary(source, label = 'coverage-summary.json') {
   return total;
 }
 
+function isSafeLcovPath(path) {
+  return Boolean(path) &&
+    !isAbsolute(path) &&
+    !path.includes('\\') &&
+    !path.split('/').includes('..') &&
+    posix.normalize(path) === path;
+}
+
 function parseLcovSourcePath(lines, sourceRoot, files) {
   const sourceLines = lines.filter((line) => line.startsWith('SF:'));
   if (sourceLines.length !== 1) fail('lcov.info contains an invalid record');
 
   const path = sourceLines[0].slice(3);
-  if (
-    !path || isAbsolute(path) || path.includes('\\') ||
-    path.split('/').includes('..') || posix.normalize(path) !== path
-  ) {
-    fail(`lcov.info contains an unsafe source path: ${path}`);
+  if (!isSafeLcovPath(path)) {
+    fail(\`lcov.info contains an unsafe source path: \${path}\`);
   }
   const absolute = resolve(repoRoot, path);
-  if (!isInside(sourceRoot, absolute)) fail(`lcov.info source is outside the production scope: ${path}`);
-  if (!existsSync(absolute) || !statSync(absolute).isFile()) fail(`lcov.info source does not exist: ${path}`);
-  if (files.has(path)) fail(`lcov.info repeats source: ${path}`);
+  if (!isInside(sourceRoot, absolute)) fail(\`lcov.info source is outside the production scope: \${path}\`);
+  if (!existsSync(absolute) || !statSync(absolute).isFile()) fail(\`lcov.info source does not exist: \${path}\`);
+  if (files.has(path)) fail(\`lcov.info repeats source: \${path}\`);
   files.add(path);
   return path;
+}
+
+function parseDaRecords(dataLines) {
+  const seenLines = new Set();
+  let coveredLines = 0;
+  for (const line of dataLines) {
+    const match = /^DA:(\d+),(\d+)(?:,.*)?$/u.exec(line);
+    if (!match || Number(match[1]) < 1 || seenLines.has(match[1])) {
+      fail('lcov.info contains invalid or duplicate DA data');
+    }
+    seenLines.add(match[1]);
+    if (Number(match[2]) > 0) coveredLines += 1;
+  }
+  return {seenLines, coveredLines};
+}
+
+function validateLcovLineSummary(
+  seenLines,
+  coveredLines,
+  lf,
+  lh,
+  allowLineSummarySuperset,
+) {
+  if (allowLineSummarySuperset) {
+    const reportedUncovered = seenLines.size - coveredLines;
+    const summaryUncovered = lf - lh;
+    if (
+      seenLines.size > lf ||
+      coveredLines > lh ||
+      reportedUncovered !== summaryUncovered
+    ) {
+      fail('lcov.info DA data exceeds line summary totals');
+    }
+    return;
+  }
+  if (seenLines.size !== lf || coveredLines !== lh) {
+    fail('lcov.info line totals do not match DA data');
+  }
 }
 
 function parseLcovLineTotals(lines, allowLineSummarySuperset) {
@@ -96,30 +139,14 @@ function parseLcovLineTotals(lines, allowLineSummarySuperset) {
     fail('lcov.info contains invalid line totals');
   }
 
-  const seenLines = new Set();
-  let coveredLines = 0;
-  for (const line of dataLines) {
-    const match = /^DA:(\d+),(\d+)(?:,.*)?$/u.exec(line);
-    if (!match || Number(match[1]) < 1 || seenLines.has(match[1])) {
-      fail('lcov.info contains invalid or duplicate DA data');
-    }
-    seenLines.add(match[1]);
-    if (Number(match[2]) > 0) coveredLines += 1;
-  }
-
-  if (allowLineSummarySuperset) {
-    const reportedUncovered = seenLines.size - coveredLines;
-    const summaryUncovered = lf - lh;
-    if (
-      seenLines.size > lf ||
-      coveredLines > lh ||
-      reportedUncovered !== summaryUncovered
-    ) {
-      fail('lcov.info DA data exceeds line summary totals');
-    }
-  } else if (seenLines.size !== lf || coveredLines !== lh) {
-    fail('lcov.info line totals do not match DA data');
-  }
+  const {seenLines, coveredLines} = parseDaRecords(dataLines);
+  validateLcovLineSummary(
+    seenLines,
+    coveredLines,
+    lf,
+    lh,
+    allowLineSummarySuperset,
+  );
   return {total: lf, covered: lh};
 }
 
