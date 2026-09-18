@@ -49,6 +49,109 @@ aegis_access::RegisteredProxyEntry EntryForEndpoint(
           endpoint.generations};
 }
 
+enum class MatchedPolicyDisposition {
+  kPreserveNative,
+  kProxy,
+  kBlock,
+};
+
+MatchedPolicyDisposition ClassifyPolicyMatch(
+    const aegis_access::PolicyMatchResult& match) {
+  if (match.policy_state == aegis_access::PolicyState::kAbsent) {
+    return MatchedPolicyDisposition::kPreserveNative;
+  }
+  if (match.policy_state != aegis_access::PolicyState::kValid) {
+    return MatchedPolicyDisposition::kBlock;
+  }
+  if (match.effective_mode == aegis_access::AccessMode::kNone ||
+      match.effective_mode == aegis_access::AccessMode::kDirect) {
+    return MatchedPolicyDisposition::kPreserveNative;
+  }
+  if (match.effective_mode == aegis_access::AccessMode::kProxy &&
+      !match.effective_proxy_group_id.empty()) {
+    return MatchedPolicyDisposition::kProxy;
+  }
+  return MatchedPolicyDisposition::kBlock;
+}
+
+int NetErrorForDispatchResult(
+    const aegis_access::PublishedRequestRuntimeResult& result) {
+  return result.status == aegis_access::PublishedRequestRuntimeStatus::kDeny ||
+                 result.status ==
+                     aegis_access::PublishedRequestRuntimeStatus::kBlockedByBarrier
+             ? net::ERR_BLOCKED_BY_CLIENT
+             : net::ERR_PROXY_CONNECTION_FAILED;
+}
+
+struct ProxyDispatchPreparation {
+  int net_error = net::ERR_PROXY_CONNECTION_FAILED;
+  std::optional<aegis_access::RequestOwnershipRecord> ownership_record;
+};
+
+ProxyDispatchPreparation PrepareProxyDispatch(
+    Profile* profile,
+    AccessPublishedRequestRuntime* runtime,
+    const aegis_access::BrowserOwnedRequestMetadata& metadata,
+    const aegis_access::PublishedAccessPolicySnapshot& snapshot,
+    const aegis_access::RequestPolicyContext& context,
+    const aegis_access::PolicyMatchResult& match) {
+  if (!runtime) {
+    return {};
+  }
+
+  const aegis_access::RequestGenerationTupleBuildResult tuple =
+      runtime->CaptureProxyGenerationTupleOnUiThread(
+          metadata.owner, match.effective_proxy_group_id);
+  if (!tuple.generations.has_value()) {
+    return {};
+  }
+
+  AccessNetworkContextTransport* transport =
+      AccessNetworkContextTransport::Get(profile);
+  const std::optional<aegis_access::RegisteredProxyEndpoint> endpoint =
+      transport ? transport->CaptureSelectedProxyEndpoint(
+                      metadata.owner, match.effective_proxy_group_id,
+                      context.exact_host())
+                : std::nullopt;
+  if (!endpoint.has_value()) {
+    return {};
+  }
+
+  AccessRequestDispatchState* dispatch_state =
+      AccessRequestDispatchState::GetOrCreate(profile);
+  if (!dispatch_state) {
+    return {};
+  }
+
+  aegis_access::PublishedRequestRuntimeInput input;
+  input.request = context.ToOwnershipRecord(*tuple.generations);
+  input.policy_state = match.policy_state;
+  input.effective_mode = match.effective_mode;
+  input.policy_scope = match.policy_scope;
+  input.effective_proxy_group_id = match.effective_proxy_group_id;
+  input.matched_policy_generation = match.policy_generation;
+  input.require_proxy_intent = true;
+  input.snapshot_state = aegis_access::SnapshotState::kPublished;
+  input.snapshot_owner = snapshot.owner;
+  input.snapshot_generations = *tuple.generations;
+  input.protection_restriction = aegis_access::ProtectionRestriction::kNone;
+  input.managed_restriction = aegis_access::ManagedRestriction::kNone;
+  input.runtime_state = aegis_access::ProxyRuntimeState::kReady;
+  input.registered_proxy_entry = EntryForEndpoint(*endpoint);
+
+  const aegis_access::PublishedRequestRuntimeResult result =
+      aegis_access::EvaluatePublishedRequestForDispatch(
+          input, dispatch_state->barriers(), dispatch_state->ownership());
+  if (result.status !=
+          aegis_access::PublishedRequestRuntimeStatus::kDispatchRegistered ||
+      result.route_plan.action !=
+          aegis_access::RouteAction::kUseRegisteredProxy) {
+    return {NetErrorForDispatchResult(result), std::nullopt};
+  }
+
+  return {net::OK, input.request};
+}
+
 class CallbackTerminationHandle final
     : public aegis_access::RequestTerminationHandle {
  public:
@@ -395,85 +498,27 @@ AccessProxyingURLLoaderFactory::EvaluateRequest(
   if (!context_result.context.has_value()) {
     return RequestDisposition::kBlock;
   }
-  const aegis_access::RequestPolicyContext& context = *context_result.context;
-  const aegis_access::PolicyMatchResult match =
-      aegis_access::EvaluateAccessPolicy(context, *snapshot);
 
-  if (match.policy_state == aegis_access::PolicyState::kAbsent ||
-      (match.policy_state == aegis_access::PolicyState::kValid &&
-       (match.effective_mode == aegis_access::AccessMode::kNone ||
-        match.effective_mode == aegis_access::AccessMode::kDirect))) {
+  const aegis_access::PolicyMatchResult match =
+      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
+  const MatchedPolicyDisposition policy_disposition =
+      ClassifyPolicyMatch(match);
+  if (policy_disposition == MatchedPolicyDisposition::kPreserveNative) {
     return RequestDisposition::kPreserveNative;
   }
-  if (match.policy_state != aegis_access::PolicyState::kValid ||
-      match.effective_mode == aegis_access::AccessMode::kReject) {
-    return RequestDisposition::kBlock;
-  }
-  if (match.effective_mode != aegis_access::AccessMode::kProxy ||
-      match.effective_proxy_group_id.empty()) {
+  if (policy_disposition == MatchedPolicyDisposition::kBlock) {
     return RequestDisposition::kBlock;
   }
 
-  const aegis_access::RequestGenerationTupleBuildResult tuple =
-      runtime->CaptureProxyGenerationTupleOnUiThread(
-          metadata.metadata->owner, match.effective_proxy_group_id);
-  if (!tuple.generations.has_value()) {
-    *net_error = net::ERR_PROXY_CONNECTION_FAILED;
+  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
+      profile_, runtime, *metadata.metadata, *snapshot, *context_result.context,
+      match);
+  if (!preparation.ownership_record.has_value()) {
+    *net_error = preparation.net_error;
     return RequestDisposition::kBlock;
   }
 
-  AccessNetworkContextTransport* transport =
-      AccessNetworkContextTransport::Get(profile_);
-  const std::optional<aegis_access::RegisteredProxyEndpoint> endpoint =
-      transport ? transport->CaptureSelectedProxyEndpoint(
-                      metadata.metadata->owner, match.effective_proxy_group_id,
-                      context.exact_host())
-                : std::nullopt;
-  if (!endpoint.has_value()) {
-    *net_error = net::ERR_PROXY_CONNECTION_FAILED;
-    return RequestDisposition::kBlock;
-  }
-
-  AccessRequestDispatchState* dispatch_state =
-      AccessRequestDispatchState::GetOrCreate(profile_);
-  if (!dispatch_state) {
-    *net_error = net::ERR_PROXY_CONNECTION_FAILED;
-    return RequestDisposition::kBlock;
-  }
-
-  aegis_access::PublishedRequestRuntimeInput input;
-  input.request = context.ToOwnershipRecord(*tuple.generations);
-  input.policy_state = match.policy_state;
-  input.effective_mode = match.effective_mode;
-  input.policy_scope = match.policy_scope;
-  input.effective_proxy_group_id = match.effective_proxy_group_id;
-  input.matched_policy_generation = match.policy_generation;
-  input.require_proxy_intent = true;
-  input.snapshot_state = aegis_access::SnapshotState::kPublished;
-  input.snapshot_owner = snapshot->owner;
-  input.snapshot_generations = *tuple.generations;
-  input.protection_restriction = aegis_access::ProtectionRestriction::kNone;
-  input.managed_restriction = aegis_access::ManagedRestriction::kNone;
-  input.runtime_state = aegis_access::ProxyRuntimeState::kReady;
-  input.registered_proxy_entry = EntryForEndpoint(*endpoint);
-
-  aegis_access::PublishedRequestRuntimeResult result =
-      aegis_access::EvaluatePublishedRequestForDispatch(
-          input, dispatch_state->barriers(), dispatch_state->ownership());
-  if (result.status !=
-          aegis_access::PublishedRequestRuntimeStatus::kDispatchRegistered ||
-      result.route_plan.action !=
-          aegis_access::RouteAction::kUseRegisteredProxy) {
-    *net_error =
-        result.status == aegis_access::PublishedRequestRuntimeStatus::kDeny ||
-                result.status ==
-                    aegis_access::PublishedRequestRuntimeStatus::kBlockedByBarrier
-            ? net::ERR_BLOCKED_BY_CLIENT
-            : net::ERR_PROXY_CONNECTION_FAILED;
-    return RequestDisposition::kBlock;
-  }
-
-  *ownership_record = input.request;
+  *ownership_record = std::move(*preparation.ownership_record);
   return RequestDisposition::kDispatchProxy;
 }
 
@@ -525,9 +570,9 @@ void AccessProxyingURLLoaderFactory::CreateLoaderAndStart(
     dispatch_state->ownership().Complete(
         ownership_record.request_id, ownership_record.owner,
         ownership_record.generations);
-    RemoveRequest(tracked_ptr);
     BlockRequest(std::move(loader_receiver), std::move(client),
                  net::ERR_PROXY_CONNECTION_FAILED);
+    RemoveRequest(tracked_ptr);
     return;
   }
 
@@ -553,6 +598,7 @@ void AccessProxyingURLLoaderFactory::ForwardNative(
       std::move(client), traffic_annotation);
 }
 
+// static
 void AccessProxyingURLLoaderFactory::BlockRequest(
     mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
