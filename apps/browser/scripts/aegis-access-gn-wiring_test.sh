@@ -234,16 +234,16 @@ fi
   "$SERIES_FILE")" == 1 ]] || fail "0125 must appear once in series"
 [[ "$(rg -F -c '0126-feat-aegis-add-browser-owned-request-metadata-adapter.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "0126 must appear once in series"
-[[ "$(tail -n 12 "$SERIES_FILE" | head -n 1)" == \
+[[ "$(tail -n 13 "$SERIES_FILE" | head -n 1)" == \
   "0115-feat-aegis-add-trusted-policy-context-matching.patch" ]] ||
   fail "patch 0115 must immediately precede patch 0116"
-[[ "$(tail -n 11 "$SERIES_FILE" | head -n 1)" == \
+[[ "$(tail -n 12 "$SERIES_FILE" | head -n 1)" == \
   "0116-feat-aegis-add-access-rule-store-recovery.patch" ]] ||
   fail "patch 0116 must immediately precede patch 0117"
-[[ "$(tail -n 10 "$SERIES_FILE" | head -n 1)" == \
+[[ "$(tail -n 11 "$SERIES_FILE" | head -n 1)" == \
   "0117-feat-aegis-add-fail-closed-proxy-route-adapter.patch" ]] ||
   fail "patch 0117 must immediately precede patch 0118"
-[[ "$(tail -n 9 "$SERIES_FILE" | head -n 1)" == \
+[[ "$(tail -n 10 "$SERIES_FILE" | head -n 1)" == \
   "0118-feat-aegis-bind-profile-network-context-proxy.patch" ]] ||
   fail "patch 0118 must immediately precede patch 0119"
 [[ "$(tail -n 9 "$SERIES_FILE" | head -n 1)" == \
