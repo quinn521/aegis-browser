@@ -203,6 +203,15 @@ IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
   EXPECT_EQ(result.status,
             AccessBrowserRequestMetadataStatus::kInvalidAttribution);
   EXPECT_FALSE(result.metadata.has_value());
+
+  constexpr int64_t kPrerenderNavigationId = 44;
+  AccessBrowserRequestMetadataResult pending_navigation =
+      BuildBrowserOwnedRequestMetadata(
+          browser()->profile(), WebContentsGetter(),
+          prerender_frame->GetFrameTreeNodeId(), kPrerenderNavigationId);
+  EXPECT_EQ(pending_navigation.status,
+            AccessBrowserRequestMetadataStatus::kInvalidAttribution);
+  EXPECT_FALSE(pending_navigation.metadata.has_value());
 }
 
 }  // namespace
