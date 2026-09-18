@@ -574,6 +574,9 @@ rg -Fq 'AccessBrowserRequestMetadataStatus::kUnconfiguredPartition' \
   fail "patch 0143 must fail closed for an unconfigured background partition"
 rg -Fq 'OwnsConfiguredPartition' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
   fail "patch 0143 must bind Profile-only ownership to a configured Access partition"
+rg -Fq 'transport, /*require_configured_partition=*/false, owner);' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must preserve frame-owned ownership without background pre-configuration"
 rg -Fq 'BackgroundMetadataDoesNotCreateTransport' \
   "$PROFILE_ONLY_BACKGROUND_TEST" ||
   fail "0143 contract must not create transport while resolving background ownership"
