@@ -48,6 +48,14 @@ source_set("access_base_proxy_config_generation_state") {
   ]
 }
 
+source_set("request_generation_tuple_builder") {
+  sources = [
+    "request_generation_tuple_builder.cc",
+    "request_generation_tuple_builder.h",
+  ]
+  public_deps = [ ":access_route_types" ]
+}
+
 source_set("browser_request_metadata_seed") {
   sources = [
     "browser_request_metadata_seed.cc",
