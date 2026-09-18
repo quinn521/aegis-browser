@@ -894,7 +894,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
       ui_test_utils::NavigateToURL(browser(), service_worker_page_url()));
   PublishProxyPolicy(/*publish_endpoint=*/false, "localhost");
 
-  EXPECT_EQ(StartServiceWorkerHarness(), "error");
+  ASSERT_EQ(StartServiceWorkerHarness(), "error");
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
 }
 
