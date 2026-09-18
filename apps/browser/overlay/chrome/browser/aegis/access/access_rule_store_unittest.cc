@@ -617,6 +617,25 @@ TEST(AccessRuleStoreTest, RevisionSequenceFingerprintAndGenerationAreBound) {
             committed.committed_policy_generation);
 }
 
+TEST(AccessRuleStoreTest,
+     CommittedJournalGenerationMustMatchReservedSequence) {
+  AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
+      ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
+  ASSERT_EQ(store.Open(), StoreStatus::kValid);
+  PendingMutationRecord committed = Commit(
+      &store, Prepare(&store, Mutation("generation-integrity",
+                                      AccessMode::kProxy)));
+  ASSERT_EQ(committed.committed_policy_generation,
+            committed.operation_sequence);
+  ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
+      &store,
+      "UPDATE access_mutation_journal SET committed_policy_generation="
+      "operation_sequence+1 WHERE operation_id='generation-integrity'"));
+  StoreResult<RecoveryState> recovery = store.LoadRecoveryState();
+  EXPECT_EQ(recovery.status, StoreStatus::kCorrupt);
+  EXPECT_FALSE(recovery.value.has_value());
+}
+
 TEST(AccessRuleStoreTest, CounterOverflowFailsWithoutJournal) {
   AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
       ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
