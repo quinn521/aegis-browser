@@ -878,13 +878,20 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   EXPECT_GT(proxy_requests_.load(std::memory_order_relaxed), 0u);
 }
 
-IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
-                       ServiceWorkerProcessScriptWithoutEndpointFailsClosed) {
+IN_PROC_BROWSER_TEST_F(
+    AccessProxyingURLLoaderFactoryBrowserTest,
+    ServiceWorkerBrowserProcessScriptStaysNativeBeforeProcessScriptFailsClosed) {
   ASSERT_TRUE(
       ui_test_utils::NavigateToURL(browser(), service_worker_page_url()));
+  const size_t origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
   PublishProxyPolicy(/*publish_endpoint=*/false, "localhost");
 
   ASSERT_EQ(StartServiceWorkerHarness(), "error");
+  // The browser-process main script uses kInvalidUniqueID and stays native.
+  // The subsequent process-backed importScripts() request is what fails closed.
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed),
+            origin_before + 1u);
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
 }
 
