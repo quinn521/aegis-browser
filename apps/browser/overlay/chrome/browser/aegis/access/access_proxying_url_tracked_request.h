@@ -3,6 +3,7 @@
 #ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_PROXYING_URL_TRACKED_REQUEST_H_
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_PROXYING_URL_TRACKED_REQUEST_H_
 
+#include <cstdint>
 #include <optional>
 
 #include "base/memory/raw_ptr.h"
