@@ -278,22 +278,24 @@ TEST_F(AccessNetworkContextTransportTest,
 TEST_F(AccessNetworkContextTransportTest,
        PublicationAckRejectsForgedOwnerAndMissingClient) {
   const base::FilePath partition;
+  auto delegate = CreateDelegate(partition);
   auto owner = transport_->OwnerForPartition(
       aegis_access::ChannelNamespace::kDev, partition);
   ASSERT_TRUE(owner.has_value());
 
   bool acked = false;
-  auto no_client = transport_->RepublishCurrentConfigWithAck(
-      *owner, base::BindOnce([](bool* value) { *value = true; }, &acked));
-  EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kInvalidOwner);
-  EXPECT_FALSE(acked);
-
-  auto delegate = CreateDelegate(partition);
   auto forged = *owner;
   forged.profile_token = "other-profile";
   auto forged_result = transport_->RepublishCurrentConfigWithAck(
       forged, base::BindOnce([](bool* value) { *value = true; }, &acked));
   EXPECT_EQ(forged_result.status, AccessNetworkConfigAckStatus::kInvalidOwner);
+  EXPECT_FALSE(acked);
+
+  delegate.reset();
+  task_environment_.RunUntilIdle();
+  auto no_client = transport_->RepublishCurrentConfigWithAck(
+      *owner, base::BindOnce([](bool* value) { *value = true; }, &acked));
+  EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kNoClients);
   EXPECT_FALSE(acked);
 }
 
