@@ -228,9 +228,9 @@ rg -Fq 'NetworkChangeObserver' "$NETWORK_EPOCH_PATCH_FILE" ||
   fail "patch 0129 must use Chromium NetworkChangeNotifier"
 rg -Fq 'AddNetworkChangeObserver(this);' "$NETWORK_EPOCH_PATCH_FILE" ||
   fail "patch 0129 must register the production network epoch source"
-rg -Fq 'endpoint.generations.network_epoch != network_epoch_' \
+rg -Fq 'endpoint.generations.network_epoch == network_epoch_' \
   "$NETWORK_EPOCH_PATCH_FILE" ||
-  fail "patch 0129 must reject stale endpoint network epochs"
+  fail "patch 0129 must bind endpoints to the current network epoch"
 rg -Fq 'NetworkChangeAdvancesEpochAndRejectsStaleEndpoint' \
   "$NETWORK_EPOCH_PATCH_FILE" ||
   fail "patch 0129 must cover real network-change epoch advancement"
