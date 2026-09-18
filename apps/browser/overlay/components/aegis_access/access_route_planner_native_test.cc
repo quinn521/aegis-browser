@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 
+#include "components/aegis_access/access_base_proxy_config_generation_state_contract_test.h"
 #include "components/aegis_access/access_identity_generation_state_contract_test.h"
 #include "components/aegis_access/access_proxy_selection_generation_state_contract_test.h"
 #include "components/aegis_access/access_route_planner_contract_test.h"
