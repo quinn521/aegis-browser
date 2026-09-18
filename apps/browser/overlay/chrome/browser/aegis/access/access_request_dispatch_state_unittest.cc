@@ -26,7 +26,7 @@ class FlagTerminationHandle final
   void Terminate() override { *terminated_ = true; }
 
  private:
-  raw_ptr<bool> terminated_;
+  bool* terminated_;
 };
 
 aegis_access::RequestOwnershipRecord TestRecord() {
