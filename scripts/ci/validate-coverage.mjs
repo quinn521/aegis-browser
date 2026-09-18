@@ -60,7 +60,11 @@ export function parseCoverageSummary(source, label = 'coverage-summary.json') {
   return total;
 }
 
-export function parseLcov(\n  source,\n  sourceRoot,\n  {allowLineSummarySuperset = false} = {},\n) {
+export function parseLcov(
+  source,
+  sourceRoot,
+  {allowLineSummarySuperset = false} = {},
+) {
   if (!source.endsWith('\n')) fail('lcov.info must end with a newline');
   const records = source.split('end_of_record\n').filter((record) => record.trim() !== '');
   const terminators = source.match(/^end_of_record$/gmu)?.length ?? 0;
