@@ -39,8 +39,9 @@ class AccessProxyingURLTrackedRequest;
 // with browser-owned Profile-only process/partition attribution, including
 // redirect follow re-evaluation under one stable logical request identity.
 // Browser-process ServiceWorker install/update script fetches,
-// prefetch/preconnect, WebSocket, BFCache, and prerender remain later slices. Each request is re-evaluated from its browser-owned attribution
-// source and the latest published Access state
+// prefetch/preconnect, WebSocket, BFCache, and prerender remain later slices.
+// Each request is re-evaluated from its browser-owned attribution source and the
+// latest published Access state
 // before it may reach the target Network Service factory.
 //
 // DIRECT/absent policy is forwarded unchanged. A PROXY decision is forwarded
