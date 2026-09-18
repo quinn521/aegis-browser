@@ -1,0 +1,280 @@
+From 0143000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Sat, 19 Sep 2026 01:50:00 +0800
+Subject: [PATCH] feat(aegis): add background Worker profile ownership contract
+
+---
+diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
+--- a/chrome/browser/aegis/access/BUILD.gn
++++ b/chrome/browser/aegis/access/BUILD.gn
+@@ -145,6 +145,22 @@ source_set("access_published_request_runtime") {
+   ]
+ }
+ 
++test("access_browser_request_adapter_unittests") {
++  sources = [ "access_browser_request_adapter_unittest.cc" ]
++  deps = [
++    ":access_browser_request_adapter",
++    ":access_network_context_transport",
++    "//base/test:run_all_unittests",
++    "//chrome/browser/profiles:test_support",
++    "//components/aegis_access",
++    "//content/public/browser",
++    "//net",
++    "//services/network/public/mojom",
++    "//testing/gtest",
++    "//url",
++  ]
++}
++
+ test("access_request_dispatch_state_unittests") {
+   sources = [ "access_request_dispatch_state_unittest.cc" ]
+   deps = [
+diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chrome/browser/aegis/access/access_browser_request_adapter.cc
+--- a/chrome/browser/aegis/access/access_browser_request_adapter.cc
++++ b/chrome/browser/aegis/access/access_browser_request_adapter.cc
+@@ -144,12 +144,12 @@ AccessBrowserRequestMetadataStatus ResolveTrustedFrame(
+   return AccessBrowserRequestMetadataStatus::kOk;
+ }
+ 
+-AccessBrowserRequestMetadataStatus ResolveOwner(
++AccessBrowserRequestMetadataStatus ResolvePartitionOwner(
+     Profile* profile,
+-    content::RenderFrameHost* request_frame,
++    content::StoragePartition* partition,
+     AccessNetworkContextTransport* transport,
++    bool require_configured_partition,
+     aegis_access::OwnershipKey* owner) {
+-  content::StoragePartition* partition = request_frame->GetStoragePartition();
+   if (!partition) {
+     return AccessBrowserRequestMetadataStatus::kMissingStoragePartition;
+   }
+@@ -165,10 +165,24 @@ AccessBrowserRequestMetadataStatus ResolveOwner(
+   if (!resolved_owner) {
+     return AccessBrowserRequestMetadataStatus::kInvalidOwner;
+   }
++  if (require_configured_partition &&
++      !transport->OwnsConfiguredPartition(*resolved_owner)) {
++    return AccessBrowserRequestMetadataStatus::kUnconfiguredPartition;
++  }
+   *owner = *resolved_owner;
+   return AccessBrowserRequestMetadataStatus::kOk;
+ }
+ 
++AccessBrowserRequestMetadataStatus ResolveOwner(
++    Profile* profile,
++    content::RenderFrameHost* request_frame,
++    AccessNetworkContextTransport* transport,
++    aegis_access::OwnershipKey* owner) {
++  return ResolvePartitionOwner(profile, request_frame->GetStoragePartition(),
++                               transport,
++                               /*require_configured_partition=*/false, owner);
++}
++
+ AccessBrowserRequestMetadataStatus ResolvePrimaryTopFrameSite(
+     Profile* profile,
+     content::WebContents* contents,
+@@ -324,4 +338,31 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
+              : Error(status);
+ }
+ 
++AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileRequestMetadata(
++    Profile* profile,
++    content::StoragePartition* partition) {
++  if (!aegis::IsAegisProfileSupported(profile)) {
++    return Error(AccessBrowserRequestMetadataStatus::kUnsupportedProfile);
++  }
++
++  AccessNetworkContextTransport* transport =
++      AccessNetworkContextTransport::Get(profile);
++  if (!transport) {
++    return Error(AccessBrowserRequestMetadataStatus::kMissingTransport);
++  }
++
++  aegis_access::OwnershipKey owner;
++  const AccessBrowserRequestMetadataStatus status = ResolvePartitionOwner(
++      profile, partition, transport,
++      /*require_configured_partition=*/true, &owner);
++  if (status != AccessBrowserRequestMetadataStatus::kOk) {
++    return Error(status);
++  }
++
++  aegis_access::BrowserRequestMetadataSeedInput seed_input;
++  seed_input.request_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  seed_input.owner = std::move(owner);
++  return BuildMetadataFromSeed(std::move(seed_input));
++}
++
+ }  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chrome/browser/aegis/access/access_browser_request_adapter.h
+--- a/chrome/browser/aegis/access/access_browser_request_adapter.h
++++ b/chrome/browser/aegis/access/access_browser_request_adapter.h
+@@ -13,6 +13,7 @@
+ class Profile;
+ 
+ namespace content {
++class StoragePartition;
+ class WebContents;
+ }
+ 
+@@ -26,6 +27,7 @@ enum class AccessBrowserRequestMetadataStatus {
+   kBrowserContextMismatch,
+   kMissingTrustedFrame,
+   kMissingStoragePartition,
++  kUnconfiguredPartition,
+   kInvalidPartitionPath,
+   kInvalidOwner,
+   kInvalidAttribution,
+@@ -55,6 +57,16 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
+     content::FrameTreeNodeId frame_tree_node_id,
+     std::optional<int64_t> navigation_id);
+ 
++// Builds browser-owned Profile-only metadata for a background Worker request
++// only when the caller can supply the exact StoragePartition that owns the
++// NetworkContext. The partition must already be configured by this Profile's
++// Access transport. No WebContents, frame, top-level site, or renderer-provided
++// initiator is consulted, so the resulting context cannot match site-scoped
++// rules.
++AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileRequestMetadata(
++    Profile* profile,
++    content::StoragePartition* partition);
++
+ }  // namespace aegis::access
+ 
+ #endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_BROWSER_REQUEST_ADAPTER_H_
+diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc b/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc
+--- a/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc
++++ b/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc
+@@ -0,0 +1,132 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/aegis/access/access_browser_request_adapter.h"
++
++#include <memory>
++
++#include "base/files/file_path.h"
++#include "base/memory/raw_ptr.h"
++#include "base/test/task_environment.h"
++#include "chrome/browser/aegis/access/access_network_context_transport.h"
++#include "chrome/test/base/testing_profile.h"
++#include "components/aegis_access/request_policy_context.h"
++#include "content/public/browser/storage_partition.h"
++#include "net/base/network_change_notifier.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace aegis::access {
++namespace {
++
++class AccessBrowserRequestAdapterTest : public testing::Test {
++ protected:
++  void SetUp() override {
++    network_change_notifier_ =
++        net::NetworkChangeNotifier::CreateMockIfNeeded();
++    profile_ = TestingProfile::Builder().Build();
++    partition_ = profile_->GetDefaultStoragePartition();
++    ASSERT_TRUE(partition_);
++  }
++
++  void ConfigureDefaultPartition() {
++    network::mojom::NetworkContextParams params;
++    ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(
++        profile_.get(), base::FilePath(), &params));
++    ASSERT_TRUE(params.initial_custom_proxy_config);
++    ASSERT_TRUE(params.custom_proxy_config_client_receiver.is_valid());
++  }
++
++  base::test::TaskEnvironment task_environment_;
++  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier_;
++  std::unique_ptr<TestingProfile> profile_;
++  raw_ptr<content::StoragePartition> partition_ = nullptr;
++};
++
++TEST_F(AccessBrowserRequestAdapterTest,
++       BackgroundMetadataDoesNotCreateTransport) {
++  EXPECT_EQ(AccessNetworkContextTransport::Get(profile_.get()), nullptr);
++
++  const AccessBrowserRequestMetadataResult result =
++      BuildBrowserOwnedProfileRequestMetadata(profile_.get(), partition_);
++
++  EXPECT_EQ(result.status,
++            AccessBrowserRequestMetadataStatus::kMissingTransport);
++  EXPECT_FALSE(result.metadata.has_value());
++  EXPECT_EQ(AccessNetworkContextTransport::Get(profile_.get()), nullptr);
++}
++
++TEST_F(AccessBrowserRequestAdapterTest,
++       BackgroundMetadataRequiresConfiguredPartition) {
++  ASSERT_TRUE(AccessNetworkContextTransport::GetOrCreate(profile_.get()));
++
++  const AccessBrowserRequestMetadataResult result =
++      BuildBrowserOwnedProfileRequestMetadata(profile_.get(), partition_);
++
++  EXPECT_EQ(result.status,
++            AccessBrowserRequestMetadataStatus::kUnconfiguredPartition);
++  EXPECT_FALSE(result.metadata.has_value());
++}
++
++TEST_F(AccessBrowserRequestAdapterTest,
++       BackgroundMetadataUsesProfileOnlyConfiguredPartitionOwnership) {
++  AccessNetworkContextTransport* transport =
++      AccessNetworkContextTransport::GetOrCreate(profile_.get());
++  ASSERT_TRUE(transport);
++  ConfigureDefaultPartition();
++
++  const AccessBrowserRequestMetadataResult result =
++      BuildBrowserOwnedProfileRequestMetadata(profile_.get(), partition_);
++
++  ASSERT_EQ(result.status, AccessBrowserRequestMetadataStatus::kOk);
++  ASSERT_TRUE(result.metadata.has_value());
++  EXPECT_FALSE(result.metadata->request_id.empty());
++  EXPECT_TRUE(transport->OwnsConfiguredPartition(result.metadata->owner));
++  EXPECT_EQ(result.metadata->attribution_kind,
++            aegis_access::RequestAttributionKind::kProfileOnly);
++  EXPECT_TRUE(result.metadata->document_token.empty());
++  EXPECT_TRUE(result.metadata->pending_navigation_token.empty());
++  EXPECT_FALSE(result.metadata->top_frame_site.has_value());
++
++  const aegis_access::RequestPolicyContextResult context =
++      aegis_access::CanonicalizeBrowserOwnedRequest(
++          *result.metadata, GURL("https://background.example/resource"));
++  ASSERT_EQ(context.error, aegis_access::RequestContextError::kNone);
++  ASSERT_TRUE(context.context.has_value());
++  EXPECT_FALSE(context.context->site_ownership_reliable());
++  EXPECT_TRUE(context.context->top_level_site().empty());
++}
++
++TEST_F(AccessBrowserRequestAdapterTest,
++       BackgroundMetadataRejectsCrossProfilePartition) {
++  ASSERT_TRUE(AccessNetworkContextTransport::GetOrCreate(profile_.get()));
++  ConfigureDefaultPartition();
++
++  std::unique_ptr<TestingProfile> other_profile =
++      TestingProfile::Builder().Build();
++  content::StoragePartition* other_partition =
++      other_profile->GetDefaultStoragePartition();
++  ASSERT_TRUE(other_partition);
++
++  const AccessBrowserRequestMetadataResult result =
++      BuildBrowserOwnedProfileRequestMetadata(profile_.get(), other_partition);
++
++  EXPECT_EQ(result.status,
++            AccessBrowserRequestMetadataStatus::kInvalidPartitionPath);
++  EXPECT_FALSE(result.metadata.has_value());
++}
++
++TEST_F(AccessBrowserRequestAdapterTest,
++       BackgroundMetadataRejectsMissingPartition) {
++  ASSERT_TRUE(AccessNetworkContextTransport::GetOrCreate(profile_.get()));
++
++  const AccessBrowserRequestMetadataResult result =
++      BuildBrowserOwnedProfileRequestMetadata(profile_.get(), nullptr);
++
++  EXPECT_EQ(result.status,
++            AccessBrowserRequestMetadataStatus::kMissingStoragePartition);
++  EXPECT_FALSE(result.metadata.has_value());
++}
++
++}  // namespace
++}  // namespace aegis::access
