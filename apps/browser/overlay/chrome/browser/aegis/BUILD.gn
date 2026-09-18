@@ -232,6 +232,7 @@ if (!is_android) {
     defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
     sources = [
       "access/access_browser_request_adapter_browsertest.cc",
+      "access/access_url_loader_throttle_browsertest.cc",
       "agent/aegis_agent_browsertest.cc",
     ]
     deps = [
