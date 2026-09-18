@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 
 #include "base/containers/unique_ptr_adapters.h"
 #include "base/functional/callback.h"
@@ -18,6 +19,7 @@
 #include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 
+class GURL;
 class Profile;
 
 namespace content {
@@ -91,6 +93,16 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
 
   RequestDisposition EvaluateRequest(
       const network::ResourceRequest& request,
+      int* net_error,
+      aegis_access::RequestOwnershipRecord* ownership_record);
+  RequestDisposition EvaluateRedirect(
+      const GURL& redirect_url,
+      const std::string& stable_request_id,
+      int* net_error,
+      aegis_access::RequestOwnershipRecord* ownership_record);
+  RequestDisposition EvaluateUrl(
+      const GURL& request_url,
+      const std::string* stable_request_id,
       int* net_error,
       aegis_access::RequestOwnershipRecord* ownership_record);
   void ForwardNative(
