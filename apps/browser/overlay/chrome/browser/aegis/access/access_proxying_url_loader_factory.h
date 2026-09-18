@@ -33,13 +33,14 @@ class AccessProxyingURLTrackedRequest;
 
 // UI-thread browser-process URLLoaderFactory wrapper for real Access request
 // dispatch. It covers primary-page document subresources, primary-page
-// main-frame/subframe navigation, Worker main-script factories, and frame-owned
-// Worker subresource factories, including redirect follow re-evaluation under
-// one stable logical request identity. Frame-less SharedWorker subresources,
-// ServiceWorker, prefetch/preconnect, WebSocket, BFCache, and prerender remain
-// later slices. Each request is re-evaluated from
-// browser-owned frame/navigation state and the latest published Access state
-// before it may reach the target Network Service factory.
+// main-frame/subframe navigation, Worker main-script factories, frame-owned
+// Worker subresource factories, and ServiceWorker subresource factories,
+// including redirect follow re-evaluation under one stable logical request
+// identity. Frame-less SharedWorker subresources, ServiceWorker script/update,
+// prefetch/preconnect, WebSocket, BFCache, and prerender remain later slices.
+// Each request is re-evaluated from browser-owned frame/navigation state or
+// browser-owned Profile/StoragePartition process state and the latest published
+// Access state before it may reach the target Network Service factory.
 //
 // DIRECT/absent policy is forwarded unchanged. A PROXY decision is forwarded
 // only after exact-host endpoint validation and the synchronous dispatch gate.
@@ -53,7 +54,8 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
 
   AccessProxyingURLLoaderFactory(
       Profile* profile,
-      content::FrameTreeNodeId frame_tree_node_id,
+      std::optional<content::FrameTreeNodeId> frame_tree_node_id,
+      std::optional<int> render_process_id,
       std::optional<int64_t> navigation_id,
       aegis_access::BrowserOwnedRequestMetadata factory_metadata,
       network::URLLoaderFactoryBuilder& factory_builder,
@@ -75,6 +77,10 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   static void MaybeProxyWorkerSubResource(
       Profile* profile,
       content::RenderFrameHost* frame,
+      network::URLLoaderFactoryBuilder& factory_builder);
+  static void MaybeProxyServiceWorkerSubResource(
+      Profile* profile,
+      int render_process_id,
       network::URLLoaderFactoryBuilder& factory_builder);
   static void MaybeProxyNavigation(
       Profile* profile,
@@ -117,6 +123,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       const std::optional<std::string>& stable_request_id,
       int* net_error,
       aegis_access::RequestOwnershipRecord* ownership_record);
+  AccessBrowserRequestMetadataResult CaptureCurrentMetadata();
   RequestDisposition EvaluatePreparedMetadata(
       const GURL& request_url,
       AccessPublishedRequestRuntime* runtime,
@@ -147,7 +154,8 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   void MaybeDestroySelf();
 
   const raw_ptr<Profile> profile_;
-  const content::FrameTreeNodeId frame_tree_node_id_;
+  const std::optional<content::FrameTreeNodeId> frame_tree_node_id_;
+  const std::optional<int> render_process_id_;
   const std::optional<int64_t> navigation_id_;
   const aegis_access::BrowserOwnedRequestMetadata factory_metadata_;
 
