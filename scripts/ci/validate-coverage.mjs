@@ -74,12 +74,12 @@ function parseLcovSourcePath(lines, sourceRoot, files) {
 
   const path = sourceLines[0].slice(3);
   if (!isSafeLcovPath(path)) {
-    fail(\`lcov.info contains an unsafe source path: \${path}\`);
+    fail(`lcov.info contains an unsafe source path: ${path}`);
   }
   const absolute = resolve(repoRoot, path);
-  if (!isInside(sourceRoot, absolute)) fail(\`lcov.info source is outside the production scope: \${path}\`);
-  if (!existsSync(absolute) || !statSync(absolute).isFile()) fail(\`lcov.info source does not exist: \${path}\`);
-  if (files.has(path)) fail(\`lcov.info repeats source: \${path}\`);
+  if (!isInside(sourceRoot, absolute)) fail(`lcov.info source is outside the production scope: ${path}`);
+  if (!existsSync(absolute) || !statSync(absolute).isFile()) fail(`lcov.info source does not exist: ${path}`);
+  if (files.has(path)) fail(`lcov.info repeats source: ${path}`);
   files.add(path);
   return path;
 }
