@@ -440,6 +440,15 @@ rg -Fq 'UsesBrowserOwnedTopSiteForNestedPendingNavigation' \
 rg -Fq 'SubframePendingNavigationPreservesPrimaryTopFrameSite' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must browser-test subframe top-site ownership"
+rg -Fq 'ResolvePrimaryTopFrameSite' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must centralize trusted primary top-site resolution"
+rg -Fq 'request_frame->GetPage().IsPrimary()' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must defensively reject non-primary request frames"
+rg -Fq 'SubframePendingNavigationRejectsOpaquePrimaryTopFrameSite' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must reject opaque nested top-frame attribution"
 rg -Fq 'SubframeNavigationWithoutPolicyPreservesNativePath' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must preserve native subframe navigation without Access policy"
