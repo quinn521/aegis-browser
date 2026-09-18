@@ -78,6 +78,8 @@ class AccessNetworkContextTransport
   void FlushClientsForTesting(const base::FilePath& relative_partition_path);
 
  private:
+  friend class AccessNetworkContextTransportTestPeer;
+
   struct PartitionState {
     std::optional<aegis_access::RegisteredProxyEndpoint> endpoint;
     std::vector<std::string> exact_hosts;
@@ -93,6 +95,9 @@ class AccessNetworkContextTransport
       const base::FilePath& relative_partition_path);
   std::optional<std::string> PartitionToken(
       const base::FilePath& relative_partition_path) const;
+  bool IsEndpointCurrentForPartition(
+      const base::FilePath& relative_partition_path,
+      const aegis_access::RegisteredProxyEndpoint& endpoint) const;
   network::mojom::CustomProxyConfigPtr BuildConfig(
       const PartitionState& state) const;
   void Broadcast(PartitionState& state);
