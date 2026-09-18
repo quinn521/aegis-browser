@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 #include "base/functional/callback_helpers.h"
@@ -85,9 +86,28 @@ AccessNetworkContextTransport* AccessNetworkContextTransport::GetOrCreate(
 
 AccessNetworkContextTransport::AccessNetworkContextTransport()
     : runtime_profile_token_(
-          base::Uuid::GenerateRandomV4().AsLowercaseString()) {}
+          base::Uuid::GenerateRandomV4().AsLowercaseString()) {
+  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
+}
 
-AccessNetworkContextTransport::~AccessNetworkContextTransport() = default;
+AccessNetworkContextTransport::~AccessNetworkContextTransport() {
+  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
+}
+
+void AccessNetworkContextTransport::OnNetworkChanged(
+    net::NetworkChangeNotifier::ConnectionType) {
+  if (network_epoch_ == 0) {
+    return;
+  }
+  if (network_epoch_ == std::numeric_limits<uint64_t>::max()) {
+    // Zero is the incomplete GenerationTuple sentinel. Once the counter is
+    // exhausted, keep the source invalid so callers fail closed rather than
+    // wrapping to a previously valid epoch.
+    network_epoch_ = 0;
+    return;
+  }
+  ++network_epoch_;
+}
 
 // static
 bool AccessNetworkContextTransport::ConfigureNetworkContext(
@@ -140,6 +160,8 @@ bool AccessNetworkContextTransport::PublishProxySelection(
   const std::optional<aegis_access::OwnershipKey> expected_owner =
       OwnerForPartition(endpoint.owner.channel, relative_partition_path);
   if (!key || !expected_owner || endpoint.owner != *expected_owner ||
+      network_epoch_ == 0 ||
+      endpoint.generations.network_epoch != network_epoch_ ||
       exact_hosts.empty() || exact_hosts.size() > kMaxExactHosts) {
     return false;
   }
