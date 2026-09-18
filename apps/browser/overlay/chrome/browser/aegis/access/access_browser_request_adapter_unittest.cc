@@ -6,7 +6,7 @@
 
 #include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
-#include "base/test/task_environment.h"
+#include "content/public/test/browser_task_environment.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/aegis_access/request_policy_context.h"
@@ -37,7 +37,7 @@ class AccessBrowserRequestAdapterTest : public testing::Test {
     ASSERT_TRUE(params.custom_proxy_config_client_receiver.is_valid());
   }
 
-  base::test::TaskEnvironment task_environment_;
+  content::BrowserTaskEnvironment task_environment_;
   std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier_;
   std::unique_ptr<TestingProfile> profile_;
   raw_ptr<content::StoragePartition> partition_ = nullptr;
