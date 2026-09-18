@@ -3,6 +3,7 @@
 #ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_NETWORK_CONTEXT_TRANSPORT_H_
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_NETWORK_CONTEXT_TRANSPORT_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
