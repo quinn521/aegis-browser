@@ -7,12 +7,11 @@ Subject: [PATCH] feat(aegis): gate frame-owned Worker subresource traffic
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
-@@ -292,6 +292,18 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
-       factory_builder);
- }
+@@ -222,6 +222,28 @@ class BrowserContextData : public base::SupportsUserData::Data {
+   base::WeakPtrFactory<BrowserContextData> weak_factory_{this};
+ };
  
-+// static
-+void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
++void MaybeProxyWorkerFactory(
 +    Profile* profile,
 +    content::RenderFrameHost* frame,
 +    network::URLLoaderFactoryBuilder& factory_builder) {
@@ -20,12 +19,54 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b
 +  if (!frame) {
 +    return;
 +  }
-+  MaybeProxyWorkerMainResource(profile, frame, factory_builder);
++
++  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
++      CaptureProxyFactoryMetadata(profile, frame, std::nullopt);
++  if (!metadata.has_value() ||
++      metadata->attribution_kind !=
++          aegis_access::RequestAttributionKind::kDocument) {
++    return;
++  }
++
++  BrowserContextData::StartProxying(
++      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
++      factory_builder);
 +}
 +
- // static
- void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
+ }  // namespace
+ 
+ AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
+@@ -274,22 +296,15 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
      Profile* profile,
+     content::RenderFrameHost* frame,
+     network::URLLoaderFactoryBuilder& factory_builder) {
+-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  if (!frame) {
+-    return;
+-  }
+-
+-  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
+-      CaptureProxyFactoryMetadata(profile, frame, std::nullopt);
+-  if (!metadata.has_value() ||
+-      metadata->attribution_kind !=
+-          aegis_access::RequestAttributionKind::kDocument) {
+-    return;
+-  }
++  MaybeProxyWorkerFactory(profile, frame, factory_builder);
++}
+ 
+-  BrowserContextData::StartProxying(
+-      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
+-      factory_builder);
++// static
++void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
++    Profile* profile,
++    content::RenderFrameHost* frame,
++    network::URLLoaderFactoryBuilder& factory_builder) {
++  MaybeProxyWorkerFactory(profile, frame, factory_builder);
+ }
+ 
+ // static
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
@@ -114,7 +155,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    GURL redirect_url() const {
      return target_origin_.GetURL(kTargetHost, "/redirect");
    }
-@@ -238,6 +272,43 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+@@ -238,6 +272,53 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
          .ExtractString();
    }
  
@@ -138,6 +179,16 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +        "ready");
 +  }
 +
++  void PrepareWorkerSubresourceTest(size_t* origin_before,
++                                    size_t* proxy_before) {
++    ASSERT_NE(origin_before, nullptr);
++    ASSERT_NE(proxy_before, nullptr);
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
++    StartWorkerSubresourceHarness();
++    *origin_before = origin_requests_.load(std::memory_order_relaxed);
++    *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
++  }
++
 +  std::string FetchWorkerSubresource(const GURL& url) {
 +    return content::EvalJs(
 +               web_contents(),
@@ -158,18 +209,15 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    void ExpectRedirectFollowedThroughProxy() {
      EXPECT_TRUE(base::test::RunUntil([&] {
        return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-@@ -430,6 +501,58 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -430,6 +511,49 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
  }
  
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 +                       WorkerSubresourceWithoutPolicyPreservesNativePath) {
-+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
-+  StartWorkerSubresourceHarness();
-+  const size_t origin_before =
-+      origin_requests_.load(std::memory_order_relaxed);
-+  const size_t proxy_before =
-+      proxy_requests_.load(std::memory_order_relaxed);
++  size_t origin_before = 0;
++  size_t proxy_before = 0;
++  PrepareWorkerSubresourceTest(&origin_before, &proxy_before);
 +
 +  EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()),
 +            "origin-worker-subresource");
@@ -182,12 +230,9 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 +                       WorkerSubresourceUsesSelectedProxy) {
-+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
-+  StartWorkerSubresourceHarness();
-+  const size_t origin_before =
-+      origin_requests_.load(std::memory_order_relaxed);
-+  const size_t proxy_before =
-+      proxy_requests_.load(std::memory_order_relaxed);
++  size_t origin_before = 0;
++  size_t proxy_before = 0;
++  PrepareWorkerSubresourceTest(&origin_before, &proxy_before);
 +  PublishProxyPolicy(/*publish_endpoint=*/true);
 +
 +  EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()),
@@ -201,12 +246,9 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 +                       WorkerSubresourceWithoutEndpointFailsClosed) {
-+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
-+  StartWorkerSubresourceHarness();
-+  const size_t origin_before =
-+      origin_requests_.load(std::memory_order_relaxed);
-+  const size_t proxy_before =
-+      proxy_requests_.load(std::memory_order_relaxed);
++  size_t origin_before = 0;
++  size_t proxy_before = 0;
++  PrepareWorkerSubresourceTest(&origin_before, &proxy_before);
 +  PublishProxyPolicy(/*publish_endpoint=*/false);
 +
 +  EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()), "error");
