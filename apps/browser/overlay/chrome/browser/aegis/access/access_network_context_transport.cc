@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 
 #include <algorithm>
+#include "base/barrier_closure.h"
 #include "base/functional/bind.h"
 #include <limits>
 #include <utility>
