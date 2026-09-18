@@ -413,6 +413,8 @@ rg -Fq 'navigation_id.has_value()' "$NAVIGATION_URL_LOADER_PATCH_FILE" ||
   fail "patch 0138 must require Chromium browser-owned navigation identity"
 rg -Fq 'MaybeProxyNavigation' "$NAVIGATION_URL_LOADER_PATCH_FILE" ||
   fail "patch 0138 must wire the navigation proxy factory"
+rg -Fq 'IsInPrimaryMainFrame()' "$NAVIGATION_URL_LOADER_PATCH_FILE" ||
+  fail "patch 0138 must remain scoped to primary main-frame navigation"
 rg -Fq 'RequestAttributionKind::kPendingNavigation' \
   "$NAVIGATION_URL_LOADER_PATCH_FILE" ||
   fail "patch 0138 must preserve pending-navigation attribution"
