@@ -98,7 +98,7 @@ export function parseLcov(\n  source,\n  sourceRoot,\n  {allowLineSummarySuperse
       if (
         seenLines.size > lf ||
         coveredLines > lh ||
-        reportedUncovered > summaryUncovered
+        reportedUncovered !== summaryUncovered
       ) {
         fail('lcov.info DA data exceeds line summary totals');
       }
