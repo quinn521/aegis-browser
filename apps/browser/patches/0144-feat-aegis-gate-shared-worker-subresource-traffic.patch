@@ -1,0 +1,400 @@
+From 0144000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Sat, 19 Sep 2026 02:00:00 +0800
+Subject: [PATCH] feat(aegis): gate frame-less SharedWorker subresources
+
+---
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+@@ -153,6 +153,23 @@ ProxyDispatchPreparation PrepareProxyDispatch(
+   return {net::OK, input.request};
+ }
+ 
++std::optional<aegis_access::BrowserOwnedRequestMetadata>
++RefreshFrameMetadata(Profile* profile,
++                     content::FrameTreeNodeId frame_tree_node_id,
++                     std::optional<int64_t> navigation_id) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  auto wc_getter =
++      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
++                          frame_tree_node_id);
++  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
++      profile, wc_getter, frame_tree_node_id, navigation_id);
++  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
++      !metadata.metadata.has_value()) {
++    return std::nullopt;
++  }
++  return std::move(*metadata.metadata);
++}
++
+ std::optional<aegis_access::BrowserOwnedRequestMetadata>
+ CaptureProxyFactoryMetadata(
+     Profile* profile,
+@@ -163,16 +180,19 @@ CaptureProxyFactoryMetadata(
+       frame->GetBrowserContext() != profile || !frame->GetPage().IsPrimary()) {
+     return std::nullopt;
+   }
++  return RefreshFrameMetadata(profile, frame->GetFrameTreeNodeId(),
++                              navigation_id);
++}
+ 
+-  const content::FrameTreeNodeId frame_tree_node_id =
+-      frame->GetFrameTreeNodeId();
+-  auto wc_getter =
+-      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
+-                          frame_tree_node_id);
+-  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
+-      profile, wc_getter, frame_tree_node_id, navigation_id);
++std::optional<aegis_access::BrowserOwnedRequestMetadata>
++RefreshProfileOnlyProcessMetadata(Profile* profile, int render_process_id) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  AccessBrowserRequestMetadataResult metadata =
++      BuildBrowserOwnedProfileOnlyRequestMetadata(profile, render_process_id);
+   if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
+-      !metadata.metadata.has_value()) {
++      !metadata.metadata.has_value() ||
++      metadata.metadata->attribution_kind !=
++          aegis_access::RequestAttributionKind::kProfileOnly) {
+     return std::nullopt;
+   }
+   return std::move(*metadata.metadata);
+@@ -186,8 +206,7 @@ class BrowserContextData : public base::SupportsUserData::Data {
+ 
+   static void StartProxying(
+       Profile* profile,
+-      content::FrameTreeNodeId frame_tree_node_id,
+-      std::optional<int64_t> navigation_id,
++      AccessProxyingURLLoaderFactory::MetadataRefreshCallback metadata_refresh,
+       aegis_access::BrowserOwnedRequestMetadata factory_metadata,
+       network::URLLoaderFactoryBuilder& factory_builder) {
+     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+@@ -199,7 +218,7 @@ class BrowserContextData : public base::SupportsUserData::Data {
+     }
+ 
+     auto proxy = std::make_unique<AccessProxyingURLLoaderFactory>(
+-        profile, frame_tree_node_id, navigation_id, std::move(factory_metadata),
++        profile, std::move(metadata_refresh), std::move(factory_metadata),
+         factory_builder,
+         base::BindOnce(&BrowserContextData::RemoveProxy,
+                        self->weak_factory_.GetWeakPtr()));
+@@ -239,26 +258,29 @@ void MaybeProxyWorkerFactory(
+     return;
+   }
+ 
++  const content::FrameTreeNodeId frame_tree_node_id =
++      frame->GetFrameTreeNodeId();
+   BrowserContextData::StartProxying(
+-      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
+-      factory_builder);
++      profile,
++      base::BindRepeating(&RefreshFrameMetadata, profile, frame_tree_node_id,
++                          std::nullopt),
++      std::move(*metadata), factory_builder);
+ }
+ 
+ }  // namespace
+ 
+ AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
+     Profile* profile,
+-    content::FrameTreeNodeId frame_tree_node_id,
+-    std::optional<int64_t> navigation_id,
++    MetadataRefreshCallback metadata_refresh,
+     aegis_access::BrowserOwnedRequestMetadata factory_metadata,
+     network::URLLoaderFactoryBuilder& factory_builder,
+     DisconnectCallback on_disconnect)
+     : profile_(profile),
+-      frame_tree_node_id_(frame_tree_node_id),
+-      navigation_id_(navigation_id),
++      metadata_refresh_(std::move(metadata_refresh)),
+       factory_metadata_(std::move(factory_metadata)),
+       on_disconnect_(std::move(on_disconnect)) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  CHECK(metadata_refresh_);
+   auto [loader_receiver, target_factory] = factory_builder.Append();
+   target_factory_.Bind(std::move(target_factory));
+   target_factory_.set_disconnect_handler(base::BindOnce(
+@@ -286,9 +308,13 @@ void AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
+     return;
+   }
+ 
++  const content::FrameTreeNodeId frame_tree_node_id =
++      frame->GetFrameTreeNodeId();
+   BrowserContextData::StartProxying(
+-      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
+-      factory_builder);
++      profile,
++      base::BindRepeating(&RefreshFrameMetadata, profile, frame_tree_node_id,
++                          std::nullopt),
++      std::move(*metadata), factory_builder);
+ }
+ 
+ // static
+@@ -303,8 +329,25 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
+ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
+     Profile* profile,
+     content::RenderFrameHost* frame,
++    int render_process_id,
+     network::URLLoaderFactoryBuilder& factory_builder) {
+-  MaybeProxyWorkerFactory(profile, frame, factory_builder);
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (frame) {
++    MaybeProxyWorkerFactory(profile, frame, factory_builder);
++    return;
++  }
++
++  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
++      RefreshProfileOnlyProcessMetadata(profile, render_process_id);
++  if (!metadata.has_value()) {
++    return;
++  }
++
++  BrowserContextData::StartProxying(
++      profile,
++      base::BindRepeating(&RefreshProfileOnlyProcessMetadata, profile,
++                          render_process_id),
++      std::move(*metadata), factory_builder);
+ }
+ 
+ // static
+@@ -322,9 +365,13 @@ void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
+     return;
+   }
+ 
+-  BrowserContextData::StartProxying(profile, frame->GetFrameTreeNodeId(),
+-                                    navigation_id, std::move(*metadata),
+-                                    factory_builder);
++  const content::FrameTreeNodeId frame_tree_node_id =
++      frame->GetFrameTreeNodeId();
++  BrowserContextData::StartProxying(
++      profile,
++      base::BindRepeating(&RefreshFrameMetadata, profile, frame_tree_node_id,
++                          navigation_id),
++      std::move(*metadata), factory_builder);
+ }
+ 
+ AccessProxyingURLLoaderFactory::RequestDisposition
+@@ -367,19 +414,15 @@ AccessProxyingURLLoaderFactory::EvaluateUrl(
+       runtime ? runtime->GetPublishedPolicySnapshot(factory_metadata_.owner)
+               : nullptr;
+ 
+-  auto wc_getter =
+-      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
+-                          frame_tree_node_id_);
+-  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
+-      profile_, wc_getter, frame_tree_node_id_, navigation_id_);
+-  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
+-      !metadata.metadata.has_value()) {
++  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
++      metadata_refresh_.Run();
++  if (!metadata.has_value()) {
+     return factory_snapshot ? RequestDisposition::kBlock
+                             : RequestDisposition::kPreserveNative;
+   }
+ 
+   aegis_access::BrowserOwnedRequestMetadata evaluated_metadata =
+-      std::move(*metadata.metadata);
++      std::move(*metadata);
+   if (!SameAttributionScope(factory_metadata_, evaluated_metadata)) {
+     return factory_snapshot ? RequestDisposition::kBlock
+                             : RequestDisposition::kPreserveNative;
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+@@ -33,9 +33,9 @@ class AccessProxyingURLTrackedRequest;
+ 
+ // UI-thread browser-process URLLoaderFactory wrapper for real Access request
+ // dispatch. It covers primary-page document subresources, primary-page
+-// main-frame/subframe navigation, Worker main-script factories, and frame-owned
+-// Worker subresource factories, including redirect follow re-evaluation under
+-// one stable logical request identity. Frame-less SharedWorker subresources,
++// main-frame/subframe navigation, Worker main-script factories, and Worker
++// subresource factories, including frame-less SharedWorker factories, with
++// redirect follow re-evaluation under one stable logical request identity.
+ // ServiceWorker, prefetch/preconnect, WebSocket, BFCache, and prerender remain
+ // later slices. Each request is re-evaluated from
+ // browser-owned frame/navigation state and the latest published Access state
+@@ -50,11 +50,12 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
+  public:
+   using DisconnectCallback =
+       base::OnceCallback<void(AccessProxyingURLLoaderFactory*)>;
++  using MetadataRefreshCallback = base::RepeatingCallback<
++      std::optional<aegis_access::BrowserOwnedRequestMetadata>()>;
+ 
+   AccessProxyingURLLoaderFactory(
+       Profile* profile,
+-      content::FrameTreeNodeId frame_tree_node_id,
+-      std::optional<int64_t> navigation_id,
++      MetadataRefreshCallback metadata_refresh,
+       aegis_access::BrowserOwnedRequestMetadata factory_metadata,
+       network::URLLoaderFactoryBuilder& factory_builder,
+       DisconnectCallback on_disconnect);
+@@ -75,6 +76,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
+   static void MaybeProxyWorkerSubResource(
+       Profile* profile,
+       content::RenderFrameHost* frame,
++      int render_process_id,
+       network::URLLoaderFactoryBuilder& factory_builder);
+   static void MaybeProxyNavigation(
+       Profile* profile,
+@@ -147,8 +149,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
+   void MaybeDestroySelf();
+ 
+   const raw_ptr<Profile> profile_;
+-  const content::FrameTreeNodeId frame_tree_node_id_;
+-  const std::optional<int64_t> navigation_id_;
++  const MetadataRefreshCallback metadata_refresh_;
+   const aegis_access::BrowserOwnedRequestMetadata factory_metadata_;
+ 
+   mojo::ReceiverSet<network::mojom::URLLoaderFactory> proxy_receivers_;
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+@@ -57,6 +57,24 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
+     response->set_content_type("text/html");
+     return response;
+   }
++  if (request.relative_url.find("/shared-worker.js") != std::string::npos) {
++    response->set_content(
++        "self.onconnect = event => {"
++        "  const port = event.ports[0];"
++        "  port.onmessage = async message => {"
++        "    try {"
++        "      const response = await fetch(message.data);"
++        "      port.postMessage(await response.text());"
++        "    } catch {"
++        "      port.postMessage('error');"
++        "    }"
++        "  };"
++        "  port.start();"
++        "  port.postMessage('ready');"
++        "};");
++    response->set_content_type("application/javascript");
++    return response;
++  }
+   if (request.relative_url.find("/worker-subresource.js") !=
+       std::string::npos) {
+     response->set_content(
+@@ -183,6 +201,10 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     return target_origin_.GetURL(kTargetHost, "/worker-subresource.js");
+   }
+ 
++  GURL shared_worker_script_url() const {
++    return target_origin_.GetURL(kTargetHost, "/shared-worker.js");
++  }
++
+   GURL worker_subresource_url() const {
+     return target_origin_.GetURL(kTargetHost, "/worker-data");
+   }
+@@ -319,6 +341,47 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+         .ExtractString();
+   }
+ 
++  void StartSharedWorkerSubresourceHarness() {
++    EXPECT_EQ(
++        content::EvalJs(
++            web_contents(),
++            content::JsReplace(
++                "new Promise(resolve => {"
++                "  window.aegisSharedWorker = new SharedWorker($1, 'aegis');"
++                "  const port = window.aegisSharedWorker.port;"
++                "  port.start();"
++                "  port.onmessage = event => {"
++                "    if (event.data === 'ready') resolve('ready');"
++                "  };"
++                "})",
++                shared_worker_script_url().spec()))
++            .ExtractString(),
++        "ready");
++  }
++
++  void PrepareSharedWorkerSubresourceTest(size_t* origin_before,
++                                          size_t* proxy_before) {
++    ASSERT_NE(origin_before, nullptr);
++    ASSERT_NE(proxy_before, nullptr);
++    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
++    StartSharedWorkerSubresourceHarness();
++    *origin_before = origin_requests_.load(std::memory_order_relaxed);
++    *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
++  }
++
++  std::string FetchSharedWorkerSubresource(const GURL& url) {
++    return content::EvalJs(
++               web_contents(),
++               content::JsReplace(
++                   "new Promise(resolve => {"
++                   "  const port = window.aegisSharedWorker.port;"
++                   "  port.onmessage = event => resolve(event.data);"
++                   "  port.postMessage($1);"
++                   "})",
++                   url.spec()))
++        .ExtractString();
++  }
++
+   void ExpectRedirectFollowedThroughProxy() {
+     EXPECT_TRUE(base::test::RunUntil([&] {
+       return proxy_requests_.load(std::memory_order_relaxed) == 2u;
+@@ -554,6 +617,50 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
+ }
+ 
++IN_PROC_BROWSER_TEST_F(
++    AccessProxyingURLLoaderFactoryBrowserTest,
++    SharedWorkerSubresourceWithoutPolicyPreservesNativePath) {
++  size_t origin_before = 0;
++  size_t proxy_before = 0;
++  PrepareSharedWorkerSubresourceTest(&origin_before, &proxy_before);
++
++  EXPECT_EQ(FetchSharedWorkerSubresource(worker_subresource_url()),
++            "origin-worker-subresource");
++  EXPECT_TRUE(base::test::RunUntil([&] {
++    return origin_requests_.load(std::memory_order_relaxed) ==
++           origin_before + 1u;
++  }));
++  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       SharedWorkerSubresourceUsesProfileProxy) {
++  size_t origin_before = 0;
++  size_t proxy_before = 0;
++  PrepareSharedWorkerSubresourceTest(&origin_before, &proxy_before);
++  PublishProxyPolicy(/*publish_endpoint=*/true);
++
++  EXPECT_EQ(FetchSharedWorkerSubresource(worker_subresource_url()),
++            "proxy-worker-subresource");
++  EXPECT_TRUE(base::test::RunUntil([&] {
++    return proxy_requests_.load(std::memory_order_relaxed) ==
++           proxy_before + 1u;
++  }));
++  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       SharedWorkerSubresourceWithoutEndpointFailsClosed) {
++  size_t origin_before = 0;
++  size_t proxy_before = 0;
++  PrepareSharedWorkerSubresourceTest(&origin_before, &proxy_before);
++  PublishProxyPolicy(/*publish_endpoint=*/false);
++
++  EXPECT_EQ(FetchSharedWorkerSubresource(worker_subresource_url()), "error");
++  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
++  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
++}
++
+ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                        RuntimePolicyUpdateRoutesExistingFactoryThroughProxy) {
+   PublishProxyPolicy(/*publish_endpoint=*/true);
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -6761,10 +6761,10 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+-  if (type == URLLoaderFactoryType::kWorkerSubResource && frame) {
++  if (type == URLLoaderFactoryType::kWorkerSubResource) {
+     aegis::access::AccessProxyingURLLoaderFactory::
+         MaybeProxyWorkerSubResource(
+-            Profile::FromBrowserContext(browser_context), frame,
++            Profile::FromBrowserContext(browser_context), frame,
++            render_process_id,
+             factory_builder);
+   }
