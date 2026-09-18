@@ -59,6 +59,8 @@ int main() {
   aegis_access::test::RunIdentityGenerationStateRegressionTests(observer);
   aegis_access::test::RunProxySelectionGenerationStateUnitTests(observer);
   aegis_access::test::RunProxySelectionGenerationStateRegressionTests(observer);
+  aegis_access::test::RunBaseProxyConfigGenerationStateUnitTests(observer);
+  aegis_access::test::RunBaseProxyConfigGenerationStateRegressionTests(observer);
   if (observer.failures() != 0) {
     std::cerr << "FAIL: aegis_access native unit (" << observer.failures()
               << " failures, " << observer.checks() << " checks)\n";
