@@ -312,7 +312,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
   auto* dispatch_state =
-      AccessRequestDispatchState::Get(browser()->profile());
+      AccessRequestDispatchState::GetOrCreate(browser()->profile());
   ASSERT_NE(dispatch_state, nullptr);
   StartFetch(slow_url());
   ASSERT_TRUE(base::test::RunUntil([&] {
