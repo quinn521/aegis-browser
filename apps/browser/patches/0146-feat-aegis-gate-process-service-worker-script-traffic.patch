@@ -7,10 +7,11 @@ Subject: [PATCH] feat(aegis): gate process-backed ServiceWorker script traffic
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
-@@ -367,6 +367,14 @@
+@@ -366,6 +366,14 @@ void AccessProxyingURLLoaderFactory::MaybeProxyServiceWorkerSubResource(
+   MaybeProxyProfileOnlyFactory(profile, render_process_id, factory_builder);
  }
  
- // static
++// static
 +void AccessProxyingURLLoaderFactory::MaybeProxyServiceWorkerScript(
 +    Profile* profile,
 +    int render_process_id,
@@ -18,17 +19,22 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b
 +  MaybeProxyProfileOnlyFactory(profile, render_process_id, factory_builder);
 +}
 +
-+// static
+ // static
  void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
      Profile* profile,
-     content::RenderFrameHost* frame,
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
-@@ -35,12 +35,13 @@
+@@ -35,12 +35,13 @@ class AccessProxyingURLTrackedRequest;
  // dispatch. It covers primary-page document subresources, primary-page
  // main-frame/subframe navigation, Worker main-script factories, frame-owned
  // Worker subresource factories, frame-less Worker subresource factories, and
+-// process-backed ServiceWorker subresource factories with browser-owned
+-// Profile-only process/partition attribution, including redirect follow
+-// re-evaluation under one stable logical request identity. ServiceWorker
+-// script/update, prefetch/preconnect, WebSocket, BFCache, and prerender remain
+-// later slices. Each request is re-evaluated from its browser-owned attribution
+-// source and the latest published Access state
 +// process-backed ServiceWorker subresource plus main/imported-script factories
 +// with browser-owned Profile-only process/partition attribution, including
 +// redirect follow re-evaluation under one stable logical request identity.
@@ -36,16 +42,10 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/
 +// WebSocket, BFCache, and prerender remain later slices.
 +// Each request is re-evaluated from its browser-owned attribution source and the
 +// latest published Access state
--// process-backed ServiceWorker subresource factories with browser-owned
--// Profile-only process/partition attribution, including redirect follow
--// re-evaluation under one stable logical request identity. ServiceWorker
--// script/update, prefetch/preconnect, WebSocket, BFCache, and prerender remain
--// later slices. Each request is re-evaluated from its browser-owned attribution
--// source and the latest published Access state
  // before it may reach the target Network Service factory.
  //
  // DIRECT/absent policy is forwarded unchanged. A PROXY decision is forwarded
-@@ -84,6 +85,10 @@
+@@ -84,6 +85,10 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
        Profile* profile,
        int render_process_id,
        network::URLLoaderFactoryBuilder& factory_builder);
@@ -59,10 +59,33 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-@@ -45,33 +45,53 @@
+@@ -45,33 +45,69 @@ constexpr char kTargetHost[] = "target.example";
  constexpr char kUnselectedRedirectHost[] = "redirect-unselected.example";
  constexpr char kProxyGroup[] = "proxy-group-browser-test";
  
++enum class ServiceWorkerRequestKind {
++  kOther,
++  kMainScript,
++  kImportedScript,
++  kData,
++};
++
++ServiceWorkerRequestKind ClassifyServiceWorkerRequest(
++    const net::test_server::HttpRequest& request) {
++  if (request.relative_url.find("/aegis-service-worker.js") !=
++      std::string::npos) {
++    return ServiceWorkerRequestKind::kMainScript;
++  }
++  if (request.relative_url.find("/aegis-service-worker-imported.js") !=
++      std::string::npos) {
++    return ServiceWorkerRequestKind::kImportedScript;
++  }
++  if (request.relative_url.find("/service-worker-data") != std::string::npos) {
++    return ServiceWorkerRequestKind::kData;
++  }
++  return ServiceWorkerRequestKind::kOther;
++}
++
 +void ConfigureServiceWorkerMainScriptResponse(
 +    net::test_server::BasicHttpResponse* response) {
 +  response->set_code(net::HTTP_OK);
@@ -88,31 +111,27 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
  std::unique_ptr<net::test_server::HttpResponse>
  ServiceWorkerOriginReply(std::atomic<size_t>* counter,
                           const net::test_server::HttpRequest& request) {
-+  const bool is_main_script =
 -  const bool is_script =
-       request.relative_url.find("/aegis-service-worker.js") !=
-       std::string::npos;
-+  const bool is_imported_script =
-+      request.relative_url.find("/aegis-service-worker-imported.js") !=
-+      std::string::npos;
-   const bool is_data =
-       request.relative_url.find("/service-worker-data") != std::string::npos;
-+  if (!is_main_script && !is_imported_script && !is_data) {
+-      request.relative_url.find("/aegis-service-worker.js") !=
+-      std::string::npos;
+-  const bool is_data =
+-      request.relative_url.find("/service-worker-data") != std::string::npos;
 -  if (!is_script && !is_data) {
++  const ServiceWorkerRequestKind kind = ClassifyServiceWorkerRequest(request);
++  if (kind == ServiceWorkerRequestKind::kOther) {
      return nullptr;
    }
  
    counter->fetch_add(1, std::memory_order_relaxed);
    auto response = std::make_unique<net::test_server::BasicHttpResponse>();
    response->set_code(net::HTTP_OK);
-+  if (is_main_script) {
+-  if (is_script) {
++  if (kind == ServiceWorkerRequestKind::kMainScript) {
 +    ConfigureServiceWorkerMainScriptResponse(response.get());
 +    return response;
 +  }
-+  if (is_imported_script) {
--  if (is_script) {
++  if (kind == ServiceWorkerRequestKind::kImportedScript) {
      response->set_content(
-+        "self.aegisImportedScriptSource = 'origin-service-worker-script';");
 -        "self.addEventListener('install', event => "
 -        "  event.waitUntil(self.skipWaiting()));"
 -        "self.addEventListener('activate', event => "
@@ -123,35 +142,29 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 -        "    .then(() => port.postMessage('resolved'))"
 -        "    .catch(() => port.postMessage('error')));"
 -        "});");
++        "self.aegisImportedScriptSource = 'origin-service-worker-script';");
      response->set_content_type("application/javascript");
      return response;
    }
-@@ -84,14 +104,32 @@
+@@ -84,14 +120,25 @@ ServiceWorkerOriginReply(std::atomic<size_t>* counter,
  std::unique_ptr<net::test_server::HttpResponse>
  ServiceWorkerProxyReply(std::atomic<size_t>* counter,
                          const net::test_server::HttpRequest& request) {
-+  const bool is_main_script =
-+      request.relative_url.find("/aegis-service-worker.js") !=
-+      std::string::npos;
-+  const bool is_imported_script =
-+      request.relative_url.find("/aegis-service-worker-imported.js") !=
-+      std::string::npos;
-+  const bool is_data =
-+      request.relative_url.find("/service-worker-data") != std::string::npos;
-+  if (!is_main_script && !is_imported_script && !is_data) {
 -  if (request.relative_url.find("/service-worker-data") ==
 -      std::string::npos) {
++  const ServiceWorkerRequestKind kind = ClassifyServiceWorkerRequest(request);
++  if (kind == ServiceWorkerRequestKind::kOther) {
      return nullptr;
    }
  
    counter->fetch_add(1, std::memory_order_relaxed);
    auto response = std::make_unique<net::test_server::BasicHttpResponse>();
    response->set_code(net::HTTP_OK);
-+  if (is_main_script) {
++  if (kind == ServiceWorkerRequestKind::kMainScript) {
 +    ConfigureServiceWorkerMainScriptResponse(response.get());
 +    return response;
 +  }
-+  if (is_imported_script) {
++  if (kind == ServiceWorkerRequestKind::kImportedScript) {
 +    response->set_content(
 +        "self.aegisImportedScriptSource = 'proxy-service-worker-script';");
 +    response->set_content_type("application/javascript");
@@ -161,27 +174,10 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    response->set_content("proxy-service-worker-subresource");
    response->set_content_type("text/plain");
    return response;
-@@ -453,25 +491,23 @@
+@@ -453,25 +500,23 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
          .ExtractString();
    }
  
-+  std::string StartServiceWorkerHarness() {
-+    return content::EvalJs(
-+               web_contents(),
-+               content::JsReplace(
-+                   "new Promise(async resolve => {"
-+                   "  try {"
-+                   "    const registration = "
-+                   "        await navigator.serviceWorker.register($1);"
-+                   "    await navigator.serviceWorker.ready;"
-+                   "    const worker = registration.active;"
-+                   "    if (!worker) { resolve('error'); return; }"
-+                   "    window.aegisServiceWorker = worker;"
-+                   "    resolve('ready');"
-+                   "  } catch { resolve('error'); }"
-+                   "})",
-+                   service_worker_script_url().spec()))
-+        .ExtractString();
 -  void StartServiceWorkerSubresourceHarness() {
 -    EXPECT_EQ(
 -        content::EvalJs(
@@ -201,15 +197,32 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 -                service_worker_script_url().spec()))
 -            .ExtractString(),
 -        "ready");
++  std::string StartServiceWorkerHarness() {
++    return content::EvalJs(
++               web_contents(),
++               content::JsReplace(
++                   "new Promise(async resolve => {"
++                   "  try {"
++                   "    const registration = "
++                   "        await navigator.serviceWorker.register($1);"
++                   "    await navigator.serviceWorker.ready;"
++                   "    const worker = registration.active;"
++                   "    if (!worker) { resolve('error'); return; }"
++                   "    window.aegisServiceWorker = worker;"
++                   "    resolve('ready');"
++                   "  } catch { resolve('error'); }"
++                   "})",
++                   service_worker_script_url().spec()))
++        .ExtractString();
    }
  
    void PrepareServiceWorkerSubresourceTest(size_t* origin_before,
-@@ -480,11 +516,23 @@
+@@ -480,11 +525,23 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
      ASSERT_NE(proxy_before, nullptr);
      ASSERT_TRUE(
          ui_test_utils::NavigateToURL(browser(), service_worker_page_url()));
-+    EXPECT_EQ(StartServiceWorkerHarness(), "ready");
 -    StartServiceWorkerSubresourceHarness();
++    ASSERT_EQ(StartServiceWorkerHarness(), "ready");
      *origin_before = origin_requests_.load(std::memory_order_relaxed);
      *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
    }
@@ -229,15 +242,17 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    std::string FetchServiceWorkerSubresource(const GURL& url) {
      return content::EvalJs(
                 web_contents(),
-@@ -811,6 +859,38 @@
+@@ -809,6 +866,38 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
+ }
  
- IN_PROC_BROWSER_TEST_F(
-     AccessProxyingURLLoaderFactoryBrowserTest,
++IN_PROC_BROWSER_TEST_F(
++    AccessProxyingURLLoaderFactoryBrowserTest,
 +    ServiceWorkerProcessScriptWithoutPolicyPreservesNativePath) {
 +  ASSERT_TRUE(
 +      ui_test_utils::NavigateToURL(browser(), service_worker_page_url()));
 +
-+  EXPECT_EQ(StartServiceWorkerHarness(), "ready");
++  ASSERT_EQ(StartServiceWorkerHarness(), "ready");
 +  EXPECT_EQ(ServiceWorkerScriptSource(), "origin-service-worker-script");
 +  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
 +}
@@ -248,7 +263,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +      ui_test_utils::NavigateToURL(browser(), service_worker_page_url()));
 +  PublishProxyPolicy(/*publish_endpoint=*/true, "localhost");
 +
-+  EXPECT_EQ(StartServiceWorkerHarness(), "ready");
++  ASSERT_EQ(StartServiceWorkerHarness(), "ready");
 +  EXPECT_EQ(ServiceWorkerScriptSource(), "proxy-service-worker-script");
 +  EXPECT_GT(proxy_requests_.load(std::memory_order_relaxed), 0u);
 +}
@@ -263,11 +278,9 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
 +}
 +
-+IN_PROC_BROWSER_TEST_F(
-+    AccessProxyingURLLoaderFactoryBrowserTest,
+ IN_PROC_BROWSER_TEST_F(
+     AccessProxyingURLLoaderFactoryBrowserTest,
      ServiceWorkerSubresourceWithoutPolicyPreservesNativePath) {
-   size_t origin_before = 0;
-   size_t proxy_before = 0;
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
