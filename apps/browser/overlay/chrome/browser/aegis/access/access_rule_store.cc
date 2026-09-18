@@ -745,6 +745,7 @@ AccessRuleStore::ReadCommittedSnapshotInternal(const std::string& partition,
     const int64_t sequence = groups.ColumnInt64(9);
     const int64_t generation = groups.ColumnInt64(10);
     if (revision <= 0 || sequence <= 0 || generation <= 0 ||
+        generation != sequence ||
         !group_ids.insert(stored.group.site_toggle_id).second) {
       return SnapshotError(StoreStatus::kCorrupt, "invalid_group_row");
     }
