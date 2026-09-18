@@ -4,6 +4,9 @@ Date: Fri, 18 Sep 2026 18:30:00 +0800
 Subject: [PATCH] fix(aegis): harden published runtime thread boundary
 
 ---
+diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
+--- a/chrome/browser/aegis/access/BUILD.gn
++++ b/chrome/browser/aegis/access/BUILD.gn
 @@ -94,6 +94,7 @@ source_set("access_published_request_runtime") {
      "//chrome/browser/aegis:profile_support",
      "//chrome/browser/net:impl",
@@ -12,6 +15,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
    ]
    public_deps = [
      ":access_rule_store",
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
 @@ -22,19 +22,6 @@ const void* const kTransportUserDataKey = &kTransportUserDataKey;
  constexpr size_t kMaxExactHosts = 256;
  constexpr size_t kMaxPartitionKeyBytes = 1024;
@@ -50,6 +56,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
           owner.profile_token == runtime_profile_token_ &&
           partitions_.contains(owner.storage_partition_token);
  }
+diff --git a/chrome/browser/aegis/access/access_published_request_runtime.cc b/chrome/browser/aegis/access/access_published_request_runtime.cc
+--- a/chrome/browser/aegis/access/access_published_request_runtime.cc
++++ b/chrome/browser/aegis/access/access_published_request_runtime.cc
 @@ -12,6 +12,7 @@
  #include "chrome/browser/net/profile_network_context_service.h"
  #include "chrome/browser/net/profile_network_context_service_factory.h"
@@ -129,6 +138,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
      input.policy_generation = snapshot->policy_generation;
    }
  
+diff --git a/chrome/browser/aegis/access/access_published_request_runtime.h b/chrome/browser/aegis/access/access_published_request_runtime.h
+--- a/chrome/browser/aegis/access/access_published_request_runtime.h
++++ b/chrome/browser/aegis/access/access_published_request_runtime.h
 @@ -32,9 +32,16 @@ struct AccessPolicyPublicationResult {
    uint64_t policy_generation = 0;
  };
@@ -161,6 +173,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
        const aegis_access::OwnershipKey& owner,
        const std::string& proxy_group_id) const;
  
+diff --git a/chrome/browser/aegis/access/access_published_request_runtime_unittest.cc b/chrome/browser/aegis/access/access_published_request_runtime_unittest.cc
+--- a/chrome/browser/aegis/access/access_published_request_runtime_unittest.cc
++++ b/chrome/browser/aegis/access/access_published_request_runtime_unittest.cc
 @@ -96,7 +96,7 @@ TEST_F(AccessPublishedRequestRuntimeTest,
    ASSERT_EQ(runtime_->PublishCommittedPolicySnapshot(Snapshot(1)).status,
              AccessPolicyPublicationStatus::kPublished);
@@ -170,6 +185,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
    EXPECT_EQ(result.status,
              aegis_access::RequestGenerationTupleBuildStatus::
                  kMissingIdentityGeneration);
+diff --git a/components/aegis_access/access_policy_evaluator.cc b/components/aegis_access/access_policy_evaluator.cc
+--- a/components/aegis_access/access_policy_evaluator.cc
++++ b/components/aegis_access/access_policy_evaluator.cc
 @@ -17,24 +17,6 @@
  namespace aegis_access {
  namespace {
@@ -213,6 +231,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
      return Error(PolicyState::kInvalid,
                   PolicyMatchReason::kInvalidSnapshot,
                   snapshot.policy_generation);
+diff --git a/components/aegis_access/access_route_planner.cc b/components/aegis_access/access_route_planner.cc
+--- a/components/aegis_access/access_route_planner.cc
++++ b/components/aegis_access/access_route_planner.cc
 @@ -5,24 +5,6 @@
  namespace aegis_access {
  namespace {
@@ -265,6 +286,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
        input.registered_proxy_entry->owner != input.request_owner) {
      return MakePlan(input, RouteAction::kFail,
                      RouteReason::kOwnershipMismatch);
+diff --git a/components/aegis_access/access_route_types.h b/components/aegis_access/access_route_types.h
+--- a/components/aegis_access/access_route_types.h
++++ b/components/aegis_access/access_route_types.h
 @@ -25,6 +25,25 @@ struct OwnershipKey {
    friend bool operator==(const OwnershipKey&, const OwnershipKey&) = default;
  };
@@ -291,6 +315,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
  struct GenerationTuple {
    // Zero is reserved for "not published / not initialized". Browser-owned
    // generation sources publish live counters starting at 1 and increment from
+diff --git a/components/aegis_access/browser_request_metadata_seed.cc b/components/aegis_access/browser_request_metadata_seed.cc
+--- a/components/aegis_access/browser_request_metadata_seed.cc
++++ b/components/aegis_access/browser_request_metadata_seed.cc
 @@ -7,24 +7,6 @@
  namespace aegis_access {
  namespace {
@@ -316,6 +343,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
  BrowserRequestMetadataSeedResult Error(BrowserRequestMetadataSeedError error) {
    return {error, std::nullopt};
  }
+diff --git a/components/aegis_access/request_generation_tuple_builder.cc b/components/aegis_access/request_generation_tuple_builder.cc
+--- a/components/aegis_access/request_generation_tuple_builder.cc
++++ b/components/aegis_access/request_generation_tuple_builder.cc
 @@ -5,24 +5,6 @@
  namespace aegis_access {
  namespace {
@@ -341,6 +371,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
  RequestGenerationTupleBuildResult Missing(
      RequestGenerationTupleBuildStatus status) {
    return {status, std::nullopt};
+diff --git a/components/aegis_access/request_ownership_registry.cc b/components/aegis_access/request_ownership_registry.cc
+--- a/components/aegis_access/request_ownership_registry.cc
++++ b/components/aegis_access/request_ownership_registry.cc
 @@ -7,24 +7,6 @@
  namespace aegis_access {
  namespace {
@@ -384,6 +417,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
           HasExactlyOneAttributionToken(selector) &&
           !selector.top_level_site.empty() && !selector.exact_host.empty() &&
           IsKnown(selector.scheme) && selector.port != 0;
+diff --git a/components/aegis_access/request_policy_context.cc b/components/aegis_access/request_policy_context.cc
+--- a/components/aegis_access/request_policy_context.cc
++++ b/components/aegis_access/request_policy_context.cc
 @@ -10,24 +10,6 @@
  namespace aegis_access {
  namespace {
@@ -418,6 +454,9 @@ Subject: [PATCH] fix(aegis): harden published runtime thread boundary
      return Error(RequestContextError::kInvalidOwner);
    }
    if (metadata.request_id.empty()) {
+diff --git a/components/aegis_access/site_proxy_rule_group.cc b/components/aegis_access/site_proxy_rule_group.cc
+--- a/components/aegis_access/site_proxy_rule_group.cc
++++ b/components/aegis_access/site_proxy_rule_group.cc
 @@ -12,24 +12,6 @@ GroupValidation Unknown(GroupValidationError error) {
                           error};
  }
