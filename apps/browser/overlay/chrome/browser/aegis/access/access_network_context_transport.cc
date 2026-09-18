@@ -3,15 +3,17 @@
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 
 #include <algorithm>
-#include "base/barrier_closure.h"
-#include "base/functional/bind.h"
 #include <limits>
+#include <memory>
 #include <utility>
 
+#include "base/barrier_closure.h"
+#include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/uuid.h"
 #include "chrome/browser/aegis/aegis_profile_support.h"
 #include "chrome/browser/profiles/profile.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -241,8 +243,8 @@ AccessNetworkContextTransport::CaptureSelectedProxyEndpoint(
 AccessNetworkConfigAckResult
 AccessNetworkContextTransport::RepublishCurrentConfigWithAck(
     const aegis_access::OwnershipKey& owner,
-    base::OnceClosure all_clients_acked) {
-  if (!all_clients_acked || !OwnsConfiguredPartition(owner)) {
+    base::OnceCallback<void(bool)> all_clients_settled) {
+  if (!all_clients_settled || !OwnsConfiguredPartition(owner)) {
     return {AccessNetworkConfigAckStatus::kInvalidOwner, 0};
   }
   auto it = partitions_.find(owner.storage_partition_token);
@@ -259,14 +261,34 @@ AccessNetworkContextTransport::RepublishCurrentConfigWithAck(
   }
 
   const size_t required_acks = state.clients.size();
-  base::RepeatingClosure barrier =
-      base::BarrierClosure(required_acks, std::move(all_clients_acked));
+  auto all_succeeded = std::make_shared<bool>(true);
+  base::RepeatingClosure barrier = base::BarrierClosure(
+      required_acks,
+      base::BindOnce(
+          [](std::shared_ptr<bool> succeeded,
+             base::OnceCallback<void(bool)> completion) {
+            std::move(completion).Run(*succeeded);
+          },
+          all_succeeded, std::move(all_clients_settled)));
+
   for (auto& client : state.clients) {
+    base::OnceCallback<void(bool)> result =
+        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+            base::BindOnce(
+                [](std::shared_ptr<bool> succeeded,
+                   base::RepeatingClosure completion, bool client_acked) {
+                  *succeeded = *succeeded && client_acked;
+                  completion.Run();
+                },
+                all_succeeded, barrier),
+            false);
     client->OnCustomProxyConfigUpdated(
         config->Clone(),
         base::BindOnce(
-            [](base::RepeatingClosure completion) { completion.Run(); },
-            barrier));
+            [](base::OnceCallback<void(bool)> result_callback) {
+              std::move(result_callback).Run(true);
+            },
+            std::move(result)));
   }
   return {AccessNetworkConfigAckStatus::kStarted, required_acks};
 }
