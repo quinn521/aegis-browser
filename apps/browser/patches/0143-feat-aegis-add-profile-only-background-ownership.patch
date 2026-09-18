@@ -88,7 +88,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
  AccessBrowserRequestMetadataStatus ResolvePrimaryTopFrameSite(
      Profile* profile,
      content::WebContents* contents,
-@@ -324,4 +340,53 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
+@@ -324,4 +340,52 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
               : Error(status);
  }
  
@@ -127,7 +127,6 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
 +  if (!aegis::IsAegisProfileSupported(profile)) {
 +    return Error(AccessBrowserRequestMetadataStatus::kUnsupportedProfile);
 +  }
-+
 +  content::RenderProcessHost* process =
 +      content::RenderProcessHost::FromID(render_process_id);
 +  if (!process) {
@@ -165,21 +164,23 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chro
    kInvalidPartitionPath,
    kInvalidOwner,
    kInvalidAttribution,
-@@ -55,6 +58,21 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
+@@ -55,6 +58,23 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
      content::FrameTreeNodeId frame_tree_node_id,
      std::optional<int64_t> navigation_id);
  
 +// Builds Profile-only metadata from an exact browser-owned StoragePartition.
-+// The partition must already be configured by this Profile's Access transport;
-+// no WebContents, top-level site, or renderer-provided initiator is consulted.
++// Must be called on the UI thread. The partition must already be configured by
++// this Profile's Access transport; no WebContents, top-level site, or
++// renderer-provided initiator is consulted.
 +AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileRequestMetadata(
 +    Profile* profile,
 +    content::StoragePartition* partition);
 +
 +// Builds Profile-only metadata for a browser-owned background request factory
-+// whose trusted source is a render process. It resolves that process's
-+// BrowserContext/StoragePartition and delegates to the configured-partition
-+// contract above, so site-scoped policy remains ineligible.
++// whose trusted source is a render process. Must be called on the UI thread.
++// It resolves that process's BrowserContext/StoragePartition and delegates to
++// the configured-partition contract above, so site-scoped policy remains
++// ineligible.
 +AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileOnlyRequestMetadata(
 +    Profile* profile,
 +    int render_process_id);
