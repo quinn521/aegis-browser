@@ -293,6 +293,15 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
 }
 
 // static
+void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  MaybeProxyWorkerMainResource(profile, frame, factory_builder);
+}
+
+// static
 void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
     Profile* profile,
     content::RenderFrameHost* frame,
