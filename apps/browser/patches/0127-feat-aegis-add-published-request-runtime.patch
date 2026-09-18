@@ -1,4 +1,4 @@
-From 372b2de3420acf53d915b859041a27006fc44bb8 Mon Sep 17 00:00:00 2001
+From 43b0f7035921ae837cd87775b0d5c46180107005 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 18 Sep 2026 15:52:00 +0800
 Subject: [PATCH] feat(aegis): add published request runtime
@@ -65,7 +65,7 @@ diff --git a/components/aegis_access/published_request_runtime.cc b/components/a
 new file mode 100644
 --- /dev/null
 +++ b/components/aegis_access/published_request_runtime.cc
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,111 @@
 +// Copyright 2026 GCSA
 +
 +#include "components/aegis_access/published_request_runtime.h"
@@ -115,12 +115,32 @@ new file mode 100644
 +  return plan;
 +}
 +
++PublishedRequestRuntimeStatus StatusForGate(
++    const RequestDispatchGateResult& gate) {
++  if (gate.status == RequestDispatchGateStatus::kAllowRegistered &&
++      gate.decision == RequestDispatchDecision::kAllow) {
++    return PublishedRequestRuntimeStatus::kDispatchRegistered;
++  }
++  if (gate.status == RequestDispatchGateStatus::kBlockedByBarrier) {
++    return PublishedRequestRuntimeStatus::kBlockedByBarrier;
++  }
++  return PublishedRequestRuntimeStatus::kRegistrationFailed;
++}
++
++PublishedRequestRuntimeResult InvalidRouteAction(RoutePlan route_plan) {
++  route_plan.action = RouteAction::kFail;
++  route_plan.reason = RouteReason::kInvalidPolicy;
++  route_plan.registered_proxy_entry.reset();
++  return NoDispatch(PublishedRequestRuntimeStatus::kFail,
++                    std::move(route_plan));
++}
++
 +}  // namespace
 +
 +PublishedRequestRuntimeResult EvaluatePublishedRequestForDispatch(
 +    const PublishedRequestRuntimeInput& input,
-+    const RequestDispatchBarrierRegistry* barriers,
-+    RequestOwnershipRegistry* ownership_registry) {
++    const RequestDispatchBarrierRegistry& barriers,
++    RequestOwnershipRegistry& ownership_registry) {
 +  if (input.snapshot_state == SnapshotState::kPublished &&
 +      (input.matched_policy_generation == 0 ||
 +       input.matched_policy_generation !=
@@ -143,22 +163,16 @@ new file mode 100644
 +    case RouteAction::kPreserveNative:
 +    case RouteAction::kUseRegisteredProxy:
 +      break;
++    default:
++      return InvalidRouteAction(std::move(route_plan));
 +  }
 +
 +  RequestDispatchGateResult gate = EvaluateAndRegisterRequestForDispatch(
-+      input.request, barriers, ownership_registry);
++      input.request, &barriers, &ownership_registry);
 +  PublishedRequestRuntimeResult result;
++  result.status = StatusForGate(gate);
 +  result.route_plan = std::move(route_plan);
 +  result.dispatch_gate = gate;
-+
-+  if (gate.status == RequestDispatchGateStatus::kAllowRegistered &&
-+      gate.decision == RequestDispatchDecision::kAllow) {
-+    result.status = PublishedRequestRuntimeStatus::kDispatchRegistered;
-+  } else if (gate.status == RequestDispatchGateStatus::kBlockedByBarrier) {
-+    result.status = PublishedRequestRuntimeStatus::kBlockedByBarrier;
-+  } else {
-+    result.status = PublishedRequestRuntimeStatus::kRegistrationFailed;
-+  }
 +  return result;
 +}
 +
@@ -231,8 +245,8 @@ new file mode 100644
 +// mutate the ownership registry.
 +PublishedRequestRuntimeResult EvaluatePublishedRequestForDispatch(
 +    const PublishedRequestRuntimeInput& input,
-+    const RequestDispatchBarrierRegistry* barriers,
-+    RequestOwnershipRegistry* ownership_registry);
++    const RequestDispatchBarrierRegistry& barriers,
++    RequestOwnershipRegistry& ownership_registry);
 +
 +}  // namespace aegis_access
 +
@@ -284,7 +298,7 @@ new file mode 100644
 +  RequestOwnershipRegistry ownership(4);
 +  const PublishedRequestRuntimeInput input = ReadyRuntimeInput();
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(
 +      result.status == PublishedRequestRuntimeStatus::kDispatchRegistered &&
 +          result.route_plan.action == RouteAction::kUseRegisteredProxy &&
@@ -306,7 +320,7 @@ new file mode 100644
 +  input.runtime_state = ProxyRuntimeState::kStopped;
 +  input.registered_proxy_entry.reset();
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(
 +      result.status == PublishedRequestRuntimeStatus::kDispatchRegistered &&
 +          result.route_plan.action == RouteAction::kPreserveNative &&
@@ -322,7 +336,7 @@ new file mode 100644
 +  input.snapshot_state = SnapshotState::kRestoring;
 +  input.matched_policy_generation = 0;
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(result.status == PublishedRequestRuntimeStatus::kWait &&
 +                      result.route_plan.action == RouteAction::kWait &&
 +                      ownership.size() == 0u,
@@ -336,7 +350,7 @@ new file mode 100644
 +  PublishedRequestRuntimeInput input = ReadyRuntimeInput("runtime-deny");
 +  input.protection_restriction = ProtectionRestriction::kDeny;
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(result.status == PublishedRequestRuntimeStatus::kDeny &&
 +                      result.route_plan.action == RouteAction::kDeny &&
 +                      ownership.size() == 0u,
@@ -351,7 +365,7 @@ new file mode 100644
 +      ReadyRuntimeInput("runtime-stale-policy");
 +  --input.matched_policy_generation;
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(
 +      result.status == PublishedRequestRuntimeStatus::kStalePolicyGeneration &&
 +          result.route_plan.action == RouteAction::kFail &&
@@ -368,7 +382,7 @@ new file mode 100644
 +      ReadyRuntimeInput("runtime-zero-generation");
 +  input.request.generations.identity_generation = 0;
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(result.status == PublishedRequestRuntimeStatus::kFail &&
 +                      result.route_plan.action == RouteAction::kFail &&
 +                      ownership.size() == 0u,
@@ -383,7 +397,7 @@ new file mode 100644
 +      ReadyRuntimeInput("runtime-stale-snapshot");
 +  ++input.snapshot_generations.network_epoch;
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(result.status == PublishedRequestRuntimeStatus::kFail &&
 +                      result.route_plan.reason ==
 +                          RouteReason::kStaleGeneration &&
@@ -401,7 +415,7 @@ new file mode 100644
 +  PublishedRequestRuntimeInput input =
 +      ReadyRuntimeInput("runtime-barrier-blocked");
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(
 +      result.status == PublishedRequestRuntimeStatus::kBlockedByBarrier &&
 +          result.dispatch_gate.decision == RequestDispatchDecision::kBlock &&
@@ -419,7 +433,7 @@ new file mode 100644
 +                      RequestOwnershipStatus::kOk,
 +                  "published runtime regression seeds duplicate");
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(
 +      result.status == PublishedRequestRuntimeStatus::kRegistrationFailed &&
 +          result.dispatch_gate.ownership_status ==
@@ -436,7 +450,7 @@ new file mode 100644
 +      ReadyRuntimeInput("runtime-conflict");
 +  input.policy_state = PolicyState::kConflict;
 +  const PublishedRequestRuntimeResult result =
-+      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
++      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
 +  observer.Expect(result.status == PublishedRequestRuntimeStatus::kFail &&
 +                      result.route_plan.reason ==
 +                          RouteReason::kPolicyConflict &&
