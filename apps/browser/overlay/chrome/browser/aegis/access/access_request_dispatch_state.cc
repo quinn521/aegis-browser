@@ -15,6 +15,8 @@ namespace {
 const void* const kDispatchStateUserDataKey = &kDispatchStateUserDataKey;
 constexpr size_t kMaxDispatchBarriers = 256;
 constexpr size_t kMaxOwnedRequests = 4096;
+constexpr size_t kMaxPolicyPublications = 256;
+constexpr size_t kMaxPolicyPublicationAckTokens = 8;
 
 }  // namespace
 
@@ -46,7 +48,10 @@ AccessRequestDispatchState* AccessRequestDispatchState::GetOrCreate(
 }
 
 AccessRequestDispatchState::AccessRequestDispatchState()
-    : barriers_(kMaxDispatchBarriers), ownership_(kMaxOwnedRequests) {
+    : barriers_(kMaxDispatchBarriers),
+      ownership_(kMaxOwnedRequests),
+      publication_acks_(kMaxPolicyPublications,
+                        kMaxPolicyPublicationAckTokens) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
 
@@ -76,6 +81,60 @@ AccessRequestDispatchState::InstallBlockBarrierAndCancelMatching(
       ++result.terminated_requests;
     }
   }
+  return result;
+}
+
+aegis_access::PolicyPublicationAckResult
+AccessRequestDispatchState::BeginPolicyPublication(
+    aegis_access::PolicyPublicationAckRequirements requirements) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return publication_acks_.Begin(std::move(requirements));
+}
+
+aegis_access::PolicyPublicationAckResult
+AccessRequestDispatchState::AcknowledgePolicyPublication(
+    const aegis_access::PolicyPublicationIdentity& identity,
+    const std::string& ack_token) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return publication_acks_.Acknowledge(identity, ack_token);
+}
+
+aegis_access::PolicyPublicationAckResult
+AccessRequestDispatchState::MarkPolicyPublicationTerminationsComplete(
+    const aegis_access::PolicyPublicationIdentity& identity) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return publication_acks_.MarkTerminationsComplete(identity);
+}
+
+aegis_access::PolicyPublicationAckResult
+AccessRequestDispatchState::MarkPolicyPublicationDurablyCommitted(
+    const aegis_access::PolicyPublicationIdentity& identity) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return publication_acks_.MarkDurablyCommitted(identity);
+}
+
+AccessPolicyBarrierReleaseResult
+AccessRequestDispatchState::ReleaseBlockBarrierForReadyPublication(
+    const aegis_access::PolicyPublicationIdentity& identity) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  AccessPolicyBarrierReleaseResult result;
+  const auto publication = publication_acks_.Lookup(identity);
+  result.publication_status = publication.status;
+  if (publication.status != aegis_access::PolicyPublicationAckStatus::kReady) {
+    return result;
+  }
+
+  result.barrier_status = barriers_.ReleaseBlockBarrier(
+      identity.selector, identity.operation_id, identity.operation_sequence);
+  if (result.barrier_status !=
+      aegis_access::RequestDispatchBarrierStatus::kOk) {
+    return result;
+  }
+
+  const auto finalized = publication_acks_.Finalize(identity);
+  result.publication_status = finalized.status;
+  result.released =
+      finalized.status == aegis_access::PolicyPublicationAckStatus::kFinalized;
   return result;
 }
 
