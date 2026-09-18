@@ -234,6 +234,8 @@ fi
   "$SERIES_FILE")" == 1 ]] || fail "0125 must appear once in series"
 [[ "$(rg -F -c '0126-feat-aegis-add-browser-owned-request-metadata-adapter.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "0126 must appear once in series"
+[[ "$(rg -F -c '0127-feat-aegis-add-published-request-runtime.patch' \
+  "$SERIES_FILE")" == 1 ]] || fail "0127 must appear once in series"
 [[ "$(tail -n 13 "$SERIES_FILE" | head -n 1)" == \
   "0115-feat-aegis-add-trusted-policy-context-matching.patch" ]] ||
   fail "patch 0115 must immediately precede patch 0116"
