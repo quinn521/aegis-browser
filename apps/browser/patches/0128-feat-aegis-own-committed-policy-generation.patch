@@ -1,13 +1,22 @@
-From aa612b20f4539c35f51527e284b3a1269efe2111 Mon Sep 17 00:00:00 2001
+From 3deb07f3c7b502b3efb2036d625a182553af930f Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 18 Sep 2026 16:05:00 +0800
 Subject: [PATCH] feat(aegis): own committed policy generation
 
 ---
 diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
+index 1bc85cd..dc0364f 100644
 --- a/chrome/browser/aegis/access/access_rule_store.cc
 +++ b/chrome/browser/aegis/access/access_rule_store.cc
-@@ -1063,7 +1063,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::PrepareSiteGroupMutation(
+@@ -745,6 +745,7 @@ AccessRuleStore::ReadCommittedSnapshotInternal(const std::string& partition,
+     const int64_t sequence = groups.ColumnInt64(9);
+     const int64_t generation = groups.ColumnInt64(10);
+     if (revision <= 0 || sequence <= 0 || generation <= 0 ||
++        generation != sequence ||
+         !group_ids.insert(stored.group.site_toggle_id).second) {
+       return SnapshotError(StoreStatus::kCorrupt, "invalid_group_row");
+     }
+@@ -1063,7 +1064,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::PrepareSiteGroupMutation(
    record.candidate.group = request.candidate_group;
    record.candidate.group.revision = record.target_revision;
    record.candidate.group.last_operation_sequence = record.operation_sequence;
@@ -16,7 +25,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/a
    const AccessMode mode = request.candidate_members[0].mode;
    std::vector<SiteProxyRuleMember> normalized_members =
        request.candidate_members;
-@@ -1234,7 +1234,8 @@ StoreResult<PendingMutationRecord> AccessRuleStore::LoadMutation(
+@@ -1234,7 +1235,8 @@ StoreResult<PendingMutationRecord> AccessRuleStore::LoadMutation(
        created_at_micros <= 0 ||
        (state == kPrepared &&
         (committed_generation != 0 || completed_at_micros != 0)) ||
@@ -26,7 +35,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/a
        (state == kSuperseded && committed_generation != 0) ||
        (state != kPrepared && completed_at_micros < created_at_micros) ||
        (mode != AccessMode::kDirect && mode != AccessMode::kProxy)) {
-@@ -1266,7 +1267,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::LoadMutation(
+@@ -1266,7 +1268,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::LoadMutation(
        .revision = record.target_revision,
        .last_operation_sequence = record.operation_sequence,
    };
@@ -35,7 +44,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/a
    const std::string proxy_group_id = row.ColumnString(14);
    const std::vector<RequestScheme> schemes = {
        RequestScheme::kHttp, RequestScheme::kHttps, RequestScheme::kWs,
-@@ -1357,17 +1358,11 @@ StoreStatus AccessRuleStore::SupersedePreparedMutation(
+@@ -1357,17 +1359,11 @@ StoreStatus AccessRuleStore::SupersedePreparedMutation(
  }
  
  StoreResult<PendingMutationRecord> AccessRuleStore::CommitPreparedMutation(
@@ -54,7 +63,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/a
    sql::Transaction transaction(&database_);
    if (!transaction.Begin()) {
      return MutationError(StoreStatus::kIoError, "commit_begin_failed");
-@@ -1378,6 +1373,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::CommitPreparedMutation(
+@@ -1378,6 +1374,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::CommitPreparedMutation(
      return loaded;
    }
    const PendingMutationRecord& record = *loaded.value;
@@ -63,6 +72,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/a
        expected.request_fingerprint != record.request_fingerprint ||
        expected.owner != record.owner ||
 diff --git a/chrome/browser/aegis/access/access_rule_store.h b/chrome/browser/aegis/access/access_rule_store.h
+index 843cebb..f0cac3b 100644
 --- a/chrome/browser/aegis/access/access_rule_store.h
 +++ b/chrome/browser/aegis/access/access_rule_store.h
 @@ -183,8 +183,9 @@ struct PendingMutationRecord {
@@ -88,6 +98,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store.h b/chrome/browser/ae
                                          const std::string& fingerprint);
    StoreResult<RecoveryState> LoadRecoveryState();
 diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/browser/aegis/access/access_rule_store_unittest.cc
+index 462fbe4..2ca9168 100644
 --- a/chrome/browser/aegis/access/access_rule_store_unittest.cc
 +++ b/chrome/browser/aegis/access/access_rule_store_unittest.cc
 @@ -179,10 +179,9 @@ PendingMutationRecord Prepare(AccessRuleStore* store,
@@ -219,7 +230,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    }
  }
  
-@@ -551,24 +587,53 @@ TEST(AccessRuleStoreTest, RevisionSequenceFingerprintAndGenerationAreBound) {
+@@ -551,24 +587,73 @@ TEST(AccessRuleStoreTest, RevisionSequenceFingerprintAndGenerationAreBound) {
    ASSERT_EQ(store.Open(), StoreStatus::kValid);
    PendingMutationRecord pending =
        Prepare(&store, Mutation("bound", AccessMode::kProxy));
@@ -231,14 +242,14 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    altered.request_fingerprint = "other";
 -  EXPECT_EQ(store.CommitPreparedMutation(altered, 1).status,
 +  EXPECT_EQ(store.CommitPreparedMutation(altered).status,
-+            StoreStatus::kConflict);
-+  PendingMutationRecord altered_generation = pending;
-+  ++altered_generation.candidate.policy_generation;
-+  EXPECT_EQ(store.CommitPreparedMutation(altered_generation).status,
              StoreStatus::kConflict);
 -  EXPECT_EQ(store.CommitPreparedMutation(pending, 0).status,
 -            StoreStatus::kInvalidArgument);
 -  Commit(&store, pending, 5);
++  PendingMutationRecord altered_generation = pending;
++  ++altered_generation.candidate.policy_generation;
++  EXPECT_EQ(store.CommitPreparedMutation(altered_generation).status,
++            StoreStatus::kConflict);
 +
 +  PendingMutationRecord committed = Commit(&store, pending);
 +  EXPECT_EQ(committed.committed_policy_generation, pending.operation_sequence);
@@ -277,10 +288,30 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
 +  StoreResult<RecoveryState> recovery = store.LoadRecoveryState();
 +  EXPECT_EQ(recovery.status, StoreStatus::kCorrupt);
 +  EXPECT_FALSE(recovery.value.has_value());
++}
++
++TEST(AccessRuleStoreTest,
++     CommittedGroupGenerationMustMatchOperationSequence) {
++  AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
++      ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
++  ASSERT_EQ(store.Open(), StoreStatus::kValid);
++  PendingMutationRecord committed = Commit(
++      &store, Prepare(&store, Mutation("group-generation-integrity",
++                                      AccessMode::kProxy)));
++  ASSERT_EQ(committed.committed_policy_generation,
++            committed.operation_sequence);
++  ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
++      &store,
++      "UPDATE access_site_groups SET committed_policy_generation="
++      "last_operation_sequence+1 WHERE site_toggle_id='toggle-news.example'"));
++  StoreResult<StoredPolicySnapshot> snapshot =
++      store.ReadCommittedSnapshot("partition-A");
++  EXPECT_EQ(snapshot.status, StoreStatus::kCorrupt);
++  EXPECT_FALSE(snapshot.value.has_value());
  }
  
  TEST(AccessRuleStoreTest, CounterOverflowFailsWithoutJournal) {
-@@ -605,8 +670,7 @@ TEST(AccessRuleStoreTest, MissingOrLaggingCounterFailsClosedOnReopen) {
+@@ -605,8 +690,7 @@ TEST(AccessRuleStoreTest, MissingOrLaggingCounterFailsClosedOnReopen) {
      AccessRuleStore store(missing_binding);
      ASSERT_EQ(store.Open(), StoreStatus::kValid);
      Commit(&store,
@@ -290,7 +321,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
      ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
          &store, "DELETE FROM access_store_counters WHERE singleton=1"));
    }
-@@ -630,10 +694,9 @@ TEST(AccessRuleStoreTest, MissingOrLaggingCounterFailsClosedOnReopen) {
+@@ -630,10 +714,9 @@ TEST(AccessRuleStoreTest, MissingOrLaggingCounterFailsClosedOnReopen) {
      AccessRuleStore store(lagging_binding);
      ASSERT_EQ(store.Open(), StoreStatus::kValid);
      Commit(&store,
@@ -303,7 +334,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
      ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
          &store,
          "UPDATE access_store_counters SET operation_sequence=1 WHERE "
-@@ -723,7 +786,7 @@ TEST(AccessRuleStoreTest, CorruptTopLevelSiteFailsClosedOnReadAndAdapter) {
+@@ -723,7 +806,7 @@ TEST(AccessRuleStoreTest, CorruptTopLevelSiteFailsClosedOnReadAndAdapter) {
    AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
        ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
    ASSERT_EQ(store.Open(), StoreStatus::kValid);
@@ -312,7 +343,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
        &store,
        "UPDATE access_site_groups SET "
-@@ -836,7 +899,7 @@ TEST(AccessRuleStoreTest, CompletionTimeNeverPrecedesCreatedTime) {
+@@ -836,7 +919,7 @@ TEST(AccessRuleStoreTest, CompletionTimeNeverPrecedesCreatedTime) {
    ASSERT_TRUE(recovery.value);
    ASSERT_EQ(recovery.value->pending.size(), 1u);
    PendingMutationRecord committed =
@@ -321,7 +352,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    EXPECT_EQ(committed.created_at_micros, kFutureMicros);
    EXPECT_EQ(committed.completed_at_micros, kFutureMicros);
    StoreResult<PendingMutationRecord> replay =
-@@ -853,7 +916,7 @@ TEST(AccessRuleStoreTest, JournalRetentionNeverDeletesPreparedAndIsBounded) {
+@@ -853,7 +936,7 @@ TEST(AccessRuleStoreTest, JournalRetentionNeverDeletesPreparedAndIsBounded) {
    ASSERT_EQ(store.Open(), StoreStatus::kValid);
    PendingMutationRecord completed = Commit(
        &store,
@@ -330,7 +361,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
        &store,
        "UPDATE access_mutation_journal SET completed_at_micros=1 WHERE "
-@@ -934,7 +997,7 @@ TEST(AccessRuleStoreTest, DetectsMissingOrphanMixedRevisionOwnerAndJournal) {
+@@ -934,7 +1017,7 @@ TEST(AccessRuleStoreTest, DetectsMissingOrphanMixedRevisionOwnerAndJournal) {
      AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
          ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
      ASSERT_EQ(store.Open(), StoreStatus::kValid);
@@ -339,7 +370,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
      if (corruption.journal) {
        Prepare(&store, Mutation("pending", AccessMode::kDirect, 1));
      }
-@@ -956,7 +1019,7 @@ TEST(AccessRuleStoreTest, InvalidJournalStateNeverLooksCommittedOrMissing) {
+@@ -956,7 +1039,7 @@ TEST(AccessRuleStoreTest, InvalidJournalStateNeverLooksCommittedOrMissing) {
      ASSERT_EQ(store.Open(), StoreStatus::kValid);
      if (with_committed_group) {
        Commit(&store,
@@ -348,7 +379,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
      }
      Prepare(&store, Mutation("corrupt-state", AccessMode::kProxy,
                               with_committed_group ? 1 : 0));
-@@ -987,8 +1050,7 @@ TEST(AccessRuleStoreTest, CorruptJournalRevisionUpperBoundFailsClosed) {
+@@ -987,8 +1070,7 @@ TEST(AccessRuleStoreTest, CorruptJournalRevisionUpperBoundFailsClosed) {
        ASSERT_EQ(store.Open(), StoreStatus::kValid);
        if (with_committed_group) {
          Commit(&store,
@@ -358,7 +389,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
        }
        Prepare(&store, Mutation("corrupt-revision", AccessMode::kProxy,
                                 with_committed_group ? 1 : 0));
-@@ -1020,7 +1082,7 @@ TEST(AccessRuleStoreTest, LastRepresentableJournalRevisionRemainsValid) {
+@@ -1020,7 +1102,7 @@ TEST(AccessRuleStoreTest, LastRepresentableJournalRevisionRemainsValid) {
    {
      AccessRuleStore store(binding);
      ASSERT_EQ(store.Open(), StoreStatus::kValid);
@@ -367,7 +398,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
      ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
          &store, "UPDATE access_site_groups SET revision=9223372036854775806"));
      ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
-@@ -1038,7 +1100,7 @@ TEST(AccessRuleStoreTest, LastRepresentableJournalRevisionRemainsValid) {
+@@ -1038,7 +1120,7 @@ TEST(AccessRuleStoreTest, LastRepresentableJournalRevisionRemainsValid) {
    ASSERT_TRUE(recovery.value.has_value());
    ASSERT_EQ(recovery.value->pending.size(), 1u);
    EXPECT_EQ(recovery.value->pending.front().target_revision, maximum_revision);
@@ -376,7 +407,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    const auto snapshot = reopened.ReadCommittedSnapshot("partition-A");
    ASSERT_EQ(snapshot.status, StoreStatus::kValid);
    ASSERT_TRUE(snapshot.value.has_value());
-@@ -1104,17 +1166,15 @@ TEST(AccessRuleStoreTest, IsolatesProfilesPartitionsAndAllChannels) {
+@@ -1104,17 +1186,15 @@ TEST(AccessRuleStoreTest, IsolatesProfilesPartitionsAndAllChannels) {
      Commit(
          &store,
          Prepare(&store, Mutation("partition-A-op", AccessMode::kProxy, 0,
@@ -396,7 +427,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
      EXPECT_EQ(store.ReadCommittedSnapshot("partition-B").status,
                StoreStatus::kValid);
    }
-@@ -1131,8 +1191,7 @@ TEST(AccessRuleStoreTest, IsolatesProfilesPartitionsAndAllChannels) {
+@@ -1131,8 +1211,7 @@ TEST(AccessRuleStoreTest, IsolatesProfilesPartitionsAndAllChannels) {
    ASSERT_EQ(second.Open(), StoreStatus::kValid);
    Commit(&first,
           Prepare(&first, Mutation("first-only", AccessMode::kProxy, 0,
@@ -406,7 +437,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    EXPECT_EQ(second.ReadCommittedSnapshot("partition-A").status,
              StoreStatus::kMissing);
  }
-@@ -1141,7 +1200,7 @@ TEST(AccessRuleStoreTest, ClosingReplacesOnlyGroupOwnedRows) {
+@@ -1141,7 +1220,7 @@ TEST(AccessRuleStoreTest, ClosingReplacesOnlyGroupOwnedRows) {
    AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
        ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
    ASSERT_EQ(store.Open(), StoreStatus::kValid);
@@ -415,7 +446,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
  
    StoredAccessRule reject = IndependentRule(
        "independent-reject", AccessMode::kReject, "cdn.news.example",
-@@ -1159,12 +1218,13 @@ TEST(AccessRuleStoreTest, ClosingReplacesOnlyGroupOwnedRows) {
+@@ -1159,12 +1238,13 @@ TEST(AccessRuleStoreTest, ClosingReplacesOnlyGroupOwnedRows) {
    PendingMutationRecord close =
        Prepare(&store, Mutation("close", AccessMode::kDirect, 1));
    EXPECT_EQ(close.operation_sequence, 54u);
@@ -430,7 +461,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    EXPECT_EQ(Selection(snapshot.value->site_groups[0]),
              GroupSelection::kDisabled);
    ASSERT_EQ(snapshot.value->independent_rules.size(), 2u);
-@@ -1190,7 +1250,7 @@ TEST(AccessRuleStoreTest, StoredSnapshotFeedsRealMatcherAndPlanner) {
+@@ -1190,7 +1270,7 @@ TEST(AccessRuleStoreTest, StoredSnapshotFeedsRealMatcherAndPlanner) {
    AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
        ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
    ASSERT_EQ(store.Open(), StoreStatus::kValid);
@@ -439,7 +470,7 @@ diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/
    StoreResult<StoredPolicySnapshot> stored =
        store.ReadCommittedSnapshot("partition-A");
    ASSERT_EQ(stored.status, StoreStatus::kValid) << stored.detail;
-@@ -1221,7 +1281,8 @@ TEST(AccessRuleStoreTest, StoredSnapshotFeedsRealMatcherAndPlanner) {
+@@ -1221,7 +1301,8 @@ TEST(AccessRuleStoreTest, StoredSnapshotFeedsRealMatcherAndPlanner) {
          Context(GURL(test.top), GURL(test.request)), published);
      ASSERT_EQ(match.policy_state, PolicyState::kValid);
      ASSERT_EQ(match.effective_mode, AccessMode::kProxy);
