@@ -428,6 +428,21 @@ rg -Fq 'MainNavigationUsesPendingNavigationProxy' \
 rg -Fq 'MainNavigationWithoutPolicyPreservesNativePath' \
   "$NAVIGATION_URL_LOADER_PATCH_FILE" ||
   fail "patch 0138 must preserve native navigation without Access policy"
+rg -Fq 'SubframePendingNavigationPreservesPrimaryTopFrameSite' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must preserve browser-owned primary top site for subframes"
+rg -Fq 'nested navigation preserves trusted top site' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must lock pending subframe top-site seed semantics"
+rg -Fq 'metadata.top_frame_site.has_value()' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must canonicalize nested pending navigation from trusted top site"
+rg -Fq 'SubframeNavigationUsesPrimaryPageProxy' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must browser-test proxied subframe navigation"
+rg -Fq 'SubframeNavigationWithoutPolicyPreservesNativePath' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must preserve native subframe navigation without Access policy"
 rg -Fq 'seed_input->top_frame_site = top_frame_site.Serialize();' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must capture browser-owned primary top site for subframe navigation"
