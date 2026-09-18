@@ -372,6 +372,9 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileOnlyRequestMetadata(
     Profile* profile,
     int render_process_id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!aegis::IsAegisProfileSupported(profile)) {
+    return Error(AccessBrowserRequestMetadataStatus::kUnsupportedProfile);
+  }
   content::RenderProcessHost* process =
       content::RenderProcessHost::FromID(render_process_id);
   if (!process) {
