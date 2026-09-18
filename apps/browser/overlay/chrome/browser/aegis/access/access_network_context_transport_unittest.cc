@@ -164,6 +164,37 @@ TEST_F(AccessNetworkContextTransportTest,
 }
 
 TEST_F(AccessNetworkContextTransportTest,
+       ResolvesOnlyCurrentPublishedExactHostEndpoint) {
+  const base::FilePath partition;
+  auto delegate = CreateDelegate(partition);
+  const auto endpoint = EndpointFor(partition);
+  ASSERT_TRUE(transport_->PublishProxySelection(
+      partition, {kTargetHost}, endpoint));
+
+  const auto resolved = transport_->ResolvePublishedProxyEndpoint(
+      endpoint.owner, kTargetHost, endpoint.proxy_group_id,
+      endpoint.generations);
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(*resolved, endpoint);
+
+  EXPECT_FALSE(transport_->ResolvePublishedProxyEndpoint(
+      endpoint.owner, "other.example", endpoint.proxy_group_id,
+      endpoint.generations));
+
+  auto stale_generations = endpoint.generations;
+  ++stale_generations.policy_generation;
+  EXPECT_FALSE(transport_->ResolvePublishedProxyEndpoint(
+      endpoint.owner, kTargetHost, endpoint.proxy_group_id,
+      stale_generations));
+
+  auto forged_owner = endpoint.owner;
+  forged_owner.profile_token = "other-profile";
+  EXPECT_FALSE(transport_->ResolvePublishedProxyEndpoint(
+      forged_owner, kTargetHost, endpoint.proxy_group_id,
+      endpoint.generations));
+}
+
+TEST_F(AccessNetworkContextTransportTest,
        NonIdempotentFirstSendUsesSelectedProxy) {
   const base::FilePath partition;
   auto delegate = CreateDelegate(partition);
