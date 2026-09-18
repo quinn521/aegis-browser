@@ -51,7 +51,7 @@ IdentityGenerationCommitResult IdentityGenerationState::Commit(
     return {IdentityGenerationCommitStatus::kExhausted, 0};
   }
 
-  generation_ = generation_ == 0 ? 1 : generation_ + 1;
+  ++generation_;
   binding_ = std::move(binding);
   return {IdentityGenerationCommitStatus::kCommitted, generation_};
 }
