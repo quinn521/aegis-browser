@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/test/base/testing_profile.h"
 #include "services/network/public/mojom/network_context.mojom.h"
