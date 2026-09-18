@@ -143,7 +143,9 @@ try {
   ];
   const cppLcovPath = join(coverageRoot, 'cpp-access-standalone/lcov.info');
   const cppLcov = freshFile(cppLcovPath, notBefore);
-  const cpp = parseLcov(cppLcov, repoRoot);
+  const cpp = parseLcov(cppLcov, repoRoot, {
+    allowLineSummarySuperset: true,
+  });
   requireExactFiles(cpp.files, cppFiles, 'C++ LCOV');
   const cppSummaryPath = join(coverageRoot, 'cpp-access-standalone/coverage-summary.json');
   const cppSummary = freshFile(cppSummaryPath, notBefore);
