@@ -179,6 +179,7 @@ class BrowserContextData : public base::SupportsUserData::Data {
   static void StartProxying(
       Profile* profile,
       content::FrameTreeNodeId frame_tree_node_id,
+      std::optional<int64_t> navigation_id,
       aegis_access::BrowserOwnedRequestMetadata factory_metadata,
       network::URLLoaderFactoryBuilder& factory_builder) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -190,7 +191,7 @@ class BrowserContextData : public base::SupportsUserData::Data {
     }
 
     auto proxy = std::make_unique<AccessProxyingURLLoaderFactory>(
-        profile, frame_tree_node_id, std::move(factory_metadata),
+        profile, frame_tree_node_id, navigation_id, std::move(factory_metadata),
         factory_builder,
         base::BindOnce(&BrowserContextData::RemoveProxy,
                        self->weak_factory_.GetWeakPtr()));
@@ -213,16 +214,46 @@ class BrowserContextData : public base::SupportsUserData::Data {
   base::WeakPtrFactory<BrowserContextData> weak_factory_{this};
 };
 
+void StartProxyingForAttribution(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    std::optional<int64_t> navigation_id,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!aegis::IsAegisProfileSupported(profile) || !frame ||
+      frame->GetBrowserContext() != profile || !frame->GetPage().IsPrimary()) {
+    return;
+  }
+
+  const content::FrameTreeNodeId frame_tree_node_id =
+      frame->GetFrameTreeNodeId();
+  auto wc_getter =
+      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
+                          frame_tree_node_id);
+  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
+      profile, wc_getter, frame_tree_node_id, navigation_id);
+  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
+      !metadata.metadata.has_value()) {
+    return;
+  }
+
+  BrowserContextData::StartProxying(
+      profile, frame_tree_node_id, navigation_id, std::move(*metadata.metadata),
+      factory_builder);
+}
+
 }  // namespace
 
 AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
     Profile* profile,
     content::FrameTreeNodeId frame_tree_node_id,
+    std::optional<int64_t> navigation_id,
     aegis_access::BrowserOwnedRequestMetadata factory_metadata,
     network::URLLoaderFactoryBuilder& factory_builder,
     DisconnectCallback on_disconnect)
     : profile_(profile),
       frame_tree_node_id_(frame_tree_node_id),
+      navigation_id_(navigation_id),
       factory_metadata_(std::move(factory_metadata)),
       on_disconnect_(std::move(on_disconnect)) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -246,27 +277,20 @@ void AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
     Profile* profile,
     content::RenderFrameHost* frame,
     network::URLLoaderFactoryBuilder& factory_builder) {
+  StartProxyingForAttribution(profile, frame, std::nullopt, factory_builder);
+}
+
+// static
+void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    int64_t navigation_id,
+    network::URLLoaderFactoryBuilder& factory_builder) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!aegis::IsAegisProfileSupported(profile) || !frame ||
-      frame->GetBrowserContext() != profile || !frame->GetPage().IsPrimary()) {
+  if (!frame || frame->GetParent()) {
     return;
   }
-
-  const content::FrameTreeNodeId frame_tree_node_id =
-      frame->GetFrameTreeNodeId();
-  auto wc_getter =
-      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
-                          frame_tree_node_id);
-  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
-      profile, wc_getter, frame_tree_node_id, std::nullopt);
-  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
-      !metadata.metadata.has_value()) {
-    return;
-  }
-
-  BrowserContextData::StartProxying(profile, frame_tree_node_id,
-                                    std::move(*metadata.metadata),
-                                    factory_builder);
+  StartProxyingForAttribution(profile, frame, navigation_id, factory_builder);
 }
 
 AccessProxyingURLLoaderFactory::RequestDisposition
@@ -289,7 +313,7 @@ AccessProxyingURLLoaderFactory::EvaluateRequest(
       base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
                           frame_tree_node_id_);
   AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
-      profile_, wc_getter, frame_tree_node_id_, std::nullopt);
+      profile_, wc_getter, frame_tree_node_id_, navigation_id_);
   if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
       !metadata.metadata.has_value() ||
       !SameAttributionScope(factory_metadata_, *metadata.metadata)) {
