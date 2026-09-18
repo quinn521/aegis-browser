@@ -54,7 +54,8 @@ scoped_refptr<AccessRequestDispatchState> AccessRequestDispatchState::GetOrCreat
     return existing;
   }
 
-  auto state = base::MakeRefCounted<AccessRequestDispatchState>();
+  scoped_refptr<AccessRequestDispatchState> state(
+      new AccessRequestDispatchState());
   profile->SetUserData(
       kDispatchStateUserDataKey,
       std::make_unique<AccessRequestDispatchStateHolder>(state));
