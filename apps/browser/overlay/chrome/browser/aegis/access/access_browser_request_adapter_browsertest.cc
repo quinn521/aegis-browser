@@ -152,6 +152,37 @@ IN_PROC_BROWSER_TEST_F(
             net::SchemefulSite(destination).Serialize());
 }
 
+IN_PROC_BROWSER_TEST_F(
+    AccessBrowserRequestAdapterBrowserTest,
+    SubframePendingNavigationRejectsOpaquePrimaryTopFrameSite) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+
+  content::RenderFrameHost* primary_frame =
+      web_contents()->GetPrimaryMainFrame();
+  ASSERT_NE(primary_frame, nullptr);
+  ASSERT_TRUE(net::SchemefulSite(primary_frame->GetLastCommittedOrigin())
+                  .opaque());
+  ASSERT_TRUE(content::ExecJs(
+      web_contents(),
+      "const frame = document.createElement('iframe');"
+      "frame.src = 'about:blank';"
+      "document.body.appendChild(frame);"));
+  content::RenderFrameHost* child_frame =
+      content::ChildFrameAt(primary_frame, /*index=*/0);
+  ASSERT_NE(child_frame, nullptr);
+  ASSERT_TRUE(child_frame->GetPage().IsPrimary());
+  ASSERT_FALSE(child_frame->IsInPrimaryMainFrame());
+
+  AccessBrowserRequestMetadataResult metadata =
+      BuildBrowserOwnedRequestMetadata(
+          browser()->profile(), WebContentsGetter(),
+          child_frame->GetFrameTreeNodeId(), /*navigation_id=*/44);
+
+  EXPECT_EQ(metadata.status,
+            AccessBrowserRequestMetadataStatus::kInvalidAttribution);
+  EXPECT_FALSE(metadata.metadata.has_value());
+}
+
 IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
                        PrerenderPageCannotInheritPrimaryPageIdentity) {
   const GURL primary_url = embedded_test_server()->GetURL("/title1.html");
