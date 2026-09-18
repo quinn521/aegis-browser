@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_request_dispatch_state.h"
 
 #include <memory>
+#include <utility>
 
 #include "chrome/browser/aegis/aegis_profile_support.h"
 #include "chrome/browser/profiles/profile.h"
@@ -51,6 +52,33 @@ AccessRequestDispatchState::AccessRequestDispatchState()
 
 AccessRequestDispatchState::~AccessRequestDispatchState() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+}
+
+AccessBlockOperationResult AccessRequestDispatchState::BeginBlockOperation(
+    aegis_access::RequestDispatchBarrier barrier) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const aegis_access::RequestCancellationSelector selector = barrier.selector;
+
+  AccessBlockOperationResult result;
+  result.barrier_status = barriers_.InstallBlockBarrier(std::move(barrier));
+  if (result.barrier_status !=
+      aegis_access::RequestDispatchBarrierStatus::kOk) {
+    return result;
+  }
+
+  result.cancellation_attempted = true;
+  result.cancellation = ownership_.CancelMatchingPageTarget(selector);
+  return result;
+}
+
+aegis_access::RequestDispatchBarrierStatus
+AccessRequestDispatchState::ReleaseBlockOperation(
+    const aegis_access::RequestCancellationSelector& selector,
+    const std::string& operation_id,
+    uint64_t operation_sequence) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return barriers_.ReleaseBlockBarrier(selector, operation_id,
+                                       operation_sequence);
 }
 
 }  // namespace aegis::access
