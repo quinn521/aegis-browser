@@ -636,6 +636,26 @@ TEST(AccessRuleStoreTest,
   EXPECT_FALSE(recovery.value.has_value());
 }
 
+TEST(AccessRuleStoreTest,
+     CommittedGroupGenerationMustMatchOperationSequence) {
+  AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
+      ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
+  ASSERT_EQ(store.Open(), StoreStatus::kValid);
+  PendingMutationRecord committed = Commit(
+      &store, Prepare(&store, Mutation("group-generation-integrity",
+                                      AccessMode::kProxy)));
+  ASSERT_EQ(committed.committed_policy_generation,
+            committed.operation_sequence);
+  ASSERT_TRUE(AccessRuleStoreTestPeer::Sql(
+      &store,
+      "UPDATE access_site_groups SET committed_policy_generation="
+      "last_operation_sequence+1 WHERE site_toggle_id='toggle-news.example'"));
+  StoreResult<StoredPolicySnapshot> snapshot =
+      store.ReadCommittedSnapshot("partition-A");
+  EXPECT_EQ(snapshot.status, StoreStatus::kCorrupt);
+  EXPECT_FALSE(snapshot.value.has_value());
+}
+
 TEST(AccessRuleStoreTest, CounterOverflowFailsWithoutJournal) {
   AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
       ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
