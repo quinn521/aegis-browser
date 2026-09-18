@@ -536,36 +536,11 @@ if rg -Fq 'URLLoaderFactoryType::kServiceWorker' \
 fi
 rg -Fq 'BuildBrowserOwnedProfileOnlyRequestMetadata' \
   "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must expose the browser-owned Profile-only metadata bridge"
+  fail "patch 0143 must expose the browser-owned Profile-only process bridge"
 rg -Fq 'RenderProcessHost::FromID' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
   fail "patch 0143 must bind Profile-only ownership to a browser-owned render process"
 rg -Fq 'process->GetStoragePartition()' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must resolve the render process StoragePartition"
-rg -Fq 'RequestAttributionKind::kProfileOnly' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must produce Profile-only request attribution"
-rg -Fq 'ProfileOnlyMetadataUsesRenderProcessPartitionWithoutSiteIdentity' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must browser-test process-owned Profile-only metadata"
-rg -Fq 'ProfileOnlyMetadataRejectsUnknownRenderProcess' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must fail closed for an unknown render process"
-rg -Fq 'BuildBrowserOwnedProfileRequestMetadata' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must expose the configured-partition Profile-only contract"
-rg -Fq 'kUnconfiguredPartition' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must fail closed for an unconfigured partition"
-rg -Fq 'OwnsConfiguredPartition' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must require Access-configured partition ownership"
-rg -Fq 'BackgroundMetadataRequiresConfiguredPartition' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must test the unconfigured-partition rejection"
-rg -Fq 'BackgroundMetadataRejectsCrossProfilePartition' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must test cross-Profile partition rejection"
-rg -Fq 'BackgroundMetadataRejectsMissingPartition' \
-  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
-  fail "patch 0143 must test missing-partition rejection"
+  fail "patch 0143 must resolve the trusted render process StoragePartition"
 rg -Fq 'BuildBrowserOwnedProfileRequestMetadata' \
   "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
   fail "patch 0143 must expose exact StoragePartition Profile-only ownership"
@@ -577,6 +552,15 @@ rg -Fq 'OwnsConfiguredPartition' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
 rg -Fq 'transport, /*require_configured_partition=*/false, owner);' \
   "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
   fail "patch 0143 must preserve frame-owned ownership without background pre-configuration"
+rg -Fq 'RequestAttributionKind::kProfileOnly' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must produce Profile-only request attribution"
+rg -Fq 'ProfileOnlyMetadataUsesRenderProcessPartitionWithoutSiteIdentity' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must browser-test process-owned Profile-only metadata"
+rg -Fq 'ProfileOnlyMetadataRejectsUnknownRenderProcess' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must fail closed for an unknown render process"
 rg -Fq 'BackgroundMetadataDoesNotCreateTransport' \
   "$PROFILE_ONLY_BACKGROUND_TEST" ||
   fail "0143 contract must not create transport while resolving background ownership"
@@ -589,6 +573,13 @@ rg -Fq 'BackgroundMetadataUsesProfileOnlyConfiguredPartitionOwnership' \
 rg -Fq 'BackgroundMetadataRejectsCrossProfilePartition' \
   "$PROFILE_ONLY_BACKGROUND_TEST" ||
   fail "0143 contract must reject cross-Profile partitions"
+rg -Fq 'BackgroundMetadataRejectsMissingPartition' \
+  "$PROFILE_ONLY_BACKGROUND_TEST" ||
+  fail "0143 contract must reject a missing partition"
+if rg -Fq 'URLLoaderFactoryType::kServiceWorker' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE"; then
+  fail "patch 0143 must not wire ServiceWorker URLLoader factories"
+fi
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
