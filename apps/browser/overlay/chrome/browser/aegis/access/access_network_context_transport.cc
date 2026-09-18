@@ -54,6 +54,43 @@ aegis_access::RoutePlan RoutePlanForEndpoint(
   return plan;
 }
 
+AccessNetworkConfigAckResult NotifyClientsOfNewConfig(
+    mojo::RemoteSet<network::mojom::CustomProxyConfigClient>& clients,
+    network::mojom::CustomProxyConfigPtr config,
+    base::OnceCallback<void(bool)> all_clients_settled) {
+  const size_t required_acks = clients.size();
+  auto all_succeeded = std::make_shared<bool>(true);
+  base::RepeatingClosure barrier = base::BarrierClosure(
+      required_acks,
+      base::BindOnce(
+          [](std::shared_ptr<bool> succeeded,
+             base::OnceCallback<void(bool)> completion) {
+            std::move(completion).Run(*succeeded);
+          },
+          all_succeeded, std::move(all_clients_settled)));
+
+  for (auto& client : clients) {
+    base::OnceCallback<void(bool)> result =
+        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+            base::BindOnce(
+                [](std::shared_ptr<bool> succeeded,
+                   base::RepeatingClosure completion, bool client_acked) {
+                  *succeeded = *succeeded && client_acked;
+                  completion.Run();
+                },
+                all_succeeded, barrier),
+            false);
+    client->OnCustomProxyConfigUpdated(
+        config->Clone(),
+        base::BindOnce(
+            [](base::OnceCallback<void(bool)> result_callback) {
+              std::move(result_callback).Run(true);
+            },
+            std::move(result)));
+  }
+  return {AccessNetworkConfigAckStatus::kStarted, required_acks};
+}
+
 }  // namespace
 
 // static
@@ -268,37 +305,8 @@ AccessNetworkContextTransport::RepublishCurrentConfigWithAck(
     return fail_publication(AccessNetworkConfigAckStatus::kBuildFailed);
   }
 
-  const size_t required_acks = state.clients.size();
-  auto all_succeeded = std::make_shared<bool>(true);
-  base::RepeatingClosure barrier = base::BarrierClosure(
-      required_acks,
-      base::BindOnce(
-          [](std::shared_ptr<bool> succeeded,
-             base::OnceCallback<void(bool)> completion) {
-            std::move(completion).Run(*succeeded);
-          },
-          all_succeeded, std::move(all_clients_settled)));
-
-  for (auto& client : state.clients) {
-    base::OnceCallback<void(bool)> result =
-        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
-            base::BindOnce(
-                [](std::shared_ptr<bool> succeeded,
-                   base::RepeatingClosure completion, bool client_acked) {
-                  *succeeded = *succeeded && client_acked;
-                  completion.Run();
-                },
-                all_succeeded, barrier),
-            false);
-    client->OnCustomProxyConfigUpdated(
-        config->Clone(),
-        base::BindOnce(
-            [](base::OnceCallback<void(bool)> result_callback) {
-              std::move(result_callback).Run(true);
-            },
-            std::move(result)));
-  }
-  return {AccessNetworkConfigAckStatus::kStarted, required_acks};
+  return NotifyClientsOfNewConfig(state.clients, std::move(config),
+                                  std::move(all_clients_settled));
 }
 
 network::mojom::CustomProxyConfigPtr
