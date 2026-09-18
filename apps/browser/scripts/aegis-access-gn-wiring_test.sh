@@ -448,6 +448,15 @@ rg -Fq 'request_frame->GetPage().IsPrimary()' \
   fail "patch 0139 must defensively reject non-primary request frames"
 rg -Fq 'request_frame->GetMainFrame() != contents->GetPrimaryMainFrame()' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must reject frames outside the primary frame tree"
+rg -Fq 'kPrerenderNavigationId' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must regression-test pending navigation from prerender pages"
+rg -Fq 'RejectsInvalidBrowserOwnedTopSiteForNestedPendingNavigation' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
+  fail "patch 0139 must reject invalid browser-owned nested top sites"
+rg -Fq 'request_frame->GetMainFrame() != contents->GetPrimaryMainFrame()' \
+  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must bind nested attribution to the primary frame tree"
 rg -Fq 'kPrerenderNavigationId' "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must reject pending navigation from prerendered Pages"
