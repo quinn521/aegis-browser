@@ -79,6 +79,16 @@ class AccessNetworkContextTransport
   // New requests then use Chromium's native proxy result again.
   bool ClearProxySelection(const base::FilePath& relative_partition_path);
 
+  // Resolves the exact endpoint currently published into NetworkContext for
+  // this owner/host/group/generation tuple. Any mismatch returns nullopt so the
+  // URLLoader gate fails closed instead of trusting stale control-plane state.
+  std::optional<aegis_access::RegisteredProxyEndpoint>
+  ResolvePublishedProxyEndpoint(
+      const aegis_access::OwnershipKey& owner,
+      std::string_view exact_host,
+      std::string_view proxy_group_id,
+      const aegis_access::GenerationTuple& generations) const;
+
   network::mojom::CustomProxyConfigPtr BuildConfigForTesting(
       const base::FilePath& relative_partition_path) const;
   void FlushClientsForTesting(const base::FilePath& relative_partition_path);
