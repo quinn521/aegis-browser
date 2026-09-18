@@ -186,7 +186,8 @@ class BrowserContextData : public base::SupportsUserData::Data {
 
   static void StartProxying(
       Profile* profile,
-      content::FrameTreeNodeId frame_tree_node_id,
+      std::optional<content::FrameTreeNodeId> frame_tree_node_id,
+      std::optional<int> render_process_id,
       std::optional<int64_t> navigation_id,
       aegis_access::BrowserOwnedRequestMetadata factory_metadata,
       network::URLLoaderFactoryBuilder& factory_builder) {
@@ -199,8 +200,8 @@ class BrowserContextData : public base::SupportsUserData::Data {
     }
 
     auto proxy = std::make_unique<AccessProxyingURLLoaderFactory>(
-        profile, frame_tree_node_id, navigation_id, std::move(factory_metadata),
-        factory_builder,
+        profile, frame_tree_node_id, render_process_id, navigation_id,
+        std::move(factory_metadata), factory_builder,
         base::BindOnce(&BrowserContextData::RemoveProxy,
                        self->weak_factory_.GetWeakPtr()));
     self->proxies_.emplace(std::move(proxy));
@@ -240,25 +241,28 @@ void MaybeProxyWorkerFactory(
   }
 
   BrowserContextData::StartProxying(
-      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
-      factory_builder);
+      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::nullopt,
+      std::move(*metadata), factory_builder);
 }
 
 }  // namespace
 
 AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
     Profile* profile,
-    content::FrameTreeNodeId frame_tree_node_id,
+    std::optional<content::FrameTreeNodeId> frame_tree_node_id,
+    std::optional<int> render_process_id,
     std::optional<int64_t> navigation_id,
     aegis_access::BrowserOwnedRequestMetadata factory_metadata,
     network::URLLoaderFactoryBuilder& factory_builder,
     DisconnectCallback on_disconnect)
     : profile_(profile),
       frame_tree_node_id_(frame_tree_node_id),
+      render_process_id_(render_process_id),
       navigation_id_(navigation_id),
       factory_metadata_(std::move(factory_metadata)),
       on_disconnect_(std::move(on_disconnect)) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  CHECK_NE(frame_tree_node_id_.has_value(), render_process_id_.has_value());
   auto [loader_receiver, target_factory] = factory_builder.Append();
   target_factory_.Bind(std::move(target_factory));
   target_factory_.set_disconnect_handler(base::BindOnce(
@@ -287,8 +291,8 @@ void AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
   }
 
   BrowserContextData::StartProxying(
-      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
-      factory_builder);
+      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::nullopt,
+      std::move(*metadata), factory_builder);
 }
 
 // static
@@ -308,6 +312,26 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
 }
 
 // static
+void AccessProxyingURLLoaderFactory::MaybeProxyServiceWorkerSubResource(
+    Profile* profile,
+    int render_process_id,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  AccessBrowserRequestMetadataResult metadata =
+      BuildBrowserOwnedProfileOnlyRequestMetadata(profile, render_process_id);
+  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
+      !metadata.metadata.has_value() ||
+      metadata.metadata->attribution_kind !=
+          aegis_access::RequestAttributionKind::kProfileOnly) {
+    return;
+  }
+
+  BrowserContextData::StartProxying(
+      profile, std::nullopt, render_process_id, std::nullopt,
+      std::move(*metadata.metadata), factory_builder);
+}
+
+// static
 void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
     Profile* profile,
     content::RenderFrameHost* frame,
@@ -322,9 +346,9 @@ void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
     return;
   }
 
-  BrowserContextData::StartProxying(profile, frame->GetFrameTreeNodeId(),
-                                    navigation_id, std::move(*metadata),
-                                    factory_builder);
+  BrowserContextData::StartProxying(
+      profile, frame->GetFrameTreeNodeId(), std::nullopt, navigation_id,
+      std::move(*metadata), factory_builder);
 }
 
 AccessProxyingURLLoaderFactory::RequestDisposition
@@ -350,6 +374,34 @@ AccessProxyingURLLoaderFactory::EvaluateRedirect(
                      ownership_record);
 }
 
+AccessBrowserRequestMetadataResult
+AccessProxyingURLLoaderFactory::CaptureCurrentMetadata() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (factory_metadata_.attribution_kind ==
+      aegis_access::RequestAttributionKind::kProfileOnly) {
+    if (!render_process_id_.has_value()) {
+      AccessBrowserRequestMetadataResult missing_process;
+      missing_process.status =
+          AccessBrowserRequestMetadataStatus::kMissingTrustedProcess;
+      return missing_process;
+    }
+    return BuildBrowserOwnedProfileOnlyRequestMetadata(profile_,
+                                                       *render_process_id_);
+  }
+
+  if (!frame_tree_node_id_.has_value()) {
+    AccessBrowserRequestMetadataResult missing_frame;
+    missing_frame.status =
+        AccessBrowserRequestMetadataStatus::kMissingTrustedFrame;
+    return missing_frame;
+  }
+  auto wc_getter =
+      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
+                          *frame_tree_node_id_);
+  return BuildBrowserOwnedRequestMetadata(
+      profile_, wc_getter, *frame_tree_node_id_, navigation_id_);
+}
+
 AccessProxyingURLLoaderFactory::RequestDisposition
 AccessProxyingURLLoaderFactory::EvaluateUrl(
     const GURL& request_url,
@@ -367,11 +419,7 @@ AccessProxyingURLLoaderFactory::EvaluateUrl(
       runtime ? runtime->GetPublishedPolicySnapshot(factory_metadata_.owner)
               : nullptr;
 
-  auto wc_getter =
-      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
-                          frame_tree_node_id_);
-  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
-      profile_, wc_getter, frame_tree_node_id_, navigation_id_);
+  AccessBrowserRequestMetadataResult metadata = CaptureCurrentMetadata();
   if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
       !metadata.metadata.has_value()) {
     return factory_snapshot ? RequestDisposition::kBlock
