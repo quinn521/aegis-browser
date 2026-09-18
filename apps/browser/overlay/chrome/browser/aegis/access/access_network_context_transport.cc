@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 
 #include <algorithm>
+#include "base/functional/bind.h"
 #include <limits>
 #include <utility>
 
@@ -234,6 +235,39 @@ AccessNetworkContextTransport::CaptureSelectedProxyEndpoint(
     return std::nullopt;
   }
   return endpoint;
+}
+
+AccessNetworkConfigAckResult
+AccessNetworkContextTransport::RepublishCurrentConfigWithAck(
+    const aegis_access::OwnershipKey& owner,
+    base::OnceClosure all_clients_acked) {
+  if (!all_clients_acked || !OwnsConfiguredPartition(owner)) {
+    return {AccessNetworkConfigAckStatus::kInvalidOwner, 0};
+  }
+  auto it = partitions_.find(owner.storage_partition_token);
+  if (it == partitions_.end()) {
+    return {AccessNetworkConfigAckStatus::kMissingPartition, 0};
+  }
+  PartitionState& state = it->second;
+  if (state.clients.empty()) {
+    return {AccessNetworkConfigAckStatus::kNoClients, 0};
+  }
+  network::mojom::CustomProxyConfigPtr config = BuildConfig(state);
+  if (!config) {
+    return {AccessNetworkConfigAckStatus::kBuildFailed, 0};
+  }
+
+  const size_t required_acks = state.clients.size();
+  base::RepeatingClosure barrier =
+      base::BarrierClosure(required_acks, std::move(all_clients_acked));
+  for (auto& client : state.clients) {
+    client->OnCustomProxyConfigUpdated(
+        config->Clone(),
+        base::BindOnce(
+            [](base::RepeatingClosure completion) { completion.Run(); },
+            barrier));
+  }
+  return {AccessNetworkConfigAckStatus::kStarted, required_acks};
 }
 
 network::mojom::CustomProxyConfigPtr
