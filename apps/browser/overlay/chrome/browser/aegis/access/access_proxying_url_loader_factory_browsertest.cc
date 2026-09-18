@@ -48,20 +48,24 @@ constexpr char kProxyGroup[] = "proxy-group-browser-test";
 std::unique_ptr<net::test_server::HttpResponse>
 ServiceWorkerOriginReply(std::atomic<size_t>* counter,
                          const net::test_server::HttpRequest& request) {
-  const bool is_script =
+  const bool is_main_script =
       request.relative_url.find("/aegis-service-worker.js") !=
+      std::string::npos;
+  const bool is_import_script =
+      request.relative_url.find("/aegis-service-worker-import.js") !=
       std::string::npos;
   const bool is_data =
       request.relative_url.find("/service-worker-data") != std::string::npos;
-  if (!is_script && !is_data) {
+  if (!is_main_script && !is_import_script && !is_data) {
     return nullptr;
   }
 
   counter->fetch_add(1, std::memory_order_relaxed);
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_code(net::HTTP_OK);
-  if (is_script) {
+  if (is_main_script) {
     response->set_content(
+        "importScripts('/aegis-service-worker-import.js');"
         "self.addEventListener('install', event => "
         "  event.waitUntil(self.skipWaiting()));"
         "self.addEventListener('activate', event => "
@@ -75,6 +79,11 @@ ServiceWorkerOriginReply(std::atomic<size_t>* counter,
     response->set_content_type("application/javascript");
     return response;
   }
+  if (is_import_script) {
+    response->set_content("self.aegisImportedScriptLoaded = true;");
+    response->set_content_type("application/javascript");
+    return response;
+  }
 
   response->set_content("origin-service-worker-subresource");
   response->set_content_type("text/plain");
@@ -84,14 +93,23 @@ ServiceWorkerOriginReply(std::atomic<size_t>* counter,
 std::unique_ptr<net::test_server::HttpResponse>
 ServiceWorkerProxyReply(std::atomic<size_t>* counter,
                         const net::test_server::HttpRequest& request) {
-  if (request.relative_url.find("/service-worker-data") ==
-      std::string::npos) {
+  const bool is_import_script =
+      request.relative_url.find("/aegis-service-worker-import.js") !=
+      std::string::npos;
+  const bool is_data =
+      request.relative_url.find("/service-worker-data") != std::string::npos;
+  if (!is_import_script && !is_data) {
     return nullptr;
   }
 
   counter->fetch_add(1, std::memory_order_relaxed);
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_code(net::HTTP_OK);
+  if (is_import_script) {
+    response->set_content("self.aegisImportedScriptLoaded = true;");
+    response->set_content_type("application/javascript");
+    return response;
+  }
   response->set_content("proxy-service-worker-subresource");
   response->set_content_type("text/plain");
   return response;
@@ -453,25 +471,37 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
         .ExtractString();
   }
 
+  std::string RegisterServiceWorker() {
+    return content::EvalJs(
+               web_contents(),
+               content::JsReplace(
+                   "new Promise(async resolve => {"
+                   "  try {"
+                   "    const registration = "
+                   "        await navigator.serviceWorker.register($1);"
+                   "    await navigator.serviceWorker.ready;"
+                   "    const worker = registration.active;"
+                   "    if (!worker) { resolve('error'); return; }"
+                   "    window.aegisServiceWorker = worker;"
+                   "    resolve('ready');"
+                   "  } catch { resolve('error'); }"
+                   "})",
+                   service_worker_script_url().spec()))
+        .ExtractString();
+  }
+
   void StartServiceWorkerSubresourceHarness() {
-    EXPECT_EQ(
-        content::EvalJs(
-            web_contents(),
-            content::JsReplace(
-                "new Promise(async resolve => {"
-                "  try {"
-                "    const registration = "
-                "        await navigator.serviceWorker.register($1);"
-                "    await navigator.serviceWorker.ready;"
-                "    const worker = registration.active;"
-                "    if (!worker) { resolve('error'); return; }"
-                "    window.aegisServiceWorker = worker;"
-                "    resolve('ready');"
-                "  } catch { resolve('error'); }"
-                "})",
-                service_worker_script_url().spec()))
-            .ExtractString(),
-        "ready");
+    EXPECT_EQ(RegisterServiceWorker(), "ready");
+  }
+
+  void PrepareServiceWorkerScriptTest(size_t* origin_before,
+                                      size_t* proxy_before) {
+    ASSERT_NE(origin_before, nullptr);
+    ASSERT_NE(proxy_before, nullptr);
+    ASSERT_TRUE(
+        ui_test_utils::NavigateToURL(browser(), service_worker_page_url()));
+    *origin_before = origin_requests_.load(std::memory_order_relaxed);
+    *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
   }
 
   void PrepareServiceWorkerSubresourceTest(size_t* origin_before,
@@ -807,6 +837,52 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   EXPECT_EQ(FetchSharedWorkerSubresource(worker_subresource_url()), "error");
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AccessProxyingURLLoaderFactoryBrowserTest,
+    ServiceWorkerScriptWithoutPolicyPreservesNativePath) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareServiceWorkerScriptTest(&origin_before, &proxy_before);
+
+  EXPECT_EQ(RegisterServiceWorker(), "ready");
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return origin_requests_.load(std::memory_order_relaxed) ==
+           origin_before + 2u;
+  }));
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       ServiceWorkerImportedScriptUsesSelectedProxy) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareServiceWorkerScriptTest(&origin_before, &proxy_before);
+  PublishProxyPolicy(/*publish_endpoint=*/true, "localhost");
+
+  EXPECT_EQ(RegisterServiceWorker(), "ready");
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) ==
+           proxy_before + 1u;
+  }));
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed),
+            origin_before + 1u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       ServiceWorkerImportedScriptWithoutEndpointFailsClosed) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareServiceWorkerScriptTest(&origin_before, &proxy_before);
+  PublishProxyPolicy(/*publish_endpoint=*/false, "localhost");
+
+  EXPECT_EQ(RegisterServiceWorker(), "error");
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return origin_requests_.load(std::memory_order_relaxed) ==
+           origin_before + 1u;
+  }));
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
 }
 
 IN_PROC_BROWSER_TEST_F(
