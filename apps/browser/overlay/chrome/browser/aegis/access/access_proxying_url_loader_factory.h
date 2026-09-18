@@ -25,7 +25,9 @@ class RenderFrameHost;
 namespace aegis::access {
 
 // UI-thread browser-process URLLoaderFactory wrapper for the first real Access
-// request vertical slice. It covers document subresources only. Each request is
+// request vertical slice. It covers primary-page document subresources only.
+// Nested-frame, navigation, worker, and WebSocket surfaces are later slices. Each
+// request is
 // re-evaluated from browser-owned frame state and the latest published Access
 // state before it may reach the target Network Service factory.
 //
