@@ -5,7 +5,6 @@ Subject: [PATCH] feat(aegis): gate primary-page subframe navigation traffic
 
 ---
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chrome/browser/aegis/access/access_browser_request_adapter.cc
-index a28ab11..814d8e4 100644
 --- a/chrome/browser/aegis/access/access_browser_request_adapter.cc
 +++ b/chrome/browser/aegis/access/access_browser_request_adapter.cc
 @@ -106,24 +106,40 @@ AccessBrowserRequestMetadataStatus ResolveTrustedContents(
@@ -171,7 +170,6 @@ index a28ab11..814d8e4 100644
               ? BuildMetadataFromSeed(std::move(seed_input))
               : Error(status);
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chrome/browser/aegis/access/access_browser_request_adapter.h
-index df0d467..92150b5 100644
 --- a/chrome/browser/aegis/access/access_browser_request_adapter.h
 +++ b/chrome/browser/aegis/access/access_browser_request_adapter.h
 @@ -43,11 +43,12 @@ struct AccessBrowserRequestMetadataResult {
@@ -193,7 +191,6 @@ index df0d467..92150b5 100644
      Profile* profile,
      const base::RepeatingCallback<content::WebContents*()>& wc_getter,
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc b/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
-index 945642a..c9bd552 100644
 --- a/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
 @@ -13,6 +13,7 @@
@@ -308,7 +305,6 @@ index 945642a..c9bd552 100644
  
  }  // namespace
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
-index 78c0f9f..393e0c2 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 @@ -293,10 +293,6 @@ void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
@@ -323,7 +319,6 @@ index 78c0f9f..393e0c2 100644
        CaptureProxyFactoryMetadata(profile, frame, navigation_id);
    if (!metadata.has_value() ||
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
-index f2a1a81..c4ad473 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 @@ -29,11 +29,12 @@ namespace aegis::access {
@@ -345,7 +340,6 @@ index f2a1a81..c4ad473 100644
  // DIRECT/absent policy is forwarded unchanged. A PROXY decision is forwarded
  // only after exact-host endpoint validation and the synchronous dispatch gate.
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-index 8f60d90..72f3000 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 @@ -184,6 +184,16 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
@@ -393,7 +387,6 @@ index 8f60d90..72f3000 100644
                         RuntimePolicyUpdateRoutesExistingFactoryThroughProxy) {
    PublishProxyPolicy(/*publish_endpoint=*/true);
 diff --git a/components/aegis_access/browser_request_metadata_seed.cc b/components/aegis_access/browser_request_metadata_seed.cc
-index d9dde4c..c0f2296 100644
 --- a/components/aegis_access/browser_request_metadata_seed.cc
 +++ b/components/aegis_access/browser_request_metadata_seed.cc
 @@ -46,6 +46,9 @@ BrowserRequestMetadataSeedResult PrepareBrowserRequestMetadataSeed(
@@ -407,7 +400,6 @@ index d9dde4c..c0f2296 100644
    }
  
 diff --git a/components/aegis_access/browser_request_metadata_seed_contract_test.h b/components/aegis_access/browser_request_metadata_seed_contract_test.h
-index 8e4236e..85e43de 100644
 --- a/components/aegis_access/browser_request_metadata_seed_contract_test.h
 +++ b/components/aegis_access/browser_request_metadata_seed_contract_test.h
 @@ -63,6 +63,19 @@ inline void RunMetadataSeedAttributionUnitTests(
@@ -431,7 +423,6 @@ index 8e4236e..85e43de 100644
        {"request-profile", MetadataSeedOwner(), "", "", ""});
    observer.Expect(profile.error == BrowserRequestMetadataSeedError::kNone &&
 diff --git a/components/aegis_access/request_policy_context.cc b/components/aegis_access/request_policy_context.cc
-index 69284f9..0383c80 100644
 --- a/components/aegis_access/request_policy_context.cc
 +++ b/components/aegis_access/request_policy_context.cc
 @@ -127,19 +127,25 @@ RequestPolicyContextResult CanonicalizeBrowserOwnedRequest(
@@ -467,7 +458,6 @@ index 69284f9..0383c80 100644
      }
      case RequestAttributionKind::kProfileOnly:
 diff --git a/components/aegis_access/request_policy_context_unittest.cc b/components/aegis_access/request_policy_context_unittest.cc
-index 5923a5e..d3b5764 100644
 --- a/components/aegis_access/request_policy_context_unittest.cc
 +++ b/components/aegis_access/request_policy_context_unittest.cc
 @@ -64,6 +64,37 @@ TEST(RequestPolicyContextTest, DerivesPendingNavigationSiteFromTarget) {
