@@ -129,10 +129,10 @@ index 12aae9f..be4ec7c 100644
        const base::FilePath& relative_partition_path) const;
    void FlushClientsForTesting(const base::FilePath& relative_partition_path);
 diff --git a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
-index 75dbef9..246b72b 100644
+index 75dbef9..ae6306c 100644
 --- a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
-@@ -234,6 +234,69 @@ TEST_F(AccessNetworkContextTransportTest,
+@@ -234,6 +234,71 @@ TEST_F(AccessNetworkContextTransportTest,
                     .has_value());
  }
  
@@ -180,22 +180,24 @@ index 75dbef9..246b72b 100644
 +TEST_F(AccessNetworkContextTransportTest,
 +       PublicationAckRejectsForgedOwnerAndMissingClient) {
 +  const base::FilePath partition;
++  auto delegate = CreateDelegate(partition);
 +  auto owner = transport_->OwnerForPartition(
 +      aegis_access::ChannelNamespace::kDev, partition);
 +  ASSERT_TRUE(owner.has_value());
 +
 +  bool acked = false;
-+  auto no_client = transport_->RepublishCurrentConfigWithAck(
-+      *owner, base::BindOnce([](bool* value) { *value = true; }, &acked));
-+  EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kInvalidOwner);
-+  EXPECT_FALSE(acked);
-+
-+  auto delegate = CreateDelegate(partition);
 +  auto forged = *owner;
 +  forged.profile_token = "other-profile";
 +  auto forged_result = transport_->RepublishCurrentConfigWithAck(
 +      forged, base::BindOnce([](bool* value) { *value = true; }, &acked));
 +  EXPECT_EQ(forged_result.status, AccessNetworkConfigAckStatus::kInvalidOwner);
++  EXPECT_FALSE(acked);
++
++  delegate.reset();
++  task_environment_.RunUntilIdle();
++  auto no_client = transport_->RepublishCurrentConfigWithAck(
++      *owner, base::BindOnce([](bool* value) { *value = true; }, &acked));
++  EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kNoClients);
 +  EXPECT_FALSE(acked);
 +}
 +
