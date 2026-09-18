@@ -3,10 +3,14 @@
 #include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/aegis/access/access_identity_generation_source.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
@@ -14,6 +18,7 @@
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_factory.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -98,7 +103,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
         .ExtractBool();
   }
 
-  aegis_access::GenerationTuple PublishProxyPolicy(bool publish_endpoint) {
+  void PublishProxyPolicy(bool publish_endpoint) {
     Profile* profile = browser()->profile();
 
     auto* identity = AccessIdentityGenerationSource::GetOrCreate(profile);
@@ -174,7 +179,6 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
       transport_->FlushClientsForTesting(base::FilePath());
     }
 
-    return generations;
   }
 
   std::atomic<size_t> origin_requests_{0};
