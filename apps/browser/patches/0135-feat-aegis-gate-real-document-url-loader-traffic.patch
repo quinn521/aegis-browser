@@ -1,9 +1,3 @@
-From 0135000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: GCSA Aegis <aegis@gcsa.local>
-Date: Fri, 18 Sep 2026 18:45:00 +0800
-Subject: [PATCH] feat(aegis): gate real document URLLoader traffic
-
----
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
@@ -103,7 +97,7 @@ diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/
 diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
 --- a/chrome/browser/aegis/access/access_network_context_transport.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport.cc
-@@ -209,6 +209,32 @@ bool AccessNetworkContextTransport::ClearProxySelection(
+@@ -209,6 +209,33 @@ bool AccessNetworkContextTransport::ClearProxySelection(
    return true;
  }
  
@@ -119,6 +113,7 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/c
 +  }
 +
 +  const auto it = partitions_.find(owner.storage_partition_token);
++  // PublishProxySelection() sorts exact_hosts before committing PartitionState.
 +  if (it == partitions_.end() || !it->second.endpoint.has_value() ||
 +      !std::binary_search(it->second.exact_hosts.begin(),
 +                          it->second.exact_hosts.end(), exact_host)) {
@@ -159,7 +154,7 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/ch
 diff --git a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 --- a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
-@@ -163,6 +163,55 @@ TEST_F(AccessNetworkContextTransportTest,
+@@ -163,6 +163,77 @@ TEST_F(AccessNetworkContextTransportTest,
              "PROXY native.example:3128; DIRECT");
  }
  
@@ -195,6 +190,28 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport_unitte
 +}
 +
 +TEST_F(AccessNetworkContextTransportTest,
++       CaptureHandlesUnsortedPublishedHosts) {
++  const base::FilePath partition;
++  auto delegate = CreateDelegate(partition);
++  const auto endpoint = EndpointFor(partition);
++  ASSERT_TRUE(transport_->PublishProxySelection(
++      partition, {"z.example", kTargetHost, "a.example"}, endpoint));
++
++  EXPECT_TRUE(transport_
++                  ->CaptureSelectedProxyEndpoint(
++                      endpoint.owner, endpoint.proxy_group_id, "a.example")
++                  .has_value());
++  EXPECT_TRUE(transport_
++                  ->CaptureSelectedProxyEndpoint(
++                      endpoint.owner, endpoint.proxy_group_id, kTargetHost)
++                  .has_value());
++  EXPECT_TRUE(transport_
++                  ->CaptureSelectedProxyEndpoint(
++                      endpoint.owner, endpoint.proxy_group_id, "z.example")
++                  .has_value());
++}
++
++TEST_F(AccessNetworkContextTransportTest,
 +       CaptureRejectsEndpointAfterNetworkEpochChanges) {
 +  const base::FilePath partition;
 +  auto delegate = CreateDelegate(partition);
@@ -219,7 +236,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
-@@ -0,0 +1,595 @@
+@@ -0,0 +1,641 @@
 +// Copyright 2026 GCSA
 +
 +#include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
@@ -269,6 +286,109 @@ new file mode 100644
 +    const aegis_access::RegisteredProxyEndpoint& endpoint) {
 +  return {endpoint.registration_id, endpoint.proxy_group_id, endpoint.owner,
 +          endpoint.generations};
++}
++
++enum class MatchedPolicyDisposition {
++  kPreserveNative,
++  kProxy,
++  kBlock,
++};
++
++MatchedPolicyDisposition ClassifyPolicyMatch(
++    const aegis_access::PolicyMatchResult& match) {
++  if (match.policy_state == aegis_access::PolicyState::kAbsent) {
++    return MatchedPolicyDisposition::kPreserveNative;
++  }
++  if (match.policy_state != aegis_access::PolicyState::kValid) {
++    return MatchedPolicyDisposition::kBlock;
++  }
++  if (match.effective_mode == aegis_access::AccessMode::kNone ||
++      match.effective_mode == aegis_access::AccessMode::kDirect) {
++    return MatchedPolicyDisposition::kPreserveNative;
++  }
++  if (match.effective_mode == aegis_access::AccessMode::kProxy &&
++      !match.effective_proxy_group_id.empty()) {
++    return MatchedPolicyDisposition::kProxy;
++  }
++  return MatchedPolicyDisposition::kBlock;
++}
++
++int NetErrorForDispatchResult(
++    const aegis_access::PublishedRequestRuntimeResult& result) {
++  return result.status == aegis_access::PublishedRequestRuntimeStatus::kDeny ||
++                 result.status ==
++                     aegis_access::PublishedRequestRuntimeStatus::kBlockedByBarrier
++             ? net::ERR_BLOCKED_BY_CLIENT
++             : net::ERR_PROXY_CONNECTION_FAILED;
++}
++
++struct ProxyDispatchPreparation {
++  int net_error = net::ERR_PROXY_CONNECTION_FAILED;
++  std::optional<aegis_access::RequestOwnershipRecord> ownership_record;
++};
++
++ProxyDispatchPreparation PrepareProxyDispatch(
++    Profile* profile,
++    AccessPublishedRequestRuntime* runtime,
++    const aegis_access::BrowserOwnedRequestMetadata& metadata,
++    const aegis_access::PublishedAccessPolicySnapshot& snapshot,
++    const aegis_access::RequestPolicyContext& context,
++    const aegis_access::PolicyMatchResult& match) {
++  if (!runtime) {
++    return {};
++  }
++
++  const aegis_access::RequestGenerationTupleBuildResult tuple =
++      runtime->CaptureProxyGenerationTupleOnUiThread(
++          metadata.owner, match.effective_proxy_group_id);
++  if (!tuple.generations.has_value()) {
++    return {};
++  }
++
++  AccessNetworkContextTransport* transport =
++      AccessNetworkContextTransport::Get(profile);
++  const std::optional<aegis_access::RegisteredProxyEndpoint> endpoint =
++      transport ? transport->CaptureSelectedProxyEndpoint(
++                      metadata.owner, match.effective_proxy_group_id,
++                      context.exact_host())
++                : std::nullopt;
++  if (!endpoint.has_value()) {
++    return {};
++  }
++
++  AccessRequestDispatchState* dispatch_state =
++      AccessRequestDispatchState::GetOrCreate(profile);
++  if (!dispatch_state) {
++    return {};
++  }
++
++  aegis_access::PublishedRequestRuntimeInput input;
++  input.request = context.ToOwnershipRecord(*tuple.generations);
++  input.policy_state = match.policy_state;
++  input.effective_mode = match.effective_mode;
++  input.policy_scope = match.policy_scope;
++  input.effective_proxy_group_id = match.effective_proxy_group_id;
++  input.matched_policy_generation = match.policy_generation;
++  input.require_proxy_intent = true;
++  input.snapshot_state = aegis_access::SnapshotState::kPublished;
++  input.snapshot_owner = snapshot.owner;
++  input.snapshot_generations = *tuple.generations;
++  input.protection_restriction = aegis_access::ProtectionRestriction::kNone;
++  input.managed_restriction = aegis_access::ManagedRestriction::kNone;
++  input.runtime_state = aegis_access::ProxyRuntimeState::kReady;
++  input.registered_proxy_entry = EntryForEndpoint(*endpoint);
++
++  const aegis_access::PublishedRequestRuntimeResult result =
++      aegis_access::EvaluatePublishedRequestForDispatch(
++          input, dispatch_state->barriers(), dispatch_state->ownership());
++  if (result.status !=
++          aegis_access::PublishedRequestRuntimeStatus::kDispatchRegistered ||
++      result.route_plan.action !=
++          aegis_access::RouteAction::kUseRegisteredProxy) {
++    return {NetErrorForDispatchResult(result), std::nullopt};
++  }
++
++  return {net::OK, input.request};
 +}
 +
 +class CallbackTerminationHandle final
@@ -617,85 +737,27 @@ new file mode 100644
 +  if (!context_result.context.has_value()) {
 +    return RequestDisposition::kBlock;
 +  }
-+  const aegis_access::RequestPolicyContext& context = *context_result.context;
-+  const aegis_access::PolicyMatchResult match =
-+      aegis_access::EvaluateAccessPolicy(context, *snapshot);
 +
-+  if (match.policy_state == aegis_access::PolicyState::kAbsent ||
-+      (match.policy_state == aegis_access::PolicyState::kValid &&
-+       (match.effective_mode == aegis_access::AccessMode::kNone ||
-+        match.effective_mode == aegis_access::AccessMode::kDirect))) {
++  const aegis_access::PolicyMatchResult match =
++      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
++  const MatchedPolicyDisposition policy_disposition =
++      ClassifyPolicyMatch(match);
++  if (policy_disposition == MatchedPolicyDisposition::kPreserveNative) {
 +    return RequestDisposition::kPreserveNative;
 +  }
-+  if (match.policy_state != aegis_access::PolicyState::kValid ||
-+      match.effective_mode == aegis_access::AccessMode::kReject) {
-+    return RequestDisposition::kBlock;
-+  }
-+  if (match.effective_mode != aegis_access::AccessMode::kProxy ||
-+      match.effective_proxy_group_id.empty()) {
++  if (policy_disposition == MatchedPolicyDisposition::kBlock) {
 +    return RequestDisposition::kBlock;
 +  }
 +
-+  const aegis_access::RequestGenerationTupleBuildResult tuple =
-+      runtime->CaptureProxyGenerationTupleOnUiThread(
-+          metadata.metadata->owner, match.effective_proxy_group_id);
-+  if (!tuple.generations.has_value()) {
-+    *net_error = net::ERR_PROXY_CONNECTION_FAILED;
++  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
++      profile_, runtime, *metadata.metadata, *snapshot, *context_result.context,
++      match);
++  if (!preparation.ownership_record.has_value()) {
++    *net_error = preparation.net_error;
 +    return RequestDisposition::kBlock;
 +  }
 +
-+  AccessNetworkContextTransport* transport =
-+      AccessNetworkContextTransport::Get(profile_);
-+  const std::optional<aegis_access::RegisteredProxyEndpoint> endpoint =
-+      transport ? transport->CaptureSelectedProxyEndpoint(
-+                      metadata.metadata->owner, match.effective_proxy_group_id,
-+                      context.exact_host())
-+                : std::nullopt;
-+  if (!endpoint.has_value()) {
-+    *net_error = net::ERR_PROXY_CONNECTION_FAILED;
-+    return RequestDisposition::kBlock;
-+  }
-+
-+  AccessRequestDispatchState* dispatch_state =
-+      AccessRequestDispatchState::GetOrCreate(profile_);
-+  if (!dispatch_state) {
-+    *net_error = net::ERR_PROXY_CONNECTION_FAILED;
-+    return RequestDisposition::kBlock;
-+  }
-+
-+  aegis_access::PublishedRequestRuntimeInput input;
-+  input.request = context.ToOwnershipRecord(*tuple.generations);
-+  input.policy_state = match.policy_state;
-+  input.effective_mode = match.effective_mode;
-+  input.policy_scope = match.policy_scope;
-+  input.effective_proxy_group_id = match.effective_proxy_group_id;
-+  input.matched_policy_generation = match.policy_generation;
-+  input.require_proxy_intent = true;
-+  input.snapshot_state = aegis_access::SnapshotState::kPublished;
-+  input.snapshot_owner = snapshot->owner;
-+  input.snapshot_generations = *tuple.generations;
-+  input.protection_restriction = aegis_access::ProtectionRestriction::kNone;
-+  input.managed_restriction = aegis_access::ManagedRestriction::kNone;
-+  input.runtime_state = aegis_access::ProxyRuntimeState::kReady;
-+  input.registered_proxy_entry = EntryForEndpoint(*endpoint);
-+
-+  aegis_access::PublishedRequestRuntimeResult result =
-+      aegis_access::EvaluatePublishedRequestForDispatch(
-+          input, dispatch_state->barriers(), dispatch_state->ownership());
-+  if (result.status !=
-+          aegis_access::PublishedRequestRuntimeStatus::kDispatchRegistered ||
-+      result.route_plan.action !=
-+          aegis_access::RouteAction::kUseRegisteredProxy) {
-+    *net_error =
-+        result.status == aegis_access::PublishedRequestRuntimeStatus::kDeny ||
-+                result.status ==
-+                    aegis_access::PublishedRequestRuntimeStatus::kBlockedByBarrier
-+            ? net::ERR_BLOCKED_BY_CLIENT
-+            : net::ERR_PROXY_CONNECTION_FAILED;
-+    return RequestDisposition::kBlock;
-+  }
-+
-+  *ownership_record = input.request;
++  *ownership_record = std::move(*preparation.ownership_record);
 +  return RequestDisposition::kDispatchProxy;
 +}
 +
@@ -747,9 +809,9 @@ new file mode 100644
 +    dispatch_state->ownership().Complete(
 +        ownership_record.request_id, ownership_record.owner,
 +        ownership_record.generations);
-+    RemoveRequest(tracked_ptr);
 +    BlockRequest(std::move(loader_receiver), std::move(client),
 +                 net::ERR_PROXY_CONNECTION_FAILED);
++    RemoveRequest(tracked_ptr);
 +    return;
 +  }
 +
@@ -775,6 +837,7 @@ new file mode 100644
 +      std::move(client), traffic_annotation);
 +}
 +
++// static
 +void AccessProxyingURLLoaderFactory::BlockRequest(
 +    mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
 +    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
@@ -819,7 +882,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,113 @@
 +// Copyright 2026 GCSA
 +
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_PROXYING_URL_LOADER_FACTORY_H_
@@ -847,7 +910,9 @@ new file mode 100644
 +namespace aegis::access {
 +
 +// UI-thread browser-process URLLoaderFactory wrapper for the first real Access
-+// request vertical slice. It covers document subresources only. Each request is
++// request vertical slice. It covers primary-page document subresources only.
++// Nested-frame, navigation, worker, and WebSocket surfaces are later slices. Each
++// request is
 +// re-evaluated from browser-owned frame state and the latest published Access
 +// state before it may reach the target Network Service factory.
 +//
@@ -908,7 +973,7 @@ new file mode 100644
 +      const network::ResourceRequest& request,
 +      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
 +      const net::MutableNetworkTrafficAnnotationTag& traffic_annotation);
-+  void BlockRequest(
++  static void BlockRequest(
 +      mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
 +      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
 +      int net_error);
@@ -935,7 +1000,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,258 @@
 +// Copyright 2026 GCSA
 +
 +#include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
@@ -990,6 +1055,24 @@ new file mode 100644
 +  return response;
 +}
 +
++std::unique_ptr<net::test_server::HttpResponse> ProxyReply(
++    std::atomic<size_t>* counter,
++    net::test_server::EmbeddedTestServer* target_origin,
++    const net::test_server::HttpRequest& request) {
++  counter->fetch_add(1, std::memory_order_relaxed);
++  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
++  if (request.relative_url.find("/redirect") != std::string::npos) {
++    response->set_code(net::HTTP_FOUND);
++    response->AddCustomHeader(
++        "Location", target_origin->GetURL(kTargetHost, "/resource").spec());
++    return response;
++  }
++  response->set_code(net::HTTP_OK);
++  response->set_content("proxy");
++  response->set_content_type("text/plain");
++  return response;
++}
++
 +class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 + public:
 +  AccessProxyingURLLoaderFactoryBrowserTest()
@@ -1005,7 +1088,8 @@ new file mode 100644
 +    target_origin_.RegisterRequestHandler(base::BindRepeating(
 +        &CountAndReply, base::Unretained(&origin_requests_), "origin"));
 +    proxy_server_.RegisterRequestHandler(base::BindRepeating(
-+        &CountAndReply, base::Unretained(&proxy_requests_), "proxy"));
++        &ProxyReply, base::Unretained(&proxy_requests_),
++        base::Unretained(&target_origin_)));
 +    ASSERT_TRUE(target_origin_.Start());
 +    ASSERT_TRUE(proxy_server_.Start());
 +    ASSERT_TRUE(embedded_test_server()->Start());
@@ -1031,15 +1115,21 @@ new file mode 100644
 +    return target_origin_.GetURL(kTargetHost, "/resource");
 +  }
 +
-+  bool FetchTarget() {
++  GURL redirect_url() const {
++    return target_origin_.GetURL(kTargetHost, "/redirect");
++  }
++
++  bool Fetch(const GURL& url) {
 +    return content::EvalJs(
 +               web_contents(),
 +               content::JsReplace(
 +                   "fetch($1, {mode: 'no-cors'}).then(() => true)"
 +                   ".catch(() => false)",
-+                   target_url().spec()))
++                   url.spec()))
 +        .ExtractBool();
 +  }
++
++  bool FetchTarget() { return Fetch(target_url()); }
 +
 +  void PublishProxyPolicy(bool publish_endpoint) {
 +    Profile* profile = browser()->profile();
@@ -1128,6 +1218,15 @@ new file mode 100644
 +};
 +
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       NoPublishedPolicyPreservesNativePath) {
++  EXPECT_TRUE(FetchTarget());
++  EXPECT_TRUE(base::test::RunUntil([&] {
++    return origin_requests_.load(std::memory_order_relaxed) == 1u;
++  }));
++  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 +                       RuntimePolicyUpdateRoutesExistingFactoryThroughProxy) {
 +  PublishProxyPolicy(/*publish_endpoint=*/true);
 +
@@ -1144,6 +1243,17 @@ new file mode 100644
 +
 +  EXPECT_FALSE(FetchTarget());
 +  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
++  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       RedirectFromProxiedRequestFailsClosed) {
++  PublishProxyPolicy(/*publish_endpoint=*/true);
++
++  EXPECT_FALSE(Fetch(redirect_url()));
++  EXPECT_TRUE(base::test::RunUntil([&] {
++    return proxy_requests_.load(std::memory_order_relaxed) == 1u;
++  }));
 +  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
 +}
 +
