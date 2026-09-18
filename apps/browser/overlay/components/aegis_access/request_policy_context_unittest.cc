@@ -83,6 +83,18 @@ TEST(RequestPolicyContextTest,
                 .Serialize());
 }
 
+TEST(RequestPolicyContextTest,
+     RejectsInvalidBrowserOwnedTopSiteForNestedPendingNavigation) {
+  const BrowserOwnedRequestMetadata metadata{
+      "request-nested-navigation-invalid-site", TestOwner(),
+      RequestAttributionKind::kPendingNavigation, {}, "navigation-token",
+      net::SchemefulSite(GURL("data:text/plain,opaque"))};
+  EXPECT_EQ(CanonicalizeBrowserOwnedRequest(
+                metadata, GURL("https://iframe.example.test/path"))
+                .error,
+            RequestContextError::kInvalidTopLevelSite);
+}
+
 TEST(RequestPolicyContextTest, PreservesProfileOnlyOwnershipWithoutSite) {
   const BrowserOwnedRequestMetadata metadata{
       "request-profile", TestOwner(), RequestAttributionKind::kProfileOnly,
