@@ -2,6 +2,7 @@
 
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -21,6 +22,15 @@
 #include "url/gurl.h"
 
 namespace aegis::access {
+
+class AccessNetworkContextTransportTestPeer {
+ public:
+  static void SetNetworkEpoch(AccessNetworkContextTransport* transport,
+                              uint64_t epoch) {
+    transport->network_epoch_ = epoch;
+  }
+};
+
 namespace {
 
 constexpr char kTargetHost[] = "target.example";
@@ -199,8 +209,13 @@ TEST_F(AccessNetworkContextTransportTest, StoragePartitionsAreIsolated) {
 TEST_F(AccessNetworkContextTransportTest,
        NetworkChangeAdvancesEpochAndRejectsStaleEndpoint) {
   const base::FilePath partition;
+  auto delegate = CreateDelegate(partition);
   ASSERT_EQ(transport_->network_epoch(), 1u);
   const aegis_access::RegisteredProxyEndpoint stale = EndpointFor(partition);
+  ASSERT_TRUE(
+      transport_->PublishProxySelection(partition, {kTargetHost}, stale));
+  transport_->FlushClientsForTesting(partition);
+  ExpectProxyResolution(delegate.get(), "https://target.example/before-change");
 
   net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
       net::NetworkChangeNotifier::CONNECTION_NONE);
@@ -210,10 +225,39 @@ TEST_F(AccessNetworkContextTransportTest,
   EXPECT_FALSE(
       transport_->PublishProxySelection(partition, {kTargetHost}, stale));
 
+  // The old localhost route remains installed while the new epoch is
+  // revalidated. Clearing it here would expose Chromium's native route and
+  // violate REQUIRE_PROXY's no-DIRECT-fallback contract.
+  ExpectProxyResolution(delegate.get(), "https://target.example/rebinding");
+
   const aegis_access::RegisteredProxyEndpoint rebound = EndpointFor(partition);
   EXPECT_EQ(rebound.generations.network_epoch, transport_->network_epoch());
   EXPECT_TRUE(
       transport_->PublishProxySelection(partition, {kTargetHost}, rebound));
+}
+
+TEST_F(AccessNetworkContextTransportTest,
+       NetworkEpochOverflowFailsClosedPermanently) {
+  const base::FilePath partition;
+  AccessNetworkContextTransportTestPeer::SetNetworkEpoch(
+      transport_, std::numeric_limits<uint64_t>::max());
+  const aegis_access::RegisteredProxyEndpoint last_valid = EndpointFor(partition);
+  ASSERT_TRUE(transport_->PublishProxySelection(
+      partition, {kTargetHost}, last_valid));
+
+  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
+      net::NetworkChangeNotifier::CONNECTION_NONE);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(transport_->network_epoch(), 0u);
+  EXPECT_FALSE(transport_->PublishProxySelection(
+      partition, {kTargetHost}, last_valid));
+
+  net::NetworkChangeNotifier::NotifyObserversOfNetworkChangeForTests(
+      net::NetworkChangeNotifier::CONNECTION_WIFI);
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(transport_->network_epoch(), 0u);
+  EXPECT_FALSE(transport_->PublishProxySelection(
+      partition, {kTargetHost}, EndpointFor(partition)));
 }
 
 TEST_F(AccessNetworkContextTransportTest,
