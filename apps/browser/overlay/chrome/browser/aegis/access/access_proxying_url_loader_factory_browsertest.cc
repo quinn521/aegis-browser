@@ -90,9 +90,10 @@ void ConfigureServiceWorkerMainScriptResponse(
   response->set_content_type("application/javascript");
 }
 
-std::unique_ptr<net::test_server::HttpResponse>
-ServiceWorkerOriginReply(std::atomic<size_t>* counter,
-                         const net::test_server::HttpRequest& request) {
+std::unique_ptr<net::test_server::HttpResponse> BuildServiceWorkerReply(
+    std::atomic<size_t>* counter,
+    const net::test_server::HttpRequest& request,
+    bool proxy_response) {
   const ServiceWorkerRequestKind kind = ClassifyServiceWorkerRequest(request);
   if (kind == ServiceWorkerRequestKind::kOther) {
     return nullptr;
@@ -106,42 +107,31 @@ ServiceWorkerOriginReply(std::atomic<size_t>* counter,
     return response;
   }
   if (kind == ServiceWorkerRequestKind::kImportedScript) {
-    response->set_content(
-        "self.aegisImportedScriptSource = 'origin-service-worker-script';");
+    response->set_content(proxy_response
+                              ? "self.aegisImportedScriptSource = "
+                                "'proxy-service-worker-script';"
+                              : "self.aegisImportedScriptSource = "
+                                "'origin-service-worker-script';");
     response->set_content_type("application/javascript");
     return response;
   }
 
-  response->set_content("origin-service-worker-subresource");
+  response->set_content(proxy_response ? "proxy-service-worker-subresource"
+                                       : "origin-service-worker-subresource");
   response->set_content_type("text/plain");
   return response;
 }
 
 std::unique_ptr<net::test_server::HttpResponse>
+ServiceWorkerOriginReply(std::atomic<size_t>* counter,
+                         const net::test_server::HttpRequest& request) {
+  return BuildServiceWorkerReply(counter, request, /*proxy_response=*/false);
+}
+
+std::unique_ptr<net::test_server::HttpResponse>
 ServiceWorkerProxyReply(std::atomic<size_t>* counter,
                         const net::test_server::HttpRequest& request) {
-  const ServiceWorkerRequestKind kind = ClassifyServiceWorkerRequest(request);
-  if (kind == ServiceWorkerRequestKind::kOther) {
-    return nullptr;
-  }
-
-  counter->fetch_add(1, std::memory_order_relaxed);
-  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
-  response->set_code(net::HTTP_OK);
-  if (kind == ServiceWorkerRequestKind::kMainScript) {
-    ConfigureServiceWorkerMainScriptResponse(response.get());
-    return response;
-  }
-  if (kind == ServiceWorkerRequestKind::kImportedScript) {
-    response->set_content(
-        "self.aegisImportedScriptSource = 'proxy-service-worker-script';");
-    response->set_content_type("application/javascript");
-    return response;
-  }
-
-  response->set_content("proxy-service-worker-subresource");
-  response->set_content_type("text/plain");
-  return response;
+  return BuildServiceWorkerReply(counter, request, /*proxy_response=*/true);
 }
 
 std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
