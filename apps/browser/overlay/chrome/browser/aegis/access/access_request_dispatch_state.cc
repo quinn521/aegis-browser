@@ -159,9 +159,14 @@ AccessRequestDispatchState::RequestNetworkContextPublicationAck(
 }
 
 void AccessRequestDispatchState::OnNetworkContextPublicationAck(
-    aegis_access::PolicyPublicationIdentity identity) {
+    aegis_access::PolicyPublicationIdentity identity,
+    bool acknowledged) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  publication_acks_.Acknowledge(identity, "network-context");
+  if (acknowledged) {
+    publication_acks_.Acknowledge(identity, "network-context");
+    return;
+  }
+  publication_acks_.MarkFailed(identity);
 }
 
 }  // namespace aegis::access
