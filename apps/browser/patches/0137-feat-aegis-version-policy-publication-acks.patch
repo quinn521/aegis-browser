@@ -21,7 +21,6 @@ index 0e5bd99..b89e941 100644
      "//content/public/browser",
    ]
 diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
-index af9ffee..7761716 100644
 --- a/chrome/browser/aegis/access/access_network_context_transport.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport.cc
 @@ -4,12 +4,16 @@
@@ -41,7 +40,7 @@ index af9ffee..7761716 100644
  #include "net/proxy_resolution/proxy_config.h"
  #include "net/proxy_resolution/proxy_info.h"
  #include "services/network/public/mojom/network_context.mojom.h"
-@@ -236,6 +240,59 @@ AccessNetworkContextTransport::CaptureSelectedProxyEndpoint(
+@@ -236,6 +240,67 @@
    return endpoint;
  }
  
@@ -49,20 +48,28 @@ index af9ffee..7761716 100644
 +AccessNetworkContextTransport::RepublishCurrentConfigWithAck(
 +    const aegis_access::OwnershipKey& owner,
 +    base::OnceCallback<void(bool)> all_clients_settled) {
-+  if (!all_clients_settled || !OwnsConfiguredPartition(owner)) {
++  if (!all_clients_settled) {
 +    return {AccessNetworkConfigAckStatus::kInvalidOwner, 0};
++  }
++  auto fail_publication =
++      [&](AccessNetworkConfigAckStatus status) -> AccessNetworkConfigAckResult {
++    std::move(all_clients_settled).Run(false);
++    return {status, 0};
++  };
++  if (!OwnsConfiguredPartition(owner)) {
++    return fail_publication(AccessNetworkConfigAckStatus::kInvalidOwner);
 +  }
 +  auto it = partitions_.find(owner.storage_partition_token);
 +  if (it == partitions_.end()) {
-+    return {AccessNetworkConfigAckStatus::kMissingPartition, 0};
++    return fail_publication(AccessNetworkConfigAckStatus::kMissingPartition);
 +  }
 +  PartitionState& state = it->second;
 +  if (state.clients.empty()) {
-+    return {AccessNetworkConfigAckStatus::kNoClients, 0};
++    return fail_publication(AccessNetworkConfigAckStatus::kNoClients);
 +  }
 +  network::mojom::CustomProxyConfigPtr config = BuildConfig(state);
 +  if (!config) {
-+    return {AccessNetworkConfigAckStatus::kBuildFailed, 0};
++    return fail_publication(AccessNetworkConfigAckStatus::kBuildFailed);
 +  }
 +
 +  const size_t required_acks = state.clients.size();
@@ -158,7 +165,6 @@ index 12aae9f..5a719b0 100644
        const base::FilePath& relative_partition_path) const;
    void FlushClientsForTesting(const base::FilePath& relative_partition_path);
 diff --git a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
-index 75dbef9..9b65412 100644
 --- a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 @@ -4,6 +4,7 @@
@@ -169,11 +175,10 @@ index 75dbef9..9b65412 100644
  #include <string>
  #include <utility>
  #include <vector>
-@@ -234,6 +235,105 @@ TEST_F(AccessNetworkContextTransportTest,
-                    .has_value());
+@@ -235,6 +236,107 @@
  }
  
-+TEST_F(AccessNetworkContextTransportTest,
+ TEST_F(AccessNetworkContextTransportTest,
 +       RealCustomProxyConfigCallbackAcknowledgesPublication) {
 +  const base::FilePath partition;
 +  auto delegate = CreateDelegate(partition);
@@ -249,7 +254,8 @@ index 75dbef9..9b65412 100644
 +          [](std::optional<bool>* value, bool success) { *value = success; },
 +          &no_client_callback));
 +  EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kNoClients);
-+  EXPECT_FALSE(no_client_callback.has_value());
++  ASSERT_TRUE(no_client_callback.has_value());
++  EXPECT_FALSE(*no_client_callback);
 +}
 +
 +TEST_F(AccessNetworkContextTransportTest,
@@ -269,12 +275,14 @@ index 75dbef9..9b65412 100644
 +          [](std::optional<bool>* value, bool success) { *value = success; },
 +          &settled));
 +  EXPECT_EQ(forged_result.status, AccessNetworkConfigAckStatus::kInvalidOwner);
-+  EXPECT_FALSE(settled.has_value());
++  ASSERT_TRUE(settled.has_value());
++  EXPECT_FALSE(*settled);
 +}
 +
- TEST_F(AccessNetworkContextTransportTest,
++TEST_F(AccessNetworkContextTransportTest,
         NonIdempotentFirstSendUsesSelectedProxy) {
    const base::FilePath partition;
+   auto delegate = CreateDelegate(partition);
 diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.cc b/chrome/browser/aegis/access/access_request_dispatch_state.cc
 index 9a81f1c..645ceab 100644
 --- a/chrome/browser/aegis/access/access_request_dispatch_state.cc
@@ -656,10 +664,9 @@ index 0d90ce1..a816020 100644
                << " failures, " << observer.checks() << " checks)\n";
 diff --git a/components/aegis_access/policy_publication_ack_tracker.cc b/components/aegis_access/policy_publication_ack_tracker.cc
 new file mode 100644
-index 0000000..0822dc1
 --- /dev/null
 +++ b/components/aegis_access/policy_publication_ack_tracker.cc
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,280 @@
 +// Copyright 2026 GCSA
 +
 +#include "components/aegis_access/policy_publication_ack_tracker.h"
@@ -725,12 +732,8 @@ index 0000000..0822dc1
 +PolicyPublicationAckTracker::Entry*
 +PolicyPublicationAckTracker::FindBySelector(
 +    const RequestCancellationSelector& selector) {
-+  auto it = std::find_if(entries_.begin(), entries_.end(),
-+                         [&](const Entry& entry) {
-+                           return SameRequestCancellationSelector(
-+                               entry.identity.selector, selector);
-+                         });
-+  return it == entries_.end() ? nullptr : &*it;
++  return const_cast<Entry*>(
++      std::as_const(*this).FindBySelector(selector));
 +}
 +
 +const PolicyPublicationAckTracker::Entry*
@@ -819,16 +822,9 @@ index 0000000..0822dc1
 +std::pair<PolicyPublicationAckStatus, PolicyPublicationAckTracker::Entry*>
 +PolicyPublicationAckTracker::FindAndValidate(
 +    const PolicyPublicationIdentity& identity) {
-+  Entry* entry = FindBySelector(identity.selector);
-+  if (!entry) {
-+    return {PolicyPublicationAckStatus::kNotFound, nullptr};
-+  }
-+  const PolicyPublicationAckStatus identity_status =
-+      ValidateIdentity(identity, *entry);
-+  if (identity_status != PolicyPublicationAckStatus::kPending) {
-+    return {identity_status, entry};
-+  }
-+  return {CurrentStatus(*entry), entry};
++  const auto [status, entry] =
++      std::as_const(*this).FindAndValidate(identity);
++  return {status, const_cast<Entry*>(entry)};
 +}
 +
 +std::pair<PolicyPublicationAckStatus,
