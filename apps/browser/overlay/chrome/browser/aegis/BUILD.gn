@@ -248,6 +248,7 @@ if (!is_android) {
       "//chrome/browser/aegis/access:access_url_loader_throttle",
       "//chrome/browser/bookmarks",
       "//chrome/browser/notifications:test_support",
+      "//chrome/browser/net:impl",
       "//chrome/browser/prefs",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/renderer_context_menu:test_support",
