@@ -98,6 +98,7 @@ source_set("access_proxying_url_loader_factory") {
     "//chrome/browser/profiles:profile",
     "//components/aegis_access",
     "//components/aegis_access:published_request_runtime",
+    "//components/aegis_access:request_ownership_registry",
     "//content/public/browser",
     "//mojo/public/cpp/bindings",
     "//net",
@@ -147,6 +148,7 @@ test("access_request_dispatch_state_unittests") {
   sources = [ "access_request_dispatch_state_unittest.cc" ]
   deps = [
     ":access_request_dispatch_state",
+    "//base",
     "//base/test:run_all_unittests",
     "//chrome/browser/profiles:test_support",
     "//content/public/test",
