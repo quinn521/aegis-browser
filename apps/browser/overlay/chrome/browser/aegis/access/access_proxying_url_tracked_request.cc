@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
 #include "chrome/browser/aegis/access/access_request_dispatch_state.h"
 #include "content/public/browser/browser_thread.h"
