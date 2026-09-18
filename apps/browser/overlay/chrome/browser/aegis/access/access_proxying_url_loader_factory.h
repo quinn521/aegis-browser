@@ -28,6 +28,7 @@ class RenderFrameHost;
 
 namespace aegis::access {
 
+struct AccessBrowserRequestMetadataResult;
 class AccessPublishedRequestRuntime;
 class AccessProxyingURLTrackedRequest;
 
