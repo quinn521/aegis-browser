@@ -29,7 +29,7 @@ AccessIdentityGenerationSource* AccessIdentityGenerationSource::Get(
 // static
 AccessIdentityGenerationSource* AccessIdentityGenerationSource::GetOrCreate(
     Profile* profile) {
-  if (!aegis::IsAegisProfileSupported(profile)) {
+  if (!profile || !aegis::IsAegisProfileSupported(profile)) {
     return nullptr;
   }
   if (auto* existing = Get(profile)) {
