@@ -455,24 +455,6 @@ rg -Fq 'SubframeNavigationWithoutPolicyPreservesNativePath' \
 rg -Fq 'SubframeNavigationUsesPrimaryPageProxy' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must browser-test proxied subframe navigation"
-rg -Fq 'SubframeNavigationWithoutPolicyPreservesNativePath' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must preserve native subframe navigation without Access policy"
-rg -Fq 'seed_input->top_frame_site = top_frame_site.Serialize();' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must capture browser-owned primary top site for subframe navigation"
-rg -Fq 'UsesBrowserOwnedTopSiteForNestedPendingNavigation' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must preserve nested navigation top-site ownership"
-rg -Fq 'SubframePendingNavigationPreservesPrimaryTopFrameSite' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must browser-test nested navigation ownership"
-rg -Fq 'SubframeNavigationWithoutPolicyPreservesNativePath' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must preserve native subframe navigation without Access policy"
-rg -Fq 'SubframeNavigationUsesPrimaryPageProxy' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must browser-test proxied subframe navigation"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
