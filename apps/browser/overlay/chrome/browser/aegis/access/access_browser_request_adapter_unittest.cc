@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/task_environment.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/test/base/testing_profile.h"
