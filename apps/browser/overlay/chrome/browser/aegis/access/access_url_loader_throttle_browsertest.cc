@@ -5,8 +5,11 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <utility>
 
+#include "base/check.h"
 #include "base/files/file_path.h"
+#include "base/memory/raw_ptr.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/aegis/access/access_identity_generation_source.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
@@ -30,6 +33,7 @@ namespace aegis::access {
 namespace {
 
 constexpr char kProxyGroup[] = "browser-test-proxy-group";
+constexpr char kTargetHost[] = "target.example";
 constexpr char kLoopbackHost[] = "127.0.0.1";
 
 std::unique_ptr<net::test_server::HttpResponse> HandleOriginRequest(
@@ -76,6 +80,7 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
         &HandleProxyRequest, base::Unretained(&proxy_requests_)));
     ASSERT_TRUE(origin_.Start());
     ASSERT_TRUE(proxy_.Start());
+    host_resolver()->AddRule(kTargetHost, kLoopbackHost);
 
     profile_ = browser()->profile();
     ASSERT_NE(profile_, nullptr);
@@ -108,7 +113,7 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
     rule.policy.rule_id = "browser-test-rule";
     rule.policy.owner = owner;
     rule.policy.scope = aegis_access::PolicyScope::kProfile;
-    rule.policy.destination_host = kLoopbackHost;
+    rule.policy.destination_host = kTargetHost;
     rule.policy.include_subdomains = false;
     rule.policy.schemes = {aegis_access::RequestScheme::kHttp};
     rule.policy.ports.scope =
@@ -135,7 +140,7 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
 
     AccessIdentityGenerationSource* identity =
         AccessIdentityGenerationSource::GetOrCreate(profile_);
-    ASSERT_NE(identity, nullptr);
+    CHECK(identity);
     const auto identity_result = identity->CommitIdentity(
         {aegis_access::AccessIdentityKind::kInstallationGuest,
          "browser-test-guest", "browser-test-entitlement", "dev",
@@ -145,7 +150,7 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
 
     AccessProxySelectionGenerationSource* selection =
         AccessProxySelectionGenerationSource::GetOrCreate(profile_);
-    ASSERT_NE(selection, nullptr);
+    CHECK(selection);
     const auto selection_result = selection->CommitSelection(
         {kProxyGroup, "endpoint-local", "lease-local", "assignment-local", 1});
     EXPECT_EQ(selection_result.status,
@@ -153,14 +158,14 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
 
     AccessPublishedRequestRuntime* runtime =
         AccessPublishedRequestRuntime::GetOrCreate(profile_);
-    ASSERT_NE(runtime, nullptr);
+    CHECK(runtime);
     const auto publication =
         runtime->PublishCommittedPolicySnapshot(ProxyPolicy(owner));
     EXPECT_EQ(publication.status, AccessPolicyPublicationStatus::kPublished);
 
     ProfileNetworkContextService* network_service =
         ProfileNetworkContextServiceFactory::GetForContext(profile_);
-    ASSERT_NE(network_service, nullptr);
+    CHECK(network_service);
     EXPECT_GT(network_service->GetAegisBaseProxyConfigGeneration(), 0u);
 
     const auto tuple_result =
@@ -181,7 +186,7 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
         kLoopbackHost,
         static_cast<uint16_t>(proxy_.port())};
     CHECK(transport_->PublishProxySelection(
-        base::FilePath(), {kLoopbackHost}, endpoint));
+        base::FilePath(), {kTargetHost}, endpoint));
     transport_->FlushClientsForTesting(base::FilePath());
     return current;
   }
@@ -196,10 +201,10 @@ class AccessURLLoaderThrottleBrowserTest : public InProcessBrowserTest {
 
 IN_PROC_BROWSER_TEST_F(AccessURLLoaderThrottleBrowserTest,
                        OffKeepsRealBrowserOnNativePath) {
-  const GURL target = origin_.GetURL("/native");
+  const GURL target = origin_.GetURL(kTargetHost, "/native");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), target));
-  EXPECT_EQ(content::EvalJs(web_contents(), "document.body.textContent"),
-            "origin");
+  EXPECT_EQ("origin",
+            content::EvalJs(web_contents(), "document.body.textContent"));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 1u);
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
 }
@@ -208,10 +213,10 @@ IN_PROC_BROWSER_TEST_F(AccessURLLoaderThrottleBrowserTest,
                        ExactHostProxyRequestReachesLocalProxy) {
   PublishReadyAccessState(false);
 
-  const GURL target = origin_.GetURL("/selected");
+  const GURL target = origin_.GetURL(kTargetHost, "/selected");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), target));
-  EXPECT_EQ(content::EvalJs(web_contents(), "document.body.textContent"),
-            "proxy");
+  EXPECT_EQ("proxy",
+            content::EvalJs(web_contents(), "document.body.textContent"));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
   EXPECT_GE(proxy_requests_.load(std::memory_order_relaxed), 1u);
 }
@@ -220,7 +225,7 @@ IN_PROC_BROWSER_TEST_F(AccessURLLoaderThrottleBrowserTest,
                        StalePublishedEndpointFailsBeforeNetworkSend) {
   PublishReadyAccessState(true);
 
-  const GURL target = origin_.GetURL("/stale");
+  const GURL target = origin_.GetURL(kTargetHost, "/stale");
   EXPECT_FALSE(ui_test_utils::NavigateToURL(browser(), target));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
