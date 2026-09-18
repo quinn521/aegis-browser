@@ -517,6 +517,8 @@ rg -Fq 'URLLoaderFactoryType::kWorkerSubResource && frame' \
   fail "patch 0142 must gate Worker subresources on a browser-owned frame"
 rg -Fq 'MaybeProxyWorkerSubResource' "$WORKER_SUBRESOURCE_PATCH_FILE" ||
   fail "patch 0142 must install the frame-owned Worker subresource wrapper"
+rg -Fq 'MaybeProxyFrameOwnedWorkerFactory' "$WORKER_SUBRESOURCE_PATCH_FILE" ||
+  fail "patch 0142 must share frame-owned Worker metadata and startup validation"
 rg -Fq 'WorkerSubresourceWithoutPolicyPreservesNativePath' \
   "$WORKER_SUBRESOURCE_PATCH_FILE" ||
   fail "patch 0142 must browser-test native Worker subresource behavior"
