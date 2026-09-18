@@ -178,23 +178,6 @@ CaptureProxyFactoryMetadata(
   return std::move(*metadata.metadata);
 }
 
-class CallbackTerminationHandle final
-    : public aegis_access::RequestTerminationHandle {
- public:
-  explicit CallbackTerminationHandle(base::OnceClosure terminate)
-      : terminate_(std::move(terminate)) {}
-  ~CallbackTerminationHandle() override = default;
-
-  void Terminate() override {
-    if (terminate_) {
-      std::move(terminate_).Run();
-    }
-  }
-
- private:
-  base::OnceClosure terminate_;
-};
-
 class BrowserContextData : public base::SupportsUserData::Data {
  public:
   BrowserContextData(const BrowserContextData&) = delete;
@@ -315,6 +298,25 @@ AccessProxyingURLLoaderFactory::EvaluateRequest(
     const network::ResourceRequest& request,
     int* net_error,
     aegis_access::RequestOwnershipRecord* ownership_record) {
+  return EvaluateUrl(request.url, nullptr, net_error, ownership_record);
+}
+
+AccessProxyingURLLoaderFactory::RequestDisposition
+AccessProxyingURLLoaderFactory::EvaluateRedirect(
+    const GURL& redirect_url,
+    const std::string& stable_request_id,
+    int* net_error,
+    aegis_access::RequestOwnershipRecord* ownership_record) {
+  return EvaluateUrl(redirect_url, &stable_request_id, net_error,
+                     ownership_record);
+}
+
+AccessProxyingURLLoaderFactory::RequestDisposition
+AccessProxyingURLLoaderFactory::EvaluateUrl(
+    const GURL& request_url,
+    const std::string* stable_request_id,
+    int* net_error,
+    aegis_access::RequestOwnershipRecord* ownership_record) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   CHECK(net_error);
   CHECK(ownership_record);
@@ -337,6 +339,12 @@ AccessProxyingURLLoaderFactory::EvaluateRequest(
     return factory_snapshot ? RequestDisposition::kBlock
                             : RequestDisposition::kPreserveNative;
   }
+  if (stable_request_id) {
+    if (stable_request_id->empty()) {
+      return RequestDisposition::kBlock;
+    }
+    metadata.metadata->request_id = *stable_request_id;
+  }
 
   const aegis_access::PublishedAccessPolicySnapshot* snapshot =
       runtime ? runtime->GetPublishedPolicySnapshot(metadata.metadata->owner)
@@ -347,7 +355,7 @@ AccessProxyingURLLoaderFactory::EvaluateRequest(
 
   aegis_access::RequestPolicyContextResult context_result =
       aegis_access::CanonicalizeBrowserOwnedRequest(*metadata.metadata,
-                                                    request.url);
+                                                    request_url);
   if (!context_result.context.has_value()) {
     return RequestDisposition::kBlock;
   }
@@ -412,13 +420,8 @@ void AccessProxyingURLLoaderFactory::CreateLoaderAndStart(
   AccessProxyingURLTrackedRequest* tracked_ptr = tracked.get();
   requests_.emplace(std::move(tracked));
 
-  auto termination = std::make_unique<CallbackTerminationHandle>(
-      base::BindOnce(&AccessProxyingURLTrackedRequest::TerminateFromRegistry,
-                     tracked_ptr->GetWeakPtr()));
   const aegis_access::RequestOwnershipStatus dispatch_status =
-      dispatch_state->ownership().MarkDispatched(
-          ownership_record.request_id, ownership_record.owner,
-          ownership_record.generations, std::move(termination));
+      tracked_ptr->MarkDispatched();
   if (dispatch_status != aegis_access::RequestOwnershipStatus::kOk) {
     dispatch_state->ownership().Complete(
         ownership_record.request_id, ownership_record.owner,
