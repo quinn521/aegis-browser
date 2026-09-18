@@ -4,6 +4,7 @@
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
 
 #include <cstddef>
+#include <string>
 
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
