@@ -127,7 +127,7 @@ function recordLcovSource(lines, sourceRoot, files) {
   if (sourceLines.length !== 1) fail('lcov.info contains an invalid record');
   const path = sourceLines[0].slice(3);
   if (
-    !path || isAbsolute(path) || path.includes('\\\\') ||
+    !path || isAbsolute(path) || path.includes('\\') ||
     path.split('/').includes('..') || posix.normalize(path) !== path
   ) {
     fail(`lcov.info contains an unsafe source path: ${path}`);
