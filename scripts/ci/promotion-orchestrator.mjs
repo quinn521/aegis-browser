@@ -64,11 +64,17 @@ export function classifyBranchRelationship({originMain, upstreamMain, originMain
 }
 
 function qualityRunMatches(run, {repo, branch, sha}) {
-  return run?.event === 'push'
-    && run?.head_branch === branch
-    && run?.head_sha === sha
-    && run?.path === QUALITY_WORKFLOW_PATH
-    && run?.repository?.full_name === repo;
+  return qualityRunSourceMatches(run) &&
+    qualityRunTargetMatches(run, {repo, branch, sha});
+}
+
+function qualityRunSourceMatches(run) {
+  return run?.event === 'push' && run?.path === QUALITY_WORKFLOW_PATH;
+}
+
+function qualityRunTargetMatches(run, {repo, branch, sha}) {
+  return run?.head_branch === branch && run?.head_sha === sha &&
+    run?.repository?.full_name === repo;
 }
 
 function qualityRunState(run, expected) {
@@ -102,6 +108,22 @@ function latestQualityRun(workflowRuns, expected) {
   return (workflowRuns ?? [])
     .filter((run) => qualityRunMatches(run, expected))
     .sort((left, right) => Number(right.id ?? 0) - Number(left.id ?? 0))[0];
+}
+
+function finalQualityAttemptState(run, finalRun, attempt, jobs, expected) {
+  if (finalRun?.id !== run.id) return 'failure';
+  if (finalRun.run_attempt !== attempt) return 'pending';
+  return qualityWorkflowRunState(finalRun, jobs, expected);
+}
+
+async function verifiedQualityRunState(repo, run, expected, token, apiFn) {
+  const state = qualityRunState(run, expected);
+  if (state !== 'success') return state;
+  const attempt = Number(run.run_attempt);
+  if (!Number.isInteger(attempt) || attempt < 1) return 'failure';
+  const result = await apiFn(repo, `/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {token});
+  const finalRun = await apiFn(repo, `/actions/runs/${run.id}`, {token});
+  return finalQualityAttemptState(run, finalRun, attempt, result?.jobs, expected);
 }
 
 export function closedPullBlocks(pr, expectedHeadSha) {
@@ -191,23 +213,7 @@ export async function requireGreenQuality(
     return false;
   }
   const run = await apiFn(repo, `/actions/runs/${selected.id}`, {token});
-  let state = qualityRunState(run, expected);
-  if (state === 'success') {
-    const attempt = Number(run.run_attempt);
-    if (!Number.isInteger(attempt) || attempt < 1) {
-      state = 'failure';
-    } else {
-      const result = await apiFn(repo, `/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {token});
-      const finalRun = await apiFn(repo, `/actions/runs/${run.id}`, {token});
-      if (finalRun?.id !== run.id) {
-        state = 'failure';
-      } else if (finalRun.run_attempt !== attempt) {
-        state = 'pending';
-      } else {
-        state = qualityWorkflowRunState(finalRun, result?.jobs, expected);
-      }
-    }
-  }
+  const state = await verifiedQualityRunState(repo, run, expected, token, apiFn);
   if (state === 'success') return true;
   if (state === 'missing' || state === 'pending') {
     console.log(`Deferred: ${repo}:${branch}@${commitSha.slice(0, 12)} quality workflow is ${state}`);
