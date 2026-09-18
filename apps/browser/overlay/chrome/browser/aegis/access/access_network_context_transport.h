@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback_forward.h"
 #include "base/supports_user_data.h"
 #include "components/aegis_access/access_proxy_route_adapter.h"
 #include "components/aegis_access/access_route_types.h"
@@ -20,6 +21,19 @@
 class Profile;
 
 namespace aegis::access {
+
+enum class AccessNetworkConfigAckStatus {
+  kStarted,
+  kInvalidOwner,
+  kMissingPartition,
+  kNoClients,
+  kBuildFailed,
+};
+
+struct AccessNetworkConfigAckResult {
+  AccessNetworkConfigAckStatus status = AccessNetworkConfigAckStatus::kBuildFailed;
+  size_t required_client_acks = 0;
+};
 
 // Profile-owned transport state for the first Network Service integration
 // slice. This is deliberately not another KeyedService: its lifetime is the
@@ -87,6 +101,13 @@ class AccessNetworkContextTransport
       const aegis_access::OwnershipKey& owner,
       const std::string& proxy_group_id,
       const std::string& exact_host) const;
+
+  // Re-publishes the currently committed custom proxy config and completes
+  // |all_clients_acked| only after every currently attached NetworkContext has
+  // acknowledged Chromium's real CustomProxyConfigClient Mojo call.
+  AccessNetworkConfigAckResult RepublishCurrentConfigWithAck(
+      const aegis_access::OwnershipKey& owner,
+      base::OnceClosure all_clients_acked);
 
   network::mojom::CustomProxyConfigPtr BuildConfigForTesting(
       const base::FilePath& relative_partition_path) const;
