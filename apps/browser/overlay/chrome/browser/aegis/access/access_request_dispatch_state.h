@@ -80,7 +80,8 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
  private:
   explicit AccessRequestDispatchState(Profile* profile);
   void OnNetworkContextPublicationAck(
-      aegis_access::PolicyPublicationIdentity identity);
+      aegis_access::PolicyPublicationIdentity identity,
+      bool acknowledged);
 
   Profile* const profile_;
   aegis_access::RequestDispatchBarrierRegistry barriers_;
