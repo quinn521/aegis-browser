@@ -452,7 +452,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +  PublishProxyPolicy(/*publish_endpoint=*/true);
 +
 +  auto* dispatch_state =
-+      AccessRequestDispatchState::Get(browser()->profile());
++      AccessRequestDispatchState::GetOrCreate(browser()->profile());
 +  ASSERT_NE(dispatch_state, nullptr);
 +  StartFetch(slow_url());
 +  ASSERT_TRUE(base::test::RunUntil([&] {
