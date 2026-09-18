@@ -235,6 +235,69 @@ TEST_F(AccessNetworkContextTransportTest,
 }
 
 TEST_F(AccessNetworkContextTransportTest,
+       RealCustomProxyConfigCallbackAcknowledgesPublication) {
+  const base::FilePath partition;
+  auto delegate = CreateDelegate(partition);
+  const auto endpoint = EndpointFor(partition);
+  ASSERT_TRUE(transport_->PublishProxySelection(
+      partition, {kTargetHost}, endpoint));
+
+  bool acked = false;
+  const auto started = transport_->RepublishCurrentConfigWithAck(
+      endpoint.owner,
+      base::BindOnce([](bool* value) { *value = true; }, &acked));
+  EXPECT_EQ(started.status, AccessNetworkConfigAckStatus::kStarted);
+  EXPECT_EQ(started.required_client_acks, 1u);
+  EXPECT_FALSE(acked);
+
+  transport_->FlushClientsForTesting(partition);
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(acked);
+}
+
+TEST_F(AccessNetworkContextTransportTest,
+       PublicationAckWaitsForEveryAttachedNetworkContext) {
+  const base::FilePath partition;
+  auto first_delegate = CreateDelegate(partition);
+  auto second_delegate = CreateDelegate(partition);
+  const auto endpoint = EndpointFor(partition);
+
+  bool acked = false;
+  const auto started = transport_->RepublishCurrentConfigWithAck(
+      endpoint.owner,
+      base::BindOnce([](bool* value) { *value = true; }, &acked));
+  EXPECT_EQ(started.status, AccessNetworkConfigAckStatus::kStarted);
+  EXPECT_EQ(started.required_client_acks, 2u);
+  EXPECT_FALSE(acked);
+
+  transport_->FlushClientsForTesting(partition);
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(acked);
+}
+
+TEST_F(AccessNetworkContextTransportTest,
+       PublicationAckRejectsForgedOwnerAndMissingClient) {
+  const base::FilePath partition;
+  auto owner = transport_->OwnerForPartition(
+      aegis_access::ChannelNamespace::kDev, partition);
+  ASSERT_TRUE(owner.has_value());
+
+  bool acked = false;
+  auto no_client = transport_->RepublishCurrentConfigWithAck(
+      *owner, base::BindOnce([](bool* value) { *value = true; }, &acked));
+  EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kInvalidOwner);
+  EXPECT_FALSE(acked);
+
+  auto delegate = CreateDelegate(partition);
+  auto forged = *owner;
+  forged.profile_token = "other-profile";
+  auto forged_result = transport_->RepublishCurrentConfigWithAck(
+      forged, base::BindOnce([](bool* value) { *value = true; }, &acked));
+  EXPECT_EQ(forged_result.status, AccessNetworkConfigAckStatus::kInvalidOwner);
+  EXPECT_FALSE(acked);
+}
+
+TEST_F(AccessNetworkContextTransportTest,
        NonIdempotentFirstSendUsesSelectedProxy) {
   const base::FilePath partition;
   auto delegate = CreateDelegate(partition);
