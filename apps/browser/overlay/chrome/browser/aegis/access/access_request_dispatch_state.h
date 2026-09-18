@@ -3,6 +3,8 @@
 #ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
 
+#include <cstddef>
+
 #include "base/supports_user_data.h"
 #include "components/aegis_access/request_ownership_registry.h"
 
