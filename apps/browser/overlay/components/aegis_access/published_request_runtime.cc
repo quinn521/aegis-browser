@@ -47,12 +47,32 @@ RoutePlan StalePolicyGenerationPlan(
   return plan;
 }
 
+PublishedRequestRuntimeStatus StatusForGate(
+    const RequestDispatchGateResult& gate) {
+  if (gate.status == RequestDispatchGateStatus::kAllowRegistered &&
+      gate.decision == RequestDispatchDecision::kAllow) {
+    return PublishedRequestRuntimeStatus::kDispatchRegistered;
+  }
+  if (gate.status == RequestDispatchGateStatus::kBlockedByBarrier) {
+    return PublishedRequestRuntimeStatus::kBlockedByBarrier;
+  }
+  return PublishedRequestRuntimeStatus::kRegistrationFailed;
+}
+
+PublishedRequestRuntimeResult InvalidRouteAction(RoutePlan route_plan) {
+  route_plan.action = RouteAction::kFail;
+  route_plan.reason = RouteReason::kInvalidPolicy;
+  route_plan.registered_proxy_entry.reset();
+  return NoDispatch(PublishedRequestRuntimeStatus::kFail,
+                    std::move(route_plan));
+}
+
 }  // namespace
 
 PublishedRequestRuntimeResult EvaluatePublishedRequestForDispatch(
     const PublishedRequestRuntimeInput& input,
-    const RequestDispatchBarrierRegistry* barriers,
-    RequestOwnershipRegistry* ownership_registry) {
+    const RequestDispatchBarrierRegistry& barriers,
+    RequestOwnershipRegistry& ownership_registry) {
   if (input.snapshot_state == SnapshotState::kPublished &&
       (input.matched_policy_generation == 0 ||
        input.matched_policy_generation !=
@@ -75,22 +95,16 @@ PublishedRequestRuntimeResult EvaluatePublishedRequestForDispatch(
     case RouteAction::kPreserveNative:
     case RouteAction::kUseRegisteredProxy:
       break;
+    default:
+      return InvalidRouteAction(std::move(route_plan));
   }
 
   RequestDispatchGateResult gate = EvaluateAndRegisterRequestForDispatch(
-      input.request, barriers, ownership_registry);
+      input.request, &barriers, &ownership_registry);
   PublishedRequestRuntimeResult result;
+  result.status = StatusForGate(gate);
   result.route_plan = std::move(route_plan);
   result.dispatch_gate = gate;
-
-  if (gate.status == RequestDispatchGateStatus::kAllowRegistered &&
-      gate.decision == RequestDispatchDecision::kAllow) {
-    result.status = PublishedRequestRuntimeStatus::kDispatchRegistered;
-  } else if (gate.status == RequestDispatchGateStatus::kBlockedByBarrier) {
-    result.status = PublishedRequestRuntimeStatus::kBlockedByBarrier;
-  } else {
-    result.status = PublishedRequestRuntimeStatus::kRegistrationFailed;
-  }
   return result;
 }
 
