@@ -5,7 +5,9 @@
 
 #include <cstddef>
 
+#include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
+#include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "components/aegis_access/policy_publication_ack_tracker.h"
 #include "components/aegis_access/request_ownership_registry.h"
 
@@ -70,12 +72,20 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
   AccessPolicyBarrierReleaseResult ReleaseBlockBarrierForReadyPublication(
       const aegis_access::PolicyPublicationIdentity& identity);
 
- private:
-  AccessRequestDispatchState();
+  AccessNetworkConfigAckResult RequestNetworkContextPublicationAck(
+      const aegis_access::PolicyPublicationIdentity& identity,
+      const aegis_access::OwnershipKey& owner);
 
+ private:
+  explicit AccessRequestDispatchState(Profile* profile);
+  void OnNetworkContextPublicationAck(
+      aegis_access::PolicyPublicationIdentity identity);
+
+  Profile* const profile_;
   aegis_access::RequestDispatchBarrierRegistry barriers_;
   aegis_access::RequestOwnershipRegistry ownership_;
   aegis_access::PolicyPublicationAckTracker publication_acks_;
+  base::WeakPtrFactory<AccessRequestDispatchState> weak_factory_{this};
 };
 
 }  // namespace aegis::access
