@@ -73,6 +73,7 @@ source_set("access_request_dispatch_state") {
     "access_request_dispatch_state.h",
   ]
   deps = [
+    ":access_network_context_transport",
     "//base",
     "//chrome/browser/aegis:profile_support",
     "//chrome/browser/profiles:profile",
