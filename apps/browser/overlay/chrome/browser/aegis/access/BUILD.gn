@@ -90,11 +90,13 @@ source_set("access_published_request_runtime") {
     ":access_identity_generation_source",
     ":access_network_context_transport",
     ":access_proxy_selection_generation_source",
-    ":access_rule_store",
     "//base",
     "//chrome/browser/aegis:profile_support",
     "//chrome/browser/net:impl",
     "//chrome/browser/profiles:profile",
+  ]
+  public_deps = [
+    ":access_rule_store",
     "//components/aegis_access",
     "//components/aegis_access:request_generation_tuple_builder",
   ]
