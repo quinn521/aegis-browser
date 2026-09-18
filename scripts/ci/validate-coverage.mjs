@@ -66,7 +66,7 @@ function parseLcovSourcePath(lines, sourceRoot, files) {
 
   const path = sourceLines[0].slice(3);
   if (
-    !path || isAbsolute(path) || path.includes('\\\\') ||
+    !path || isAbsolute(path) || path.includes('\\') ||
     path.split('/').includes('..') || posix.normalize(path) !== path
   ) {
     fail(`lcov.info contains an unsafe source path: ${path}`);
@@ -99,7 +99,7 @@ function parseLcovLineTotals(lines, allowLineSummarySuperset) {
   const seenLines = new Set();
   let coveredLines = 0;
   for (const line of dataLines) {
-    const match = /^DA:(\\d+),(\\d+)(?:,.*)?$/u.exec(line);
+    const match = /^DA:(\d+),(\d+)(?:,.*)?$/u.exec(line);
     if (!match || Number(match[1]) < 1 || seenLines.has(match[1])) {
       fail('lcov.info contains invalid or duplicate DA data');
     }
