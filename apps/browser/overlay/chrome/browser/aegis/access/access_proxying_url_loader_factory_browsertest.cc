@@ -45,15 +45,22 @@ constexpr char kTargetHost[] = "target.example";
 constexpr char kUnselectedRedirectHost[] = "redirect-unselected.example";
 constexpr char kProxyGroup[] = "proxy-group-browser-test";
 
-std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
-    std::atomic<size_t>* counter,
-    const char* body,
-    const net::test_server::HttpRequest& request) {
+std::unique_ptr<net::test_server::HttpResponse>
+ServiceWorkerOriginReply(std::atomic<size_t>* counter,
+                         const net::test_server::HttpRequest& request) {
+  const bool is_script =
+      request.relative_url.find("/aegis-service-worker.js") !=
+      std::string::npos;
+  const bool is_data =
+      request.relative_url.find("/service-worker-data") != std::string::npos;
+  if (!is_script && !is_data) {
+    return nullptr;
+  }
+
   counter->fetch_add(1, std::memory_order_relaxed);
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_code(net::HTTP_OK);
-  if (request.relative_url.find("/aegis-service-worker.js") !=
-      std::string::npos) {
+  if (is_script) {
     response->set_content(
         "self.addEventListener('install', event => "
         "  event.waitUntil(self.skipWaiting()));"
@@ -68,6 +75,35 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
     response->set_content_type("application/javascript");
     return response;
   }
+
+  response->set_content("origin-service-worker-subresource");
+  response->set_content_type("text/plain");
+  return response;
+}
+
+std::unique_ptr<net::test_server::HttpResponse>
+ServiceWorkerProxyReply(std::atomic<size_t>* counter,
+                        const net::test_server::HttpRequest& request) {
+  if (request.relative_url.find("/service-worker-data") ==
+      std::string::npos) {
+    return nullptr;
+  }
+
+  counter->fetch_add(1, std::memory_order_relaxed);
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content("proxy-service-worker-subresource");
+  response->set_content_type("text/plain");
+  return response;
+}
+
+std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
+    std::atomic<size_t>* counter,
+    const char* body,
+    const net::test_server::HttpRequest& request) {
+  counter->fetch_add(1, std::memory_order_relaxed);
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
   if (request.relative_url.find("/worker-page") != std::string::npos) {
     response->set_content("<!doctype html><title>worker-main</title>");
     response->set_content_type("text/html");
@@ -90,12 +126,6 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
   }
   if (request.relative_url.find("/worker-data") != std::string::npos) {
     response->set_content("origin-worker-subresource");
-    response->set_content_type("text/plain");
-    return response;
-  }
-  if (request.relative_url.find("/service-worker-data") !=
-      std::string::npos) {
-    response->set_content("origin-service-worker-subresource");
     response->set_content_type("text/plain");
     return response;
   }
@@ -127,13 +157,6 @@ std::unique_ptr<net::test_server::HttpResponse> ProxyReply(
   if (request.relative_url.find("/worker-data") != std::string::npos) {
     response->set_code(net::HTTP_OK);
     response->set_content("proxy-worker-subresource");
-    response->set_content_type("text/plain");
-    return response;
-  }
-  if (request.relative_url.find("/service-worker-data") !=
-      std::string::npos) {
-    response->set_code(net::HTTP_OK);
-    response->set_content("proxy-service-worker-subresource");
     response->set_content_type("text/plain");
     return response;
   }
@@ -171,7 +194,11 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     host_resolver()->AddRule(kUnselectedRedirectHost, "127.0.0.1");
 
     target_origin_.RegisterRequestHandler(base::BindRepeating(
+        &ServiceWorkerOriginReply, base::Unretained(&origin_requests_)));
+    target_origin_.RegisterRequestHandler(base::BindRepeating(
         &CountAndReply, base::Unretained(&origin_requests_), "origin"));
+    proxy_server_.RegisterRequestHandler(base::BindRepeating(
+        &ServiceWorkerProxyReply, base::Unretained(&proxy_requests_)));
     proxy_server_.RegisterRequestHandler(base::BindRepeating(
         &ProxyReply, base::Unretained(&proxy_requests_),
         base::Unretained(&target_origin_)));
