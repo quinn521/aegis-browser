@@ -105,11 +105,12 @@ class AccessNetworkContextTransport
       const std::string& exact_host) const;
 
   // Re-publishes the currently committed custom proxy config and completes
-  // |all_clients_acked| only after every currently attached NetworkContext has
-  // acknowledged Chromium's real CustomProxyConfigClient Mojo call.
+  // |all_clients_settled| only after every currently attached NetworkContext
+  // has either acknowledged Chromium's real CustomProxyConfigClient Mojo call
+  // or dropped its callback. The bool is true only when every client ACKed.
   AccessNetworkConfigAckResult RepublishCurrentConfigWithAck(
       const aegis_access::OwnershipKey& owner,
-      base::OnceClosure all_clients_acked);
+      base::OnceCallback<void(bool)> all_clients_settled);
 
   network::mojom::CustomProxyConfigPtr BuildConfigForTesting(
       const base::FilePath& relative_partition_path) const;
