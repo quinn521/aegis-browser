@@ -256,7 +256,21 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    GURL hanging_url() const {
      return target_origin_.GetURL(kTargetHost, "/hang");
    }
-@@ -350,16 +364,47 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -184,6 +198,13 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+ 
+   bool FetchTarget() { return Fetch(target_url()); }
+ 
++  void ExpectRedirectFollowedThroughProxy() {
++    EXPECT_TRUE(base::test::RunUntil([&] {
++      return proxy_requests_.load(std::memory_order_relaxed) == 2u;
++    }));
++    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
++  }
++
+   void NavigateNewIframe(const GURL& url) {
+     ASSERT_TRUE(content::ExecJs(
+         web_contents(),
+@@ -350,13 +371,35 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
  }
  
  IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -265,12 +279,11 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    PublishProxyPolicy(/*publish_endpoint=*/true);
  
 -  EXPECT_FALSE(Fetch(redirect_url()));
-+  EXPECT_TRUE(Fetch(redirect_url()));
-   EXPECT_TRUE(base::test::RunUntil([&] {
+-  EXPECT_TRUE(base::test::RunUntil([&] {
 -    return proxy_requests_.load(std::memory_order_relaxed) == 1u;
-+    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-+  }));
-+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+-  }));
++  EXPECT_TRUE(Fetch(redirect_url()));
++  ExpectRedirectFollowedThroughProxy();
 +}
 +
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -278,21 +291,15 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +  PublishProxyPolicy(/*publish_endpoint=*/true);
 +
 +  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), redirect_url()));
-+  EXPECT_TRUE(base::test::RunUntil([&] {
-+    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-   }));
-   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
- }
- 
++  ExpectRedirectFollowedThroughProxy();
++}
++
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 +                       SubframeNavigationRedirectReevaluatesThroughProxy) {
 +  PublishProxyPolicy(/*publish_endpoint=*/true);
 +
 +  NavigateNewIframe(redirect_url());
-+  EXPECT_TRUE(base::test::RunUntil([&] {
-+    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-+  }));
-+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
++  ExpectRedirectFollowedThroughProxy();
 +}
 +
 +IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -301,12 +308,9 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +
 +  EXPECT_FALSE(Fetch(unselected_redirect_url()));
 +  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 1u);
-+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
-+}
-+
- IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
-                        BlockBarrierTerminatesInFlightProxyRequest) {
-   PublishProxyPolicy(/*publish_endpoint=*/true);
+   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+ }
+ 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
