@@ -7,22 +7,29 @@ Subject: [PATCH] feat(aegis): gate frame-owned Worker subresource traffic
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
-@@ -288,6 +288,15 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
-       factory_builder);
- }
- 
+@@ -274,6 +274,22 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
+     Profile* profile,
+     content::RenderFrameHost* frame,
+     network::URLLoaderFactoryBuilder& factory_builder) {
++  MaybeProxyFrameOwnedWorkerFactory(profile, frame, factory_builder);
++}
++
 +// static
 +void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
 +    Profile* profile,
 +    content::RenderFrameHost* frame,
 +    network::URLLoaderFactoryBuilder& factory_builder) {
-+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-+  MaybeProxyWorkerMainResource(profile, frame, factory_builder);
++  MaybeProxyFrameOwnedWorkerFactory(profile, frame, factory_builder);
 +}
 +
- // static
- void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
-     Profile* profile,
++// static
++void AccessProxyingURLLoaderFactory::MaybeProxyFrameOwnedWorkerFactory(
++    Profile* profile,
++    content::RenderFrameHost* frame,
++    network::URLLoaderFactoryBuilder& factory_builder) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   if (!frame) {
+     return;
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
@@ -53,6 +60,18 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/
    static void MaybeProxyNavigation(
        Profile* profile,
        content::RenderFrameHost* frame,
+@@ -92,6 +97,11 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
+  private:
+   friend class AccessProxyingURLTrackedRequest;
+ 
++  static void MaybeProxyFrameOwnedWorkerFactory(
++      Profile* profile,
++      content::RenderFrameHost* frame,
++      network::URLLoaderFactoryBuilder& factory_builder);
++
+   enum class RequestDisposition {
+     kPreserveNative,
+     kDispatchProxy,
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
