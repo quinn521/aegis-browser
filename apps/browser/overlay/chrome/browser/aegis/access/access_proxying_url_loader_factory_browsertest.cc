@@ -45,6 +45,28 @@ constexpr char kTargetHost[] = "target.example";
 constexpr char kUnselectedRedirectHost[] = "redirect-unselected.example";
 constexpr char kProxyGroup[] = "proxy-group-browser-test";
 
+std::unique_ptr<net::test_server::HttpResponse> ServiceWorkerReply(
+    const net::test_server::HttpRequest& request) {
+  if (request.relative_url != "/aegis-service-worker.js") {
+    return nullptr;
+  }
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content(
+      "self.addEventListener('install', event => "
+      "  event.waitUntil(self.skipWaiting()));"
+      "self.addEventListener('activate', event => "
+      "  event.waitUntil(self.clients.claim()));"
+      "self.addEventListener('message', event => {"
+      "  const port = event.ports[0];"
+      "  event.waitUntil(fetch(event.data, {mode: 'no-cors'})"
+      "    .then(() => port.postMessage('resolved'))"
+      "    .catch(() => port.postMessage('error')));"
+      "});");
+  response->set_content_type("application/javascript");
+  return response;
+}
+
 std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
     std::atomic<size_t>* counter,
     const char* body,
@@ -77,6 +99,12 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
     response->set_content_type("text/plain");
     return response;
   }
+  if (request.relative_url.find("/service-worker-data") !=
+      std::string::npos) {
+    response->set_content("origin-service-worker-subresource");
+    response->set_content_type("text/plain");
+    return response;
+  }
   if (request.relative_url.find("/worker.js") != std::string::npos) {
     response->set_content("self.postMessage('origin');");
     response->set_content_type("application/javascript");
@@ -105,6 +133,13 @@ std::unique_ptr<net::test_server::HttpResponse> ProxyReply(
   if (request.relative_url.find("/worker-data") != std::string::npos) {
     response->set_code(net::HTTP_OK);
     response->set_content("proxy-worker-subresource");
+    response->set_content_type("text/plain");
+    return response;
+  }
+  if (request.relative_url.find("/service-worker-data") !=
+      std::string::npos) {
+    response->set_code(net::HTTP_OK);
+    response->set_content("proxy-service-worker-subresource");
     response->set_content_type("text/plain");
     return response;
   }
@@ -148,6 +183,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
         base::Unretained(&target_origin_)));
     ASSERT_TRUE(target_origin_.Start());
     ASSERT_TRUE(proxy_server_.Start());
+    embedded_test_server()->RegisterRequestHandler(
+        base::BindRepeating(&ServiceWorkerReply));
     ASSERT_TRUE(embedded_test_server()->Start());
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -185,6 +222,14 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 
   GURL worker_subresource_url() const {
     return target_origin_.GetURL(kTargetHost, "/worker-data");
+  }
+
+  GURL service_worker_subresource_url() const {
+    return target_origin_.GetURL(kTargetHost, "/service-worker-data");
+  }
+
+  GURL service_worker_script_url() const {
+    return embedded_test_server()->GetURL("/aegis-service-worker.js");
   }
 
   GURL redirect_url() const {
@@ -314,6 +359,52 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
                    "    resolve('error');"
                    "  };"
                    "  worker.postMessage($1);"
+                   "})",
+                   url.spec()))
+        .ExtractString();
+  }
+
+  void StartServiceWorkerSubresourceHarness() {
+    EXPECT_EQ(
+        content::EvalJs(
+            web_contents(),
+            content::JsReplace(
+                "new Promise(async resolve => {"
+                "  try {"
+                "    const registration = "
+                "        await navigator.serviceWorker.register($1);"
+                "    await navigator.serviceWorker.ready;"
+                "    const worker = registration.active;"
+                "    if (!worker) { resolve('error'); return; }"
+                "    window.aegisServiceWorker = worker;"
+                "    resolve('ready');"
+                "  } catch { resolve('error'); }"
+                "})",
+                service_worker_script_url().spec()))
+            .ExtractString(),
+        "ready");
+  }
+
+  void PrepareServiceWorkerSubresourceTest(size_t* origin_before,
+                                           size_t* proxy_before) {
+    ASSERT_NE(origin_before, nullptr);
+    ASSERT_NE(proxy_before, nullptr);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), embedded_test_server()->GetURL("/title1.html")));
+    StartServiceWorkerSubresourceHarness();
+    *origin_before = origin_requests_.load(std::memory_order_relaxed);
+    *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  }
+
+  std::string FetchServiceWorkerSubresource(const GURL& url) {
+    return content::EvalJs(
+               web_contents(),
+               content::JsReplace(
+                   "new Promise(resolve => {"
+                   "  const worker = window.aegisServiceWorker;"
+                   "  const channel = new MessageChannel();"
+                   "  channel.port1.onmessage = event => resolve(event.data);"
+                   "  worker.postMessage($1, [channel.port2]);"
                    "})",
                    url.spec()))
         .ExtractString();
@@ -550,6 +641,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/false);
 
   EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()), "error");
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AccessProxyingURLLoaderFactoryBrowserTest,
+    ServiceWorkerSubresourceWithoutPolicyPreservesNativePath) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareServiceWorkerSubresourceTest(&origin_before, &proxy_before);
+
+  EXPECT_EQ(FetchServiceWorkerSubresource(service_worker_subresource_url()),
+            "resolved");
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return origin_requests_.load(std::memory_order_relaxed) ==
+           origin_before + 1u;
+  }));
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       ServiceWorkerSubresourceUsesSelectedProxy) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareServiceWorkerSubresourceTest(&origin_before, &proxy_before);
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  EXPECT_EQ(FetchServiceWorkerSubresource(service_worker_subresource_url()),
+            "resolved");
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) ==
+           proxy_before + 1u;
+  }));
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       ServiceWorkerSubresourceWithoutEndpointFailsClosed) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareServiceWorkerSubresourceTest(&origin_before, &proxy_before);
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+
+  EXPECT_EQ(FetchServiceWorkerSubresource(service_worker_subresource_url()),
+            "error");
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
 }
