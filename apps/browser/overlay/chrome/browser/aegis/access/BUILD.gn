@@ -102,6 +102,44 @@ source_set("access_published_request_runtime") {
   ]
 }
 
+source_set("access_request_dispatch_state") {
+  sources = [
+    "access_request_dispatch_state.cc",
+    "access_request_dispatch_state.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/aegis:profile_support",
+    "//chrome/browser/profiles:profile",
+  ]
+  public_deps = [
+    "//components/aegis_access:published_request_runtime",
+    "//components/aegis_access:request_ownership_registry",
+  ]
+}
+
+source_set("access_url_loader_throttle") {
+  sources = [
+    "access_url_loader_throttle.cc",
+    "access_url_loader_throttle.h",
+  ]
+  deps = [
+    ":access_browser_request_adapter",
+    ":access_network_context_transport",
+    ":access_published_request_runtime",
+    ":access_request_dispatch_state",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/aegis_access",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//third_party/blink/public/common",
+    "//url",
+  ]
+}
+
 test("access_identity_generation_source_unittests") {
   sources = [ "access_identity_generation_source_unittest.cc" ]
   deps = [
