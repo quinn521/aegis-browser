@@ -12,10 +12,12 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/test/run_until.h"
+#include "chrome/browser/aegis/access/access_browser_request_adapter.h"
 #include "chrome/browser/aegis/access/access_identity_generation_source.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/browser/aegis/access/access_proxy_selection_generation_source.h"
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
+#include "chrome/browser/aegis/access/access_request_dispatch_state.h"
 #include "chrome/browser/net/profile_network_context_service.h"
 #include "chrome/browser/net/profile_network_context_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -25,6 +27,7 @@
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/aegis_access/access_identity_generation_state.h"
 #include "components/aegis_access/access_proxy_selection_generation_state.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/http/http_status_code.h"
@@ -57,6 +60,9 @@ std::unique_ptr<net::test_server::HttpResponse> ProxyReply(
     net::test_server::EmbeddedTestServer* target_origin,
     const net::test_server::HttpRequest& request) {
   counter->fetch_add(1, std::memory_order_relaxed);
+  if (request.relative_url.find("/slow") != std::string::npos) {
+    return std::make_unique<net::test_server::HungResponse>();
+  }
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   if (request.relative_url.find("/redirect") != std::string::npos) {
     response->set_code(net::HTTP_FOUND);
@@ -116,6 +122,10 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     return target_origin_.GetURL(kTargetHost, "/redirect");
   }
 
+  GURL slow_url() const {
+    return target_origin_.GetURL(kTargetHost, "/slow");
+  }
+
   bool Fetch(const GURL& url) {
     return content::EvalJs(
                web_contents(),
@@ -127,6 +137,49 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
   }
 
   bool FetchTarget() { return Fetch(target_url()); }
+
+  void StartFetch(const GURL& url) {
+    ASSERT_TRUE(content::ExecJs(
+        web_contents(),
+        content::JsReplace(
+            "void (window.aegisFetchResult = "
+            "fetch($1, {mode: 'no-cors'}).then(() => true)"
+            ".catch(() => false));",
+            url.spec())));
+  }
+
+  bool AwaitFetchResult() {
+    return content::EvalJs(web_contents(), "window.aegisFetchResult")
+        .ExtractBool();
+  }
+
+  void BuildTargetSelector(
+      aegis_access::RequestCancellationSelector* selector) {
+    ASSERT_NE(selector, nullptr);
+    Profile* profile = browser()->profile();
+    content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
+    ASSERT_NE(frame, nullptr);
+
+    const content::FrameTreeNodeId frame_tree_node_id =
+        frame->GetFrameTreeNodeId();
+    auto wc_getter =
+        base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
+                            frame_tree_node_id);
+    const AccessBrowserRequestMetadataResult metadata =
+        BuildBrowserOwnedRequestMetadata(profile, wc_getter, frame_tree_node_id,
+                                         std::nullopt);
+    ASSERT_EQ(metadata.status, AccessBrowserRequestMetadataStatus::kOk);
+    ASSERT_TRUE(metadata.metadata.has_value());
+    ASSERT_TRUE(metadata.metadata->top_frame_site.has_value());
+
+    *selector = {metadata.metadata->owner,
+                 metadata.metadata->document_token,
+                 metadata.metadata->pending_navigation_token,
+                 metadata.metadata->top_frame_site->Serialize(),
+                 kTargetHost,
+                 aegis_access::RequestScheme::kHttp,
+                 static_cast<uint16_t>(target_url().EffectiveIntPort())};
+  }
 
   void PublishProxyPolicy(bool publish_endpoint) {
     Profile* profile = browser()->profile();
@@ -250,6 +303,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   EXPECT_FALSE(Fetch(redirect_url()));
   EXPECT_TRUE(base::test::RunUntil([&] {
     return proxy_requests_.load(std::memory_order_relaxed) == 1u;
+  }));
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       BlockOperationTerminatesInflightProxyRequest) {
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  auto* dispatch_state =
+      AccessRequestDispatchState::Get(browser()->profile());
+  ASSERT_NE(dispatch_state, nullptr);
+  StartFetch(slow_url());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) == 1u &&
+           dispatch_state->ownership().size() == 1u;
+  }));
+
+  aegis_access::RequestCancellationSelector selector;
+  BuildTargetSelector(&selector);
+  const AccessBlockOperationResult blocked =
+      dispatch_state->BeginBlockOperation(
+          {"browser-block-operation", 10, selector});
+  EXPECT_EQ(blocked.barrier_status,
+            aegis_access::RequestDispatchBarrierStatus::kOk);
+  EXPECT_TRUE(blocked.cancellation_attempted);
+  EXPECT_EQ(blocked.cancellation.status,
+            aegis_access::RequestOwnershipStatus::kOk);
+  ASSERT_EQ(blocked.cancellation.cancellations.size(), 1u);
+  EXPECT_TRUE(blocked.cancellation.cancellations.front().termination_invoked);
+  EXPECT_EQ(dispatch_state->ownership().size(), 0u);
+  EXPECT_FALSE(AwaitFetchResult());
+
+  // The installed barrier also blocks a new matching request after the
+  // in-flight termination. No request may fall back to DIRECT while BLOCK owns
+  // the page target.
+  EXPECT_FALSE(FetchTarget());
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 1u);
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+
+  EXPECT_EQ(dispatch_state->ReleaseBlockOperation(
+                selector, "browser-block-operation", 10),
+            aegis_access::RequestDispatchBarrierStatus::kOk);
+  EXPECT_TRUE(FetchTarget());
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
   }));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
 }
