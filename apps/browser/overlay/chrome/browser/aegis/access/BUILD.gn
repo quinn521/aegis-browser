@@ -152,3 +152,16 @@ test("access_rule_store_unittests") {
     "//url",
   ]
 }
+
+test("access_published_request_runtime_unittests") {
+  sources = [ "access_published_request_runtime_unittest.cc" ]
+  deps = [
+    ":access_network_context_transport",
+    ":access_published_request_runtime",
+    "//base/test:run_all_unittests",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:test_support",
+    "//services/network/public/mojom",
+    "//testing/gtest",
+  ]
+}
