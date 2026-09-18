@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "components/aegis_access/request_ownership_registry.h"
@@ -18,6 +19,7 @@ enum class PolicyPublicationAckStatus {
   kPending,
   kReady,
   kFinalized,
+  kFailed,
   kInvalidOperation,
   kCapacityExceeded,
   kStaleOperation,
@@ -51,6 +53,7 @@ struct PolicyPublicationAckSnapshot {
   size_t received_acks = 0;
   bool termination_complete = false;
   bool durable_committed = false;
+  bool failed = false;
   bool ready = false;
 };
 
@@ -80,6 +83,8 @@ class PolicyPublicationAckTracker {
       const PolicyPublicationIdentity& identity);
   PolicyPublicationAckResult MarkDurablyCommitted(
       const PolicyPublicationIdentity& identity);
+  PolicyPublicationAckResult MarkFailed(
+      const PolicyPublicationIdentity& identity);
   PolicyPublicationAckResult Lookup(
       const PolicyPublicationIdentity& identity) const;
   PolicyPublicationAckResult Finalize(
@@ -95,6 +100,7 @@ class PolicyPublicationAckTracker {
     bool require_termination = true;
     bool termination_complete = false;
     bool durable_committed = false;
+    bool failed = false;
   };
 
   Entry* FindBySelector(const RequestCancellationSelector& selector);
@@ -103,6 +109,18 @@ class PolicyPublicationAckTracker {
   PolicyPublicationAckStatus ValidateIdentity(
       const PolicyPublicationIdentity& identity,
       const Entry& entry) const;
+  PolicyPublicationAckStatus ValidateRequirements(
+      const PolicyPublicationAckRequirements& requirements,
+      std::set<std::string>* required_acks) const;
+  PolicyPublicationAckResult UpdateEntry(
+      Entry* entry,
+      PolicyPublicationAckRequirements requirements,
+      std::set<std::string> required_acks);
+  std::pair<PolicyPublicationAckStatus, Entry*> FindAndValidate(
+      const PolicyPublicationIdentity& identity);
+  std::pair<PolicyPublicationAckStatus, const Entry*> FindAndValidate(
+      const PolicyPublicationIdentity& identity) const;
+  static PolicyPublicationAckStatus CurrentStatus(const Entry& entry);
   static bool IsReady(const Entry& entry);
   static PolicyPublicationAckSnapshot SnapshotFor(const Entry& entry);
   static PolicyPublicationAckResult ResultFor(
