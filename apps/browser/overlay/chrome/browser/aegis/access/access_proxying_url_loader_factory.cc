@@ -6,7 +6,9 @@
 #include <optional>
 #include <utility>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/aegis/access/access_browser_request_adapter.h"
@@ -18,6 +20,7 @@
 #include "components/aegis_access/access_policy_evaluator.h"
 #include "components/aegis_access/published_request_runtime.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/page.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "mojo/public/cpp/bindings/receiver.h"
