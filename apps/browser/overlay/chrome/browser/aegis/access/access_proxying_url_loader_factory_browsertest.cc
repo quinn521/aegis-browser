@@ -516,36 +516,53 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
             url.spec())));
   }
 
-  void PublishProxyPolicy(bool publish_endpoint,
-                          std::string destination_host = kTargetHost) {
-    Profile* profile = browser()->profile();
+  uint64_t CommitIdentityGenerationForProxyPolicy() {
+    auto* identity =
+        AccessIdentityGenerationSource::GetOrCreate(browser()->profile());
+    EXPECT_NE(identity, nullptr);
+    if (!identity) {
+      return 0;
+    }
 
-    auto* identity = AccessIdentityGenerationSource::GetOrCreate(profile);
-    ASSERT_NE(identity, nullptr);
-    const auto identity_commit = identity->CommitIdentity(
+    const auto commit = identity->CommitIdentity(
         {aegis_access::AccessIdentityKind::kInstallationGuest,
          "guest-browser-test", "entitlement-browser-test", "dev", "access"});
-    EXPECT_EQ(identity_commit.status,
+    EXPECT_EQ(commit.status,
               aegis_access::IdentityGenerationCommitStatus::kCommitted);
+    return commit.generation;
+  }
 
+  uint64_t CommitSelectionGenerationForProxyPolicy() {
     auto* selection =
-        AccessProxySelectionGenerationSource::GetOrCreate(profile);
-    ASSERT_NE(selection, nullptr);
-    const auto selection_commit = selection->CommitSelection(
+        AccessProxySelectionGenerationSource::GetOrCreate(browser()->profile());
+    EXPECT_NE(selection, nullptr);
+    if (!selection) {
+      return 0;
+    }
+
+    const auto commit = selection->CommitSelection(
         {kProxyGroup, "endpoint-browser-test", "lease-browser-test",
          "assignment-browser-test", 1});
-    EXPECT_EQ(
-        selection_commit.status,
-        aegis_access::ProxySelectionGenerationCommitStatus::kCommitted);
+    EXPECT_EQ(commit.status,
+              aegis_access::ProxySelectionGenerationCommitStatus::kCommitted);
+    return commit.generation;
+  }
 
+  uint64_t CurrentBaseProxyGeneration() {
     auto* network_service =
-        ProfileNetworkContextServiceFactory::GetForContext(profile);
+        ProfileNetworkContextServiceFactory::GetForContext(browser()->profile());
     EXPECT_NE(network_service, nullptr);
-    const uint64_t base_proxy_generation =
-        network_service ? network_service->GetAegisBaseProxyConfigGeneration()
-                        : 0;
-    EXPECT_GT(base_proxy_generation, 0u);
+    if (!network_service) {
+      return 0;
+    }
 
+    const uint64_t generation =
+        network_service->GetAegisBaseProxyConfigGeneration();
+    EXPECT_GT(generation, 0u);
+    return generation;
+  }
+
+  void PublishCommittedProxyRule(const std::string& destination_host) {
     aegis_access::AccessPolicyRule rule;
     rule.rule_id = "rule-browser-test";
     rule.owner = *owner_;
@@ -569,30 +586,44 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     snapshot.policy_generation = 1;
     snapshot.independent_rules.push_back(std::move(stored_rule));
 
-    auto* runtime = AccessPublishedRequestRuntime::GetOrCreate(profile);
+    auto* runtime =
+        AccessPublishedRequestRuntime::GetOrCreate(browser()->profile());
     EXPECT_NE(runtime, nullptr);
+    if (!runtime) {
+      return;
+    }
+
     const AccessPolicyPublicationResult publication =
         runtime->PublishCommittedPolicySnapshot(snapshot);
     EXPECT_EQ(publication.status, AccessPolicyPublicationStatus::kPublished);
+  }
 
-    aegis_access::GenerationTuple generations{
+  void PublishSelectedProxyEndpoint(
+      const std::string& destination_host,
+      const aegis_access::GenerationTuple& generations) {
+    const aegis_access::RegisteredProxyEndpoint endpoint{
+        "registration-browser-test", kProxyGroup, *owner_, generations,
+        aegis_access::RegisteredProxyTransport::kHttp, "127.0.0.1",
+        static_cast<uint16_t>(proxy_server_.port())};
+    EXPECT_TRUE(transport_->PublishProxySelection(
+        base::FilePath(), {destination_host}, endpoint));
+    transport_->FlushClientsForTesting(base::FilePath());
+  }
+
+  void PublishProxyPolicy(bool publish_endpoint,
+                          std::string destination_host = kTargetHost) {
+    const aegis_access::GenerationTuple generations{
         1,
-        identity_commit.generation,
-        selection_commit.generation,
+        CommitIdentityGenerationForProxyPolicy(),
+        CommitSelectionGenerationForProxyPolicy(),
         transport_->network_epoch(),
-        base_proxy_generation,
+        CurrentBaseProxyGeneration(),
     };
 
+    PublishCommittedProxyRule(destination_host);
     if (publish_endpoint) {
-      const aegis_access::RegisteredProxyEndpoint endpoint{
-          "registration-browser-test", kProxyGroup, *owner_, generations,
-          aegis_access::RegisteredProxyTransport::kHttp, "127.0.0.1",
-          static_cast<uint16_t>(proxy_server_.port())};
-      EXPECT_TRUE(transport_->PublishProxySelection(
-          base::FilePath(), {destination_host}, endpoint));
-      transport_->FlushClientsForTesting(base::FilePath());
+      PublishSelectedProxyEndpoint(destination_host, generations);
     }
-
   }
 
   std::atomic<size_t> origin_requests_{0};
