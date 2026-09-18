@@ -300,6 +300,26 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       NavigationProxyPolicyRoutesMainFrameThroughProxy) {
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), target_url()));
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) == 1u;
+  }));
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       NavigationProxyPolicyWithoutEndpointFailsClosed) {
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+
+  EXPECT_FALSE(ui_test_utils::NavigateToURL(browser(), target_url()));
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        RedirectFromProxiedRequestFailsClosed) {
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
