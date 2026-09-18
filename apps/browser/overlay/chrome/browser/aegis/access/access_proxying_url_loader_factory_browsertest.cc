@@ -292,6 +292,16 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
         "ready");
   }
 
+  void PrepareWorkerSubresourceTest(size_t* origin_before,
+                                    size_t* proxy_before) {
+    ASSERT_NE(origin_before, nullptr);
+    ASSERT_NE(proxy_before, nullptr);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
+    StartWorkerSubresourceHarness();
+    *origin_before = origin_requests_.load(std::memory_order_relaxed);
+    *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  }
+
   std::string FetchWorkerSubresource(const GURL& url) {
     return content::EvalJs(
                web_contents(),
@@ -503,12 +513,9 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        WorkerSubresourceWithoutPolicyPreservesNativePath) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
-  StartWorkerSubresourceHarness();
-  const size_t origin_before =
-      origin_requests_.load(std::memory_order_relaxed);
-  const size_t proxy_before =
-      proxy_requests_.load(std::memory_order_relaxed);
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareWorkerSubresourceTest(&origin_before, &proxy_before);
 
   EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()),
             "origin-worker-subresource");
@@ -521,12 +528,9 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        WorkerSubresourceUsesSelectedProxy) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
-  StartWorkerSubresourceHarness();
-  const size_t origin_before =
-      origin_requests_.load(std::memory_order_relaxed);
-  const size_t proxy_before =
-      proxy_requests_.load(std::memory_order_relaxed);
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareWorkerSubresourceTest(&origin_before, &proxy_before);
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
   EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()),
@@ -540,12 +544,9 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        WorkerSubresourceWithoutEndpointFailsClosed) {
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
-  StartWorkerSubresourceHarness();
-  const size_t origin_before =
-      origin_requests_.load(std::memory_order_relaxed);
-  const size_t proxy_before =
-      proxy_requests_.load(std::memory_order_relaxed);
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareWorkerSubresourceTest(&origin_before, &proxy_before);
   PublishProxyPolicy(/*publish_endpoint=*/false);
 
   EXPECT_EQ(FetchWorkerSubresource(worker_subresource_url()), "error");
