@@ -131,6 +131,30 @@ inline void ExpectNewerOperationInvalidatesLateAck(
                   "late old completion cannot mutate newer operation");
 }
 
+inline void ExpectExecutionPointFailureStaysFailClosed(
+    PolicyPublicationAckTrackerTestObserver& observer) {
+  PolicyPublicationAckTracker tracker(8, 4);
+  const auto failed = PublicationRequirements(30, 30, "operation-failed");
+  tracker.Begin(failed);
+  observer.Expect(
+      tracker.MarkFailed(failed.identity).status ==
+          PolicyPublicationAckStatus::kFailed,
+      "execution-point failure marks publication failed");
+  observer.Expect(
+      tracker.Acknowledge(failed.identity, "network-context").status ==
+          PolicyPublicationAckStatus::kFailed,
+      "late ack cannot revive failed publication");
+  observer.Expect(
+      tracker.Finalize(failed.identity).status ==
+          PolicyPublicationAckStatus::kFailed,
+      "failed publication cannot finalize");
+
+  const auto retry = PublicationRequirements(31, 31, "operation-retry");
+  observer.Expect(
+      tracker.Begin(retry).status == PolicyPublicationAckStatus::kPending,
+      "newer operation can supersede failed publication");
+}
+
 inline void ExpectGenerationCannotMoveBackward(
     PolicyPublicationAckTrackerTestObserver& observer) {
   PolicyPublicationAckTracker tracker(8, 4);
@@ -184,6 +208,7 @@ inline void RunPolicyPublicationAckTrackerUnitTests(
 inline void RunPolicyPublicationAckTrackerRegressionTests(
     PolicyPublicationAckTrackerTestObserver& observer) {
   ExpectNewerOperationInvalidatesLateAck(observer);
+  ExpectExecutionPointFailureStaysFailClosed(observer);
   ExpectGenerationCannotMoveBackward(observer);
 }
 
