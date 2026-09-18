@@ -274,6 +274,22 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
     Profile* profile,
     content::RenderFrameHost* frame,
     network::URLLoaderFactoryBuilder& factory_builder) {
+  MaybeProxyFrameOwnedWorkerFactory(profile, frame, factory_builder);
+}
+
+// static
+void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  MaybeProxyFrameOwnedWorkerFactory(profile, frame, factory_builder);
+}
+
+// static
+void AccessProxyingURLLoaderFactory::MaybeProxyFrameOwnedWorkerFactory(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    network::URLLoaderFactoryBuilder& factory_builder) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!frame) {
     return;
@@ -290,15 +306,6 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerMainResource(
   BrowserContextData::StartProxying(
       profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
       factory_builder);
-}
-
-// static
-void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
-    Profile* profile,
-    content::RenderFrameHost* frame,
-    network::URLLoaderFactoryBuilder& factory_builder) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  MaybeProxyWorkerMainResource(profile, frame, factory_builder);
 }
 
 // static
