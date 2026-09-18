@@ -265,6 +265,22 @@ void MaybeProxyWorkerFactory(
       std::move(*metadata), factory_builder);
 }
 
+void MaybeProxyProfileOnlyFactory(
+    Profile* profile,
+    int render_process_id,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
+      CaptureProfileOnlyProxyFactoryMetadata(profile, render_process_id);
+  if (!metadata.has_value()) {
+    return;
+  }
+
+  BrowserContextData::StartProxying(
+      profile, content::FrameTreeNodeId(), std::nullopt, render_process_id,
+      std::move(*metadata), factory_builder);
+}
+
 }  // namespace
 
 AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
@@ -339,15 +355,7 @@ void AccessProxyingURLLoaderFactory::MaybeProxyWorkerSubResource(
     return;
   }
 
-  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
-      CaptureProfileOnlyProxyFactoryMetadata(profile, render_process_id);
-  if (!metadata.has_value()) {
-    return;
-  }
-
-  BrowserContextData::StartProxying(
-      profile, content::FrameTreeNodeId(), std::nullopt, render_process_id,
-      std::move(*metadata), factory_builder);
+  MaybeProxyProfileOnlyFactory(profile, render_process_id, factory_builder);
 }
 
 // static
@@ -355,16 +363,7 @@ void AccessProxyingURLLoaderFactory::MaybeProxyServiceWorkerSubResource(
     Profile* profile,
     int render_process_id,
     network::URLLoaderFactoryBuilder& factory_builder) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
-      CaptureProfileOnlyProxyFactoryMetadata(profile, render_process_id);
-  if (!metadata.has_value()) {
-    return;
-  }
-
-  BrowserContextData::StartProxying(
-      profile, content::FrameTreeNodeId(), std::nullopt, render_process_id,
-      std::move(*metadata), factory_builder);
+  MaybeProxyProfileOnlyFactory(profile, render_process_id, factory_builder);
 }
 
 // static
