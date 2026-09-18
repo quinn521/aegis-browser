@@ -10,6 +10,15 @@ class Profile;
 
 namespace aegis::access {
 
+struct AccessBlockAndCancelResult {
+  aegis_access::RequestDispatchBarrierStatus barrier_status =
+      aegis_access::RequestDispatchBarrierStatus::kInvalidBarrier;
+  aegis_access::RequestOwnershipStatus cancellation_status =
+      aegis_access::RequestOwnershipStatus::kInvalidCancellationSelector;
+  size_t matched_requests = 0;
+  size_t terminated_requests = 0;
+};
+
 // UI-thread Profile-owned request dispatch state shared by all Aegis
 // URLLoaderFactory wrappers for the Profile. Keeping barrier and ownership
 // registries here gives policy mutation/cancellation code one stable owner
@@ -30,6 +39,12 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
   aegis_access::RequestOwnershipRegistry& ownership() {
     return ownership_;
   }
+
+  // Installs the BLOCK barrier before touching in-flight ownership state, then
+  // terminates every matching request. If cancellation fails, the barrier is
+  // deliberately retained so new matching requests continue to fail closed.
+  AccessBlockAndCancelResult InstallBlockBarrierAndCancelMatching(
+      aegis_access::RequestDispatchBarrier barrier);
 
  private:
   AccessRequestDispatchState();
