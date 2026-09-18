@@ -147,6 +147,18 @@ test("access_base_proxy_config_generation_state_unittests") {
   ]
 }
 
+test("request_generation_tuple_builder_unittests") {
+  sources = [
+    "request_generation_tuple_builder_contract_test.h",
+    "request_generation_tuple_builder_unittest.cc",
+  ]
+  deps = [
+    ":request_generation_tuple_builder",
+    "//base/test:run_all_unittests",
+    "//testing/gtest",
+  ]
+}
+
 test("browser_request_metadata_seed_unittests") {
   sources = [
     "browser_request_metadata_seed_contract_test.h",
