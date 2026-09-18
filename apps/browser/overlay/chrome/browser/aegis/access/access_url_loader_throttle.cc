@@ -24,12 +24,6 @@ namespace {
 
 constexpr char kAccessCancelReason[] = "AegisAccessDispatch";
 
-std::unique_ptr<AccessURLLoaderThrottle> Deny(const GURL& url) {
-  return std::unique_ptr<AccessURLLoaderThrottle>(
-      new AccessURLLoaderThrottle(
-          url, AccessURLLoaderThrottle::StartDisposition::kDeny, nullptr, {}));
-}
-
 std::optional<aegis_access::RegisteredProxyEntry> ToRegisteredEntry(
     const aegis_access::RegisteredProxyEndpoint& endpoint) {
   if (endpoint.registration_id.empty() || endpoint.proxy_group_id.empty()) {
@@ -73,6 +67,12 @@ std::unique_ptr<AccessURLLoaderThrottle> AccessURLLoaderThrottle::MaybeCreate(
     return nullptr;
   }
 
+  const auto deny = [&request]() {
+    return std::unique_ptr<AccessURLLoaderThrottle>(
+        new AccessURLLoaderThrottle(request.url, StartDisposition::kDeny,
+                                    nullptr, {}));
+  };
+
   AccessBrowserRequestMetadataResult metadata_result =
       BuildBrowserOwnedRequestMetadata(profile, wc_getter, frame_tree_node_id,
                                        navigation_id);
@@ -87,7 +87,7 @@ std::unique_ptr<AccessURLLoaderThrottle> AccessURLLoaderThrottle::MaybeCreate(
       aegis_access::CanonicalizeBrowserOwnedRequest(*metadata_result.metadata,
                                                     request.url);
   if (!context_result.context.has_value()) {
-    return Deny(request.url);
+    return deny();
   }
   const aegis_access::RequestPolicyContext& context = *context_result.context;
 
@@ -111,42 +111,42 @@ std::unique_ptr<AccessURLLoaderThrottle> AccessURLLoaderThrottle::MaybeCreate(
   }
   if (match.policy_state != aegis_access::PolicyState::kValid ||
       match.effective_mode == aegis_access::AccessMode::kReject) {
-    return Deny(request.url);
+    return deny();
   }
   if (match.effective_mode != aegis_access::AccessMode::kProxy ||
       match.effective_proxy_group_id.empty()) {
-    return Deny(request.url);
+    return deny();
   }
 
   const aegis_access::RequestGenerationTupleBuildResult tuple_result =
       published_runtime->BuildProxyGenerationTuple(
           context.owner(), match.effective_proxy_group_id);
   if (!tuple_result.generations.has_value()) {
-    return Deny(request.url);
+    return deny();
   }
 
   AccessNetworkContextTransport* transport =
       AccessNetworkContextTransport::Get(profile);
   if (!transport) {
-    return Deny(request.url);
+    return deny();
   }
   const std::optional<aegis_access::RegisteredProxyEndpoint> endpoint =
       transport->ResolvePublishedProxyEndpoint(
           context.owner(), context.exact_host(),
           match.effective_proxy_group_id, *tuple_result.generations);
   if (!endpoint.has_value()) {
-    return Deny(request.url);
+    return deny();
   }
   const std::optional<aegis_access::RegisteredProxyEntry> registered_entry =
       ToRegisteredEntry(*endpoint);
   if (!registered_entry.has_value()) {
-    return Deny(request.url);
+    return deny();
   }
 
   scoped_refptr<AccessRequestDispatchState> dispatch_state =
       AccessRequestDispatchState::GetOrCreate(profile);
   if (!dispatch_state) {
-    return Deny(request.url);
+    return deny();
   }
 
   aegis_access::PublishedRequestRuntimeInput runtime_input;
@@ -174,7 +174,13 @@ std::unique_ptr<AccessURLLoaderThrottle> AccessURLLoaderThrottle::MaybeCreate(
           aegis_access::PublishedRequestRuntimeStatus::kDispatchRegistered ||
       dispatch.route_plan.action !=
           aegis_access::RouteAction::kUseRegisteredProxy) {
-    return Deny(request.url);
+    if (dispatch.status ==
+        aegis_access::PublishedRequestRuntimeStatus::kDispatchRegistered) {
+      dispatch_state->Complete(runtime_input.request.request_id,
+                               runtime_input.request.owner,
+                               runtime_input.request.generations);
+    }
+    return deny();
   }
 
   return std::unique_ptr<AccessURLLoaderThrottle>(
@@ -191,7 +197,9 @@ AccessURLLoaderThrottle::AccessURLLoaderThrottle(
     : expected_url_(std::move(expected_url)),
       disposition_(disposition),
       dispatch_state_(std::move(dispatch_state)),
-      request_record_(std::move(request_record)) {}
+      request_record_(std::move(request_record)),
+      registered_(disposition == StartDisposition::kDispatchProxy &&
+                  dispatch_state_ && !request_record_.request_id.empty()) {}
 
 AccessURLLoaderThrottle::~AccessURLLoaderThrottle() {
   CompleteRegistered();
@@ -220,6 +228,7 @@ void AccessURLLoaderThrottle::WillStartRequest(
       !lookup.snapshot.has_value() ||
       lookup.snapshot->lifecycle !=
           aegis_access::RequestOwnershipLifecycle::kNew) {
+    registered_ = false;
     CancelWithoutRegistry(kAccessCancelReason);
     return;
   }
@@ -234,10 +243,10 @@ void AccessURLLoaderThrottle::WillStartRequest(
   if (status != aegis_access::RequestOwnershipStatus::kOk) {
     dispatch_state_->Complete(request_record_.request_id, request_record_.owner,
                               request_record_.generations);
+    registered_ = false;
     CancelWithoutRegistry(kAccessCancelReason);
     return;
   }
-  registered_ = true;
 }
 
 void AccessURLLoaderThrottle::WillRedirectRequest(
