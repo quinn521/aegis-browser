@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -242,17 +243,20 @@ TEST_F(AccessNetworkContextTransportTest,
   ASSERT_TRUE(transport_->PublishProxySelection(
       partition, {kTargetHost}, endpoint));
 
-  bool acked = false;
+  std::optional<bool> acked;
   const auto started = transport_->RepublishCurrentConfigWithAck(
       endpoint.owner,
-      base::BindOnce([](bool* value) { *value = true; }, &acked));
+      base::BindOnce(
+          [](std::optional<bool>* value, bool success) { *value = success; },
+          &acked));
   EXPECT_EQ(started.status, AccessNetworkConfigAckStatus::kStarted);
   EXPECT_EQ(started.required_client_acks, 1u);
-  EXPECT_FALSE(acked);
+  EXPECT_FALSE(acked.has_value());
 
   transport_->FlushClientsForTesting(partition);
   task_environment_.RunUntilIdle();
-  EXPECT_TRUE(acked);
+  ASSERT_TRUE(acked.has_value());
+  EXPECT_TRUE(*acked);
 }
 
 TEST_F(AccessNetworkContextTransportTest,
@@ -262,41 +266,72 @@ TEST_F(AccessNetworkContextTransportTest,
   auto second_delegate = CreateDelegate(partition);
   const auto endpoint = EndpointFor(partition);
 
-  bool acked = false;
+  std::optional<bool> acked;
   const auto started = transport_->RepublishCurrentConfigWithAck(
       endpoint.owner,
-      base::BindOnce([](bool* value) { *value = true; }, &acked));
+      base::BindOnce(
+          [](std::optional<bool>* value, bool success) { *value = success; },
+          &acked));
   EXPECT_EQ(started.status, AccessNetworkConfigAckStatus::kStarted);
   EXPECT_EQ(started.required_client_acks, 2u);
-  EXPECT_FALSE(acked);
+  EXPECT_FALSE(acked.has_value());
 
   transport_->FlushClientsForTesting(partition);
   task_environment_.RunUntilIdle();
-  EXPECT_TRUE(acked);
+  ASSERT_TRUE(acked.has_value());
+  EXPECT_TRUE(*acked);
 }
 
 TEST_F(AccessNetworkContextTransportTest,
-       PublicationAckRejectsForgedOwnerAndMissingClient) {
+       DroppedMojoCallbackSettlesAsFailureAndNeverAsAck) {
   const base::FilePath partition;
   auto delegate = CreateDelegate(partition);
   auto owner = transport_->OwnerForPartition(
       aegis_access::ChannelNamespace::kDev, partition);
   ASSERT_TRUE(owner.has_value());
 
-  bool acked = false;
-  auto forged = *owner;
-  forged.profile_token = "other-profile";
-  auto forged_result = transport_->RepublishCurrentConfigWithAck(
-      forged, base::BindOnce([](bool* value) { *value = true; }, &acked));
-  EXPECT_EQ(forged_result.status, AccessNetworkConfigAckStatus::kInvalidOwner);
-  EXPECT_FALSE(acked);
+  std::optional<bool> settled;
+  const auto started = transport_->RepublishCurrentConfigWithAck(
+      *owner,
+      base::BindOnce(
+          [](std::optional<bool>* value, bool success) { *value = success; },
+          &settled));
+  ASSERT_EQ(started.status, AccessNetworkConfigAckStatus::kStarted);
+  EXPECT_FALSE(settled.has_value());
 
   delegate.reset();
   task_environment_.RunUntilIdle();
-  auto no_client = transport_->RepublishCurrentConfigWithAck(
-      *owner, base::BindOnce([](bool* value) { *value = true; }, &acked));
+  ASSERT_TRUE(settled.has_value());
+  EXPECT_FALSE(*settled);
+
+  std::optional<bool> no_client_callback;
+  const auto no_client = transport_->RepublishCurrentConfigWithAck(
+      *owner,
+      base::BindOnce(
+          [](std::optional<bool>* value, bool success) { *value = success; },
+          &no_client_callback));
   EXPECT_EQ(no_client.status, AccessNetworkConfigAckStatus::kNoClients);
-  EXPECT_FALSE(acked);
+  EXPECT_FALSE(no_client_callback.has_value());
+}
+
+TEST_F(AccessNetworkContextTransportTest,
+       PublicationAckRejectsForgedOwner) {
+  const base::FilePath partition;
+  auto delegate = CreateDelegate(partition);
+  auto owner = transport_->OwnerForPartition(
+      aegis_access::ChannelNamespace::kDev, partition);
+  ASSERT_TRUE(owner.has_value());
+
+  std::optional<bool> settled;
+  auto forged = *owner;
+  forged.profile_token = "other-profile";
+  const auto forged_result = transport_->RepublishCurrentConfigWithAck(
+      forged,
+      base::BindOnce(
+          [](std::optional<bool>* value, bool success) { *value = success; },
+          &settled));
+  EXPECT_EQ(forged_result.status, AccessNetworkConfigAckStatus::kInvalidOwner);
+  EXPECT_FALSE(settled.has_value());
 }
 
 TEST_F(AccessNetworkContextTransportTest,
