@@ -73,6 +73,7 @@ fi
   "$COMPONENT_DIR/published_request_runtime.cc" \
   "$COMPONENT_DIR/access_identity_generation_state.cc" \
   "$COMPONENT_DIR/access_proxy_selection_generation_state.cc" \
+  "$COMPONENT_DIR/access_base_proxy_config_generation_state.cc" \
   "$COMPONENT_DIR/access_route_planner_native_test.cc" \
   -o "$TEST_ROOT/aegis_access_native_test"
 
