@@ -34,6 +34,7 @@ REAL_URL_LOADER_PATCH_FILE="$BROWSER_DIR/patches/0135-feat-aegis-gate-real-docum
 REQUEST_TERMINATION_PATCH_FILE="$BROWSER_DIR/patches/0136-feat-aegis-terminate-in-flight-access-requests.patch"
 POLICY_PUBLICATION_ACK_PATCH_FILE="$BROWSER_DIR/patches/0137-feat-aegis-version-policy-publication-acks.patch"
 NAVIGATION_URL_LOADER_PATCH_FILE="$BROWSER_DIR/patches/0138-feat-aegis-gate-real-navigation-url-loader-traffic.patch"
+REDIRECT_REEVALUATION_PATCH_FILE="$BROWSER_DIR/patches/0139-feat-aegis-reevaluate-proxied-redirects.patch"
 BROWSER_TEST_WIRING_PATCH_FILE="$BROWSER_DIR/patches/0060-feat-aegis-add-browser-agent-side-panel-and-entry-po.patch"
 SERIES_FILE="$BROWSER_DIR/patches/series"
 STORE_CONTRACT_TEST="$SCRIPT_DIR/access-rule-store-contract_test.sh"
@@ -427,6 +428,27 @@ rg -Fq 'MainNavigationUsesPendingNavigationProxy' \
 rg -Fq 'MainNavigationWithoutPolicyPreservesNativePath' \
   "$NAVIGATION_URL_LOADER_PATCH_FILE" ||
   fail "patch 0138 must preserve native navigation without Access policy"
+rg -Fq 'EvaluateRedirect' "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must re-evaluate redirect targets before follow"
+rg -Fq 'stable_request_id' "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must retain one logical request id across redirect hops"
+rg -Fq 'RebindOwnershipForRedirect' "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must replace ownership before following the redirect"
+rg -Fq 'tracked_ptr->MarkDispatched()' "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must centralize termination-handle attachment"
+rg -Fq 'target_loader_->FollowRedirect' "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must follow only after redirect ownership is rebound"
+rg -Fq 'RequestDisposition::kDispatchProxy' "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must reject redirect targets that would leave PROXY dispatch"
+rg -Fq 'SameHostRedirectReevaluatesThroughProxy' \
+  "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must browser-test same-host redirect proxy continuity"
+rg -Fq 'MainNavigationRedirectReevaluatesThroughProxy' \
+  "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must browser-test main-navigation redirect reevaluation"
+rg -Fq 'RedirectToUnselectedHostFailsClosed' \
+  "$REDIRECT_REEVALUATION_PATCH_FILE" ||
+  fail "patch 0139 must cover redirect no-DIRECT fallback"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
@@ -481,6 +503,8 @@ fi
   "$SERIES_FILE")" == 1 ]] || fail "0137 must appear once in series"
 [[ "$(rg -F -c '0138-feat-aegis-gate-real-navigation-url-loader-traffic.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "patch 0138 must appear once in series"
+[[ "$(rg -F -c '0139-feat-aegis-reevaluate-proxied-redirects.patch' \
+  "$SERIES_FILE")" == 1 ]] || fail "patch 0139 must appear once in series"
 expected_access_tail="$(cat <<'EOF'
 0115-feat-aegis-add-trusted-policy-context-matching.patch
 0116-feat-aegis-add-access-rule-store-recovery.patch
@@ -506,10 +530,11 @@ expected_access_tail="$(cat <<'EOF'
 0136-feat-aegis-terminate-in-flight-access-requests.patch
 0137-feat-aegis-version-policy-publication-acks.patch
 0138-feat-aegis-gate-real-navigation-url-loader-traffic.patch
+0139-feat-aegis-reevaluate-proxied-redirects.patch
 EOF
 )"
-[[ "$(tail -n 24 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "Access patch tail must remain sequential through patch 0138"
+[[ "$(tail -n 25 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "Access patch tail must remain sequential through patch 0139"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
