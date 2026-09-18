@@ -867,7 +867,7 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.cc b/chro
 diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.h b/chrome/browser/aegis/access/access_request_dispatch_state.h
 --- a/chrome/browser/aegis/access/access_request_dispatch_state.h
 +++ b/chrome/browser/aegis/access/access_request_dispatch_state.h
-@@ -3,13 +3,26 @@
+@@ -3,13 +3,23 @@
  #ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
  #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
  
@@ -886,15 +886,12 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.h b/chrom
 +      aegis_access::RequestDispatchBarrierStatus::kInvalidBarrier;
 +  bool cancellation_attempted = false;
 +  aegis_access::RequestOwnershipBatchCancelResult cancellation;
-+
-+  friend bool operator==(const AccessBlockOperationResult&,
-+                         const AccessBlockOperationResult&) = default;
 +};
 +
  // UI-thread Profile-owned request dispatch state shared by all Aegis
  // URLLoaderFactory wrappers for the Profile. Keeping barrier and ownership
  // registries here gives policy mutation/cancellation code one stable owner
-@@ -31,6 +44,21 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
+@@ -31,6 +41,21 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
      return ownership_;
    }
  
@@ -919,7 +916,7 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.h b/chrom
 diff --git a/chrome/browser/aegis/access/access_request_dispatch_state_unittest.cc b/chrome/browser/aegis/access/access_request_dispatch_state_unittest.cc
 --- a/chrome/browser/aegis/access/access_request_dispatch_state_unittest.cc
 +++ b/chrome/browser/aegis/access/access_request_dispatch_state_unittest.cc
-@@ -3,14 +3,57 @@
+@@ -3,14 +3,73 @@
  #include "chrome/browser/aegis/access/access_request_dispatch_state.h"
  
  #include <memory>
@@ -934,15 +931,31 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state_unittest.
  namespace aegis::access {
  namespace {
  
-+class FlagTerminationHandle final
++class BarrierAwareTerminationHandle final
 +    : public aegis_access::RequestTerminationHandle {
 + public:
-+  explicit FlagTerminationHandle(bool* terminated) : terminated_(terminated) {}
-+  ~FlagTerminationHandle() override = default;
++  BarrierAwareTerminationHandle(
++      AccessRequestDispatchState* state,
++      aegis_access::RequestOwnershipRecord record,
++      bool* barrier_seen,
++      bool* terminated)
++      : state_(state),
++        record_(std::move(record)),
++        barrier_seen_(barrier_seen),
++        terminated_(terminated) {}
++  ~BarrierAwareTerminationHandle() override = default;
 +
-+  void Terminate() override { *terminated_ = true; }
++  void Terminate() override {
++    *barrier_seen_ =
++        state_->barriers().EvaluateRequest(record_).decision ==
++        aegis_access::RequestDispatchDecision::kBlock;
++    *terminated_ = true;
++  }
 +
 + private:
++  raw_ptr<AccessRequestDispatchState> state_;
++  aegis_access::RequestOwnershipRecord record_;
++  raw_ptr<bool> barrier_seen_;
 +  raw_ptr<bool> terminated_;
 +};
 +
@@ -977,7 +990,7 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state_unittest.
  class AccessRequestDispatchStateTest : public testing::Test {
   protected:
    content::BrowserTaskEnvironment task_environment_;
-@@ -40,5 +83,71 @@ TEST_F(AccessRequestDispatchStateTest, ProfilesAreIsolated) {
+@@ -40,5 +99,75 @@ TEST_F(AccessRequestDispatchStateTest, ProfilesAreIsolated) {
    EXPECT_NE(first, second);
  }
  
@@ -994,10 +1007,13 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state_unittest.
 +  ASSERT_EQ(state->ownership().Register(other),
 +            aegis_access::RequestOwnershipStatus::kOk);
 +
++  bool barrier_seen_by_termination = false;
 +  bool terminated = false;
 +  ASSERT_EQ(state->ownership().MarkDispatched(
 +                matching.request_id, matching.owner, matching.generations,
-+                std::make_unique<FlagTerminationHandle>(&terminated)),
++                std::make_unique<BarrierAwareTerminationHandle>(
++                    state, matching, &barrier_seen_by_termination,
++                    &terminated)),
 +            aegis_access::RequestOwnershipStatus::kOk);
 +
 +  const auto selector = SelectorFor(matching);
@@ -1010,6 +1026,7 @@ diff --git a/chrome/browser/aegis/access/access_request_dispatch_state_unittest.
 +            aegis_access::RequestOwnershipStatus::kOk);
 +  ASSERT_EQ(result.cancellation.cancellations.size(), 1u);
 +  EXPECT_TRUE(result.cancellation.cancellations.front().termination_invoked);
++  EXPECT_TRUE(barrier_seen_by_termination);
 +  EXPECT_TRUE(terminated);
 +  EXPECT_EQ(state->ownership().size(), 1u);
 +  EXPECT_EQ(state->barriers().EvaluateRequest(matching).decision,
