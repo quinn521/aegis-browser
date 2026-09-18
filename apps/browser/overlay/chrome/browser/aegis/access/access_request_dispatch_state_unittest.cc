@@ -14,15 +14,31 @@
 namespace aegis::access {
 namespace {
 
-class FlagTerminationHandle final
+class BarrierAwareTerminationHandle final
     : public aegis_access::RequestTerminationHandle {
  public:
-  explicit FlagTerminationHandle(bool* terminated) : terminated_(terminated) {}
-  ~FlagTerminationHandle() override = default;
+  BarrierAwareTerminationHandle(
+      AccessRequestDispatchState* state,
+      aegis_access::RequestOwnershipRecord record,
+      bool* barrier_seen,
+      bool* terminated)
+      : state_(state),
+        record_(std::move(record)),
+        barrier_seen_(barrier_seen),
+        terminated_(terminated) {}
+  ~BarrierAwareTerminationHandle() override = default;
 
-  void Terminate() override { *terminated_ = true; }
+  void Terminate() override {
+    *barrier_seen_ =
+        state_->barriers().EvaluateRequest(record_).decision ==
+        aegis_access::RequestDispatchDecision::kBlock;
+    *terminated_ = true;
+  }
 
  private:
+  raw_ptr<AccessRequestDispatchState> state_;
+  aegis_access::RequestOwnershipRecord record_;
+  raw_ptr<bool> barrier_seen_;
   raw_ptr<bool> terminated_;
 };
 
@@ -96,10 +112,13 @@ TEST_F(AccessRequestDispatchStateTest,
   ASSERT_EQ(state->ownership().Register(other),
             aegis_access::RequestOwnershipStatus::kOk);
 
+  bool barrier_seen_by_termination = false;
   bool terminated = false;
   ASSERT_EQ(state->ownership().MarkDispatched(
                 matching.request_id, matching.owner, matching.generations,
-                std::make_unique<FlagTerminationHandle>(&terminated)),
+                std::make_unique<BarrierAwareTerminationHandle>(
+                    state, matching, &barrier_seen_by_termination,
+                    &terminated)),
             aegis_access::RequestOwnershipStatus::kOk);
 
   const auto selector = SelectorFor(matching);
@@ -112,6 +131,7 @@ TEST_F(AccessRequestDispatchStateTest,
             aegis_access::RequestOwnershipStatus::kOk);
   ASSERT_EQ(result.cancellation.cancellations.size(), 1u);
   EXPECT_TRUE(result.cancellation.cancellations.front().termination_invoked);
+  EXPECT_TRUE(barrier_seen_by_termination);
   EXPECT_TRUE(terminated);
   EXPECT_EQ(state->ownership().size(), 1u);
   EXPECT_EQ(state->barriers().EvaluateRequest(matching).decision,
