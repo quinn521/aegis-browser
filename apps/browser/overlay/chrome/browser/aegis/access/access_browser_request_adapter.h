@@ -24,6 +24,7 @@ enum class AccessBrowserRequestMetadataStatus {
   kMissingTransport,
   kMissingTrustedContents,
   kMissingTrustedProcess,
+  kUnconfiguredPartition,
   kBrowserContextMismatch,
   kMissingTrustedFrame,
   kMissingStoragePartition,
