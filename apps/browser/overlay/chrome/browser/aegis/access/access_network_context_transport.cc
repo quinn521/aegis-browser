@@ -221,6 +221,7 @@ AccessNetworkContextTransport::CaptureSelectedProxyEndpoint(
   }
 
   const auto it = partitions_.find(owner.storage_partition_token);
+  // PublishProxySelection() sorts exact_hosts before committing PartitionState.
   if (it == partitions_.end() || !it->second.endpoint.has_value() ||
       !std::binary_search(it->second.exact_hosts.begin(),
                           it->second.exact_hosts.end(), exact_host)) {
