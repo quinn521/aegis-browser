@@ -234,6 +234,11 @@ rg -Fq 'endpoint.generations.network_epoch != network_epoch_' \
 rg -Fq 'NetworkChangeAdvancesEpochAndRejectsStaleEndpoint' \
   "$NETWORK_EPOCH_PATCH_FILE" ||
   fail "patch 0129 must cover real network-change epoch advancement"
+rg -Fq 'NetworkEpochOverflowFailsClosedPermanently' \
+  "$NETWORK_EPOCH_PATCH_FILE" ||
+  fail "patch 0129 must cover epoch exhaustion fail-closed behavior"
+rg -Fq 'violate REQUIRE_PROXY' "$NETWORK_EPOCH_PATCH_FILE" ||
+  fail "patch 0129 must preserve the no-DIRECT-fallback rationale"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
