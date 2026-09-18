@@ -40,7 +40,7 @@ inline void ExpectReadyProxyRegisters(
   RequestOwnershipRegistry ownership(4);
   const PublishedRequestRuntimeInput input = ReadyRuntimeInput();
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(
       result.status == PublishedRequestRuntimeStatus::kDispatchRegistered &&
           result.route_plan.action == RouteAction::kUseRegisteredProxy &&
@@ -62,7 +62,7 @@ inline void ExpectDirectPreservesNativeAndRegisters(
   input.runtime_state = ProxyRuntimeState::kStopped;
   input.registered_proxy_entry.reset();
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(
       result.status == PublishedRequestRuntimeStatus::kDispatchRegistered &&
           result.route_plan.action == RouteAction::kPreserveNative &&
@@ -78,7 +78,7 @@ inline void ExpectWaitDoesNotRegister(
   input.snapshot_state = SnapshotState::kRestoring;
   input.matched_policy_generation = 0;
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(result.status == PublishedRequestRuntimeStatus::kWait &&
                       result.route_plan.action == RouteAction::kWait &&
                       ownership.size() == 0u,
@@ -92,7 +92,7 @@ inline void ExpectDenyDoesNotRegister(
   PublishedRequestRuntimeInput input = ReadyRuntimeInput("runtime-deny");
   input.protection_restriction = ProtectionRestriction::kDeny;
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(result.status == PublishedRequestRuntimeStatus::kDeny &&
                       result.route_plan.action == RouteAction::kDeny &&
                       ownership.size() == 0u,
@@ -107,7 +107,7 @@ inline void ExpectStalePolicyGenerationFailsClosed(
       ReadyRuntimeInput("runtime-stale-policy");
   --input.matched_policy_generation;
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(
       result.status == PublishedRequestRuntimeStatus::kStalePolicyGeneration &&
           result.route_plan.action == RouteAction::kFail &&
@@ -124,7 +124,7 @@ inline void ExpectIncompleteRequestGenerationFailsClosed(
       ReadyRuntimeInput("runtime-zero-generation");
   input.request.generations.identity_generation = 0;
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(result.status == PublishedRequestRuntimeStatus::kFail &&
                       result.route_plan.action == RouteAction::kFail &&
                       ownership.size() == 0u,
@@ -139,7 +139,7 @@ inline void ExpectSnapshotGenerationMismatchFailsClosed(
       ReadyRuntimeInput("runtime-stale-snapshot");
   ++input.snapshot_generations.network_epoch;
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(result.status == PublishedRequestRuntimeStatus::kFail &&
                       result.route_plan.reason ==
                           RouteReason::kStaleGeneration &&
@@ -157,7 +157,7 @@ inline void ExpectBarrierBlocksBeforeRegistration(
   PublishedRequestRuntimeInput input =
       ReadyRuntimeInput("runtime-barrier-blocked");
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(
       result.status == PublishedRequestRuntimeStatus::kBlockedByBarrier &&
           result.dispatch_gate.decision == RequestDispatchDecision::kBlock &&
@@ -175,7 +175,7 @@ inline void ExpectDuplicateRegistrationFailsClosed(
                       RequestOwnershipStatus::kOk,
                   "published runtime regression seeds duplicate");
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(
       result.status == PublishedRequestRuntimeStatus::kRegistrationFailed &&
           result.dispatch_gate.ownership_status ==
@@ -192,7 +192,7 @@ inline void ExpectConflictFailsBeforeRegistration(
       ReadyRuntimeInput("runtime-conflict");
   input.policy_state = PolicyState::kConflict;
   const PublishedRequestRuntimeResult result =
-      EvaluatePublishedRequestForDispatch(input, &barriers, &ownership);
+      EvaluatePublishedRequestForDispatch(input, barriers, ownership);
   observer.Expect(result.status == PublishedRequestRuntimeStatus::kFail &&
                       result.route_plan.reason ==
                           RouteReason::kPolicyConflict &&
