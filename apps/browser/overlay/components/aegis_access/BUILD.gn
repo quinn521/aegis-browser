@@ -41,6 +41,13 @@ source_set("access_proxy_selection_generation_state") {
   ]
 }
 
+source_set("access_base_proxy_config_generation_state") {
+  sources = [
+    "access_base_proxy_config_generation_state.cc",
+    "access_base_proxy_config_generation_state.h",
+  ]
+}
+
 source_set("browser_request_metadata_seed") {
   sources = [
     "browser_request_metadata_seed.cc",
