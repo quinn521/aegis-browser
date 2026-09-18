@@ -588,11 +588,12 @@ rg -Fq 'RefreshProfileOnlyProcessMetadata' \
   fail "patch 0144 must refresh frame-less SharedWorker Profile-only ownership"
 rg -Fq 'metadata_refresh_.Run()' "$SHARED_WORKER_SUBRESOURCE_PATCH_FILE" ||
   fail "patch 0144 must re-evaluate browser-owned metadata at request time"
-rg -Fq 'if (type == URLLoaderFactoryType::kWorkerSubResource)' \
+rg -Fq '+  if (type == URLLoaderFactoryType::kWorkerSubResource)' \
   "$SHARED_WORKER_SUBRESOURCE_PATCH_FILE" ||
   fail "patch 0144 must install the Worker subresource wrapper for frame-less factories"
-if rg -Fq 'kWorkerSubResource && frame' "$SHARED_WORKER_SUBRESOURCE_PATCH_FILE"; then
-  fail "patch 0144 must not require a RenderFrameHost for SharedWorker subresources"
+if rg -Fq '+  if (type == URLLoaderFactoryType::kWorkerSubResource && frame)' \
+  "$SHARED_WORKER_SUBRESOURCE_PATCH_FILE"; then
+  fail "patch 0144 must not add a RenderFrameHost requirement for SharedWorker subresources"
 fi
 rg -Fq 'render_process_id' "$SHARED_WORKER_SUBRESOURCE_PATCH_FILE" ||
   fail "patch 0144 must pass the trusted render process id into SharedWorker ownership"
