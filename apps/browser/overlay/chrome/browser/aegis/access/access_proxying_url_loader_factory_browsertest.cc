@@ -198,6 +198,13 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 
   bool FetchTarget() { return Fetch(target_url()); }
 
+  void ExpectRedirectFollowedThroughProxy() {
+    EXPECT_TRUE(base::test::RunUntil([&] {
+      return proxy_requests_.load(std::memory_order_relaxed) == 2u;
+    }));
+    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+  }
+
   void NavigateNewIframe(const GURL& url) {
     ASSERT_TRUE(content::ExecJs(
         web_contents(),
@@ -368,10 +375,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
   EXPECT_TRUE(Fetch(redirect_url()));
-  EXPECT_TRUE(base::test::RunUntil([&] {
-    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-  }));
-  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+  ExpectRedirectFollowedThroughProxy();
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -379,10 +383,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), redirect_url()));
-  EXPECT_TRUE(base::test::RunUntil([&] {
-    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-  }));
-  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+  ExpectRedirectFollowedThroughProxy();
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -390,10 +391,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
   NavigateNewIframe(redirect_url());
-  EXPECT_TRUE(base::test::RunUntil([&] {
-    return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-  }));
-  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+  ExpectRedirectFollowedThroughProxy();
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
