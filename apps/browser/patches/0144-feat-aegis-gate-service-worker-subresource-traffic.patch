@@ -232,12 +232,26 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-@@ -52,6 +52,22 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
-   counter->fetch_add(1, std::memory_order_relaxed);
-   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
-   response->set_code(net::HTTP_OK);
-+  if (request.relative_url.find("/aegis-service-worker.js") !=
-+      std::string::npos) {
+@@ -45,6 +45,58 @@ constexpr char kTargetHost[] = "target.example";
+ constexpr char kUnselectedRedirectHost[] = "redirect-unselected.example";
+ constexpr char kProxyGroup[] = "proxy-group-browser-test";
+ 
++std::unique_ptr<net::test_server::HttpResponse>
++ServiceWorkerOriginReply(std::atomic<size_t>* counter,
++                         const net::test_server::HttpRequest& request) {
++  const bool is_script =
++      request.relative_url.find("/aegis-service-worker.js") !=
++      std::string::npos;
++  const bool is_data =
++      request.relative_url.find("/service-worker-data") != std::string::npos;
++  if (!is_script && !is_data) {
++    return nullptr;
++  }
++
++  counter->fetch_add(1, std::memory_order_relaxed);
++  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
++  response->set_code(net::HTTP_OK);
++  if (is_script) {
 +    response->set_content(
 +        "self.addEventListener('install', event => "
 +        "  event.waitUntil(self.skipWaiting()));"
@@ -252,37 +266,45 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +    response->set_content_type("application/javascript");
 +    return response;
 +  }
-   if (request.relative_url.find("/worker-page") != std::string::npos) {
-     response->set_content("<!doctype html><title>worker-main</title>");
-     response->set_content_type("text/html");
-@@ -77,6 +93,12 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
-     response->set_content_type("text/plain");
-     return response;
-   }
-+  if (request.relative_url.find("/service-worker-data") !=
++
++  response->set_content("origin-service-worker-subresource");
++  response->set_content_type("text/plain");
++  return response;
++}
++
++std::unique_ptr<net::test_server::HttpResponse>
++ServiceWorkerProxyReply(std::atomic<size_t>* counter,
++                        const net::test_server::HttpRequest& request) {
++  if (request.relative_url.find("/service-worker-data") ==
 +      std::string::npos) {
-+    response->set_content("origin-service-worker-subresource");
-+    response->set_content_type("text/plain");
-+    return response;
++    return nullptr;
 +  }
-   if (request.relative_url.find("/worker.js") != std::string::npos) {
-     response->set_content("self.postMessage('origin');");
-     response->set_content_type("application/javascript");
-@@ -108,6 +130,13 @@ std::unique_ptr<net::test_server::HttpResponse> ProxyReply(
-     response->set_content_type("text/plain");
-     return response;
-   }
-+  if (request.relative_url.find("/service-worker-data") !=
-+      std::string::npos) {
-+    response->set_code(net::HTTP_OK);
-+    response->set_content("proxy-service-worker-subresource");
-+    response->set_content_type("text/plain");
-+    return response;
-+  }
-   if (request.relative_url.find("/redirect-unselected") !=
-       std::string::npos) {
-     response->set_code(net::HTTP_FOUND);
-@@ -187,6 +216,18 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
++
++  counter->fetch_add(1, std::memory_order_relaxed);
++  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
++  response->set_code(net::HTTP_OK);
++  response->set_content("proxy-service-worker-subresource");
++  response->set_content_type("text/plain");
++  return response;
++}
++
+ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
+     std::atomic<size_t>* counter,
+     const char* body,
+@@ -141,8 +193,12 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     host_resolver()->AddRule(kTargetHost, "127.0.0.1");
+     host_resolver()->AddRule(kUnselectedRedirectHost, "127.0.0.1");
+ 
++    target_origin_.RegisterRequestHandler(base::BindRepeating(
++        &ServiceWorkerOriginReply, base::Unretained(&origin_requests_)));
+     target_origin_.RegisterRequestHandler(base::BindRepeating(
+         &CountAndReply, base::Unretained(&origin_requests_), "origin"));
++    proxy_server_.RegisterRequestHandler(base::BindRepeating(
++        &ServiceWorkerProxyReply, base::Unretained(&proxy_requests_)));
+     proxy_server_.RegisterRequestHandler(base::BindRepeating(
+         &ProxyReply, base::Unretained(&proxy_requests_),
+         base::Unretained(&target_origin_)));
+@@ -187,6 +243,18 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
      return target_origin_.GetURL(kTargetHost, "/worker-data");
    }
  
@@ -301,7 +323,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    GURL redirect_url() const {
      return target_origin_.GetURL(kTargetHost, "/redirect");
    }
-@@ -319,6 +360,52 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+@@ -319,6 +387,52 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
          .ExtractString();
    }
  
@@ -354,7 +376,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    void ExpectRedirectFollowedThroughProxy() {
      EXPECT_TRUE(base::test::RunUntil([&] {
        return proxy_requests_.load(std::memory_order_relaxed) == 2u;
-@@ -336,7 +423,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+@@ -336,7 +450,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
              url.spec())));
    }
  
@@ -364,7 +386,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
      Profile* profile = browser()->profile();
  
      auto* identity = AccessIdentityGenerationSource::GetOrCreate(profile);
-@@ -369,7 +457,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+@@ -369,7 +484,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
      rule.rule_id = "rule-browser-test";
      rule.owner = *owner_;
      rule.scope = aegis_access::PolicyScope::kProfile;
@@ -373,7 +395,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
      rule.schemes = {aegis_access::RequestScheme::kHttp};
      rule.ports.scope = aegis_access::PortScope::kAllBrowserPermitted;
      rule.mode = aegis_access::AccessMode::kProxy;
-@@ -408,7 +496,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+@@ -408,7 +523,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
            aegis_access::RegisteredProxyTransport::kHttp, "127.0.0.1",
            static_cast<uint16_t>(proxy_server_.port())};
        EXPECT_TRUE(transport_->PublishProxySelection(
@@ -382,7 +404,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
        transport_->FlushClientsForTesting(base::FilePath());
      }
  
-@@ -554,6 +642,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -554,6 +669,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
  }
  
