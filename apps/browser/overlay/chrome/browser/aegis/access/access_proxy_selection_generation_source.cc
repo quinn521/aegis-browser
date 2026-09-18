@@ -72,8 +72,7 @@ AccessProxySelectionGenerationSource::CommitSelection(
     return {aegis_access::ProxySelectionGenerationCommitStatus::kInvalidSelection,
             0};
   }
-  const std::string proxy_group_id = binding.proxy_group_id;
-  auto it = groups_.try_emplace(proxy_group_id).first;
+  auto it = groups_.try_emplace(binding.proxy_group_id).first;
   return it->second.Commit(std::move(binding));
 }
 
