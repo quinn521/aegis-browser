@@ -246,7 +246,7 @@ fi
 [[ "$(tail -n 9 "$SERIES_FILE" | head -n 1)" == \
   "0118-feat-aegis-bind-profile-network-context-proxy.patch" ]] ||
   fail "patch 0118 must immediately precede patch 0119"
-[[ "$(tail -n 8 "$SERIES_FILE" | head -n 1)" == \
+[[ "$(tail -n 9 "$SERIES_FILE" | head -n 1)" == \
   "0119-test-aegis-local-proxy-network-acceptance.patch" ]] ||
   fail "patch 0119 must immediately precede patch 0120"
 [[ "$(tail -n 8 "$SERIES_FILE" | head -n 1)" == \
