@@ -20,7 +20,8 @@ class NativeObserver : public aegis_access::test::ContractTestObserver,
                        public aegis_access::test::BrowserRequestMetadataSeedTestObserver,
                        public aegis_access::test::BaseProxyConfigGenerationStateTestObserver,
                        public aegis_access::test::IdentityGenerationStateTestObserver,
-                       public aegis_access::test::ProxySelectionGenerationStateTestObserver {
+                       public aegis_access::test::ProxySelectionGenerationStateTestObserver,
+                       public aegis_access::test::RequestGenerationTupleBuilderTestObserver {
  public:
   void Expect(bool condition, const std::string& label) override {
     ++checks_;
