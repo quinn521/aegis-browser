@@ -14,6 +14,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/prerender_test_util.h"
+#include "net/base/schemeful_site.h"
 #include "url/gurl.h"
 
 namespace aegis::access {
@@ -65,6 +66,36 @@ IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
   ASSERT_TRUE(result.metadata.has_value());
   EXPECT_EQ(result.metadata->attribution_kind,
             aegis_access::RequestAttributionKind::kDocument);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
+                       NavigationUsesPendingNavigationIdentity) {
+  const GURL current_url = embedded_test_server()->GetURL("/title1.html");
+  const GURL target_url = embedded_test_server()->GetURL("/title2.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), current_url));
+
+  content::RenderFrameHost* primary_frame = web_contents()->GetPrimaryMainFrame();
+  ASSERT_NE(primary_frame, nullptr);
+
+  AccessBrowserRequestMetadataResult result = BuildBrowserOwnedRequestMetadata(
+      browser()->profile(), WebContentsGetter(),
+      primary_frame->GetFrameTreeNodeId(), /*navigation_id=*/42);
+
+  EXPECT_EQ(result.status, AccessBrowserRequestMetadataStatus::kOk);
+  ASSERT_TRUE(result.metadata.has_value());
+  EXPECT_EQ(result.metadata->attribution_kind,
+            aegis_access::RequestAttributionKind::kPendingNavigation);
+  EXPECT_TRUE(result.metadata->document_token.empty());
+  EXPECT_FALSE(result.metadata->pending_navigation_token.empty());
+  EXPECT_FALSE(result.metadata->top_frame_site.has_value());
+
+  aegis_access::RequestPolicyContextResult context =
+      aegis_access::CanonicalizeBrowserOwnedRequest(*result.metadata,
+                                                    target_url);
+  ASSERT_TRUE(context.context.has_value());
+  EXPECT_TRUE(context.context->site_ownership_reliable());
+  EXPECT_EQ(context.context->top_level_site(),
+            net::SchemefulSite(target_url).Serialize());
 }
 
 IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
