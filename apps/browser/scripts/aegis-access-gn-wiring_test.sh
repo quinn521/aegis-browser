@@ -654,9 +654,9 @@ rg -Fq 'ServiceWorkerProcessScriptWithoutPolicyPreservesNativePath' \
 rg -Fq 'ServiceWorkerProcessScriptUsesSelectedProxy' \
   "$SERVICE_WORKER_SCRIPT_PATCH_FILE" ||
   fail "patch 0146 must browser-test selected process-backed ServiceWorker script routing"
-rg -Fq 'ServiceWorkerProcessScriptWithoutEndpointFailsClosed' \
+rg -Fq 'ServiceWorkerBrowserProcessScriptStaysNativeBeforeProcessScriptFailsClosed' \
   "$SERVICE_WORKER_SCRIPT_PATCH_FILE" ||
-  fail "patch 0146 must fail closed when process-backed ServiceWorker PROXY lacks an endpoint"
+  fail "patch 0146 must keep browser-process ServiceWorker scripts native before process-backed fail-closed"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
