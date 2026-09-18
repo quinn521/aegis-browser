@@ -385,6 +385,8 @@ rg -Fq 'AccessProxyingURLTrackedRequest' "$BLOCK_TERMINATION_PATCH_FILE" ||
 rg -Fq 'BlockOperationTerminatesInflightProxyRequest' \
   "$BLOCK_TERMINATION_PATCH_FILE" ||
   fail "patch 0136 must carry the in-flight termination browser smoke"
+rg -Fq 'barrier_seen_by_termination' "$BLOCK_TERMINATION_PATCH_FILE" ||
+  fail "patch 0136 must prove the BLOCK barrier is visible before termination"
 rg -Fq 'HungResponse' "$BLOCK_TERMINATION_PATCH_FILE" ||
   fail "patch 0136 browser smoke must hold a real proxied request in flight"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
