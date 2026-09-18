@@ -129,8 +129,8 @@ if [[ -n "$COVERAGE_DIR" ]]; then
     keep { print }
     /^end_of_record$/ { keep = 0 }
   ' "$COVERAGE_DIR/lcov.unfiltered.info" > "$COVERAGE_DIR/lcov.info"
-  if [[ "$(grep -c '^SF:' "$COVERAGE_DIR/lcov.info")" != 9 ]]; then
-    printf 'FAIL: native LCOV must contain exactly the nine standalone production units\n' >&2
+  if [[ "$(grep -c '^SF:' "$COVERAGE_DIR/lcov.info")" != 10 ]]; then
+    printf 'FAIL: native LCOV must contain exactly the ten standalone production units\n' >&2
     exit 1
   fi
   rm "$COVERAGE_DIR/lcov.unfiltered.info"
