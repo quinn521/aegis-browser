@@ -106,6 +106,26 @@ AccessBrowserRequestMetadataStatus ResolveTrustedContents(
   return AccessBrowserRequestMetadataStatus::kOk;
 }
 
+AccessBrowserRequestMetadataStatus ValidatePrimaryFrameTreeFrame(
+    Profile* profile,
+    content::WebContents* contents,
+    content::RenderFrameHost* request_frame) {
+  if (!contents) {
+    return AccessBrowserRequestMetadataStatus::kMissingTrustedContents;
+  }
+  if (!request_frame) {
+    return AccessBrowserRequestMetadataStatus::kMissingTrustedFrame;
+  }
+  if (request_frame->GetBrowserContext() != profile) {
+    return AccessBrowserRequestMetadataStatus::kBrowserContextMismatch;
+  }
+  if (!request_frame->GetPage().IsPrimary() ||
+      request_frame->GetMainFrame() != contents->GetPrimaryMainFrame()) {
+    return AccessBrowserRequestMetadataStatus::kInvalidAttribution;
+  }
+  return AccessBrowserRequestMetadataStatus::kOk;
+}
+
 AccessBrowserRequestMetadataStatus ResolveTrustedFrame(
     Profile* profile,
     content::WebContents* contents,
@@ -115,14 +135,10 @@ AccessBrowserRequestMetadataStatus ResolveTrustedFrame(
       frame_tree_node_id
           ? contents->UnsafeFindFrameByFrameTreeNodeId(frame_tree_node_id)
           : contents->GetPrimaryMainFrame();
-  if (!request_frame) {
-    return AccessBrowserRequestMetadataStatus::kMissingTrustedFrame;
-  }
-  if (request_frame->GetBrowserContext() != profile) {
-    return AccessBrowserRequestMetadataStatus::kBrowserContextMismatch;
-  }
-  if (!request_frame->GetPage().IsPrimary()) {
-    return AccessBrowserRequestMetadataStatus::kInvalidAttribution;
+  const AccessBrowserRequestMetadataStatus status =
+      ValidatePrimaryFrameTreeFrame(profile, contents, request_frame);
+  if (status != AccessBrowserRequestMetadataStatus::kOk) {
+    return status;
   }
   *trusted_frame = request_frame;
   return AccessBrowserRequestMetadataStatus::kOk;
@@ -161,9 +177,10 @@ AccessBrowserRequestMetadataStatus ResolvePrimaryTopFrameSite(
     return AccessBrowserRequestMetadataStatus::kMissingTrustedFrame;
   }
   content::RenderFrameHost* primary_frame = contents->GetPrimaryMainFrame();
-  if (!primary_frame || primary_frame->GetBrowserContext() != profile ||
-      !primary_frame->GetPage().IsPrimary()) {
-    return AccessBrowserRequestMetadataStatus::kMissingTrustedFrame;
+  const AccessBrowserRequestMetadataStatus frame_status =
+      ValidatePrimaryFrameTreeFrame(profile, contents, primary_frame);
+  if (frame_status != AccessBrowserRequestMetadataStatus::kOk) {
+    return frame_status;
   }
 
   const net::SchemefulSite resolved_site(
@@ -183,9 +200,10 @@ AccessBrowserRequestMetadataStatus BuildSeedInput(
     std::optional<int64_t> navigation_id,
     const aegis_access::OwnershipKey& owner,
     aegis_access::BrowserRequestMetadataSeedInput* seed_input) {
-  if (!request_frame || request_frame->GetBrowserContext() != profile ||
-      !request_frame->GetPage().IsPrimary()) {
-    return AccessBrowserRequestMetadataStatus::kMissingTrustedFrame;
+  const AccessBrowserRequestMetadataStatus frame_status =
+      ValidatePrimaryFrameTreeFrame(profile, contents, request_frame);
+  if (frame_status != AccessBrowserRequestMetadataStatus::kOk) {
+    return frame_status;
   }
 
   seed_input->request_id =
