@@ -552,6 +552,22 @@ rg -Fq 'ProfileOnlyMetadataRejectsUnknownRenderProcess' \
   fail "patch 0143 must fail closed for an unknown render process"
 rg -Fq 'BuildBrowserOwnedProfileRequestMetadata' \
   "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must expose the configured-partition Profile-only contract"
+rg -Fq 'kUnconfiguredPartition' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must fail closed for an unconfigured partition"
+rg -Fq 'OwnsConfiguredPartition' "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must require Access-configured partition ownership"
+rg -Fq 'BackgroundMetadataRequiresConfiguredPartition' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must test the unconfigured-partition rejection"
+rg -Fq 'BackgroundMetadataRejectsCrossProfilePartition' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must test cross-Profile partition rejection"
+rg -Fq 'BackgroundMetadataRejectsMissingPartition' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
+  fail "patch 0143 must test missing-partition rejection"
+rg -Fq 'BuildBrowserOwnedProfileRequestMetadata' \
+  "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
   fail "patch 0143 must expose exact StoragePartition Profile-only ownership"
 rg -Fq 'AccessBrowserRequestMetadataStatus::kUnconfiguredPartition' \
   "$PROFILE_ONLY_BACKGROUND_PATCH_FILE" ||
