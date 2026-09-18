@@ -10,6 +10,7 @@
 #include "components/aegis_access/browser_request_metadata_seed_contract_test.h"
 #include "components/aegis_access/published_request_runtime_contract_test.h"
 #include "components/aegis_access/request_dispatch_gate_contract_test.h"
+#include "components/aegis_access/request_generation_tuple_builder_contract_test.h"
 #include "components/aegis_access/request_ownership_registry_contract_test.h"
 
 namespace {
