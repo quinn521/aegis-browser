@@ -1,13 +1,13 @@
 From 0143000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Sat, 19 Sep 2026 01:33:00 +0800
-Subject: [PATCH] feat(aegis): harden Profile-only background ownership
+Subject: [PATCH] feat(aegis): add Profile-only background request ownership
 
 ---
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
-@@ -145,6 +145,24 @@ source_set("access_published_request_runtime") {
+@@ -145,6 +145,24 @@
    ]
  }
  
@@ -46,15 +46,15 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
  #include "content/public/browser/storage_partition.h"
  #include "content/public/browser/web_contents.h"
  #include "net/base/schemeful_site.h"
-@@ -144,12 +146,12 @@ AccessBrowserRequestMetadataStatus ResolveTrustedFrame(
+@@ -144,12 +146,12 @@
    return AccessBrowserRequestMetadataStatus::kOk;
  }
  
--AccessBrowserRequestMetadataStatus ResolveOwner(
 +AccessBrowserRequestMetadataStatus ResolveOwnerForPartition(
+-AccessBrowserRequestMetadataStatus ResolveOwner(
      Profile* profile,
--    content::RenderFrameHost* request_frame,
 +    content::StoragePartition* partition,
+-    content::RenderFrameHost* request_frame,
      AccessNetworkContextTransport* transport,
 +    bool require_configured_partition,
      aegis_access::OwnershipKey* owner) {
@@ -62,7 +62,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
    if (!partition) {
      return AccessBrowserRequestMetadataStatus::kMissingStoragePartition;
    }
-@@ -165,10 +167,24 @@ AccessBrowserRequestMetadataStatus ResolveOwner(
+@@ -165,10 +167,24 @@
    if (!resolved_owner) {
      return AccessBrowserRequestMetadataStatus::kInvalidOwner;
    }
@@ -87,7 +87,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
  AccessBrowserRequestMetadataStatus ResolvePrimaryTopFrameSite(
      Profile* profile,
      content::WebContents* contents,
-@@ -324,4 +340,53 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
+@@ -324,4 +340,53 @@
               : Error(status);
  }
  
@@ -152,7 +152,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chro
  class WebContents;
  }
  
-@@ -23,9 +24,11 @@ enum class AccessBrowserRequestMetadataStatus {
+@@ -23,9 +24,11 @@
    kUnsupportedProfile,
    kMissingTransport,
    kMissingTrustedContents,
@@ -164,7 +164,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chro
    kInvalidPartitionPath,
    kInvalidOwner,
    kInvalidAttribution,
-@@ -55,6 +58,21 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
+@@ -55,6 +58,21 @@
      content::FrameTreeNodeId frame_tree_node_id,
      std::optional<int64_t> navigation_id);
  
@@ -205,7 +205,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsert
  #include "content/public/browser/web_contents.h"
  #include "content/public/test/browser_test_utils.h"
  #include "content/public/test/prerender_test_util.h"
-@@ -183,6 +185,56 @@ IN_PROC_BROWSER_TEST_F(
+@@ -183,7 +185,57 @@
    EXPECT_FALSE(metadata.metadata.has_value());
  }
  
@@ -248,7 +248,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsert
 +  EXPECT_EQ(context.context->exact_host(), "background.example");
 +}
 +
-+IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
+ IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
 +                       ProfileOnlyMetadataRejectsUnknownRenderProcess) {
 +  AccessBrowserRequestMetadataResult result =
 +      BuildBrowserOwnedProfileOnlyRequestMetadata(
@@ -259,9 +259,10 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsert
 +  EXPECT_FALSE(result.metadata.has_value());
 +}
 +
- IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
++IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
                         PrerenderPageCannotInheritPrimaryPageIdentity) {
    const GURL primary_url = embedded_test_server()->GetURL("/title1.html");
+   const GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc b/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc
 new file mode 100644
 --- /dev/null
