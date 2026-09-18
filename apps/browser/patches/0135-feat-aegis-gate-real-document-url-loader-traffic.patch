@@ -1,3 +1,9 @@
+From 0135000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Fri, 18 Sep 2026 18:50:00 +0800
+Subject: [PATCH] feat(aegis): gate real document URLLoader traffic
+
+---
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
