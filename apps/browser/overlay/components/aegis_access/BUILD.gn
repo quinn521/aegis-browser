@@ -127,6 +127,18 @@ test("access_proxy_selection_generation_state_unittests") {
   ]
 }
 
+test("access_base_proxy_config_generation_state_unittests") {
+  sources = [
+    "access_base_proxy_config_generation_state_contract_test.h",
+    "access_base_proxy_config_generation_state_unittest.cc",
+  ]
+  deps = [
+    ":access_base_proxy_config_generation_state",
+    "//base/test:run_all_unittests",
+    "//testing/gtest",
+  ]
+}
+
 test("browser_request_metadata_seed_unittests") {
   sources = [
     "browser_request_metadata_seed_contract_test.h",
