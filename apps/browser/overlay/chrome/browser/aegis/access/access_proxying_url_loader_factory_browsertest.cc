@@ -52,6 +52,24 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
   return response;
 }
 
+std::unique_ptr<net::test_server::HttpResponse> ProxyReply(
+    std::atomic<size_t>* counter,
+    net::test_server::EmbeddedTestServer* target_origin,
+    const net::test_server::HttpRequest& request) {
+  counter->fetch_add(1, std::memory_order_relaxed);
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  if (request.relative_url.find("/redirect") != std::string::npos) {
+    response->set_code(net::HTTP_FOUND);
+    response->AddCustomHeader(
+        "Location", target_origin->GetURL(kTargetHost, "/resource").spec());
+    return response;
+  }
+  response->set_code(net::HTTP_OK);
+  response->set_content("proxy");
+  response->set_content_type("text/plain");
+  return response;
+}
+
 class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
  public:
   AccessProxyingURLLoaderFactoryBrowserTest()
@@ -67,7 +85,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     target_origin_.RegisterRequestHandler(base::BindRepeating(
         &CountAndReply, base::Unretained(&origin_requests_), "origin"));
     proxy_server_.RegisterRequestHandler(base::BindRepeating(
-        &CountAndReply, base::Unretained(&proxy_requests_), "proxy"));
+        &ProxyReply, base::Unretained(&proxy_requests_),
+        base::Unretained(&target_origin_)));
     ASSERT_TRUE(target_origin_.Start());
     ASSERT_TRUE(proxy_server_.Start());
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -93,15 +112,21 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     return target_origin_.GetURL(kTargetHost, "/resource");
   }
 
-  bool FetchTarget() {
+  GURL redirect_url() const {
+    return target_origin_.GetURL(kTargetHost, "/redirect");
+  }
+
+  bool Fetch(const GURL& url) {
     return content::EvalJs(
                web_contents(),
                content::JsReplace(
                    "fetch($1, {mode: 'no-cors'}).then(() => true)"
                    ".catch(() => false)",
-                   target_url().spec()))
+                   url.spec()))
         .ExtractBool();
   }
+
+  bool FetchTarget() { return Fetch(target_url()); }
 
   void PublishProxyPolicy(bool publish_endpoint) {
     Profile* profile = browser()->profile();
@@ -190,6 +215,15 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 };
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       NoPublishedPolicyPreservesNativePath) {
+  EXPECT_TRUE(FetchTarget());
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return origin_requests_.load(std::memory_order_relaxed) == 1u;
+  }));
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        RuntimePolicyUpdateRoutesExistingFactoryThroughProxy) {
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
@@ -206,6 +240,17 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
   EXPECT_FALSE(FetchTarget());
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       RedirectFromProxiedRequestFailsClosed) {
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  EXPECT_FALSE(Fetch(redirect_url()));
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) == 1u;
+  }));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
 }
 
