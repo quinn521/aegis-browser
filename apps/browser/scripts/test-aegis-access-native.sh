@@ -117,7 +117,8 @@ if [[ -n "$COVERAGE_DIR" ]]; then
       published_runtime = project_root "apps/browser/overlay/components/aegis_access/published_request_runtime.cc"
       identity_generation = project_root "apps/browser/overlay/components/aegis_access/access_identity_generation_state.cc"
       selection_generation = project_root "apps/browser/overlay/components/aegis_access/access_proxy_selection_generation_state.cc"
-      keep = (source == route || source == group || source == ownership || source == dispatch_gate || source == metadata_seed || source == published_runtime || source == identity_generation || source == selection_generation)
+      base_proxy_generation = project_root "apps/browser/overlay/components/aegis_access/access_base_proxy_config_generation_state.cc"
+      keep = (source == route || source == group || source == ownership || source == dispatch_gate || source == metadata_seed || source == published_runtime || source == identity_generation || source == selection_generation || source == base_proxy_generation)
       if (keep) {
         print "SF:" substr(source, length(project_root) + 1)
       }
