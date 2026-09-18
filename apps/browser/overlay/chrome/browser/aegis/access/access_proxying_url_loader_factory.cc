@@ -405,10 +405,8 @@ void AccessProxyingURLLoaderFactory::StartTargetRequest(
     const network::ResourceRequest& request,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  target_factory_->CreateLoaderAndStart(
-      std::move(loader_receiver), request_id, options, request,
-      std::move(client), traffic_annotation);
+  ForwardNative(std::move(loader_receiver), request_id, options, request,
+                std::move(client), traffic_annotation);
 }
 
 void AccessProxyingURLLoaderFactory::ForwardNative(
@@ -418,6 +416,8 @@ void AccessProxyingURLLoaderFactory::ForwardNative(
     const network::ResourceRequest& request,
     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  DCHECK(target_factory_.is_bound());
   target_factory_->CreateLoaderAndStart(
       std::move(loader_receiver), request_id, options, request,
       std::move(client), traffic_annotation);
