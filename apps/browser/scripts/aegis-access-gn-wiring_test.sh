@@ -218,6 +218,11 @@ rg -Fq 'ReservedPolicyGenerationIsRecoveredAndNeverReused' \
 rg -Fq 'CommittedJournalGenerationMustMatchReservedSequence' \
   "$POLICY_GENERATION_PATCH_FILE" ||
   fail "patch 0128 must reject journal generation drift"
+rg -Fq 'CommittedGroupGenerationMustMatchOperationSequence' \
+  "$POLICY_GENERATION_PATCH_FILE" ||
+  fail "patch 0128 must reject committed group generation drift"
+rg -Fq 'generation != sequence' "$POLICY_GENERATION_PATCH_FILE" ||
+  fail "patch 0128 must bind persisted group generation to operation sequence"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
