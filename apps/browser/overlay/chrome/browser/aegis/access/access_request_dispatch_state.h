@@ -3,12 +3,25 @@
 #ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_REQUEST_DISPATCH_STATE_H_
 
+#include <cstdint>
+#include <string>
+
 #include "base/supports_user_data.h"
 #include "components/aegis_access/request_ownership_registry.h"
 
 class Profile;
 
 namespace aegis::access {
+
+struct AccessBlockOperationResult {
+  aegis_access::RequestDispatchBarrierStatus barrier_status =
+      aegis_access::RequestDispatchBarrierStatus::kInvalidBarrier;
+  bool cancellation_attempted = false;
+  aegis_access::RequestOwnershipBatchCancelResult cancellation;
+
+  friend bool operator==(const AccessBlockOperationResult&,
+                         const AccessBlockOperationResult&) = default;
+};
 
 // UI-thread Profile-owned request dispatch state shared by all Aegis
 // URLLoaderFactory wrappers for the Profile. Keeping barrier and ownership
@@ -30,6 +43,21 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
   aegis_access::RequestOwnershipRegistry& ownership() {
     return ownership_;
   }
+
+  // Installs the BLOCK barrier before touching any in-flight request, then
+  // synchronously cancels only requests matching the trusted page-target
+  // selector. If cancellation cannot complete, the barrier intentionally
+  // remains installed so no new matching request can escape.
+  AccessBlockOperationResult BeginBlockOperation(
+      aegis_access::RequestDispatchBarrier barrier);
+
+  // Only the exact owning operation may release its barrier. Persistence and
+  // ACK orchestration lives above this state owner and calls release only after
+  // its own success boundary.
+  aegis_access::RequestDispatchBarrierStatus ReleaseBlockOperation(
+      const aegis_access::RequestCancellationSelector& selector,
+      const std::string& operation_id,
+      uint64_t operation_sequence);
 
  private:
   AccessRequestDispatchState();
