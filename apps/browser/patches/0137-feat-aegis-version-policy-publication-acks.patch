@@ -39,7 +39,7 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/c
  #include "net/proxy_resolution/proxy_config.h"
  #include "net/proxy_resolution/proxy_info.h"
  #include "services/network/public/mojom/network_context.mojom.h"
-@@ -236,6 +240,66 @@ AccessNetworkContextTransport::CaptureSelectedProxyEndpoint(
+@@ -236,6 +240,73 @@ AccessNetworkContextTransport::CaptureSelectedProxyEndpoint(
    return endpoint;
  }
  
@@ -71,9 +71,17 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/c
 +  }
 +
 +  const size_t required_acks = state.clients.size();
++  UpdateClientConfigs(state, config, std::move(all_clients_settled));
++  return {AccessNetworkConfigAckStatus::kStarted, required_acks};
++}
++
++void AccessNetworkContextTransport::UpdateClientConfigs(
++    PartitionState& state,
++    const network::mojom::CustomProxyConfigPtr& config,
++    base::OnceCallback<void(bool)> all_clients_settled) {
 +  auto all_succeeded = std::make_shared<bool>(true);
 +  base::RepeatingClosure barrier = base::BarrierClosure(
-+      required_acks,
++      state.clients.size(),
 +      base::BindOnce(
 +          [](std::shared_ptr<bool> succeeded,
 +             base::OnceCallback<void(bool)> completion) {
@@ -100,13 +108,12 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/c
 +            },
 +            std::move(result)));
 +  }
-+  return {AccessNetworkConfigAckStatus::kStarted, required_acks};
 +}
 +
  network::mojom::CustomProxyConfigPtr
  AccessNetworkContextTransport::BuildConfigForTesting(
      const base::FilePath& relative_partition_path) const {
-@@ -337,4 +401,4 @@ void AccessNetworkContextTransport::Broadcast(PartitionState& state) {
+@@ -337,4 +408,4 @@ void AccessNetworkContextTransport::Broadcast(PartitionState& state) {
    }
  }
  
@@ -168,6 +175,24 @@ diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/ch
    network::mojom::CustomProxyConfigPtr BuildConfigForTesting(
        const base::FilePath& relative_partition_path) const;
    void FlushClientsForTesting(const base::FilePath& relative_partition_path);
+@@ -115,6 +139,10 @@ class AccessNetworkContextTransport
+       const aegis_access::RegisteredProxyEndpoint& endpoint) const;
+   network::mojom::CustomProxyConfigPtr BuildConfig(
+       const PartitionState& state) const;
++  void UpdateClientConfigs(
++      PartitionState& state,
++      const network::mojom::CustomProxyConfigPtr& config,
++      base::OnceCallback<void(bool)> all_clients_settled);
+   void Broadcast(PartitionState& state);
+ 
+   std::string runtime_profile_token_;
+@@ -124,4 +152,4 @@ class AccessNetworkContextTransport
+ 
+ }  // namespace aegis::access
+ 
+-#endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_NETWORK_CONTEXT_TRANSPORT_H_
++#endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_NETWORK_CONTEXT_TRANSPORT_H_
+\ No newline at end of file
 diff --git a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 --- a/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport_unittest.cc
