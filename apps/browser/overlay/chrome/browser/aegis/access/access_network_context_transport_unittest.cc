@@ -195,6 +195,28 @@ TEST_F(AccessNetworkContextTransportTest,
 }
 
 TEST_F(AccessNetworkContextTransportTest,
+       CaptureHandlesUnsortedPublishedHosts) {
+  const base::FilePath partition;
+  auto delegate = CreateDelegate(partition);
+  const auto endpoint = EndpointFor(partition);
+  ASSERT_TRUE(transport_->PublishProxySelection(
+      partition, {"z.example", kTargetHost, "a.example"}, endpoint));
+
+  EXPECT_TRUE(transport_
+                  ->CaptureSelectedProxyEndpoint(
+                      endpoint.owner, endpoint.proxy_group_id, "a.example")
+                  .has_value());
+  EXPECT_TRUE(transport_
+                  ->CaptureSelectedProxyEndpoint(
+                      endpoint.owner, endpoint.proxy_group_id, kTargetHost)
+                  .has_value());
+  EXPECT_TRUE(transport_
+                  ->CaptureSelectedProxyEndpoint(
+                      endpoint.owner, endpoint.proxy_group_id, "z.example")
+                  .has_value());
+}
+
+TEST_F(AccessNetworkContextTransportTest,
        CaptureRejectsEndpointAfterNetworkEpochChanges) {
   const base::FilePath partition;
   auto delegate = CreateDelegate(partition);
