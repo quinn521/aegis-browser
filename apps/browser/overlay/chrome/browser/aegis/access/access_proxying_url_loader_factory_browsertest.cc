@@ -31,6 +31,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/test_navigation_observer.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
@@ -269,6 +270,50 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
   raw_ptr<AccessNetworkContextTransport> transport_ = nullptr;
   std::optional<aegis_access::OwnershipKey> owner_;
 };
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       PrimaryNavigationWithoutPolicyPreservesNativePath) {
+  content::TestNavigationObserver observer(web_contents());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), target_url()));
+
+  EXPECT_TRUE(observer.last_navigation_succeeded());
+  EXPECT_EQ(observer.last_net_error_code(), net::OK);
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return origin_requests_.load(std::memory_order_relaxed) == 1u;
+  }));
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       PrimaryNavigationRoutesThroughSelectedProxy) {
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  content::TestNavigationObserver observer(web_contents());
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), target_url()));
+
+  EXPECT_TRUE(observer.last_navigation_succeeded());
+  EXPECT_EQ(observer.last_net_error_code(), net::OK);
+  EXPECT_TRUE(base::test::RunUntil([&] {
+    return proxy_requests_.load(std::memory_order_relaxed) == 1u;
+  }));
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+  EXPECT_EQ(web_contents()->GetLastCommittedURL().host(), kTargetHost);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       PrimaryNavigationWithoutSelectedEndpointFailsClosed) {
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+
+  content::TestNavigationObserver observer(
+      web_contents(), net::ERR_PROXY_CONNECTION_FAILED);
+  ui_test_utils::NavigateToURL(browser(), target_url());
+
+  EXPECT_FALSE(observer.last_navigation_succeeded());
+  EXPECT_EQ(observer.last_net_error_code(),
+            net::ERR_PROXY_CONNECTION_FAILED);
+  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        NoPublishedPolicyPreservesNativePath) {
