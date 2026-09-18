@@ -19,7 +19,7 @@
 
 设计已经冻结为 V1.0 修订 4，包含 118 项功能/交付验收、13 项性能指标及 G0–G3 四个阶段门槛。到 2026-09-18，P0 已推进到 NetworkContext 代理传输、请求所有权/定向取消、dispatch BLOCK barrier、统一 dispatch gate 与 browser-owned request metadata；当前 `develop` patch 栈止于 `0126`。Published request runtime、五个真实 generation lifecycle source、真实 URLLoader vertical slice、Xray/认证/计量、用户 `SetSiteProxy` 入口和部署验收仍未闭合，G0 仍未通过。具体证据边界和下一顺序以 [P0 实现与证据](p0-implementation.zh-CN.md) 的当前快照为准。
 
-2026-09-18 实施核对基线为个人 Fork `develop@488544b89b43cd22fc1476aec2f44ef50275bce4`；个人 `main` 为 `013d5ba639b177a599a3036f24c82e07026568d3`，Fork 默认分支已经是 `develop`。旧设计记录中的 PR/分支状态只保留历史含义，不作为当前完成证据。当前仍没有本访问服务的完整浏览器 runtime、G0 或可分发结论。
+2026-09-18 实施核对基线为个人 Fork `develop@488544b89b43cd22fc1476aec2f44ef50275bce4`；个人 `main` 为 `013d5ba639b177a599a3036f24c82e07026568d3`，Fork 默认分支已经是 `develop`。旧设计记录中的 PR/分支状态已不再适用于当前进度判断，仅保留为历史记录。当前仍没有本访问服务的完整浏览器 runtime、G0 或可分发结论。
 
 **1. 产品定位与范围**
 
