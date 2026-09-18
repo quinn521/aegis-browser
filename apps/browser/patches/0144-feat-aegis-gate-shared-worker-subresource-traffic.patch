@@ -388,7 +388,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6761,10 +6761,10 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+@@ -6761,10 +6761,11 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
 -  if (type == URLLoaderFactoryType::kWorkerSubResource && frame) {
 +  if (type == URLLoaderFactoryType::kWorkerSubResource) {
      aegis::access::AccessProxyingURLLoaderFactory::
