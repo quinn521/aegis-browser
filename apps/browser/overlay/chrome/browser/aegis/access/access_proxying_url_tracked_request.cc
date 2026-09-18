@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_proxying_url_tracked_request.h"
 
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
