@@ -61,8 +61,8 @@ struct PublishedRequestRuntimeResult {
 // mutate the ownership registry.
 PublishedRequestRuntimeResult EvaluatePublishedRequestForDispatch(
     const PublishedRequestRuntimeInput& input,
-    const RequestDispatchBarrierRegistry* barriers,
-    RequestOwnershipRegistry* ownership_registry);
+    const RequestDispatchBarrierRegistry& barriers,
+    RequestOwnershipRegistry& ownership_registry);
 
 }  // namespace aegis_access
 
