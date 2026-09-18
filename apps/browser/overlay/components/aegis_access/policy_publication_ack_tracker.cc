@@ -23,9 +23,19 @@ PolicyPublicationAckTracker::PolicyPublicationAckTracker(
 PolicyPublicationAckTracker::~PolicyPublicationAckTracker() = default;
 
 bool PolicyPublicationAckTracker::IsReady(const Entry& entry) {
-  return entry.received_acks.size() == entry.required_acks.size() &&
+  return !entry.failed &&
+         entry.received_acks.size() == entry.required_acks.size() &&
          (!entry.require_termination || entry.termination_complete) &&
          entry.durable_committed;
+}
+
+PolicyPublicationAckStatus PolicyPublicationAckTracker::CurrentStatus(
+    const Entry& entry) {
+  if (entry.failed) {
+    return PolicyPublicationAckStatus::kFailed;
+  }
+  return IsReady(entry) ? PolicyPublicationAckStatus::kReady
+                        : PolicyPublicationAckStatus::kPending;
 }
 
 PolicyPublicationAckSnapshot PolicyPublicationAckTracker::SnapshotFor(
@@ -36,6 +46,7 @@ PolicyPublicationAckSnapshot PolicyPublicationAckTracker::SnapshotFor(
       entry.received_acks.size(),
       entry.termination_complete,
       entry.durable_committed,
+      entry.failed,
       IsReady(entry),
   };
 }
@@ -90,57 +101,103 @@ PolicyPublicationAckStatus PolicyPublicationAckTracker::ValidateIdentity(
   return PolicyPublicationAckStatus::kPending;
 }
 
-PolicyPublicationAckResult PolicyPublicationAckTracker::Begin(
-    PolicyPublicationAckRequirements requirements) {
-  if (requirements.identity.operation_id.empty() ||
+PolicyPublicationAckStatus PolicyPublicationAckTracker::ValidateRequirements(
+    const PolicyPublicationAckRequirements& requirements,
+    std::set<std::string>* required_acks) const {
+  if (!required_acks || requirements.identity.operation_id.empty() ||
       requirements.identity.operation_sequence == 0 ||
       requirements.identity.policy_generation == 0 ||
       !IsValidRequestCancellationSelector(requirements.identity.selector) ||
       requirements.required_ack_tokens.empty() ||
       requirements.required_ack_tokens.size() >
           max_ack_tokens_per_operation_) {
-    return {PolicyPublicationAckStatus::kInvalidOperation, std::nullopt};
+    return PolicyPublicationAckStatus::kInvalidOperation;
   }
 
-  std::set<std::string> required_acks;
   for (const std::string& token : requirements.required_ack_tokens) {
-    if (!IsValidAckToken(token) || !required_acks.insert(token).second) {
-      return {PolicyPublicationAckStatus::kInvalidOperation, std::nullopt};
+    if (!IsValidAckToken(token) || !required_acks->insert(token).second) {
+      return PolicyPublicationAckStatus::kInvalidOperation;
     }
   }
+  return PolicyPublicationAckStatus::kPending;
+}
 
-  Entry* current = FindBySelector(requirements.identity.selector);
-  if (current) {
-    if (requirements.identity.operation_sequence <
-        current->identity.operation_sequence) {
-      return ResultFor(PolicyPublicationAckStatus::kStaleOperation, current);
+PolicyPublicationAckResult PolicyPublicationAckTracker::UpdateEntry(
+    Entry* entry,
+    PolicyPublicationAckRequirements requirements,
+    std::set<std::string> required_acks) {
+  if (requirements.identity.operation_sequence <
+      entry->identity.operation_sequence) {
+    return ResultFor(PolicyPublicationAckStatus::kStaleOperation, entry);
+  }
+  if (requirements.identity.operation_sequence ==
+      entry->identity.operation_sequence) {
+    if (requirements.identity != entry->identity ||
+        required_acks != entry->required_acks ||
+        requirements.require_termination != entry->require_termination) {
+      return ResultFor(PolicyPublicationAckStatus::kVersionMismatch, entry);
     }
-    if (requirements.identity.operation_sequence ==
-        current->identity.operation_sequence) {
-      if (requirements.identity != current->identity ||
-          required_acks != current->required_acks ||
-          requirements.require_termination != current->require_termination) {
-        return ResultFor(PolicyPublicationAckStatus::kVersionMismatch, current);
-      }
-      return ResultFor(IsReady(*current)
-                           ? PolicyPublicationAckStatus::kReady
-                           : PolicyPublicationAckStatus::kPending,
-                       current);
-    }
-    if (requirements.identity.policy_generation <=
-        current->identity.policy_generation) {
-      return ResultFor(PolicyPublicationAckStatus::kStaleGeneration, current);
-    }
-
-    current->identity = std::move(requirements.identity);
-    current->required_acks = std::move(required_acks);
-    current->received_acks.clear();
-    current->require_termination = requirements.require_termination;
-    current->termination_complete = false;
-    current->durable_committed = false;
-    return ResultFor(PolicyPublicationAckStatus::kPending, current);
+    return ResultFor(CurrentStatus(*entry), entry);
+  }
+  if (requirements.identity.policy_generation <=
+      entry->identity.policy_generation) {
+    return ResultFor(PolicyPublicationAckStatus::kStaleGeneration, entry);
   }
 
+  entry->identity = std::move(requirements.identity);
+  entry->required_acks = std::move(required_acks);
+  entry->received_acks.clear();
+  entry->require_termination = requirements.require_termination;
+  entry->termination_complete = false;
+  entry->durable_committed = false;
+  entry->failed = false;
+  return ResultFor(PolicyPublicationAckStatus::kPending, entry);
+}
+
+std::pair<PolicyPublicationAckStatus, PolicyPublicationAckTracker::Entry*>
+PolicyPublicationAckTracker::FindAndValidate(
+    const PolicyPublicationIdentity& identity) {
+  Entry* entry = FindBySelector(identity.selector);
+  if (!entry) {
+    return {PolicyPublicationAckStatus::kNotFound, nullptr};
+  }
+  const PolicyPublicationAckStatus identity_status =
+      ValidateIdentity(identity, *entry);
+  if (identity_status != PolicyPublicationAckStatus::kPending) {
+    return {identity_status, entry};
+  }
+  return {CurrentStatus(*entry), entry};
+}
+
+std::pair<PolicyPublicationAckStatus,
+          const PolicyPublicationAckTracker::Entry*>
+PolicyPublicationAckTracker::FindAndValidate(
+    const PolicyPublicationIdentity& identity) const {
+  const Entry* entry = FindBySelector(identity.selector);
+  if (!entry) {
+    return {PolicyPublicationAckStatus::kNotFound, nullptr};
+  }
+  const PolicyPublicationAckStatus identity_status =
+      ValidateIdentity(identity, *entry);
+  if (identity_status != PolicyPublicationAckStatus::kPending) {
+    return {identity_status, entry};
+  }
+  return {CurrentStatus(*entry), entry};
+}
+
+PolicyPublicationAckResult PolicyPublicationAckTracker::Begin(
+    PolicyPublicationAckRequirements requirements) {
+  std::set<std::string> required_acks;
+  const PolicyPublicationAckStatus requirements_status =
+      ValidateRequirements(requirements, &required_acks);
+  if (requirements_status != PolicyPublicationAckStatus::kPending) {
+    return {requirements_status, std::nullopt};
+  }
+
+  if (Entry* current = FindBySelector(requirements.identity.selector)) {
+    return UpdateEntry(current, std::move(requirements),
+                       std::move(required_acks));
+  }
   if (entries_.size() >= max_operations_) {
     return {PolicyPublicationAckStatus::kCapacityExceeded, std::nullopt};
   }
@@ -152,6 +209,7 @@ PolicyPublicationAckResult PolicyPublicationAckTracker::Begin(
       requirements.require_termination,
       false,
       false,
+      false,
   });
   return ResultFor(PolicyPublicationAckStatus::kPending, &entries_.back());
 }
@@ -159,14 +217,9 @@ PolicyPublicationAckResult PolicyPublicationAckTracker::Begin(
 PolicyPublicationAckResult PolicyPublicationAckTracker::Acknowledge(
     const PolicyPublicationIdentity& identity,
     const std::string& ack_token) {
-  Entry* entry = FindBySelector(identity.selector);
-  if (!entry) {
-    return {PolicyPublicationAckStatus::kNotFound, std::nullopt};
-  }
-  const PolicyPublicationAckStatus identity_status =
-      ValidateIdentity(identity, *entry);
-  if (identity_status != PolicyPublicationAckStatus::kPending) {
-    return ResultFor(identity_status, entry);
+  auto [status, entry] = FindAndValidate(identity);
+  if (status != PolicyPublicationAckStatus::kPending) {
+    return ResultFor(status, entry);
   }
   if (!entry->required_acks.contains(ack_token)) {
     return ResultFor(PolicyPublicationAckStatus::kUnexpectedAck, entry);
@@ -174,75 +227,54 @@ PolicyPublicationAckResult PolicyPublicationAckTracker::Acknowledge(
   if (!entry->received_acks.insert(ack_token).second) {
     return ResultFor(PolicyPublicationAckStatus::kDuplicateAck, entry);
   }
-  return ResultFor(IsReady(*entry) ? PolicyPublicationAckStatus::kReady
-                                   : PolicyPublicationAckStatus::kPending,
-                   entry);
+  return ResultFor(CurrentStatus(*entry), entry);
 }
 
 PolicyPublicationAckResult
 PolicyPublicationAckTracker::MarkTerminationsComplete(
     const PolicyPublicationIdentity& identity) {
-  Entry* entry = FindBySelector(identity.selector);
-  if (!entry) {
-    return {PolicyPublicationAckStatus::kNotFound, std::nullopt};
-  }
-  const PolicyPublicationAckStatus identity_status =
-      ValidateIdentity(identity, *entry);
-  if (identity_status != PolicyPublicationAckStatus::kPending) {
-    return ResultFor(identity_status, entry);
+  auto [status, entry] = FindAndValidate(identity);
+  if (status != PolicyPublicationAckStatus::kPending) {
+    return ResultFor(status, entry);
   }
   entry->termination_complete = true;
-  return ResultFor(IsReady(*entry) ? PolicyPublicationAckStatus::kReady
-                                   : PolicyPublicationAckStatus::kPending,
-                   entry);
+  return ResultFor(CurrentStatus(*entry), entry);
 }
 
 PolicyPublicationAckResult PolicyPublicationAckTracker::MarkDurablyCommitted(
     const PolicyPublicationIdentity& identity) {
-  Entry* entry = FindBySelector(identity.selector);
-  if (!entry) {
-    return {PolicyPublicationAckStatus::kNotFound, std::nullopt};
-  }
-  const PolicyPublicationAckStatus identity_status =
-      ValidateIdentity(identity, *entry);
-  if (identity_status != PolicyPublicationAckStatus::kPending) {
-    return ResultFor(identity_status, entry);
+  auto [status, entry] = FindAndValidate(identity);
+  if (status != PolicyPublicationAckStatus::kPending) {
+    return ResultFor(status, entry);
   }
   entry->durable_committed = true;
-  return ResultFor(IsReady(*entry) ? PolicyPublicationAckStatus::kReady
-                                   : PolicyPublicationAckStatus::kPending,
-                   entry);
+  return ResultFor(CurrentStatus(*entry), entry);
+}
+
+PolicyPublicationAckResult PolicyPublicationAckTracker::MarkFailed(
+    const PolicyPublicationIdentity& identity) {
+  auto [status, entry] = FindAndValidate(identity);
+  if (status != PolicyPublicationAckStatus::kPending) {
+    return ResultFor(status, entry);
+  }
+  entry->failed = true;
+  return ResultFor(PolicyPublicationAckStatus::kFailed, entry);
 }
 
 PolicyPublicationAckResult PolicyPublicationAckTracker::Lookup(
     const PolicyPublicationIdentity& identity) const {
-  const Entry* entry = FindBySelector(identity.selector);
-  if (!entry) {
-    return {PolicyPublicationAckStatus::kNotFound, std::nullopt};
-  }
-  const PolicyPublicationAckStatus identity_status =
-      ValidateIdentity(identity, *entry);
-  if (identity_status != PolicyPublicationAckStatus::kPending) {
-    return ResultFor(identity_status, entry);
-  }
-  return ResultFor(IsReady(*entry) ? PolicyPublicationAckStatus::kReady
-                                   : PolicyPublicationAckStatus::kPending,
-                   entry);
+  const auto [status, entry] = FindAndValidate(identity);
+  return ResultFor(status, entry);
 }
 
 PolicyPublicationAckResult PolicyPublicationAckTracker::Finalize(
     const PolicyPublicationIdentity& identity) {
-  Entry* entry = FindBySelector(identity.selector);
-  if (!entry) {
-    return {PolicyPublicationAckStatus::kNotFound, std::nullopt};
-  }
-  const PolicyPublicationAckStatus identity_status =
-      ValidateIdentity(identity, *entry);
-  if (identity_status != PolicyPublicationAckStatus::kPending) {
-    return ResultFor(identity_status, entry);
-  }
-  if (!IsReady(*entry)) {
-    return ResultFor(PolicyPublicationAckStatus::kNotReady, entry);
+  auto [status, entry] = FindAndValidate(identity);
+  if (status != PolicyPublicationAckStatus::kReady) {
+    if (status == PolicyPublicationAckStatus::kPending) {
+      status = PolicyPublicationAckStatus::kNotReady;
+    }
+    return ResultFor(status, entry);
   }
 
   const PolicyPublicationAckSnapshot snapshot = SnapshotFor(*entry);
