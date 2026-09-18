@@ -17,6 +17,7 @@ namespace {
 class NativeObserver : public aegis_access::test::ContractTestObserver,
                        public aegis_access::test::RequestOwnershipRegistryTestObserver,
                        public aegis_access::test::BrowserRequestMetadataSeedTestObserver,
+                       public aegis_access::test::BaseProxyConfigGenerationStateTestObserver,
                        public aegis_access::test::IdentityGenerationStateTestObserver,
                        public aegis_access::test::ProxySelectionGenerationStateTestObserver {
  public:
