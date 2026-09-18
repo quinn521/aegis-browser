@@ -32,8 +32,9 @@ class AccessProxyingURLTrackedRequest;
 
 // UI-thread browser-process URLLoaderFactory wrapper for real Access request
 // dispatch. It covers primary-page document subresources plus main navigation
-// factories. Worker, ServiceWorker, prefetch, WebSocket, nested-page, and
-// redirect re-evaluation remain later slices. Each request is re-evaluated from
+// factories, including redirect follow re-evaluation under one stable logical
+// request identity. Worker, ServiceWorker, prefetch, WebSocket, nested-page,
+// BFCache, and prerender remain later slices. Each request is re-evaluated from
 // browser-owned frame/navigation state and the latest published Access state
 // before it may reach the target Network Service factory.
 //
