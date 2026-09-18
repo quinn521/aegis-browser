@@ -161,6 +161,7 @@ if [[ -n "$COVERAGE_DIR" ]]; then
     "$COMPONENT_DIR/access_identity_generation_state.cc" \
     "$COMPONENT_DIR/access_proxy_selection_generation_state.cc" \
     "$COMPONENT_DIR/access_base_proxy_config_generation_state.cc" \
+    "$COMPONENT_DIR/request_generation_tuple_builder.cc" \
     > "$COVERAGE_DIR/coverage.txt"
 else
   "$TEST_ROOT/aegis_access_native_test"
