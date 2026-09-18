@@ -3,6 +3,8 @@
 #include "chrome/browser/aegis/access/access_request_dispatch_state.h"
 
 #include <memory>
+
+#include "base/functional/bind.h"
 #include <utility>
 
 #include "chrome/browser/aegis/aegis_profile_support.h"
@@ -41,14 +43,15 @@ AccessRequestDispatchState* AccessRequestDispatchState::GetOrCreate(
     return existing;
   }
   auto state =
-      std::unique_ptr<AccessRequestDispatchState>(new AccessRequestDispatchState());
+      std::unique_ptr<AccessRequestDispatchState>(new AccessRequestDispatchState(profile));
   auto* result = state.get();
   profile->SetUserData(kDispatchStateUserDataKey, std::move(state));
   return result;
 }
 
-AccessRequestDispatchState::AccessRequestDispatchState()
-    : barriers_(kMaxDispatchBarriers),
+AccessRequestDispatchState::AccessRequestDispatchState(Profile* profile)
+    : profile_(profile),
+      barriers_(kMaxDispatchBarriers),
       ownership_(kMaxOwnedRequests),
       publication_acks_(kMaxPolicyPublications,
                         kMaxPolicyPublicationAckTokens) {
@@ -136,6 +139,29 @@ AccessRequestDispatchState::ReleaseBlockBarrierForReadyPublication(
   result.released =
       finalized.status == aegis_access::PolicyPublicationAckStatus::kFinalized;
   return result;
+}
+
+AccessNetworkConfigAckResult
+AccessRequestDispatchState::RequestNetworkContextPublicationAck(
+    const aegis_access::PolicyPublicationIdentity& identity,
+    const aegis_access::OwnershipKey& owner) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  AccessNetworkContextTransport* transport =
+      AccessNetworkContextTransport::Get(profile_);
+  if (!transport) {
+    return {AccessNetworkConfigAckStatus::kMissingTransport, 0};
+  }
+  return transport->RepublishCurrentConfigWithAck(
+      owner,
+      base::BindOnce(
+          &AccessRequestDispatchState::OnNetworkContextPublicationAck,
+          weak_factory_.GetWeakPtr(), identity));
+}
+
+void AccessRequestDispatchState::OnNetworkContextPublicationAck(
+    aegis_access::PolicyPublicationIdentity identity) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  publication_acks_.Acknowledge(identity, "network-context");
 }
 
 }  // namespace aegis::access
