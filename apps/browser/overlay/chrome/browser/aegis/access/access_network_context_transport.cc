@@ -43,6 +43,13 @@ bool IsCanonicalExactHost(const std::string& host) {
   return url.is_valid() && url.has_host() && url.host() == host;
 }
 
+bool AreCanonicalExactHosts(const std::vector<std::string>& exact_hosts) {
+  return !exact_hosts.empty() && exact_hosts.size() <= kMaxExactHosts &&
+         std::adjacent_find(exact_hosts.begin(), exact_hosts.end()) ==
+             exact_hosts.end() &&
+         std::ranges::all_of(exact_hosts, IsCanonicalExactHost);
+}
+
 aegis_access::RoutePlan RoutePlanForEndpoint(
     const aegis_access::RegisteredProxyEndpoint& endpoint) {
   aegis_access::RoutePlan plan;
@@ -107,6 +114,13 @@ void AccessNetworkContextTransport::OnNetworkChanged(
     return;
   }
   ++network_epoch_;
+
+  // Keep the already-installed localhost proxy route intact here. Broadcasting
+  // an empty CustomProxyConfig would restore Chromium's native proxy result and
+  // could silently downgrade a request that still requires proxying to DIRECT.
+  // The incremented epoch invalidates stale re-publication; the request-runtime
+  // generation gate is responsible for blocking stale tuples while the local
+  // proxy runtime rebinds to the new network.
 }
 
 // static
@@ -157,21 +171,13 @@ bool AccessNetworkContextTransport::PublishProxySelection(
     std::vector<std::string> exact_hosts,
     const aegis_access::RegisteredProxyEndpoint& endpoint) {
   const std::optional<std::string> key = PartitionKey(relative_partition_path);
-  const std::optional<aegis_access::OwnershipKey> expected_owner =
-      OwnerForPartition(endpoint.owner.channel, relative_partition_path);
-  if (!key || !expected_owner || endpoint.owner != *expected_owner ||
-      network_epoch_ == 0 ||
-      endpoint.generations.network_epoch != network_epoch_ ||
-      exact_hosts.empty() || exact_hosts.size() > kMaxExactHosts) {
+  if (!key ||
+      !IsEndpointCurrentForPartition(relative_partition_path, endpoint)) {
     return false;
   }
 
   std::sort(exact_hosts.begin(), exact_hosts.end());
-  if (std::adjacent_find(exact_hosts.begin(), exact_hosts.end()) !=
-      exact_hosts.end()) {
-    return false;
-  }
-  if (!std::ranges::all_of(exact_hosts, IsCanonicalExactHost)) {
+  if (!AreCanonicalExactHosts(exact_hosts)) {
     return false;
   }
 
@@ -253,6 +259,16 @@ std::optional<std::string> AccessNetworkContextTransport::PartitionKey(
 std::optional<std::string> AccessNetworkContextTransport::PartitionToken(
     const base::FilePath& relative_partition_path) const {
   return PartitionKey(relative_partition_path);
+}
+
+bool AccessNetworkContextTransport::IsEndpointCurrentForPartition(
+    const base::FilePath& relative_partition_path,
+    const aegis_access::RegisteredProxyEndpoint& endpoint) const {
+  const std::optional<aegis_access::OwnershipKey> expected_owner =
+      OwnerForPartition(endpoint.owner.channel, relative_partition_path);
+  return network_epoch_ != 0 && expected_owner.has_value() &&
+         endpoint.owner == *expected_owner &&
+         endpoint.generations.network_epoch == network_epoch_;
 }
 
 network::mojom::CustomProxyConfigPtr AccessNetworkContextTransport::BuildConfig(
