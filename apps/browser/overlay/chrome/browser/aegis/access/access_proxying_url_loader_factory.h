@@ -97,6 +97,11 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
  private:
   friend class AccessProxyingURLTrackedRequest;
 
+  static void MaybeProxyFrameOwnedWorkerFactory(
+      Profile* profile,
+      content::RenderFrameHost* frame,
+      network::URLLoaderFactoryBuilder& factory_builder);
+
   enum class RequestDisposition {
     kPreserveNative,
     kDispatchProxy,
