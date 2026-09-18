@@ -18,9 +18,6 @@ struct AccessBlockOperationResult {
       aegis_access::RequestDispatchBarrierStatus::kInvalidBarrier;
   bool cancellation_attempted = false;
   aegis_access::RequestOwnershipBatchCancelResult cancellation;
-
-  friend bool operator==(const AccessBlockOperationResult&,
-                         const AccessBlockOperationResult&) = default;
 };
 
 // UI-thread Profile-owned request dispatch state shared by all Aegis
