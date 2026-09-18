@@ -1205,6 +1205,7 @@ TEST(AccessRuleStoreTest, ClosingReplacesOnlyGroupOwnedRows) {
   ASSERT_EQ(snapshot.status, StoreStatus::kValid) << snapshot.detail;
   ASSERT_TRUE(snapshot.value);
   ASSERT_EQ(snapshot.value->site_groups.size(), 1u);
+  EXPECT_EQ(snapshot.value->policy_generation, close.operation_sequence);
   EXPECT_EQ(Selection(snapshot.value->site_groups[0]),
             GroupSelection::kDisabled);
   ASSERT_EQ(snapshot.value->independent_rules.size(), 2u);
