@@ -24,6 +24,7 @@ namespace aegis::access {
 
 enum class AccessNetworkConfigAckStatus {
   kStarted,
+  kMissingTransport,
   kInvalidOwner,
   kMissingPartition,
   kNoClients,
