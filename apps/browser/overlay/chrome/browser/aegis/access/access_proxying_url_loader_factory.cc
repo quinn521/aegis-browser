@@ -153,6 +153,31 @@ ProxyDispatchPreparation PrepareProxyDispatch(
   return {net::OK, input.request};
 }
 
+std::optional<aegis_access::BrowserOwnedRequestMetadata>
+CaptureProxyFactoryMetadata(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    std::optional<int64_t> navigation_id) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!aegis::IsAegisProfileSupported(profile) || !frame ||
+      frame->GetBrowserContext() != profile || !frame->GetPage().IsPrimary()) {
+    return std::nullopt;
+  }
+
+  const content::FrameTreeNodeId frame_tree_node_id =
+      frame->GetFrameTreeNodeId();
+  auto wc_getter =
+      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
+                          frame_tree_node_id);
+  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
+      profile, wc_getter, frame_tree_node_id, navigation_id);
+  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
+      !metadata.metadata.has_value()) {
+    return std::nullopt;
+  }
+  return std::move(*metadata.metadata);
+}
+
 class CallbackTerminationHandle final
     : public aegis_access::RequestTerminationHandle {
  public:
@@ -250,26 +275,15 @@ void AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
     content::RenderFrameHost* frame,
     network::URLLoaderFactoryBuilder& factory_builder) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!aegis::IsAegisProfileSupported(profile) || !frame ||
-      frame->GetBrowserContext() != profile || !frame->GetPage().IsPrimary()) {
+  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
+      CaptureProxyFactoryMetadata(profile, frame, std::nullopt);
+  if (!metadata.has_value()) {
     return;
   }
 
-  const content::FrameTreeNodeId frame_tree_node_id =
-      frame->GetFrameTreeNodeId();
-  auto wc_getter =
-      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
-                          frame_tree_node_id);
-  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
-      profile, wc_getter, frame_tree_node_id, std::nullopt);
-  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
-      !metadata.metadata.has_value()) {
-    return;
-  }
-
-  BrowserContextData::StartProxying(profile, frame_tree_node_id, std::nullopt,
-                                    std::move(*metadata.metadata),
-                                    factory_builder);
+  BrowserContextData::StartProxying(
+      profile, frame->GetFrameTreeNodeId(), std::nullopt, std::move(*metadata),
+      factory_builder);
 }
 
 // static
@@ -279,27 +293,20 @@ void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
     int64_t navigation_id,
     network::URLLoaderFactoryBuilder& factory_builder) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!aegis::IsAegisProfileSupported(profile) || !frame ||
-      frame->GetBrowserContext() != profile || !frame->GetPage().IsPrimary()) {
+  if (!frame || !frame->IsInPrimaryMainFrame()) {
     return;
   }
 
-  const content::FrameTreeNodeId frame_tree_node_id =
-      frame->GetFrameTreeNodeId();
-  auto wc_getter =
-      base::BindRepeating(&content::WebContents::FromFrameTreeNodeId,
-                          frame_tree_node_id);
-  AccessBrowserRequestMetadataResult metadata = BuildBrowserOwnedRequestMetadata(
-      profile, wc_getter, frame_tree_node_id, navigation_id);
-  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
-      !metadata.metadata.has_value() ||
-      metadata.metadata->attribution_kind !=
+  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
+      CaptureProxyFactoryMetadata(profile, frame, navigation_id);
+  if (!metadata.has_value() ||
+      metadata->attribution_kind !=
           aegis_access::RequestAttributionKind::kPendingNavigation) {
     return;
   }
 
-  BrowserContextData::StartProxying(profile, frame_tree_node_id, navigation_id,
-                                    std::move(*metadata.metadata),
+  BrowserContextData::StartProxying(profile, frame->GetFrameTreeNodeId(),
+                                    navigation_id, std::move(*metadata),
                                     factory_builder);
 }
 
