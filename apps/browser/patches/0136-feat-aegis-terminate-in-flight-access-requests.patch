@@ -18,7 +18,7 @@ index a7cd516..0e5bd99 100644
    deps = [
      ":access_browser_request_adapter",
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
-index abccc25..d415f20 100644
+index abccc25..5a28670 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 @@ -1,6 +1,7 @@
@@ -242,7 +242,7 @@ index abccc25..d415f20 100644
                       tracked_ptr->GetWeakPtr()));
    const aegis_access::RequestOwnershipStatus dispatch_status =
        dispatch_state->ownership().MarkDispatched(
-@@ -586,6 +398,19 @@ void AccessProxyingURLLoaderFactory::Clone(
+@@ -586,6 +398,17 @@ void AccessProxyingURLLoaderFactory::Clone(
    proxy_receivers_.Add(this, std::move(loader_receiver));
  }
  
@@ -253,15 +253,22 @@ index abccc25..d415f20 100644
 +    const network::ResourceRequest& request,
 +    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
 +    const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
-+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-+  target_factory_->CreateLoaderAndStart(
-+      std::move(loader_receiver), request_id, options, request,
-+      std::move(client), traffic_annotation);
++  ForwardNative(std::move(loader_receiver), request_id, options, request,
++                std::move(client), traffic_annotation);
 +}
 +
  void AccessProxyingURLLoaderFactory::ForwardNative(
      mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
      int32_t request_id,
+@@ -593,6 +416,8 @@ void AccessProxyingURLLoaderFactory::ForwardNative(
+     const network::ResourceRequest& request,
+     mojo::PendingRemote<network::mojom::URLLoaderClient> client,
+     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  DCHECK(target_factory_.is_bound());
+   target_factory_->CreateLoaderAndStart(
+       std::move(loader_receiver), request_id, options, request,
+       std::move(client), traffic_annotation);
 @@ -610,7 +435,7 @@ void AccessProxyingURLLoaderFactory::BlockRequest(
    }
  }
