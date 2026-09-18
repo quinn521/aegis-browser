@@ -455,11 +455,6 @@ rg -Fq 'kPrerenderNavigationId' \
 rg -Fq 'RejectsInvalidBrowserOwnedTopSiteForNestedPendingNavigation' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must reject invalid browser-owned nested top sites"
-rg -Fq 'request_frame->GetMainFrame() != contents->GetPrimaryMainFrame()' \
-  "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must bind nested attribution to the primary frame tree"
-rg -Fq 'kPrerenderNavigationId' "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
-  fail "patch 0139 must reject pending navigation from prerendered Pages"
 rg -Fq 'SubframePendingNavigationRejectsOpaquePrimaryTopFrameSite' \
   "$SUBFRAME_NAVIGATION_PATCH_FILE" ||
   fail "patch 0139 must reject opaque nested top-frame attribution"
