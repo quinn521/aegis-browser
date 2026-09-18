@@ -38,6 +38,8 @@ SUBFRAME_NAVIGATION_PATCH_FILE="$BROWSER_DIR/patches/0139-feat-aegis-gate-primar
 REDIRECT_REEVALUATION_PATCH_FILE="$BROWSER_DIR/patches/0140-feat-aegis-reevaluate-proxied-redirects.patch"
 WORKER_MAIN_RESOURCE_PATCH_FILE="$BROWSER_DIR/patches/0141-feat-aegis-gate-worker-main-resource-traffic.patch"
 WORKER_SUBRESOURCE_PATCH_FILE="$BROWSER_DIR/patches/0142-feat-aegis-gate-worker-subresource-traffic.patch"
+BACKGROUND_WORKER_OWNERSHIP_PATCH_FILE="$BROWSER_DIR/patches/0143-feat-aegis-add-background-worker-profile-ownership.patch"
+BACKGROUND_WORKER_OWNERSHIP_TEST="$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc"
 BROWSER_TEST_WIRING_PATCH_FILE="$BROWSER_DIR/patches/0060-feat-aegis-add-browser-agent-side-panel-and-entry-po.patch"
 SERIES_FILE="$BROWSER_DIR/patches/series"
 STORE_CONTRACT_TEST="$SCRIPT_DIR/access-rule-store-contract_test.sh"
@@ -532,6 +534,33 @@ if rg -Fq 'URLLoaderFactoryType::kServiceWorker' \
   "$WORKER_SUBRESOURCE_PATCH_FILE"; then
   fail "patch 0142 must not claim ServiceWorker coverage"
 fi
+rg -Fq 'BuildBrowserOwnedProfileRequestMetadata' \
+  "$BACKGROUND_WORKER_OWNERSHIP_PATCH_FILE" ||
+  fail "patch 0143 must expose browser-owned profile-only background metadata"
+rg -Fq 'AccessBrowserRequestMetadataStatus::kUnconfiguredPartition' \
+  "$BACKGROUND_WORKER_OWNERSHIP_PATCH_FILE" ||
+  fail "patch 0143 must fail closed for unconfigured background partitions"
+rg -Fq 'OwnsConfiguredPartition' "$BACKGROUND_WORKER_OWNERSHIP_PATCH_FILE" ||
+  fail "patch 0143 must bind background ownership to a configured Access partition"
+rg -Fq 'RequestAttributionKind::kProfileOnly' \
+  "$BACKGROUND_WORKER_OWNERSHIP_PATCH_FILE" ||
+  fail "patch 0143 must emit profile-only attribution without borrowing a site"
+rg -Fq 'BackgroundMetadataDoesNotCreateTransport' \
+  "$BACKGROUND_WORKER_OWNERSHIP_TEST" ||
+  fail "0143 regression must prove background metadata does not create transport"
+rg -Fq 'BackgroundMetadataRequiresConfiguredPartition' \
+  "$BACKGROUND_WORKER_OWNERSHIP_TEST" ||
+  fail "0143 regression must reject unconfigured partitions"
+rg -Fq 'BackgroundMetadataUsesProfileOnlyConfiguredPartitionOwnership' \
+  "$BACKGROUND_WORKER_OWNERSHIP_TEST" ||
+  fail "0143 regression must prove profile-only configured ownership"
+rg -Fq 'BackgroundMetadataRejectsCrossProfilePartition' \
+  "$BACKGROUND_WORKER_OWNERSHIP_TEST" ||
+  fail "0143 regression must reject cross-Profile partitions"
+if rg -Fq 'URLLoaderFactoryType::kServiceWorker' \
+  "$BACKGROUND_WORKER_OWNERSHIP_PATCH_FILE"; then
+  fail "patch 0143 must not wire ServiceWorker URLLoader factories"
+fi
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
@@ -594,6 +623,8 @@ fi
   "$SERIES_FILE")" == 1 ]] || fail "patch 0141 must appear once in series"
 [[ "$(rg -F -c '0142-feat-aegis-gate-worker-subresource-traffic.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "patch 0142 must appear once in series"
+[[ "$(rg -F -c '0143-feat-aegis-add-background-worker-profile-ownership.patch' \
+  "$SERIES_FILE")" == 1 ]] || fail "patch 0143 must appear once in series"
 expected_access_tail="$(cat <<'EOF'
 0115-feat-aegis-add-trusted-policy-context-matching.patch
 0116-feat-aegis-add-access-rule-store-recovery.patch
@@ -623,10 +654,11 @@ expected_access_tail="$(cat <<'EOF'
 0140-feat-aegis-reevaluate-proxied-redirects.patch
 0141-feat-aegis-gate-worker-main-resource-traffic.patch
 0142-feat-aegis-gate-worker-subresource-traffic.patch
+0143-feat-aegis-add-background-worker-profile-ownership.patch
 EOF
 )"
-[[ "$(tail -n 28 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "Access patch tail must remain sequential through patch 0142"
+[[ "$(tail -n 29 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "Access patch tail must remain sequential through patch 0143"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
