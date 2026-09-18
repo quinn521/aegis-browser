@@ -1,13 +1,13 @@
 From 0143000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Sat, 19 Sep 2026 01:33:00 +0800
-Subject: [PATCH] feat(aegis): add Profile-only background request ownership
+Subject: [PATCH] feat(aegis): harden Profile-only background ownership
 
 ---
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
-@@ -145,6 +145,24 @@
+@@ -145,6 +145,25 @@ source_set("access_published_request_runtime") {
    ]
  }
  
@@ -22,6 +22,7 @@ diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/
 +    "//chrome/browser/profiles:test_support",
 +    "//components/aegis_access",
 +    "//content/public/browser",
++    "//content/public/test",
 +    "//net",
 +    "//services/network/public/mojom",
 +    "//testing/gtest",
@@ -46,15 +47,15 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
  #include "content/public/browser/storage_partition.h"
  #include "content/public/browser/web_contents.h"
  #include "net/base/schemeful_site.h"
-@@ -144,12 +146,12 @@
+@@ -144,12 +146,12 @@ AccessBrowserRequestMetadataStatus ResolveTrustedFrame(
    return AccessBrowserRequestMetadataStatus::kOk;
  }
  
-+AccessBrowserRequestMetadataStatus ResolveOwnerForPartition(
 -AccessBrowserRequestMetadataStatus ResolveOwner(
++AccessBrowserRequestMetadataStatus ResolveOwnerForPartition(
      Profile* profile,
-+    content::StoragePartition* partition,
 -    content::RenderFrameHost* request_frame,
++    content::StoragePartition* partition,
      AccessNetworkContextTransport* transport,
 +    bool require_configured_partition,
      aegis_access::OwnershipKey* owner) {
@@ -62,7 +63,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
    if (!partition) {
      return AccessBrowserRequestMetadataStatus::kMissingStoragePartition;
    }
-@@ -165,10 +167,24 @@
+@@ -165,10 +167,24 @@ AccessBrowserRequestMetadataStatus ResolveOwner(
    if (!resolved_owner) {
      return AccessBrowserRequestMetadataStatus::kInvalidOwner;
    }
@@ -87,7 +88,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.cc b/chr
  AccessBrowserRequestMetadataStatus ResolvePrimaryTopFrameSite(
      Profile* profile,
      content::WebContents* contents,
-@@ -324,4 +340,53 @@
+@@ -324,4 +340,53 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
               : Error(status);
  }
  
@@ -152,7 +153,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chro
  class WebContents;
  }
  
-@@ -23,9 +24,11 @@
+@@ -23,9 +24,11 @@ enum class AccessBrowserRequestMetadataStatus {
    kUnsupportedProfile,
    kMissingTransport,
    kMissingTrustedContents,
@@ -164,7 +165,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter.h b/chro
    kInvalidPartitionPath,
    kInvalidOwner,
    kInvalidAttribution,
-@@ -55,6 +58,21 @@
+@@ -55,6 +58,21 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
      content::FrameTreeNodeId frame_tree_node_id,
      std::optional<int64_t> navigation_id);
  
@@ -205,7 +206,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsert
  #include "content/public/browser/web_contents.h"
  #include "content/public/test/browser_test_utils.h"
  #include "content/public/test/prerender_test_util.h"
-@@ -183,7 +185,57 @@
+@@ -183,6 +185,56 @@ IN_PROC_BROWSER_TEST_F(
    EXPECT_FALSE(metadata.metadata.has_value());
  }
  
@@ -248,7 +249,7 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsert
 +  EXPECT_EQ(context.context->exact_host(), "background.example");
 +}
 +
- IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
++IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
 +                       ProfileOnlyMetadataRejectsUnknownRenderProcess) {
 +  AccessBrowserRequestMetadataResult result =
 +      BuildBrowserOwnedProfileOnlyRequestMetadata(
@@ -259,10 +260,9 @@ diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsert
 +  EXPECT_FALSE(result.metadata.has_value());
 +}
 +
-+IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
+ IN_PROC_BROWSER_TEST_F(AccessBrowserRequestAdapterBrowserTest,
                         PrerenderPageCannotInheritPrimaryPageIdentity) {
    const GURL primary_url = embedded_test_server()->GetURL("/title1.html");
-   const GURL prerender_url = embedded_test_server()->GetURL("/title2.html");
 diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc b/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc
 new file mode 100644
 --- /dev/null
@@ -276,7 +276,7 @@ new file mode 100644
 +
 +#include "base/files/file_path.h"
 +#include "base/memory/raw_ptr.h"
-+#include "base/test/task_environment.h"
++#include "content/public/test/browser_task_environment.h"
 +#include "chrome/browser/aegis/access/access_network_context_transport.h"
 +#include "chrome/test/base/testing_profile.h"
 +#include "components/aegis_access/request_policy_context.h"
@@ -307,7 +307,7 @@ new file mode 100644
 +    ASSERT_TRUE(params.custom_proxy_config_client_receiver.is_valid());
 +  }
 +
-+  base::test::TaskEnvironment task_environment_;
++  content::BrowserTaskEnvironment task_environment_;
 +  std::unique_ptr<net::NetworkChangeNotifier> network_change_notifier_;
 +  std::unique_ptr<TestingProfile> profile_;
 +  raw_ptr<content::StoragePartition> partition_ = nullptr;
