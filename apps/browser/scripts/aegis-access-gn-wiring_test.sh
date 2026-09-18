@@ -258,7 +258,7 @@ rg -Fq 'CommittedIdentityTransitionsAdvanceGeneration'   "$IDENTITY_GENERATION_P
   fail "patch 0130 must cover committed identity transitions"
 rg -Fq 'ProfileOwnedSourcesAreIsolated' "$IDENTITY_GENERATION_PATCH_FILE" ||
   fail "patch 0130 must cover Profile-owned identity isolation"
-rg -Fq 'identity generation regression overflow fails closed'   "$IDENTITY_GENERATION_PATCH_FILE" ||
+rg -Fq 'ExpectIdentityGenerationOverflowFailsClosed'   "$IDENTITY_GENERATION_PATCH_FILE" ||
   fail "patch 0130 must cover identity generation exhaustion"
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
