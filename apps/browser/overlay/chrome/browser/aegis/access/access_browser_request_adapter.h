@@ -59,16 +59,18 @@ AccessBrowserRequestMetadataResult BuildBrowserOwnedRequestMetadata(
     std::optional<int64_t> navigation_id);
 
 // Builds Profile-only metadata from an exact browser-owned StoragePartition.
-// The partition must already be configured by this Profile's Access transport;
-// no WebContents, top-level site, or renderer-provided initiator is consulted.
+// Must be called on the UI thread. The partition must already be configured by
+// this Profile's Access transport; no WebContents, top-level site, or
+// renderer-provided initiator is consulted.
 AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileRequestMetadata(
     Profile* profile,
     content::StoragePartition* partition);
 
 // Builds Profile-only metadata for a browser-owned background request factory
-// whose trusted source is a render process. It resolves that process's
-// BrowserContext/StoragePartition and delegates to the configured-partition
-// contract above, so site-scoped policy remains ineligible.
+// whose trusted source is a render process. Must be called on the UI thread.
+// It resolves that process's BrowserContext/StoragePartition and delegates to
+// the configured-partition contract above, so site-scoped policy remains
+// ineligible.
 AccessBrowserRequestMetadataResult BuildBrowserOwnedProfileOnlyRequestMetadata(
     Profile* profile,
     int render_process_id);
