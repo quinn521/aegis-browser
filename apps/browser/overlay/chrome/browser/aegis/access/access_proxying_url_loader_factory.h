@@ -86,7 +86,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       const network::ResourceRequest& request,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation);
-  void BlockRequest(
+  static void BlockRequest(
       mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       int net_error);
