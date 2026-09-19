@@ -24,6 +24,7 @@ class Profile;
 
 namespace content {
 class RenderFrameHost;
+class StoragePartition;
 }
 
 namespace aegis::access {
@@ -36,10 +37,12 @@ class AccessProxyingURLTrackedRequest;
 // main-frame/subframe navigation, Worker main-script factories, frame-owned
 // Worker subresource factories, frame-less Worker subresource factories,
 // process-backed ServiceWorker subresource plus main/imported-script factories,
-// and frame-backed renderer prefetch factories. Browser-owned Profile-only
-// process/partition attribution and redirect follow re-evaluation remain bound
-// to one stable logical request identity. Browser-initiated prefetch,
-// explicit ServiceWorker update-check lifecycle validation, preconnect,
+// frame-backed renderer prefetch factories, and LoadingPredictor browser-process
+// prefetch bound to the Profile default StoragePartition. Browser-owned
+// Profile-only process/partition attribution and redirect follow re-evaluation
+// remain bound to one stable logical request identity. Search/browser-process
+// prefetch outside LoadingPredictor, explicit ServiceWorker update-check,
+// preconnect,
 // WebSocket, BFCache, and prerender remain later slices.
 // Each request is re-evaluated from its browser-owned attribution source and the
 // latest published Access state
@@ -93,6 +96,10 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   static void MaybeProxyPrefetch(
       Profile* profile,
       content::RenderFrameHost* frame,
+      network::URLLoaderFactoryBuilder& factory_builder);
+  static void MaybeProxyBrowserProcessPrefetch(
+      Profile* profile,
+      content::StoragePartition* partition,
       network::URLLoaderFactoryBuilder& factory_builder);
   static void MaybeProxyNavigation(
       Profile* profile,
