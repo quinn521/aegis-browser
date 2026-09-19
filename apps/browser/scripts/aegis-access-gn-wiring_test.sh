@@ -713,6 +713,15 @@ rg -Fq 'BrowserProcessPrefetchUsesSelectedProxy' \
 rg -Fq 'BrowserProcessPrefetchWithoutEndpointFailsClosed' \
   "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
   fail "patch 0148 must fail closed when browser-process prefetch PROXY lacks an endpoint"
+rg -Fq 'BrowserProcessPrefetchRedirectToUnselectedHostFailsClosed' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
+  fail "patch 0148 must re-evaluate browser-process prefetch redirect targets"
+rg -Fq 'BrowserProcessPrefetchNonDefaultPartitionStaysNative' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
+  fail "patch 0148 must preserve native routing for non-default partitions"
+rg -Fq 'StoragePartitionConfig::Create' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
+  fail "patch 0148 must exercise an actual non-default StoragePartition"
 if rg -Fq 'streaming_search_prefetch_url_loader' \
   "$BROWSER_PROCESS_PREFETCH_PATCH_FILE"; then
   fail "patch 0148 must not claim SearchPrefetch browser-process coverage"
