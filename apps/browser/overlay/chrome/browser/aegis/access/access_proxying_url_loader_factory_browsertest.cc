@@ -31,6 +31,7 @@
 #include "components/aegis_access/request_policy_context.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
 #include "net/http/http_status_code.h"
@@ -392,10 +393,10 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 
   bool FetchTarget() { return Fetch(target_url()); }
 
-  std::optional<std::string> FetchBrowserProcessPrefetch(const GURL& url) {
+  std::optional<std::string> FetchBrowserProcessPrefetchOnPartition(
+      content::StoragePartition* partition,
+      const GURL& url) {
     Profile* profile = browser()->profile();
-    content::StoragePartition* partition =
-        profile->GetDefaultStoragePartition();
     EXPECT_NE(partition, nullptr);
     if (!partition) {
       return std::nullopt;
@@ -422,6 +423,11 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
       return std::nullopt;
     }
     return result.Get();
+  }
+
+  std::optional<std::string> FetchBrowserProcessPrefetch(const GURL& url) {
+    return FetchBrowserProcessPrefetchOnPartition(
+        browser()->profile()->GetDefaultStoragePartition(), url);
   }
 
   std::string RunPrefetch(const GURL& url) {
@@ -893,6 +899,48 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
   EXPECT_FALSE(FetchBrowserProcessPrefetch(target_url()).has_value());
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AccessProxyingURLLoaderFactoryBrowserTest,
+    BrowserProcessPrefetchRedirectToUnselectedHostFailsClosed) {
+  const size_t origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  EXPECT_FALSE(
+      FetchBrowserProcessPrefetch(unselected_redirect_url()).has_value());
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/1u);
+}
+
+IN_PROC_BROWSER_TEST_F(
+    AccessProxyingURLLoaderFactoryBrowserTest,
+    BrowserProcessPrefetchNonDefaultPartitionStaysNative) {
+  Profile* profile = browser()->profile();
+  const content::StoragePartitionConfig config =
+      content::StoragePartitionConfig::Create(
+          profile, "aegis-prefetch-test", "non-default",
+          /*in_memory=*/true);
+  content::StoragePartition* partition =
+      profile->GetStoragePartition(config, /*can_create=*/true);
+  ASSERT_NE(partition, nullptr);
+  ASSERT_NE(partition, profile->GetDefaultStoragePartition());
+
+  const size_t origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  const std::optional<std::string> body =
+      FetchBrowserProcessPrefetchOnPartition(partition, target_url());
+  ASSERT_TRUE(body.has_value());
+  EXPECT_EQ(*body, "origin");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
                      /*proxy_delta=*/0u);
 }
 
