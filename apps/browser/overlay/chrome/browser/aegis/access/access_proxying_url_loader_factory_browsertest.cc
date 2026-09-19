@@ -409,6 +409,28 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
   }
 
+  void ExpectRoutingDelta(size_t origin_before,
+                          size_t proxy_before,
+                          size_t origin_delta,
+                          size_t proxy_delta) {
+    if (origin_delta > 0u) {
+      EXPECT_TRUE(base::test::RunUntil([&] {
+        return origin_requests_.load(std::memory_order_relaxed) ==
+               origin_before + origin_delta;
+      }));
+    }
+    if (proxy_delta > 0u) {
+      EXPECT_TRUE(base::test::RunUntil([&] {
+        return proxy_requests_.load(std::memory_order_relaxed) ==
+               proxy_before + proxy_delta;
+      }));
+    }
+    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed),
+              origin_before + origin_delta);
+    EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed),
+              proxy_before + proxy_delta);
+  }
+
   std::string RunWorkerMainScript(const GURL& script_url) {
     return content::EvalJs(
                web_contents(),
@@ -762,11 +784,8 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PreparePrefetchTest(&origin_before, &proxy_before);
 
   ASSERT_EQ(RunPrefetch(target_url()), "loaded");
-  EXPECT_TRUE(base::test::RunUntil([&] {
-    return origin_requests_.load(std::memory_order_relaxed) ==
-           origin_before + 1u;
-  }));
-  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -777,11 +796,8 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/true);
 
   ASSERT_EQ(RunPrefetch(target_url()), "loaded");
-  EXPECT_TRUE(base::test::RunUntil([&] {
-    return proxy_requests_.load(std::memory_order_relaxed) ==
-           proxy_before + 1u;
-  }));
-  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/1u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
@@ -792,8 +808,8 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   PublishProxyPolicy(/*publish_endpoint=*/false);
 
   ASSERT_EQ(RunPrefetch(target_url()), "error");
-  EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), origin_before);
-  EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), proxy_before);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
