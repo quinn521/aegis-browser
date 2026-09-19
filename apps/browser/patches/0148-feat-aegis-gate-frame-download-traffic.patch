@@ -109,7 +109,7 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
    std::string RunPrefetch(const GURL& url) {
      return content::EvalJs(
                 web_contents(),
-@@ -777,6 +805,57 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -777,6 +805,60 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
  }
  
@@ -160,6 +160,9 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 +      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
 +  RunFrameBackedDownload(download_url(), &observer);
 +
++  EXPECT_EQ(
++      observer.NumDownloadsSeenInState(download::DownloadItem::INTERRUPTED),
++      1u);
 +  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
 +                     /*proxy_delta=*/0u);
 +}
