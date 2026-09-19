@@ -94,6 +94,10 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       Profile* profile,
       content::RenderFrameHost* frame,
       network::URLLoaderFactoryBuilder& factory_builder);
+  static void MaybeProxyDownload(
+      Profile* profile,
+      content::RenderFrameHost* frame,
+      network::URLLoaderFactoryBuilder& factory_builder);
   static void MaybeProxyNavigation(
       Profile* profile,
       content::RenderFrameHost* frame,
