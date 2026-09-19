@@ -1,0 +1,414 @@
+From 0148000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Sat, 19 Sep 2026 11:18:00 +0800
+Subject: [PATCH] feat(aegis): gate frame-backed WebSocket handshakes
+
+---
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+@@ -31,6 +31,19 @@ namespace aegis::access {
+ class AccessPublishedRequestRuntime;
+ class AccessProxyingURLTrackedRequest;
+ 
++enum class AccessFrameWebSocketGateDisposition {
++  kPreserveNative,
++  kDispatchProxy,
++  kBlock,
++};
++
++struct AccessFrameWebSocketGateResult {
++  AccessFrameWebSocketGateDisposition disposition =
++      AccessFrameWebSocketGateDisposition::kPreserveNative;
++  int net_error = 0;
++  std::optional<aegis_access::RequestOwnershipRecord> ownership_record;
++};
++
+ // UI-thread browser-process URLLoaderFactory wrapper for real Access request
+ // dispatch. It covers primary-page document subresources, primary-page
+ // main-frame/subframe navigation, Worker main-script factories, frame-owned
+@@ -40,7 +53,8 @@ class AccessProxyingURLTrackedRequest;
+ // process/partition attribution and redirect follow re-evaluation remain bound
+ // to one stable logical request identity. Browser-initiated prefetch,
+ // explicit ServiceWorker update-check lifecycle validation, preconnect,
+-// WebSocket, BFCache, and prerender remain later slices.
++// persistent WebSocket connection ownership/termination, BFCache, and prerender
++// remain later slices.
+ // Each request is re-evaluated from its browser-owned attribution source and the
+ // latest published Access state
+ // before it may reach the target Network Service factory.
+@@ -100,6 +114,22 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
+       int64_t navigation_id,
+       network::URLLoaderFactoryBuilder& factory_builder);
+ 
++  // Frame-backed WebSocket preflight. It reuses the same browser-owned
++  // document attribution, published policy, 5/5 generation tuple, exact-host
++  // endpoint validation and dispatch barrier as URLLoader traffic. The
++  // returned ownership record remains kNew and must be completed immediately
++  // after the caller hands the handshake to Chromium's existing WebSocket
++  // factory; persistent WebSocket lifetime ownership is a later slice.
++  static bool ShouldInterceptFrameWebSocket(
++      content::RenderFrameHost* frame);
++  static AccessFrameWebSocketGateResult EvaluateFrameWebSocketForDispatch(
++      Profile* profile,
++      content::RenderFrameHost* frame,
++      const GURL& url);
++  static bool CompleteFrameWebSocketDispatch(
++      Profile* profile,
++      const aegis_access::RequestOwnershipRecord& record);
++
+   // network::mojom::URLLoaderFactory:
+   void CreateLoaderAndStart(
+       mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+@@ -511,6 +511,95 @@ AccessProxyingURLLoaderFactory::EvaluatePreparedMetadata(
+   return RequestDisposition::kDispatchProxy;
+ }
+ 
++bool AccessProxyingURLLoaderFactory::ShouldInterceptFrameWebSocket(
++    content::RenderFrameHost* frame) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!frame || !frame->GetPage().IsPrimary()) {
++    return false;
++  }
++  Profile* profile = Profile::FromBrowserContext(frame->GetBrowserContext());
++  return aegis::IsAegisProfileSupported(profile);
++}
++
++AccessFrameWebSocketGateResult
++AccessProxyingURLLoaderFactory::EvaluateFrameWebSocketForDispatch(
++    Profile* profile,
++    content::RenderFrameHost* frame,
++    const GURL& url) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  AccessFrameWebSocketGateResult result;
++  result.net_error = net::ERR_BLOCKED_BY_CLIENT;
++
++  if (!ShouldInterceptFrameWebSocket(frame) || !profile ||
++      frame->GetBrowserContext() != profile) {
++    return result;
++  }
++
++  AccessPublishedRequestRuntime* runtime =
++      AccessPublishedRequestRuntime::Get(profile);
++  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
++      CaptureProxyFactoryMetadata(profile, frame, std::nullopt);
++  if (!metadata.has_value()) {
++    if (runtime) {
++      result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
++    }
++    return result;
++  }
++
++  const aegis_access::PublishedAccessPolicySnapshot* snapshot =
++      runtime ? runtime->GetPublishedPolicySnapshot(metadata->owner) : nullptr;
++  if (!snapshot) {
++    return result;
++  }
++
++  aegis_access::RequestPolicyContextResult context_result =
++      aegis_access::CanonicalizeBrowserOwnedRequest(*metadata, url);
++  if (!context_result.context.has_value()) {
++    result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
++    return result;
++  }
++
++  const aegis_access::PolicyMatchResult match =
++      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
++  switch (ClassifyPolicyMatch(match)) {
++    case MatchedPolicyDisposition::kPreserveNative:
++      return result;
++    case MatchedPolicyDisposition::kBlock:
++      result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
++      return result;
++    case MatchedPolicyDisposition::kProxy:
++      break;
++  }
++
++  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
++      profile, runtime, *metadata, *snapshot, *context_result.context, match);
++  if (!preparation.ownership_record.has_value()) {
++    result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
++    result.net_error = preparation.net_error;
++    return result;
++  }
++
++  result.disposition = AccessFrameWebSocketGateDisposition::kDispatchProxy;
++  result.net_error = net::OK;
++  result.ownership_record = std::move(preparation.ownership_record);
++  return result;
++}
++
++bool AccessProxyingURLLoaderFactory::CompleteFrameWebSocketDispatch(
++    Profile* profile,
++    const aegis_access::RequestOwnershipRecord& record) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  AccessRequestDispatchState* dispatch_state =
++      AccessRequestDispatchState::Get(profile);
++  if (!dispatch_state) {
++    return false;
++  }
++  const aegis_access::RequestOwnershipTerminalResult completed =
++      dispatch_state->ownership().Complete(record.request_id, record.owner,
++                                           record.generations);
++  return completed.status == aegis_access::RequestOwnershipStatus::kOk;
++}
++
+ void AccessProxyingURLLoaderFactory::CreateLoaderAndStart(
+     mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
+     int32_t request_id,
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+@@ -33,6 +33,7 @@
+ #include "content/public/test/browser_test_utils.h"
+ #include "net/http/http_status_code.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
++#include "net/test/embedded_test_server/install_default_websocket_handlers.h"
+ #include "net/test/embedded_test_server/http_request.h"
+ #include "net/test/embedded_test_server/http_response.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+@@ -240,7 +241,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+  public:
+   AccessProxyingURLLoaderFactoryBrowserTest()
+       : target_origin_(net::test_server::EmbeddedTestServer::TYPE_HTTP),
+-        proxy_server_(net::test_server::EmbeddedTestServer::TYPE_HTTP) {}
++        proxy_server_(net::test_server::EmbeddedTestServer::TYPE_HTTP),
++        websocket_server_(net::test_server::EmbeddedTestServer::TYPE_HTTP) {}
+   ~AccessProxyingURLLoaderFactoryBrowserTest() override = default;
+ 
+   void SetUpOnMainThread() override {
+@@ -258,8 +260,10 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     proxy_server_.RegisterRequestHandler(base::BindRepeating(
+         &ProxyReply, base::Unretained(&proxy_requests_),
+         base::Unretained(&target_origin_)));
++    net::test_server::InstallDefaultWebSocketHandlers(&websocket_server_);
+     ASSERT_TRUE(target_origin_.Start());
+     ASSERT_TRUE(proxy_server_.Start());
++    ASSERT_TRUE(websocket_server_.Start());
+     ASSERT_TRUE(embedded_test_server()->Start());
+ 
+     ASSERT_TRUE(ui_test_utils::NavigateToURL(
+@@ -327,6 +331,11 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     return target_origin_.GetURL(kTargetHost, "/hang");
+   }
+ 
++  GURL websocket_url() const {
++    return net::test_server::GetWebSocketURL(
++        websocket_server_, kTargetHost, "/echo-with-no-extension");
++  }
++
+   void BuildCancellationSelector(
+       const GURL& url,
+       aegis_access::RequestCancellationSelector* selector) {
+@@ -431,6 +440,19 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+               proxy_before + proxy_delta);
+   }
+ 
++  std::string RunWebSocket(const GURL& url) {
++    return content::EvalJs(
++               web_contents(),
++               content::JsReplace(
++                   "new Promise(resolve => {"
++                   "  const socket = new WebSocket($1);"
++                   "  socket.onopen = () => { socket.close(); resolve('open'); };"
++                   "  socket.onerror = () => resolve('error');"
++                   "})",
++                   url.spec()))
++        .ExtractString();
++  }
++
+   std::string RunWorkerMainScript(const GURL& script_url) {
+     return content::EvalJs(
+                web_contents(),
+@@ -656,13 +678,16 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     return generation;
+   }
+ 
+-  void PublishCommittedProxyRule(const std::string& destination_host) {
++  void PublishCommittedProxyRule(
++      const std::string& destination_host,
++      aegis_access::RequestScheme scheme =
++          aegis_access::RequestScheme::kHttp) {
+     aegis_access::AccessPolicyRule rule;
+     rule.rule_id = "rule-browser-test";
+     rule.owner = *owner_;
+     rule.scope = aegis_access::PolicyScope::kProfile;
+     rule.destination_host = destination_host;
+-    rule.schemes = {aegis_access::RequestScheme::kHttp};
++    rule.schemes = {scheme};
+     rule.ports.scope = aegis_access::PortScope::kAllBrowserPermitted;
+     rule.mode = aegis_access::AccessMode::kProxy;
+     rule.proxy_group_id = kProxyGroup;
+@@ -704,8 +729,11 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     transport_->FlushClientsForTesting(base::FilePath());
+   }
+ 
+-  void PublishProxyPolicy(bool publish_endpoint,
+-                          std::string destination_host = kTargetHost) {
++  void PublishProxyPolicy(
++      bool publish_endpoint,
++      std::string destination_host = kTargetHost,
++      aegis_access::RequestScheme scheme =
++          aegis_access::RequestScheme::kHttp) {
+     const aegis_access::GenerationTuple generations{
+         1,
+         CommitIdentityGenerationForProxyPolicy(),
+@@ -714,7 +742,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+         CurrentBaseProxyGeneration(),
+     };
+ 
+-    PublishCommittedProxyRule(destination_host);
++    PublishCommittedProxyRule(destination_host, scheme);
+     if (publish_endpoint) {
+       PublishSelectedProxyEndpoint(destination_host, generations);
+     }
+@@ -724,6 +752,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+   std::atomic<size_t> proxy_requests_{0};
+   net::test_server::EmbeddedTestServer target_origin_;
+   net::test_server::EmbeddedTestServer proxy_server_;
++  net::test_server::EmbeddedTestServer websocket_server_;
+   raw_ptr<AccessNetworkContextTransport> transport_ = nullptr;
+   std::optional<aegis_access::OwnershipKey> owner_;
+ };
+@@ -812,6 +841,43 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                      /*proxy_delta=*/0u);
+ }
+ 
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       FrameWebSocketWithoutPolicyPreservesNativePath) {
++  EXPECT_EQ(RunWebSocket(websocket_url()), "open");
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       FrameWebSocketWithoutEndpointFailsClosed) {
++  PublishProxyPolicy(/*publish_endpoint=*/false, kTargetHost,
++                     aegis_access::RequestScheme::kWs);
++  EXPECT_EQ(RunWebSocket(websocket_url()), "error");
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       FrameWebSocketSelectedEndpointRegistersDispatch) {
++  PublishProxyPolicy(/*publish_endpoint=*/true, kTargetHost,
++                     aegis_access::RequestScheme::kWs);
++
++  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
++  ASSERT_NE(frame, nullptr);
++  const AccessFrameWebSocketGateResult gate =
++      AccessProxyingURLLoaderFactory::EvaluateFrameWebSocketForDispatch(
++          browser()->profile(), frame, websocket_url());
++  ASSERT_EQ(gate.disposition,
++            AccessFrameWebSocketGateDisposition::kDispatchProxy);
++  ASSERT_TRUE(gate.ownership_record.has_value());
++  EXPECT_EQ(gate.ownership_record->exact_host, kTargetHost);
++  EXPECT_EQ(gate.ownership_record->scheme, aegis_access::RequestScheme::kWs);
++
++  auto* dispatch_state =
++      AccessRequestDispatchState::Get(browser()->profile());
++  ASSERT_NE(dispatch_state, nullptr);
++  EXPECT_EQ(dispatch_state->ownership().size(), 1u);
++  EXPECT_TRUE(AccessProxyingURLLoaderFactory::CompleteFrameWebSocketDispatch(
++      browser()->profile(), *gate.ownership_record));
++  EXPECT_EQ(dispatch_state->ownership().size(), 0u);
++}
++
+ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                        WorkerMainResourceWithoutPolicyPreservesNativePath) {
+   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -401,6 +401,7 @@
+ #include "media/mojo/mojom/speech_recognizer.mojom.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "net/base/data_url.h"
++#include "net/base/net_errors.h"
+ #include "net/base/url_util.h"
+ #include "net/cookies/cookie_setting_override.h"
+ #include "net/cookies/site_for_cookies.h"
+@@ -6843,6 +6844,10 @@
+ 
+ bool ChromeContentBrowserClient::WillInterceptWebSocket(
+     content::RenderFrameHost* frame) {
++  if (aegis::access::AccessProxyingURLLoaderFactory::
++          ShouldInterceptFrameWebSocket(frame)) {
++    return true;
++  }
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   if (!frame) {
+     return false;
+@@ -6888,21 +6893,61 @@
+     mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
+         handshake_client,
+     content::ContentBrowserClient::WebSocketOptions options) {
++  Profile* profile =
++      frame ? Profile::FromBrowserContext(frame->GetBrowserContext()) : nullptr;
++  if (aegis::access::AccessProxyingURLLoaderFactory::
++          ShouldInterceptFrameWebSocket(frame)) {
++    const aegis::access::AccessFrameWebSocketGateResult gate =
++        aegis::access::AccessProxyingURLLoaderFactory::
++            EvaluateFrameWebSocketForDispatch(profile, frame, url);
++    if (gate.disposition ==
++        aegis::access::AccessFrameWebSocketGateDisposition::kBlock) {
++      mojo::Remote<network::mojom::WebSocketHandshakeClient> client(
++          std::move(handshake_client));
++      if (client.is_bound()) {
++        client->OnFailure("Blocked by Aegis Access policy", gate.net_error,
++                          -1);
++      }
++      return;
++    }
++    if (gate.disposition ==
++        aegis::access::AccessFrameWebSocketGateDisposition::kDispatchProxy) {
++      if (!gate.ownership_record.has_value() ||
++          !aegis::access::AccessProxyingURLLoaderFactory::
++              CompleteFrameWebSocketDispatch(profile,
++                                              *gate.ownership_record)) {
++        mojo::Remote<network::mojom::WebSocketHandshakeClient> client(
++            std::move(handshake_client));
++        if (client.is_bound()) {
++          client->OnFailure("Aegis Access dispatch registration failed",
++                            net::ERR_PROXY_CONNECTION_FAILED, -1);
++        }
++        return;
++      }
++    }
++  }
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+-  // TODO(crbug.com/40195467): Request w/o a frame also should be proxied.
+-  if (!frame) {
+-    return;
+-  }
+-  auto* web_request_api =
+-      extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
+-          frame->GetBrowserContext());
+-
+-  DCHECK(web_request_api);
+-  web_request_api->ProxyWebSocket(
+-      frame, std::move(factory), url, site_for_cookies, user_agent,
+-      std::move(handshake_client), std::move(options.header_client));
++  if (frame) {
++    auto* web_request_api =
++        extensions::BrowserContextKeyedAPIFactory<
++            extensions::WebRequestAPI>::Get(frame->GetBrowserContext());
++    if (web_request_api && web_request_api->MayHaveProxiesForFrame(frame)) {
++      web_request_api->ProxyWebSocket(
++          frame, std::move(factory), url, site_for_cookies, user_agent,
++          std::move(handshake_client), std::move(options.header_client));
++      return;
++    }
++  }
+ #endif
++
++  std::vector<network::mojom::HttpHeaderPtr> additional_headers;
++  if (user_agent.has_value()) {
++    additional_headers.push_back(
++        network::mojom::HttpHeader::New("User-Agent", *user_agent));
++  }
++  std::move(factory).Run(url, std::move(additional_headers),
++                         std::move(handshake_client), mojo::NullRemote(),
++                         std::move(options.header_client));
+ }
