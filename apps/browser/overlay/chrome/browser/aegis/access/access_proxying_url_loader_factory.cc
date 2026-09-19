@@ -374,6 +374,14 @@ void AccessProxyingURLLoaderFactory::MaybeProxyPrefetch(
 }
 
 // static
+void AccessProxyingURLLoaderFactory::MaybeProxyDownload(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  MaybeProxyFrameOwnedFactory(profile, frame, factory_builder);
+}
+
+// static
 void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
     Profile* profile,
     content::RenderFrameHost* frame,
