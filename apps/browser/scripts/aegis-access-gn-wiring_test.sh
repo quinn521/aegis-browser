@@ -43,6 +43,7 @@ FRAMELESS_WORKER_SUBRESOURCE_PATCH_FILE="$BROWSER_DIR/patches/0144-feat-aegis-ga
 SERVICE_WORKER_SUBRESOURCE_PATCH_FILE="$BROWSER_DIR/patches/0145-feat-aegis-gate-service-worker-subresource-traffic.patch"
 SERVICE_WORKER_SCRIPT_PATCH_FILE="$BROWSER_DIR/patches/0146-feat-aegis-gate-process-service-worker-script-traffic.patch"
 PREFETCH_PATCH_FILE="$BROWSER_DIR/patches/0147-feat-aegis-gate-frame-prefetch-traffic.patch"
+WEBSOCKET_PATCH_FILE="$BROWSER_DIR/patches/0148-feat-aegis-gate-frame-websocket-handshakes.patch"
 PROFILE_ONLY_BACKGROUND_TEST="$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_browser_request_adapter_unittest.cc"
 BROWSER_TEST_WIRING_PATCH_FILE="$BROWSER_DIR/patches/0060-feat-aegis-add-browser-agent-side-panel-and-entry-po.patch"
 SERIES_FILE="$BROWSER_DIR/patches/series"
@@ -679,6 +680,29 @@ rg -Fq 'PrefetchWithoutEndpointFailsClosed' \
 if rg -Fq 'URLLoaderFactoryType::kPrefetch && !frame' "$PREFETCH_PATCH_FILE"; then
   fail "patch 0147 must not claim browser-initiated frame-less prefetch"
 fi
+rg -Fq 'ShouldInterceptFrameWebSocket' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must gate only browser-owned frame WebSocket handshakes"
+rg -Fq 'EvaluateFrameWebSocketForDispatch' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must evaluate WebSocket policy before handshake dispatch"
+rg -Fq 'CompleteFrameWebSocketDispatch' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must close temporary WebSocket dispatch ownership"
+rg -Fq 'MayHaveProxiesForFrame' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must preserve the existing extension WebSocket proxy chain"
+rg -Fq 'std::move(factory).Run' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must preserve Chromium native WebSocket dispatch"
+rg -Fq 'if (!frame || !frame->GetPage().IsPrimary())' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must reject frame-less and non-primary Page attribution"
+rg -Fq 'FrameWebSocketWithoutPolicyPreservesNativePath' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must preserve native frame WebSocket traffic without policy"
+rg -Fq 'FrameWebSocketWithoutEndpointFailsClosed' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must fail closed when WebSocket PROXY lacks an endpoint"
+rg -Fq 'FrameWebSocketSelectedEndpointRegistersDispatch' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must test selected WebSocket dispatch registration"
+rg -Fq 'RequestScheme::kWs' "$WEBSOCKET_PATCH_FILE" ||
+  fail "patch 0148 must evaluate WebSocket traffic under the ws policy scheme"
+if rg -Fq 'ShouldInterceptFrameWebSocket(nullptr)' "$WEBSOCKET_PATCH_FILE"; then
+  fail "patch 0148 must not claim frame-less WebSocket ownership"
+fi
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
 fi
@@ -751,6 +775,8 @@ fi
   "$SERIES_FILE")" == 1 ]] || fail "patch 0146 must appear once in series"
 [[ "$(rg -F -c '0147-feat-aegis-gate-frame-prefetch-traffic.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "patch 0147 must appear once in series"
+[[ "$(rg -F -c '0148-feat-aegis-gate-frame-websocket-handshakes.patch' \
+  "$SERIES_FILE")" == 1 ]] || fail "patch 0148 must appear once in series"
 expected_access_tail="$(cat <<'EOF'
 0115-feat-aegis-add-trusted-policy-context-matching.patch
 0116-feat-aegis-add-access-rule-store-recovery.patch
@@ -785,10 +811,11 @@ expected_access_tail="$(cat <<'EOF'
 0145-feat-aegis-gate-service-worker-subresource-traffic.patch
 0146-feat-aegis-gate-process-service-worker-script-traffic.patch
 0147-feat-aegis-gate-frame-prefetch-traffic.patch
+0148-feat-aegis-gate-frame-websocket-handshakes.patch
 EOF
 )"
-[[ "$(tail -n 33 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "Access patch tail must remain sequential through patch 0147"
+[[ "$(tail -n 34 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "Access patch tail must remain sequential through patch 0148"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
