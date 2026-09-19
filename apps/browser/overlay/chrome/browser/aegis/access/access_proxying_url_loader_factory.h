@@ -63,6 +63,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       content::FrameTreeNodeId frame_tree_node_id,
       std::optional<int64_t> navigation_id,
       std::optional<int> profile_only_render_process_id,
+      content::StoragePartition* profile_only_storage_partition,
       aegis_access::BrowserOwnedRequestMetadata factory_metadata,
       network::URLLoaderFactoryBuilder& factory_builder,
       DisconnectCallback on_disconnect);
@@ -176,6 +177,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   const content::FrameTreeNodeId frame_tree_node_id_;
   const std::optional<int64_t> navigation_id_;
   const std::optional<int> profile_only_render_process_id_;
+  const raw_ptr<content::StoragePartition> profile_only_storage_partition_;
   const aegis_access::BrowserOwnedRequestMetadata factory_metadata_;
 
   mojo::ReceiverSet<network::mojom::URLLoaderFactory> proxy_receivers_;
