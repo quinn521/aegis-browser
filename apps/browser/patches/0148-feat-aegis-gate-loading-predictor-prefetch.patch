@@ -1,0 +1,322 @@
+From 0148000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Sat, 19 Sep 2026 11:20:00 +0800
+Subject: [PATCH] feat(aegis): gate LoadingPredictor browser-process prefetch
+
+---
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -269,6 +269,7 @@ if (!is_android) {
+       "//components/search_engines",
+       "//content/test:test_support",
+       "//net:test_support",
++      "//services/network/public/cpp",
+       "//testing/gtest",
+       "//ui/message_center/public/cpp",
+       "//url",
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+@@ -197,6 +197,25 @@ CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
+   return std::move(*metadata.metadata);
+ }
+ 
++std::optional<aegis_access::BrowserOwnedRequestMetadata>
++CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
++                                       content::StoragePartition* partition) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!aegis::IsAegisProfileSupported(profile) || !partition) {
++    return std::nullopt;
++  }
++
++  AccessBrowserRequestMetadataResult metadata =
++      BuildBrowserOwnedProfileRequestMetadata(profile, partition);
++  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
++      !metadata.metadata.has_value() ||
++      metadata.metadata->attribution_kind !=
++          aegis_access::RequestAttributionKind::kProfileOnly) {
++    return std::nullopt;
++  }
++  return std::move(*metadata.metadata);
++}
++
+ class BrowserContextData : public base::SupportsUserData::Data {
+  public:
+   BrowserContextData(const BrowserContextData&) = delete;
+@@ -298,11 +317,17 @@ AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
+       factory_metadata_(std::move(factory_metadata)),
+       on_disconnect_(std::move(on_disconnect)) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  CHECK_EQ(profile_only_render_process_id_.has_value(),
+-           factory_metadata_.attribution_kind ==
+-               aegis_access::RequestAttributionKind::kProfileOnly);
+-  CHECK(profile_only_render_process_id_.has_value() || frame_tree_node_id_);
+-  CHECK(!profile_only_render_process_id_.has_value() || !frame_tree_node_id_);
++  const bool is_profile_only =
++      factory_metadata_.attribution_kind ==
++      aegis_access::RequestAttributionKind::kProfileOnly;
++  CHECK(!profile_only_render_process_id_.has_value() || is_profile_only);
++  if (is_profile_only) {
++    CHECK(!frame_tree_node_id_);
++    CHECK(!navigation_id_.has_value());
++  } else {
++    CHECK(frame_tree_node_id_);
++    CHECK(!profile_only_render_process_id_.has_value());
++  }
+   auto [loader_receiver, target_factory] = factory_builder.Append();
+   target_factory_.Bind(std::move(target_factory));
+   target_factory_.set_disconnect_handler(base::BindOnce(
+@@ -373,6 +398,28 @@ void AccessProxyingURLLoaderFactory::MaybeProxyPrefetch(
+   MaybeProxyFrameOwnedFactory(profile, frame, factory_builder);
+ }
+ 
++// static
++void AccessProxyingURLLoaderFactory::MaybeProxyBrowserProcessPrefetch(
++    Profile* profile,
++    content::StoragePartition* partition,
++    network::URLLoaderFactoryBuilder& factory_builder) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!profile || !partition ||
++      partition != profile->GetDefaultStoragePartition()) {
++    return;
++  }
++
++  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
++      CaptureProfileOnlyProxyFactoryMetadata(profile, partition);
++  if (!metadata.has_value()) {
++    return;
++  }
++
++  BrowserContextData::StartProxying(
++      profile, content::FrameTreeNodeId(), std::nullopt, std::nullopt,
++      std::move(*metadata), factory_builder);
++}
++
+ // static
+ void AccessProxyingURLLoaderFactory::MaybeProxyNavigation(
+     Profile* profile,
+@@ -419,9 +466,14 @@ AccessProxyingURLLoaderFactory::EvaluateRedirect(
+ AccessBrowserRequestMetadataResult
+ AccessProxyingURLLoaderFactory::CaptureCurrentMetadata() {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  if (profile_only_render_process_id_.has_value()) {
+-    return BuildBrowserOwnedProfileOnlyRequestMetadata(
+-        profile_, *profile_only_render_process_id_);
++  if (factory_metadata_.attribution_kind ==
++      aegis_access::RequestAttributionKind::kProfileOnly) {
++    if (profile_only_render_process_id_.has_value()) {
++      return BuildBrowserOwnedProfileOnlyRequestMetadata(
++          profile_, *profile_only_render_process_id_);
++    }
++    return BuildBrowserOwnedProfileRequestMetadata(
++        profile_, profile_->GetDefaultStoragePartition());
+   }
+ 
+   auto wc_getter =
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+@@ -24,6 +24,7 @@ class Profile;
+ 
+ namespace content {
+ class RenderFrameHost;
++class StoragePartition;
+ }
+ 
+ namespace aegis::access {
+@@ -36,10 +37,12 @@ class AccessProxyingURLTrackedRequest;
+ // main-frame/subframe navigation, Worker main-script factories, frame-owned
+ // Worker subresource factories, frame-less Worker subresource factories,
+ // process-backed ServiceWorker subresource plus main/imported-script factories,
+-// and frame-backed renderer prefetch factories. Browser-owned Profile-only
+-// process/partition attribution and redirect follow re-evaluation remain bound
+-// to one stable logical request identity. Browser-initiated prefetch,
+-// explicit ServiceWorker update-check lifecycle validation, preconnect,
++// frame-backed renderer prefetch factories, and LoadingPredictor browser-process
++// prefetch bound to the Profile default StoragePartition. Browser-owned
++// Profile-only process/partition attribution and redirect follow re-evaluation
++// remain bound to one stable logical request identity. Search/browser-process
++// prefetch outside LoadingPredictor, explicit ServiceWorker update-check,
++// preconnect,
+ // WebSocket, BFCache, and prerender remain later slices.
+ // Each request is re-evaluated from its browser-owned attribution source and the
+ // latest published Access state
+@@ -94,6 +97,10 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
+       Profile* profile,
+       content::RenderFrameHost* frame,
+       network::URLLoaderFactoryBuilder& factory_builder);
++  static void MaybeProxyBrowserProcessPrefetch(
++      Profile* profile,
++      content::StoragePartition* partition,
++      network::URLLoaderFactoryBuilder& factory_builder);
+   static void MaybeProxyNavigation(
+       Profile* profile,
+       content::RenderFrameHost* frame,
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+@@ -12,6 +12,7 @@
+ #include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/test/run_until.h"
++#include "base/test/test_future.h"
+ #include "chrome/browser/aegis/access/access_browser_request_adapter.h"
+ #include "chrome/browser/aegis/access/access_identity_generation_source.h"
+ #include "chrome/browser/aegis/access/access_network_context_transport.h"
+@@ -29,12 +30,19 @@
+ #include "components/aegis_access/access_proxy_selection_generation_state.h"
+ #include "components/aegis_access/request_policy_context.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/test/browser_test_utils.h"
+ #include "net/http/http_status_code.h"
++#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
+ #include "net/test/embedded_test_server/http_request.h"
+ #include "net/test/embedded_test_server/http_response.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/simple_url_loader.h"
++#include "services/network/public/cpp/shared_url_loader_factory.h"
++#include "services/network/public/cpp/url_loader_factory_builder.h"
++#include "services/network/public/mojom/fetch_api.mojom-shared.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "url/gurl.h"
+ 
+@@ -384,6 +392,38 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+ 
+   bool FetchTarget() { return Fetch(target_url()); }
+ 
++  std::optional<std::string> FetchBrowserProcessPrefetch(const GURL& url) {
++    Profile* profile = browser()->profile();
++    content::StoragePartition* partition =
++        profile->GetDefaultStoragePartition();
++    EXPECT_NE(partition, nullptr);
++    if (!partition) {
++      return std::nullopt;
++    }
++
++    network::URLLoaderFactoryBuilder factory_builder;
++    AccessProxyingURLLoaderFactory::MaybeProxyBrowserProcessPrefetch(
++        profile, partition, factory_builder);
++    scoped_refptr<network::SharedURLLoaderFactory> factory =
++        std::move(factory_builder)
++            .Finish(partition->GetURLLoaderFactoryForBrowserProcess());
++
++    auto request = std::make_unique<network::ResourceRequest>();
++    request->method = "GET";
++    request->url = url;
++    request->destination = network::mojom::RequestDestination::kDocument;
++    auto loader = network::SimpleURLLoader::Create(
++        std::move(request), TRAFFIC_ANNOTATION_FOR_TESTS);
++    base::test::TestFuture<std::optional<std::string>> result;
++    loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
++        factory.get(), result.GetCallback());
++    EXPECT_TRUE(result.Wait());
++    if (loader->NetError() != net::OK) {
++      return std::nullopt;
++    }
++    return result.Get();
++  }
++
+   std::string RunPrefetch(const GURL& url) {
+     return content::EvalJs(
+                web_contents(),
+@@ -812,6 +852,50 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                      /*proxy_delta=*/0u);
+ }
+ 
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       BrowserProcessPrefetchWithoutPolicyPreservesNativePath) {
++  const size_t origin_before =
++      origin_requests_.load(std::memory_order_relaxed);
++  const size_t proxy_before =
++      proxy_requests_.load(std::memory_order_relaxed);
++
++  const std::optional<std::string> body =
++      FetchBrowserProcessPrefetch(target_url());
++  ASSERT_TRUE(body.has_value());
++  EXPECT_EQ(*body, "origin");
++  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
++                     /*proxy_delta=*/0u);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       BrowserProcessPrefetchUsesSelectedProxy) {
++  const size_t origin_before =
++      origin_requests_.load(std::memory_order_relaxed);
++  const size_t proxy_before =
++      proxy_requests_.load(std::memory_order_relaxed);
++  PublishProxyPolicy(/*publish_endpoint=*/true);
++
++  const std::optional<std::string> body =
++      FetchBrowserProcessPrefetch(target_url());
++  ASSERT_TRUE(body.has_value());
++  EXPECT_EQ(*body, "proxy");
++  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
++                     /*proxy_delta=*/1u);
++}
++
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       BrowserProcessPrefetchWithoutEndpointFailsClosed) {
++  const size_t origin_before =
++      origin_requests_.load(std::memory_order_relaxed);
++  const size_t proxy_before =
++      proxy_requests_.load(std::memory_order_relaxed);
++  PublishProxyPolicy(/*publish_endpoint=*/false);
++
++  EXPECT_FALSE(FetchBrowserProcessPrefetch(target_url()).has_value());
++  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
++                     /*proxy_delta=*/0u);
++}
++
+ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                        WorkerMainResourceWithoutPolicyPreservesNativePath) {
+   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
+diff --git a/chrome/browser/predictors/BUILD.gn b/chrome/browser/predictors/BUILD.gn
+--- a/chrome/browser/predictors/BUILD.gn
++++ b/chrome/browser/predictors/BUILD.gn
+@@ -90,8 +90,9 @@ source_set("impl") {
+   deps = [
+     ":config",
+     ":predictors",
+     "lcp_critical_path_predictor:impl",
++    "//chrome/browser/aegis/access:access_proxying_url_loader_factory",
+     "//chrome/browser:browser_features",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/history",
+diff --git a/chrome/browser/predictors/prefetch_manager.cc b/chrome/browser/predictors/prefetch_manager.cc
+--- a/chrome/browser/predictors/prefetch_manager.cc
++++ b/chrome/browser/predictors/prefetch_manager.cc
+@@ -13,6 +13,7 @@
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
+ #include "chrome/browser/predictors/perform_network_context_prefetch.h"
+ #include "chrome/browser/predictors/predictors_features.h"
+ #include "chrome/browser/predictors/predictors_switches.h"
+@@ -276,9 +277,9 @@ void PrefetchManager::PrefetchUrl(
+       net::IsolationInfo::RequestType::kOther, top_frame_origin, frame_origin,
+       net::SiteForCookies::FromUrl(info.url));
+ 
++  network::URLLoaderFactoryBuilder factory_builder;
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+-  network::URLLoaderFactoryBuilder factory_builder;
+   auto* web_request_api =
+       extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
+           profile_);
+@@ -290,8 +291,11 @@ void PrefetchManager::PrefetchUrl(
+         /*navigation_response_task_runner=*/nullptr,
+         /*request_initiator=*/url::Origin());
+   }
+-  factory = std::move(factory_builder).Finish(factory);
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  aegis::access::AccessProxyingURLLoaderFactory::
++      MaybeProxyBrowserProcessPrefetch(
++          profile_, profile_->GetDefaultStoragePartition(), factory_builder);
++  factory = std::move(factory_builder).Finish(factory);
+ 
+   // Set up throttles. Use null values for frame/navigation-related params, for
+   // now, since this is just the browser prefetching resources and the requests
