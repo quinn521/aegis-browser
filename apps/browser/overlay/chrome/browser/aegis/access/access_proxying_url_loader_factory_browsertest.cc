@@ -412,6 +412,27 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     observer->WaitForFinished();
   }
 
+  void ExpectCompletedFrameBackedDownload(bool use_proxy_policy) {
+    size_t origin_before = 0;
+    size_t proxy_before = 0;
+    PrepareFrameBackedDownloadTest(&origin_before, &proxy_before);
+    if (use_proxy_policy) {
+      PublishProxyPolicy(/*publish_endpoint=*/true);
+    }
+
+    content::DownloadTestObserverTerminal observer(
+        browser()->profile()->GetDownloadManager(), 1,
+        content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+    RunFrameBackedDownload(download_url(), &observer);
+
+    EXPECT_EQ(
+        observer.NumDownloadsSeenInState(download::DownloadItem::COMPLETE),
+        1u);
+    ExpectRoutingDelta(origin_before, proxy_before,
+                       /*origin_delta=*/use_proxy_policy ? 0u : 1u,
+                       /*proxy_delta=*/use_proxy_policy ? 1u : 0u);
+  }
+
   std::string RunPrefetch(const GURL& url) {
     return content::EvalJs(
                web_contents(),
@@ -807,37 +828,12 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        FrameBackedDownloadWithoutPolicyPreservesNativePath) {
-  size_t origin_before = 0;
-  size_t proxy_before = 0;
-  PrepareFrameBackedDownloadTest(&origin_before, &proxy_before);
-
-  content::DownloadTestObserverTerminal observer(
-      browser()->profile()->GetDownloadManager(), 1,
-      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
-  RunFrameBackedDownload(download_url(), &observer);
-
-  EXPECT_EQ(observer.NumDownloadsSeenInState(download::DownloadItem::COMPLETE),
-            1u);
-  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
-                     /*proxy_delta=*/0u);
+  ExpectCompletedFrameBackedDownload(/*use_proxy_policy=*/false);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        FrameBackedDownloadUsesSelectedProxy) {
-  size_t origin_before = 0;
-  size_t proxy_before = 0;
-  PrepareFrameBackedDownloadTest(&origin_before, &proxy_before);
-  PublishProxyPolicy(/*publish_endpoint=*/true);
-
-  content::DownloadTestObserverTerminal observer(
-      browser()->profile()->GetDownloadManager(), 1,
-      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
-  RunFrameBackedDownload(download_url(), &observer);
-
-  EXPECT_EQ(observer.NumDownloadsSeenInState(download::DownloadItem::COMPLETE),
-            1u);
-  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
-                     /*proxy_delta=*/1u);
+  ExpectCompletedFrameBackedDownload(/*use_proxy_policy=*/true);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
