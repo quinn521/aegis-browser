@@ -686,6 +686,15 @@ rg -Fq 'chrome/browser/predictors/prefetch_manager.cc' \
 rg -Fq 'profile_->GetDefaultStoragePartition()' \
   "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
   fail "patch 0148 must bind browser-process prefetch to the exact default partition"
+rg -Fq 'PrefetchUrl(std::move(job), storage_partition, factory);' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
+  fail "patch 0148 must pass the exact PrefetchManager partition into PrefetchUrl"
+rg -Fq 'MaybeProxyBrowserProcessPrefetch(profile_, storage_partition' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
+  fail "patch 0148 must pass the same PrefetchManager partition into Access"
+rg -Fq 'profile_only_storage_partition_' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
+  fail "patch 0148 must retain the exact Profile-only StoragePartition source"
 rg -Fq 'MaybeProxyBrowserProcessPrefetch' \
   "$BROWSER_PROCESS_PREFETCH_PATCH_FILE" ||
   fail "patch 0148 must install the browser-process prefetch Access wrapper"
@@ -710,6 +719,10 @@ rg -Fq 'BrowserProcessPrefetchWithoutEndpointFailsClosed' \
 if rg -Fq 'streaming_search_prefetch_url_loader' \
   "$BROWSER_PROCESS_PREFETCH_PATCH_FILE"; then
   fail "patch 0148 must not claim SearchPrefetch browser-process coverage"
+fi
+if rg -Fq 'content/browser/preloading/prefetch' \
+  "$BROWSER_PROCESS_PREFETCH_PATCH_FILE"; then
+  fail "patch 0148 must not claim generic Content PrefetchService frame-less coverage"
 fi
 if rg -Fq 'request_initiator' "$BROWSER_METADATA_ADAPTER"; then
   fail "browser-owned Access metadata adapter must not consume renderer request_initiator"
