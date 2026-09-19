@@ -33,6 +33,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
+#include "net/test/embedded_test_server/install_default_websocket_handlers.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -240,7 +241,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
  public:
   AccessProxyingURLLoaderFactoryBrowserTest()
       : target_origin_(net::test_server::EmbeddedTestServer::TYPE_HTTP),
-        proxy_server_(net::test_server::EmbeddedTestServer::TYPE_HTTP) {}
+        proxy_server_(net::test_server::EmbeddedTestServer::TYPE_HTTP),
+        websocket_server_(net::test_server::EmbeddedTestServer::TYPE_HTTP) {}
   ~AccessProxyingURLLoaderFactoryBrowserTest() override = default;
 
   void SetUpOnMainThread() override {
@@ -258,8 +260,10 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     proxy_server_.RegisterRequestHandler(base::BindRepeating(
         &ProxyReply, base::Unretained(&proxy_requests_),
         base::Unretained(&target_origin_)));
+    net::test_server::InstallDefaultWebSocketHandlers(&websocket_server_);
     ASSERT_TRUE(target_origin_.Start());
     ASSERT_TRUE(proxy_server_.Start());
+    ASSERT_TRUE(websocket_server_.Start());
     ASSERT_TRUE(embedded_test_server()->Start());
 
     ASSERT_TRUE(ui_test_utils::NavigateToURL(
@@ -325,6 +329,11 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 
   GURL hanging_url() const {
     return target_origin_.GetURL(kTargetHost, "/hang");
+  }
+
+  GURL websocket_url() const {
+    return net::test_server::GetWebSocketURL(
+        websocket_server_, kTargetHost, "/echo-with-no-extension");
   }
 
   void BuildCancellationSelector(
@@ -429,6 +438,19 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
               origin_before + origin_delta);
     EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed),
               proxy_before + proxy_delta);
+  }
+
+  std::string RunWebSocket(const GURL& url) {
+    return content::EvalJs(
+               web_contents(),
+               content::JsReplace(
+                   "new Promise(resolve => {"
+                   "  const socket = new WebSocket($1);"
+                   "  socket.onopen = () => { socket.close(); resolve('open'); };"
+                   "  socket.onerror = () => resolve('error');"
+                   "})",
+                   url.spec()))
+        .ExtractString();
   }
 
   std::string RunWorkerMainScript(const GURL& script_url) {
@@ -656,13 +678,16 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     return generation;
   }
 
-  void PublishCommittedProxyRule(const std::string& destination_host) {
+  void PublishCommittedProxyRule(
+      const std::string& destination_host,
+      aegis_access::RequestScheme scheme =
+          aegis_access::RequestScheme::kHttp) {
     aegis_access::AccessPolicyRule rule;
     rule.rule_id = "rule-browser-test";
     rule.owner = *owner_;
     rule.scope = aegis_access::PolicyScope::kProfile;
     rule.destination_host = destination_host;
-    rule.schemes = {aegis_access::RequestScheme::kHttp};
+    rule.schemes = {scheme};
     rule.ports.scope = aegis_access::PortScope::kAllBrowserPermitted;
     rule.mode = aegis_access::AccessMode::kProxy;
     rule.proxy_group_id = kProxyGroup;
@@ -704,8 +729,11 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     transport_->FlushClientsForTesting(base::FilePath());
   }
 
-  void PublishProxyPolicy(bool publish_endpoint,
-                          std::string destination_host = kTargetHost) {
+  void PublishProxyPolicy(
+      bool publish_endpoint,
+      std::string destination_host = kTargetHost,
+      aegis_access::RequestScheme scheme =
+          aegis_access::RequestScheme::kHttp) {
     const aegis_access::GenerationTuple generations{
         1,
         CommitIdentityGenerationForProxyPolicy(),
@@ -714,7 +742,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
         CurrentBaseProxyGeneration(),
     };
 
-    PublishCommittedProxyRule(destination_host);
+    PublishCommittedProxyRule(destination_host, scheme);
     if (publish_endpoint) {
       PublishSelectedProxyEndpoint(destination_host, generations);
     }
@@ -724,6 +752,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
   std::atomic<size_t> proxy_requests_{0};
   net::test_server::EmbeddedTestServer target_origin_;
   net::test_server::EmbeddedTestServer proxy_server_;
+  net::test_server::EmbeddedTestServer websocket_server_;
   raw_ptr<AccessNetworkContextTransport> transport_ = nullptr;
   std::optional<aegis_access::OwnershipKey> owner_;
 };
@@ -810,6 +839,43 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   ASSERT_EQ(RunPrefetch(target_url()), "error");
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
                      /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       FrameWebSocketWithoutPolicyPreservesNativePath) {
+  EXPECT_EQ(RunWebSocket(websocket_url()), "open");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       FrameWebSocketWithoutEndpointFailsClosed) {
+  PublishProxyPolicy(/*publish_endpoint=*/false, kTargetHost,
+                     aegis_access::RequestScheme::kWs);
+  EXPECT_EQ(RunWebSocket(websocket_url()), "error");
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       FrameWebSocketSelectedEndpointRegistersDispatch) {
+  PublishProxyPolicy(/*publish_endpoint=*/true, kTargetHost,
+                     aegis_access::RequestScheme::kWs);
+
+  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
+  ASSERT_NE(frame, nullptr);
+  const AccessFrameWebSocketGateResult gate =
+      AccessProxyingURLLoaderFactory::EvaluateFrameWebSocketForDispatch(
+          browser()->profile(), frame, websocket_url());
+  ASSERT_EQ(gate.disposition,
+            AccessFrameWebSocketGateDisposition::kDispatchProxy);
+  ASSERT_TRUE(gate.ownership_record.has_value());
+  EXPECT_EQ(gate.ownership_record->exact_host, kTargetHost);
+  EXPECT_EQ(gate.ownership_record->scheme, aegis_access::RequestScheme::kWs);
+
+  auto* dispatch_state =
+      AccessRequestDispatchState::Get(browser()->profile());
+  ASSERT_NE(dispatch_state, nullptr);
+  EXPECT_EQ(dispatch_state->ownership().size(), 1u);
+  EXPECT_TRUE(AccessProxyingURLLoaderFactory::CompleteFrameWebSocketDispatch(
+      browser()->profile(), *gate.ownership_record));
+  EXPECT_EQ(dispatch_state->ownership().size(), 0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
