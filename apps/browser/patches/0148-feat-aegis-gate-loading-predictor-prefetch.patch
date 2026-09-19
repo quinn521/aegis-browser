@@ -428,14 +428,14 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 diff --git a/chrome/browser/predictors/BUILD.gn b/chrome/browser/predictors/BUILD.gn
 --- a/chrome/browser/predictors/BUILD.gn
 +++ b/chrome/browser/predictors/BUILD.gn
-@@ -90,6 +90,7 @@ source_set("impl") {
-   deps = [
+@@ -91,6 +91,7 @@
      ":config",
      ":predictors",
-+    "//chrome/browser/aegis/access:access_proxying_url_loader_factory",
      "lcp_critical_path_predictor:impl",
++    "//chrome/browser/aegis/access:access_proxying_url_loader_factory",
      "//chrome/browser:browser_features",
      "//chrome/browser:browser_process",
+     "//chrome/browser/history",
 diff --git a/chrome/browser/predictors/prefetch_manager.h b/chrome/browser/predictors/prefetch_manager.h
 --- a/chrome/browser/predictors/prefetch_manager.h
 +++ b/chrome/browser/predictors/prefetch_manager.h
@@ -450,16 +450,16 @@ diff --git a/chrome/browser/predictors/prefetch_manager.h b/chrome/browser/predi
  namespace blink {
  class ThrottlingURLLoader;
  }
-@@ -127,8 +131,10 @@ class PrefetchManager {
+@@ -127,8 +131,10 @@
   private:
    friend class PrefetchManagerTest;
  
--  void PrefetchUrl(std::unique_ptr<PrefetchJob> job,
--                   scoped_refptr<network::SharedURLLoaderFactory> factory);
 +  void PrefetchUrl(
 +      std::unique_ptr<PrefetchJob> job,
 +      content::StoragePartition* storage_partition,
 +      scoped_refptr<network::SharedURLLoaderFactory> factory);
+-  void PrefetchUrl(std::unique_ptr<PrefetchJob> job,
+-                   scoped_refptr<network::SharedURLLoaderFactory> factory);
    void OnPrefetchFinished(
        std::unique_ptr<PrefetchJob> job,
        std::unique_ptr<blink::ThrottlingURLLoader> loader,
@@ -474,8 +474,7 @@ diff --git a/chrome/browser/predictors/prefetch_manager.cc b/chrome/browser/pred
  #include "chrome/browser/predictors/perform_network_context_prefetch.h"
  #include "chrome/browser/predictors/predictors_features.h"
  #include "chrome/browser/predictors/predictors_switches.h"
-@@ -227,9 +228,11 @@ bool PrefetchManager::IsAvailableForPrefetch(
- }
+@@ -228,8 +229,10 @@
  
  void PrefetchManager::PrefetchUrl(
      std::unique_ptr<PrefetchJob> job,
@@ -486,7 +485,7 @@ diff --git a/chrome/browser/predictors/prefetch_manager.cc b/chrome/browser/pred
    DCHECK(job);
    DCHECK(job->info);
  
-@@ -276,9 +279,9 @@ void PrefetchManager::PrefetchUrl(
+@@ -276,8 +279,8 @@
        net::IsolationInfo::RequestType::kOther, top_frame_origin, frame_origin,
        net::SiteForCookies::FromUrl(info.url));
  
@@ -496,27 +495,28 @@ diff --git a/chrome/browser/predictors/prefetch_manager.cc b/chrome/browser/pred
    auto* web_request_api =
        extensions::BrowserContextKeyedAPIFactory<extensions::WebRequestAPI>::Get(
            profile_);
-@@ -290,8 +293,11 @@ void PrefetchManager::PrefetchUrl(
+@@ -290,8 +293,11 @@
          /*navigation_response_task_runner=*/nullptr,
          /*request_initiator=*/url::Origin());
    }
--  factory = std::move(factory_builder).Finish(factory);
- #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 +  aegis::access::AccessProxyingURLLoaderFactory::
 +      MaybeProxyBrowserProcessPrefetch(profile_, storage_partition,
 +                                       factory_builder);
-+  factory = std::move(factory_builder).Finish(factory);
+   factory = std::move(factory_builder).Finish(factory);
+-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
  
    // Set up throttles. Use null values for frame/navigation-related params, for
    // now, since this is just the browser prefetching resources and the requests
-@@ -416,8 +422,9 @@ void PrefetchManager::TryToLaunchPrefetchJobs() {
+@@ -416,8 +422,9 @@
      UMA_HISTOGRAM_TIMES("Navigation.Prefetch.PrefetchJobQueueingTime",
                          base::TimeTicks::Now() - job->creation_time);
  
--    if (job->url.is_valid() && factory && !info->was_canceled)
--      PrefetchUrl(std::move(job), factory);
 +    if (job->url.is_valid() && factory && !info->was_canceled) {
 +      PrefetchUrl(std::move(job), storage_partition, factory);
 +    }
+-    if (job->url.is_valid() && factory && !info->was_canceled)
+-      PrefetchUrl(std::move(job), factory);
    }
  }
+ 
