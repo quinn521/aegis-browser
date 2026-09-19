@@ -36,9 +36,10 @@ class AccessProxyingURLTrackedRequest;
 // main-frame/subframe navigation, Worker main-script factories, frame-owned
 // Worker subresource factories, frame-less Worker subresource factories,
 // process-backed ServiceWorker subresource plus main/imported-script factories,
-// and frame-backed renderer prefetch factories. Browser-owned Profile-only
-// process/partition attribution and redirect follow re-evaluation remain bound
-// to one stable logical request identity. Browser-initiated prefetch,
+// frame-backed renderer prefetch factories, and frame-backed HTTP(S) download
+// factories. Browser-owned Profile-only process/partition attribution and
+// redirect follow re-evaluation remain bound to one stable logical request
+// identity. Browser-initiated prefetch, frame-less/background downloads,
 // explicit ServiceWorker update-check lifecycle validation, preconnect,
 // WebSocket, BFCache, and prerender remain later slices.
 // Each request is re-evaluated from its browser-owned attribution source and the
