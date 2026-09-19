@@ -179,15 +179,8 @@ CaptureProxyFactoryMetadata(
 }
 
 std::optional<aegis_access::BrowserOwnedRequestMetadata>
-CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
-                                       int render_process_id) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!aegis::IsAegisProfileSupported(profile)) {
-    return std::nullopt;
-  }
-
-  AccessBrowserRequestMetadataResult metadata =
-      BuildBrowserOwnedProfileOnlyRequestMetadata(profile, render_process_id);
+ValidateAndExtractProfileOnlyMetadata(
+    AccessBrowserRequestMetadataResult metadata) {
   if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
       !metadata.metadata.has_value() ||
       metadata.metadata->attribution_kind !=
@@ -199,21 +192,24 @@ CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
 
 std::optional<aegis_access::BrowserOwnedRequestMetadata>
 CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
+                                       int render_process_id) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!aegis::IsAegisProfileSupported(profile)) {
+    return std::nullopt;
+  }
+  return ValidateAndExtractProfileOnlyMetadata(
+      BuildBrowserOwnedProfileOnlyRequestMetadata(profile, render_process_id));
+}
+
+std::optional<aegis_access::BrowserOwnedRequestMetadata>
+CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
                                        content::StoragePartition* partition) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!aegis::IsAegisProfileSupported(profile) || !partition) {
     return std::nullopt;
   }
-
-  AccessBrowserRequestMetadataResult metadata =
-      BuildBrowserOwnedProfileRequestMetadata(profile, partition);
-  if (metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
-      !metadata.metadata.has_value() ||
-      metadata.metadata->attribution_kind !=
-          aegis_access::RequestAttributionKind::kProfileOnly) {
-    return std::nullopt;
-  }
-  return std::move(*metadata.metadata);
+  return ValidateAndExtractProfileOnlyMetadata(
+      BuildBrowserOwnedProfileRequestMetadata(profile, partition));
 }
 
 class BrowserContextData : public base::SupportsUserData::Data {
