@@ -31,6 +31,19 @@ namespace aegis::access {
 class AccessPublishedRequestRuntime;
 class AccessProxyingURLTrackedRequest;
 
+enum class AccessFrameWebSocketGateDisposition {
+  kPreserveNative,
+  kDispatchProxy,
+  kBlock,
+};
+
+struct AccessFrameWebSocketGateResult {
+  AccessFrameWebSocketGateDisposition disposition =
+      AccessFrameWebSocketGateDisposition::kPreserveNative;
+  int net_error = 0;
+  std::optional<aegis_access::RequestOwnershipRecord> ownership_record;
+};
+
 // UI-thread browser-process URLLoaderFactory wrapper for real Access request
 // dispatch. It covers primary-page document subresources, primary-page
 // main-frame/subframe navigation, Worker main-script factories, frame-owned
@@ -39,8 +52,8 @@ class AccessProxyingURLTrackedRequest;
 // and frame-backed renderer prefetch factories. Browser-owned Profile-only
 // process/partition attribution and redirect follow re-evaluation remain bound
 // to one stable logical request identity. Browser-initiated prefetch,
-// explicit ServiceWorker update-check lifecycle validation, preconnect,
-// WebSocket, BFCache, and prerender remain later slices.
+// explicit ServiceWorker update-check lifecycle validation, preconnect, persistent WebSocket connection ownership/termination,
+// BFCache, and prerender remain later slices.
 // Each request is re-evaluated from its browser-owned attribution source and the
 // latest published Access state
 // before it may reach the target Network Service factory.
@@ -99,6 +112,22 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       content::RenderFrameHost* frame,
       int64_t navigation_id,
       network::URLLoaderFactoryBuilder& factory_builder);
+
+  // Frame-backed WebSocket preflight. It reuses the same browser-owned
+  // document attribution, published policy, 5/5 generation tuple, exact-host
+  // endpoint validation and dispatch barrier as URLLoader traffic. The
+  // returned ownership record remains kNew and must be completed immediately
+  // after the caller hands the handshake to Chromium's existing WebSocket
+  // factory; persistent WebSocket lifetime ownership is a later slice.
+  static bool ShouldInterceptFrameWebSocket(
+      content::RenderFrameHost* frame);
+  static AccessFrameWebSocketGateResult EvaluateFrameWebSocketForDispatch(
+      Profile* profile,
+      content::RenderFrameHost* frame,
+      const GURL& url);
+  static bool CompleteFrameWebSocketDispatch(
+      Profile* profile,
+      const aegis_access::RequestOwnershipRecord& record);
 
   // network::mojom::URLLoaderFactory:
   void CreateLoaderAndStart(
