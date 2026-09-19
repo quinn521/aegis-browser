@@ -511,6 +511,95 @@ AccessProxyingURLLoaderFactory::EvaluatePreparedMetadata(
   return RequestDisposition::kDispatchProxy;
 }
 
+bool AccessProxyingURLLoaderFactory::ShouldInterceptFrameWebSocket(
+    content::RenderFrameHost* frame) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!frame || !frame->GetPage().IsPrimary()) {
+    return false;
+  }
+  Profile* profile = Profile::FromBrowserContext(frame->GetBrowserContext());
+  return aegis::IsAegisProfileSupported(profile);
+}
+
+AccessFrameWebSocketGateResult
+AccessProxyingURLLoaderFactory::EvaluateFrameWebSocketForDispatch(
+    Profile* profile,
+    content::RenderFrameHost* frame,
+    const GURL& url) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  AccessFrameWebSocketGateResult result;
+  result.net_error = net::ERR_BLOCKED_BY_CLIENT;
+
+  if (!ShouldInterceptFrameWebSocket(frame) || !profile ||
+      frame->GetBrowserContext() != profile) {
+    return result;
+  }
+
+  AccessPublishedRequestRuntime* runtime =
+      AccessPublishedRequestRuntime::Get(profile);
+  std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
+      CaptureProxyFactoryMetadata(profile, frame, std::nullopt);
+  if (!metadata.has_value()) {
+    if (runtime) {
+      result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
+    }
+    return result;
+  }
+
+  const aegis_access::PublishedAccessPolicySnapshot* snapshot =
+      runtime ? runtime->GetPublishedPolicySnapshot(metadata->owner) : nullptr;
+  if (!snapshot) {
+    return result;
+  }
+
+  aegis_access::RequestPolicyContextResult context_result =
+      aegis_access::CanonicalizeBrowserOwnedRequest(*metadata, url);
+  if (!context_result.context.has_value()) {
+    result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
+    return result;
+  }
+
+  const aegis_access::PolicyMatchResult match =
+      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
+  switch (ClassifyPolicyMatch(match)) {
+    case MatchedPolicyDisposition::kPreserveNative:
+      return result;
+    case MatchedPolicyDisposition::kBlock:
+      result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
+      return result;
+    case MatchedPolicyDisposition::kProxy:
+      break;
+  }
+
+  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
+      profile, runtime, *metadata, *snapshot, *context_result.context, match);
+  if (!preparation.ownership_record.has_value()) {
+    result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
+    result.net_error = preparation.net_error;
+    return result;
+  }
+
+  result.disposition = AccessFrameWebSocketGateDisposition::kDispatchProxy;
+  result.net_error = net::OK;
+  result.ownership_record = std::move(preparation.ownership_record);
+  return result;
+}
+
+bool AccessProxyingURLLoaderFactory::CompleteFrameWebSocketDispatch(
+    Profile* profile,
+    const aegis_access::RequestOwnershipRecord& record) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  AccessRequestDispatchState* dispatch_state =
+      AccessRequestDispatchState::Get(profile);
+  if (!dispatch_state) {
+    return false;
+  }
+  const aegis_access::RequestOwnershipTerminalResult completed =
+      dispatch_state->ownership().Complete(record.request_id, record.owner,
+                                           record.generations);
+  return completed.status == aegis_access::RequestOwnershipStatus::kOk;
+}
+
 void AccessProxyingURLLoaderFactory::CreateLoaderAndStart(
     mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
     int32_t request_id,
