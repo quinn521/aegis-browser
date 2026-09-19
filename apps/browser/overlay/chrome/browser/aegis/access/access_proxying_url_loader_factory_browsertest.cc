@@ -852,6 +852,9 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
       content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
   RunFrameBackedDownload(download_url(), &observer);
 
+  EXPECT_EQ(
+      observer.NumDownloadsSeenInState(download::DownloadItem::INTERRUPTED),
+      1u);
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
                      /*proxy_delta=*/0u);
 }
