@@ -52,8 +52,9 @@ struct AccessFrameWebSocketGateResult {
 // and frame-backed renderer prefetch factories. Browser-owned Profile-only
 // process/partition attribution and redirect follow re-evaluation remain bound
 // to one stable logical request identity. Browser-initiated prefetch,
-// explicit ServiceWorker update-check lifecycle validation, preconnect, persistent WebSocket connection ownership/termination,
-// BFCache, and prerender remain later slices.
+// explicit ServiceWorker update-check lifecycle validation, preconnect,
+// persistent WebSocket connection ownership/termination, BFCache, and prerender
+// remain later slices.
 // Each request is re-evaluated from its browser-owned attribution source and the
 // latest published Access state
 // before it may reach the target Network Service factory.
