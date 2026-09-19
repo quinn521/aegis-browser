@@ -28,13 +28,17 @@
 #include "components/aegis_access/access_identity_generation_state.h"
 #include "components/aegis_access/access_proxy_selection_generation_state.h"
 #include "components/aegis_access/request_policy_context.h"
+#include "content/public/browser/download_manager.h"
+#include "content/public/browser/download_request_utils.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/download_test_observer.h"
 #include "net/http/http_status_code.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -283,6 +287,10 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     return target_origin_.GetURL(kTargetHost, "/resource");
   }
 
+  GURL download_url() const {
+    return target_origin_.GetURL(kTargetHost, "/download");
+  }
+
   GURL worker_page_url() const {
     return target_origin_.GetURL(kTargetHost, "/worker-page");
   }
@@ -383,6 +391,26 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
   }
 
   bool FetchTarget() { return Fetch(target_url()); }
+
+  void PrepareFrameBackedDownloadTest(size_t* origin_before,
+                                      size_t* proxy_before) {
+    ASSERT_NE(origin_before, nullptr);
+    ASSERT_NE(proxy_before, nullptr);
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
+    *origin_before = origin_requests_.load(std::memory_order_relaxed);
+    *proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  }
+
+  void RunFrameBackedDownload(const GURL& url,
+                              content::DownloadTestObserver* observer) {
+    ASSERT_NE(observer, nullptr);
+    auto params =
+        content::DownloadRequestUtils::CreateDownloadForWebContentsMainFrame(
+            web_contents(), url, TRAFFIC_ANNOTATION_FOR_TESTS);
+    ASSERT_TRUE(params);
+    browser()->profile()->GetDownloadManager()->DownloadUrl(std::move(params));
+    observer->WaitForFinished();
+  }
 
   std::string RunPrefetch(const GURL& url) {
     return content::EvalJs(
@@ -775,6 +803,57 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
     return proxy_requests_.load(std::memory_order_relaxed) == 1u;
   }));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       FrameBackedDownloadWithoutPolicyPreservesNativePath) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareFrameBackedDownloadTest(&origin_before, &proxy_before);
+
+  content::DownloadTestObserverTerminal observer(
+      browser()->profile()->GetDownloadManager(), 1,
+      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+  RunFrameBackedDownload(download_url(), &observer);
+
+  EXPECT_EQ(observer.NumDownloadsSeenInState(download::DownloadItem::COMPLETE),
+            1u);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       FrameBackedDownloadUsesSelectedProxy) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareFrameBackedDownloadTest(&origin_before, &proxy_before);
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+
+  content::DownloadTestObserverTerminal observer(
+      browser()->profile()->GetDownloadManager(), 1,
+      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+  RunFrameBackedDownload(download_url(), &observer);
+
+  EXPECT_EQ(observer.NumDownloadsSeenInState(download::DownloadItem::COMPLETE),
+            1u);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/1u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       FrameBackedDownloadWithoutEndpointFailsClosed) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PrepareFrameBackedDownloadTest(&origin_before, &proxy_before);
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+
+  content::DownloadTestObserverInterrupted observer(
+      browser()->profile()->GetDownloadManager(), 1,
+      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+  RunFrameBackedDownload(download_url(), &observer);
+
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
