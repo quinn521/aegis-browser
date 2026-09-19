@@ -153,6 +153,65 @@ ProxyDispatchPreparation PrepareProxyDispatch(
   return {net::OK, input.request};
 }
 
+enum class PreparedRequestDisposition {
+  kPreserveNative,
+  kDispatchProxy,
+  kBlock,
+};
+
+struct PreparedRequestEvaluation {
+  PreparedRequestDisposition disposition =
+      PreparedRequestDisposition::kPreserveNative;
+  int net_error = net::OK;
+  std::optional<aegis_access::RequestOwnershipRecord> ownership_record;
+};
+
+PreparedRequestEvaluation EvaluatePreparedRequestForDispatch(
+    Profile* profile,
+    AccessPublishedRequestRuntime* runtime,
+    aegis_access::BrowserOwnedRequestMetadata metadata,
+    const GURL& request_url) {
+  PreparedRequestEvaluation evaluation;
+  const aegis_access::PublishedAccessPolicySnapshot* snapshot =
+      runtime ? runtime->GetPublishedPolicySnapshot(metadata.owner) : nullptr;
+  if (!snapshot) {
+    return evaluation;
+  }
+
+  aegis_access::RequestPolicyContextResult context_result =
+      aegis_access::CanonicalizeBrowserOwnedRequest(metadata, request_url);
+  if (!context_result.context.has_value()) {
+    evaluation.disposition = PreparedRequestDisposition::kBlock;
+    evaluation.net_error = net::ERR_BLOCKED_BY_CLIENT;
+    return evaluation;
+  }
+
+  const aegis_access::PolicyMatchResult match =
+      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
+  const MatchedPolicyDisposition policy_disposition =
+      ClassifyPolicyMatch(match);
+  if (policy_disposition == MatchedPolicyDisposition::kPreserveNative) {
+    return evaluation;
+  }
+  if (policy_disposition == MatchedPolicyDisposition::kBlock) {
+    evaluation.disposition = PreparedRequestDisposition::kBlock;
+    evaluation.net_error = net::ERR_BLOCKED_BY_CLIENT;
+    return evaluation;
+  }
+
+  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
+      profile, runtime, metadata, *snapshot, *context_result.context, match);
+  if (!preparation.ownership_record.has_value()) {
+    evaluation.disposition = PreparedRequestDisposition::kBlock;
+    evaluation.net_error = preparation.net_error;
+    return evaluation;
+  }
+
+  evaluation.disposition = PreparedRequestDisposition::kDispatchProxy;
+  evaluation.ownership_record = std::move(preparation.ownership_record);
+  return evaluation;
+}
+
 std::optional<aegis_access::BrowserOwnedRequestMetadata>
 CaptureProxyFactoryMetadata(
     Profile* profile,
@@ -477,38 +536,19 @@ AccessProxyingURLLoaderFactory::EvaluatePreparedMetadata(
     aegis_access::BrowserOwnedRequestMetadata metadata,
     int* net_error,
     aegis_access::RequestOwnershipRecord* ownership_record) {
-  const aegis_access::PublishedAccessPolicySnapshot* snapshot =
-      runtime ? runtime->GetPublishedPolicySnapshot(metadata.owner) : nullptr;
-  if (!snapshot) {
-    return RequestDisposition::kPreserveNative;
+  PreparedRequestEvaluation evaluation = EvaluatePreparedRequestForDispatch(
+      profile_, runtime, std::move(metadata), request_url);
+  *net_error = evaluation.net_error;
+  switch (evaluation.disposition) {
+    case PreparedRequestDisposition::kPreserveNative:
+      return RequestDisposition::kPreserveNative;
+    case PreparedRequestDisposition::kBlock:
+      return RequestDisposition::kBlock;
+    case PreparedRequestDisposition::kDispatchProxy:
+      CHECK(evaluation.ownership_record.has_value());
+      *ownership_record = std::move(*evaluation.ownership_record);
+      return RequestDisposition::kDispatchProxy;
   }
-
-  aegis_access::RequestPolicyContextResult context_result =
-      aegis_access::CanonicalizeBrowserOwnedRequest(metadata, request_url);
-  if (!context_result.context.has_value()) {
-    return RequestDisposition::kBlock;
-  }
-
-  const aegis_access::PolicyMatchResult match =
-      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
-  const MatchedPolicyDisposition policy_disposition =
-      ClassifyPolicyMatch(match);
-  if (policy_disposition == MatchedPolicyDisposition::kPreserveNative) {
-    return RequestDisposition::kPreserveNative;
-  }
-  if (policy_disposition == MatchedPolicyDisposition::kBlock) {
-    return RequestDisposition::kBlock;
-  }
-
-  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
-      profile_, runtime, metadata, *snapshot, *context_result.context, match);
-  if (!preparation.ownership_record.has_value()) {
-    *net_error = preparation.net_error;
-    return RequestDisposition::kBlock;
-  }
-
-  *ownership_record = std::move(*preparation.ownership_record);
-  return RequestDisposition::kDispatchProxy;
 }
 
 bool AccessProxyingURLLoaderFactory::ShouldInterceptFrameWebSocket(
@@ -528,7 +568,6 @@ AccessProxyingURLLoaderFactory::EvaluateFrameWebSocketForDispatch(
     const GURL& url) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   AccessFrameWebSocketGateResult result;
-  result.net_error = net::ERR_BLOCKED_BY_CLIENT;
 
   if (!ShouldInterceptFrameWebSocket(frame) || !profile ||
       frame->GetBrowserContext() != profile) {
@@ -542,47 +581,26 @@ AccessProxyingURLLoaderFactory::EvaluateFrameWebSocketForDispatch(
   if (!metadata.has_value()) {
     if (runtime) {
       result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
+      result.net_error = net::ERR_BLOCKED_BY_CLIENT;
     }
     return result;
   }
 
-  const aegis_access::PublishedAccessPolicySnapshot* snapshot =
-      runtime ? runtime->GetPublishedPolicySnapshot(metadata->owner) : nullptr;
-  if (!snapshot) {
-    return result;
-  }
-
-  aegis_access::RequestPolicyContextResult context_result =
-      aegis_access::CanonicalizeBrowserOwnedRequest(*metadata, url);
-  if (!context_result.context.has_value()) {
-    result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
-    return result;
-  }
-
-  const aegis_access::PolicyMatchResult match =
-      aegis_access::EvaluateAccessPolicy(*context_result.context, *snapshot);
-  switch (ClassifyPolicyMatch(match)) {
-    case MatchedPolicyDisposition::kPreserveNative:
+  PreparedRequestEvaluation evaluation = EvaluatePreparedRequestForDispatch(
+      profile, runtime, std::move(*metadata), url);
+  result.net_error = evaluation.net_error;
+  switch (evaluation.disposition) {
+    case PreparedRequestDisposition::kPreserveNative:
       return result;
-    case MatchedPolicyDisposition::kBlock:
+    case PreparedRequestDisposition::kBlock:
       result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
       return result;
-    case MatchedPolicyDisposition::kProxy:
-      break;
+    case PreparedRequestDisposition::kDispatchProxy:
+      CHECK(evaluation.ownership_record.has_value());
+      result.disposition = AccessFrameWebSocketGateDisposition::kDispatchProxy;
+      result.ownership_record = std::move(evaluation.ownership_record);
+      return result;
   }
-
-  ProxyDispatchPreparation preparation = PrepareProxyDispatch(
-      profile, runtime, *metadata, *snapshot, *context_result.context, match);
-  if (!preparation.ownership_record.has_value()) {
-    result.disposition = AccessFrameWebSocketGateDisposition::kBlock;
-    result.net_error = preparation.net_error;
-    return result;
-  }
-
-  result.disposition = AccessFrameWebSocketGateDisposition::kDispatchProxy;
-  result.net_error = net::OK;
-  result.ownership_record = std::move(preparation.ownership_record);
-  return result;
 }
 
 bool AccessProxyingURLLoaderFactory::CompleteFrameWebSocketDispatch(
