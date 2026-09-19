@@ -1,6 +1,6 @@
 From 0148000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
-Date: Sat, 19 Sep 2026 11:10:00 +0800
+Date: Sat, 19 Sep 2026 11:20:00 +0800
 Subject: [PATCH] feat(aegis): gate LoadingPredictor browser-process prefetch
 
 ---
@@ -428,14 +428,14 @@ diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_brow
 diff --git a/chrome/browser/predictors/BUILD.gn b/chrome/browser/predictors/BUILD.gn
 --- a/chrome/browser/predictors/BUILD.gn
 +++ b/chrome/browser/predictors/BUILD.gn
-@@ -91,6 +91,7 @@
+@@ -90,6 +90,7 @@
+   deps = [
      ":config",
      ":predictors",
-     "lcp_critical_path_predictor:impl",
 +    "//chrome/browser/aegis/access:access_proxying_url_loader_factory",
+     "lcp_critical_path_predictor:impl",
      "//chrome/browser:browser_features",
      "//chrome/browser:browser_process",
-     "//chrome/browser/history",
 diff --git a/chrome/browser/predictors/prefetch_manager.h b/chrome/browser/predictors/prefetch_manager.h
 --- a/chrome/browser/predictors/prefetch_manager.h
 +++ b/chrome/browser/predictors/prefetch_manager.h
