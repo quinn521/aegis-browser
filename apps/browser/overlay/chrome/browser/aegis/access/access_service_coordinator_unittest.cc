@@ -8,17 +8,23 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_testing_helper.h"
 #include "chrome/test/base/testing_profile.h"
+#include "content/public/test/browser_task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace aegis::access {
 namespace {
 
-TEST(AccessServiceCoordinatorTest, RejectsNullProfile) {
+class AccessServiceCoordinatorTest : public testing::Test {
+ protected:
+  content::BrowserTaskEnvironment task_environment_;
+};
+
+TEST_F(AccessServiceCoordinatorTest, RejectsNullProfile) {
   EXPECT_EQ(AccessServiceCoordinator::Get(nullptr), nullptr);
   EXPECT_EQ(AccessServiceCoordinator::GetOrCreate(nullptr), nullptr);
 }
 
-TEST(AccessServiceCoordinatorTest, ReusesProfileOwnedCoordinator) {
+TEST_F(AccessServiceCoordinatorTest, ReusesProfileOwnedCoordinator) {
   auto profile = TestingProfile::Builder().Build();
   EXPECT_EQ(AccessServiceCoordinator::Get(profile.get()), nullptr);
 
@@ -31,7 +37,7 @@ TEST(AccessServiceCoordinatorTest, ReusesProfileOwnedCoordinator) {
   EXPECT_EQ(first->state_generation(), 0u);
 }
 
-TEST(AccessServiceCoordinatorTest, ProfilesNeverShareCoordinatorState) {
+TEST_F(AccessServiceCoordinatorTest, ProfilesNeverShareCoordinatorState) {
   auto first_profile = TestingProfile::Builder().Build();
   auto second_profile = TestingProfile::Builder().Build();
 
