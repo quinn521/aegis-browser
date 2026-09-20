@@ -52,6 +52,7 @@ BROWSER_TEST_WIRING_PATCH_FILE="$BROWSER_DIR/patches/0060-feat-aegis-add-browser
 SERIES_FILE="$BROWSER_DIR/patches/series"
 STORE_CONTRACT_TEST="$SCRIPT_DIR/access-rule-store-contract_test.sh"
 TARGET="//components/aegis_access:aegis_access_unittests"
+COORDINATOR_TARGET="//chrome/browser/aegis/access:access_service_coordinator_unittests"
 OWNERSHIP_TARGET="//components/aegis_access:request_ownership_registry_unittests"
 DISPATCH_GATE_TARGET="//components/aegis_access:request_dispatch_gate_unittests"
 BROWSER_METADATA_TARGET="//components/aegis_access:browser_request_metadata_seed_unittests"
@@ -66,6 +67,10 @@ fail() {
 args_block="$(awk '/^root_extra_deps = \[$/,/^\]$/' "$ARGS_FILE")"
 [[ "$args_block" == *"$TARGET"* ]] ||
   fail "the access test must be reachable through root_extra_deps"
+[[ "$(rg -F -c "$COORDINATOR_TARGET" "$ARGS_FILE")" == 1 ]] ||
+  fail "aegis.gn must add the coordinator lifecycle test exactly once"
+[[ "$args_block" == *"$COORDINATOR_TARGET"* ]] ||
+  fail "the coordinator lifecycle test must be reachable through root_extra_deps"
 [[ "$(rg -F -c "$OWNERSHIP_TARGET" "$ARGS_FILE")" == 1 ]] ||
   fail "aegis.gn must add the ownership registry test exactly once"
 [[ "$args_block" == *"$OWNERSHIP_TARGET"* ]] ||

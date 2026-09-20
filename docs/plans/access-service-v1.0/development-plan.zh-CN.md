@@ -10,6 +10,8 @@
 
 G0 保持 **UNVERIFIED**，G1–G3 **未达到**。2026-09-20 固定 Chromium 151 验证已有全补丁重放、overlay 对齐和 GN 目标生成记录，但 `unit_tests` / `browser_tests` 构建尚无完成结果，更没有本候选的 GTest、浏览器代理流量或完整 Chrome 运行结论。35 个 browser-test 定义是源码数量，不是 35 个通过的测试。[交接页](handoff-20260920.zh-CN.md)逐项区分仓库质量门、Chromium 构建和运行证据。
 
+当前阶段由 [Fork PR #135](https://github.com/quinn521/aegis-browser/pull/135) 交付 Profile-owned `AccessServiceCoordinator` 生命周期、同 Profile 复用/跨 Profile 隔离单元回归，以及两个普通 Profile 的真实主导航路由隔离回归。独立 Review 指出 coordinator 单测虽已定义，但未进入开发者 `root_extra_deps` 测试图；本 PR 将该目标加入 `apps/browser/args/aegis.gn` 并在 GN wiring 回归中固定此关系。该修复只解决开发测试图可达性，PR #135 仍须在**最终 HEAD**通过 hosted 必需 CI、独立复审和同一最终补丁树的固定 Chromium 编译/运行停线后才可合并。
+
 ## 先关闭现有 Chromium 验证欠账
 
 **暂停扩展新的请求入口功能**，直到当前固定 Chromium 候选的编译完成且全部当前必需的真实入口回归执行通过，阻塞失败关闭。先由现有构建所有者回收 `unit_tests` / `browser_tests` 结果；已计划的窄范围 prefetch 过滤器只能证明其列明子集，不能代替导航、重定向、Worker、BLOCK、在途取消、缺失代理 endpoint、Profile 隔离和真实派发入口用例。对每项列出确切测试名/过滤器、执行退出码、请求与 origin/proxy 观测、未覆盖场景；仅测试 helper 或在测试中直接调用 factory 的用例，应注明没有证明真实入口接线。失败时先确定第一处源码/构建/环境问题，修复并重跑相关回归；`BLOCKED` 或 `NOT_RUN` 均继续暂停，不以源码存在或 GN 生成作为继续扩展入口的通行证。
@@ -33,6 +35,8 @@ G0 保持 **UNVERIFIED**，G1–G3 **未达到**。2026-09-20 固定 Chromium 15
 实施与测试两条工作线共享同一固定候选合同：产品 head/tree、Chromium 基线及 patched tree、patch series、GN args、渠道/配置、用例和观察点。只有一名明确的隔离构建工作区所有者能修改补丁树或启动/重启构建；测试线准备受控代理与 origin fixture，分别记录两端日志、同一请求的关联 ID、直连/代理路径和故障注入结果。合成代理 fixture 自行响应时 `origin_count=0` 可以成立；真实转发代理则会合法触达 origin，必须以受控代理出口/连接与关联日志证明走代理，并证明没有 DIRECT origin 路径，不能只信转发请求头或笼统要求 origin 零请求。按目标和拒绝/BLOCK 生效时间记录基线与增量：缺 endpoint 的被拒绝请求在有界窗口内对代理及 origin 均零派发；重定向可先有一次合法代理请求，但被拒绝的重定向目标不得新增派发；BLOCK 前已在途的代理请求保留在基线，验证屏障生效后无新命中派发及在途终止时序，不抹掉历史计数。每个零增量断言都需同配置的健康控制请求证明日志确实能记录流量，超时/无响应本身不算 PASS。同时验证额度耗尽、离线、重启和迟到回调时没有 DIRECT fallback。测试证据只记录脱敏 ID、字节/状态与必要时序，不泄露凭据或请求秘密。真实受控服务尚未运行的场景不得记服务端 PASS。
 
 此后每项新**产品功能**须在同一 PR 交付可运行 unit 与真实入口 regression，并在该 PR 最终 HEAD 对匹配固定候选实际执行两者；overlay/顺序补丁/BUILD 接线一并审查。未执行即登记 `NOT_RUN`，不算验收。只改文档的 PR 不需要补造产品测试；过去对 [Fork PR #129](https://github.com/quinn521/aegis-browser/pull/129)/[上游 PR #18](https://github.com/gcsagroup/aegis-browser/pull/18) 的一次性源码晋升例外不适用于新功能。各行实现、映射、执行、结果与覆盖分别更新[验收追踪表](acceptance-tracker.zh-CN.md)，不能因一个子场景通过把主行升为 PASS。
+
+阶段交付采用“一阶段一 PR”：每完成一个可评审单元，都在该 PR 内同步更新本开发计划与对应 Handoff，记录本阶段精确边界、验证结果和下一依赖；随后由独立 PRO reviewer 对最终 HEAD 复审。下一阶段若依赖上一阶段代码，必须等上一 PR **实际合并**且合并后的最新 `develop` push CI 通过后，再从最新 `develop` 创建新的隔离工作分支；等待期间只做只读准备。
 
 ## macOS / 浏览器 CI 分层建设（待实施）
 
