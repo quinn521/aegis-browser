@@ -12,7 +12,7 @@ PR #144 最终 HEAD `b2b7b3b9246320b6a1530b1033016cc79fb7b13e` 的本地 full qu
 
 [PR #147](https://github.com/quinn521/aegis-browser/pull/147) 已在最终 HEAD `08d49e6226b353ef04b086d12039767721ad4977`（tree `f45c0fa24f58d24078eac585ec0e595d8658bf9d`）完成 0157 修复。本地 full quality 为 PASS、`sourceStable=true`，输入/最终摘要同为 `9ccb7119e25d96b722695e89fb2a42b6534860cfb32eed913a75a1fd9f1ed8ac`；托管 CI run `35601244970`、C++ run `35601244785`、Codacy 和同一 Astra High reviewer 最终复审均通过，且无未解决 conversation。GitHub 已将 #147 squash merge 为 `develop@9d59d23609d47b1158767bd333579478f9ea7a43`，对应 develop push CI run `35601662252` 的 quality / quality-gate 成功。
 
-个人 main 晋升候选 [PR #148](https://github.com/quinn521/aegis-browser/pull/148) 从该精确 `develop` 建立，初始 HEAD/tree 与 `9d59d23`/`f45c0fa` 完全一致，三份 README 保留个人 Codacy 项目 `72c871eba82e471ebc05eaacd4d45218` 的 main/develop 徽章。该初始 HEAD 的本地 full quality 为 PASS、`sourceStable=true`、摘要仍为 `9ccb7119...`，但 Codacy 在 `AccessServiceCoordinator::BeginPublication` 报出一个 Medium：54 行超过 50 行门槛。为避免修复只落到 main 并使 develop 落后，#148 转向 develop，只交付行为不变的 candidate preparation 提取、顺序补丁 0158、wiring 回归及本文档/Handoff。Minor 圈复杂度记录但不阻塞；最终 HEAD 仍须重新取得本地 full quality、托管 CI、无 Medium+ Codacy、全部 conversation resolved 和同一 Astra High reviewer CLEAR。mirror/upstream 按用户最新要求暂缓；仓库门禁不证明 Chromium GN/GTest/runtime，G0 继续 **UNVERIFIED**。
+个人 main 晋升候选 [PR #148](https://github.com/quinn521/aegis-browser/pull/148) 从该精确 `develop` 建立，初始 HEAD/tree 与 `9d59d23`/`f45c0fa` 完全一致，三份 README 保留个人 Codacy 项目 `72c871eba82e471ebc05eaacd4d45218` 的 main/develop 徽章。该初始 HEAD 的本地 full quality 为 PASS、`sourceStable=true`、摘要仍为 `9ccb7119...`，但 Codacy 在 `AccessServiceCoordinator::BeginPublication` 报出一个 Medium：54 行超过 50 行门槛。为避免修复只落到 main 并使 develop 落后，#148 转向 develop，只交付行为不变的 candidate preparation 提取、顺序补丁 0158、wiring 回归及本文档/Handoff。Minor 圈复杂度记录但不阻塞。修复 commit `f7d610d75af36e78e3a0d0a4841d180c232b5472`（tree `2e5a447546c6de03d94ead3ed1aff2a2cf0acb48`）的补丁格式、GN wiring 与 848 项 Access checks 通过；本地 full quality 为 PASS、`sourceStable=true`、输入/最终摘要同为 `19485eeceb33a1f4cdda6a38bc4bcf66a7f2e9b8a79d148557546fa599073084`；托管 C++ run `35602778691`、CI run `35602778700`、Codacy 无问题和同一 Astra High reviewer CLEAR 均已取得。本文档同步会产生新的最终 HEAD，因此合并前仍须把本地/托管/Codacy/同一 reviewer 证据重新绑定到该最终 HEAD，并确认全部 conversation resolved。mirror/upstream 按用户最新要求暂缓；仓库门禁不证明 Chromium GN/GTest/runtime，G0 继续 **UNVERIFIED**。
 
 ## 2026-09-21：commit/publish snapshot 阶段（代码已合并；native 验证仍欠账）
 
@@ -25,11 +25,11 @@ Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 
 | 证据 | 当前边界 |
 | --- | --- |
 | 实现及测试源码 | 已增加 candidate builder、coordinator transaction、runtime rollback、transport/version ACK，以及 unit/真实主导航回归源码；0157 按 proxy group 绑定 selection generation；#148 的 0158 仅提取 transport candidate preparation，保持行为不变并同步 overlay/顺序补丁。 |
-| 本地 standalone C++ | #147 最终树执行通过 848 checks；#148 的结构重构仍须在最终 HEAD 重跑同一套 Access checks。该结果不是 SQLite/GN/GTest/browser 执行证据。 |
+| 本地 standalone C++ | #148 修复 commit `f7d610d` 执行通过 848 checks，含 patch format 与 GN wiring；本文档提交后的最终 HEAD 仍需重跑。这不是 SQLite/GN/GTest/browser 执行证据。 |
 | Chromium/GTest/真实入口 | **NOT_RUN / BLOCKED**：已核实旧 PR135 retry3 权威退出文件为 1，首个失败是 `ProxySelectionGenerationState` 的 inline constructor / missing out-of-line destructor style 检查。该源码问题已由 #139 的 0154 修复，但尚无重建后的固定候选 PASS；缓存和旧二进制均不是当前证据，旧工作区不改动。 |
-| 独立审查 | #147 已由同一 Astra High reviewer 最终 CLEAR。#148 已启动新的 Astra High 只读审查；0158、文档和 Codacy Medium 修复产生最终 HEAD 后，必须由同一 #148 reviewer 复审并给出 CLEAR。 |
-| 本地 full quality | #148 初始 promotion HEAD `9d59d23` 对 `origin/main@11d58af` 为 PASS、`sourceStable=true`，输入/最终摘要同为 `9ccb7119e25d96b722695e89fb2a42b6534860cfb32eed913a75a1fd9f1ed8ac`；0158 与文档更新使该证据失效，最终 HEAD 必须重新运行完整质量门并保持摘要一致。 |
-| Hosted CI / 合并 | #147 已合并且 develop push CI `35601662252` 成功。#148 初始 C++ run `35602204658` 成功，但 Codacy 因一个 Medium 行数问题失败；修复后的最终 HEAD 必须重新通过托管 quality、quality-gate、C++、无 Medium+ Codacy 与全部 conversation，再 squash merge 到 develop 并核验精确 develop push CI。 |
+| 独立审查 | #148 的 Astra High reviewer 已对 `f7d610d` / `2e5a447` 给出 CLEAR，无 Medium+ 发现；本文档提交产生新 HEAD 后，必须由同一 reviewer 复审并再次 CLEAR。 |
+| 本地 full quality | 修复 commit `f7d610d` 对 `origin/develop@9d59d23` 为 PASS、`sourceStable=true`，输入/最终摘要同为 `19485eeceb33a1f4cdda6a38bc4bcf66a7f2e9b8a79d148557546fa599073084`；本文档提交使该证据失效，最终 HEAD 必须重新运行完整质量门并保持摘要一致。 |
+| Hosted CI / 合并 | #148 修复 commit `f7d610d` 的 C++ run `35602778691`、CI run `35602778700` 与 Codacy 已通过；本文档提交后的最终 HEAD 必须重新通过同一门禁、全部 conversation resolved 和同一 Astra reviewer CLEAR，再 squash merge 到 develop 并核验精确 develop push CI。 |
 | G0 | **UNVERIFIED**。基础质量或测试源码不能升级为 native/runtime 验收。 |
 
 在宣告 G0 或依赖 native 验收继续扩展请求入口前，必须在同一固定候选实际执行 coordinator、store、runtime、transport、dispatch/tracker 单元与回归，并执行 `MainNavigationConsumesPreparedSnapshotBeforeCommit`、`MainNavigationRoutingIsolatedAcrossProfiles` 及既有导航/redirect/Worker/SharedWorker/Service Worker/missing endpoint/BLOCK/LoadingPredictor/frame prefetch 矩阵。零匹配、非零退出、不同候选均失败。上述未完成证据债与 #139 已完成的合并状态分开跟踪，也不能由仓库 CI 或测试源码替代。
