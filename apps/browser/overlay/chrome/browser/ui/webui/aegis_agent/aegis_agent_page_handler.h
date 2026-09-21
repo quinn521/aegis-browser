@@ -52,6 +52,10 @@ class AegisAgentPageHandler : public aegis_agent::mojom::PageHandler,
                       const std::string& api_key,
                       bool clear_api_key,
                       ConfigureModelCallback callback) override;
+  void ConfigureTypeSafe(bool enabled,
+                         const std::string& api_key,
+                         bool clear_api_key,
+                         ConfigureTypeSafeCallback callback) override;
   void ListModels(const std::string& provider,
                   const std::string& base_url,
                   const std::string& api_key,
@@ -117,6 +121,9 @@ class AegisAgentPageHandler : public aegis_agent::mojom::PageHandler,
   void OnModelConfigured(ConfigureModelCallback callback,
                          bool ok,
                          std::string error);
+  void OnTypeSafeConfigured(ConfigureTypeSafeCallback callback,
+                            bool ok,
+                            std::string error);
   void OnModelsListed(ListModelsCallback callback,
                       bool ok,
                       std::string error,
