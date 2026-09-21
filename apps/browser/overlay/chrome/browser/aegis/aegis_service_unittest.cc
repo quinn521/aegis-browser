@@ -380,7 +380,7 @@ TEST_F(AegisServiceModelSettingsTest, EncryptsAndClearsProviderApiKey) {
 }
 
 TEST_F(AegisServiceModelSettingsTest,
-       EncryptsAndClearsIndependentTypeSafeKey) {
+       EncryptsAndReplacesIndependentTypeSafeKey) {
   constexpr char kApiKey[] = "ts-test-routing-secret";
   constexpr char kReplacementApiKey[] = "ts-test-replacement-secret";
   AegisService* service = this->service();
@@ -410,6 +410,16 @@ TEST_F(AegisServiceModelSettingsTest,
   EXPECT_TRUE(service->IsTypeSafeGoalRoutingEnabled());
   EXPECT_EQ(kReplacementApiKey,
             service->TypeSafeApiKeyForBrowserAgent(profile()).value_or(""));
+}
+
+TEST_F(AegisServiceModelSettingsTest,
+       DisablesReenablesAndClearsIndependentTypeSafeKey) {
+  constexpr char kApiKey[] = "ts-test-routing-secret";
+  AegisService* service = this->service();
+  base::test::TestFuture<bool, std::string> saved;
+  service->SetTypeSafeGoalRoutingSettings(true, kApiKey, false,
+                                          saved.GetCallback());
+  ASSERT_TRUE(saved.Get<0>()) << saved.Get<1>();
 
   base::test::TestFuture<bool, std::string> disabled;
   service->SetTypeSafeGoalRoutingSettings(false, std::string(), false,

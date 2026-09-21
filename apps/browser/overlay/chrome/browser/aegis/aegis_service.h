@@ -380,6 +380,19 @@ class AegisService : public KeyedService,
   void LoadTypeSafeCredential();
   void OnTypeSafeCredentialLoaded(
       scoped_refptr<os_crypt_async::Encryptor> encryptor);
+  std::optional<std::string> ValidateTypeSafeSettingsMutation(
+      const std::string& api_key,
+      bool clear_api_key) const;
+  void ClearTypeSafeGoalRoutingSettings(
+      base::OnceCallback<void(bool, std::string)> done);
+  void SetTypeSafeGoalRoutingEnabledOnly(
+      bool enabled,
+      base::OnceCallback<void(bool, std::string)> done);
+  void BeginSaveTypeSafeApiKey(
+      uint64_t generation,
+      bool enabled,
+      std::string api_key,
+      base::OnceCallback<void(bool, std::string)> done);
   void SaveTypeSafeApiKey(
       uint64_t generation,
       bool enabled,

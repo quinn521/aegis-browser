@@ -1,8 +1,8 @@
 // Copyright 2026 GCSA
 
 #include <cstdlib>
-#include <limits>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,18 +24,20 @@ bool Expect(bool condition, std::string_view label) {
   return condition;
 }
 
-}  // namespace
-
-int main() {
-  int passed = 0;
-  std::string error;
-  TypeSafeChoiceValue valid{
+TypeSafeChoiceValue ValidChoice() {
+  return TypeSafeChoiceValue{
       .choice = "research",
       .confidence = 0.91,
       .probabilities = {{"research", 0.91},
                         {"browser_steward", 0.03},
                         {"safe_download", 0.03},
                         {"shopping", 0.03}}};
+}
+
+int TestConfidenceContract() {
+  int passed = 0;
+  std::string error;
+  TypeSafeChoiceValue valid = ValidChoice();
   passed += Expect(ValidateTypeSafeChoice(valid, kOptions, 0.8, &error),
                    "valid complete choice");
 
@@ -43,6 +45,18 @@ int main() {
   low.confidence = 0.79;
   passed += Expect(!ValidateTypeSafeChoice(low, kOptions, 0.8, &error),
                    "low confidence falls back");
+
+  TypeSafeChoiceValue threshold = valid;
+  threshold.confidence = 0.8;
+  passed += Expect(ValidateTypeSafeChoice(threshold, kOptions, 0.8, &error),
+                   "confidence threshold is inclusive");
+  return passed;
+}
+
+int TestChoiceContract() {
+  int passed = 0;
+  std::string error;
+  TypeSafeChoiceValue valid = ValidChoice();
 
   TypeSafeChoiceValue contradictory = valid;
   contradictory.probabilities = {{"research", 0.03},
@@ -52,6 +66,18 @@ int main() {
   passed += Expect(
       !ValidateTypeSafeChoice(contradictory, kOptions, 0.8, &error),
       "choice must match highest probability");
+
+  TypeSafeChoiceValue unknown = valid;
+  unknown.choice = "unknown";
+  passed += Expect(!ValidateTypeSafeChoice(unknown, kOptions, 0.8, &error),
+                   "selected option must be offered");
+  return passed;
+}
+
+int TestDistributionContract() {
+  int passed = 0;
+  std::string error;
+  TypeSafeChoiceValue valid = ValidChoice();
 
   TypeSafeChoiceValue incomplete = valid;
   incomplete.probabilities.pop_back();
@@ -64,11 +90,6 @@ int main() {
   passed += Expect(
       !ValidateTypeSafeChoice(invalid_sum, kOptions, 0.8, &error),
       "probabilities must sum to one");
-
-  TypeSafeChoiceValue unknown = valid;
-  unknown.choice = "unknown";
-  passed += Expect(!ValidateTypeSafeChoice(unknown, kOptions, 0.8, &error),
-                   "selected option must be offered");
 
   TypeSafeChoiceValue duplicate = valid;
   duplicate.probabilities[3] = {"research", 0.03};
@@ -90,12 +111,14 @@ int main() {
   passed += Expect(
       !ValidateTypeSafeChoice(out_of_range, kOptions, 0.8, &error),
       "out-of-range probability is rejected");
+  return passed;
+}
 
-  TypeSafeChoiceValue threshold = valid;
-  threshold.confidence = 0.8;
-  passed += Expect(ValidateTypeSafeChoice(threshold, kOptions, 0.8, &error),
-                   "confidence threshold is inclusive");
+}  // namespace
 
+int main() {
+  const int passed = TestConfidenceContract() + TestChoiceContract() +
+                     TestDistributionContract();
   if (passed != 10) {
     return EXIT_FAILURE;
   }

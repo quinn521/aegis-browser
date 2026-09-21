@@ -94,6 +94,37 @@ base::DictValue ChoiceQuestion(std::string instructions,
   return question;
 }
 
+base::DictValue WorkflowQuestion() {
+  base::DictValue criteria;
+  criteria.Set("research",
+               "Read, compare, summarize, or find public information");
+  criteria.Set(
+      "browser_steward",
+      "Work with native browser data such as bookmarks, tabs, history, "
+      "downloads, permissions, or workspaces");
+  criteria.Set("safe_download",
+               "Find or verify an official software download");
+  criteria.Set("shopping",
+               "A user-authorized purchase, cart, or checkout workflow");
+  return ChoiceQuestion("Which fixed Aegis workflow best matches the user goal?",
+                        std::move(criteria));
+}
+
+base::DictValue EntryKindQuestion() {
+  base::DictValue criteria;
+  criteria.Set(
+      "browser_only",
+      "Use native browser data such as bookmarks, tabs, history, downloads, "
+      "permissions, or workspaces; do not open a search result");
+  criteria.Set(
+      "web_search",
+      "The goal needs a public web search before the browser can continue");
+  return ChoiceQuestion(
+      "Should Aegis use only existing browser context or begin with a public "
+      "web search?",
+      std::move(criteria));
+}
+
 std::optional<double> JsonNumber(const base::Value* value) {
   if (!value) {
     return std::nullopt;
@@ -125,19 +156,93 @@ std::optional<TypeSafeChoiceValue> ParseChoice(
     return std::nullopt;
   }
   TypeSafeChoiceValue result{.choice = *choice, .confidence = *confidence};
-  for (const auto [name, probability_value] : *probabilities) {
-    const std::optional<double> probability = JsonNumber(&probability_value);
+  for (auto it = probabilities->begin(); it != probabilities->end(); ++it) {
+    const std::optional<double> probability = JsonNumber(&it->second);
     if (!probability) {
       *error = "TypeSafe returned a non-numeric probability";
       return std::nullopt;
     }
-    result.probabilities.emplace_back(name, *probability);
+    result.probabilities.emplace_back(it->first, *probability);
   }
   if (!ValidateTypeSafeChoice(result, allowed_options,
                               kTypeSafeGoalRouteMinimumConfidence, error)) {
     return std::nullopt;
   }
   return result;
+}
+
+struct TypeSafeGoalChoices {
+  TypeSafeChoiceValue workflow;
+  TypeSafeChoiceValue entry_kind;
+};
+
+std::optional<TypeSafeGoalChoices> ParseGoalChoices(std::string_view body,
+                                                    std::string* error) {
+  std::optional<base::DictValue> root =
+      base::JSONReader::ReadDict(body, base::JSON_PARSE_RFC);
+  if (!root) {
+    *error = "TypeSafe returned malformed routing data";
+    return std::nullopt;
+  }
+  const base::DictValue* answers = root->FindDict("answers");
+  const std::string* model = root->FindString("model");
+  if (!answers || !model || model->empty()) {
+    *error = "TypeSafe returned malformed routing data";
+    return std::nullopt;
+  }
+  std::optional<TypeSafeChoiceValue> workflow =
+      ParseChoice(answers->FindDict("workflow"), kWorkflowOptions, error);
+  if (!workflow) {
+    return std::nullopt;
+  }
+  std::optional<TypeSafeChoiceValue> entry_kind =
+      ParseChoice(answers->FindDict("entry_kind"), kEntryKindOptions, error);
+  if (!entry_kind) {
+    return std::nullopt;
+  }
+  return TypeSafeGoalChoices{.workflow = std::move(*workflow),
+                             .entry_kind = std::move(*entry_kind)};
+}
+
+std::optional<AgentWorkflowKind> WorkflowForChoice(std::string_view choice) {
+  if (choice == "research") {
+    return AgentWorkflowKind::kResearch;
+  }
+  if (choice == "browser_steward") {
+    return AgentWorkflowKind::kBrowserSteward;
+  }
+  if (choice == "safe_download") {
+    return AgentWorkflowKind::kSafeDownload;
+  }
+  if (choice == "shopping") {
+    return AgentWorkflowKind::kShopping;
+  }
+  return std::nullopt;
+}
+
+std::optional<AgentGoalRoute> BuildGoalRoute(
+    const TypeSafeGoalChoices& choices,
+    std::string_view original_goal,
+    std::string* error) {
+  std::optional<AgentWorkflowKind> workflow =
+      WorkflowForChoice(choices.workflow.choice);
+  if (!workflow) {
+    *error = "TypeSafe returned an unknown workflow";
+    return std::nullopt;
+  }
+  AgentGoalRoute route;
+  route.workflow = *workflow;
+  route.entry_kind = choices.entry_kind.choice == "browser_only"
+                         ? AgentGoalEntryKind::kBrowserOnly
+                         : AgentGoalEntryKind::kWebSearch;
+  route.target = route.entry_kind == AgentGoalEntryKind::kWebSearch
+                     ? std::string(original_goal)
+                     : std::string();
+  route.summary = "Use the browser to fulfill the original user goal.";
+  if (!ValidateAndNormalizeGoalRoute(&route, error)) {
+    return std::nullopt;
+  }
+  return route;
 }
 
 int ResponseCode(network::SimpleURLLoader* loader) {
@@ -162,39 +267,9 @@ std::optional<std::string> BuildTypeSafeGoalRequestBody(
     return std::nullopt;
   }
 
-  base::DictValue workflow_criteria;
-  workflow_criteria.Set("research",
-                        "Read, compare, summarize, or find public information");
-  workflow_criteria.Set(
-      "browser_steward",
-      "Work with native browser data such as bookmarks, tabs, history, "
-      "downloads, permissions, or workspaces");
-  workflow_criteria.Set("safe_download",
-                        "Find or verify an official software download");
-  workflow_criteria.Set(
-      "shopping",
-      "A user-authorized purchase, cart, or checkout workflow");
-
-  base::DictValue entry_criteria;
-  entry_criteria.Set(
-      "browser_only",
-      "Use native browser data such as bookmarks, tabs, history, downloads, "
-      "permissions, or workspaces; do not open a search result");
-  entry_criteria.Set(
-      "web_search",
-      "The goal needs a public web search before the browser can continue");
-
   base::DictValue questions;
-  questions.Set(
-      "workflow",
-      ChoiceQuestion("Which fixed Aegis workflow best matches the user goal?",
-                     std::move(workflow_criteria)));
-  questions.Set(
-      "entry_kind",
-      ChoiceQuestion(
-          "Should Aegis use only existing browser context or begin with a "
-          "public web search?",
-          std::move(entry_criteria)));
+  questions.Set("workflow", WorkflowQuestion());
+  questions.Set("entry_kind", EntryKindQuestion());
 
   base::DictValue request;
   request.Set("state", std::string(goal));
@@ -220,51 +295,13 @@ std::optional<AgentGoalRoute> ParseTypeSafeGoalResponse(
     *error = "invalid TypeSafe goal routing response";
     return std::nullopt;
   }
-  std::optional<base::DictValue> root =
-      base::JSONReader::ReadDict(body, base::JSON_PARSE_RFC);
-  const base::DictValue* answers = root ? root->FindDict("answers") : nullptr;
-  const std::string* model = root ? root->FindString("model") : nullptr;
-  if (!answers || !model || model->empty()) {
-    *error = "TypeSafe returned malformed routing data";
+  std::optional<TypeSafeGoalChoices> choices = ParseGoalChoices(body, error);
+  if (!choices) {
     return std::nullopt;
   }
-  std::optional<TypeSafeChoiceValue> workflow =
-      ParseChoice(answers->FindDict("workflow"), kWorkflowOptions, error);
-  if (!workflow) {
-    return std::nullopt;
-  }
-  std::optional<TypeSafeChoiceValue> entry_kind =
-      ParseChoice(answers->FindDict("entry_kind"), kEntryKindOptions, error);
-  if (!entry_kind) {
-    return std::nullopt;
-  }
-
-  AgentGoalRoute route;
-  if (workflow->choice == "research") {
-    route.workflow = AgentWorkflowKind::kResearch;
-  } else if (workflow->choice == "browser_steward") {
-    route.workflow = AgentWorkflowKind::kBrowserSteward;
-  } else if (workflow->choice == "safe_download") {
-    route.workflow = AgentWorkflowKind::kSafeDownload;
-  } else if (workflow->choice == "shopping") {
-    route.workflow = AgentWorkflowKind::kShopping;
-  } else {
-    *error = "TypeSafe returned an unknown workflow";
-    return std::nullopt;
-  }
-  route.entry_kind = entry_kind->choice == "browser_only"
-                         ? AgentGoalEntryKind::kBrowserOnly
-                         : AgentGoalEntryKind::kWebSearch;
   // Jev selects only known options. Aegis derives any search query from the
   // user's original text and applies its existing intent constraints later.
-  route.target = route.entry_kind == AgentGoalEntryKind::kWebSearch
-                     ? std::string(original_goal)
-                     : std::string();
-  route.summary = "Use the browser to fulfill the original user goal.";
-  if (!ValidateAndNormalizeGoalRoute(&route, error)) {
-    return std::nullopt;
-  }
-  return route;
+  return BuildGoalRoute(*choices, original_goal, error);
 }
 
 TypeSafeGoalRouterClient::TypeSafeGoalRouterClient(
