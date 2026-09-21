@@ -6,7 +6,7 @@
 
 本项只维护展示和晋升隔离，不升级 native/G0 证据。PR #142 已以 squash commit `211bfd33fe0e07ab59fed8fccbf4b17bd0fc56d0` 合并到 develop，其 push CI run `35588469947` 的 quality / quality-gate 均成功；最终 HEAD `32cf623a99f0687f9f6e9602af56af98e2a3da98` 的本地 full quality、Codacy 与 Astra High 独立审查均通过。旧 main→develop PR #140 绑定旧 base，控制器按 fail-closed 拒绝继续；替代同步 PR #143 已在最终 HEAD `c619c4d8737b8f82c0669d411a9a60c15f76bf16` 关闭 Codacy review 提出的日志可诊断性、缺失 series 文件和末行无换行回归缺口，并以 merge commit `aded49ef24bc088d88b380f7db5a525830d63d65` 合入 develop。对应 develop push CI run `35590221938` 的 quality / quality-gate 均成功。
 
-当前个人 main 晋升候选从 `develop@aded49ef24bc088d88b380f7db5a525830d63d65` 创建；`origin/main@11d58af895e1b024d10fab98aa8167bc9ea96b1c` 已作为该 develop 历史中的第二父提交完成显式同步。候选保留三份个人 README 的 main/develop Codacy 徽章；合并方式必须为 merge commit。合并前仍须在最终 HEAD 完成本地 full quality、托管 quality/quality-gate、Codacy 与 Astra High 独立审查；实际合并后核验个人 main push CI，再从冻结的个人 main SHA 创建独立上游导出候选，并仅在该导出候选恢复冻结 upstream/main 的三份 README。
+首个个人 main 晋升候选 PR #144 的托管检查通过后，Codacy review 发现代理候选没有显式把目标 host 加入 allowlist，且 `ReplaceSelection` 接受未排序 host 后会破坏 `binary_search` 前提。为避免修复先落到 main 并使 develop 落后，#144 已重新定向到 `develop@aded49ef24bc088d88b380f7db5a525830d63d65`：代理 mutation 从当前 endpoint 和权威 selection generation 构造候选，插入目标 host 并保持排序；transport 拒绝未排序 replacement。新增 unit 覆盖 DIRECT 后重新加入 PROXY allowlist 以及未排序 replacement fail-closed，并以顺序补丁 0156 保持 overlay 对齐。该修复合并且 develop push CI 通过后，再从最新 develop 创建新的个人 main 晋升 PR；候选保留个人 Codacy README，个人 main CI 成功后才创建独立上游导出候选。
 
 ## 2026-09-21：commit/publish snapshot 阶段（待验证）
 
