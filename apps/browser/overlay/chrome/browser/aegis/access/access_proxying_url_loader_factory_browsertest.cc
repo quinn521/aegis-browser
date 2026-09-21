@@ -67,6 +67,36 @@ constexpr char kTargetHost[] = "target.example";
 constexpr char kUnselectedRedirectHost[] = "redirect-unselected.example";
 constexpr char kProxyGroup[] = "proxy-group-browser-test";
 
+SiteGroupMutationRequest PreparedNavigationRequest(const OwnershipKey& owner) {
+  SiteGroupMutationRequest request;
+  request.operation_id = "prepared-navigation";
+  request.request_fingerprint = "prepared-navigation-fingerprint";
+  request.candidate_group = {
+      .site_toggle_id = "navigation-toggle",
+      .canonical_host = kTargetHost,
+      .owner = owner,
+      .http_top_level_site = "http://target.example",
+      .https_top_level_site = "https://target.example",
+      .member_rule_ids = {"navigation:http", "navigation:https"},
+  };
+  for (const auto& scheme : {std::string("http"), std::string("https")}) {
+    request.candidate_members.push_back({
+        .rule_id = "navigation:" + scheme,
+        .owner = owner,
+        .site_toggle_id = "navigation-toggle",
+        .top_level_site = scheme + "://target.example",
+        .exact_host = kTargetHost,
+        .schemes = {RequestScheme::kHttp, RequestScheme::kHttps,
+                    RequestScheme::kWs, RequestScheme::kWss},
+        .ports = PortScope::kAllBrowserPermitted,
+        .mode = AccessMode::kProxy,
+        .proxy_group_id = kProxyGroup,
+        .protection_override = ProtectionOverride::kNone,
+    });
+  }
+  return request;
+}
+
 enum class ServiceWorkerRequestKind {
   kOther,
   kMainScript,
@@ -820,32 +850,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        MainNavigationConsumesPreparedSnapshotBeforeCommit) {
   AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(*owner_));
   ASSERT_EQ(store.Open(), StoreStatus::kValid);
-  SiteGroupMutationRequest request;
-  request.operation_id = "prepared-navigation";
-  request.request_fingerprint = "prepared-navigation-fingerprint";
-  request.candidate_group = {
-      .site_toggle_id = "navigation-toggle",
-      .canonical_host = kTargetHost,
-      .owner = *owner_,
-      .http_top_level_site = "http://target.example",
-      .https_top_level_site = "https://target.example",
-      .member_rule_ids = {"navigation:http", "navigation:https"},
-  };
-  for (const auto& scheme : {std::string("http"), std::string("https")}) {
-    request.candidate_members.push_back({
-        .rule_id = "navigation:" + scheme,
-        .owner = *owner_,
-        .site_toggle_id = "navigation-toggle",
-        .top_level_site = scheme + "://target.example",
-        .exact_host = kTargetHost,
-        .schemes = {RequestScheme::kHttp, RequestScheme::kHttps,
-                    RequestScheme::kWs, RequestScheme::kWss},
-        .ports = PortScope::kAllBrowserPermitted,
-        .mode = AccessMode::kProxy,
-        .proxy_group_id = kProxyGroup,
-        .protection_override = ProtectionOverride::kNone,
-    });
-  }
+  const auto request = PreparedNavigationRequest(*owner_);
   const auto prepared = store.PrepareSiteGroupMutation(request);
   ASSERT_TRUE(prepared.value) << prepared.detail;
   EXPECT_EQ(prepared.value->committed_policy_generation, 0u);

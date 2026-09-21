@@ -73,14 +73,29 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
 
  private:
   explicit AccessServiceCoordinator(Profile* profile);
+  struct MutationTransaction;
+  std::optional<AccessMutationTransactionResult> PrepareCandidate(
+      MutationTransaction& transaction,
+      const SiteGroupMutationRequest& request);
+  std::optional<AccessMutationTransactionResult> ReadPreviousSnapshot(
+      MutationTransaction& transaction,
+      const SiteGroupMutationRequest& request);
+  std::optional<AccessMutationTransactionResult> ValidateTransportScope(
+      const MutationTransaction& transaction,
+      AccessMode mode) const;
+  std::optional<uint64_t> SelectionGeneration(
+      const MutationTransaction& transaction) const;
+  std::optional<AccessMutationTransactionResult> BeginPublication(
+      MutationTransaction& transaction);
+  std::optional<AccessMutationTransactionResult> PublishCandidate(
+      MutationTransaction& transaction);
+  void RequestPublicationAck(std::unique_ptr<MutationTransaction> transaction);
+  bool CandidateStillCurrent(const MutationTransaction& transaction) const;
+  void FailTransaction(std::unique_ptr<MutationTransaction> transaction,
+                       AccessMutationTransactionResult result);
+  void RestoreCandidate(const MutationTransaction& transaction);
   void OnNetworkContextPublicationAck(
-      PendingMutationRecord pending,
-      StoredPolicySnapshot candidate,
-      std::optional<StoredPolicySnapshot> previous,
-      AccessTransportSelection previous_selection,
-      AccessTransportSelection candidate_selection,
-      aegis_access::PolicyPublicationIdentity identity,
-      base::OnceCallback<void(AccessMutationTransactionResult)> completion,
+      std::unique_ptr<MutationTransaction> transaction,
       bool acknowledged);
   void Finish(
       base::OnceCallback<void(AccessMutationTransactionResult)> completion,

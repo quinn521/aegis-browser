@@ -902,10 +902,11 @@ expected_access_tail="$(cat <<'EOF'
 0152-feat-aegis-ack-exact-access-policy-publication.patch
 0153-feat-access-publish-prepared-snapshots.patch
 0154-fix-access-selection-lifecycle-style.patch
+0155-refactor-access-snapshot-transaction-stages.patch
 EOF
 )"
-[[ "$(tail -n 40 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "Access patch tail must remain sequential through patch 0154"
+[[ "$(tail -n 41 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "Access patch tail must remain sequential through patch 0155"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does

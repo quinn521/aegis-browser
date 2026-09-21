@@ -54,6 +54,17 @@ aegis_access::RoutePlan RoutePlanForEndpoint(
   return plan;
 }
 
+bool IsCandidateIdentityValid(
+    const aegis_access::PolicyPublicationIdentity& identity,
+    uint64_t network_epoch) {
+  return !(
+      !aegis_access::IsValidRequestCancellationSelector(identity.selector) ||
+      identity.operation_id.empty() || identity.operation_sequence == 0 ||
+      identity.policy_generation == 0 ||
+      identity.policy_generation != identity.operation_sequence ||
+      identity.network_epoch == 0 || identity.network_epoch != network_epoch);
+}
+
 }  // namespace
 
 // static
@@ -291,11 +302,7 @@ AccessNetworkContextTransport::PublishPolicyCandidateWithAck(
   if (!OwnsConfiguredPartition(owner) || identity.selector.owner != owner) {
     return fail(AccessNetworkConfigAckStatus::kInvalidOwner);
   }
-  if (!aegis_access::IsValidRequestCancellationSelector(identity.selector) ||
-      identity.operation_id.empty() || identity.operation_sequence == 0 ||
-      identity.policy_generation == 0 ||
-      identity.policy_generation != identity.operation_sequence ||
-      identity.network_epoch == 0 || identity.network_epoch != network_epoch_) {
+  if (!IsCandidateIdentityValid(identity, network_epoch_)) {
     return fail(AccessNetworkConfigAckStatus::kInvalidPublication);
   }
   auto it = partitions_.find(owner.storage_partition_token);
@@ -306,15 +313,8 @@ AccessNetworkContextTransport::PublishPolicyCandidateWithAck(
   if (state.clients.empty()) {
     return fail(AccessNetworkConfigAckStatus::kNoClients);
   }
-  if (identity.selection_generation != 0) {
-    if (!state.endpoint.has_value() || state.endpoint->owner != owner ||
-        state.endpoint->generations.selection_generation !=
-            identity.selection_generation ||
-        state.endpoint->generations.network_epoch != identity.network_epoch ||
-        !std::binary_search(state.exact_hosts.begin(), state.exact_hosts.end(),
-                            identity.selector.exact_host)) {
-      return fail(AccessNetworkConfigAckStatus::kInvalidPublication);
-    }
+  if (!SelectionMatchesIdentity(state, identity)) {
+    return fail(AccessNetworkConfigAckStatus::kInvalidPublication);
   }
 
   const size_t required_acks = state.clients.size();
@@ -360,6 +360,35 @@ bool AccessNetworkContextTransport::ReplaceSelection(
   return true;
 }
 
+bool AccessNetworkContextTransport::SelectionMatchesIdentity(
+    const PartitionState& state,
+    const aegis_access::PolicyPublicationIdentity& identity) {
+  if (identity.selection_generation == 0) {
+    return true;
+  }
+  return state.endpoint && state.endpoint->owner == identity.selector.owner &&
+         state.endpoint->generations.selection_generation ==
+             identity.selection_generation &&
+         state.endpoint->generations.network_epoch == identity.network_epoch &&
+         std::binary_search(state.exact_hosts.begin(), state.exact_hosts.end(),
+                            identity.selector.exact_host);
+}
+
+bool AccessNetworkContextTransport::PublicationStillCurrent(
+    const aegis_access::PolicyPublicationIdentity& identity,
+    uint64_t clients_generation,
+    size_t client_count) const {
+  if (network_epoch_ != identity.network_epoch) {
+    return false;
+  }
+  const auto it =
+      partitions_.find(identity.selector.owner.storage_partition_token);
+  return it != partitions_.end() &&
+         it->second.clients_generation == clients_generation &&
+         it->second.clients.size() == client_count &&
+         SelectionMatchesIdentity(it->second, identity);
+}
+
 void AccessNetworkContextTransport::PublishPolicyCandidateToClients(
     PartitionState& state,
     const aegis_access::PolicyPublicationIdentity& identity,
@@ -384,23 +413,9 @@ void AccessNetworkContextTransport::PublishPolicyCandidateToClients(
              uint64_t clients_generation, size_t client_count,
              std::shared_ptr<bool> succeeded,
              base::OnceCallback<void(bool)> completion) {
-            bool current = transport &&
-                           transport->network_epoch_ == identity.network_epoch;
-            if (current) {
-              const auto it = transport->partitions_.find(
-                  identity.selector.owner.storage_partition_token);
-              current = it != transport->partitions_.end() &&
-                        it->second.clients_generation == clients_generation &&
-                        it->second.clients.size() == client_count;
-              if (current && identity.selection_generation != 0) {
-                current = it->second.endpoint &&
-                          it->second.endpoint->generations.selection_generation ==
-                              identity.selection_generation &&
-                          std::binary_search(it->second.exact_hosts.begin(),
-                                             it->second.exact_hosts.end(),
-                                             identity.selector.exact_host);
-              }
-            }
+            const bool current =
+                transport && transport->PublicationStillCurrent(
+                                 identity, clients_generation, client_count);
             std::move(completion).Run(*succeeded && current);
           },
           weak_factory_.GetWeakPtr(), identity, state.clients_generation,

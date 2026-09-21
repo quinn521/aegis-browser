@@ -170,6 +170,13 @@ class AccessNetworkContextTransport
       PartitionState& state,
       const network::mojom::CustomProxyConfigPtr& config,
       base::OnceCallback<void(bool)> all_clients_settled);
+  static bool SelectionMatchesIdentity(
+      const PartitionState& state,
+      const aegis_access::PolicyPublicationIdentity& identity);
+  bool PublicationStillCurrent(
+      const aegis_access::PolicyPublicationIdentity& identity,
+      uint64_t clients_generation,
+      size_t client_count) const;
   void PublishPolicyCandidateToClients(
       PartitionState& state,
       const aegis_access::PolicyPublicationIdentity& identity,

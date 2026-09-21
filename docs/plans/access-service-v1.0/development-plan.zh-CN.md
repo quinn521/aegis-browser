@@ -10,12 +10,12 @@ Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 
 
 | 证据 | 当前边界 |
 | --- | --- |
-| 实现及测试源码 | 已增加 candidate builder、coordinator transaction、runtime rollback、transport/version ACK，以及 unit/真实主导航回归源码；顺序补丁 0152/0153/0154 必须与 overlay 对齐；0154 修复 ProxySelectionGenerationState 的 out-of-line 构造/析构。 |
+| 实现及测试源码 | 已增加 candidate builder、coordinator transaction、runtime rollback、transport/version ACK，以及 unit/真实主导航回归源码；顺序补丁 0152/0153/0154/0155 必须与 overlay 对齐；0154 修复 ProxySelectionGenerationState 的 out-of-line 构造/析构。 |
 | 本地 standalone C++ | 本轮执行通过 845 checks，包含 tracker version/abort 回归；不是 SQLite/GN/GTest/browser 执行证据。最终 HEAD 的完整质量报告另存 artifact 并在 PR 绑定。 |
 | Chromium/GTest/真实入口 | **NOT_RUN / BLOCKED**：已核实旧 PR135 retry3 权威退出文件为 1，首个失败是 `ProxySelectionGenerationState` 的 inline constructor / missing out-of-line destructor style 检查。本 PR 以 0154 修复；正从已释放的旧候选创建独立 APFS 验证副本，复用依赖及缓存后重绑本 PR 补丁树。缓存和旧二进制均不是当前 PASS；旧工作区不改动。 |
 | 独立审查 | GPT-6 独立源码审查与指定 PRO 的冻结源码包审查在 `0e4bb97` 未发现剩余源码阻塞；PRO 包审查不等于直接读取 checkout。二者均未清除 native 欠账。本轮 style/文档新提交仍需最终 HEAD 复审。 |
 | 本地 full quality | `0e4bb97eb738f9d270d8fbedc2909df380851343` 的 `local-0e4bb97/report.json` 为 PASS，sourceStable=true，输入/最终摘要同为 `1842ba2323647ace020943db5711b2a9c8d7cca44ce44e4affb606ce3faf5acc`（1168 files），nativeIntegration=REQUIRED。该记录不能转用于本轮新 HEAD。 |
-| Hosted CI / 合并 | `0e4bb97`：CI run `35577430465` attempt 1 的 quality/quality-gate SUCCESS；C++ run `35577430464` SUCCESS；Codacy ACTION_REQUIRED，待查明。PR #139 仍 OPEN/Draft；新 HEAD 必须重新核验。 |
+| Hosted CI / 合并 | `0e4bb97`：CI run `35577430465` attempt 1 的 quality/quality-gate SUCCESS；C++ run `35577430464` SUCCESS；Codacy ACTION_REQUIRED：10 项函数复杂度/长度、2 项 Markdown 空行。本轮按准备、发布、ACK 与回滚边界拆分函数并移除多余空行，不降低检查阈值，待新 HEAD 重跑。PR #139 仍 OPEN/Draft；新 HEAD 必须重新核验。 |
 | G0 | **UNVERIFIED**。基础质量或测试源码不能升级为 native/runtime 验收。 |
 
 合并前必须在同一固定候选实际执行 coordinator、store、runtime、transport、dispatch/tracker 单元与回归，并执行 `MainNavigationConsumesPreparedSnapshotBeforeCommit`、`MainNavigationRoutingIsolatedAcrossProfiles` 及既有导航/redirect/Worker/SharedWorker/Service Worker/missing endpoint/BLOCK/LoadingPredictor/frame prefetch 矩阵。零匹配、非零退出、不同候选均失败。之后冻结最终 HEAD，重跑 full quality（sourceStable 与源码摘要一致）、hosted 必需 CI 和独立 PRO 复审。**存在上述欠账时 PR 保持 Draft，不开启可导致提前合并的 auto-merge。**
@@ -28,7 +28,6 @@ Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 
 4. 本轮完成上述晋升前，不开始下一依赖功能阶段。后续仍从最新 develop 新建 `codex/*` 隔离 worktree，一阶段一 PR，并在同 PR 更新 plan/Handoff。
 
 ## 历史核验记录（2026-09-20，非当前门禁结论）
-
 
 状态日期：2026-09-21（Asia/Shanghai）。本页是从当前 `develop` 继续实施的入口；[交接与精确证据](handoff-20260920.zh-CN.md)记录本次基线和待验证事项，[A01–A118 / PF01–PF13 验收追踪表](acceptance-tracker.zh-CN.md)是逐行覆盖与证据的唯一台账，[P0 历史实现记录](p0-implementation.zh-CN.md)保留切片过程。行为、验收项和 G0–G3 门槛以[冻结规范修订 4](spec.zh-CN.md)及[冻结清单](freeze.json)为准；本文不修改合同。分支、PR、Review 与最终 HEAD 门禁按[DEV CI 与上游推进指南](../../development/ci.zh-CN.md)执行。
 

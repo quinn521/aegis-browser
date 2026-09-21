@@ -474,6 +474,51 @@ bool BindAndRunRuleInsert(sql::Database* database,
   return insert.Run();
 }
 
+bool IsPreparedCandidateValid(const PendingMutationRecord& expected) {
+  return !(expected.phase != MutationPhase::kPrepared ||
+           expected.operation_id.empty() || expected.operation_sequence == 0 ||
+           expected.committed_policy_generation != 0 ||
+           expected.candidate.policy_generation !=
+               expected.operation_sequence ||
+           !IsCompleteOwner(expected.owner) ||
+           expected.candidate.group.owner != expected.owner);
+}
+
+void ReplacePreparedSiteGroup(StoredPolicySnapshot* candidate,
+                              const PendingMutationRecord& expected) {
+  bool replaced = false;
+  for (StoredSiteGroup& group : candidate->site_groups) {
+    if (group.group.site_toggle_id != expected.candidate.group.site_toggle_id) {
+      continue;
+    }
+    group = expected.candidate;
+    group.policy_generation = expected.operation_sequence;
+    replaced = true;
+    break;
+  }
+  if (!replaced) {
+    StoredSiteGroup group = expected.candidate;
+    group.policy_generation = expected.operation_sequence;
+    candidate->site_groups.push_back(std::move(group));
+  }
+  std::sort(candidate->site_groups.begin(), candidate->site_groups.end(),
+            [](const StoredSiteGroup& left, const StoredSiteGroup& right) {
+              return left.group.site_toggle_id < right.group.site_toggle_id;
+            });
+}
+
+StoreResult<StoredPolicySnapshot> ValidatePreparedSnapshot(
+    StoredPolicySnapshot candidate) {
+  StoreResult<MatcherRuleSetCandidate> validated =
+      AccessRuleStore::AdaptMatcherSnapshot(candidate);
+  if (validated.status != StoreStatus::kValid || !validated.value.has_value()) {
+    return SnapshotError(validated.status, validated.detail.empty()
+                                               ? "invalid_prepared_snapshot"
+                                               : validated.detail);
+  }
+  return {StoreStatus::kValid, std::move(candidate), {}};
+}
+
 }  // namespace
 
 AccessStoreBinding::AccessStoreBinding(AccessStoreKind kind,
@@ -1365,12 +1410,7 @@ AccessRuleStore::BuildPreparedCandidateSnapshot(
   if (!is_open_) {
     return SnapshotError(terminal_status_, "store_not_open");
   }
-  if (expected.phase != MutationPhase::kPrepared ||
-      expected.operation_id.empty() || expected.operation_sequence == 0 ||
-      expected.committed_policy_generation != 0 ||
-      expected.candidate.policy_generation != expected.operation_sequence ||
-      !IsCompleteOwner(expected.owner) ||
-      expected.candidate.group.owner != expected.owner) {
+  if (!IsPreparedCandidateValid(expected)) {
     return SnapshotError(StoreStatus::kInvalidArgument,
                          "invalid_prepared_candidate");
   }
@@ -1398,36 +1438,9 @@ AccessRuleStore::BuildPreparedCandidateSnapshot(
   candidate.owner = expected.owner;
   candidate.policy_generation = expected.operation_sequence;
 
-  bool replaced = false;
-  for (StoredSiteGroup& group : candidate.site_groups) {
-    if (group.group.site_toggle_id !=
-        expected.candidate.group.site_toggle_id) {
-      continue;
-    }
-    group = expected.candidate;
-    group.policy_generation = expected.operation_sequence;
-    replaced = true;
-    break;
-  }
-  if (!replaced) {
-    StoredSiteGroup group = expected.candidate;
-    group.policy_generation = expected.operation_sequence;
-    candidate.site_groups.push_back(std::move(group));
-  }
-  std::sort(candidate.site_groups.begin(), candidate.site_groups.end(),
-            [](const StoredSiteGroup& left, const StoredSiteGroup& right) {
-              return left.group.site_toggle_id < right.group.site_toggle_id;
-            });
+  ReplacePreparedSiteGroup(&candidate, expected);
 
-  StoreResult<MatcherRuleSetCandidate> validated =
-      AdaptMatcherSnapshot(candidate);
-  if (validated.status != StoreStatus::kValid ||
-      !validated.value.has_value()) {
-    return SnapshotError(validated.status, validated.detail.empty()
-                                               ? "invalid_prepared_snapshot"
-                                               : validated.detail);
-  }
-  return {StoreStatus::kValid, std::move(candidate), {}};
+  return ValidatePreparedSnapshot(std::move(candidate));
 }
 
 StoreResult<PendingMutationRecord> AccessRuleStore::CommitPreparedMutation(
