@@ -376,6 +376,23 @@ aegis::AegisService* CoreServiceForProfile(Profile* profile) {
 
 }  // namespace
 
+class AegisAgentCoreServiceObserver final
+    : public aegis::AegisServiceObserver {
+ public:
+  AegisAgentCoreServiceObserver(aegis::AegisService* service,
+                                base::RepeatingClosure on_changed)
+      : on_changed_(std::move(on_changed)), observation_(this) {
+    observation_.Observe(service);
+  }
+
+  void OnAegisStateChanged() override { on_changed_.Run(); }
+
+ private:
+  base::RepeatingClosure on_changed_;
+  base::ScopedObservation<aegis::AegisService, aegis::AegisServiceObserver>
+      observation_;
+};
+
 AegisAgentPageHandler::AegisAgentPageHandler(
     Profile* profile,
     BrowserWindowInterface* browser,
@@ -411,7 +428,10 @@ AegisAgentPageHandler::AegisAgentPageHandler(
     ObserveTask(service_->MostRecentTask());
   }
   if (aegis::AegisService* core_service = CoreServiceForProfile(profile_)) {
-    core_service_observation_.Observe(core_service);
+    core_service_observer_ = std::make_unique<AegisAgentCoreServiceObserver>(
+        core_service,
+        base::BindRepeating(&AegisAgentPageHandler::PushSnapshot,
+                            weak_ptr_factory_.GetWeakPtr()));
   }
 }
 
@@ -908,10 +928,6 @@ void AegisAgentPageHandler::OnUndoFinished(
 }
 
 void AegisAgentPageHandler::OnAgentServiceSnapshotChanged() {
-  PushSnapshot();
-}
-
-void AegisAgentPageHandler::OnAegisStateChanged() {
   PushSnapshot();
 }
 
