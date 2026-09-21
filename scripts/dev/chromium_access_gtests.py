@@ -15,8 +15,8 @@ import subprocess
 import tempfile
 from typing import Iterable
 
-BROWSER = Path(__file__).resolve().parents[1]
-ROOT = BROWSER.parents[1]
+ROOT = Path(__file__).resolve().parents[2]
+BROWSER = ROOT / "apps" / "browser"
 ARGS_FILE = BROWSER / "args" / "aegis.gn"
 COMMIT_FILE = BROWSER / "CHROMIUM_COMMIT"
 VERSION_FILE = BROWSER / "CHROMIUM_VERSION"
