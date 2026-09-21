@@ -353,6 +353,27 @@ aegis_access::PolicyPublicationIdentity CandidateIdentity(
   return identity;
 }
 
+TEST_F(AccessNetworkContextTransportTest, DirectCandidateRestoresNativeForOnlyTarget) {
+  auto delegate = CreateDelegate({});
+  const auto endpoint = EndpointFor({});
+  ASSERT_TRUE(transport_->PublishProxySelection(
+      {}, {"other.example", kTargetHost}, endpoint));
+  transport_->FlushClientsForTesting({});
+  const auto previous = *transport_->CurrentSelection(endpoint.owner);
+  auto candidate = previous;
+  candidate.exact_hosts = {"other.example"};
+  candidate.endpoint->generations.policy_generation = 10;
+  ASSERT_TRUE(transport_->ReplaceSelection(endpoint.owner, previous, candidate));
+  transport_->FlushClientsForTesting({});
+  EXPECT_EQ(Resolve(delegate.get(), "https://target.example/")
+                .proxy_list().ToPacString(),
+            "PROXY native.example:3128; DIRECT");
+  ExpectProxyResolution(delegate.get(), "https://other.example/");
+  ASSERT_TRUE(transport_->ReplaceSelection(endpoint.owner, candidate, previous));
+  transport_->FlushClientsForTesting({});
+  ExpectProxyResolution(delegate.get(), "https://target.example/");
+}
+
 TEST_F(AccessNetworkContextTransportTest, ExactCandidateRequiresEveryContext) {
   auto first = CreateDelegate({});
   auto second = CreateDelegate({});

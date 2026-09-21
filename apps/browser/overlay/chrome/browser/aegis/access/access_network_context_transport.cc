@@ -332,18 +332,31 @@ AccessNetworkContextTransport::CurrentEndpoint(
   return partitions_.at(owner.storage_partition_token).endpoint;
 }
 
-bool AccessNetworkContextTransport::ReplaceEndpointPolicyGeneration(
+std::optional<AccessTransportSelection>
+AccessNetworkContextTransport::CurrentSelection(
+    const aegis_access::OwnershipKey& owner) const {
+  if (!OwnsConfiguredPartition(owner)) {
+    return std::nullopt;
+  }
+  const auto& state = partitions_.at(owner.storage_partition_token);
+  return AccessTransportSelection{state.endpoint, state.exact_hosts};
+}
+
+bool AccessNetworkContextTransport::ReplaceSelection(
     const aegis_access::OwnershipKey& owner,
-    const aegis_access::RegisteredProxyEndpoint& expected,
-    uint64_t generation) {
-  if (!OwnsConfiguredPartition(owner) || generation == 0) {
+    const AccessTransportSelection& expected,
+    const AccessTransportSelection& replacement) {
+  if (CurrentSelection(owner) != expected ||
+      (replacement.endpoint && replacement.endpoint->owner != owner) ||
+      (!replacement.exact_hosts.empty() &&
+       (!replacement.endpoint || !AreCanonicalExactHosts(replacement.exact_hosts)))) {
     return false;
   }
-  auto& endpoint = partitions_.at(owner.storage_partition_token).endpoint;
-  if (!endpoint || *endpoint != expected) {
-    return false;
-  }
-  endpoint->generations.policy_generation = generation;
+  auto& state = partitions_.at(owner.storage_partition_token);
+  state.endpoint = replacement.endpoint;
+  state.exact_hosts = replacement.exact_hosts;
+  // The policy metadata is sent after this config on the same Mojo pipe.
+  Broadcast(state);
   return true;
 }
 

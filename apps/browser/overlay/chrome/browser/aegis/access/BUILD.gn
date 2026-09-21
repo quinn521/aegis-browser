@@ -153,7 +153,6 @@ source_set("access_service_coordinator") {
   ]
   deps = [
     ":access_proxy_selection_generation_source",
-    ":access_network_context_transport",
     ":access_published_request_runtime",
     ":access_request_dispatch_state",
     "//base",
@@ -162,6 +161,7 @@ source_set("access_service_coordinator") {
     "//content/public/browser",
   ]
   public_deps = [
+    ":access_network_context_transport",
     ":access_rule_store",
     "//components/aegis_access:policy_publication_ack_tracker",
   ]

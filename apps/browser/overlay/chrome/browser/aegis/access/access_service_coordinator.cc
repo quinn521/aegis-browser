@@ -233,26 +233,29 @@ void AccessServiceCoordinator::CommitSiteGroupMutation(
     return;
   }
 
-  const auto previous_endpoint = transport->CurrentEndpoint(pending.owner);
-  if (previous_endpoint &&
-      !transport->ReplaceEndpointPolicyGeneration(
-          pending.owner, *previous_endpoint, pending.operation_sequence)) {
-    dispatch->FailPolicyPublication(identity);
-    supersede_and_fail(
-        Result(AccessMutationTransactionStatus::kRuntimePublicationFailed));
-    return;
+  const auto previous_selection = *transport->CurrentSelection(pending.owner);
+  auto candidate_selection = previous_selection;
+  if (candidate_selection.endpoint) {
+    candidate_selection.endpoint->generations.policy_generation =
+        pending.operation_sequence;
+  }
+  if (mode == AccessMode::kDirect) {
+    std::erase(candidate_selection.exact_hosts, selector.exact_host);
   }
 
   const AccessPolicyPublicationResult publication =
       runtime->PublishPreparedPolicyCandidate(candidate);
   if (publication.status != AccessPolicyPublicationStatus::kPublished &&
       publication.status != AccessPolicyPublicationStatus::kUnchanged) {
-    if (previous_endpoint) {
-      auto rebound = *previous_endpoint;
-      rebound.generations.policy_generation = pending.operation_sequence;
-      transport->ReplaceEndpointPolicyGeneration(
-          pending.owner, rebound, previous_endpoint->generations.policy_generation);
-    }
+    dispatch->FailPolicyPublication(identity);
+    supersede_and_fail(
+        Result(AccessMutationTransactionStatus::kRuntimePublicationFailed));
+    return;
+  }
+
+  if (!transport->ReplaceSelection(pending.owner, previous_selection,
+                                   candidate_selection)) {
+    runtime->RollbackPreparedPolicyCandidate(candidate, previous);
     dispatch->FailPolicyPublication(identity);
     supersede_and_fail(
         Result(AccessMutationTransactionStatus::kRuntimePublicationFailed));
@@ -265,7 +268,7 @@ void AccessServiceCoordinator::CommitSiteGroupMutation(
   auto settlement = std::make_shared<base::OnceCallback<void(bool)>>(base::BindOnce(
       &AccessServiceCoordinator::OnNetworkContextPublicationAck,
       weak_factory_.GetWeakPtr(), std::move(pending),
-      std::move(candidate), std::move(previous), previous_endpoint, std::move(identity),
+      std::move(candidate), std::move(previous), previous_selection, candidate_selection, std::move(identity),
       std::move(completion)));
   auto settle = [](std::shared_ptr<base::OnceCallback<void(bool)>> callback,
                    bool accepted) {
@@ -284,7 +287,8 @@ void AccessServiceCoordinator::OnNetworkContextPublicationAck(
     PendingMutationRecord pending,
     StoredPolicySnapshot candidate,
     std::optional<StoredPolicySnapshot> previous,
-    std::optional<aegis_access::RegisteredProxyEndpoint> previous_endpoint,
+    AccessTransportSelection previous_selection,
+    AccessTransportSelection candidate_selection,
     aegis_access::PolicyPublicationIdentity identity,
     base::OnceCallback<void(AccessMutationTransactionResult)> completion,
     bool acknowledged) {
@@ -300,15 +304,10 @@ void AccessServiceCoordinator::OnNetworkContextPublicationAck(
       dispatch->FailPolicyPublication(identity);
     }
     if (runtime) {
-      if (runtime->RollbackPreparedPolicyCandidate(candidate, previous) &&
-          previous_endpoint) {
-        auto* transport = AccessNetworkContextTransport::Get(profile_);
-        auto rebound = *previous_endpoint;
-        rebound.generations.policy_generation = pending.operation_sequence;
-        if (transport) {
-          transport->ReplaceEndpointPolicyGeneration(
-              pending.owner, rebound,
-              previous_endpoint->generations.policy_generation);
+      if (runtime->RollbackPreparedPolicyCandidate(candidate, previous)) {
+        if (auto* transport = AccessNetworkContextTransport::Get(profile_)) {
+          transport->ReplaceSelection(pending.owner, candidate_selection,
+                                      previous_selection);
         }
       }
     }
@@ -342,14 +341,7 @@ void AccessServiceCoordinator::OnNetworkContextPublicationAck(
     fail_and_restore(AccessMutationTransactionStatus::kNetworkPublicationFailed);
     return;
   }
-  if (previous_endpoint) {
-    auto expected_endpoint = *previous_endpoint;
-    expected_endpoint.generations.policy_generation = pending.operation_sequence;
-    if (transport->CurrentEndpoint(pending.owner) != expected_endpoint) {
-      fail_and_restore(AccessMutationTransactionStatus::kNetworkPublicationFailed);
-      return;
-    }
-  } else if (transport->CurrentEndpoint(pending.owner)) {
+  if (transport->CurrentSelection(pending.owner) != candidate_selection) {
     fail_and_restore(AccessMutationTransactionStatus::kNetworkPublicationFailed);
     return;
   }

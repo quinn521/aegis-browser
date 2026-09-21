@@ -187,15 +187,16 @@ TEST_F(AccessMutationTransactionTest, PublishesPreparedThenCommitsOnlyAfterAck) 
   ASSERT_TRUE(result.Wait());
   EXPECT_EQ(result.Get().status, AccessMutationTransactionStatus::kCommitted);
   EXPECT_EQ(coordinator_->state_generation(), 1u);
-  auto reopened = OpenStore();
-  const auto durable = reopened->ReadCommittedSnapshot(owner_.storage_partition_token);
+  const auto durable = pending_store->ReadCommittedSnapshot(owner_.storage_partition_token);
   ASSERT_TRUE(durable.value);
   EXPECT_EQ(durable.value->policy_generation, result.Get().policy_generation);
 }
 
 TEST_F(AccessMutationTransactionTest, FailedAckRemovesCandidateWithoutCommit) {
   base::test::TestFuture<AccessMutationTransactionResult> result;
-  coordinator_->CommitSiteGroupMutation(OpenStore(), Mutation(), Selector(),
+  auto store = OpenStore();
+  auto* retained_store = store.get();
+  coordinator_->CommitSiteGroupMutation(std::move(store), Mutation(), Selector(),
                                         result.GetCallback());
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(client_->reply);
@@ -206,8 +207,7 @@ TEST_F(AccessMutationTransactionTest, FailedAckRemovesCandidateWithoutCommit) {
   EXPECT_EQ(coordinator_->state_generation(), 0u);
   EXPECT_EQ(AccessPublishedRequestRuntime::Get(profile_.get())
                 ->GetPublishedPolicySnapshot(owner_), nullptr);
-  auto reopened = OpenStore();
-  EXPECT_EQ(reopened->ReadCommittedSnapshot(owner_.storage_partition_token).status,
+  EXPECT_EQ(retained_store->ReadCommittedSnapshot(owner_.storage_partition_token).status,
             StoreStatus::kMissing);
 }
 
@@ -265,19 +265,23 @@ TEST_F(AccessMutationTransactionTest, EndpointPolicyGenerationRollsBackOnFailure
   const aegis_access::RegisteredProxyEndpoint old_endpoint{
       "registration", "proxy-group", owner_, {7, 2, 3, transport_->network_epoch(), 5},
       aegis_access::RegisteredProxyTransport::kHttp, "127.0.0.1", 18080};
-  ASSERT_TRUE(transport_->PublishProxySelection({}, {"other.example"}, old_endpoint));
+  ASSERT_TRUE(transport_->PublishProxySelection({}, {"news.example", "other.example"}, old_endpoint));
   base::test::TestFuture<AccessMutationTransactionResult> result;
   coordinator_->CommitSiteGroupMutation(OpenStore(), Mutation(), Selector(),
                                         result.GetCallback());
   task_environment_.RunUntilIdle();
   ASSERT_TRUE(client_->metadata);
   const auto candidate_endpoint = transport_->CurrentEndpoint(owner_);
+  EXPECT_EQ(transport_->CurrentSelection(owner_)->exact_hosts,
+            (std::vector<std::string>{"other.example"}));
   ASSERT_TRUE(candidate_endpoint);
   EXPECT_EQ(candidate_endpoint->generations.policy_generation,
             client_->metadata->policy_generation);
   std::move(client_->reply).Run(false);
   ASSERT_TRUE(result.Wait());
   EXPECT_EQ(transport_->CurrentEndpoint(owner_), old_endpoint);
+  EXPECT_EQ(transport_->CurrentSelection(owner_)->exact_hosts,
+            (std::vector<std::string>{"news.example", "other.example"}));
 }
 
 TEST_F(AccessMutationTransactionTest, EphemeralStoreSurvivesConsecutiveMutations) {

@@ -12,6 +12,7 @@
 #include "base/supports_user_data.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/aegis/access/access_rule_store.h"
+#include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "components/aegis_access/policy_publication_ack_tracker.h"
 #include "components/aegis_access/access_proxy_route_adapter.h"
 
@@ -75,7 +76,8 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
       PendingMutationRecord pending,
       StoredPolicySnapshot candidate,
       std::optional<StoredPolicySnapshot> previous,
-      std::optional<aegis_access::RegisteredProxyEndpoint> previous_endpoint,
+      AccessTransportSelection previous_selection,
+      AccessTransportSelection candidate_selection,
       aegis_access::PolicyPublicationIdentity identity,
       base::OnceCallback<void(AccessMutationTransactionResult)> completion,
       bool acknowledged);

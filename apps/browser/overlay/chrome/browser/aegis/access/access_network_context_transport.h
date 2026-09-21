@@ -40,6 +40,13 @@ struct AccessNetworkConfigAckResult {
   size_t required_client_acks = 0;
 };
 
+struct AccessTransportSelection {
+  std::optional<aegis_access::RegisteredProxyEndpoint> endpoint;
+  std::vector<std::string> exact_hosts;
+  friend bool operator==(const AccessTransportSelection&,
+                         const AccessTransportSelection&) = default;
+};
+
 // Profile-owned transport state for the first Network Service integration
 // slice. This is deliberately not another KeyedService: its lifetime is the
 // exact BrowserContext/Profile and it stores independent state per
@@ -125,10 +132,11 @@ class AccessNetworkContextTransport
 
   std::optional<aegis_access::RegisteredProxyEndpoint> CurrentEndpoint(
       const aegis_access::OwnershipKey& owner) const;
-  bool ReplaceEndpointPolicyGeneration(
-      const aegis_access::OwnershipKey& owner,
-      const aegis_access::RegisteredProxyEndpoint& expected,
-      uint64_t generation);
+  std::optional<AccessTransportSelection> CurrentSelection(
+      const aegis_access::OwnershipKey& owner) const;
+  bool ReplaceSelection(const aegis_access::OwnershipKey& owner,
+                        const AccessTransportSelection& expected,
+                        const AccessTransportSelection& replacement);
 
   network::mojom::CustomProxyConfigPtr BuildConfigForTesting(
       const base::FilePath& relative_partition_path) const;
