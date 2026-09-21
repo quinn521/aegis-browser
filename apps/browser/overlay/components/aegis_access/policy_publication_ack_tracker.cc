@@ -94,6 +94,14 @@ PolicyPublicationAckStatus PolicyPublicationAckTracker::ValidateIdentity(
   if (identity.policy_generation != entry.identity.policy_generation) {
     return PolicyPublicationAckStatus::kVersionMismatch;
   }
+  if (identity.selection_generation < entry.identity.selection_generation ||
+      identity.network_epoch < entry.identity.network_epoch) {
+    return PolicyPublicationAckStatus::kStaleGeneration;
+  }
+  if (identity.selection_generation != entry.identity.selection_generation ||
+      identity.network_epoch != entry.identity.network_epoch) {
+    return PolicyPublicationAckStatus::kVersionMismatch;
+  }
   return PolicyPublicationAckStatus::kPending;
 }
 
@@ -103,6 +111,7 @@ PolicyPublicationAckStatus PolicyPublicationAckTracker::ValidateRequirements(
   if (!required_acks || requirements.identity.operation_id.empty() ||
       requirements.identity.operation_sequence == 0 ||
       requirements.identity.policy_generation == 0 ||
+      requirements.identity.network_epoch == 0 ||
       !IsValidRequestCancellationSelector(requirements.identity.selector) ||
       requirements.required_ack_tokens.empty() ||
       requirements.required_ack_tokens.size() >
@@ -248,6 +257,22 @@ PolicyPublicationAckResult PolicyPublicationAckTracker::MarkFailed(
   }
   entry->failed = true;
   return ResultFor(PolicyPublicationAckStatus::kFailed, entry);
+}
+
+PolicyPublicationAckResult PolicyPublicationAckTracker::Abort(
+    const PolicyPublicationIdentity& identity) {
+  auto it = std::find_if(entries_.begin(), entries_.end(),
+                         [&](const Entry& entry) {
+                           return entry.identity == identity;
+                         });
+  if (it == entries_.end()) {
+    return {PolicyPublicationAckStatus::kNotFound, std::nullopt};
+  }
+  auto snapshot = SnapshotFor(*it);
+  entries_.erase(it);
+  snapshot.failed = true;
+  snapshot.ready = false;
+  return {PolicyPublicationAckStatus::kFailed, snapshot};
 }
 
 PolicyPublicationAckResult PolicyPublicationAckTracker::Lookup(

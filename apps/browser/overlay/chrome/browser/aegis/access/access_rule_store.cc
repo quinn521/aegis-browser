@@ -1358,6 +1358,78 @@ StoreStatus AccessRuleStore::SupersedePreparedMutation(
                                              : StoreStatus::kConflict;
 }
 
+StoreResult<StoredPolicySnapshot>
+AccessRuleStore::BuildPreparedCandidateSnapshot(
+    const PendingMutationRecord& expected) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!is_open_) {
+    return SnapshotError(terminal_status_, "store_not_open");
+  }
+  if (expected.phase != MutationPhase::kPrepared ||
+      expected.operation_id.empty() || expected.operation_sequence == 0 ||
+      expected.committed_policy_generation != 0 ||
+      expected.candidate.policy_generation != expected.operation_sequence ||
+      !IsCompleteOwner(expected.owner) ||
+      expected.candidate.group.owner != expected.owner) {
+    return SnapshotError(StoreStatus::kInvalidArgument,
+                         "invalid_prepared_candidate");
+  }
+
+  StoreResult<PendingMutationRecord> loaded =
+      LoadMutation(expected.operation_id, true);
+  if (!loaded.value.has_value()) {
+    return SnapshotError(loaded.status, loaded.detail);
+  }
+  if (*loaded.value != expected) {
+    return SnapshotError(StoreStatus::kConflict, "prepared_record_mismatch");
+  }
+
+  StoreResult<StoredPolicySnapshot> current = ReadCommittedSnapshotInternal(
+      expected.owner.storage_partition_token, false);
+  if (current.status != StoreStatus::kMissing &&
+      current.status != StoreStatus::kValid) {
+    return SnapshotError(current.status, current.detail);
+  }
+
+  StoredPolicySnapshot candidate;
+  if (current.value.has_value()) {
+    candidate = std::move(*current.value);
+  }
+  candidate.owner = expected.owner;
+  candidate.policy_generation = expected.operation_sequence;
+
+  bool replaced = false;
+  for (StoredSiteGroup& group : candidate.site_groups) {
+    if (group.group.site_toggle_id !=
+        expected.candidate.group.site_toggle_id) {
+      continue;
+    }
+    group = expected.candidate;
+    group.policy_generation = expected.operation_sequence;
+    replaced = true;
+    break;
+  }
+  if (!replaced) {
+    StoredSiteGroup group = expected.candidate;
+    group.policy_generation = expected.operation_sequence;
+    candidate.site_groups.push_back(std::move(group));
+  }
+  std::sort(candidate.site_groups.begin(), candidate.site_groups.end(),
+            [](const StoredSiteGroup& left, const StoredSiteGroup& right) {
+              return left.group.site_toggle_id < right.group.site_toggle_id;
+            });
+
+  StoreResult<MatcherRuleSetCandidate> validated =
+      AdaptMatcherSnapshot(candidate);
+  if (validated.status != StoreStatus::kValid ||
+      !validated.value.has_value()) {
+    return SnapshotError(validated.status, validated.detail.empty()
+                                               ? "invalid_prepared_snapshot"
+                                               : validated.detail);
+  }
+  return {StoreStatus::kValid, std::move(candidate), {}};
+}
+
 StoreResult<PendingMutationRecord> AccessRuleStore::CommitPreparedMutation(
     const PendingMutationRecord& expected) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

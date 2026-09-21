@@ -137,6 +137,10 @@ bool AccessNetworkContextTransport::ConfigureNetworkContext(
   mojo::PendingRemote<network::mojom::CustomProxyConfigClient> client;
   network_context_params->custom_proxy_config_client_receiver =
       client.InitWithNewPipeAndPassReceiver();
+  if (state.clients_generation == std::numeric_limits<uint64_t>::max()) {
+    return false;
+  }
+  ++state.clients_generation;
   state.clients.Add(std::move(client));
   return true;
 }
@@ -270,6 +274,138 @@ AccessNetworkContextTransport::RepublishCurrentConfigWithAck(
   const size_t required_acks = state.clients.size();
   UpdateClientConfigs(state, config, std::move(all_clients_settled));
   return {AccessNetworkConfigAckStatus::kStarted, required_acks};
+}
+
+AccessNetworkConfigAckResult
+AccessNetworkContextTransport::PublishPolicyCandidateWithAck(
+    const aegis_access::PolicyPublicationIdentity& identity,
+    const aegis_access::OwnershipKey& owner,
+    base::OnceCallback<void(bool)> all_clients_settled) {
+  if (!all_clients_settled) {
+    return {AccessNetworkConfigAckStatus::kInvalidPublication, 0};
+  }
+  auto fail = [&](AccessNetworkConfigAckStatus status) {
+    std::move(all_clients_settled).Run(false);
+    return AccessNetworkConfigAckResult{status, 0};
+  };
+  if (!OwnsConfiguredPartition(owner) || identity.selector.owner != owner) {
+    return fail(AccessNetworkConfigAckStatus::kInvalidOwner);
+  }
+  if (!aegis_access::IsValidRequestCancellationSelector(identity.selector) ||
+      identity.operation_id.empty() || identity.operation_sequence == 0 ||
+      identity.policy_generation == 0 ||
+      identity.policy_generation != identity.operation_sequence ||
+      identity.network_epoch == 0 || identity.network_epoch != network_epoch_) {
+    return fail(AccessNetworkConfigAckStatus::kInvalidPublication);
+  }
+  auto it = partitions_.find(owner.storage_partition_token);
+  if (it == partitions_.end()) {
+    return fail(AccessNetworkConfigAckStatus::kMissingPartition);
+  }
+  PartitionState& state = it->second;
+  if (state.clients.empty()) {
+    return fail(AccessNetworkConfigAckStatus::kNoClients);
+  }
+  if (identity.selection_generation != 0) {
+    if (!state.endpoint.has_value() || state.endpoint->owner != owner ||
+        state.endpoint->generations.selection_generation !=
+            identity.selection_generation ||
+        state.endpoint->generations.network_epoch != identity.network_epoch ||
+        !std::binary_search(state.exact_hosts.begin(), state.exact_hosts.end(),
+                            identity.selector.exact_host)) {
+      return fail(AccessNetworkConfigAckStatus::kInvalidPublication);
+    }
+  }
+
+  const size_t required_acks = state.clients.size();
+  PublishPolicyCandidateToClients(state, identity, owner,
+                                  std::move(all_clients_settled));
+  return {AccessNetworkConfigAckStatus::kStarted, required_acks};
+}
+
+std::optional<aegis_access::RegisteredProxyEndpoint>
+AccessNetworkContextTransport::CurrentEndpoint(
+    const aegis_access::OwnershipKey& owner) const {
+  if (!OwnsConfiguredPartition(owner)) {
+    return std::nullopt;
+  }
+  return partitions_.at(owner.storage_partition_token).endpoint;
+}
+
+bool AccessNetworkContextTransport::ReplaceEndpointPolicyGeneration(
+    const aegis_access::OwnershipKey& owner,
+    const aegis_access::RegisteredProxyEndpoint& expected,
+    uint64_t generation) {
+  if (!OwnsConfiguredPartition(owner) || generation == 0) {
+    return false;
+  }
+  auto& endpoint = partitions_.at(owner.storage_partition_token).endpoint;
+  if (!endpoint || *endpoint != expected) {
+    return false;
+  }
+  endpoint->generations.policy_generation = generation;
+  return true;
+}
+
+void AccessNetworkContextTransport::PublishPolicyCandidateToClients(
+    PartitionState& state,
+    const aegis_access::PolicyPublicationIdentity& identity,
+    const aegis_access::OwnershipKey& owner,
+    base::OnceCallback<void(bool)> all_clients_settled) {
+  auto metadata = network::mojom::AegisAccessPolicyPublicationMetadata::New();
+  metadata->operation_id = identity.operation_id;
+  metadata->operation_sequence = identity.operation_sequence;
+  metadata->policy_generation = identity.policy_generation;
+  metadata->selection_generation = identity.selection_generation;
+  metadata->network_epoch = identity.network_epoch;
+  metadata->channel = static_cast<uint32_t>(owner.channel);
+  metadata->profile_token = owner.profile_token;
+  metadata->storage_partition_token = owner.storage_partition_token;
+
+  auto all_succeeded = std::make_shared<bool>(true);
+  base::RepeatingClosure barrier = base::BarrierClosure(
+      state.clients.size(),
+      base::BindOnce(
+          [](base::WeakPtr<AccessNetworkContextTransport> transport,
+             aegis_access::PolicyPublicationIdentity identity,
+             uint64_t clients_generation, size_t client_count,
+             std::shared_ptr<bool> succeeded,
+             base::OnceCallback<void(bool)> completion) {
+            bool current = transport &&
+                           transport->network_epoch_ == identity.network_epoch;
+            if (current) {
+              const auto it = transport->partitions_.find(
+                  identity.selector.owner.storage_partition_token);
+              current = it != transport->partitions_.end() &&
+                        it->second.clients_generation == clients_generation &&
+                        it->second.clients.size() == client_count;
+              if (current && identity.selection_generation != 0) {
+                current = it->second.endpoint &&
+                          it->second.endpoint->generations.selection_generation ==
+                              identity.selection_generation &&
+                          std::binary_search(it->second.exact_hosts.begin(),
+                                             it->second.exact_hosts.end(),
+                                             identity.selector.exact_host);
+              }
+            }
+            std::move(completion).Run(*succeeded && current);
+          },
+          weak_factory_.GetWeakPtr(), identity, state.clients_generation,
+          state.clients.size(), all_succeeded, std::move(all_clients_settled)));
+
+  for (auto& client : state.clients) {
+    base::OnceCallback<void(bool)> result =
+        mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+            base::BindOnce(
+                [](std::shared_ptr<bool> succeeded,
+                   base::RepeatingClosure completion, bool client_acked) {
+                  *succeeded = *succeeded && client_acked;
+                  completion.Run();
+                },
+                all_succeeded, barrier),
+            false);
+    client->OnAegisAccessPolicyPublished(metadata->Clone(), std::move(result));
+  }
 }
 
 void AccessNetworkContextTransport::UpdateClientConfigs(
