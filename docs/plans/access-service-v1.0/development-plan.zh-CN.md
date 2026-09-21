@@ -8,11 +8,11 @@
 
 首个个人 main 晋升候选 PR #144 的托管检查通过后，Codacy review 发现代理候选没有显式把目标 host 加入 allowlist，且 `ReplaceSelection` 接受未排序 host 后会破坏 `binary_search` 前提。为避免修复先落到 main 并使 develop 落后，#144 已重新定向到 `develop@aded49ef24bc088d88b380f7db5a525830d63d65`：代理 mutation 从当前 endpoint 和权威 selection generation 构造候选，插入目标 host 并保持排序；transport 拒绝未排序 replacement。新增 unit 覆盖 DIRECT 后重新加入 PROXY allowlist 以及未排序 replacement fail-closed，并以顺序补丁 0156 保持 overlay 对齐。Astra High 随后发现 coordinator test 直接 include proxy selection source 却未声明直接 GN 依赖；0156 与 wiring 回归已补齐该依赖。
 
-PR #144 最终 HEAD `b2b7b3b9246320b6a1530b1033016cc79fb7b13e` 的本地 full quality 为 PASS，`sourceStable=true`，输入/最终摘要同为 `5c3c5bb80bf5bcc2ceb86285b6f16c14b6de93407ee2ad0ac7fdde075e595711`；托管 quality、quality-gate、C++ unit、Codacy 与 Astra High 最终 HEAD 复审均通过，三个 Codacy conversation 均已解决。该 PR 已 squash merge 为 `develop@3b7f66658afeb192339b5ad60eaf9463cb5b96e6`，其 push CI run `35593565545` 的 quality / quality-gate 成功。新的个人 main 晋升 [PR #146](https://github.com/quinn521/aegis-browser/pull/146) 从该精确 develop 建立，目标为 `main@11d58af895e1b024d10fab98aa8167bc9ea96b1c`，保留个人 Codacy README。本次文档提交会产生新的候选 HEAD，必须重新取得本地 full quality、托管 CI、Codacy 与 Astra High 最终 HEAD 复审；使用 merge commit 实际合并并核验 main push CI 后，才创建独立上游导出候选。以上仓库证据不升级 Chromium runtime 或 G0，G0 继续 **UNVERIFIED**。
+PR #144 最终 HEAD `b2b7b3b9246320b6a1530b1033016cc79fb7b13e` 的本地 full quality 为 PASS，`sourceStable=true`，输入/最终摘要同为 `5c3c5bb80bf5bcc2ceb86285b6f16c14b6de93407ee2ad0ac7fdde075e595711`；托管 quality、quality-gate、C++ unit、Codacy 与 Astra High 最终 HEAD 复审均通过，三个 Codacy conversation 均已解决。该 PR 已 squash merge 为 `develop@3b7f66658afeb192339b5ad60eaf9463cb5b96e6`，其 push CI run `35593565545` 的 quality / quality-gate 成功。新的个人 main 晋升 [PR #146](https://github.com/quinn521/aegis-browser/pull/146) 首次以 `main@11d58af895e1b024d10fab98aa8167bc9ea96b1c` 为目标时，精确 HEAD `6fe675bd58e74dcaa167eebe9135f0ca3405067f` 的本地 full quality 和托管质量门通过；Codacy 相对 main 报告一个 Minor 复杂度问题，用户明确当前只以 Medium 及以上为阻塞，不为该 Minor 扩大产品改动。Astra High 同时发现已合并 #139 仍被写成 OPEN/Draft。为保持 develop 先行，#146 已重新定向到上述精确 develop，只修正文档和 Handoff，保留 native 欠账并登记新的 Codacy 门槛。#146 最终 HEAD 必须重新取得本地 full quality、托管 CI、Medium 及以上 Codacy 结果与同一 Astra High reviewer 复审；实际合入并核验 develop push CI 后，才创建新的个人 main 晋升候选。以上仓库证据不升级 Chromium runtime 或 G0，G0 继续 **UNVERIFIED**。
 
-## 2026-09-21：commit/publish snapshot 阶段（待验证）
+## 2026-09-21：commit/publish snapshot 阶段（代码已合并；native 验证仍欠账）
 
-本阶段基于 `develop@3154d39871ddd592a1be609abf9c90c78d7e29c6`，范围为普通 DIRECT/PROXY 网站协议组事务。此前上游 PR #19 已合并；当前交付复用 [Fork PR #139](https://github.com/quinn521/aegis-browser/pull/139)。2026-09-21 用户要求 review 进度、更新 plan/Handoff，并在本 PR 门禁通过且实际合并后进行一次上游晋升。以下历史核验记录不作为本阶段证据。
+本阶段基于 `develop@3154d39871ddd592a1be609abf9c90c78d7e29c6`，范围为普通 DIRECT/PROXY 网站协议组事务，已由 [Fork PR #139](https://github.com/quinn521/aegis-browser/pull/139) 合并为 `2c591b7`。以下行为说明保留已交付的源码边界；固定 Chromium/GTest/真实入口仍是后续 native 证据欠账，不再把 #139 写成待合并 PR。
 
 冻结事务顺序为：验证可信 selector 与 store → PREPARED journal 预留 operationSequence → 从旧 durable base 构造完整候选 → 发布到浏览器 request runtime → 向所属 NetworkContext 发布精确 operation/G/S/E 与 owner/partition → 全部候选 ACK → 再原子 durable commit → finalize。PREPARED 的 `committed_policy_generation` 始终为 0，候选及成功提交的 policy generation 都等于预留的 operationSequence。请求路由只读取内存快照，不读取 SQLite。`RepublishCurrentConfigWithAck` 不能作为候选发布证据。
 
@@ -20,22 +20,22 @@ Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 
 
 | 证据 | 当前边界 |
 | --- | --- |
-| 实现及测试源码 | 已增加 candidate builder、coordinator transaction、runtime rollback、transport/version ACK，以及 unit/真实主导航回归源码；顺序补丁 0152/0153/0154/0155 必须与 overlay 对齐；0154 修复 ProxySelectionGenerationState 的 out-of-line 构造/析构。 |
+| 实现及测试源码 | 已增加 candidate builder、coordinator transaction、runtime rollback、transport/version ACK，以及 unit/真实主导航回归源码；顺序补丁 0152–0156 与 overlay 对齐。#146 不修改产品源码。 |
 | 本地 standalone C++ | 本轮执行通过 845 checks，包含 tracker version/abort 回归；不是 SQLite/GN/GTest/browser 执行证据。最终 HEAD 的完整质量报告另存 artifact 并在 PR 绑定。 |
-| Chromium/GTest/真实入口 | **NOT_RUN / BLOCKED**：已核实旧 PR135 retry3 权威退出文件为 1，首个失败是 `ProxySelectionGenerationState` 的 inline constructor / missing out-of-line destructor style 检查。本 PR 以 0154 修复；正从已释放的旧候选创建独立 APFS 验证副本，复用依赖及缓存后重绑本 PR 补丁树。缓存和旧二进制均不是当前 PASS；旧工作区不改动。 |
-| 独立审查 | GPT-6 独立源码审查与指定 PRO 的冻结源码包审查在 `0e4bb97` 未发现剩余源码阻塞；PRO 包审查不等于直接读取 checkout。二者均未清除 native 欠账。本轮 style/文档新提交仍需最终 HEAD 复审。 |
-| 本地 full quality | `0e4bb97eb738f9d270d8fbedc2909df380851343` 的 `local-0e4bb97/report.json` 为 PASS，sourceStable=true，输入/最终摘要同为 `1842ba2323647ace020943db5711b2a9c8d7cca44ce44e4affb606ce3faf5acc`（1168 files），nativeIntegration=REQUIRED。该记录不能转用于本轮新 HEAD。 |
-| Hosted CI / 合并 | `0e4bb97`：CI run `35577430465` attempt 1 的 quality/quality-gate SUCCESS；C++ run `35577430464` SUCCESS；Codacy ACTION_REQUIRED：10 项函数复杂度/长度、2 项 Markdown 空行。本轮按准备、发布、ACK 与回滚边界拆分函数并移除多余空行，不降低检查阈值，待新 HEAD 重跑。PR #139 仍 OPEN/Draft；新 HEAD 必须重新核验。 |
+| Chromium/GTest/真实入口 | **NOT_RUN / BLOCKED**：已核实旧 PR135 retry3 权威退出文件为 1，首个失败是 `ProxySelectionGenerationState` 的 inline constructor / missing out-of-line destructor style 检查。该源码问题已由 #139 的 0154 修复，但尚无重建后的固定候选 PASS；缓存和旧二进制均不是当前证据，旧工作区不改动。 |
+| 独立审查 | #139 的历史审查不清除 native 欠账，也不能转用于 #146。当前 #146 修复与文档必须由同一 Astra High reviewer 覆盖最终 HEAD。 |
+| 本地 full quality | #144 最终 HEAD 的完整质量证据见上；#146 的任何修复或文档提交都会使 `6fe675b` 旧报告失效，须在新最终 HEAD 重跑并要求 `sourceStable=true`、输入/最终摘要一致。 |
+| Hosted CI / 合并 | #139 已合并为 `2c591b7`，不再等待 merge。#146 首次 main 目标检查报告一个 Codacy Minor；按用户当前门槛不阻塞，服务端质量门调整为只阻塞 Medium 及以上。Astra 文档问题在 develop-first 修复；最终 HEAD 的 hosted CI、Codacy、review 与合并后 develop push CI 均须重新核验。 |
 | G0 | **UNVERIFIED**。基础质量或测试源码不能升级为 native/runtime 验收。 |
 
-合并前必须在同一固定候选实际执行 coordinator、store、runtime、transport、dispatch/tracker 单元与回归，并执行 `MainNavigationConsumesPreparedSnapshotBeforeCommit`、`MainNavigationRoutingIsolatedAcrossProfiles` 及既有导航/redirect/Worker/SharedWorker/Service Worker/missing endpoint/BLOCK/LoadingPredictor/frame prefetch 矩阵。零匹配、非零退出、不同候选均失败。之后冻结最终 HEAD，重跑 full quality（sourceStable 与源码摘要一致）、hosted 必需 CI 和独立 PRO 复审。**存在上述欠账时 PR 保持 Draft，不开启可导致提前合并的 auto-merge。**
+在宣告 G0 或依赖 native 验收继续扩展请求入口前，必须在同一固定候选实际执行 coordinator、store、runtime、transport、dispatch/tracker 单元与回归，并执行 `MainNavigationConsumesPreparedSnapshotBeforeCommit`、`MainNavigationRoutingIsolatedAcrossProfiles` 及既有导航/redirect/Worker/SharedWorker/Service Worker/missing endpoint/BLOCK/LoadingPredictor/frame prefetch 矩阵。零匹配、非零退出、不同候选均失败。上述是未完成证据债，不回写为 #139 仍待合并，也不能由仓库 CI 或测试源码替代。
 
 本轮后续顺序：
 
-1. 在独立候选中完成编译与上述全部必需回归，绑定 Chromium/V8 patched tree、GN args、二进制摘要和真实退出码；失败先修复，G0 不提前升级。
-2. 更新本 PR 文档并冻结最终 HEAD，取得 local full quality、hosted 必需 CI 与独立 PRO review-clear 后 squash merge #139；回读实际 MERGED 和合并提交 S 的 develop push CI。
-3. 仅在 S 的 develop CI 通过后做一次上游晋升：刷新 upstream/main，按分支指南安全同步 main/develop；从最终 develop 建个人晋升分支并保留个人 README；上游导出候选的三个 README 与本次 upstream/main 保持一致。个人 main 晋升 PR 使用 merge commit；核验 main push CI 后再提 upstream/main PR，分别审查 public diff、最终 HEAD quality/CI 和实际合并状态。
-4. 本轮完成上述晋升前，不开始下一依赖功能阶段。后续仍从最新 develop 新建 `codex/*` 隔离 worktree，一阶段一 PR，并在同 PR 更新 plan/Handoff。
+1. 在 #146 完成本开发计划与 Handoff 修复并登记 Codacy 只阻塞 Medium 及以上；冻结最终 HEAD，取得 local full quality、hosted CI、对应 Codacy 门槛与同一 Astra High reviewer clear 后 squash merge 到 develop，并核验合并提交 S 的 develop push CI。
+2. 仅在该 develop push CI 通过后，从最新 develop 建新的个人 main 晋升分支，保留个人 README，经最终 HEAD 门禁后使用 merge commit；核验精确 main push CI。
+3. main push CI 通过后刷新并冻结 upstream/main，从个人 main 建独立导出候选，只恢复三份上游 README，分别审查 public diff、最终 HEAD quality/CI、Astra review 和实际合并状态。
+4. 上述晋升完成前不开始下一依赖功能阶段；后续仍从最新 develop 新建 `codex/*` 隔离 worktree，一阶段一 PR，并在同 PR 更新 plan/Handoff。native/G0 欠账继续独立登记，不用仓库晋升结果升级。
 
 ## 历史核验记录（2026-09-20，非当前门禁结论）
 
