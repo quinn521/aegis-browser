@@ -398,4 +398,151 @@ describe("PolicyEngine", () => {
       "remove failed",
     );
   });
+
+  it("falls back to the disabled phishing path for async assessment", async () => {
+    const harness = makeHarness(
+      cloneSettings({
+        modules: {
+          ...DEFAULT_SETTINGS.modules,
+          phish: false,
+        },
+      }),
+    );
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    await expect(engine.assessPageAsync(suspiciousSnapshot)).resolves.toMatchObject({
+      shouldBlock: false,
+      score: 0,
+      url: suspiciousSnapshot.url,
+    });
+  });
+
+  it("uses the configured phishing model for async assessment", async () => {
+    const harness = makeHarness();
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    const score = vi.fn(async (_snapshot: PageSnapshot) => 100);
+    engine.setPhishModel({ score });
+
+    const assessment = await engine.assessPageAsync(suspiciousSnapshot);
+
+    expect(score).toHaveBeenCalledTimes(1);
+    expect(assessment.shouldBlock).toBe(true);
+    expect(
+      assessment.reasons.some(
+        (reason) => reason.code === "lightweight_model_blend",
+      ),
+    ).toBe(true);
+  });
+
+  it("loads phishing feedback by value", () => {
+    const harness = makeHarness();
+    const engine = new PolicyEngine(harness.ports);
+    const feedback: Record<string, "safe" | "phish"> = {
+      "evil.tk": "safe",
+    };
+
+    engine.loadPhishFeedback(feedback);
+    feedback["evil.tk"] = "phish";
+
+    expect(engine.getPhishFeedback()).toEqual({ "evil.tk": "safe" });
+  });
+
+  it("resolves auto locale for enabled privacy summaries", async () => {
+    const harness = makeHarness(cloneSettings({ locale: "auto" }));
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    const result = await engine.summarize({
+      url: "https://example.com/",
+      title: "",
+      textSample: "",
+    });
+
+    expect(result).toMatchObject({
+      summary: "未能提取可读页面文本。",
+      backend: "mock",
+      modelReady: true,
+    });
+    expect(harness.modelReady).not.toHaveBeenCalled();
+    expect(harness.modelChat).not.toHaveBeenCalled();
+  });
+
+  it("allows safe cloud use but blocks sensitive origins when cloud models are enabled", async () => {
+    const harness = makeHarness(cloneSettings({ allowCloudModels: true }));
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    expect(engine.gateCloudPrompt("safe text", true)).toMatchObject({
+      allowed: true,
+      reason: "ok",
+    });
+    expect(engine.cloudUploadAllowedForUrl("https://paypal.com/login")).toBe(
+      false,
+    );
+    expect(engine.cloudUploadAllowedForUrl("https://example.com/")).toBe(true);
+  });
+
+  it("removes tracking decorations when link sanitization is enabled", async () => {
+    const harness = makeHarness();
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    const result = engine.sanitizeUrl(
+      "https://example.com/?utm_source=test&keep=1#utm_campaign=spring",
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.removed).toEqual(
+      expect.arrayContaining(["utm_source", "#tracking-hash"]),
+    );
+    expect(result.cleaned).toContain("keep=1");
+    expect(result.cleaned).not.toContain("utm_source");
+  });
+
+  it("preserves rejected cookies on tracker-whitelisted domains", async () => {
+    const harness = makeHarness(
+      cloneSettings({ trackerWhitelist: ["trusted.example"] }),
+    );
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    const analytics: StorageCookie = {
+      name: "_ga",
+      value: "1",
+      domain: ".trusted.example",
+      path: "/",
+      secure: true,
+      httpOnly: false,
+      session: true,
+    };
+    harness.listCookies.mockResolvedValueOnce([analytics]);
+    harness.classifyCookie.mockReturnValueOnce("analytics");
+
+    await expect(engine.enforceCookiePolicy()).resolves.toBe(0);
+    expect(harness.removeCookie).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the built-in cookie classifier", async () => {
+    const harness = makeHarness();
+    delete harness.ports.storage.classifyCookie;
+    const engine = new PolicyEngine(harness.ports);
+    await engine.init();
+
+    const analytics: StorageCookie = {
+      name: "_ga",
+      value: "1",
+      domain: "example.com",
+      path: "/",
+      secure: true,
+      httpOnly: false,
+      session: true,
+    };
+    harness.listCookies.mockResolvedValueOnce([analytics]);
+
+    await expect(engine.enforceCookiePolicy()).resolves.toBe(1);
+    expect(harness.removeCookie).toHaveBeenCalledWith(analytics);
+  });
 });
