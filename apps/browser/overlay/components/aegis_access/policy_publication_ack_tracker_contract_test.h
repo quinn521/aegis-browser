@@ -54,6 +54,8 @@ inline void ExpectPublicationWaitsForEveryCompletion(
   observer.Expect(
       tracker.Begin(requirements).status == PolicyPublicationAckStatus::kPending,
       "publication begins pending");
+  observer.Expect(!tracker.CanCommit(requirements.identity),
+                  "unacknowledged publication cannot commit");
   observer.Expect(
       tracker.Acknowledge(requirements.identity, "browser-runtime").status ==
           PolicyPublicationAckStatus::kPending,
@@ -67,6 +69,8 @@ inline void ExpectPublicationWaitsForEveryCompletion(
           PolicyPublicationAckStatus::kPending,
       "termination still waits for durable commit");
 
+  observer.Expect(tracker.CanCommit(requirements.identity),
+                  "all execution prerequisites permit synchronous durable commit");
   const auto committed = tracker.MarkDurablyCommitted(requirements.identity);
   observer.Expect(committed.status == PolicyPublicationAckStatus::kReady,
                   "durable commit makes publication ready");

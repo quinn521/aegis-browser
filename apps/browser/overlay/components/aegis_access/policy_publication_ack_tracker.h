@@ -86,6 +86,7 @@ class PolicyPublicationAckTracker {
       const std::string& ack_token);
   PolicyPublicationAckResult MarkTerminationsComplete(
       const PolicyPublicationIdentity& identity);
+  bool CanCommit(const PolicyPublicationIdentity& identity) const;
   PolicyPublicationAckResult MarkDurablyCommitted(
       const PolicyPublicationIdentity& identity);
   PolicyPublicationAckResult MarkFailed(

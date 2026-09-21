@@ -7,6 +7,7 @@
 #include <optional>
 #include <utility>
 
+#include "base/check.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/time/time.h"
@@ -366,6 +367,15 @@ void AccessServiceCoordinator::OnNetworkContextPublicationAck(
     }
   }
 
+  if (!dispatch->CanCommitPolicyPublication(identity)) {
+    fail_and_restore(AccessMutationTransactionStatus::kPublicationTrackerRejected);
+    return;
+  }
+  // From this check through finalization, execution stays synchronous on UI.
+  // The store transaction neither pumps tasks nor invokes external callbacks.
+  // Thus the validated tracker entry cannot change before its infallible
+  // in-memory commit/finalize transitions. Never report a committed durable
+  // mutation as a rolled-back transaction.
   StoreResult<PendingMutationRecord> committed =
       store->CommitPreparedMutation(pending);
   if (committed.status != StoreStatus::kValid || !committed.value.has_value()) {
@@ -375,19 +385,9 @@ void AccessServiceCoordinator::OnNetworkContextPublicationAck(
   }
 
   const auto ready = dispatch->MarkPolicyPublicationDurablyCommitted(identity);
-  if (ready.status != aegis_access::PolicyPublicationAckStatus::kReady) {
-    Finish(std::move(completion),
-           Result(AccessMutationTransactionStatus::kFinalizeFailed,
-                  StoreStatus::kValid, pending.operation_sequence));
-    return;
-  }
+  CHECK(ready.status == aegis_access::PolicyPublicationAckStatus::kReady);
   const auto finalized = dispatch->FinalizePolicyPublication(identity);
-  if (finalized.status != aegis_access::PolicyPublicationAckStatus::kFinalized) {
-    Finish(std::move(completion),
-           Result(AccessMutationTransactionStatus::kFinalizeFailed,
-                  StoreStatus::kValid, pending.operation_sequence));
-    return;
-  }
+  CHECK(finalized.status == aegis_access::PolicyPublicationAckStatus::kFinalized);
 
   ++state_generation_;
   Finish(std::move(completion),

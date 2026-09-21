@@ -239,6 +239,15 @@ PolicyPublicationAckTracker::MarkTerminationsComplete(
   return ResultFor(CurrentStatus(*entry), entry);
 }
 
+bool PolicyPublicationAckTracker::CanCommit(
+    const PolicyPublicationIdentity& identity) const {
+  const auto [status, entry] = FindAndValidate(identity);
+  return status == PolicyPublicationAckStatus::kPending && entry &&
+         !entry->durable_committed && !entry->failed &&
+         entry->received_acks.size() == entry->required_acks.size() &&
+         (!entry->require_termination || entry->termination_complete);
+}
+
 PolicyPublicationAckResult PolicyPublicationAckTracker::MarkDurablyCommitted(
     const PolicyPublicationIdentity& identity) {
   auto [status, entry] = FindAndValidate(identity);

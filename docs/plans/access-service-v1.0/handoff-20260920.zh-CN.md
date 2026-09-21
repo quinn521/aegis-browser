@@ -11,9 +11,9 @@ Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 
 | 证据 | 当前边界 |
 | --- | --- |
 | 实现及测试源码 | 已增加 candidate builder、coordinator transaction、runtime rollback、transport/version ACK，以及 unit/真实主导航回归源码；顺序补丁 0152/0153 必须与 overlay 对齐。 |
-| 本地 standalone C++ | 本轮执行通过 843 checks，包含 tracker version/abort 回归；不是 SQLite/GN/GTest/browser 执行证据。最终 HEAD 的完整质量报告另存 artifact 并在 PR 绑定。 |
+| 本地 standalone C++ | 本轮执行通过 845 checks，包含 tracker version/abort 回归；不是 SQLite/GN/GTest/browser 执行证据。最终 HEAD 的完整质量报告另存 artifact 并在 PR 绑定。 |
 | Chromium/GTest/真实入口 | **NOT_RUN / BLOCKED**：隔离 replay 树缺 `third_party/llvm-build`、`buildtools/mac` 与 build output。不能复用旧 workspace 的二进制，不修改该 workspace。 |
-| 独立审查 | 中途 GPT-6 新上下文审查发现阻塞项并推进修复；最终 HEAD 仍须复审。指定 PRO 网页连接本轮失败，不声明 PRO review-clear。 |
+| 独立审查 | 中途 GPT-6 新上下文审查发现阻塞项并推进修复；最终 HEAD 仍须复审。指定 PRO 首次连接失败后已完成 `07e192d` 审查，指出提交后 finalize 语义；当前改为提交前核验全部 tracker 条件，随后同一 UI 同步调用栈完成 durable/内存 finalize，不把已提交状态返回成已回滚失败。新 HEAD 仍待 PRO 复审，不声明 merge-clear。 |
 | Hosted CI / 合并 | 本阶段尚无最终 HEAD hosted PASS 或合并证据。原基线或旧 PR 绿灯不能代替。 |
 | G0 | **UNVERIFIED**。基础质量或测试源码不能升级为 native/runtime 验收。 |
 

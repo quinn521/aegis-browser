@@ -69,6 +69,8 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
   aegis_access::PolicyPublicationAckResult
   MarkPolicyPublicationTerminationsComplete(
       const aegis_access::PolicyPublicationIdentity& identity);
+  bool CanCommitPolicyPublication(
+      const aegis_access::PolicyPublicationIdentity& identity) const;
   aegis_access::PolicyPublicationAckResult MarkPolicyPublicationDurablyCommitted(
       const aegis_access::PolicyPublicationIdentity& identity);
   aegis_access::PolicyPublicationAckResult FailPolicyPublication(

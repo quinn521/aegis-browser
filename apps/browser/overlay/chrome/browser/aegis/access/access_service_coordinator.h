@@ -34,7 +34,6 @@ enum class AccessMutationTransactionStatus {
   kRuntimePublicationFailed,
   kNetworkPublicationFailed,
   kCommitFailed,
-  kFinalizeFailed,
 };
 
 struct AccessMutationTransactionResult {

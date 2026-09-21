@@ -109,6 +109,12 @@ AccessRequestDispatchState::MarkPolicyPublicationTerminationsComplete(
   return publication_acks_.MarkTerminationsComplete(identity);
 }
 
+bool AccessRequestDispatchState::CanCommitPolicyPublication(
+    const aegis_access::PolicyPublicationIdentity& identity) const {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  return publication_acks_.CanCommit(identity);
+}
+
 aegis_access::PolicyPublicationAckResult
 AccessRequestDispatchState::MarkPolicyPublicationDurablyCommitted(
     const aegis_access::PolicyPublicationIdentity& identity) {
