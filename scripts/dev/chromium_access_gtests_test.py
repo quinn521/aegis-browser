@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
+
+sys.dont_write_bytecode = True
 
 import chromium_access_gtests as sut
 
