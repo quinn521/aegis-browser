@@ -369,14 +369,18 @@ export function inspectOpenPromotionPulls({personalOpen, upstreamOpen, personalR
   return {status: 'active', active: automation[0]};
 }
 
+function dependency(value, fallback) {
+  return value === undefined ? fallback : value;
+}
+
 function activePullDependencies(deps) {
   return {
-    git: deps.git ?? git,
-    sha: deps.sha ?? sha,
-    assertHeads: deps.assertHeads ?? assertRemoteHeads,
-    build: deps.build ?? buildCandidate,
-    fetchBranch: deps.fetchBranch ?? fetchOriginBranch,
-    validate: deps.validate ?? validateCandidate,
+    git: dependency(deps.git, git),
+    sha: dependency(deps.sha, sha),
+    assertHeads: dependency(deps.assertHeads, assertRemoteHeads),
+    build: dependency(deps.build, buildCandidate),
+    fetchBranch: dependency(deps.fetchBranch, fetchOriginBranch),
+    validate: dependency(deps.validate, validateCandidate),
   };
 }
 
