@@ -4,7 +4,10 @@ import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
-import {collectStaticInventory} from '../run-static-checks.mjs';
+import {
+  collectStaticInventory,
+  staticCheckDefinitions,
+} from '../run-static-checks.mjs';
 
 test('collectStaticInventory is tracked-only and NUL-safe', () => {
   const root = mkdtempSync(join(tmpdir(), 'aegis-static-checks-'));
@@ -42,4 +45,34 @@ test('collectStaticInventory is tracked-only and NUL-safe', () => {
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
+});
+
+test('static check definitions preserve order and explicit lint scope', () => {
+  const inventory = {
+    javascript: ['one.mjs'],
+    python: ['one.py'],
+    shell: ['one.sh'],
+    workflows: ['.github/workflows/quality.yml'],
+  };
+  const definitions = staticCheckDefinitions(inventory);
+
+  assert.deepEqual(
+    definitions.map(({name}) => name),
+    [
+      'static-runner-tests',
+      'javascript-syntax',
+      'python-syntax',
+      'shell-syntax',
+      'actionlint',
+      'shellcheck-warning',
+      'eslint-static-scope',
+      'typescript-typecheck',
+    ],
+  );
+  assert.deepEqual(
+    definitions.find(({name}) => name === 'eslint-static-scope')?.args,
+    ['pnpm', 'run', 'lint:static'],
+  );
+  assert.equal(definitions[1].files, inventory.javascript);
+  assert.equal(definitions[4].files, inventory.workflows);
 });

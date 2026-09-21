@@ -9,6 +9,11 @@ import {git, repoRoot} from '../ci/common.mjs';
 const currentFile = fileURLToPath(import.meta.url);
 const reportPath = resolve(repoRoot, '.artifacts/static-checks/report.json');
 const maxBuffer = 64 * 1024 * 1024;
+const pythonSyntaxProgram = [
+  'import ast, pathlib, sys',
+  'for name in sys.argv[1:]:',
+  '    ast.parse(pathlib.Path(name).read_text(encoding="utf-8"), filename=name)',
+].join('\n');
 
 function byteSort(left, right) {
   return Buffer.from(left).compare(Buffer.from(right));
@@ -111,6 +116,55 @@ function runIfFiles(name, executable, args, files) {
   return runCommand(name, executable, [...args, ...files], files.length);
 }
 
+export function staticCheckDefinitions(inventory) {
+  return [
+    ['command', 'static-runner-tests', process.execPath,
+      ['--test', './scripts/dev/tests/*.test.mjs']],
+    ['each-file', 'javascript-syntax', process.execPath, ['--check'],
+      inventory.javascript],
+    ['if-files', 'python-syntax', 'python3', ['-c', pythonSyntaxProgram],
+      inventory.python],
+    ['each-file', 'shell-syntax', 'bash', ['-n'], inventory.shell],
+    ['if-files', 'actionlint', 'actionlint', [], inventory.workflows],
+    ['if-files', 'shellcheck-warning', 'shellcheck', ['-S', 'warning'],
+      inventory.shell],
+    ['command', 'eslint-static-scope', 'corepack',
+      ['pnpm', 'run', 'lint:static']],
+    ['command', 'typescript-typecheck', 'corepack',
+      ['pnpm', 'run', 'typecheck']],
+  ].map(([mode, name, executable, args, files]) => ({
+    mode,
+    name,
+    executable,
+    args,
+    files,
+  }));
+}
+
+function runStaticCheck({mode, name, executable, args, files}) {
+  if (mode === 'each-file') {
+    return runEachFile(name, executable, args, files);
+  }
+  if (mode === 'if-files') {
+    return runIfFiles(name, executable, args, files);
+  }
+  return runCommand(name, executable, args);
+}
+
+function buildReport(startedAt, inventory, checks) {
+  const failed = checks.filter((check) => check.result === 'FAIL');
+  return {
+    schemaVersion: 1,
+    result: failed.length === 0 ? 'PASS' : 'FAIL',
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    inventory: Object.fromEntries(
+      Object.entries(inventory).map(([name, files]) => [name, files.length]),
+    ),
+    checks,
+  };
+}
+
 function writeReport(report) {
   mkdirSync(dirname(reportPath), {recursive: true});
   const temporary = `${reportPath}.tmp`;
@@ -121,70 +175,13 @@ function writeReport(report) {
 function main() {
   const startedAt = new Date().toISOString();
   const inventory = collectStaticInventory();
-  const checks = [];
-
-  checks.push(runCommand(
-    'static-runner-tests',
-    process.execPath,
-    ['--test', './scripts/dev/tests/*.test.mjs'],
-  ));
-  checks.push(runEachFile(
-    'javascript-syntax',
-    process.execPath,
-    ['--check'],
-    inventory.javascript,
-  ));
-
-  const pythonProgram = [
-    'import ast, pathlib, sys',
-    'for name in sys.argv[1:]:',
-    '    ast.parse(pathlib.Path(name).read_text(encoding="utf-8"), filename=name)',
-  ].join('\n');
-  checks.push(runIfFiles(
-    'python-syntax',
-    'python3',
-    ['-c', pythonProgram],
-    inventory.python,
-  ));
-  checks.push(runEachFile(
-    'shell-syntax',
-    'bash',
-    ['-n'],
-    inventory.shell,
-  ));
-  checks.push(runIfFiles('actionlint', 'actionlint', [], inventory.workflows));
-  checks.push(runIfFiles(
-    'shellcheck-warning',
-    'shellcheck',
-    ['-S', 'warning'],
-    inventory.shell,
-  ));
-  checks.push(runCommand(
-    'eslint-static-scope',
-    'corepack',
-    ['pnpm', 'run', 'lint:static'],
-  ));
-  checks.push(runCommand(
-    'typescript-typecheck',
-    'corepack',
-    ['pnpm', 'run', 'typecheck'],
-  ));
-
-  const failed = checks.filter((check) => check.result === 'FAIL');
-  const report = {
-    schemaVersion: 1,
-    result: failed.length === 0 ? 'PASS' : 'FAIL',
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    inventory: Object.fromEntries(
-      Object.entries(inventory).map(([name, files]) => [name, files.length]),
-    ),
-    checks,
-  };
+  const checks = staticCheckDefinitions(inventory).map(runStaticCheck);
+  const report = buildReport(startedAt, inventory, checks);
   writeReport(report);
   process.stdout.write(`[static] report: ${reportPath}\n`);
 
-  if (failed.length > 0) {
+  if (report.result === 'FAIL') {
+    const failed = checks.filter((check) => check.result === 'FAIL');
     process.stderr.write(
       `[static] failed checks: ${failed.map((check) => check.name).join(', ')}\n`,
     );
