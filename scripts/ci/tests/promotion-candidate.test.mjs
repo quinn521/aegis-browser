@@ -158,3 +158,53 @@ test('immutable branch reuse validates a real fetched remote ref and rejects sam
   f.git('push', '-q', 'origin', `${replacement}:refs/heads/${candidate.branch}`);
   await assert.rejects(publishCandidate(config, candidate, deps), /expected tree or parents/u);
 });
+
+for (const mergeMethod of ['merge', 'squash']) {
+  test(`README-only upstream divergence exports with upstream ancestry and survives a ${mergeMethod} roundtrip`, (t) => {
+    const f = fixture(t);
+    f.write('product.txt', 'personal product change\n');
+    const main = f.commit('feat: personal product');
+    f.git('switch', '--detach', f.upstream);
+    for (const path of README_FILES) f.write(path, `Updated upstream ${path}\n`);
+    const upstream = f.commit('docs: update upstream README');
+    assert.equal(f.git('merge-base', main, upstream), f.upstream);
+    assert.equal(sameProduct(upstream, f.upstream, f.options), true);
+    assert.equal(classifyProductRelationship(main, upstream, f.options), 'origin-ahead');
+    const exported = buildCandidate('export', main, upstream, f.options);
+    assert.deepEqual(exported.parents, [main, upstream]);
+    const head = f.makeCommit(exported);
+    assert.equal(f.git('show', '-s', '--format=%P', head), `${main} ${upstream}`);
+    assert.equal(f.git('merge-base', upstream, head), upstream);
+    assert.equal(f.git('diff', '--name-only', `${upstream}...${head}`, '--', ...README_FILES), '');
+    assert.equal(f.git('diff', '--name-only', `${upstream}...${head}`), 'product.txt');
+    assert.equal(sameProduct(main, head, f.options), true);
+    const branch = `refs/heads/${exported.branch}`;
+    f.git('update-ref', branch, head);
+    assert.equal(validateCandidate(exported, branch, f.options), branch);
+    for (const parents of [[main], [upstream, main]]) {
+      f.git('update-ref', branch, f.makeCommit(exported, parents));
+      assert.throws(() => validateCandidate(exported, branch, f.options), /expected tree or parents/u);
+    }
+    f.git('update-ref', branch, head);
+    assert.equal(validateCandidate(exported, branch, f.options), branch);
+
+    const integrated = f.git('commit-tree', exported.tree, '-p', upstream, ...(mergeMethod === 'merge' ? ['-p', head] : []), '-m', 'feat: integrate export');
+    assert.equal(classifyProductRelationship(main, integrated, f.options), 'origin-behind');
+    const sync = buildCandidate('upstream-sync', main, integrated, f.options);
+    assert.deepEqual(sync.parents, [main, integrated]);
+    assert.equal(sameProduct(integrated, sync.tree, f.options), true);
+    assert.equal(f.git('diff', '--name-only', main, sync.tree, '--', ...README_FILES), '');
+    const restored = f.makeCommit(sync);
+    assert.equal(classifyProductRelationship(restored, integrated, f.options), 'same');
+    assert.throws(() => buildCandidate('export', restored, integrated, f.options), /empty or divergent export/u);
+
+    f.git('switch', '--detach', restored);
+    f.write('product.txt', 'next personal product change\n');
+    const nextMain = f.commit('feat: next personal product');
+    const nextExport = buildCandidate('export', nextMain, integrated, f.options);
+    assert.deepEqual(nextExport.parents, [nextMain]);
+    const nextHead = f.makeCommit(nextExport);
+    assert.equal(f.git('merge-base', integrated, nextHead), integrated);
+    assert.equal(f.git('diff', '--name-only', `${integrated}...${nextHead}`, '--', ...README_FILES), '');
+  });
+}

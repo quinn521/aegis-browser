@@ -58,15 +58,28 @@ export function classifyProductRelationship(originMain, upstreamMain, options) {
   const base = bases[0];
   if (base === upstreamMain) return sameProduct(originMain, upstreamMain, options) ? 'same' : 'origin-ahead';
   if (base === originMain || sameProduct(originMain, base, options) || sameProduct(originMain, upstreamMain, options)) return 'origin-behind';
+  if (sameProduct(upstreamMain, base, options)) return 'origin-ahead';
   return 'diverged';
 }
 
-export function buildCandidate(kind, originMain, upstreamMain, options) {
+function validateCandidateSources(kind, originMain, upstreamMain, options) {
   if (![originMain, upstreamMain].every((value) => /^[a-f0-9]{40}$/u.test(value))) throw new Error('Fail closed: full source SHAs required');
   const state = classifyProductRelationship(originMain, upstreamMain, options);
   if (kind === 'export' && state !== 'origin-ahead') throw new Error('Fail closed: empty or divergent export');
   if (kind === 'upstream-sync' && state !== 'origin-behind') throw new Error('Fail closed: unsafe upstream synchronization');
   if (!['export', 'upstream-sync'].includes(kind)) throw new Error('Unknown candidate kind');
+}
+
+function candidateParents(kind, originMain, upstreamMain, options) {
+  if (kind !== 'export') return [originMain, upstreamMain];
+  const base = candidateGit(['merge-base', '--all', originMain, upstreamMain], options);
+  // README-only upstream advances still need ancestry in the export so the
+  // GitHub three-dot PR diff uses the exact upstream README source as its base.
+  return base === upstreamMain ? [originMain] : [originMain, upstreamMain];
+}
+
+export function buildCandidate(kind, originMain, upstreamMain, options) {
+  validateCandidateSources(kind, originMain, upstreamMain, options);
   const productSource = kind === 'export' ? originMain : upstreamMain;
   const readmeSource = kind === 'export' ? upstreamMain : originMain;
   return {
@@ -78,7 +91,7 @@ export function buildCandidate(kind, originMain, upstreamMain, options) {
     baseTree: candidateGit(['rev-parse', `${productSource}^{tree}`], options),
     readmeSource,
     tree: treeWithReadmes(productSource, readmeSource, options),
-    parents: kind === 'export' ? [originMain] : [originMain, upstreamMain],
+    parents: candidateParents(kind, originMain, upstreamMain, options),
     message: kind === 'export' ? 'chore(promotion): prepare upstream README export' : 'chore(sync): preserve personal README while merging upstream',
   };
 }

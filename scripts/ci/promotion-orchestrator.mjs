@@ -369,42 +369,72 @@ export function inspectOpenPromotionPulls({personalOpen, upstreamOpen, personalR
   return {status: 'active', active: automation[0]};
 }
 
-export async function validateActivePull(active, config, deps = {}) {
-  const gitFn = deps.git ?? git;
-  const shaFn = deps.sha ?? sha;
-  const assertHeads = deps.assertHeads ?? assertRemoteHeads;
-  const relation = {originMain: shaFn('origin/main'), upstreamMain: shaFn('upstream/main')};
-  const {pr, kind} = active;
-  const branch = pr.head.ref;
-  const base = kind === 'upstream' ? relation.upstreamMain : relation.originMain;
-  if (kind === 'sync') {
-    if (pr.head.sha !== relation.originMain || pr.base.sha !== shaFn('origin/develop')) throw new Error('Fail closed: sync PR source/base changed');
-    await assertHeads(sourceHeads(config, relation, pr.base.sha));
-    return;
+function activePullDependencies(deps) {
+  return {
+    git: deps.git ?? git,
+    sha: deps.sha ?? sha,
+    assertHeads: deps.assertHeads ?? assertRemoteHeads,
+    build: deps.build ?? buildCandidate,
+    fetchBranch: deps.fetchBranch ?? fetchOriginBranch,
+    validate: deps.validate ?? validateCandidate,
+  };
+}
+
+async function validateSyncPull(pr, config, relation, deps) {
+  if (pr.head.sha !== relation.originMain || pr.base.sha !== deps.sha('origin/develop')) throw new Error('Fail closed: sync PR source/base changed');
+  await deps.assertHeads(sourceHeads(config, relation, pr.base.sha));
+}
+
+function validateLegacyUpstreamPull(pr, relation, deps) {
+  if (pr.head.sha !== relation.originMain ||
+      deps.git('diff', '--name-only', relation.originMain, relation.upstreamMain, '--', ...README_FILES)) {
+    throw new Error('Fail closed: legacy personal:main upstream PR would export personal README changes');
   }
+}
+
+async function validatePersonalPromotionPull(pr, config, relation, deps) {
+  const develop = deps.sha('origin/develop');
+  if (pr.head.ref !== `${PROMOTION_BRANCH_PREFIX}${develop}-${relation.originMain}` || pr.head.sha !== develop) {
+    throw new Error('Fail closed: stale or legacy personal promotion candidate');
+  }
+  await deps.assertHeads(sourceHeads(config, relation, develop));
+}
+
+function validateImmutablePull({pr, kind}, config, relation, deps) {
+  const branch = pr.head.ref;
+  const candidate = deps.build(kind === 'upstream' ? 'export' : 'upstream-sync', relation.originMain, relation.upstreamMain);
+  if (candidate.branch !== branch) throw new Error('Fail closed: stale candidate source SHAs');
+  deps.fetchBranch(branch, config.forkToken);
+  const fetched = deps.sha(`origin/${branch}`);
+  if (fetched !== pr.head.sha) throw new Error('Fail closed: active PR head changed');
+  deps.validate(candidate, fetched);
+}
+
+async function validateActiveCandidatePull(active, config, relation, deps) {
+  const {pr, kind} = active;
+  const base = kind === 'upstream' ? relation.upstreamMain : relation.originMain;
   if (pr.base.sha !== base) throw new Error('Fail closed: active candidate PR base changed');
   if (pr.auto_merge) throw new Error('Fail closed: candidate PR must wait for explicit final CI/review and merge');
-  if (kind === 'upstream' && branch === 'main') {
-    if (pr.head.sha !== relation.originMain ||
-        gitFn('diff', '--name-only', relation.originMain, relation.upstreamMain, '--', ...README_FILES)) {
-      throw new Error('Fail closed: legacy personal:main upstream PR would export personal README changes');
-    }
+  if (kind === 'upstream' && pr.head.ref === 'main') {
+    validateLegacyUpstreamPull(pr, relation, deps);
   } else if (kind === 'promotion') {
-    const develop = shaFn('origin/develop');
-    if (branch !== `${PROMOTION_BRANCH_PREFIX}${develop}-${relation.originMain}` || pr.head.sha !== develop) {
-      throw new Error('Fail closed: stale or legacy personal promotion candidate');
-    }
-    await assertHeads(sourceHeads(config, relation, develop));
+    await validatePersonalPromotionPull(pr, config, relation, deps);
   } else {
-    const candidate = (deps.build ?? buildCandidate)(kind === 'upstream' ? 'export' : 'upstream-sync', relation.originMain, relation.upstreamMain);
-    if (candidate.branch !== branch) throw new Error('Fail closed: stale candidate source SHAs');
-    (deps.fetchBranch ?? fetchOriginBranch)(branch, config.forkToken);
-    const fetched = shaFn(`origin/${branch}`);
-    if (fetched !== pr.head.sha) throw new Error('Fail closed: active PR head changed');
-    (deps.validate ?? validateCandidate)(candidate, fetched);
+    validateImmutablePull(active, config, relation, deps);
   }
-  await assertHeads([...sourceHeads(config, relation),
-    {repo: config.personalRepo, branch, sha: pr.head.sha, token: config.forkToken}]);
+}
+
+export async function validateActivePull(active, config, deps = {}) {
+  const operations = activePullDependencies(deps);
+  const relation = {originMain: operations.sha('origin/main'), upstreamMain: operations.sha('upstream/main')};
+  const {pr, kind} = active;
+  if (kind === 'sync') {
+    await validateSyncPull(pr, config, relation, operations);
+    return;
+  }
+  await validateActiveCandidatePull(active, config, relation, operations);
+  await operations.assertHeads([...sourceHeads(config, relation),
+    {repo: config.personalRepo, branch: pr.head.ref, sha: pr.head.sha, token: config.forkToken}]);
 }
 
 async function handleExistingPulls(personalRepo, upstreamRepo, forkToken, upstreamToken) {
