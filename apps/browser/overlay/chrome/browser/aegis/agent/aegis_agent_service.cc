@@ -920,8 +920,12 @@ void AegisAgentService::OnTypeSafeGoalRouteResult(
   }
   typesafe_goal_router_request_id_.clear();
   if (ok && route) {
-    CompleteGoalRouting(generation, true, std::string(), std::move(route));
-    return;
+    *route = ConstrainGoalRouteToUserIntent(goal, std::move(*route));
+    std::string validation_error;
+    if (ValidateAndNormalizeGoalRoute(&*route, &validation_error)) {
+      CompleteGoalRouting(generation, true, std::string(), std::move(route));
+      return;
+    }
   }
   // TypeSafe is an optional decision layer. Any transport, protocol, or
   // confidence failure falls through once to the existing configured model.

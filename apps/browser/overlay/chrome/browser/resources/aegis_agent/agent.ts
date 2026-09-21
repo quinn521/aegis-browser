@@ -21,7 +21,7 @@ let modelBusy = false;
 let typesafeBusy = false;
 let goalUserEdited = false;
 let modelFormInitialized = false;
-let typesafeFormInitialized = false;
+let typesafeEnabledDirty = false;
 let autoRunTaskId = '';
 let autoRunInFlight = false;
 let activeView: 'task'|'automation' = 'task';
@@ -491,9 +491,8 @@ function renderModel(next: TaskSnapshot) {
 
 function renderTypeSafe(next: TaskSnapshot) {
   const enabled = element<HTMLInputElement>('typesafe-enabled');
-  if (!typesafeFormInitialized) {
+  if (!typesafeEnabledDirty) {
     enabled.checked = next.typesafeEnabled;
-    typesafeFormInitialized = true;
   }
   element('typesafe-state').textContent = next.typesafeEnabled ?
       loadTimeData.getString('typesafeEnabled') :
@@ -1000,13 +999,13 @@ async function saveTypeSafe(clearApiKey = false) {
   if (typesafeBusy) {
     return;
   }
+  const requestedEnabled = clearApiKey ? false :
+      element<HTMLInputElement>('typesafe-enabled').checked;
   typesafeBusy = true;
   element('typesafe-feedback').textContent = '';
   if (snapshot) {
     render(snapshot);
   }
-  const requestedEnabled = clearApiKey ? false :
-      element<HTMLInputElement>('typesafe-enabled').checked;
   try {
     const response = await proxy.handler.configureTypeSafe(
         requestedEnabled,
@@ -1017,7 +1016,7 @@ async function saveTypeSafe(clearApiKey = false) {
         response.snapshot.typesafeEnabled === requestedEnabled &&
         (!clearApiKey || !response.snapshot.typesafeKeyConfigured);
     if (saved) {
-      typesafeFormInitialized = false;
+      typesafeEnabledDirty = false;
     }
     render(response.snapshot);
     if (saved) {
@@ -1081,6 +1080,9 @@ function bindActions() {
       'click', () => saveTypeSafe(false));
   element('clear-typesafe-key-button').addEventListener(
       'click', () => saveTypeSafe(true));
+  element('typesafe-enabled').addEventListener('change', () => {
+    typesafeEnabledDirty = true;
+  });
   element('pause-button').addEventListener('click', () => withBusy(() =>
     proxy.handler.pause(snapshot?.taskId || '')));
   element('resume-button').addEventListener('click', () => withBusy(() =>

@@ -118,6 +118,20 @@ TEST_F(TypeSafeGoalRouterClientTest,
   EXPECT_NE(error.find("contradicts"), std::string::npos);
 }
 
+TEST_F(TypeSafeGoalRouterClientTest,
+       RejectsIncompatibleWorkflowAndOversizedDerivedSearch) {
+  std::string error;
+  EXPECT_FALSE(ParseTypeSafeGoalResponse(
+      R"({"model":"jev","answers":{"workflow":{"type":"choice","choice":"browser_steward","confidence":0.95,"probabilities":{"research":0.02,"browser_steward":0.92,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})",
+      kGoal, &error));
+  EXPECT_EQ(error, "goal route contains an invalid search query");
+
+  const std::string oversized_goal(1025, 'a');
+  EXPECT_FALSE(
+      ParseTypeSafeGoalResponse(kValidResponse, oversized_goal, &error));
+  EXPECT_EQ(error, "goal route contains an invalid search query");
+}
+
 TEST_F(TypeSafeGoalRouterClientTest, DoesNotRetryHttpFailure) {
   base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> done;
   ASSERT_TRUE(client_.Start(kGoal, kApiKey, done.GetCallback()));

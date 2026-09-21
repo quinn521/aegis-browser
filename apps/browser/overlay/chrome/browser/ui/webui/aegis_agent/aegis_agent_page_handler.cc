@@ -410,6 +410,9 @@ AegisAgentPageHandler::AegisAgentPageHandler(
   if (service_) {
     ObserveTask(service_->MostRecentTask());
   }
+  if (aegis::AegisService* core_service = CoreServiceForProfile(profile_)) {
+    core_service_observation_.Observe(core_service);
+  }
 }
 
 void AegisAgentPageHandler::ShowUI() {
@@ -905,6 +908,10 @@ void AegisAgentPageHandler::OnUndoFinished(
 }
 
 void AegisAgentPageHandler::OnAgentServiceSnapshotChanged() {
+  PushSnapshot();
+}
+
+void AegisAgentPageHandler::OnAegisStateChanged() {
   PushSnapshot();
 }
 

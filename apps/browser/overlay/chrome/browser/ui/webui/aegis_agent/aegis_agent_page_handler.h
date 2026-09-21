@@ -11,6 +11,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "chrome/browser/aegis/aegis_service.h"
 #include "chrome/browser/aegis/agent/agent_execution.h"
 #include "chrome/browser/aegis/agent/agent_planner.h"
 #include "chrome/browser/aegis/agent/agent_service_observer.h"
@@ -32,7 +33,8 @@ class AegisAgentService;
 
 class AegisAgentPageHandler : public aegis_agent::mojom::PageHandler,
                               public aegis::agent::AgentTaskObserver,
-                              public aegis::agent::AegisAgentServiceObserver {
+                              public aegis::agent::AegisAgentServiceObserver,
+                              public aegis::AegisServiceObserver {
  public:
   AegisAgentPageHandler(
       Profile* profile,
@@ -93,6 +95,7 @@ class AegisAgentPageHandler : public aegis_agent::mojom::PageHandler,
       const std::string& task_id,
       const aegis::agent::AgentTaskEvent& event) override;
   void OnAgentServiceSnapshotChanged() override;
+  void OnAegisStateChanged() override;
 
  private:
   aegis_agent::mojom::TaskSnapshotPtr BuildSnapshot();
@@ -153,6 +156,8 @@ class AegisAgentPageHandler : public aegis_agent::mojom::PageHandler,
   base::ScopedObservation<aegis::agent::AegisAgentService,
                           aegis::agent::AegisAgentServiceObserver>
       service_observation_{this};
+  base::ScopedObservation<aegis::AegisService, aegis::AegisServiceObserver>
+      core_service_observation_{this};
   base::WeakPtrFactory<AegisAgentPageHandler> weak_ptr_factory_{this};
 };
 

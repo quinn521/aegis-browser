@@ -261,6 +261,9 @@ std::optional<AgentGoalRoute> ParseTypeSafeGoalResponse(
                      ? std::string(original_goal)
                      : std::string();
   route.summary = "Use the browser to fulfill the original user goal.";
+  if (!ValidateAndNormalizeGoalRoute(&route, error)) {
+    return std::nullopt;
+  }
   return route;
 }
 

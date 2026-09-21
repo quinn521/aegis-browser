@@ -504,36 +504,65 @@ std::optional<AgentGoalRoute> ParseAndValidateGoalRoute(
 
   AgentGoalRoute route;
   route.workflow = *workflow;
-  route.target = base::TrimWhitespaceASCII(*target_value, base::TRIM_ALL);
+  route.target = *target_value;
   route.summary = *summary;
   if (*entry_name == "browser_only") {
     route.entry_kind = AgentGoalEntryKind::kBrowserOnly;
-    // Some otherwise-correct local models repeat the user's goal in `target`.
-    // A browser-only route never consumes that field, so discard it instead
-    // of failing a harmless request or spending the single repair attempt.
-    // The browser still derives workflow, scope, origins, and tools itself.
-    route.target.clear();
   } else if (*entry_name == "open_url") {
     route.entry_kind = AgentGoalEntryKind::kOpenUrl;
-    const GURL url(route.target);
-    if (!IsModelRoutablePublicUrl(url) ||
-        route.workflow == AgentWorkflowKind::kBrowserSteward) {
-      *error = "goal route contains an invalid public URL";
-      return std::nullopt;
-    }
-    route.target = url.spec();
   } else if (*entry_name == "web_search") {
     route.entry_kind = AgentGoalEntryKind::kWebSearch;
-    if (route.target.empty() || route.target.size() > 1024u ||
-        route.workflow == AgentWorkflowKind::kBrowserSteward) {
-      *error = "goal route contains an invalid search query";
-      return std::nullopt;
-    }
   } else {
     *error = "goal route has an unknown entry kind";
     return std::nullopt;
   }
+  if (!ValidateAndNormalizeGoalRoute(&route, error)) {
+    return std::nullopt;
+  }
   return route;
+}
+
+bool ValidateAndNormalizeGoalRoute(AgentGoalRoute* route, std::string* error) {
+  if (!route || !error) {
+    return false;
+  }
+  error->clear();
+  if (route->summary.empty() || route->summary.size() > kMaxPlanTextBytes ||
+      !base::IsStringUTF8(route->summary)) {
+    *error = "goal route contains an invalid summary";
+    return false;
+  }
+  route->target =
+      base::TrimWhitespaceASCII(route->target, base::TRIM_ALL);
+  switch (route->entry_kind) {
+    case AgentGoalEntryKind::kBrowserOnly:
+      // Some otherwise-correct local models repeat the user's goal in
+      // `target`. A browser-only route never consumes that field, so discard
+      // it instead of failing a harmless request or spending the single
+      // repair attempt. Browser-owned scope validation still applies.
+      route->target.clear();
+      return true;
+    case AgentGoalEntryKind::kOpenUrl: {
+      const GURL url(route->target);
+      if (!IsModelRoutablePublicUrl(url) ||
+          route->workflow == AgentWorkflowKind::kBrowserSteward) {
+        *error = "goal route contains an invalid public URL";
+        return false;
+      }
+      route->target = url.spec();
+      return true;
+    }
+    case AgentGoalEntryKind::kWebSearch:
+      if (route->target.empty() || route->target.size() > 1024u ||
+          !base::IsStringUTF8(route->target) ||
+          route->workflow == AgentWorkflowKind::kBrowserSteward) {
+        *error = "goal route contains an invalid search query";
+        return false;
+      }
+      return true;
+  }
+  *error = "goal route has an unknown entry kind";
+  return false;
 }
 
 bool AgentGoalRequiresPageEvidence(std::string_view user_goal) {

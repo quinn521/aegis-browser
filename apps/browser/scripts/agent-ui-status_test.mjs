@@ -279,7 +279,7 @@ function typesafeHarness(initial = {
   const calls = [];
   let response = {snapshot: initial};
   const sandbox = vm.createContext({
-    element: field, typesafeBusy: false, typesafeFormInitialized: false,
+    element: field, typesafeBusy: false, typesafeEnabledDirty: false,
     snapshot: initial, loadTimeData: {getString: key => key},
     proxy: {handler: {configureTypeSafe: async (...args) => {
       calls.push(args);
@@ -301,10 +301,28 @@ const typesafeCases = [
     assert.equal(h.field('typesafe-state').textContent, 'typesafeDisabled');
     assert.equal(h.field('clear-typesafe-key-button').disabled, true);
   }],
+  ['未编辑复选框随异步和跨窗口快照刷新', async () => {
+    const h = typesafeHarness();
+    h.sandbox.render({
+      typesafeEnabled: true, typesafeKeyConfigured: true, lastError: '',
+    });
+    assert.equal(h.field('typesafe-enabled').checked, true);
+    assert.equal(h.field('typesafe-state').textContent, 'typesafeEnabled');
+  }],
+  ['用户未保存的复选框修改不被后台快照覆盖', async () => {
+    const initial = {typesafeEnabled: false, typesafeKeyConfigured: true, lastError: ''};
+    const h = typesafeHarness(initial);
+    h.field('typesafe-enabled').checked = true;
+    h.sandbox.typesafeEnabledDirty = true;
+    h.sandbox.render(initial);
+    assert.equal(h.field('typesafe-enabled').checked, true);
+    assert.equal(h.field('typesafe-state').textContent, 'typesafeConfigured');
+  }],
   ['已有密钥可不重新输入而启用', async () => {
     const initial = {typesafeEnabled: false, typesafeKeyConfigured: true, lastError: ''};
     const h = typesafeHarness(initial);
     h.field('typesafe-enabled').checked = true;
+    h.sandbox.typesafeEnabledDirty = true;
     h.setResponse({snapshot: {...initial, typesafeEnabled: true}});
     await h.sandbox.saveTypeSafe(false);
     assert.deepEqual(h.calls[0], [true, '', false]);
