@@ -179,6 +179,12 @@ rg -Fq '+      aegis_selection_generation_by_proxy_group_;' \
 rg -Fq '+       AegisSelectionGenerationIsMonotonicWithinEachProxyGroup) {' \
   "$SCOPED_SELECTION_GENERATION_PATCH_FILE" ||
   fail "patch 0157 must cover cross-group and same-group generation ordering"
+rg -Fq 'identity.proxy_group_id.clear();' \
+  "$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_request_dispatch_state_unittest.cc" ||
+  fail "dispatch-state DIRECT fixture must bind an explicit empty proxy group"
+rg -Fq '+  identity.proxy_group_id.clear();' \
+  "$SCOPED_SELECTION_GENERATION_PATCH_FILE" ||
+  fail "patch 0157 must update the dispatch-state publication fixture"
 rg -Fq '+                       MainNavigationRoutingIsolatedAcrossProfiles) {' \
   "$ACCESS_COORDINATOR_PATCH_FILE" ||
   fail "patch 0150 must deliver the real two-Profile navigation regression"
