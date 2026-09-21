@@ -9,6 +9,7 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
+#include "chrome/browser/aegis/access/access_proxy_selection_generation_source.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 
@@ -179,6 +180,8 @@ TEST_F(AccessMutationTransactionTest, PublishesPreparedThenCommitsOnlyAfterAck) 
   EXPECT_EQ(client_->metadata->operation_id, "ordinary-operation");
   EXPECT_EQ(client_->metadata->policy_generation,
             client_->metadata->operation_sequence);
+  EXPECT_TRUE(client_->metadata->proxy_group_id.empty());
+  EXPECT_EQ(client_->metadata->selection_generation, 0u);
   EXPECT_EQ(pending_store->ReadCommittedSnapshot(owner_.storage_partition_token)
                 .status, StoreStatus::kRecoveryRequired);
   const auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
@@ -284,6 +287,45 @@ TEST_F(AccessMutationTransactionTest, EndpointPolicyGenerationRollsBackOnFailure
   std::move(client_->reply).Run(false);
   ASSERT_TRUE(result.Wait());
   EXPECT_EQ(transport_->CurrentEndpoint(owner_), old_endpoint);
+  EXPECT_EQ(transport_->CurrentSelection(owner_)->exact_hosts,
+            (std::vector<std::string>{"news.example", "other.example"}));
+}
+
+TEST_F(AccessMutationTransactionTest,
+       ProxyCandidateAddsTargetToSortedAllowlistBeforeAck) {
+  auto* source =
+      AccessProxySelectionGenerationSource::GetOrCreate(profile_.get());
+  ASSERT_TRUE(source);
+  const auto selection = source->CommitSelection(
+      {"proxy-group", "endpoint", "lease", "assignment", 1});
+  ASSERT_EQ(selection.status,
+            aegis_access::ProxySelectionGenerationCommitStatus::kCommitted);
+  const aegis_access::RegisteredProxyEndpoint endpoint{
+      "registration", "proxy-group", owner_,
+      {7, 2, selection.generation, transport_->network_epoch(), 5},
+      aegis_access::RegisteredProxyTransport::kHttp, "127.0.0.1", 18080};
+  ASSERT_TRUE(
+      transport_->PublishProxySelection({}, {"other.example"}, endpoint));
+
+  auto mutation = Mutation();
+  for (auto& member : mutation.candidate_members) {
+    member.mode = AccessMode::kProxy;
+    member.proxy_group_id = "proxy-group";
+  }
+  base::test::TestFuture<AccessMutationTransactionResult> result;
+  coordinator_->CommitSiteGroupMutation(OpenStore(), mutation, Selector(),
+                                        result.GetCallback());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_TRUE(client_->reply);
+  ASSERT_TRUE(client_->metadata);
+  EXPECT_EQ(client_->metadata->proxy_group_id, "proxy-group");
+  EXPECT_EQ(client_->metadata->selection_generation, selection.generation);
+  EXPECT_EQ(transport_->CurrentSelection(owner_)->exact_hosts,
+            (std::vector<std::string>{"news.example", "other.example"}));
+  std::move(client_->reply).Run(true);
+  ASSERT_TRUE(result.Wait());
+  EXPECT_EQ(result.Get().status, AccessMutationTransactionStatus::kCommitted);
   EXPECT_EQ(transport_->CurrentSelection(owner_)->exact_hosts,
             (std::vector<std::string>{"news.example", "other.example"}));
 }

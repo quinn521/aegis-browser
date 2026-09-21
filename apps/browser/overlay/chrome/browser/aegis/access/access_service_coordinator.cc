@@ -238,10 +238,11 @@ std::optional<uint64_t> AccessServiceCoordinator::SelectionGeneration(
   }
   auto* transport = AccessNetworkContextTransport::Get(profile_);
   const auto& group = pending.candidate.members.front().policy.proxy_group_id;
-  const auto endpoint = transport->CaptureSelectedProxyEndpoint(
-      pending.owner, group, transaction.identity.selector.exact_host);
+  const auto endpoint = transport->CurrentEndpoint(pending.owner);
   auto* source = AccessProxySelectionGenerationSource::Get(profile_);
-  if (!endpoint || !source || endpoint->generations.selection_generation == 0 ||
+  if (!endpoint || endpoint->owner != pending.owner ||
+      endpoint->proxy_group_id != group || !source ||
+      endpoint->generations.selection_generation == 0 ||
       endpoint->generations.network_epoch != transport->network_epoch() ||
       source->selection_generation(group) !=
           endpoint->generations.selection_generation) {
@@ -268,18 +269,30 @@ AccessServiceCoordinator::BeginPublication(MutationTransaction& transaction) {
   if (!selection_generation) {
     return Result(AccessMutationTransactionStatus::kProxySelectionUnavailable);
   }
-  transaction.identity = {pending.operation_id,
-                          pending.operation_sequence,
-                          pending.candidate.policy_generation,
-                          *selection_generation,
-                          transport->network_epoch(),
-                          transaction.identity.selector};
+  transaction.identity.operation_id = pending.operation_id;
+  transaction.identity.operation_sequence = pending.operation_sequence;
+  transaction.identity.policy_generation =
+      pending.candidate.policy_generation;
+  transaction.identity.proxy_group_id =
+      pending.candidate.members.front().policy.mode == AccessMode::kProxy
+          ? pending.candidate.members.front().policy.proxy_group_id
+          : std::string();
+  transaction.identity.selection_generation = *selection_generation;
+  transaction.identity.network_epoch = transport->network_epoch();
   const auto begin = dispatch->BeginPolicyPublication(
       {transaction.identity, {"network-context"}, false});
   if (begin.status != aegis_access::PolicyPublicationAckStatus::kPending) {
     return Result(AccessMutationTransactionStatus::kPublicationTrackerRejected);
   }
   transaction.tracker_started = true;
+  PrepareTransportCandidate(transaction);
+  return std::nullopt;
+}
+
+void AccessServiceCoordinator::PrepareTransportCandidate(
+    MutationTransaction& transaction) {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  const auto& pending = transaction.pending;
   transaction.previous_selection = *transport->CurrentSelection(pending.owner);
   transaction.candidate_selection = transaction.previous_selection;
   if (transaction.candidate_selection.endpoint) {
@@ -289,8 +302,16 @@ AccessServiceCoordinator::BeginPublication(MutationTransaction& transaction) {
   if (pending.candidate.members.front().policy.mode == AccessMode::kDirect) {
     std::erase(transaction.candidate_selection.exact_hosts,
                transaction.identity.selector.exact_host);
+  } else {
+    auto insertion = std::ranges::lower_bound(
+        transaction.candidate_selection.exact_hosts,
+        transaction.identity.selector.exact_host);
+    if (insertion == transaction.candidate_selection.exact_hosts.end() ||
+        *insertion != transaction.identity.selector.exact_host) {
+      transaction.candidate_selection.exact_hosts.insert(
+          insertion, transaction.identity.selector.exact_host);
+    }
   }
-  return std::nullopt;
 }
 
 std::optional<AccessMutationTransactionResult>
