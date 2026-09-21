@@ -27,6 +27,7 @@ enum class AccessMutationTransactionStatus {
   kStoreReadFailed,
   kPrepareFailed,
   kCandidateBuildFailed,
+  kUnsupportedTransportScope,
   kMissingRuntime,
   kMissingDispatchState,
   kMissingTransport,

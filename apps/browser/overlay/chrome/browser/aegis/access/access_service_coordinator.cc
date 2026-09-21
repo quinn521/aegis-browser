@@ -174,6 +174,26 @@ void AccessServiceCoordinator::CommitSiteGroupMutation(
   }
   StoredPolicySnapshot candidate = std::move(*built.value);
 
+  // The current CustomProxyConfig transport selects by destination host,
+  // not by top-level-site scope. Refuse a mixed DIRECT/PROXY candidate for
+  // this host rather than break an unrelated retained rule in another scope.
+  const auto matcher = AccessRuleStore::AdaptMatcherSnapshot(candidate);
+  const auto requested_mode = *OrdinaryMutationMode(request);
+  if (!matcher.value || std::ranges::any_of(
+          matcher.value->rules, [&](const AccessPolicyRule& rule) {
+            const bool overlaps = rule.destination_host == selector.exact_host ||
+                (rule.include_subdomains && selector.exact_host.ends_with(
+                    "." + rule.destination_host));
+            const bool incompatible =
+                (requested_mode == AccessMode::kDirect && rule.mode == AccessMode::kProxy) ||
+                (requested_mode == AccessMode::kProxy && rule.mode == AccessMode::kDirect);
+            return overlaps && incompatible;
+          })) {
+    supersede_and_fail(
+        Result(AccessMutationTransactionStatus::kUnsupportedTransportScope));
+    return;
+  }
+
   AccessPublishedRequestRuntime* runtime =
       AccessPublishedRequestRuntime::GetOrCreate(profile_);
   if (!runtime) {

@@ -843,6 +843,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
         .ports = PortScope::kAllBrowserPermitted,
         .mode = AccessMode::kProxy,
         .proxy_group_id = kProxyGroup,
+        .protection_override = ProtectionOverride::kNone,
     });
   }
   const auto prepared = store.PrepareSiteGroupMutation(request);

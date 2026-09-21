@@ -23,6 +23,9 @@ namespace aegis::access {
 
 class AccessRuleStoreTestPeer {
  public:
+  static StoreStatus Import(AccessRuleStore* store, const StoredAccessRule& rule) {
+    return store->ImportIndependentRuleForTesting(rule);
+  }
   static AccessStoreBinding Binding(const base::FilePath& path,
                                    const OwnershipKey& owner) {
     return AccessStoreBinding(path.empty() ? AccessStoreKind::kEphemeralProfile
@@ -139,6 +142,7 @@ class AccessMutationTransactionTest : public AccessServiceCoordinatorTest {
                       RequestScheme::kWs, RequestScheme::kWss},
           .ports = PortScope::kAllBrowserPermitted,
           .mode = AccessMode::kDirect,
+          .protection_override = ProtectionOverride::kNone,
       });
     }
     return request;
@@ -327,6 +331,42 @@ TEST_F(AccessMutationTransactionTest, EphemeralStoreSurvivesConsecutiveMutations
   ASSERT_TRUE(durable.value);
   EXPECT_EQ(durable.value->site_groups.size(), 2u);
   EXPECT_EQ(coordinator_->state_generation(), 2u);
+}
+
+TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication) {
+  auto store = OpenStore();
+  auto* retained_store = store.get();
+  StoredAccessRule independent;
+  independent.policy = {
+      .rule_id = "other-site-proxy",
+      .owner = owner_,
+      .scope = PolicyScope::kSite,
+      .top_level_site = "https://other.example",
+      .destination_host = "news.example",
+      .schemes = {RequestScheme::kHttps},
+      .ports = {PortScope::kAllBrowserPermitted, {}},
+      .mode = AccessMode::kProxy,
+      .proxy_group_id = "independent-proxy",
+      .protection_override = ProtectionOverride::kNone,
+      .row_revision = 1,
+      .last_operation_sequence = 1,
+  };
+  independent.source = StoredRuleSource::kTestFixture;
+  independent.lifetime = StoredRuleLifetime::kPersistent;
+  ASSERT_EQ(AccessRuleStoreTestPeer::Import(store.get(), independent), StoreStatus::kValid);
+  const auto before = store->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(before.value);
+  base::test::TestFuture<AccessMutationTransactionResult> result;
+  coordinator_->CommitSiteGroupMutation(std::move(store), Mutation(), Selector(),
+                                        result.GetCallback());
+  ASSERT_TRUE(result.IsReady());
+  EXPECT_EQ(result.Get().status,
+            AccessMutationTransactionStatus::kUnsupportedTransportScope);
+  EXPECT_FALSE(client_->metadata);
+  const auto after = retained_store->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(after.value);
+  EXPECT_EQ(*after.value, *before.value);
+  EXPECT_EQ(coordinator_->state_generation(), 0u);
 }
 
 TEST_F(AccessMutationTransactionTest, ForgedSelectorDoesNotPrepareMutation) {

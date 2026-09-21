@@ -6,7 +6,7 @@
 
 冻结事务顺序为：验证可信 selector 与 store → PREPARED journal 预留 operationSequence → 从旧 durable base 构造完整候选 → 发布到浏览器 request runtime → 向所属 NetworkContext 发布精确 operation/G/S/E 与 owner/partition → 全部候选 ACK → 再原子 durable commit → finalize。PREPARED 的 `committed_policy_generation` 始终为 0，候选及成功提交的 policy generation 都等于预留的 operationSequence。请求路由只读取内存快照，不读取 SQLite。`RepublishCurrentConfigWithAck` 不能作为候选发布证据。
 
-Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 传空指针复用，禁止替换库。候选保留无关网站组和独立规则。浏览器同步重绑定保留端点的 policy generation，并在 DIRECT 时从 CustomProxyConfig 的 exact-host 列表移除目标网站、保留其他网站；候选 config 与 metadata 使用同一 Mojo channel 顺序发送。失败仅在候选仍精确匹配时恢复旧快照/端点，并 supersede journal；清理写入失败透传 store 错误并保留待恢复边界。提交前重新核对 runtime、权威 selection source 的 S/E、完整端点及所有 NetworkContext 的集合；新 context、版本变化、错误或丢失 ACK、30 秒超时均阻止提交。迟到 ACK 不能复活已取消的事务；失败的 exact identity 释放 tracker 容量。Network Service 在受信任的 context channel 上保存 owner 绑定、单调的候选回执；它不从数据库重建策略。BLOCK/ALLOW 的屏障及取消流程、可信 UI 入口、真实身份/节点提交与 Xray 集成不属于此阶段。
+Profile 持有首个可信 store（含 ephemeral 会话库），后续 mutation 传空指针复用，禁止替换库。候选保留无关网站组和独立规则。当前 transport 只有 partition/host 粒度：同 host 的其他规则需要相反 DIRECT/PROXY 策略时，发布前返回 `kUnsupportedTransportScope`，保留原状态；不宣称已实现按 top-level-site 区分的 transport。浏览器同步重绑定保留端点的 policy generation，并在 DIRECT 时从 CustomProxyConfig 的 exact-host 列表移除目标网站、保留其他网站；候选 config 与 metadata 使用同一 Mojo channel 顺序发送。失败仅在候选仍精确匹配时恢复旧快照/端点，并 supersede journal；清理写入失败透传 store 错误并保留待恢复边界。提交前重新核对 runtime、权威 selection source 的 S/E、完整端点及所有 NetworkContext 的集合；新 context、版本变化、错误或丢失 ACK、30 秒超时均阻止提交。迟到 ACK 不能复活已取消的事务；失败的 exact identity 释放 tracker 容量。Network Service 在受信任的 context channel 上保存 owner 绑定、单调的候选回执；它不从数据库重建策略。BLOCK/ALLOW 的屏障及取消流程、可信 UI 入口、真实身份/节点提交与 Xray 集成不属于此阶段。
 
 | 证据 | 当前边界 |
 | --- | --- |

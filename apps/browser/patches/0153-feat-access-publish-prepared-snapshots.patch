@@ -1,4 +1,4 @@
-From 675cf4c08461b8f3463be8d88de5c4e7a8451236 Mon Sep 17 00:00:00 2001
+From e17fcd0ec12e4a45cb103ba336ee117ab7dc83b9 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Mon, 21 Sep 2026 15:58:13 +0800
 Subject: [PATCH] feat(access): publish prepared snapshots before durable
@@ -6,10 +6,10 @@ Subject: [PATCH] feat(access): publish prepared snapshots before durable
 
 ---
  chrome/browser/aegis/access/BUILD.gn          |  25 +-
- .../access_network_context_transport.cc       | 149 ++++++++
+ .../access_network_context_transport.cc       | 149 +++++++
  .../access/access_network_context_transport.h |  33 ++
  ...cess_network_context_transport_unittest.cc | 126 +++++-
- ...proxying_url_loader_factory_browsertest.cc |  62 +++
+ ...proxying_url_loader_factory_browsertest.cc |  63 +++
  .../access_published_request_runtime.cc       |  48 +++
  .../access/access_published_request_runtime.h |  15 +
  ...cess_published_request_runtime_unittest.cc |  37 ++
@@ -19,15 +19,15 @@ Subject: [PATCH] feat(access): publish prepared snapshots before durable
  .../browser/aegis/access/access_rule_store.cc |  72 ++++
  .../browser/aegis/access/access_rule_store.h  |   6 +
  .../access/access_rule_store_unittest.cc      |  62 +++
- .../access/access_service_coordinator.cc      | 361 +++++++++++++++++-
- .../aegis/access/access_service_coordinator.h |  75 +++-
- .../access_service_coordinator_unittest.cc    | 292 +++++++++++++-
+ .../access/access_service_coordinator.cc      | 381 +++++++++++++++++-
+ .../aegis/access/access_service_coordinator.h |  76 +++-
+ .../access_service_coordinator_unittest.cc    | 332 ++++++++++++++-
  .../policy_publication_ack_tracker.cc         |  34 ++
  .../policy_publication_ack_tracker.h          |   8 +
  ...cy_publication_ack_tracker_contract_test.h |  52 ++-
  .../prefetch_proxy_configurator_unittest.cc   |   6 +
  .../network/network_service_proxy_delegate.cc |   2 -
- 22 files changed, 1503 insertions(+), 31 deletions(-)
+ 22 files changed, 1565 insertions(+), 31 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 58e644a400..b445f9dcc4 100644
@@ -509,7 +509,7 @@ index e9576c74ef..cc2da3ed5c 100644
         NonIdempotentFirstSendUsesSelectedProxy) {
    const base::FilePath partition;
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-index 30e27c2487..595a07aa61 100644
+index 30e27c2487..e75224ce8c 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 @@ -52,6 +52,15 @@
@@ -528,7 +528,7 @@ index 30e27c2487..595a07aa61 100644
  namespace {
  
  constexpr char kTargetHost[] = "target.example";
-@@ -807,6 +816,59 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -807,6 +816,60 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
  }
  
@@ -559,6 +559,7 @@ index 30e27c2487..595a07aa61 100644
 +        .ports = PortScope::kAllBrowserPermitted,
 +        .mode = AccessMode::kProxy,
 +        .proxy_group_id = kProxyGroup,
++        .protection_override = ProtectionOverride::kNone,
 +    });
 +  }
 +  const auto prepared = store.PrepareSiteGroupMutation(request);
@@ -1084,7 +1085,7 @@ index 2ca916852d..0d3a873624 100644
    AccessRuleStore store(AccessRuleStoreTestPeer::Ephemeral(
        ChannelNamespace::kBeta, "durable-profile-A", "profile-A"));
 diff --git a/chrome/browser/aegis/access/access_service_coordinator.cc b/chrome/browser/aegis/access/access_service_coordinator.cc
-index af79b0848f..9d07ed79e4 100644
+index af79b0848f..98cfe6df43 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator.cc
 +++ b/chrome/browser/aegis/access/access_service_coordinator.cc
 @@ -2,22 +2,82 @@
@@ -1129,9 +1130,8 @@ index af79b0848f..9d07ed79e4 100644
 +               std::ranges::find(member.schemes, selector.scheme) !=
 +                   member.schemes.end();
 +      });
- }
- 
--AccessServiceCoordinator::AccessServiceCoordinator() = default;
++}
++
 +std::optional<AccessMode> OrdinaryMutationMode(
 +    const SiteGroupMutationRequest& request) {
 +  if (request.candidate_members.empty()) {
@@ -1148,21 +1148,22 @@ index af79b0848f..9d07ed79e4 100644
 +  }
 +  return mode;
 +}
- 
--AccessServiceCoordinator::~AccessServiceCoordinator() = default;
++
 +AccessMutationTransactionResult Result(
 +    AccessMutationTransactionStatus status,
 +    StoreStatus store_status = StoreStatus::kValid,
 +    uint64_t generation = 0) {
 +  return {status, store_status, generation};
 +}
-+}
-+
+ }
+ 
+-AccessServiceCoordinator::AccessServiceCoordinator() = default;
 +AccessServiceCoordinator::AccessServiceCoordinator(Profile* profile)
 +    : profile_(profile) {
 +  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 +}
-+
+ 
+-AccessServiceCoordinator::~AccessServiceCoordinator() = default;
 +AccessServiceCoordinator::~AccessServiceCoordinator() {
 +  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 +}
@@ -1180,7 +1181,7 @@ index af79b0848f..9d07ed79e4 100644
    if (!profile || !aegis::IsAegisProfileSupported(profile)) {
      return nullptr;
    }
-@@ -37,10 +98,304 @@ AccessServiceCoordinator* AccessServiceCoordinator::GetOrCreate(
+@@ -37,10 +98,324 @@ AccessServiceCoordinator* AccessServiceCoordinator::GetOrCreate(
    }
  
    auto coordinator = std::unique_ptr<AccessServiceCoordinator>(
@@ -1260,6 +1261,26 @@ index af79b0848f..9d07ed79e4 100644
 +    return;
 +  }
 +  StoredPolicySnapshot candidate = std::move(*built.value);
++
++  // The current CustomProxyConfig transport selects by destination host,
++  // not by top-level-site scope. Refuse a mixed DIRECT/PROXY candidate for
++  // this host rather than break an unrelated retained rule in another scope.
++  const auto matcher = AccessRuleStore::AdaptMatcherSnapshot(candidate);
++  const auto requested_mode = *OrdinaryMutationMode(request);
++  if (!matcher.value || std::ranges::any_of(
++          matcher.value->rules, [&](const AccessPolicyRule& rule) {
++            const bool overlaps = rule.destination_host == selector.exact_host ||
++                (rule.include_subdomains && selector.exact_host.ends_with(
++                    "." + rule.destination_host));
++            const bool incompatible =
++                (requested_mode == AccessMode::kDirect && rule.mode == AccessMode::kProxy) ||
++                (requested_mode == AccessMode::kProxy && rule.mode == AccessMode::kDirect);
++            return overlaps && incompatible;
++          })) {
++    supersede_and_fail(
++        Result(AccessMutationTransactionStatus::kUnsupportedTransportScope));
++    return;
++  }
 +
 +  AccessPublishedRequestRuntime* runtime =
 +      AccessPublishedRequestRuntime::GetOrCreate(profile_);
@@ -1487,10 +1508,10 @@ index af79b0848f..9d07ed79e4 100644
 +
  }  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_service_coordinator.h b/chrome/browser/aegis/access/access_service_coordinator.h
-index 641d3a854b..d9424939fc 100644
+index 641d3a854b..008c527679 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator.h
 +++ b/chrome/browser/aegis/access/access_service_coordinator.h
-@@ -4,21 +4,50 @@
+@@ -4,21 +4,51 @@
  #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_SERVICE_COORDINATOR_H_
  
  #include <cstdint>
@@ -1525,6 +1546,7 @@ index 641d3a854b..d9424939fc 100644
 +  kStoreReadFailed,
 +  kPrepareFailed,
 +  kCandidateBuildFailed,
++  kUnsupportedTransportScope,
 +  kMissingRuntime,
 +  kMissingDispatchState,
 +  kMissingTransport,
@@ -1549,7 +1571,7 @@ index 641d3a854b..d9424939fc 100644
  class AccessServiceCoordinator : public base::SupportsUserData::Data {
   public:
    static AccessServiceCoordinator* Get(Profile* profile);
-@@ -30,10 +59,38 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
+@@ -30,10 +60,38 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
  
    uint64_t state_generation() const { return state_generation_; }
  
@@ -1590,7 +1612,7 @@ index 641d3a854b..d9424939fc 100644
  
  }  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
-index cb6adedef9..da7e525844 100644
+index cb6adedef9..14ebeed997 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
 +++ b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
 @@ -3,6 +3,14 @@
@@ -1608,13 +1630,16 @@ index cb6adedef9..da7e525844 100644
  
  #include "build/chromeos_buildflags.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -12,11 +20,24 @@
+@@ -12,11 +20,27 @@
  #include "testing/gtest/include/gtest/gtest.h"
  
  namespace aegis::access {
 +
 +class AccessRuleStoreTestPeer {
 + public:
++  static StoreStatus Import(AccessRuleStore* store, const StoredAccessRule& rule) {
++    return store->ImportIndependentRuleForTesting(rule);
++  }
 +  static AccessStoreBinding Binding(const base::FilePath& path,
 +                                   const OwnershipKey& owner) {
 +    return AccessStoreBinding(path.empty() ? AccessStoreKind::kEphemeralProfile
@@ -1634,7 +1659,7 @@ index cb6adedef9..da7e525844 100644
  };
  
  TEST_F(AccessServiceCoordinatorTest, RejectsNullProfile) {
-@@ -51,6 +72,275 @@ TEST_F(AccessServiceCoordinatorTest, ProfilesNeverShareCoordinatorState) {
+@@ -51,6 +75,312 @@ TEST_F(AccessServiceCoordinatorTest, ProfilesNeverShareCoordinatorState) {
    EXPECT_EQ(second->state_generation(), 0u);
  }
  
@@ -1705,6 +1730,7 @@ index cb6adedef9..da7e525844 100644
 +                      RequestScheme::kWs, RequestScheme::kWss},
 +          .ports = PortScope::kAllBrowserPermitted,
 +          .mode = AccessMode::kDirect,
++          .protection_override = ProtectionOverride::kNone,
 +      });
 +    }
 +    return request;
@@ -1893,6 +1919,42 @@ index cb6adedef9..da7e525844 100644
 +  ASSERT_TRUE(durable.value);
 +  EXPECT_EQ(durable.value->site_groups.size(), 2u);
 +  EXPECT_EQ(coordinator_->state_generation(), 2u);
++}
++
++TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication) {
++  auto store = OpenStore();
++  auto* retained_store = store.get();
++  StoredAccessRule independent;
++  independent.policy = {
++      .rule_id = "other-site-proxy",
++      .owner = owner_,
++      .scope = PolicyScope::kSite,
++      .top_level_site = "https://other.example",
++      .destination_host = "news.example",
++      .schemes = {RequestScheme::kHttps},
++      .ports = {PortScope::kAllBrowserPermitted, {}},
++      .mode = AccessMode::kProxy,
++      .proxy_group_id = "independent-proxy",
++      .protection_override = ProtectionOverride::kNone,
++      .row_revision = 1,
++      .last_operation_sequence = 1,
++  };
++  independent.source = StoredRuleSource::kTestFixture;
++  independent.lifetime = StoredRuleLifetime::kPersistent;
++  ASSERT_EQ(AccessRuleStoreTestPeer::Import(store.get(), independent), StoreStatus::kValid);
++  const auto before = store->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(before.value);
++  base::test::TestFuture<AccessMutationTransactionResult> result;
++  coordinator_->CommitSiteGroupMutation(std::move(store), Mutation(), Selector(),
++                                        result.GetCallback());
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_EQ(result.Get().status,
++            AccessMutationTransactionStatus::kUnsupportedTransportScope);
++  EXPECT_FALSE(client_->metadata);
++  const auto after = retained_store->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(after.value);
++  EXPECT_EQ(*after.value, *before.value);
++  EXPECT_EQ(coordinator_->state_generation(), 0u);
 +}
 +
 +TEST_F(AccessMutationTransactionTest, ForgedSelectorDoesNotPrepareMutation) {
