@@ -5,7 +5,7 @@ import {join, resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import test from 'node:test';
 import YAML from 'yaml';
-import {MODE, classifyBranchRelationship, inspectOpenPromotionPulls, loadPromotionConfig,
+import {MODE, createCandidatePull, classifyBranchRelationship, inspectOpenPromotionPulls, loadPromotionConfig,
   mirrorMain, publishCandidate, runPromotionCycle, validateActivePull} from '../promotion-orchestrator.mjs';
 import {assertRemoteHeads, listPulls} from '../promotion-github.mjs';
 import {buildCandidate} from '../promotion-candidate.mjs';
@@ -162,4 +162,47 @@ test('workflow validator rejects old enablement, main/PR triggers and write-toke
       const changed=structuredClone(original);mutate(changed);assert.notEqual(validate(changed).status,0);
     }
   } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+function creationDependencies(overrides = {}) {
+  let inventories = 0;
+  const pr = pull(candidate.branch, D);
+  return {listPulls: async () => [], publish: async () => D,
+    git: () => 'feat(core): frozen product batch', command: () => {}, assertHeads: async () => {},
+    inventory: async () => ++inventories < 3 ? null : {repo: config.upstreamRepo, pr},
+    api: async () => pr, log: () => {}, ...overrides};
+}
+
+test('actual PR creation rechecks external writers after preparation before POST', async () => {
+  let competing = false, posts = 0;
+  await assert.rejects(createCandidatePull(config, state, candidate, creationDependencies({
+    publish: async () => {competing = true; return D;},
+    inventory: async () => competing ? {repo: config.upstreamRepo, pr: pull('manual-promotion')} : null,
+    api: async () => {posts++; return pull();},
+  })), /before PR creation/u);
+  assert.equal(posts, 0);
+});
+
+test('actual PR creation detects an external writer racing POST without mutating either PR', async () => {
+  let posted = false; const writes = [];
+  await assert.rejects(createCandidatePull(config, state, candidate, creationDependencies({
+    api: async (repo, path, args) => {posted = true; writes.push([path, args.method]); return pull(candidate.branch, D);},
+    inventory: async () => {
+      if (posted) return inspectOpenPromotionPulls({...config, personalOpen: [],
+        upstreamOpen: [pull(candidate.branch, D), {...pull('manual-promotion'), number: 13}]});
+      return null;
+    },
+  })), /Multiple/u);
+  assert.deepEqual(writes, [['/pulls', 'POST']]);
+});
+
+test('actual PR creation verifies its single active path and refuses closed batches or moved heads', async () => {
+  await createCandidatePull(config, state, candidate, creationDependencies());
+  await assert.rejects(createCandidatePull(config, state, candidate, creationDependencies({
+    listPulls: async () => [{state: 'closed'}],
+    api: async () => {throw new Error('unexpected write');},
+  })), /Existing\/closed/u);
+  await assert.rejects(createCandidatePull(config, state, candidate, creationDependencies({
+    api: async () => pull(candidate.branch, H),
+  })), /identity/u);
 });

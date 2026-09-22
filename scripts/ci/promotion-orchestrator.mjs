@@ -137,27 +137,41 @@ export async function publishCandidate(config, candidate, state, deps = {}) {
   return head;
 }
 
-async function createCandidatePull(config, state, candidate) {
+export async function createCandidatePull(config, state, candidate, overrides = {}) {
+  const ops = {api: githubApi, listPulls, inventory, publish: publishCandidate, git, command,
+    assertHeads: assertRemoteHeads, log: console.log, ...overrides};
   const promotion = candidate.kind === 'promotion';
   const repo = promotion ? config.upstreamRepo : config.personalRepo;
   const token = promotion ? config.upstreamToken : config.forkToken;
   const base = promotion ? 'main' : 'develop';
   const owner = config.personalRepo.split('/')[0];
   const query = new URLSearchParams({state: 'all', base, head: `${owner}:${candidate.branch}`});
-  const previous = await listPulls(repo, token, query.toString());
+  const previous = await ops.listPulls(repo, token, query.toString());
   if (previous.length) throw new Error('Existing/closed batch requires coordinator reconciliation; not reopening or duplicating it');
-  if (await inventory(config)) throw new Error('Another promotion path appeared during preparation');
-  const head = await publishCandidate(config, candidate, state);
-  if (promotion) command('node', ['scripts/ci/check-public-diff.mjs', '--base', candidate.base, '--head', head]);
-  const subjects = git('log', '--reverse', '--format=%s', `${candidate.base}..${head}`).split('\n');
+  if (await ops.inventory(config)) throw new Error('Another promotion path appeared during preparation');
+  const head = await ops.publish(config, candidate, state);
+  if (promotion) ops.command('node', ['scripts/ci/check-public-diff.mjs', '--base', candidate.base, '--head', head]);
+  const subjects = ops.git('log', '--reverse', '--format=%s', `${candidate.base}..${head}`).split('\n');
   const title = promotion ? inferPromotionTitle(subjects) : 'chore(sync): backflow upstream main into develop';
   if (!title) throw new Error('No Conventional Commit title available for candidate');
   const body = `Frozen ${candidate.kind} batch.\n\n- source: \`${candidate.source}\`\n- initial base: \`${candidate.base}\`\n- current head: \`${head}\`\n- review fixes may be appended; every new head requires fresh review and CI\n- merge method: merge commit; no automatic merge\n- upstream promotion requires Codacy and applicable native validation\n- personal main is an exact upstream mirror; all fixes return to develop\n`;
-  const pull = await githubApi(repo, '/pulls', {token, method: 'POST',
+  await ops.assertHeads([...sourceRefs(config, state),
+    headRef(config.personalRepo, candidate.branch, head, config.forkToken)]);
+  // Concurrency groups cannot serialize other human/automation writers.
+  if (await ops.inventory(config)) throw new Error('Another promotion path appeared before PR creation');
+  const pull = await ops.api(repo, '/pulls', {token, method: 'POST',
     body: {base, head: `${owner}:${candidate.branch}`, title, body}});
-  if (pull.head?.sha !== head || pull.base?.sha !== candidate.base) throw new Error('PR base/head changed during creation');
+  if (pull.head?.sha !== head || pull.base?.sha !== candidate.base ||
+      pull.head?.ref !== candidate.branch || pull.head?.repo?.full_name !== config.personalRepo ||
+      pull.base?.repo?.full_name !== repo || pull.base?.ref !== base) throw new Error('PR identity changed during creation');
+  const active = await ops.inventory(config);
+  if (active?.repo !== repo || active.pr?.number !== pull.number || active.pr.head?.sha !== head) {
+    throw new Error('Active promotion path changed after PR creation; coordinator reconciliation required');
+  }
+  await ops.assertHeads([...sourceRefs(config, state),
+    headRef(config.personalRepo, candidate.branch, head, config.forkToken)]);
   // GitHub rulesets request Copilot review. The controller never approves/merges.
-  console.log(`Created ${candidate.kind}: ${pull.html_url}`);
+  ops.log(`Created ${candidate.kind}: ${pull.html_url}`);
 }
 
 function defaults() {
