@@ -22,6 +22,7 @@ COMMIT_FILE = BROWSER / "CHROMIUM_COMMIT"
 VERSION_FILE = BROWSER / "CHROMIUM_VERSION"
 PATCH_DIR = BROWSER / "patches"
 V8_PATCH_DIR = PATCH_DIR / "v8"
+OVERLAY_DIR = BROWSER / "overlay"
 
 TARGETS = (
     ("//components/aegis_access:access_identity_generation_state_unittests",
@@ -161,7 +162,7 @@ def require_clean(repo: Path, label: str, *, ignore_submodules: bool = False) ->
         raise ValueError(f"{label} checkout is dirty: {repo}")
 
 
-def verify_tree(repo: Path, base: str, patches: Path) -> str:
+def replay_tree(repo: Path, base: str, patches: Path, overlay: Path | None = None) -> str:
     fd, index_name = tempfile.mkstemp(prefix="aegis-access-tree-")
     os.close(fd)
     index = Path(index_name)
@@ -178,15 +179,37 @@ def verify_tree(repo: Path, base: str, patches: Path) -> str:
                 str(patches / name),
                 env=env,
             )
-        expected = git(repo, "write-tree", env=env)
-        actual = git(repo, "rev-parse", "HEAD^{tree}")
-        if expected != actual:
-            raise ValueError(
-                f"patched source tree does not match the current patch series: {repo}"
+        if overlay is not None:
+            entries = []
+            for path in sorted(overlay.rglob("*")):
+                if path.is_symlink():
+                    raise ValueError(f"overlay symlinks are not supported: {path}")
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(overlay).as_posix()
+                if any(part == ".git" for part in path.relative_to(overlay).parts):
+                    raise ValueError(f"unsafe overlay path: {relative}")
+                blob = git(repo, "hash-object", "-w", "--", str(path))
+                mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+                entries.append(f"{mode} {blob}\t{relative}\0")
+            subprocess.run(
+                [tool("git"), "-C", str(repo), "update-index", "-z", "--index-info"],
+                input="".join(entries), text=True, env=env, check=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-        return actual
+        return git(repo, "write-tree", env=env)
     finally:
         index.unlink(missing_ok=True)
+
+
+def verify_tree(repo: Path, base: str, patches: Path, overlay: Path | None = None) -> str:
+    expected = replay_tree(repo, base, patches, overlay)
+    actual = git(repo, "rev-parse", "HEAD^{tree}")
+    if expected != actual:
+        raise ValueError(
+            f"patched source tree does not match the current patch series/overlay: {repo}"
+        )
+    return actual
 
 
 def count_gtests(output: str) -> int:
@@ -206,15 +229,22 @@ def run_logged(
     env: dict[str, str],
     log: Path,
 ) -> None:
+    argv = list(command)
+    started = now()
     with log.open("w", encoding="utf-8") as stream:
-        subprocess.run(
-            list(command),
+        completed = subprocess.run(
+            argv,
             cwd=cwd,
             env=env,
             stdout=stream,
             stderr=subprocess.STDOUT,
-            check=True,
+            check=False,
         )
+    write_json(log.with_suffix(log.suffix + ".json"), {
+        "command": argv, "cwd": str(cwd), "startedAt": started,
+        "finishedAt": now(), "exitCode": completed.returncode,
+    })
+    completed.check_returncode()
 
 
 def run_target(
@@ -226,6 +256,7 @@ def run_target(
     env: dict[str, str],
     autoninja: str,
     jobs: int,
+    build_jobs: int = 4,
 ) -> dict[str, object]:
     label, ninja_target, binary_name = target
     build_log = report / f"{binary_name}.build.log"
@@ -233,7 +264,7 @@ def run_target(
     test_log = report / f"{binary_name}.test.log"
 
     run_logged(
-        [autoninja, "-C", str(out), ninja_target],
+        [autoninja, "-C", str(out), f"-j{build_jobs}", ninja_target],
         cwd=src,
         env=env,
         log=build_log,
@@ -243,14 +274,8 @@ def run_target(
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError(f"compiled GTest binary is missing: {binary}")
 
-    listed = subprocess.check_output(
-        [str(binary), "--gtest_list_tests"],
-        cwd=src,
-        env=env,
-        text=True,
-        stderr=subprocess.STDOUT,
-    )
-    list_log.write_text(listed, encoding="utf-8")
+    run_logged([str(binary), "--gtest_list_tests"], cwd=src, env=env, log=list_log)
+    listed = list_log.read_text(encoding="utf-8")
     test_count = count_gtests(listed)
     if test_count <= 0:
         raise ValueError(f"GTest target reported zero tests: {label}")
@@ -270,6 +295,7 @@ def run_target(
         "label": label,
         "ninjaTarget": ninja_target,
         "binary": binary_name,
+        "binarySha256": sha256(binary),
         "tests": test_count,
         "result": "PASS",
         "buildLog": build_log.name,
@@ -335,112 +361,93 @@ def write_summary(result: dict[str, object], report: Path) -> None:
 
 
 def execute(options: argparse.Namespace) -> Path:
-    chromium_root = resolve_chromium_root()
-    src = chromium_root / "src"
+    src = resolve_chromium_root() / "src"
     if not (src / "BUILD.gn").is_file():
         raise ValueError(f"fixed Chromium src is missing: {src}")
-
-    require_clean(ROOT, "product", ignore_submodules=True)
-    require_clean(src, "Chromium", ignore_submodules=True)
-
-    product_head = git(ROOT, "rev-parse", "HEAD")
-    product_tree = git(ROOT, "rev-parse", "HEAD^{tree}")
-    chromium_pin = read_pin(COMMIT_FILE)
-    chromium_version = read_pin(VERSION_FILE)
-    chromium_head = git(src, "rev-parse", "HEAD")
-    if not is_ancestor(src, chromium_pin, chromium_head):
-        raise ValueError(
-            f"pinned Chromium commit is not an ancestor of the checkout: {chromium_pin}"
-        )
-
-    chromium_tree = verify_tree(src, chromium_pin, PATCH_DIR)
-    v8_base = git(src, "rev-parse", chromium_pin + ":v8")
-    v8 = src / "v8"
-    require_clean(v8, "V8", ignore_submodules=True)
-    v8_head = git(v8, "rev-parse", "HEAD")
-    if not is_ancestor(v8, v8_base, v8_head):
-        raise ValueError(f"pinned V8 commit is not an ancestor of the checkout: {v8_base}")
-    v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR)
-
-    out = (
-        Path(options.out).expanduser().resolve()
-        if options.out
-        else src / "out" / "AegisAccessTests"
-    )
-    report = (
-        Path(options.report_dir).expanduser().resolve()
-        if options.report_dir
-        else ROOT / ".artifacts" / "chromium-native" / product_head[:12]
-    )
+    report = (Path(options.report_dir).expanduser().resolve() if options.report_dir
+              else ROOT / ".artifacts" / "chromium-native" / dt.datetime.now().strftime("%Y%m%d-%H%M%S"))
     report.mkdir(parents=True, exist_ok=True)
-
-    minimum = options.min_free_gib
-    free_gib = shutil.disk_usage(src).free / 1024**3
-    if free_gib < minimum:
-        raise ValueError(
-            f"not enough free space for Chromium GTests: {free_gib:.1f} GiB < {minimum} GiB"
-        )
-
-    env = execution_env()
-    gn = tool("gn", env)
-    autoninja = tool("autoninja", env)
     state = report / "result.json"
-    result: dict[str, object] = {
-        "startedAt": now(),
-        "status": "preflight",
-        "productHead": product_head,
-        "productTree": product_tree,
-        "chromiumVersion": chromium_version,
-        "chromiumPin": chromium_pin,
-        "chromiumHead": chromium_head,
-        "chromiumTree": chromium_tree,
-        "v8Base": v8_base,
-        "v8Head": v8_head,
-        "v8Tree": v8_tree,
-        "argsSha256": sha256(ARGS_FILE),
-        "patchSeriesSha256": sha256(PATCH_DIR / "series"),
-        "v8PatchSeriesSha256": sha256(V8_PATCH_DIR / "series"),
-        "outDir": str(out),
-        "freeGiBAtStart": round(free_gib, 2),
-        "targetCount": 0,
-        "testCount": 0,
-        "targets": [],
-    }
-    write_json(state, result)
-
+    selected = set(options.target or [t[2] for t in TARGETS])
+    targets = sorted(TARGETS, key=lambda t: t[2] != "access_service_coordinator_unittests")
+    rows = [{"label": t[0], "binary": t[2], "tests": None,
+             "binarySha256": None, "result": "NOT_RUN"} for t in targets]
+    result = {"startedAt": now(), "status": "preflight", "targets": rows,
+              "targetCount": 0, "testCount": 0, "selectedTargets": sorted(selected)}
     lock = acquire_lock(src)
     try:
-        result["status"] = "generating"
         write_json(state, result)
-        args_text = ARGS_FILE.read_text(encoding="utf-8")
-        run_logged(
-            [gn, "gen", str(out), f"--args={args_text}", "--check"],
-            cwd=src,
-            env=env,
-            log=report / "gn.log",
-        )
-
+        require_clean(ROOT, "product", ignore_submodules=True)
+        require_clean(src, "Chromium", ignore_submodules=True)
+        product_head = git(ROOT, "rev-parse", "HEAD")
+        chromium_pin = read_pin(COMMIT_FILE)
+        chromium_head = git(src, "rev-parse", "HEAD")
+        if not is_ancestor(src, chromium_pin, chromium_head):
+            raise ValueError("pinned Chromium commit is not an ancestor of the checkout")
+        chromium_tree = verify_tree(src, chromium_pin, PATCH_DIR, OVERLAY_DIR)
+        v8_base = git(src, "rev-parse", chromium_pin + ":v8")
+        v8 = src / "v8"
+        require_clean(v8, "V8", ignore_submodules=True)
+        v8_head = git(v8, "rev-parse", "HEAD")
+        if not is_ancestor(v8, v8_base, v8_head):
+            raise ValueError("pinned V8 commit is not an ancestor of the checkout")
+        v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR)
+        out = Path(options.out).expanduser().resolve() if options.out else src / "out" / "AegisAccessTests"
+        if not out.is_relative_to(src / "out"):
+            raise ValueError("output must be inside this candidate's src/out")
+        args_file = Path(options.args_file).expanduser().resolve() if options.args_file else ARGS_FILE
+        args_text = args_file.read_text(encoding="utf-8")
+        args_hash = sha256(args_file)
+        (report / "args.gn").write_text(args_text, encoding="utf-8")
+        free_gib = shutil.disk_usage(src).free / 1024**3
+        if free_gib < options.min_free_gib:
+            raise ValueError(f"not enough free space: {free_gib:.1f} GiB")
+        env = execution_env()
+        gn = tool("gn", env)
+        autoninja = tool("autoninja", env)
+        result.update(productHead=product_head, productTree=git(ROOT, "rev-parse", "HEAD^{tree}"),
+                      chromiumVersion=read_pin(VERSION_FILE), chromiumPin=chromium_pin,
+                      chromiumHead=chromium_head, chromiumTree=chromium_tree,
+                      sourceComposition="pinned base + ordered patches + exact product overlay",
+                      v8Base=v8_base, v8Head=v8_head, v8Tree=v8_tree,
+                      argsFile=str(args_file), argsSha256=args_hash,
+                      productArgsSha256=sha256(ARGS_FILE), outDir=str(out),
+                      freeGiBAtStart=round(free_gib, 2),
+                      inputs={str(p.relative_to(BROWSER)): sha256(p)
+                              for directory in (PATCH_DIR, OVERLAY_DIR)
+                              for p in sorted(directory.rglob("*")) if p.is_file()},
+                      status="generating")
+        write_json(state, result)
+        run_logged([gn, "gen", str(out), f"--args={args_text}", "--check"],
+                   cwd=src, env=env, log=report / "gn.log")
         result["status"] = "testing"
-        for target in TARGETS:
-            item = run_target(
-                target,
-                src=src,
-                out=out,
-                report=report,
-                env=env,
-                autoninja=autoninja,
-                jobs=options.jobs,
-            )
-            result["targets"].append(item)
-            result["targetCount"] = len(result["targets"])
-            result["testCount"] = sum(int(row["tests"]) for row in result["targets"])
+        for target, row in zip(targets, rows):
+            if target[2] not in selected:
+                continue
+            row["result"] = "BUILDING"
             write_json(state, result)
-
-        result["status"] = "PASS"
+            try:
+                row.update(run_target(target, src=src, out=out, report=report, env=env,
+                                      autoninja=autoninja, jobs=options.jobs,
+                                      build_jobs=options.build_jobs))
+            except Exception as error:
+                row.update(result="FAIL", error=str(error))
+                raise
+            result["targetCount"] += 1
+            result["testCount"] += row["tests"]
+            write_json(state, result)
+        for repo, label, head in ((ROOT, "product", product_head),
+                                  (src, "Chromium", chromium_head), (v8, "V8", v8_head)):
+            require_clean(repo, label, ignore_submodules=True)
+            if git(repo, "rev-parse", "HEAD") != head:
+                raise ValueError(f"{label} HEAD changed during execution")
+        if sha256(args_file) != args_hash:
+            raise ValueError("GN arguments changed during execution")
+        result["sourceStable"] = True
+        result["status"] = "PASS" if len(selected) == len(TARGETS) else "PARTIAL_PASS"
         return report
     except Exception as error:
-        result["status"] = "FAIL"
-        result["error"] = str(error)
+        result.update(status="FAIL", error=str(error))
         raise
     finally:
         result["finishedAt"] = now()
@@ -452,6 +459,10 @@ def execute(options: argparse.Namespace) -> Path:
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__)
     value.add_argument("--out", help="isolated Chromium output directory")
+    value.add_argument("--args-file", help="explicit local GN args; recorded separately from product args")
+    value.add_argument("--target", action="append", choices=[t[2] for t in TARGETS],
+                       help="run selected executables; omitted targets stay NOT_RUN")
+    value.add_argument("--build-jobs", type=int, default=4, help="bounded Ninja parallelism")
     value.add_argument("--report-dir", help="evidence output directory")
     value.add_argument(
         "--jobs",
@@ -470,14 +481,14 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     options = parser().parse_args()
-    if options.jobs <= 0 or options.min_free_gib <= 0:
+    if options.jobs <= 0 or options.build_jobs <= 0 or options.min_free_gib <= 0:
         raise SystemExit("--jobs and --min-free-gib must be positive")
     try:
         report = execute(options)
     except Exception as error:
         print(f"FAIL: {error}", file=os.sys.stderr)
         return 1
-    print(f"PASS: fixed Chromium Access GTests; evidence: {report}")
+    print(f"{json.loads((report / 'result.json').read_text())['status']}: fixed Chromium Access GTests; evidence: {report}")
     return 0
 
 

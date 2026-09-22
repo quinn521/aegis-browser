@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import os
+import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -12,6 +14,70 @@ import chromium_access_gtests as sut
 
 
 class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
+    def test_real_patch_overlay_identity_rejects_drift_and_extra_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            repo, patches, overlay = (root / n for n in ("repo", "patches", "overlay"))
+            for directory in (repo, patches, overlay):
+                directory.mkdir()
+            sut.git(repo, "init", "-q")
+            sut.git(repo, "config", "user.name", "Fixture")
+            sut.git(repo, "config", "user.email", "fixture@example.invalid")
+            source = repo / "source.txt"
+            source.write_text("base\n")
+            sut.git(repo, "add", ".")
+            sut.git(repo, "commit", "-qm", "base")
+            base = sut.git(repo, "rev-parse", "HEAD")
+            source.write_text("patched\n")
+            (patches / "a.patch").write_text(sut.git(repo, "diff") + "\n")
+            (patches / "series").write_text("a.patch\n")
+            (overlay / "source.txt").write_text("overlay\n")
+            (overlay / "extra.txt").write_text("added by overlay\n")
+            expected = sut.replay_tree(repo, base, patches, overlay)
+            source.write_text("overlay\n")
+            (repo / "extra.txt").write_text("added by overlay\n")
+            sut.git(repo, "add", ".")
+            sut.git(repo, "commit", "-qm", "composed")
+            self.assertEqual(sut.verify_tree(repo, base, patches, overlay), expected)
+            sut.require_clean(repo, "fixture")
+            source.write_text("dirty\n")
+            with self.assertRaisesRegex(ValueError, "dirty"):
+                sut.require_clean(repo, "fixture")
+            sut.git(repo, "checkout", "--", "source.txt")
+            (repo / "unexpected.txt").write_text("untracked\n")
+            with self.assertRaisesRegex(ValueError, "dirty"):
+                sut.require_clean(repo, "fixture")
+            sut.git(repo, "add", ".")
+            sut.git(repo, "commit", "-qm", "unexpected")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                sut.verify_tree(repo, base, patches, overlay)
+
+    def test_failure_command_keeps_exit_and_raw_output(self):
+        with tempfile.TemporaryDirectory() as root:
+            log = Path(root) / "command.log"
+            with self.assertRaises(subprocess.CalledProcessError):
+                sut.run_logged([sys.executable, "-c", "print('failure'); exit(7)"],
+                               cwd=Path(root), env=dict(os.environ), log=log)
+            self.assertIn("failure", log.read_text())
+            self.assertEqual(json.loads(log.with_suffix(".log.json").read_text())["exitCode"], 7)
+
+    def test_admission_failure_writes_full_not_run_matrix(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            (root / "src").mkdir()
+            (root / "src/BUILD.gn").write_text("")
+            report = root / "report"
+            options = sut.parser().parse_args(["--report-dir", str(report)])
+            with mock.patch.object(sut, "resolve_chromium_root", return_value=root), \
+                    mock.patch.object(sut, "require_clean", side_effect=ValueError("dirty")):
+                with self.assertRaisesRegex(ValueError, "dirty"):
+                    sut.execute(options)
+            result = json.loads((report / "result.json").read_text())
+            self.assertEqual(result["status"], "FAIL")
+            self.assertEqual(len(result["targets"]), 17)
+            self.assertTrue(all(t["result"] == "NOT_RUN" for t in result["targets"]))
+            self.assertFalse((root / ".aegis-access-gtest-lock").exists())
+
     def test_target_inventory_is_complete_and_unique(self):
         self.assertEqual(len(sut.TARGETS), 17)
         labels = [item[0] for item in sut.TARGETS]
