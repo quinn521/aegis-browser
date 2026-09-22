@@ -133,9 +133,14 @@ def command_argv(command: Iterable[str]) -> list[str]:
 
 def run_process(command: Iterable[str], *, cwd=None, env=None,
                 output=subprocess.PIPE, input_text=None, check=True):
+    """Execute developer-selected tools, never shell text or untrusted tool choices."""
     argv = command_argv(command)
-    # Only validated executable paths and separate literal arguments cross this boundary.
-    return subprocess.run(argv, cwd=cwd, env=env, input=input_text, stdout=output,
+    # PATH/DEPOT_TOOLS_DIR and explicit GN/Ninja paths are trusted local configuration.
+    # command_argv validates an absolute executable and literal non-NUL arguments;
+    # the real-process regression proves shell metacharacters stay literal. Quoting
+    # argv elements would corrupt them. Review: 7805e05, B603 and the exact rule below.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    return subprocess.run(argv, cwd=cwd, env=env, input=input_text, stdout=output,  # nosec B603
                           stderr=subprocess.STDOUT, text=True, shell=False, check=check)
 
 
