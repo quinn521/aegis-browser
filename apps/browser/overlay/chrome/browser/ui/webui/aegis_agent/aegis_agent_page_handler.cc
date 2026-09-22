@@ -20,8 +20,9 @@
 #include "chrome/browser/aegis/aegis_service_factory.h"
 #include "chrome/browser/aegis/agent/aegis_agent_service.h"
 #include "chrome/browser/aegis/agent/aegis_agent_service_factory.h"
-#include "chrome/browser/aegis/agent/agent_policy_broker.h"
 #include "chrome/browser/aegis/agent/agent_monitor_summary.h"
+#include "chrome/browser/aegis/agent/agent_policy_broker.h"
+#include "chrome/browser/aegis/agent/agent_task_store.h"
 #include "chrome/browser/aegis/agent/agent_workflow.h"
 #include "chrome/browser/aegis/model_provider_policy.h"
 #include "chrome/browser/profiles/profile.h"
@@ -39,6 +40,135 @@
 #include "url/origin.h"
 
 namespace {
+
+bool ParseOptionalPrice(const std::string& text,
+                        std::optional<int64_t>* price) {
+  if (text.empty()) {
+    return true;
+  }
+  int64_t parsed = 0;
+  if (!base::StringToInt64(text, &parsed) || parsed < 0) {
+    return false;
+  }
+  *price = parsed;
+  return true;
+}
+
+std::string FormatOptionalPrice(const std::optional<int64_t>& price) {
+  return price ? base::NumberToString(*price) : std::string();
+}
+
+std::optional<aegis::agent::AgentModelCatalogEntry> ReadModelPoolEntry(
+    const aegis_agent::mojom::ModelPoolEntryPtr& item) {
+  int64_t cost = 0;
+  if (!item ||
+      (!item->cost_microusd_per_million_tokens.empty() &&
+       (!base::StringToInt64(item->cost_microusd_per_million_tokens, &cost) ||
+        cost < 0))) {
+    return std::nullopt;
+  }
+  aegis::agent::AgentModelCatalogEntry entry{
+      .id = item->id,
+      .destination = {.provider = item->provider,
+                      .endpoint = item->base_url,
+                      .model = item->model},
+      .enabled = item->enabled,
+      .authorized = true,
+      .supports_tool_calls = item->supports_tool_calls,
+      .supports_long_context = item->supports_long_context,
+      .supports_strong_reasoning = item->supports_strong_reasoning,
+      .quality_score = item->quality_score,
+      .latency_score = item->latency_score,
+      .priority = item->priority};
+  if (!item->cost_microusd_per_million_tokens.empty()) {
+    entry.cost_microusd_per_million_tokens = cost;
+  }
+  if (!item->default_profile || !item->basic_profile || !item->strong_profile) {
+    return std::nullopt;
+  }
+  entry.generation_policy.supported_efforts = item->supported_efforts;
+  entry.generation_policy.default_profile = {
+      item->default_profile->effort, item->default_profile->max_output_tokens};
+  entry.generation_policy.basic_profile = {
+      item->basic_profile->effort, item->basic_profile->max_output_tokens};
+  entry.generation_policy.strong_profile = {
+      item->strong_profile->effort, item->strong_profile->max_output_tokens};
+  if (!ParseOptionalPrice(item->input_price, &entry.token_prices.input) ||
+      !ParseOptionalPrice(item->cached_input_price,
+                          &entry.token_prices.cached_input) ||
+      !ParseOptionalPrice(item->output_price, &entry.token_prices.output)) {
+    return std::nullopt;
+  }
+  return entry;
+}
+
+aegis_agent::mojom::ModelPoolEntryPtr BuildModelPoolEntry(
+    const aegis::agent::AgentModelCatalogEntry& entry) {
+  auto value = aegis_agent::mojom::ModelPoolEntry::New();
+  value->id = entry.id;
+  value->provider = entry.destination.provider;
+  value->base_url = entry.destination.endpoint;
+  value->model = entry.destination.model;
+  value->enabled = entry.enabled;
+  value->supports_tool_calls = entry.supports_tool_calls;
+  value->supports_long_context = entry.supports_long_context;
+  value->supports_strong_reasoning = entry.supports_strong_reasoning;
+  value->quality_score = entry.quality_score;
+  value->latency_score = entry.latency_score;
+  value->cost_microusd_per_million_tokens =
+      entry.cost_microusd_per_million_tokens
+          ? base::NumberToString(*entry.cost_microusd_per_million_tokens)
+          : std::string();
+  value->priority = entry.priority;
+  value->input_price = FormatOptionalPrice(entry.token_prices.input);
+  value->cached_input_price =
+      FormatOptionalPrice(entry.token_prices.cached_input);
+  value->output_price = FormatOptionalPrice(entry.token_prices.output);
+  value->supported_efforts = entry.generation_policy.supported_efforts;
+  value->default_profile = aegis_agent::mojom::GenerationProfile::New(
+      entry.generation_policy.default_profile.effort,
+      entry.generation_policy.default_profile.max_output_tokens);
+  value->basic_profile = aegis_agent::mojom::GenerationProfile::New(
+      entry.generation_policy.basic_profile.effort,
+      entry.generation_policy.basic_profile.max_output_tokens);
+  value->strong_profile = aegis_agent::mojom::GenerationProfile::New(
+      entry.generation_policy.strong_profile.effort,
+      entry.generation_policy.strong_profile.max_output_tokens);
+  return value;
+}
+
+void FillRoutingCost(const aegis::agent::AgentTask* task,
+                     const aegis::agent::AgentModelRoutingMetrics& metrics,
+                     aegis_agent::mojom::PlanSummary* value) {
+  long double known_cost = 0;
+  bool any_known_cost = false;
+  value->estimated_cost_complete = metrics.attempts_complete;
+  size_t recorded_task_calls = 0;
+  for (const auto& attempt : metrics.attempts) {
+    recorded_task_calls += attempt.phase == "task";
+    const auto cost = aegis::agent::EstimateAgentAttemptMicrousd(attempt);
+    value->estimated_cost_complete &= cost.has_value();
+    any_known_cost |= cost.has_value();
+    known_cost += cost.value_or(0);
+  }
+  value->estimated_cost_complete &=
+      recorded_task_calls == static_cast<size_t>(task->model_calls_used());
+  if (any_known_cost) {
+    value->estimated_model_cost_microusd =
+        base::NumberToString(static_cast<double>(known_cost));
+  }
+}
+
+std::string ExportRoutingObservations(const aegis::agent::AgentTask& task) {
+  auto metrics = task.model_routing_metrics();
+  const size_t recorded_task_calls = std::ranges::count_if(
+      metrics.attempts, [](const auto& attempt) { return attempt.phase == "task"; });
+  metrics.attempts_complete &= std::ranges::all_of(
+      metrics.attempts, [](const auto& attempt) { return attempt.completed; });
+  metrics.attempts_complete &=
+      recorded_task_calls == static_cast<size_t>(task.model_calls_used());
+  return aegis::agent::AgentTaskStore::SerializeModelRoutingMetrics(metrics);
+}
 
 using aegis::agent::AgentDataClass;
 using aegis::agent::AgentMode;
@@ -598,32 +728,13 @@ void AegisAgentPageHandler::ConfigureModelRouting(
   std::vector<aegis::agent::AgentModelCatalogEntry> catalog;
   catalog.reserve(model_pool.size());
   for (const auto& item : model_pool) {
-    int64_t cost = 0;
-    if (!item ||
-        (!item->cost_microusd_per_million_tokens.empty() &&
-         (!base::StringToInt64(item->cost_microusd_per_million_tokens, &cost) ||
-          cost < 0))) {
+    auto entry = ReadModelPoolEntry(item);
+    if (!entry) {
       last_error_ = "Agent model routing settings are invalid";
       std::move(callback).Run(BuildSnapshot());
       return;
     }
-    aegis::agent::AgentModelCatalogEntry entry{
-        .id = item->id,
-        .destination = {.provider = item->provider,
-                        .endpoint = item->base_url,
-                        .model = item->model},
-        .enabled = item->enabled,
-        .authorized = true,
-        .supports_tool_calls = item->supports_tool_calls,
-        .supports_long_context = item->supports_long_context,
-        .supports_strong_reasoning = item->supports_strong_reasoning,
-        .quality_score = item->quality_score,
-        .latency_score = item->latency_score,
-        .priority = item->priority};
-    if (!item->cost_microusd_per_million_tokens.empty()) {
-      entry.cost_microusd_per_million_tokens = cost;
-    }
-    catalog.push_back(std::move(entry));
+    catalog.push_back(std::move(*entry));
   }
   if (!core_service->SetAgentModelRoutingSettings(
           *converted_mode, std::move(catalog), &last_error_)) {
@@ -848,6 +959,10 @@ void AegisAgentPageHandler::CreateResolvedTask(
     scope->model_fallback_destination = model_route->fallback;
     scope->model_selection_mode = model_route->mode;
     scope->model_catalog_revision = model_route->catalog_revision;
+    scope->model_generation_profile = model_route->primary_profile;
+    scope->fallback_generation_profile = model_route->fallback_profile;
+    scope->model_token_prices = model_route->primary_token_prices;
+    scope->fallback_token_prices = model_route->fallback_token_prices;
   }
   if (scope && browser_only && GoalRequestsWindowTabMetadata(goal) &&
       browser_ && browser_->GetProfile() == profile_ &&
@@ -1138,24 +1253,7 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
     snapshot->model_catalog_revision =
         core_service->AgentModelCatalogRevision();
     for (const auto& entry : core_service->AgentModelCatalog()) {
-      auto value = aegis_agent::mojom::ModelPoolEntry::New();
-      value->id = entry.id;
-      value->provider = entry.destination.provider;
-      value->base_url = entry.destination.endpoint;
-      value->model = entry.destination.model;
-      value->enabled = entry.enabled;
-      value->supports_tool_calls = entry.supports_tool_calls;
-      value->supports_long_context = entry.supports_long_context;
-      value->supports_strong_reasoning = entry.supports_strong_reasoning;
-      value->quality_score = entry.quality_score;
-      value->latency_score = entry.latency_score;
-      value->cost_microusd_per_million_tokens =
-          entry.cost_microusd_per_million_tokens
-              ? base::NumberToString(
-                    *entry.cost_microusd_per_million_tokens)
-              : std::string();
-      value->priority = entry.priority;
-      snapshot->model_pool.push_back(std::move(value));
+      snapshot->model_pool.push_back(BuildModelPoolEntry(entry));
     }
     snapshot->typesafe_enabled =
         core_service->IsTypeSafeGoalRoutingEnabled();
@@ -1245,6 +1343,7 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
     return snapshot;
   }
   snapshot->task_id = task->id();
+  snapshot->routing_observations_json = ExportRoutingObservations(*task);
   snapshot->state = aegis::agent::AgentTaskStateToString(task->state());
   snapshot->mode = ModeName(task->mode());
   snapshot->goal = task->goal();
@@ -1300,6 +1399,11 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
               : "cloud";
     }
     const auto& metrics = task->model_routing_metrics();
+    const auto& effective_profile =
+        metrics.fallback_used ? plan->scope.fallback_generation_profile
+                              : plan->scope.model_generation_profile;
+    plan_value->reasoning_effort = effective_profile.effort;
+    plan_value->max_output_tokens = effective_profile.max_output_tokens;
     plan_value->typesafe_outcome = metrics.typesafe_outcome;
     plan_value->typesafe_model = metrics.typesafe_model;
     plan_value->typesafe_decisions = metrics.typesafe_decisions;
@@ -1314,20 +1418,8 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
         base::NumberToString(metrics.model_output_tokens);
     plan_value->model_latency_ms =
         base::NumberToString(metrics.model_latency_ms);
-    const std::optional<int64_t>& active_cost =
-        metrics.fallback_used
-            ? metrics.fallback_model_cost_microusd_per_million_tokens
-            : metrics.primary_model_cost_microusd_per_million_tokens;
-    if (active_cost) {
-      base::CheckedNumeric<int64_t> estimated_cost(metrics.model_input_tokens);
-      estimated_cost += metrics.model_output_tokens;
-      estimated_cost *= *active_cost;
-      estimated_cost /= 1000000;
-      if (estimated_cost.IsValid()) {
-        plan_value->estimated_model_cost_microusd = base::NumberToString(
-            static_cast<long long>(estimated_cost.ValueOrDie()));
-      }
-    }
+    FillRoutingCost(task, metrics, plan_value.get());
+    plan_value->routing_observations_json = snapshot->routing_observations_json;
     plan_value->max_risk = RiskName(max_risk);
     snapshot->plan = std::move(plan_value);
   }

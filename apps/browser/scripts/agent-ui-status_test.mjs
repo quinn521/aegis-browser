@@ -457,6 +457,25 @@ console.log('PASS: 监控收尾与部分完成时间线 6/6（DOM 单元测试�
 const planRenderer = tree.statements.find(node =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'renderPlan');
 assert(planRenderer);
+const observationsRenderer = tree.statements.find(node =>
+  ts.isFunctionDeclaration(node) && node.name?.text === 'renderRoutingObservations');
+assert(observationsRenderer);
+vm.runInContext(ts.transpileModule(observationsRenderer.getText(tree), {
+  compilerOptions: {target: ts.ScriptTarget.ES2022},
+}).outputText, rendererContext);
+for (const state of ['failed', 'cancelled', 'planning', 'paused_by_user']) {
+  const observations = JSON.stringify({attempts_complete: false, attempts: []});
+  rendererContext.renderRoutingObservations({
+    taskId: 'failed-without-plan', state, plan: null,
+    routingObservationsJson: observations,
+  });
+  assert.equal(element('routing-observations-details').hidden, false, state);
+  assert.equal(element('routing-observations').value, observations, state);
+}
+rendererContext.renderRoutingObservations({taskId: '', plan: null});
+assert.equal(element('routing-observations-details').hidden, true);
+assert.equal(element('routing-observations').value, '');
+console.log('PASS: 无计划失败/取消/规划/暂停均可复制观测，离开任务清空观测（DOM）');
 vm.runInContext(ts.transpileModule(planRenderer.getText(tree), {
   compilerOptions: {target: ts.ScriptTarget.ES2022},
 }).outputText, rendererContext);

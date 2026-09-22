@@ -8,6 +8,8 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "chrome/browser/aegis/agent/agent_generation_profile.h"
+#include "chrome/browser/aegis/agent/agent_model_accounting.h"
 
 #include "base/containers/flat_set.h"
 #include "base/time/time.h"
@@ -127,6 +129,10 @@ struct AgentTaskScope {
   AgentModelSelectionMode model_selection_mode =
       AgentModelSelectionMode::kFixed;
   int model_catalog_revision = 0;
+  AgentGenerationProfile model_generation_profile;
+  AgentGenerationProfile fallback_generation_profile;
+  AgentTokenPrices model_token_prices;
+  AgentTokenPrices fallback_token_prices;
 
   bool IsValid() const;
   bool AllowsOrigin(const GURL& url) const;
@@ -153,6 +159,8 @@ struct AgentModelRoutingMetrics {
   int64_t model_input_tokens = 0;
   int64_t model_output_tokens = 0;
   int64_t model_latency_ms = 0;
+  std::vector<AgentModelAttempt> attempts;
+  bool attempts_complete = false;
 
   bool IsValid() const;
 };

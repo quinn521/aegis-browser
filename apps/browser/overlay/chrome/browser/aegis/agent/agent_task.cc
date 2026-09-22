@@ -2,6 +2,7 @@
 
 #include "chrome/browser/aegis/agent/agent_task.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/check.h"
@@ -205,6 +206,48 @@ void AgentTask::RecordModelObservation(int64_t input_tokens,
 
 void AgentTask::RecordModelFallback() {
   model_routing_metrics_.fallback_used = true;
+}
+
+bool AgentTask::RecordModelAttempt(AgentModelAttempt attempt) {
+  const bool duplicate =
+      !attempt.observation_id.empty() &&
+      std::ranges::any_of(
+          model_routing_metrics_.attempts, [&attempt](const auto& item) {
+            return item.observation_id == attempt.observation_id;
+          });
+  if (!attempt.IsValid() || duplicate ||
+      model_routing_metrics_.attempts.size() >= 1000) {
+    model_routing_metrics_.attempts_complete = false;
+    return false;
+  }
+  model_routing_metrics_.attempts.push_back(std::move(attempt));
+  return true;
+}
+
+bool AgentTask::CompleteModelAttempt(const AgentModelAttempt& observation) {
+  if (observation.observation_id.empty() || !observation.IsValid()) {
+    return false;
+  }
+  for (auto& attempt : model_routing_metrics_.attempts) {
+    if (attempt.observation_id != observation.observation_id) {
+      continue;
+    }
+    if (attempt.completed) {
+      return false;
+    }
+    attempt.input_tokens = observation.input_tokens;
+    attempt.output_tokens = observation.output_tokens;
+    attempt.cached_input_tokens = observation.cached_input_tokens;
+    attempt.reasoning_tokens = observation.reasoning_tokens;
+    attempt.latency_ms = observation.latency_ms;
+    attempt.succeeded = observation.succeeded;
+    attempt.completed = true;
+    RecordModelObservation(attempt.input_tokens.value_or(0),
+                           attempt.output_tokens.value_or(0),
+                           base::Milliseconds(attempt.latency_ms));
+    return true;
+  }
+  return false;
 }
 
 void AgentTask::AddObserver(AgentTaskObserver* observer) {

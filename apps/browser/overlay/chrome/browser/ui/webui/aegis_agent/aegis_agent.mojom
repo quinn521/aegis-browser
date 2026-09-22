@@ -30,6 +30,11 @@ enum ModelSelectionMode {
   kLocalOnly = 4,
 };
 
+struct GenerationProfile {
+  string effort;
+  int32 max_output_tokens;
+};
+
 struct ModelPoolEntry {
   string id;
   string provider;
@@ -43,6 +48,13 @@ struct ModelPoolEntry {
   int32 latency_score;
   string cost_microusd_per_million_tokens;
   int32 priority;
+  array<string> supported_efforts;
+  GenerationProfile default_profile;
+  GenerationProfile basic_profile;
+  GenerationProfile strong_profile;
+  string input_price;
+  string cached_input_price;
+  string output_price;
 };
 
 struct PlanStep {
@@ -80,6 +92,10 @@ struct PlanSummary {
   string model_output_tokens;
   string model_latency_ms;
   string estimated_model_cost_microusd;
+  string reasoning_effort;
+  int32 max_output_tokens;
+  bool estimated_cost_complete;
+  string routing_observations_json;
   string max_risk;
   array<PlanStep> steps;
 };
@@ -154,6 +170,7 @@ struct TaskSnapshot {
   string suggested_goal;
   string task_id;
   string state;
+  string routing_observations_json;
   string mode;
   string goal;
   PlanSummary? plan;

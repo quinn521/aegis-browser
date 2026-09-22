@@ -51,6 +51,28 @@ namespace aegis::agent {
 
 class AegisAgentServiceTestPeer {
  public:
+  static void QueueObservedRequest(AegisAgentService* service,
+                                   AgentTask* task,
+                                   AgentModelClient* client,
+                                   AgentModelClient::Callback callback) {
+    AgentModelRequest request;
+    request.model = "fixture-model";
+    request.system_prompt = "Use the approved fixture tool only.";
+    request.user_prompt = "Read the approved fixture.";
+    request.tools.push_back(BuildSubmitPlanToolDefinition());
+    request.stream = false;
+    service->StartObservedModelRequest(
+        task, client,
+        {.provider = ModelProvider::kOpenAI,
+         .base_url = "http://127.0.0.1:8779/v1"},
+        std::move(request), std::move(callback));
+  }
+
+  static bool EnterReflecting(AegisAgentService* service, AgentTask* task) {
+    return service->Transition(task->id(), AgentTaskState::kReflecting,
+                               "test tool failure repair");
+  }
+
   static void FinishMonitorDecryption(
       AegisAgentService* service,
       const std::string& monitor_id,
@@ -1374,6 +1396,108 @@ TEST_F(AegisAgentServiceTest, IdempotentActionIdsBindTheExactCall) {
   mismatch.arguments.Set("tab_id", 7);
   EXPECT_EQ(service->EvaluateToolCall(task->id(), mismatch).error,
             AgentErrorCode::kInvalidRequest);
+}
+
+TEST_F(AegisAgentServiceTest, ReflectingAndSiblingDispatchesRemainIndependent) {
+  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
+  auto* task = service->CreateTask("repair fixture", AgentMode::kAsk,
+                                  ServiceTestScope());
+  ASSERT_TRUE(task);
+  ASSERT_TRUE(InstallServicePlan(service, task));
+  ASSERT_TRUE(service->GrantTaskConsent(task->id()));
+  ASSERT_TRUE(AegisAgentServiceTestPeer::EnterReflecting(service, task));
+  network::TestURLLoaderFactory first_factory;
+  network::TestURLLoaderFactory second_factory;
+  AgentModelClient first(first_factory.GetSafeWeakWrapper());
+  AgentModelClient second(second_factory.GetSafeWeakWrapper());
+  base::test::TestFuture<bool, std::string, AgentModelParseResult> first_done;
+  base::test::TestFuture<bool, std::string, AgentModelParseResult> second_done;
+  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &first,
+                                                 first_done.GetCallback());
+  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &second,
+                                                 second_done.GetCallback());
+  FlushTaskStore(service);
+  const GURL endpoint("http://127.0.0.1:8779/v1/responses");
+  first_factory.WaitForRequest(endpoint);
+  second_factory.WaitForRequest(endpoint);
+  EXPECT_EQ(first_factory.NumPending(), 1);
+  EXPECT_EQ(second_factory.NumPending(), 1);
+  EXPECT_EQ(task->model_routing_metrics().attempts.size(), 2u);
+}
+
+TEST_F(AegisAgentServiceTest, PauseResumeRevokesPromptWaitingForDurableSave) {
+  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
+  auto* task = service->CreateTask("pause fixture", AgentMode::kAsk,
+                                  ServiceTestScope());
+  ASSERT_TRUE(task);
+  ASSERT_TRUE(InstallServicePlan(service, task));
+  ASSERT_TRUE(service->GrantTaskConsent(task->id()));
+  network::TestURLLoaderFactory factory;
+  AgentModelClient client(factory.GetSafeWeakWrapper());
+  base::test::TestFuture<bool, std::string, AgentModelParseResult> stale;
+  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
+                                                 stale.GetCallback());
+  ASSERT_TRUE(service->PauseTask(task->id()));
+  ASSERT_TRUE(service->ResumeTask(task->id()));
+  base::test::TestFuture<bool, std::string, AgentModelParseResult> current;
+  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
+                                                 current.GetCallback());
+  FlushTaskStore(service);
+  DrainTaskRunners();
+  EXPECT_EQ(factory.NumPending(), 1);
+  EXPECT_FALSE(stale.IsReady());
+  const auto& attempts = task->model_routing_metrics().attempts;
+  ASSERT_EQ(attempts.size(), 2u);
+  EXPECT_NE(attempts[0].observation_id, attempts[1].observation_id);
+  EXPECT_FALSE(attempts[0].completed);
+  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
+      "http://127.0.0.1:8779/v1/responses",
+      R"({"status":"completed","output":[]})"));
+  EXPECT_TRUE(current.Get<0>());
+  EXPECT_FALSE(stale.IsReady());
+}
+
+TEST_F(AegisAgentServiceTest, ConfigurationRevokesPromptWaitingForDurableSave) {
+  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
+  auto* task = service->CreateTask("configuration fixture", AgentMode::kAsk,
+                                  ServiceTestScope());
+  ASSERT_TRUE(task);
+  ASSERT_TRUE(InstallServicePlan(service, task));
+  ASSERT_TRUE(service->GrantTaskConsent(task->id()));
+  network::TestURLLoaderFactory factory;
+  AgentModelClient client(factory.GetSafeWeakWrapper());
+  base::test::TestFuture<bool, std::string, AgentModelParseResult> stale;
+  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
+                                                 stale.GetCallback());
+  service->InvalidatePendingModelDispatches();
+  FlushTaskStore(service);
+  DrainTaskRunners();
+  EXPECT_EQ(factory.NumPending(), 0);
+  EXPECT_TRUE(stale.IsReady());
+  EXPECT_FALSE(stale.Get<0>());
+  EXPECT_EQ(task->state(), AgentTaskState::kPausedByUser);
+  EXPECT_TRUE(service->ResumeTask(task->id()));
+  EXPECT_EQ(task->state(), AgentTaskState::kRunning);
+}
+
+TEST_F(AegisAgentServiceTest, ConfigurationChangeEndsPendingPlanningExplicitly) {
+  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
+  auto* task = service->CreateTask("planning configuration fixture", AgentMode::kAsk,
+                                  ServiceTestScope());
+  ASSERT_TRUE(task);
+  ASSERT_TRUE(service->BeginPlanning(task->id()));
+  network::TestURLLoaderFactory factory;
+  AgentModelClient client(factory.GetSafeWeakWrapper());
+  base::test::TestFuture<bool, std::string, AgentModelParseResult> result;
+  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
+                                                 result.GetCallback());
+  service->InvalidatePendingModelDispatches();
+  FlushTaskStore(service);
+  DrainTaskRunners();
+  EXPECT_EQ(factory.NumPending(), 0);
+  EXPECT_TRUE(result.IsReady());
+  EXPECT_FALSE(result.Get<0>());
+  EXPECT_EQ(task->state(), AgentTaskState::kFailed);
 }
 
 TEST_F(AegisAgentServiceTest, CreatesPausesResumesAndStopsOwnedActorTask) {

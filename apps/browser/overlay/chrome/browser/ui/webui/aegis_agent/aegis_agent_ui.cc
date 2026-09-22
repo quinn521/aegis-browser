@@ -141,6 +141,31 @@ void AddStrings(content::WebUIDataSource* source) {
   add("modelRoutingCost", "Auto · cost", "自动 · 成本", "自動 · 成本");
   add("modelRoutingLocalOnly", "Auto · local only", "自动 · 仅本地",
       "自動 · 僅本機");
+  add("supportedEfforts", "Model-supported efforts (comma separated)",
+      "模型支持的 effort（逗号分隔）", "模型支援的 effort（逗號分隔）");
+  add("inputTokenPrice", "Input price (µUSD / 1M tokens)",
+      "输入单价（µUSD / 百万 token）", "輸入單價（µUSD / 百萬 token）");
+  add("cachedTokenPrice", "Cached input price (µUSD / 1M tokens)",
+      "缓存输入单价（µUSD / 百万 token）", "快取輸入單價（µUSD / 百萬 token）");
+  add("outputTokenPrice", "Output price including reasoning (µUSD / 1M tokens)",
+      "输出单价含推理（µUSD / 百万 token）",
+      "輸出單價含推理（µUSD / 百萬 token）");
+  add("costComplete", "Complete estimate", "完整估算", "完整估算");
+  add("runtimeCostUnknown", "Unknown: usage or prices unavailable",
+      "未知：缺少用量或单价", "未知：缺少用量或單價");
+  add("routingObservations", "Copy routing observations (JSON)",
+      "复制路由观测（JSON）", "複製路由觀測（JSON）");
+  add("costPartial", "Partial estimate; some usage or prices unknown",
+      "部分估算：存在未知用量或单价", "部分估算：存在未知用量或單價");
+  add("defaultProfile", "Default effort:output limit (empty: provider default)",
+      "默认 effort:输出预算（空白沿用供应商默认）",
+      "預設 effort:輸出預算（空白沿用供應商預設）");
+  add("basicProfile", "Simple task effort:output limit",
+      "简单任务 effort:输出预算", "簡單任務 effort:輸出預算");
+  add("strongProfile", "Complex task effort:output limit",
+      "复杂任务 effort:输出预算", "複雜任務 effort:輸出預算");
+  add("generationProfile", "Effective effort / output limit",
+      "实际 effort / 输出预算", "實際 effort / 輸出預算");
   add("modelQualityScore", "Evaluated quality (0–100)",
       "评测质量（0–100）", "評測品質（0–100）");
   add("modelLatencyScore", "Latency score (lower is faster)",
@@ -169,8 +194,8 @@ void AddStrings(content::WebUIDataSource* source) {
       "生成模型用量");
   add("fallbackUsed", "Fallback used", "已使用备用模型",
       "已使用備用模型");
-  add("estimatedModelCost", "Estimated generation cost",
-      "生成模型估算成本", "生成模型估算成本");
+  add("estimatedModelCost", "Estimated task cost including routing",
+      "任务费用估算（含路由）", "任務費用估算（含路由）");
   add("modelDetected", "Model list retrieved", "模型列表获取成功",
       "模型清單取得成功");
   add("modelSaved", "Model settings saved", "模型设置已保存", "模型設定已儲存");

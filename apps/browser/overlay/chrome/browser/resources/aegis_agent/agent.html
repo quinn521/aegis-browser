@@ -98,6 +98,20 @@
             <input id="model-latency-score" type="number" min="0" max="100" value="50">
             <label for="model-cost" id="model-cost-label"></label>
             <input id="model-cost" type="number" min="0" placeholder="$i18n{modelCostUnknown}">
+            <label for="model-efforts">$i18n{supportedEfforts}</label>
+            <input id="model-efforts" type="text" placeholder="low,medium,high" maxlength="128">
+            <label for="model-profile-default">$i18n{defaultProfile}</label>
+            <input id="model-profile-default" type="text" placeholder="medium:8192" maxlength="32">
+            <label for="model-profile-basic">$i18n{basicProfile}</label>
+            <input id="model-profile-basic" type="text" placeholder="low:2048" maxlength="32">
+            <label for="model-profile-strong">$i18n{strongProfile}</label>
+            <input id="model-profile-strong" type="text" placeholder="high:16384" maxlength="32">
+            <label for="model-input-price">$i18n{inputTokenPrice}</label>
+            <input id="model-input-price" type="number" min="0">
+            <label for="model-cache-price">$i18n{cachedTokenPrice}</label>
+            <input id="model-cache-price" type="number" min="0">
+            <label for="model-output-price">$i18n{outputTokenPrice}</label>
+            <input id="model-output-price" type="number" min="0">
           </div>
           <div class="model-capabilities">
             <label><input id="model-supports-tools" type="checkbox" checked>
@@ -167,6 +181,12 @@
         </details>
         <button id="start-button" type="button" hidden disabled></button>
       </section>
+
+      <details id="routing-observations-details" class="card" hidden>
+        <summary>$i18n{routingObservations}</summary>
+        <textarea id="routing-observations" readonly rows="5"
+            aria-label="$i18n{routingObservations}"></textarea>
+      </details>
 
       <section id="result-card" class="card result-card" hidden>
         <h2 id="result-title"></h2>

@@ -56,6 +56,28 @@ TEST(AgentModelRouterTest, FixedModePreservesExistingDestination) {
   EXPECT_EQ(plan->primary_cost_microusd_per_million_tokens, 42);
 }
 
+TEST(AgentModelRouterTest, CostPolicyUsesSplitRatesAndSelectedBudget) {
+  AgentModelSelectionInput input;
+  input.mode = AgentModelSelectionMode::kCost;
+  input.requirements.reasoning = AgentReasoningNeed::kBasic;
+  auto expensive =
+      Entry("expensive", Destination("expensive"), 100, 1, std::nullopt);
+  expensive.token_prices = {.input = 100, .cached_input = 10, .output = 500};
+  expensive.generation_policy.basic_profile.max_output_tokens = 16000;
+  auto cheap = Entry("cheap", Destination("cheap"), 70, 50, std::nullopt);
+  cheap.token_prices = {.input = 100, .cached_input = 10, .output = 500};
+  cheap.generation_policy.basic_profile.max_output_tokens = 2000;
+  input.catalog = {expensive, cheap};
+  std::string error;
+  auto plan = SelectAgentModelRoute(input, &error);
+  ASSERT_TRUE(plan) << error;
+  EXPECT_EQ(plan->primary.model, "cheap");
+  input.catalog[1].token_prices.output.reset();
+  plan = SelectAgentModelRoute(input, &error);
+  ASSERT_TRUE(plan) << error;
+  EXPECT_EQ(plan->primary.model, "expensive");
+}
+
 TEST(AgentModelRouterTest, RejectsEmptyOrUnauthorizedPool) {
   AgentModelSelectionInput input;
   input.mode = AgentModelSelectionMode::kBalanced;

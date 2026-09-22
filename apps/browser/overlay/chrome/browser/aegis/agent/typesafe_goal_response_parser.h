@@ -27,6 +27,7 @@ struct TypeSafeGoalAnalysis {
   TypeSafeChoiceValue output_need;
   int input_tokens = 0;
   int output_tokens = 0;
+  bool usage_present = false;
   base::TimeDelta latency;
 };
 

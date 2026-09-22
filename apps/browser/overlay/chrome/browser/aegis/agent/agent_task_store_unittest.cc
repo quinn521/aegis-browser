@@ -159,6 +159,9 @@ TEST(AegisAgentTaskStoreTest, RoundTripsFrozenAutomaticModelBinding) {
   AgentTaskScope scope = StoreTestScope();
   scope.model_selection_mode = AgentModelSelectionMode::kQuality;
   scope.model_catalog_revision = 12;
+  scope.model_generation_profile = {"low", 4096};
+  scope.fallback_generation_profile = {"high", 16384};
+  scope.model_token_prices = {.input = 100, .cached_input = 20, .output = 500};
   scope.model_fallback_destination = scope.model_destination;
   scope.model_fallback_destination->model = "fixture-backup";
   AgentTask task("automatic-model-binding", "route fixture", AgentMode::kAsk,
@@ -171,10 +174,72 @@ TEST(AegisAgentTaskStoreTest, RoundTripsFrozenAutomaticModelBinding) {
   EXPECT_EQ(restored->model_selection_mode,
             AgentModelSelectionMode::kQuality);
   EXPECT_EQ(restored->model_catalog_revision, 12);
+  EXPECT_EQ(restored->model_generation_profile.effort, "low");
+  EXPECT_EQ(restored->fallback_generation_profile.max_output_tokens, 16384);
+  EXPECT_EQ(restored->model_token_prices.cached_input, 20);
+  auto changed = *restored;
+  changed.model_generation_profile.effort = "high";
+  EXPECT_FALSE(changed.IsNoBroaderThan(scope));
   ASSERT_TRUE(restored->model_fallback_destination);
   EXPECT_EQ(restored->model_fallback_destination->model, "fixture-backup");
   EXPECT_TRUE(restored->IsNoBroaderThan(scope));
   EXPECT_TRUE(scope.IsNoBroaderThan(*restored));
+}
+
+TEST(AegisAgentTaskStoreTest,
+     ObservationIdsKeepOverlappingCallsAndPendingUsage) {
+  AgentTask task("observation-fixture", "fixture", AgentMode::kAsk,
+                 StoreTestScope());
+  ASSERT_TRUE(task.RecordModelAttempt({.model = "primary",
+                                       .effort = "low",
+                                       .prices = {.input = 100, .output = 200},
+                                       .observation_id = "first",
+                                       .completed = false}));
+  ASSERT_TRUE(task.RecordModelAttempt({.model = "backup",
+                                       .effort = "high",
+                                       .prices = {.input = 300, .output = 400},
+                                       .observation_id = "second",
+                                       .completed = false}));
+  AgentModelAttempt second{.input_tokens = 10,
+                           .output_tokens = 20,
+                           .latency_ms = 300,
+                           .succeeded = true,
+                           .observation_id = "second"};
+  ASSERT_TRUE(task.CompleteModelAttempt(second));
+  EXPECT_FALSE(task.CompleteModelAttempt(second));
+  EXPECT_EQ(task.model_routing_metrics().model_output_tokens, 20);
+  auto restored = AgentTaskStore::DeserializeModelRoutingMetrics(
+      AgentTaskStore::SerializeModelRoutingMetrics(
+          task.model_routing_metrics()));
+  ASSERT_TRUE(restored);
+  ASSERT_EQ(restored->attempts.size(), 2u);
+  EXPECT_FALSE(restored->attempts[0].completed);
+  EXPECT_FALSE(restored->attempts[0].input_tokens);
+  EXPECT_EQ(restored->attempts[1].model, "backup");
+  EXPECT_EQ(restored->attempts[1].prices.output, 400);
+  EXPECT_EQ(restored->attempts[1].latency_ms, 300);
+}
+
+TEST(AegisAgentTaskStoreTest, RoundTripsAttemptUnknownUsageAndFrozenPrices) {
+  AgentModelRoutingMetrics metrics;
+  metrics.attempts_complete = true;
+  metrics.attempts.push_back(
+      {.model = "small",
+       .effort = "low",
+       .input_tokens = 100,
+       .cached_input_tokens = 50,
+       .output_tokens = 20,
+       .reasoning_tokens = 10,
+       .prices = {.input = 100, .cached_input = 20, .output = 500}});
+  metrics.attempts.push_back({.kind = "typesafe", .model = "jev"});
+  auto restored = AgentTaskStore::DeserializeModelRoutingMetrics(
+      AgentTaskStore::SerializeModelRoutingMetrics(metrics));
+  ASSERT_TRUE(restored);
+  ASSERT_EQ(restored->attempts.size(), 2u);
+  EXPECT_EQ(restored->attempts[0].cached_input_tokens, 50);
+  EXPECT_EQ(restored->attempts[0].prices.output, 500);
+  EXPECT_FALSE(restored->attempts[1].input_tokens);
+  EXPECT_FALSE(restored->attempts[1].prices.input);
 }
 
 TEST(AegisAgentTaskStoreTest, RejectsBroadenedOrMalformedStoredScope) {
@@ -431,8 +496,8 @@ TEST(AegisAgentTaskStoreTest, MigratesVersionSevenWithoutLosingMonitorState) {
   ASSERT_TRUE(inspected.Open(path));
   sql::MetaTable meta;
   ASSERT_TRUE(meta.Init(&inspected, 9, 9));
-  EXPECT_EQ(meta.GetVersionNumber(), 9);
-  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 9);
+  EXPECT_EQ(meta.GetVersionNumber(), 10);
+  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 10);
 }
 
 TEST(AegisAgentTaskStoreTest,

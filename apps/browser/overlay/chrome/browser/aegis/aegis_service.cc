@@ -2,6 +2,8 @@
 // Intended path: chrome/browser/aegis/aegis_service.cc
 
 #include "chrome/browser/aegis/aegis_service.h"
+#include "chrome/browser/aegis/agent/agent_generation_profile_json.h"
+#include "chrome/browser/aegis/agent/agent_model_accounting_json.h"
 
 #include <algorithm>
 #include <limits>
@@ -209,6 +211,10 @@ std::optional<agent::AgentModelCatalogEntry> DeserializeAgentModelCatalogEntry(
           item.FindInt("cost_microusd_per_million_tokens")) {
     entry.cost_microusd_per_million_tokens = *cost;
   }
+  if (!agent::ReadGenerationPolicy(item, &entry.generation_policy) ||
+      !agent::ReadTokenPrices(item, "token_prices", &entry.token_prices)) {
+    return std::nullopt;
+  }
   return entry.IsValid() ? std::make_optional(std::move(entry)) : std::nullopt;
 }
 
@@ -250,6 +256,8 @@ std::optional<base::DictValue> SerializeAgentModelCatalogEntry(
   item.Set("quality_score", entry->quality_score);
   item.Set("latency_score", entry->latency_score);
   item.Set("priority", entry->priority);
+  agent::WriteGenerationPolicy(entry->generation_policy, &item);
+  item.Set("token_prices", agent::SerializeTokenPrices(entry->token_prices));
   if (entry->cost_microusd_per_million_tokens) {
     item.Set("cost_microusd_per_million_tokens",
              static_cast<int>(*entry->cost_microusd_per_million_tokens));
@@ -1747,6 +1755,7 @@ bool AegisService::SetAgentModelRoutingSettings(
   if (auto* agent_service =
           agent::AegisAgentServiceFactory::GetForProfileIfExists(profile_)) {
     agent_service->CancelPendingGoalRouting();
+    agent_service->InvalidatePendingModelDispatches();
   }
   prefs_->SetList(prefs::kAgentModelCatalog, std::move(serialized));
   prefs_->SetString(prefs::kAgentModelSelectionMode,
@@ -1961,6 +1970,10 @@ void AegisService::OnTypeSafeCredentialLoaded(
 void AegisService::PersistModelConfiguration(const std::string& provider,
                                              const std::string& base_url,
                                              const std::string& model) {
+  if (auto* agent_service =
+          agent::AegisAgentServiceFactory::GetForProfileIfExists(profile_)) {
+    agent_service->InvalidatePendingModelDispatches();
+  }
   prefs_->SetString(prefs::kModelProvider, provider);
   prefs_->SetString(prefs::kModelBaseUrl, base_url);
   prefs_->SetString(prefs::kModelName, model);

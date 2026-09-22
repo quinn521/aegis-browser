@@ -61,6 +61,9 @@ bool AgentModelDestination::IsValid() const {
 
 bool AgentTaskScope::IsValid() const {
   if (!budgets.IsValid() || !model_destination.IsValid() ||
+      !model_generation_profile.IsValid() ||
+      !fallback_generation_profile.IsValid() || !model_token_prices.IsValid() ||
+      !fallback_token_prices.IsValid() ||
       (model_fallback_destination &&
        (!model_fallback_destination->IsValid() ||
         *model_fallback_destination == model_destination)) ||
@@ -118,6 +121,10 @@ bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
       model_destination != other.model_destination ||
       model_selection_mode != other.model_selection_mode ||
       model_catalog_revision != other.model_catalog_revision ||
+      model_generation_profile != other.model_generation_profile ||
+      fallback_generation_profile != other.fallback_generation_profile ||
+      model_token_prices != other.model_token_prices ||
+      fallback_token_prices != other.fallback_token_prices ||
       (model_fallback_destination &&
        model_fallback_destination != other.model_fallback_destination) ||
       !IsSubset(allowed_tab_ids, other.allowed_tab_ids) ||
@@ -135,7 +142,10 @@ bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
 }
 
 bool AgentModelRoutingMetrics::IsValid() const {
-  return typesafe_outcome.size() <= 64u && typesafe_model.size() <= 128u &&
+  return attempts.size() <= 1000 &&
+         std::ranges::all_of(attempts,
+                             [](const auto& item) { return item.IsValid(); }) &&
+         typesafe_outcome.size() <= 64u && typesafe_model.size() <= 128u &&
          typesafe_decisions.size() <= 512u && typesafe_input_tokens >= 0 &&
          typesafe_output_tokens >= 0 && typesafe_latency_ms >= 0 &&
          (!primary_model_cost_microusd_per_million_tokens ||

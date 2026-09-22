@@ -64,6 +64,9 @@ int AgentModelToolOutputTokenLimit(std::string_view tool_name);
 struct AgentModelUsage {
   int64_t input_tokens = 0;
   int64_t output_tokens = 0;
+  std::optional<int64_t> cached_input_tokens;
+  std::optional<int64_t> reasoning_tokens;
+  bool billing_complete = true;
 };
 
 struct AgentModelEvent {

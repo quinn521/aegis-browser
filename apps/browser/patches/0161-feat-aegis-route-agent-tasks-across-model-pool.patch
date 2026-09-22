@@ -1,50 +1,60 @@
-From df7fdf89b5d716e3e36131b1991b637d60a0b9e8 Mon Sep 17 00:00:00 2001
+From 9fd39c6fac342c7aa0cab207e7849b8bb25fa371 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 22 Sep 2026 15:12:32 +0800
 Subject: [PATCH] feat(aegis): route agent tasks across model pool
 
 ---
- chrome/browser/aegis/BUILD.gn                 |   3 +
+ chrome/browser/aegis/BUILD.gn                 |   7 +
  chrome/browser/aegis/aegis_prefs.cc           |   7 +
- chrome/browser/aegis/aegis_service.cc         | 449 ++++++++++++++++++
- chrome/browser/aegis/aegis_service.h          |  62 +++
- .../browser/aegis/aegis_service_unittest.cc   |  83 ++++
- .../aegis/agent/aegis_agent_service.cc        | 400 ++++++++++++++--
- .../browser/aegis/agent/aegis_agent_service.h |  43 +-
- .../agent/aegis_agent_service_unittest.cc     | 337 +++++++++++++
+ chrome/browser/aegis/aegis_service.cc         | 462 +++++++++++++
+ chrome/browser/aegis/aegis_service.h          |  62 ++
+ .../browser/aegis/aegis_service_unittest.cc   |  83 +++
+ .../aegis/agent/aegis_agent_service.cc        | 623 +++++++++++++++---
+ .../browser/aegis/agent/aegis_agent_service.h |  68 +-
+ .../agent/aegis_agent_service_unittest.cc     | 461 +++++++++++++
  .../aegis/agent/agent_core_unittest.cc        |  27 +-
+ .../aegis/agent/agent_generation_profile.h    |  82 +++
+ .../agent/agent_generation_profile_json.h     |  71 ++
+ .../aegis/agent/agent_model_accounting.h      |  84 +++
+ .../aegis/agent/agent_model_accounting_json.h | 122 ++++
  .../browser/aegis/agent/agent_model_client.cc |  48 +-
+ .../browser/aegis/agent/agent_model_client.h  |   3 +
  .../agent/agent_model_client_unittest.cc      |  21 +
- .../aegis/agent/agent_model_protocol.cc       |   7 +
- .../aegis/agent/agent_model_protocol.h        |  15 +
- .../browser/aegis/agent/agent_model_router.cc | 149 ++++++
- .../browser/aegis/agent/agent_model_router.h  |  85 ++++
- .../agent/agent_model_router_unittest.cc      | 136 ++++++
- chrome/browser/aegis/agent/agent_planner.cc   |  86 +++-
+ .../aegis/agent/agent_model_protocol.cc       | 102 ++-
+ .../aegis/agent/agent_model_protocol.h        |  18 +
+ .../agent/agent_model_protocol_unittest.cc    |  71 +-
+ .../browser/aegis/agent/agent_model_router.cc | 180 +++++
+ .../browser/aegis/agent/agent_model_router.h  |  91 +++
+ .../agent/agent_model_router_unittest.cc      | 158 +++++
+ chrome/browser/aegis/agent/agent_planner.cc   |  91 ++-
  chrome/browser/aegis/agent/agent_planner.h    |   5 +
- chrome/browser/aegis/agent/agent_task.cc      |  24 +
- chrome/browser/aegis/agent/agent_task.h       |   9 +
- .../browser/aegis/agent/agent_task_store.cc   | 250 +++++++++-
- chrome/browser/aegis/agent/agent_task_store.h |   6 +
- .../aegis/agent/agent_task_store_unittest.cc  | 117 ++++-
- chrome/browser/aegis/agent/agent_types.cc     |  26 +
- chrome/browser/aegis/agent/agent_types.h      |  39 ++
- .../aegis/agent/typesafe_choice_contract.cc   | 110 +++++
- .../aegis/agent/typesafe_choice_contract.h    |  34 ++
- .../agent/typesafe_goal_response_parser.cc    | 268 +++++++++++
- .../agent/typesafe_goal_response_parser.h     |  45 ++
- .../agent/typesafe_goal_router_client.cc      | 300 ++++++++++++
- .../aegis/agent/typesafe_goal_router_client.h |  67 +++
- .../typesafe_goal_router_client_unittest.cc   | 222 +++++++++
- .../browser/resources/aegis_agent/agent.css   |  56 ++-
- .../browser/resources/aegis_agent/agent.html  |  49 ++
- chrome/browser/resources/aegis_agent/agent.ts | 230 ++++++++-
- .../ui/webui/aegis_agent/aegis_agent.mojom    |  59 +++
- .../aegis_agent/aegis_agent_page_handler.cc   | 321 ++++++++++++-
+ chrome/browser/aegis/agent/agent_task.cc      |  67 ++
+ chrome/browser/aegis/agent/agent_task.h       |  11 +
+ .../browser/aegis/agent/agent_task_store.cc   | 299 ++++++++-
+ chrome/browser/aegis/agent/agent_task_store.h |   7 +
+ .../aegis/agent/agent_task_store_unittest.cc  | 182 ++++-
+ chrome/browser/aegis/agent/agent_types.cc     |  36 +
+ chrome/browser/aegis/agent/agent_types.h      |  47 ++
+ .../aegis/agent/typesafe_choice_contract.cc   | 110 ++++
+ .../aegis/agent/typesafe_choice_contract.h    |  34 +
+ .../agent/typesafe_goal_response_parser.cc    | 272 ++++++++
+ .../agent/typesafe_goal_response_parser.h     |  46 ++
+ .../agent/typesafe_goal_router_client.cc      | 300 +++++++++
+ .../aegis/agent/typesafe_goal_router_client.h |  67 ++
+ .../typesafe_goal_router_client_unittest.cc   | 222 +++++++
+ .../browser/resources/aegis_agent/agent.css   |  56 +-
+ .../browser/resources/aegis_agent/agent.html  |  69 ++
+ chrome/browser/resources/aegis_agent/agent.ts | 261 +++++++-
+ .../ui/webui/aegis_agent/aegis_agent.mojom    |  76 +++
+ .../aegis_agent/aegis_agent_page_handler.cc   | 415 +++++++++++-
  .../aegis_agent/aegis_agent_page_handler.h    |  24 +
- .../ui/webui/aegis_agent/aegis_agent_ui.cc    |  74 +++
+ .../ui/webui/aegis_agent/aegis_agent_ui.cc    |  99 +++
  chrome/common/aegis/pref_names.h              |   9 +
- 40 files changed, 4189 insertions(+), 113 deletions(-)
+ 46 files changed, 5508 insertions(+), 148 deletions(-)
+ create mode 100644 chrome/browser/aegis/agent/agent_generation_profile.h
+ create mode 100644 chrome/browser/aegis/agent/agent_generation_profile_json.h
+ create mode 100644 chrome/browser/aegis/agent/agent_model_accounting.h
+ create mode 100644 chrome/browser/aegis/agent/agent_model_accounting_json.h
  create mode 100644 chrome/browser/aegis/agent/agent_model_router.cc
  create mode 100644 chrome/browser/aegis/agent/agent_model_router.h
  create mode 100644 chrome/browser/aegis/agent/agent_model_router_unittest.cc
@@ -57,19 +67,23 @@ Subject: [PATCH] feat(aegis): route agent tasks across model pool
  create mode 100644 chrome/browser/aegis/agent/typesafe_goal_router_client_unittest.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index 96e5b48e23..1b829e76b8 100644
+index 96e5b48e23..ca3dccf9a7 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
-@@ -22,6 +22,8 @@ source_set("agent_core") {
+@@ -22,6 +22,12 @@ source_set("agent_core") {
      "agent/agent_execution.h",
      "agent/agent_model_protocol.cc",
      "agent/agent_model_protocol.h",
 +    "agent/agent_model_router.cc",
 +    "agent/agent_model_router.h",
++    "agent/agent_generation_profile.h",
++    "agent/agent_generation_profile_json.h",
++    "agent/agent_model_accounting.h",
++    "agent/agent_model_accounting_json.h",
      "agent/agent_monitor_scheduler.cc",
      "agent/agent_monitor_scheduler.h",
      "agent/agent_monitor_summary.cc",
-@@ -344,6 +346,7 @@ test("aegis_agent_core_unittests") {
+@@ -344,6 +350,7 @@ test("aegis_agent_core_unittests") {
      "agent/agent_core_unittest.cc",
      "agent/agent_execution_unittest.cc",
      "agent/agent_model_protocol_unittest.cc",
@@ -96,18 +110,22 @@ index 89e3003c10..eed93d8661 100644
    registry->RegisterStringPref(prefs::kOllamaBaseUrl, "http://127.0.0.1:11434");
    registry->RegisterStringPref(prefs::kOllamaModel, "llama3.2:3b");
 diff --git a/chrome/browser/aegis/aegis_service.cc b/chrome/browser/aegis/aegis_service.cc
-index 36f242ed25..28e1797acb 100644
+index 36f242ed25..45d6025dd8 100644
 --- a/chrome/browser/aegis/aegis_service.cc
 +++ b/chrome/browser/aegis/aegis_service.cc
-@@ -4,6 +4,7 @@
+@@ -2,8 +2,11 @@
+ // Intended path: chrome/browser/aegis/aegis_service.cc
+ 
  #include "chrome/browser/aegis/aegis_service.h"
++#include "chrome/browser/aegis/agent/agent_generation_profile_json.h"
++#include "chrome/browser/aegis/agent/agent_model_accounting_json.h"
  
  #include <algorithm>
 +#include <limits>
  #include <string_view>
  
  #include "base/base64.h"
-@@ -24,6 +25,8 @@
+@@ -24,6 +27,8 @@
  #include "chrome/browser/aegis/aegis_bounce_observer.h"
  #include "chrome/browser/aegis/aegis_cookie_janitor.h"
  #include "chrome/browser/aegis/aegis_service_factory.h"
@@ -116,7 +134,7 @@ index 36f242ed25..28e1797acb 100644
  #if BUILDFLAG(IS_MAC)
  #include "chrome/browser/aegis/aegis_torrent_client.h"
  #endif
-@@ -65,6 +68,7 @@ constexpr base::TimeDelta kObserverNotificationInterval =
+@@ -65,6 +70,7 @@ constexpr base::TimeDelta kObserverNotificationInterval =
  constexpr base::TimeDelta kMinerObservationWindow = base::Seconds(30);
  constexpr size_t kMaxMinerDocuments = 100;
  constexpr size_t kMaxModelApiKeyBytes = 4096;
@@ -124,7 +142,7 @@ index 36f242ed25..28e1797acb 100644
  constexpr std::string_view kLegacyOllamaBaseUrl = "http://127.0.0.1:11434";
  constexpr std::string_view kLegacyOllamaModel = "llama3.2:3b";
  
-@@ -100,6 +104,39 @@ std::optional<std::string> NormalizeModelBaseUrl(ModelProvider provider,
+@@ -100,6 +106,39 @@ std::optional<std::string> NormalizeModelBaseUrl(ModelProvider provider,
    return parsed.ReplaceComponents(replacements).spec();
  }
  
@@ -164,7 +182,7 @@ index 36f242ed25..28e1797acb 100644
  std::string ModelCredentialKey(ModelProvider provider,
                                 const std::string& normalized_base_url) {
    return std::string(ModelProviderId(provider)) + "|" + normalized_base_url;
-@@ -126,6 +163,105 @@ bool HasUserSetting(PrefService* prefs, const char* name) {
+@@ -126,6 +165,111 @@ bool HasUserSetting(PrefService* prefs, const char* name) {
    return preference && preference->HasUserSetting();
  }
  
@@ -214,6 +232,10 @@ index 36f242ed25..28e1797acb 100644
 +          item.FindInt("cost_microusd_per_million_tokens")) {
 +    entry.cost_microusd_per_million_tokens = *cost;
 +  }
++  if (!agent::ReadGenerationPolicy(item, &entry.generation_policy) ||
++      !agent::ReadTokenPrices(item, "token_prices", &entry.token_prices)) {
++    return std::nullopt;
++  }
 +  return entry.IsValid() ? std::make_optional(std::move(entry)) : std::nullopt;
 +}
 +
@@ -255,6 +277,8 @@ index 36f242ed25..28e1797acb 100644
 +  item.Set("quality_score", entry->quality_score);
 +  item.Set("latency_score", entry->latency_score);
 +  item.Set("priority", entry->priority);
++  agent::WriteGenerationPolicy(entry->generation_policy, &item);
++  item.Set("token_prices", agent::SerializeTokenPrices(entry->token_prices));
 +  if (entry->cost_microusd_per_million_tokens) {
 +    item.Set("cost_microusd_per_million_tokens",
 +             static_cast<int>(*entry->cost_microusd_per_million_tokens));
@@ -270,7 +294,7 @@ index 36f242ed25..28e1797acb 100644
  std::optional<std::string> LegacyOllamaBaseToOpenAI(
      std::string_view legacy_base_url) {
    std::optional<std::string> normalized =
-@@ -329,6 +465,7 @@ AegisService::AegisService(Profile* profile)
+@@ -329,6 +473,7 @@ AegisService::AegisService(Profile* profile)
    }
    model_client_ = std::make_unique<ModelProviderClient>();
    LoadModelCredentials();
@@ -278,7 +302,7 @@ index 36f242ed25..28e1797acb 100644
    InstallReporterCallbacks();
  #if !BUILDFLAG(IS_ANDROID)
    if (!profile->IsOffTheRecord()) {
-@@ -516,6 +653,12 @@ void AegisService::ShutdownForProfile() {
+@@ -516,6 +661,12 @@ void AegisService::ShutdownForProfile() {
    model_credentials_loading_ = false;
    model_credentials_loaded_ = false;
    model_credentials_available_ = true;
@@ -291,7 +315,7 @@ index 36f242ed25..28e1797acb 100644
    if (cookie_janitor_) {
      cookie_janitor_->Stop();
    }
-@@ -1509,6 +1652,312 @@ std::string AegisService::ModelCredentialState(
+@@ -1509,9 +1660,320 @@ std::string AegisService::ModelCredentialState(
    return model_credentials_available_ ? "ready" : "unavailable";
  }
  
@@ -390,6 +414,7 @@ index 36f242ed25..28e1797acb 100644
 +  if (auto* agent_service =
 +          agent::AegisAgentServiceFactory::GetForProfileIfExists(profile_)) {
 +    agent_service->CancelPendingGoalRouting();
++    agent_service->InvalidatePendingModelDispatches();
 +  }
 +  prefs_->SetList(prefs::kAgentModelCatalog, std::move(serialized));
 +  prefs_->SetString(prefs::kAgentModelSelectionMode,
@@ -604,6 +629,13 @@ index 36f242ed25..28e1797acb 100644
  void AegisService::PersistModelConfiguration(const std::string& provider,
                                               const std::string& base_url,
                                               const std::string& model) {
++  if (auto* agent_service =
++          agent::AegisAgentServiceFactory::GetForProfileIfExists(profile_)) {
++    agent_service->InvalidatePendingModelDispatches();
++  }
+   prefs_->SetString(prefs::kModelProvider, provider);
+   prefs_->SetString(prefs::kModelBaseUrl, base_url);
+   prefs_->SetString(prefs::kModelName, model);
 diff --git a/chrome/browser/aegis/aegis_service.h b/chrome/browser/aegis/aegis_service.h
 index f8af292326..349b55999f 100644
 --- a/chrome/browser/aegis/aegis_service.h
@@ -800,7 +832,7 @@ index bae516a800..cc8e52ba35 100644
         SendsPublicSummaryButKeepsSensitiveHostLocal) {
    AegisService* service = this->service();
 diff --git a/chrome/browser/aegis/agent/aegis_agent_service.cc b/chrome/browser/aegis/agent/aegis_agent_service.cc
-index 40472f083f..2bf06e6cbf 100644
+index 40472f083f..fefa9bb3c4 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_service.cc
 +++ b/chrome/browser/aegis/agent/aegis_agent_service.cc
 @@ -30,6 +30,7 @@
@@ -811,7 +843,7 @@ index 40472f083f..2bf06e6cbf 100644
  #include "chrome/browser/aegis/model_provider_policy.h"
  #include "chrome/browser/browser_process.h"
  #if !BUILDFLAG(IS_ANDROID)
-@@ -253,6 +254,38 @@ std::string ModelCapabilityKey(const AgentModelDestination& destination) {
+@@ -253,6 +254,62 @@ std::string ModelCapabilityKey(const AgentModelDestination& destination) {
           destination.model;
  }
  
@@ -833,6 +865,30 @@ index 40472f083f..2bf06e6cbf 100644
 +             : task.scope().model_destination;
 +}
 +
++const AgentGenerationProfile& ActiveGenerationProfile(const AgentTask& task) {
++  return task.model_routing_metrics().fallback_used
++             ? task.scope().fallback_generation_profile
++             : task.scope().model_generation_profile;
++}
++
++void PopulateAttemptUsage(const AgentModelParseResult& result,
++                          AgentModelAttempt* attempt) {
++  // All live Agent requests are non-streaming. For a stream, the latest usage
++  // event is the cumulative total, not an additional independently billed call.
++  for (const auto& event : result.events) {
++    if (event.type == AgentModelEventType::kUsage) {
++      attempt->input_tokens = event.usage.billing_complete
++                                  ? std::make_optional(event.usage.input_tokens)
++                                  : std::nullopt;
++      attempt->output_tokens = event.usage.output_tokens;
++      attempt->cached_input_tokens = event.usage.cached_input_tokens;
++      attempt->reasoning_tokens = event.usage.reasoning_tokens;
++    }
++  }
++  attempt->succeeded =
++      result.ok() && result.failure == AgentModelRequestFailure::kNone;
++}
++
 +std::string TypeSafeDecisionSummary(const TypeSafeGoalAnalysis& analysis) {
 +  return base::StrCat(
 +      {"workflow=", analysis.workflow.choice, ":",
@@ -850,7 +906,7 @@ index 40472f083f..2bf06e6cbf 100644
  std::optional<AgentModelClientConfig> ResolveModelConfig(
      Profile* profile,
      const AgentModelDestination& destination,
-@@ -263,7 +296,16 @@ std::optional<AgentModelClientConfig> ResolveModelConfig(
+@@ -263,7 +320,16 @@ std::optional<AgentModelClientConfig> ResolveModelConfig(
    error->clear();
    const std::optional<AgentModelDestination> configured =
        ReadExplicitAgentModelDestination(profile);
@@ -868,7 +924,7 @@ index 40472f083f..2bf06e6cbf 100644
      *error = "Agent model destination is not explicitly configured";
      return std::nullopt;
    }
-@@ -283,7 +325,7 @@ std::optional<AgentModelClientConfig> ResolveModelConfig(
+@@ -283,7 +349,7 @@ std::optional<AgentModelClientConfig> ResolveModelConfig(
      return std::nullopt;
    }
    std::string api_key;
@@ -877,7 +933,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (settings) {
      std::optional<std::string> stored_key =
          settings->ModelApiKeyForBrowserAgent(profile, destination.provider,
-@@ -612,6 +654,36 @@ AegisAgentService::ConfiguredModelDestination() const {
+@@ -612,6 +678,37 @@ AegisAgentService::ConfiguredModelDestination() const {
    return ReadExplicitAgentModelDestination(profile_);
  }
  
@@ -908,13 +964,14 @@ index 40472f083f..2bf06e6cbf 100644
 +  }
 +  AgentModelRoutingMetrics metrics;
 +  metrics.typesafe_outcome = "not_required";
++  metrics.attempts_complete = true;
 +  return metrics;
 +}
 +
  bool AegisAgentService::IsToolAvailable(std::string_view tool_name) const {
    if (!IsEnabled() || !tool_registry_.Find(tool_name)) {
      return false;
-@@ -647,7 +719,9 @@ bool AegisAgentService::IsToolAvailable(std::string_view tool_name) const {
+@@ -647,7 +744,9 @@ bool AegisAgentService::IsToolAvailable(std::string_view tool_name) const {
  
  AgentTask* AegisAgentService::CreateTask(std::string goal,
                                           AgentMode mode,
@@ -925,7 +982,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (!IsEnabled() || goal.empty() || goal.size() > 4096u ||
        !AgentTaskStore::IsSafeSummary(goal) || !scope.IsValid()) {
      return nullptr;
-@@ -655,6 +729,9 @@ AgentTask* AegisAgentService::CreateTask(std::string goal,
+@@ -655,6 +754,9 @@ AgentTask* AegisAgentService::CreateTask(std::string goal,
    const std::string task_id = AgentTask::GenerateTaskId();
    auto task = std::make_unique<AgentTask>(task_id, std::move(goal), mode,
                                            std::move(scope));
@@ -935,7 +992,7 @@ index 40472f083f..2bf06e6cbf 100644
    AgentTask* result = task.get();
    tasks_.emplace(task_id, std::move(task));
    task_has_external_side_effect_[task_id] = false;
-@@ -751,8 +828,68 @@ bool AegisAgentService::BeginPlanning(const std::string& task_id) {
+@@ -751,8 +853,69 @@ bool AegisAgentService::BeginPlanning(const std::string& task_id) {
  void AegisAgentService::RouteGoal(std::string goal,
                                    AgentWorkflowKind requested_workflow,
                                    GoalRouteCallback callback) {
@@ -960,6 +1017,7 @@ index 40472f083f..2bf06e6cbf 100644
 +      DefaultModelRequirements(requested_workflow);
 +  last_goal_routing_metrics_ = AgentModelRoutingMetrics();
 +  last_goal_routing_metrics_.typesafe_outcome = "not_attempted";
++  last_goal_routing_metrics_.attempts_complete = true;
 +  const uint64_t generation = ++goal_route_generation_;
 +  pending_goal_route_callback_ = std::move(callback);
 +  AegisService* settings = AegisServiceFactory::GetForProfileIfExists(profile_);
@@ -1005,7 +1063,7 @@ index 40472f083f..2bf06e6cbf 100644
  }
  
  void AegisAgentService::RouteGoalAttempt(std::string goal,
-@@ -764,12 +901,18 @@ void AegisAgentService::RouteGoalAttempt(std::string goal,
+@@ -764,12 +927,18 @@ void AegisAgentService::RouteGoalAttempt(std::string goal,
      std::move(callback).Run(true, std::string(), goal_route_for_testing_);
      return;
    }
@@ -1026,7 +1084,32 @@ index 40472f083f..2bf06e6cbf 100644
                              std::nullopt);
      return;
    }
-@@ -836,6 +979,95 @@ void AegisAgentService::SetGoalRouterClientForTesting(
+@@ -808,11 +977,20 @@ void AegisAgentService::RouteGoalAttempt(std::string goal,
+   request.user_prompt = *prompt;
+   request.tools.push_back(BuildRouteGoalToolDefinition());
+   request.required_tool_name = "agent.route_goal";
+-  request.reasoning_effort = "none";
+-  request.disable_model_thinking = ShouldDisableLocalQwenThinking(*destination);
+-  request.max_output_tokens =
+-      AgentModelToolOutputTokenLimit(request.required_tool_name);
++  request.reasoning_effort = route->primary_profile.effort;
++  request.disable_model_thinking = (request.reasoning_effort.empty() ||
++                                    request.reasoning_effort == "none") &&
++                                   ShouldDisableLocalQwenThinking(*destination);
++  request.max_output_tokens = AgentGenerationOutputLimit(
++      route->primary_profile,
++      AgentModelToolOutputTokenLimit(request.required_tool_name));
+   request.stream = false;
++  pending_goal_model_attempt_ = {.kind = "generation",
++                                 .model = request.model,
++                                 .effort = request.reasoning_effort,
++                                 .prices = route->primary_token_prices};
++  pending_goal_model_attempt_.phase = "screening";
++  goal_model_started_at_ = base::TimeTicks::Now();
+   std::optional<AgentModelClient::RequestId> request_id =
+       goal_router_client_->Start(
+           std::move(*config), std::move(request),
+@@ -836,6 +1014,106 @@ void AegisAgentService::SetGoalRouterClientForTesting(
    goal_router_client_ = std::move(client);
  }
  
@@ -1078,6 +1161,17 @@ index 40472f083f..2bf06e6cbf 100644
 +      typesafe_goal_router_client_
 +          ? typesafe_goal_router_client_->last_latency().InMilliseconds()
 +          : 0;
++  AgentModelAttempt screening{
++      .kind = "typesafe",
++      .model = analysis ? analysis->model : "",
++      .latency_ms = last_goal_routing_metrics_.typesafe_latency_ms,
++      .succeeded = ok};
++  screening.phase = "screening";
++  if (analysis && analysis->usage_present) {
++    screening.input_tokens = analysis->input_tokens;
++    screening.output_tokens = analysis->output_tokens;
++  }
++  last_goal_routing_metrics_.attempts.push_back(std::move(screening));
 +  if (ok && analysis) {
 +    analysis->requirements.requires_tool_calls = true;
 +    last_goal_model_requirements_ = analysis->requirements;
@@ -1122,7 +1216,19 @@ index 40472f083f..2bf06e6cbf 100644
  void AegisAgentService::SetTaskModelClientForTesting(
      const std::string& task_id,
      std::unique_ptr<AgentModelClient> client) {
-@@ -934,12 +1166,14 @@ bool AegisAgentService::AcceptModelPlan(const std::string& task_id,
+@@ -853,6 +1131,11 @@ void AegisAgentService::OnGoalRouteModelResult(
+     std::string error,
+     AgentModelParseResult result) {
+   goal_router_request_id_.clear();
++  PopulateAttemptUsage(result, &pending_goal_model_attempt_);
++  pending_goal_model_attempt_.latency_ms =
++      (base::TimeTicks::Now() - goal_model_started_at_).InMilliseconds();
++  last_goal_routing_metrics_.attempts.push_back(
++      std::move(pending_goal_model_attempt_));
+   if (!ok) {
+     if (repair_attempt == 0 && !result.error.empty()) {
+       RouteGoalAttempt(std::move(goal), requested_workflow,
+@@ -934,12 +1217,14 @@ bool AegisAgentService::AcceptModelPlan(const std::string& task_id,
  
  void AegisAgentService::RequestPlan(const std::string& task_id,
                                      PlanReadyCallback callback) {
@@ -1138,7 +1244,7 @@ index 40472f083f..2bf06e6cbf 100644
                                             std::string previous_error,
                                             PlanReadyCallback callback) {
    AgentTask* task = GetTask(task_id);
-@@ -952,11 +1186,23 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
+@@ -952,11 +1237,23 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
      std::move(callback).Run(false, "task could not enter planning");
      return;
    }
@@ -1164,7 +1270,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (!prompt || !config) {
      FailPlanning(task_id, std::move(callback),
                   !config_error.empty()
-@@ -978,7 +1224,7 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
+@@ -978,7 +1275,7 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
      return;
    }
    const std::optional<ModelProvider> provider =
@@ -1173,7 +1279,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (!provider) {
      FailPlanning(task_id, std::move(callback), "unsupported model provider");
      return;
-@@ -990,7 +1236,7 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
+@@ -990,7 +1287,7 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
    }
    AgentModelRequest request;
    request.provider = ProtocolProvider(*provider);
@@ -1182,26 +1288,37 @@ index 40472f083f..2bf06e6cbf 100644
    request.system_prompt = BuildAgentPlannerSystemContract();
    if (repair_attempt > 0) {
      request.system_prompt.append(
-@@ -1001,7 +1247,7 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
+@@ -999,25 +1296,25 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
+   request.user_prompt = std::move(*prompt);
+   request.tools.push_back(BuildSubmitPlanToolDefinition());
    request.required_tool_name = "agent.submit_plan";
-   request.reasoning_effort = "none";
+-  request.reasoning_effort = "none";
++  request.reasoning_effort = ActiveGenerationProfile(*task).effort;
    request.disable_model_thinking =
 -      ShouldDisableLocalQwenThinking(task->scope().model_destination);
+-  request.max_output_tokens =
+-      AgentModelToolOutputTokenLimit(request.required_tool_name);
++      (request.reasoning_effort.empty() ||
++       request.reasoning_effort == "none") &&
 +      ShouldDisableLocalQwenThinking(active_destination);
-   request.max_output_tokens =
-       AgentModelToolOutputTokenLimit(request.required_tool_name);
++  request.max_output_tokens = AgentGenerationOutputLimit(
++      ActiveGenerationProfile(*task),
++      AgentModelToolOutputTokenLimit(request.required_tool_name));
    request.stream = false;
-@@ -1010,32 +1256,58 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
-           std::move(*config), std::move(request),
-           base::BindOnce(&AegisAgentService::OnPlanModelResult,
-                          weak_ptr_factory_.GetWeakPtr(), task_id,
+-  std::optional<AgentModelClient::RequestId> request_id =
+-      client_it->second->Start(
+-          std::move(*config), std::move(request),
+-          base::BindOnce(&AegisAgentService::OnPlanModelResult,
+-                         weak_ptr_factory_.GetWeakPtr(), task_id,
 -                         repair_attempt, std::move(callback)));
-+                         repair_attempt, using_fallback,
-+                         std::move(callback)));
-   if (request_id && client_it->second->busy()) {
-     model_request_ids_[task_id] = std::move(*request_id);
-+    model_request_started_at_[task_id] = base::TimeTicks::Now();
-   }
+-  if (request_id && client_it->second->busy()) {
+-    model_request_ids_[task_id] = std::move(*request_id);
+-  }
++  StartObservedModelRequest(
++      task, client_it->second.get(), std::move(*config), std::move(request),
++      base::BindOnce(&AegisAgentService::OnPlanModelResult,
++                     weak_ptr_factory_.GetWeakPtr(), task_id, repair_attempt,
++                     using_fallback, std::move(callback)));
  }
  
  void AegisAgentService::OnPlanModelResult(const std::string& task_id,
@@ -1210,11 +1327,7 @@ index 40472f083f..2bf06e6cbf 100644
                                            PlanReadyCallback callback,
                                            bool ok,
                                            std::string error,
-                                           AgentModelParseResult result) {
-   model_request_ids_.erase(task_id);
-+  RecordTaskModelObservation(task_id, result);
-   AgentTask* task = GetTask(task_id);
-   if (!task || task->state() != AgentTaskState::kPlanning) {
+@@ -1028,14 +1325,36 @@ void AegisAgentService::OnPlanModelResult(const std::string& task_id,
      std::move(callback).Run(false, "planning task is no longer active");
      return;
    }
@@ -1253,7 +1366,7 @@ index 40472f083f..2bf06e6cbf 100644
                           std::move(callback));
        return;
      }
-@@ -1055,10 +1327,12 @@ void AegisAgentService::OnPlanModelResult(const std::string& task_id,
+@@ -1055,10 +1374,12 @@ void AegisAgentService::OnPlanModelResult(const std::string& task_id,
        SelectExecutionToolCall(result, "agent.submit_plan", &validation_error);
    if (!event || !AcceptModelPlan(task_id, *event, &validation_error)) {
      capability.RecordSchemaFailure();
@@ -1268,15 +1381,16 @@ index 40472f083f..2bf06e6cbf 100644
                           std::move(callback));
        return;
      }
-@@ -1263,6 +1537,7 @@ bool AegisAgentService::CancelTask(const std::string& task_id) {
+@@ -1263,6 +1584,8 @@ bool AegisAgentService::CancelTask(const std::string& task_id) {
  }
  
  void AegisAgentService::CancelAllForDisable() {
++  InvalidatePendingModelDispatches();
 +  CancelPendingGoalRouting();
    monitor_timer_.Stop();
    monitor_url_checks_.clear();
    monitor_page_checks_.clear();
-@@ -1486,8 +1761,10 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
+@@ -1486,8 +1809,10 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
      tool = tool_registry_.ModelToolForName(expected_tool);
    }
    std::string config_error;
@@ -1288,7 +1402,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (!tool || !config) {
      Transition(task_id, AgentTaskState::kFailed,
                 "execution model request could not be started");
-@@ -1513,7 +1790,7 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
+@@ -1513,7 +1838,7 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
      return;
    }
    const std::optional<ModelProvider> provider =
@@ -1297,7 +1411,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (!provider) {
      Transition(task_id, AgentTaskState::kFailed,
                 "unsupported execution model provider");
-@@ -1538,7 +1815,7 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
+@@ -1538,7 +1863,7 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
    }
    AgentModelRequest request;
    request.provider = ProtocolProvider(*provider);
@@ -1306,32 +1420,39 @@ index 40472f083f..2bf06e6cbf 100644
    if (selection_prompt) {
      request.system_prompt = BuildAgentTranslationSelectionSystemContract();
      request.user_prompt = std::move(*selection_prompt);
-@@ -1558,7 +1835,7 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
+@@ -1556,20 +1881,19 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
+   }
+   request.tools.push_back(std::move(*tool));
    request.required_tool_name = expected_tool;
-   request.reasoning_effort = "none";
+-  request.reasoning_effort = "none";
++  request.reasoning_effort = ActiveGenerationProfile(*task).effort;
    request.disable_model_thinking =
 -      ShouldDisableLocalQwenThinking(task->scope().model_destination);
+-  request.max_output_tokens = AgentModelToolOutputTokenLimit(expected_tool);
++      (request.reasoning_effort.empty() ||
++       request.reasoning_effort == "none") &&
 +      ShouldDisableLocalQwenThinking(active_destination);
-   request.max_output_tokens = AgentModelToolOutputTokenLimit(expected_tool);
++  request.max_output_tokens =
++      AgentGenerationOutputLimit(ActiveGenerationProfile(*task),
++                                 AgentModelToolOutputTokenLimit(expected_tool));
    request.stream = false;
-   std::optional<AgentModelClient::RequestId> request_id =
-@@ -1569,6 +1846,7 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
-                          expected_tool));
-   if (request_id && client_it->second->busy()) {
-     model_request_ids_[task_id] = std::move(*request_id);
-+    model_request_started_at_[task_id] = base::TimeTicks::Now();
-   }
+-  std::optional<AgentModelClient::RequestId> request_id =
+-      client_it->second->Start(
+-          std::move(*config), std::move(request),
+-          base::BindOnce(&AegisAgentService::OnExecutionModelResult,
+-                         weak_ptr_factory_.GetWeakPtr(), task_id,
+-                         expected_tool));
+-  if (request_id && client_it->second->busy()) {
+-    model_request_ids_[task_id] = std::move(*request_id);
+-  }
++  StartObservedModelRequest(
++      task, client_it->second.get(), std::move(*config), std::move(request),
++      base::BindOnce(&AegisAgentService::OnExecutionModelResult,
++                     weak_ptr_factory_.GetWeakPtr(), task_id, expected_tool));
  }
  
-@@ -1730,6 +2008,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
-                                                std::string error,
-                                                AgentModelParseResult result) {
-   model_request_ids_.erase(task_id);
-+  RecordTaskModelObservation(task_id, result);
-   auto runtime_it = executions_.find(task_id);
-   AgentTask* task = GetTask(task_id);
-   const AgentTaskPlan* plan = GetPlan(task_id);
-@@ -1739,12 +2018,13 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+ void AegisAgentService::EnsureFreshObservationThenContinue(
+@@ -1739,12 +2063,13 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
      return;
    }
    ExecutionRuntime& runtime = *runtime_it->second;
@@ -1347,7 +1468,7 @@ index 40472f083f..2bf06e6cbf 100644
      }
      if (runtime.model_failures < 2) {
        RequestNextModelTurn(task_id);
-@@ -1766,8 +2046,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1766,8 +2091,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
        SelectExecutionToolCall(result, expected_tool, &validation_error);
    if (!event) {
      ++runtime.model_failures;
@@ -1357,7 +1478,7 @@ index 40472f083f..2bf06e6cbf 100644
      runtime.last_model_error = validation_error;
      if (runtime.model_failures < 2) {
        RequestNextModelTurn(task_id);
-@@ -1794,8 +2073,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1794,8 +2118,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
          runtime.page_evidence_history_complete);
      if (!selection) {
        runtime.last_model_error = validation_error;
@@ -1367,7 +1488,7 @@ index 40472f083f..2bf06e6cbf 100644
        if (++runtime.model_failures < 2) {
          RequestNextModelTurn(task_id);
        } else {
-@@ -1805,8 +2083,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1805,8 +2128,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
      }
      runtime.model_failures = 0;
      runtime.last_model_error.clear();
@@ -1377,7 +1498,7 @@ index 40472f083f..2bf06e6cbf 100644
      if (selection->selected_source_ids.empty()) {
        FinishWithBrowserVerifiedFallback(task_id);
        return;
-@@ -1819,8 +2096,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1819,8 +2141,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
      const auto accepted = ParseAgentTranslationReview(*event, &validation_error);
      if (!accepted.has_value()) {
        runtime.last_model_error = validation_error;
@@ -1387,7 +1508,7 @@ index 40472f083f..2bf06e6cbf 100644
        if (++runtime.model_failures < 2) {
          RequestNextModelTurn(task_id);
        } else {
-@@ -1829,8 +2105,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1829,8 +2150,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
        return;
      }
      runtime.model_failures = 0;
@@ -1397,7 +1518,7 @@ index 40472f083f..2bf06e6cbf 100644
      if (*accepted && runtime.pending_translation_completion) {
        runtime.translation_review_passed = true;
        auto completion = std::move(*runtime.pending_translation_completion);
-@@ -1895,8 +2170,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1895,8 +2215,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
      if (!completion) {
        ++runtime.model_failures;
        runtime.last_model_error = validation_error;
@@ -1407,7 +1528,7 @@ index 40472f083f..2bf06e6cbf 100644
        if (runtime.model_failures < 2) {
          RequestNextModelTurn(task_id);
          return;
-@@ -1916,8 +2190,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1916,8 +2235,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
      }
      runtime.model_failures = 0;
      runtime.last_model_error.clear();
@@ -1417,7 +1538,7 @@ index 40472f083f..2bf06e6cbf 100644
      if (completion->outcome == "completed" &&
          AgentGoalRequestsTranslation(task->goal())) {
        runtime.pending_translation_completion = std::move(completion);
-@@ -1938,8 +2211,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
+@@ -1938,8 +2256,7 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
    }
    runtime.model_failures = 0;
    runtime.last_model_error.clear();
@@ -1427,7 +1548,7 @@ index 40472f083f..2bf06e6cbf 100644
    if (runtime.next_step >= plan->steps.size()) {
      Transition(task_id, AgentTaskState::kFailed,
                 "model requested an action after the plan ended");
-@@ -3524,7 +3796,7 @@ void AegisAgentService::StartMonitorPageCheck(AgentMonitorDefinition monitor) {
+@@ -3524,7 +3841,7 @@ void AegisAgentService::StartMonitorPageCheck(AgentMonitorDefinition monitor) {
    scope.allowed_tab_ids = {check->tab_id};
    scope.allowed_tools = {"page.observe"};
    scope.allowed_data_classes = {AgentDataClass::kPublicPage};
@@ -1436,7 +1557,7 @@ index 40472f083f..2bf06e6cbf 100644
    scope.budgets = owner->scope().budgets;
    scope.budgets.max_tabs = 1;
    check->task = std::make_unique<AgentTask>(
-@@ -3689,7 +3961,7 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
+@@ -3689,7 +4006,7 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
    AgentTask* owner = GetTask(check.monitor.task_id);
    std::string error;
    auto config = owner ? ResolveModelConfig(
@@ -1445,7 +1566,7 @@ index 40472f083f..2bf06e6cbf 100644
                        : std::nullopt;
    if (!IsEnabled() || !owner || !check.summary_input || !config ||
        (owner->state() != AgentTaskState::kRunning &&
-@@ -3717,7 +3989,7 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
+@@ -3717,7 +4034,7 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
    }
    AgentModelRequest request;
    request.provider = ProtocolProvider(config->provider);
@@ -1454,40 +1575,35 @@ index 40472f083f..2bf06e6cbf 100644
    request.system_prompt = AgentMonitorSummarySystemPrompt();
    if (check.summary_attempt > 0) {
      request.system_prompt +=
-@@ -3730,7 +4002,7 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
+@@ -3728,10 +4045,13 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
+       g_browser_process ? g_browser_process->GetApplicationLocale() : "en");
+   request.tools.push_back(BuildAgentMonitorSummaryTool());
    request.required_tool_name = "agent.summarize_monitor";
-   request.reasoning_effort = "none";
+-  request.reasoning_effort = "none";
++  request.reasoning_effort = ActiveGenerationProfile(*owner).effort;
    request.disable_model_thinking =
 -      ShouldDisableLocalQwenThinking(owner->scope().model_destination);
+-  request.max_output_tokens = 2048;
++      (request.reasoning_effort.empty() ||
++       request.reasoning_effort == "none") &&
 +      ShouldDisableLocalQwenThinking(ActiveModelDestination(*owner));
-   request.max_output_tokens = 2048;
++  request.max_output_tokens =
++      AgentGenerationOutputLimit(ActiveGenerationProfile(*owner), 2048);
    request.stream = false;
    check.timer.Start(
-@@ -3740,10 +4012,14 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
+       FROM_HERE,
+@@ -3740,8 +4060,8 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
            ModelProviderChatTimeout(config->provider, GURL(config->base_url)) +
                base::Seconds(5)),
        base::BindOnce(check.fail, AgentMonitorCheckStatus::kSummaryUnavailable));
 -  check.summary_client->Start(
-+  const std::optional<AgentModelClient::RequestId> summary_request_id =
-+      check.summary_client->Start(
-       std::move(*config), std::move(request),
+-      std::move(*config), std::move(request),
++  StartObservedModelRequest(
++      owner, check.summary_client.get(), std::move(*config), std::move(request),
        base::BindOnce(&AegisAgentService::OnMonitorSummaryResult,
                       weak_ptr_factory_.GetWeakPtr(), monitor_id, request_id));
-+  if (summary_request_id && check.summary_client->busy()) {
-+    model_request_started_at_[owner->id()] = base::TimeTicks::Now();
-+  }
  }
- 
- void AegisAgentService::OnMonitorSummaryResult(const std::string& monitor_id,
-@@ -3756,6 +4032,7 @@ void AegisAgentService::OnMonitorSummaryResult(const std::string& monitor_id,
-       it->second->request_id != request_id || !it->second->summary_input) {
-     return;
-   }
-+  RecordTaskModelObservation(it->second->monitor.task_id, result);
-   auto observation =
-       ok ? AttachAgentMonitorSummary(it->second->pending_observation,
-                                      *it->second->summary_input, result,
-@@ -3957,10 +4234,7 @@ void AegisAgentService::Shutdown() {
+@@ -3957,10 +4277,7 @@ void AegisAgentService::Shutdown() {
    monitor_url_checks_.clear();
    monitor_page_checks_.clear();
    weak_ptr_factory_.InvalidateWeakPtrs();
@@ -1499,37 +1615,165 @@ index 40472f083f..2bf06e6cbf 100644
    for (const auto& [task_id, request_id] : model_request_ids_) {
      auto client = model_clients_.find(task_id);
      if (client != model_clients_.end()) {
-@@ -4216,6 +4490,29 @@ bool AegisAgentService::PersistTask(const AgentTask& task) {
+@@ -4162,6 +4479,7 @@ bool AegisAgentService::Transition(const std::string& task_id,
+   if (state == AgentTaskState::kPausedByUser ||
+       state == AgentTaskState::kUserTakeover ||
+       (IsTerminalState(state) && state != AgentTaskState::kCompleted)) {
++    ++task_dispatch_generations_[task_id];
+     std::erase_if(monitor_url_checks_, [&](const auto& entry) {
+       return entry.second->monitor.task_id == task_id;
+     });
+@@ -4216,6 +4534,149 @@ bool AegisAgentService::PersistTask(const AgentTask& task) {
    return true;
  }
  
-+void AegisAgentService::RecordTaskModelObservation(
-+    const std::string& task_id,
-+    const AgentModelParseResult& result) {
-+  AgentTask* task = GetTask(task_id);
-+  auto started = model_request_started_at_.find(task_id);
-+  if (!task || started == model_request_started_at_.end()) {
++void AegisAgentService::StartObservedModelRequest(
++    AgentTask* task,
++    AgentModelClient* client,
++    AgentModelClientConfig config,
++    AgentModelRequest request,
++    AgentModelClient::Callback callback) {
++  const std::string observation_id =
++      base::Uuid::GenerateRandomV4().AsLowercaseString();
++  AgentModelAttempt attempt{
++      .kind = "generation",
++      .model = request.model,
++      .effort = request.reasoning_effort,
++      .prices = task->model_routing_metrics().fallback_used
++                    ? task->scope().fallback_token_prices
++                    : task->scope().model_token_prices,
++      .observation_id = observation_id,
++      .completed = false};
++  if (!storage_ready_ || !task->RecordModelAttempt(std::move(attempt))) {
++    std::move(callback).Run(
++        false, "model observation storage unavailable",
++        {.failure = AgentModelRequestFailure::kConfiguration});
 +    return;
 +  }
-+  const base::TimeDelta latency = base::TimeTicks::Now() - started->second;
-+  model_request_started_at_.erase(started);
-+  int64_t input_tokens = 0;
-+  int64_t output_tokens = 0;
-+  for (const AgentModelEvent& event : result.events) {
-+    if (event.type == AgentModelEventType::kUsage &&
-+        event.usage.input_tokens >= 0 && event.usage.output_tokens >= 0) {
-+      input_tokens += event.usage.input_tokens;
-+      output_tokens += event.usage.output_tokens;
++  // Commit the unknown-usage placeholder before any network request. A crash,
++  // cancellation, or lost callback therefore cannot erase an incurred call.
++  task_store_.AsyncCall(&AgentTaskStore::SaveTaskRecord)
++      .WithArgs(MakeTaskStoreRecord(*task))
++      .Then(base::BindOnce(&AegisAgentService::OnModelAttemptStored,
++                           weak_ptr_factory_.GetWeakPtr(), task->id(),
++                           observation_id,
++                           std::pair(model_dispatch_generation_,
++                                     task_dispatch_generations_[task->id()]),
++                           client->GetWeakPtr(),
++                           std::move(config), std::move(request),
++                           std::move(callback)));
++}
++
++void AegisAgentService::OnModelAttemptStored(
++    std::string task_id,
++    std::string observation_id,
++    std::pair<uint64_t, uint64_t> dispatch_token,
++    base::WeakPtr<AgentModelClient> client,
++    AgentModelClientConfig config,
++    AgentModelRequest request,
++    AgentModelClient::Callback callback,
++    bool saved) {
++  // A resumed task can be Running again, but its old prompt is still revoked.
++  // Do not invoke its stale continuation against the new execution runtime.
++  if (dispatch_token.second != task_dispatch_generations_[task_id]) {
++    return;
++  }
++  if (dispatch_token.first != model_dispatch_generation_) {
++    StopDispatchForConfigurationChange(task_id);
++    std::move(callback).Run(
++        false, "model settings changed; resume or retry the task",
++        {.failure = AgentModelRequestFailure::kConfiguration});
++    return;
++  }
++  AgentTask* task = GetTask(task_id);
++  if (!saved || !client || !IsEnabled() || !storage_ready_ || !task ||
++      (task->state() != AgentTaskState::kPlanning &&
++       task->state() != AgentTaskState::kRunning &&
++       task->state() != AgentTaskState::kReflecting &&
++       task->state() != AgentTaskState::kCompleted)) {
++    std::move(callback).Run(
++        false, "model dispatch cancelled or storage failed",
++        {.failure = AgentModelRequestFailure::kConfiguration});
++    return;
++  }
++  const auto request_id = client->Start(
++      std::move(config), std::move(request),
++      base::BindOnce(&AegisAgentService::OnObservedModelResult,
++                     weak_ptr_factory_.GetWeakPtr(), task_id, observation_id,
++                     dispatch_token.second, base::TimeTicks::Now(),
++                     std::move(callback)));
++  auto owned = model_clients_.find(task_id);
++  if (request_id && client && client->busy() && owned != model_clients_.end() &&
++      owned->second.get() == client.get()) {
++    model_request_ids_[task_id] = *request_id;
++  }
++}
++
++void AegisAgentService::OnObservedModelResult(
++    std::string task_id,
++    std::string observation_id,
++    uint64_t task_generation,
++    base::TimeTicks started,
++    AgentModelClient::Callback callback,
++    bool ok,
++    std::string error,
++    AgentModelParseResult result) {
++  if (AgentTask* task = GetTask(task_id)) {
++    AgentModelAttempt observation{
++        .latency_ms = (base::TimeTicks::Now() - started).InMilliseconds(),
++        .observation_id = observation_id};
++    PopulateAttemptUsage(result, &observation);
++    observation.succeeded = ok;
++    if (task->CompleteModelAttempt(observation)) {
++      PersistTask(*task);
 +    }
 +  }
-+  task->RecordModelObservation(input_tokens, output_tokens, latency);
++  if (task_generation == task_dispatch_generations_[task_id]) {
++    std::move(callback).Run(ok, std::move(error), std::move(result));
++  }
++}
++
++void AegisAgentService::InvalidatePendingModelDispatches() {
++  ++model_dispatch_generation_;
++}
++
++void AegisAgentService::StopDispatchForConfigurationChange(
++    const std::string& task_id) {
++  AgentTask* task = GetTask(task_id);
++  if (!task) {
++    return;
++  }
++  const std::string reason =
++      "model settings changed; resume or retry with the current configuration";
++  if (task->state() == AgentTaskState::kPlanning) {
++    Transition(task_id, AgentTaskState::kFailed, reason);
++  } else if (task->state() == AgentTaskState::kRunning ||
++             task->state() == AgentTaskState::kReflecting) {
++    if (TaskUsesActor(*task)) {
++      actor_bridge_.PauseTask(task_id, /*by_user=*/true);
++    }
++    if (auto it = executions_.find(task_id); it != executions_.end()) {
++      it->second->needs_fresh_observation = TaskUsesActor(*task);
++    }
++    if (task->state() != AgentTaskState::kPausedByUser) {
++      Transition(task_id, AgentTaskState::kPausedByUser, reason);
++    }
++  } else if (task->state() == AgentTaskState::kCompleted) {
++    // A completed monitor owner has no running task to pause. End this check;
++    // the normal monitor scheduler can start a fresh check later.
++    std::erase_if(monitor_page_checks_, [&](const auto& entry) {
++      return entry.second->monitor.task_id == task_id;
++    });
++  }
++  task->RecordEvent("model settings changed", reason);
 +  PersistTask(*task);
++  NotifyServiceSnapshotChanged();
 +}
 +
  AgentTaskStoreRecord AegisAgentService::MakeTaskStoreRecord(
      const AgentTask& task) const {
    const auto side_effect = task_has_external_side_effect_.find(task.id());
-@@ -4231,6 +4528,7 @@ AgentTaskStoreRecord AegisAgentService::MakeTaskStoreRecord(
+@@ -4231,6 +4692,7 @@ AgentTaskStoreRecord AegisAgentService::MakeTaskStoreRecord(
        .tool_calls_used = task.tool_calls_used(),
        .model_calls_used = task.model_calls_used(),
        .network_requests_used = task.network_requests_used(),
@@ -1537,7 +1781,12 @@ index 40472f083f..2bf06e6cbf 100644
        .created_at = task.created_at(),
    };
  }
-@@ -4324,10 +4622,7 @@ void AegisAgentService::OnCriticalStoreWriteFinished(bool ok) {
+@@ -4320,14 +4782,12 @@ void AegisAgentService::OnCriticalStoreWriteFinished(bool ok) {
+     return;
+   }
+   storage_ready_ = false;
++  InvalidatePendingModelDispatches();
+   monitor_timer_.Stop();
    monitor_url_checks_.clear();
    monitor_page_checks_.clear();
    pending_invocation_context_.reset();
@@ -1549,7 +1798,7 @@ index 40472f083f..2bf06e6cbf 100644
    for (const auto& [task_id, request_id] : model_request_ids_) {
      auto client = model_clients_.find(task_id);
      if (client != model_clients_.end()) {
-@@ -4404,6 +4699,7 @@ void AegisAgentService::RestoreUnfinishedTasks(StoredAgentState state) {
+@@ -4404,6 +4864,7 @@ void AegisAgentService::RestoreUnfinishedTasks(StoredAgentState state) {
      if (!task) {
        continue;
      }
@@ -1558,13 +1807,14 @@ index 40472f083f..2bf06e6cbf 100644
      if (stored.state != AgentTaskState::kCompleted &&
          task->HasExpired(base::Time::Now())) {
 diff --git a/chrome/browser/aegis/agent/aegis_agent_service.h b/chrome/browser/aegis/agent/aegis_agent_service.h
-index 1c1c3324b0..24a3d847e5 100644
+index 1c1c3324b0..90d7f755b5 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_service.h
 +++ b/chrome/browser/aegis/agent/aegis_agent_service.h
-@@ -19,11 +19,13 @@
+@@ -19,11 +19,14 @@
  #include "chrome/browser/aegis/agent/aegis_actor_bridge.h"
  #include "chrome/browser/aegis/agent/aegis_browser_tools.h"
  #include "chrome/browser/aegis/agent/agent_execution.h"
++#include "chrome/browser/aegis/agent/agent_model_client.h"
 +#include "chrome/browser/aegis/agent/agent_model_router.h"
  #include "chrome/browser/aegis/agent/agent_planner.h"
  #include "chrome/browser/aegis/agent/agent_policy_broker.h"
@@ -1575,7 +1825,7 @@ index 1c1c3324b0..24a3d847e5 100644
  #include "components/keyed_service/core/keyed_service.h"
  
  class Profile;
-@@ -44,6 +46,7 @@ class Encryptor;
+@@ -44,6 +47,7 @@ class Encryptor;
  namespace aegis::agent {
  
  class AgentModelClient;
@@ -1583,7 +1833,7 @@ index 1c1c3324b0..24a3d847e5 100644
  
  // System notification centers outlive Incognito windows, so only regular
  // Profiles may export Agent monitor events to that surface.
-@@ -78,8 +81,20 @@ class AegisAgentService : public KeyedService {
+@@ -78,8 +82,20 @@ class AegisAgentService : public KeyedService {
    bool IsToolAvailable(std::string_view tool_name) const;
    Profile* profile() const { return profile_; }
    std::optional<AgentModelDestination> ConfiguredModelDestination() const;
@@ -1605,26 +1855,47 @@ index 1c1c3324b0..24a3d847e5 100644
    AgentTask* GetTask(const std::string& task_id);
    const AgentTask* GetTask(const std::string& task_id) const;
    AgentTask* MostRecentTask();
-@@ -98,6 +113,9 @@ class AegisAgentService : public KeyedService {
+@@ -98,6 +114,10 @@ class AegisAgentService : public KeyedService {
                   GoalRouteCallback callback);
    void SetGoalRouteForTesting(std::optional<AgentGoalRoute> route);
    void SetGoalRouterClientForTesting(std::unique_ptr<AgentModelClient> client);
 +  void SetTypeSafeGoalRouterClientForTesting(
 +      std::unique_ptr<TypeSafeGoalRouterClient> client);
 +  void CancelPendingGoalRouting();
++  void InvalidatePendingModelDispatches();
    void SetTaskModelClientForTesting(const std::string& task_id,
                                      std::unique_ptr<AgentModelClient> client);
    bool AcceptModelPlan(const std::string& task_id,
-@@ -193,6 +211,8 @@ class AegisAgentService : public KeyedService {
+@@ -193,6 +213,28 @@ class AegisAgentService : public KeyedService {
    bool TryReadOnlyPlanningRecovery(const std::string& task_id,
                                     std::string* error);
    bool PersistTask(const AgentTask& task);
-+  void RecordTaskModelObservation(const std::string& task_id,
-+                                  const AgentModelParseResult& result);
++  void StartObservedModelRequest(AgentTask* task,
++                                 AgentModelClient* client,
++                                 AgentModelClientConfig config,
++                                 AgentModelRequest request,
++                                 AgentModelClient::Callback callback);
++  void OnModelAttemptStored(std::string task_id,
++                            std::string observation_id,
++                            std::pair<uint64_t, uint64_t> dispatch_token,
++                            base::WeakPtr<AgentModelClient> client,
++                            AgentModelClientConfig config,
++                            AgentModelRequest request,
++                            AgentModelClient::Callback callback,
++                            bool saved);
++  void StopDispatchForConfigurationChange(const std::string& task_id);
++  void OnObservedModelResult(std::string task_id,
++                             std::string observation_id,
++                             uint64_t task_generation,
++                             base::TimeTicks started,
++                             AgentModelClient::Callback callback,
++                             bool ok,
++                             std::string error,
++                             AgentModelParseResult result);
    AgentTaskStoreRecord MakeTaskStoreRecord(const AgentTask& task) const;
    bool PersistPlan(const std::string& task_id,
                     const AgentTaskPlan& plan,
-@@ -278,10 +298,12 @@ class AegisAgentService : public KeyedService {
+@@ -278,10 +320,12 @@ class AegisAgentService : public KeyedService {
        const AgentMonitorDefinition& monitor) const;
    void RequestPlanAttempt(const std::string& task_id,
                            int repair_attempt,
@@ -1637,7 +1908,7 @@ index 1c1c3324b0..24a3d847e5 100644
                           PlanReadyCallback callback,
                           bool ok,
                           std::string error,
-@@ -298,6 +320,18 @@ class AegisAgentService : public KeyedService {
+@@ -298,6 +342,18 @@ class AegisAgentService : public KeyedService {
                                bool ok,
                                std::string error,
                                AgentModelParseResult result);
@@ -1656,11 +1927,12 @@ index 1c1c3324b0..24a3d847e5 100644
    void RequestNextModelTurn(const std::string& task_id);
    void EnsureFreshObservationThenContinue(const std::string& task_id,
                                            bool force_refresh);
-@@ -363,9 +397,16 @@ class AegisAgentService : public KeyedService {
+@@ -363,9 +419,19 @@ class AegisAgentService : public KeyedService {
    std::map<std::string, std::pair<size_t, int>> plan_progress_;
    std::map<std::string, std::unique_ptr<AgentModelClient>> model_clients_;
    std::map<std::string, std::string> model_request_ids_;
-+  std::map<std::string, base::TimeTicks> model_request_started_at_;
++  uint64_t model_dispatch_generation_ = 0;
++  std::map<std::string, uint64_t> task_dispatch_generations_;
    std::unique_ptr<AgentModelClient> goal_router_client_;
    std::string goal_router_request_id_;
 +  std::unique_ptr<TypeSafeGoalRouterClient> typesafe_goal_router_client_;
@@ -1670,11 +1942,13 @@ index 1c1c3324b0..24a3d847e5 100644
    std::optional<AgentGoalRoute> goal_route_for_testing_;
 +  AgentModelRequirements last_goal_model_requirements_;
 +  AgentModelRoutingMetrics last_goal_routing_metrics_;
++  AgentModelAttempt pending_goal_model_attempt_;
++  base::TimeTicks goal_model_started_at_;
    std::map<std::string, std::unique_ptr<ExecutionRuntime>> executions_;
    std::map<std::string, AgentModelCapabilityTracker> model_capabilities_;
    std::map<std::string, ActionResults> action_results_;
 diff --git a/chrome/browser/aegis/agent/aegis_agent_service_unittest.cc b/chrome/browser/aegis/agent/aegis_agent_service_unittest.cc
-index 4c2d81fbf4..38d4289e0e 100644
+index 4c2d81fbf4..eb6162345a 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_service_unittest.cc
 +++ b/chrome/browser/aegis/agent/aegis_agent_service_unittest.cc
 @@ -23,6 +23,9 @@
@@ -1695,7 +1969,36 @@ index 4c2d81fbf4..38d4289e0e 100644
  #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
  #include "services/network/test/test_url_loader_factory.h"
  #include "services/network/test/test_utils.h"
-@@ -111,6 +115,26 @@ AgentTaskScope ServiceTestScope() {
+@@ -47,6 +51,28 @@ namespace aegis::agent {
+ 
+ class AegisAgentServiceTestPeer {
+  public:
++  static void QueueObservedRequest(AegisAgentService* service,
++                                   AgentTask* task,
++                                   AgentModelClient* client,
++                                   AgentModelClient::Callback callback) {
++    AgentModelRequest request;
++    request.model = "fixture-model";
++    request.system_prompt = "Use the approved fixture tool only.";
++    request.user_prompt = "Read the approved fixture.";
++    request.tools.push_back(BuildSubmitPlanToolDefinition());
++    request.stream = false;
++    service->StartObservedModelRequest(
++        task, client,
++        {.provider = ModelProvider::kOpenAI,
++         .base_url = "http://127.0.0.1:8779/v1"},
++        std::move(request), std::move(callback));
++  }
++
++  static bool EnterReflecting(AegisAgentService* service, AgentTask* task) {
++    return service->Transition(task->id(), AgentTaskState::kReflecting,
++                               "test tool failure repair");
++  }
++
+   static void FinishMonitorDecryption(
+       AegisAgentService* service,
+       const std::string& monitor_id,
+@@ -111,6 +137,26 @@ AgentTaskScope ServiceTestScope() {
    return scope;
  }
  
@@ -1722,7 +2025,7 @@ index 4c2d81fbf4..38d4289e0e 100644
  AgentModelEvent ServicePlanEvent() {
    AgentModelEvent event;
    event.type = AgentModelEventType::kToolCall;
-@@ -232,6 +256,25 @@ class AegisAgentServiceTest : public testing::Test {
+@@ -232,6 +278,25 @@ class AegisAgentServiceTest : public testing::Test {
    void TearDown() override { profile_ = nullptr; }
  
   protected:
@@ -1748,7 +2051,7 @@ index 4c2d81fbf4..38d4289e0e 100644
    void FlushTaskStore(AegisAgentService* service) {
      base::test::TestFuture<bool> flushed;
      service->FlushTaskStoreForTesting(flushed.GetCallback());
-@@ -426,6 +469,7 @@ TEST_F(AegisAgentServiceTest,
+@@ -426,6 +491,7 @@ TEST_F(AegisAgentServiceTest,
      service->RouteGoal("整理收藏夹", AgentWorkflowKind::kResearch,
                         result.GetCallback());
      factory.WaitForRequest(endpoint);
@@ -1756,7 +2059,7 @@ index 4c2d81fbf4..38d4289e0e 100644
      ASSERT_EQ(factory.NumPending(), 1);
      const auto payload = base::JSONReader::ReadDict(
          network::GetUploadData(factory.GetPendingRequest(0)->request),
-@@ -446,6 +490,299 @@ TEST_F(AegisAgentServiceTest,
+@@ -446,6 +512,299 @@ TEST_F(AegisAgentServiceTest,
    }
  }
  
@@ -2056,6 +2359,115 @@ index 4c2d81fbf4..38d4289e0e 100644
  TEST_F(AegisAgentServiceTest,
         RepairsOneMalformedGoalRouteWithoutBroadeningScope) {
    constexpr std::string_view kBaseUrl = "http://127.0.0.1:8765/v1";
+@@ -1039,6 +1398,108 @@ TEST_F(AegisAgentServiceTest, IdempotentActionIdsBindTheExactCall) {
+             AgentErrorCode::kInvalidRequest);
+ }
+ 
++TEST_F(AegisAgentServiceTest, ReflectingAndSiblingDispatchesRemainIndependent) {
++  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
++  auto* task = service->CreateTask("repair fixture", AgentMode::kAsk,
++                                  ServiceTestScope());
++  ASSERT_TRUE(task);
++  ASSERT_TRUE(InstallServicePlan(service, task));
++  ASSERT_TRUE(service->GrantTaskConsent(task->id()));
++  ASSERT_TRUE(AegisAgentServiceTestPeer::EnterReflecting(service, task));
++  network::TestURLLoaderFactory first_factory;
++  network::TestURLLoaderFactory second_factory;
++  AgentModelClient first(first_factory.GetSafeWeakWrapper());
++  AgentModelClient second(second_factory.GetSafeWeakWrapper());
++  base::test::TestFuture<bool, std::string, AgentModelParseResult> first_done;
++  base::test::TestFuture<bool, std::string, AgentModelParseResult> second_done;
++  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &first,
++                                                 first_done.GetCallback());
++  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &second,
++                                                 second_done.GetCallback());
++  FlushTaskStore(service);
++  const GURL endpoint("http://127.0.0.1:8779/v1/responses");
++  first_factory.WaitForRequest(endpoint);
++  second_factory.WaitForRequest(endpoint);
++  EXPECT_EQ(first_factory.NumPending(), 1);
++  EXPECT_EQ(second_factory.NumPending(), 1);
++  EXPECT_EQ(task->model_routing_metrics().attempts.size(), 2u);
++}
++
++TEST_F(AegisAgentServiceTest, PauseResumeRevokesPromptWaitingForDurableSave) {
++  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
++  auto* task = service->CreateTask("pause fixture", AgentMode::kAsk,
++                                  ServiceTestScope());
++  ASSERT_TRUE(task);
++  ASSERT_TRUE(InstallServicePlan(service, task));
++  ASSERT_TRUE(service->GrantTaskConsent(task->id()));
++  network::TestURLLoaderFactory factory;
++  AgentModelClient client(factory.GetSafeWeakWrapper());
++  base::test::TestFuture<bool, std::string, AgentModelParseResult> stale;
++  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
++                                                 stale.GetCallback());
++  ASSERT_TRUE(service->PauseTask(task->id()));
++  ASSERT_TRUE(service->ResumeTask(task->id()));
++  base::test::TestFuture<bool, std::string, AgentModelParseResult> current;
++  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
++                                                 current.GetCallback());
++  FlushTaskStore(service);
++  DrainTaskRunners();
++  EXPECT_EQ(factory.NumPending(), 1);
++  EXPECT_FALSE(stale.IsReady());
++  const auto& attempts = task->model_routing_metrics().attempts;
++  ASSERT_EQ(attempts.size(), 2u);
++  EXPECT_NE(attempts[0].observation_id, attempts[1].observation_id);
++  EXPECT_FALSE(attempts[0].completed);
++  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
++      "http://127.0.0.1:8779/v1/responses",
++      R"({"status":"completed","output":[]})"));
++  EXPECT_TRUE(current.Get<0>());
++  EXPECT_FALSE(stale.IsReady());
++}
++
++TEST_F(AegisAgentServiceTest, ConfigurationRevokesPromptWaitingForDurableSave) {
++  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
++  auto* task = service->CreateTask("configuration fixture", AgentMode::kAsk,
++                                  ServiceTestScope());
++  ASSERT_TRUE(task);
++  ASSERT_TRUE(InstallServicePlan(service, task));
++  ASSERT_TRUE(service->GrantTaskConsent(task->id()));
++  network::TestURLLoaderFactory factory;
++  AgentModelClient client(factory.GetSafeWeakWrapper());
++  base::test::TestFuture<bool, std::string, AgentModelParseResult> stale;
++  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
++                                                 stale.GetCallback());
++  service->InvalidatePendingModelDispatches();
++  FlushTaskStore(service);
++  DrainTaskRunners();
++  EXPECT_EQ(factory.NumPending(), 0);
++  EXPECT_TRUE(stale.IsReady());
++  EXPECT_FALSE(stale.Get<0>());
++  EXPECT_EQ(task->state(), AgentTaskState::kPausedByUser);
++  EXPECT_TRUE(service->ResumeTask(task->id()));
++  EXPECT_EQ(task->state(), AgentTaskState::kRunning);
++}
++
++TEST_F(AegisAgentServiceTest, ConfigurationChangeEndsPendingPlanningExplicitly) {
++  auto* service = AegisAgentServiceFactory::GetForProfile(profile_);
++  auto* task = service->CreateTask("planning configuration fixture", AgentMode::kAsk,
++                                  ServiceTestScope());
++  ASSERT_TRUE(task);
++  ASSERT_TRUE(service->BeginPlanning(task->id()));
++  network::TestURLLoaderFactory factory;
++  AgentModelClient client(factory.GetSafeWeakWrapper());
++  base::test::TestFuture<bool, std::string, AgentModelParseResult> result;
++  AegisAgentServiceTestPeer::QueueObservedRequest(service, task, &client,
++                                                 result.GetCallback());
++  service->InvalidatePendingModelDispatches();
++  FlushTaskStore(service);
++  DrainTaskRunners();
++  EXPECT_EQ(factory.NumPending(), 0);
++  EXPECT_TRUE(result.IsReady());
++  EXPECT_FALSE(result.Get<0>());
++  EXPECT_EQ(task->state(), AgentTaskState::kFailed);
++}
++
+ TEST_F(AegisAgentServiceTest, CreatesPausesResumesAndStopsOwnedActorTask) {
+   AegisAgentService* service =
+       AegisAgentServiceFactory::GetForProfile(profile_);
 diff --git a/chrome/browser/aegis/agent/agent_core_unittest.cc b/chrome/browser/aegis/agent/agent_core_unittest.cc
 index 8ea1bbbce3..c77b973cec 100644
 --- a/chrome/browser/aegis/agent/agent_core_unittest.cc
@@ -2101,6 +2513,389 @@ index 8ea1bbbce3..c77b973cec 100644
    EXPECT_FALSE(DidAgentMonitorConditionMatch(kind, "not json", "{}"));
    EXPECT_FALSE(DidAgentMonitorConditionMatch(kind,
        R"({"version":1,"kind":0,"currency":"USD","amount":"100"})",
+diff --git a/chrome/browser/aegis/agent/agent_generation_profile.h b/chrome/browser/aegis/agent/agent_generation_profile.h
+new file mode 100644
+index 0000000000..c2075aae9a
+--- /dev/null
++++ b/chrome/browser/aegis/agent/agent_generation_profile.h
+@@ -0,0 +1,82 @@
++// Copyright 2026 GCSA
++// Pure routing policy, shared by production and the standalone contract test.
++#ifndef CHROME_BROWSER_AEGIS_AGENT_AGENT_GENERATION_PROFILE_H_
++#define CHROME_BROWSER_AEGIS_AGENT_AGENT_GENERATION_PROFILE_H_
++
++#include <algorithm>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace aegis::agent {
++
++inline bool IsAgentReasoningEffort(std::string_view effort) {
++  return effort.empty() || effort == "none" || effort == "minimal" ||
++         effort == "low" || effort == "medium" || effort == "high" ||
++         effort == "xhigh";
++}
++
++struct AgentGenerationProfile {
++  // Empty means leave the provider default alone. Zero preserves the legacy
++  // tool-specific output limit for old tasks and unconfigured custom models.
++  std::string effort;
++  int max_output_tokens = 0;
++
++  bool IsValid() const {
++    return IsAgentReasoningEffort(effort) && max_output_tokens >= 0 &&
++           max_output_tokens <= 32768;
++  }
++  bool operator==(const AgentGenerationProfile&) const = default;
++};
++
++struct AgentGenerationPolicy {
++  std::vector<std::string> supported_efforts;
++  AgentGenerationProfile default_profile;
++  AgentGenerationProfile basic_profile;
++  AgentGenerationProfile strong_profile;
++
++  bool Supports(const AgentGenerationProfile& profile) const {
++    return profile.IsValid() &&
++           (profile.effort.empty() ||
++            std::ranges::find(supported_efforts, profile.effort) !=
++                supported_efforts.end());
++  }
++
++  bool IsValid(std::string_view provider) const {
++    if (supported_efforts.size() > 6 || !Supports(default_profile) ||
++        !Supports(basic_profile) || !Supports(strong_profile)) {
++      return false;
++    }
++    std::vector<std::string> unique;
++    for (const auto& effort : supported_efforts) {
++      if (effort.empty() || !IsAgentReasoningEffort(effort) ||
++          std::ranges::find(unique, effort) != unique.end()) {
++        return false;
++      }
++      unique.push_back(effort);
++    }
++    // Other adapters have different reasoning controls. Never silently accept
++    // an OpenAI effort that Anthropic/Gemini would ignore.
++    return (provider != "anthropic" && provider != "gemini") ||
++           supported_efforts.empty();
++  }
++
++  AgentGenerationProfile Select(bool fixed, bool basic, bool strong) const {
++    if (fixed || (!basic && !strong)) {
++      return default_profile;
++    }
++    const auto& selected = basic ? basic_profile : strong_profile;
++    return selected == AgentGenerationProfile{} ? default_profile : selected;
++  }
++};
++
++inline int AgentGenerationOutputLimit(const AgentGenerationProfile& profile,
++                                      int legacy_limit) {
++  // Reasoning consumes the same output budget; do not cap a high-effort
++  // profile to a tiny tool-argument-only limit.
++  return profile.max_output_tokens > 0 ? profile.max_output_tokens
++                                       : legacy_limit;
++}
++
++}  // namespace aegis::agent
++#endif  // CHROME_BROWSER_AEGIS_AGENT_AGENT_GENERATION_PROFILE_H_
+diff --git a/chrome/browser/aegis/agent/agent_generation_profile_json.h b/chrome/browser/aegis/agent/agent_generation_profile_json.h
+new file mode 100644
+index 0000000000..ea7f2f5c0c
+--- /dev/null
++++ b/chrome/browser/aegis/agent/agent_generation_profile_json.h
+@@ -0,0 +1,71 @@
++// Copyright 2026 GCSA
++#ifndef CHROME_BROWSER_AEGIS_AGENT_AGENT_GENERATION_PROFILE_JSON_H_
++#define CHROME_BROWSER_AEGIS_AGENT_AGENT_GENERATION_PROFILE_JSON_H_
++
++#include "base/values.h"
++#include "chrome/browser/aegis/agent/agent_generation_profile.h"
++
++namespace aegis::agent {
++
++inline base::DictValue SerializeGenerationProfile(
++    const AgentGenerationProfile& profile) {
++  base::DictValue value;
++  value.Set("effort", profile.effort);
++  value.Set("max_output_tokens", profile.max_output_tokens);
++  return value;
++}
++
++inline bool ReadGenerationProfile(const base::DictValue& parent,
++                                  std::string_view key,
++                                  AgentGenerationProfile* profile) {
++  if (!parent.contains(key)) {
++    return true;
++  }
++  const auto* value = parent.FindDict(key);
++  const auto* effort = value ? value->FindString("effort") : nullptr;
++  const auto budget =
++      value ? value->FindInt("max_output_tokens") : std::nullopt;
++  if (!effort || !budget) {
++    return false;
++  }
++  *profile = {.effort = *effort, .max_output_tokens = *budget};
++  return profile->IsValid();
++}
++
++inline bool ReadGenerationPolicy(const base::DictValue& value,
++                                 AgentGenerationPolicy* policy) {
++  if (value.contains("supported_efforts")) {
++    const auto* efforts = value.FindList("supported_efforts");
++    if (!efforts) {
++      return false;
++    }
++    for (const auto& effort : *efforts) {
++      if (!effort.is_string()) {
++        return false;
++      }
++      policy->supported_efforts.push_back(effort.GetString());
++    }
++  }
++  return ReadGenerationProfile(value, "default_profile",
++                               &policy->default_profile) &&
++         ReadGenerationProfile(value, "basic_profile",
++                               &policy->basic_profile) &&
++         ReadGenerationProfile(value, "strong_profile",
++                               &policy->strong_profile);
++}
++
++inline void WriteGenerationPolicy(const AgentGenerationPolicy& policy,
++                                  base::DictValue* value) {
++  base::ListValue efforts;
++  for (const auto& effort : policy.supported_efforts) {
++    efforts.Append(effort);
++  }
++  value->Set("supported_efforts", std::move(efforts));
++  value->Set("default_profile",
++             SerializeGenerationProfile(policy.default_profile));
++  value->Set("basic_profile", SerializeGenerationProfile(policy.basic_profile));
++  value->Set("strong_profile",
++             SerializeGenerationProfile(policy.strong_profile));
++}
++}  // namespace aegis::agent
++#endif  // CHROME_BROWSER_AEGIS_AGENT_AGENT_GENERATION_PROFILE_JSON_H_
+diff --git a/chrome/browser/aegis/agent/agent_model_accounting.h b/chrome/browser/aegis/agent/agent_model_accounting.h
+new file mode 100644
+index 0000000000..12e7b1cb3c
+--- /dev/null
++++ b/chrome/browser/aegis/agent/agent_model_accounting.h
+@@ -0,0 +1,84 @@
++// Copyright 2026 GCSA
++#ifndef CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ACCOUNTING_H_
++#define CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ACCOUNTING_H_
++
++#include <cmath>
++#include <cstdint>
++#include <optional>
++#include <string>
++
++namespace aegis::agent {
++struct AgentTokenPrices {
++  std::optional<int64_t> input;
++  std::optional<int64_t> cached_input;
++  std::optional<int64_t> output;
++  bool IsValid() const {
++    return (!input || *input >= 0) && (!cached_input || *cached_input >= 0) &&
++           (!output || *output >= 0);
++  }
++  bool operator==(const AgentTokenPrices&) const = default;
++};
++
++struct AgentModelAttempt {
++  std::string kind = "generation";
++  std::string model;
++  std::string effort;
++  std::optional<int64_t> input_tokens;
++  std::optional<int64_t> cached_input_tokens;
++  std::optional<int64_t> output_tokens;
++  std::optional<int64_t> reasoning_tokens;
++  AgentTokenPrices prices;
++  int64_t latency_ms = 0;
++  bool succeeded = false;
++  std::string phase = "task";
++  std::string observation_id;
++  bool completed = true;
++
++  bool IsValid() const {
++    constexpr int64_t kMax = 9007199254740991LL;
++    const auto valid = [](const auto& value) {
++      return !value || (*value >= 0 && *value <= kMax);
++    };
++    return observation_id.size() <= 64 &&
++           (completed || !observation_id.empty()) &&
++           (phase == "task" || phase == "screening") &&
++           (kind == "generation" || kind == "typesafe") &&
++           model.size() <= 256 && effort.size() <= 16 && latency_ms >= 0 &&
++           valid(input_tokens) && valid(cached_input_tokens) &&
++           valid(output_tokens) && valid(reasoning_tokens) &&
++           prices.IsValid() &&
++           (!cached_input_tokens || !input_tokens ||
++            *cached_input_tokens <= *input_tokens) &&
++           (!reasoning_tokens || !output_tokens ||
++            *reasoning_tokens <= *output_tokens);
++  }
++};
++
++inline std::optional<long double> EstimateAgentAttemptMicrousd(
++    const AgentModelAttempt& attempt) {
++  if (!attempt.IsValid() || !attempt.completed || !attempt.input_tokens ||
++      !attempt.output_tokens || !attempt.prices.input ||
++      !attempt.prices.output) {
++    return std::nullopt;
++  }
++  // Missing cache detail is safe only when caching cannot affect the price.
++  if ((!attempt.cached_input_tokens &&
++       attempt.prices.cached_input != attempt.prices.input) ||
++      (attempt.cached_input_tokens.value_or(0) > 0 &&
++       !attempt.prices.cached_input)) {
++    return std::nullopt;
++  }
++  const int64_t cached = attempt.cached_input_tokens.value_or(0);
++  const long double input =
++      static_cast<long double>(*attempt.input_tokens - cached);
++  const long double cost =
++      input * *attempt.prices.input +
++      static_cast<long double>(cached) *
++          attempt.prices.cached_input.value_or(0) +
++      static_cast<long double>(*attempt.output_tokens) * *attempt.prices.output;
++  // Reasoning tokens are already included in output_tokens.
++  return std::isfinite(cost) ? std::make_optional(cost / 1000000.L)
++                             : std::nullopt;
++}
++}  // namespace aegis::agent
++#endif  // CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ACCOUNTING_H_
+diff --git a/chrome/browser/aegis/agent/agent_model_accounting_json.h b/chrome/browser/aegis/agent/agent_model_accounting_json.h
+new file mode 100644
+index 0000000000..37661b8b0a
+--- /dev/null
++++ b/chrome/browser/aegis/agent/agent_model_accounting_json.h
+@@ -0,0 +1,122 @@
++// Copyright 2026 GCSA
++#ifndef CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ACCOUNTING_JSON_H_
++#define CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ACCOUNTING_JSON_H_
++
++#include "base/strings/string_number_conversions.h"
++#include "base/values.h"
++#include "chrome/browser/aegis/agent/agent_model_accounting.h"
++
++namespace aegis::agent {
++inline void WriteOptionalTokenValue(base::DictValue* value,
++                                    std::string_view key,
++                                    const std::optional<int64_t>& number) {
++  if (number) {
++    value->Set(key, base::NumberToString(*number));
++  } else {
++    value->Set(key, base::Value());
++  }
++}
++
++inline bool ReadOptionalTokenValue(const base::DictValue& value,
++                                   std::string_view key,
++                                   std::optional<int64_t>* number) {
++  const auto* field = value.Find(key);
++  if (!field || field->is_none()) {
++    number->reset();
++    return true;
++  }
++  int64_t parsed = 0;
++  if (!field->is_string() ||
++      !base::StringToInt64(field->GetString(), &parsed) || parsed < 0) {
++    return false;
++  }
++  *number = parsed;
++  return true;
++}
++
++inline base::DictValue SerializeTokenPrices(const AgentTokenPrices& prices) {
++  base::DictValue value;
++  WriteOptionalTokenValue(&value, "input", prices.input);
++  WriteOptionalTokenValue(&value, "cached_input", prices.cached_input);
++  WriteOptionalTokenValue(&value, "output", prices.output);
++  return value;
++}
++
++inline bool ReadTokenPrices(const base::DictValue& parent,
++                            std::string_view key,
++                            AgentTokenPrices* prices) {
++  if (!parent.contains(key)) {
++    return true;
++  }
++  const auto* value = parent.FindDict(key);
++  return value && ReadOptionalTokenValue(*value, "input", &prices->input) &&
++         ReadOptionalTokenValue(*value, "cached_input",
++                                &prices->cached_input) &&
++         ReadOptionalTokenValue(*value, "output", &prices->output) &&
++         prices->IsValid();
++}
++
++inline base::DictValue SerializeModelAttempt(const AgentModelAttempt& attempt) {
++  base::DictValue value;
++  value.Set("kind", attempt.kind);
++  value.Set("model", attempt.model);
++  value.Set("effort", attempt.effort);
++  value.Set("succeeded", attempt.succeeded);
++  value.Set("phase", attempt.phase);
++  value.Set("observation_id", attempt.observation_id);
++  value.Set("completed", attempt.completed);
++  value.Set("latency_ms", base::NumberToString(attempt.latency_ms));
++  value.Set("prices", SerializeTokenPrices(attempt.prices));
++  WriteOptionalTokenValue(&value, "input_tokens", attempt.input_tokens);
++  WriteOptionalTokenValue(&value, "cached_input_tokens",
++                          attempt.cached_input_tokens);
++  WriteOptionalTokenValue(&value, "output_tokens", attempt.output_tokens);
++  WriteOptionalTokenValue(&value, "reasoning_tokens", attempt.reasoning_tokens);
++  return value;
++}
++
++inline std::optional<AgentModelAttempt> ReadModelAttempt(
++    const base::Value& item) {
++  const auto* value = item.GetIfDict();
++  if (!value) {
++    return std::nullopt;
++  }
++  const auto* kind = value->FindString("kind");
++  const auto* model = value->FindString("model");
++  const auto* effort = value->FindString("effort");
++  const auto* latency = value->FindString("latency_ms");
++  const auto succeeded = value->FindBool("succeeded");
++  AgentModelAttempt attempt;
++  if (!kind || !model || !effort || !latency || !succeeded ||
++      !base::StringToInt64(*latency, &attempt.latency_ms) ||
++      !ReadOptionalTokenValue(*value, "input_tokens", &attempt.input_tokens) ||
++      !ReadOptionalTokenValue(*value, "cached_input_tokens",
++                              &attempt.cached_input_tokens) ||
++      !ReadOptionalTokenValue(*value, "output_tokens",
++                              &attempt.output_tokens) ||
++      !ReadOptionalTokenValue(*value, "reasoning_tokens",
++                              &attempt.reasoning_tokens) ||
++      !ReadTokenPrices(*value, "prices", &attempt.prices)) {
++    return std::nullopt;
++  }
++  attempt.kind = *kind;
++  attempt.model = *model;
++  attempt.effort = *effort;
++  attempt.succeeded = *succeeded;
++  if (const auto* phase = value->FindString("phase")) {
++    attempt.phase = *phase;
++  }
++  if (const auto* id = value->FindString("observation_id")) {
++    attempt.observation_id = *id;
++  }
++  if (value->contains("completed")) {
++    const auto completed = value->FindBool("completed");
++    if (!completed) {
++      return std::nullopt;
++    }
++    attempt.completed = *completed;
++  }
++  return attempt.IsValid() ? std::make_optional(attempt) : std::nullopt;
++}
++}  // namespace aegis::agent
++#endif  // CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ACCOUNTING_JSON_H_
 diff --git a/chrome/browser/aegis/agent/agent_model_client.cc b/chrome/browser/aegis/agent/agent_model_client.cc
 index 7ecbcc4f2d..f19f9f56b0 100644
 --- a/chrome/browser/aegis/agent/agent_model_client.cc
@@ -2204,6 +2999,20 @@ index 7ecbcc4f2d..f19f9f56b0 100644
      const std::string error = result.error;
      std::move(done).Run(false, error, std::move(result));
      return;
+diff --git a/chrome/browser/aegis/agent/agent_model_client.h b/chrome/browser/aegis/agent/agent_model_client.h
+index 67e3cd4d12..4b84e8c907 100644
+--- a/chrome/browser/aegis/agent/agent_model_client.h
++++ b/chrome/browser/aegis/agent/agent_model_client.h
+@@ -49,6 +49,9 @@ class AgentModelClient {
+                                  Callback done);
+   bool Cancel(RequestId request_id);
+   bool busy() const { return loader_ != nullptr; }
++  base::WeakPtr<AgentModelClient> GetWeakPtr() {
++    return weak_factory_.GetWeakPtr();
++  }
+ 
+  private:
+   void OnComplete(Callback done, std::optional<std::string> body);
 diff --git a/chrome/browser/aegis/agent/agent_model_client_unittest.cc b/chrome/browser/aegis/agent/agent_model_client_unittest.cc
 index 282a3a321b..7c4e717c59 100644
 --- a/chrome/browser/aegis/agent/agent_model_client_unittest.cc
@@ -2241,10 +3050,18 @@ index 282a3a321b..7c4e717c59 100644
    const GURL endpoint("http://127.0.0.1:8765/v1/responses");
    AgentModelClient client(factory_.GetSafeWeakWrapper());
 diff --git a/chrome/browser/aegis/agent/agent_model_protocol.cc b/chrome/browser/aegis/agent/agent_model_protocol.cc
-index 7d76297b04..38aff2ab4c 100644
+index 7d76297b04..e5efdae9dc 100644
 --- a/chrome/browser/aegis/agent/agent_model_protocol.cc
 +++ b/chrome/browser/aegis/agent/agent_model_protocol.cc
-@@ -20,6 +20,13 @@
+@@ -9,6 +9,7 @@
+ #include <map>
+ #include <optional>
+ #include <string_view>
++#include <tuple>
+ #include <utility>
+ 
+ #include "base/containers/flat_set.h"
+@@ -20,6 +21,13 @@
  
  namespace aegis::agent {
  
@@ -2258,11 +3075,167 @@ index 7d76297b04..38aff2ab4c 100644
  bool IsQwenModelName(std::string_view model) {
    const std::string normalized = base::ToLowerASCII(model);
    for (size_t start = normalized.find("qwen"); start != std::string::npos;
+@@ -407,6 +415,78 @@ bool ReadNonNegativeInteger(const base::DictValue& dict,
+   return false;
+ }
+ 
++bool ReadOpenAIUsageDetails(const base::DictValue& usage,
++                            AgentModelParseResult* result) {
++  auto& tokens = result->events.back().usage;
++  for (const auto& [parent, key, total, destination] :
++       {std::tuple{"input_tokens_details", "cached_tokens", tokens.input_tokens,
++                   &tokens.cached_input_tokens},
++        std::tuple{"output_tokens_details", "reasoning_tokens",
++                   tokens.output_tokens, &tokens.reasoning_tokens}}) {
++    if (!usage.contains(parent)) {
++      continue;
++    }
++    const auto* details = usage.FindDict(parent);
++    int64_t count = 0;
++    if (!details ||
++        (details->contains(key) &&
++         (!ReadNonNegativeInteger(*details, key, &count) || count > total))) {
++      result->error = "OpenAI token details are invalid";
++      return false;
++    }
++    if (details->contains(key)) {
++      *destination = count;
++    }
++  }
++  return true;
++}
++
++bool NormalizeProviderUsage(const base::DictValue& usage,
++                            bool gemini,
++                            AgentModelParseResult* result) {
++  auto& tokens = result->events.back().usage;
++  const char* cached_key =
++      gemini ? "cachedContentTokenCount" : "cache_read_input_tokens";
++  const char* extra_key =
++      gemini ? "thoughtsTokenCount" : "cache_creation_input_tokens";
++  int64_t cached = 0;
++  int64_t extra = 0;
++  if ((usage.contains(cached_key) &&
++       !ReadNonNegativeInteger(usage, cached_key, &cached)) ||
++      (usage.contains(extra_key) &&
++       !ReadNonNegativeInteger(usage, extra_key, &extra))) {
++    result->error = "provider cache or reasoning usage is invalid";
++    return false;
++  }
++  if (gemini) {
++    if (extra > kMaxSafeInteger - tokens.output_tokens ||
++        cached > tokens.input_tokens) {
++      result->error = "Gemini usage overflow or invalid cache count";
++      return false;
++    }
++    tokens.output_tokens += extra;
++    if (usage.contains(extra_key)) {
++      tokens.reasoning_tokens = extra;
++    }
++  } else {
++    if (cached > kMaxSafeInteger - tokens.input_tokens ||
++        extra > kMaxSafeInteger - tokens.input_tokens - cached) {
++      result->error = "Anthropic usage overflow";
++      return false;
++    }
++    tokens.input_tokens += cached + extra;
++  }
++  if (usage.contains(cached_key)) {
++    tokens.cached_input_tokens = cached;
++  }
++  // Cache creation has a separate tariff not represented by this catalog.
++  // Missing provider detail remains unknown rather than under-billed.
++  tokens.billing_complete =
++      usage.contains(extra_key) &&
++      (gemini || (extra == 0 && usage.contains(cached_key)));
++  return true;
++}
++
+ AgentModelParseResult ParseOpenAINonStream(
+     const base::DictValue& root,
+     const std::vector<AgentModelToolDefinition>& tools) {
+@@ -466,7 +546,8 @@ AgentModelParseResult ParseOpenAINonStream(
+     int64_t output_tokens = 0;
+     if (!ReadNonNegativeInteger(*usage, "input_tokens", &input) ||
+         !ReadNonNegativeInteger(*usage, "output_tokens", &output_tokens) ||
+-        !AppendUsage(input, output_tokens, &result)) {
++        !AppendUsage(input, output_tokens, &result) ||
++        !ReadOpenAIUsageDetails(*usage, &result)) {
+       if (result.error.empty()) {
+         result.error = "OpenAI usage is invalid";
+       }
+@@ -520,7 +601,8 @@ AgentModelParseResult ParseAnthropicNonStream(
+     int64_t output_tokens = 0;
+     if (!ReadNonNegativeInteger(*usage, "input_tokens", &input) ||
+         !ReadNonNegativeInteger(*usage, "output_tokens", &output_tokens) ||
+-        !AppendUsage(input, output_tokens, &result)) {
++        !AppendUsage(input, output_tokens, &result) ||
++        !NormalizeProviderUsage(*usage, false, &result)) {
+       if (result.error.empty()) {
+         result.error = "Anthropic usage is invalid";
+       }
+@@ -584,7 +666,8 @@ AgentModelParseResult ParseGeminiChunk(
+     if (!ReadNonNegativeInteger(*usage, "promptTokenCount", &input) ||
+         !ReadNonNegativeInteger(*usage, "candidatesTokenCount",
+                                 &output_tokens) ||
+-        !AppendUsage(input, output_tokens, &result)) {
++        !AppendUsage(input, output_tokens, &result) ||
++        !NormalizeProviderUsage(*usage, true, &result)) {
+       if (result.error.empty()) {
+         result.error = "Gemini usage is invalid";
+       }
+@@ -730,7 +813,8 @@ AgentModelParseResult ParseOpenAIStream(
+         int64_t output = 0;
+         if (!ReadNonNegativeInteger(*usage, "input_tokens", &input) ||
+             !ReadNonNegativeInteger(*usage, "output_tokens", &output) ||
+-            !AppendUsage(input, output, &result)) {
++            !AppendUsage(input, output, &result) ||
++            !ReadOpenAIUsageDetails(*usage, &result)) {
+           if (result.error.empty()) {
+             result.error = "OpenAI stream usage is invalid";
+           }
+@@ -851,10 +935,13 @@ AgentModelParseResult ParseAnthropicStream(
+       })) {
+     return Fail("Anthropic stream ended before completion");
+   }
+-  if ((have_input_usage || have_output_usage) &&
++  if (have_input_usage && have_output_usage &&
+       !AppendUsage(input_tokens, output_tokens, &result)) {
+     return result;
+   }
++  if (have_input_usage && have_output_usage) {
++    result.events.back().usage.billing_complete = false;
++  }
+   AppendCompleted(&result);
+   return result;
+ }
+@@ -926,7 +1013,10 @@ bool ValidateRequest(const AgentModelRequest& request, std::string* error) {
+        request.reasoning_effort != "minimal" &&
+        request.reasoning_effort != "low" &&
+        request.reasoning_effort != "medium" &&
+-       request.reasoning_effort != "high") ||
++       request.reasoning_effort != "high" &&
++       request.reasoning_effort != "xhigh") ||
++      (!request.reasoning_effort.empty() &&
++       request.provider != AgentModelProvider::kOpenAICompatible) ||
+       (request.disable_model_thinking &&
+        request.provider != AgentModelProvider::kOpenAICompatible)) {
+     *error = "invalid model request";
 diff --git a/chrome/browser/aegis/agent/agent_model_protocol.h b/chrome/browser/aegis/agent/agent_model_protocol.h
-index 0c5ca2ee3d..467560ef91 100644
+index 0c5ca2ee3d..9a6acc4263 100644
 --- a/chrome/browser/aegis/agent/agent_model_protocol.h
 +++ b/chrome/browser/aegis/agent/agent_model_protocol.h
-@@ -75,9 +75,24 @@ struct AgentModelEvent {
+@@ -64,6 +64,9 @@ int AgentModelToolOutputTokenLimit(std::string_view tool_name);
+ struct AgentModelUsage {
+   int64_t input_tokens = 0;
+   int64_t output_tokens = 0;
++  std::optional<int64_t> cached_input_tokens;
++  std::optional<int64_t> reasoning_tokens;
++  bool billing_complete = true;
+ };
+ 
+ struct AgentModelEvent {
+@@ -75,9 +78,24 @@ struct AgentModelEvent {
    AgentModelUsage usage;
  };
  
@@ -2287,12 +3260,101 @@ index 0c5ca2ee3d..467560ef91 100644
  
    bool ok() const { return error.empty(); }
  };
+diff --git a/chrome/browser/aegis/agent/agent_model_protocol_unittest.cc b/chrome/browser/aegis/agent/agent_model_protocol_unittest.cc
+index 15c43d04fa..3286a5e422 100644
+--- a/chrome/browser/aegis/agent/agent_model_protocol_unittest.cc
++++ b/chrome/browser/aegis/agent/agent_model_protocol_unittest.cc
+@@ -44,7 +44,8 @@ AgentModelRequest Request(AgentModelProvider provider, bool stream) {
+   request.user_prompt = "Observe the approved page.";
+   request.tools.push_back(ObserveTool());
+   request.required_tool_name = "page.observe";
+-  request.reasoning_effort = "none";
++  request.reasoning_effort =
++      provider == AgentModelProvider::kOpenAICompatible ? "none" : "";
+   request.stream = stream;
+   return request;
+ }
+@@ -65,6 +66,74 @@ const AgentModelEvent* FindEvent(const AgentModelParseResult& result,
+   return nullptr;
+ }
+ 
++TEST(AegisAgentModelProtocolTest,
++     EmitsSelectedEffortAndPreservesUnknownDefault) {
++  auto request = Request(AgentModelProvider::kOpenAICompatible, false);
++  request.reasoning_effort = "xhigh";
++  request.max_output_tokens = 16384;
++  std::string error;
++  auto body = BuildAgentModelRequestBody(request, &error);
++  ASSERT_TRUE(body) << error;
++  auto parsed = base::JSONReader::ReadDict(*body, base::JSON_PARSE_RFC);
++  ASSERT_TRUE(parsed);
++  EXPECT_EQ(*parsed->FindDict("reasoning")->FindString("effort"), "xhigh");
++  EXPECT_EQ(parsed->FindInt("max_output_tokens"), 16384);
++  request.reasoning_effort.clear();
++  body = BuildAgentModelRequestBody(request, &error);
++  ASSERT_TRUE(body);
++  EXPECT_FALSE(body->contains("reasoning"));
++  request.reasoning_effort = "high";
++  request.provider = AgentModelProvider::kAnthropic;
++  EXPECT_FALSE(BuildAgentModelRequestBody(request, &error));
++}
++
++TEST(AegisAgentModelProtocolTest, KeepsCachedAndReasoningUsageAsSubsets) {
++  const auto result = ParseAgentModelResponse(
++      AgentModelProvider::kOpenAICompatible,
++      R"({"status":"completed","output":[],"usage":{"input_tokens":100,"output_tokens":40,
++        "input_tokens_details":{"cached_tokens":60},
++        "output_tokens_details":{"reasoning_tokens":30}}})",
++      false, Tools());
++  ASSERT_TRUE(result.ok()) << result.error;
++  const auto* usage = FindEvent(result, AgentModelEventType::kUsage);
++  ASSERT_TRUE(usage);
++  EXPECT_EQ(usage->usage.cached_input_tokens, 60);
++  EXPECT_EQ(usage->usage.reasoning_tokens, 30);
++  EXPECT_EQ(usage->usage.output_tokens, 40);
++}
++
++TEST(AegisAgentModelProtocolTest, GeminiIncludesThoughtsAndCachedPromptUsage) {
++  const auto result = ParseAgentModelResponse(
++      AgentModelProvider::kGemini,
++      R"({"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],
++        "usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,
++          "thoughtsTokenCount":30,"cachedContentTokenCount":60}})",
++      false, Tools());
++  ASSERT_TRUE(result.ok()) << result.error;
++  const auto* usage = FindEvent(result, AgentModelEventType::kUsage);
++  ASSERT_TRUE(usage);
++  EXPECT_EQ(usage->usage.output_tokens, 50);
++  EXPECT_EQ(usage->usage.reasoning_tokens, 30);
++  EXPECT_EQ(usage->usage.cached_input_tokens, 60);
++  EXPECT_TRUE(usage->usage.billing_complete);
++}
++
++TEST(AegisAgentModelProtocolTest,
++     AnthropicCacheCreationCannotClaimCompleteCost) {
++  const auto result = ParseAgentModelResponse(
++      AgentModelProvider::kAnthropic,
++      R"({"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
++        "usage":{"input_tokens":100,"output_tokens":20,
++          "cache_read_input_tokens":60,"cache_creation_input_tokens":40}})",
++      false, Tools());
++  ASSERT_TRUE(result.ok()) << result.error;
++  const auto* usage = FindEvent(result, AgentModelEventType::kUsage);
++  ASSERT_TRUE(usage);
++  EXPECT_EQ(usage->usage.input_tokens, 200);
++  EXPECT_EQ(usage->usage.cached_input_tokens, 60);
++  EXPECT_FALSE(usage->usage.billing_complete);
++}
++
+ TEST(AegisAgentModelProtocolTest, BuildsProviderSpecificRestrictedTools) {
+   for (AgentModelProvider provider : {
+            AgentModelProvider::kOpenAICompatible,
 diff --git a/chrome/browser/aegis/agent/agent_model_router.cc b/chrome/browser/aegis/agent/agent_model_router.cc
 new file mode 100644
-index 0000000000..58de5ce394
+index 0000000000..58c0374631
 --- /dev/null
 +++ b/chrome/browser/aegis/agent/agent_model_router.cc
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,180 @@
 +// Copyright 2026 GCSA
 +
 +#include "chrome/browser/aegis/agent/agent_model_router.h"
@@ -2316,30 +3378,48 @@ index 0000000000..58de5ce394
 +          entry.supports_strong_reasoning);
 +}
 +
-+auto KnownCostKey(const AgentModelCatalogEntry& entry) {
-+  return std::tuple(!entry.cost_microusd_per_million_tokens.has_value(),
-+                    entry.cost_microusd_per_million_tokens.value_or(0));
++auto KnownCostKey(const AgentModelCatalogEntry& entry,
++                  const AgentModelRequirements& requirements) {
++  const auto profile = entry.generation_policy.Select(
++      false, requirements.reasoning == AgentReasoningNeed::kBasic,
++      requirements.reasoning == AgentReasoningNeed::kStrong);
++  // Conservative comparison estimate, not a bill: assume uncached input and
++  // the selected output cap. Both candidates use the same input-size heuristic.
++  const long double input =
++      requirements.context == AgentContextNeed::kLong ? 16384 : 1024;
++  const long double output = AgentGenerationOutputLimit(
++      profile,
++      requirements.output == AgentOutputNeed::kShortExtraction ? 1024 : 8192);
++  if (entry.token_prices.input && entry.token_prices.output) {
++    return std::tuple(false, input * *entry.token_prices.input +
++                                 output * *entry.token_prices.output);
++  }
++  return std::tuple(
++      !entry.cost_microusd_per_million_tokens.has_value(),
++      (input + output) * entry.cost_microusd_per_million_tokens.value_or(0));
 +}
 +
 +bool ComesBefore(const AgentModelCatalogEntry* left,
 +                 const AgentModelCatalogEntry* right,
-+                 AgentModelSelectionMode mode) {
-+  if (mode == AgentModelSelectionMode::kCost) {
-+    return std::tuple(KnownCostKey(*left), -left->quality_score,
-+                      left->latency_score, -left->priority, left->id) <
-+           std::tuple(KnownCostKey(*right), -right->quality_score,
-+                      right->latency_score, -right->priority, right->id);
++                 const AgentModelSelectionInput& input) {
++  const auto left_cost = KnownCostKey(*left, input.requirements);
++  const auto right_cost = KnownCostKey(*right, input.requirements);
++  if (input.mode == AgentModelSelectionMode::kCost) {
++    return std::tuple(left_cost, -left->quality_score, left->latency_score,
++                      -left->priority, left->id) <
++           std::tuple(right_cost, -right->quality_score, right->latency_score,
++                      -right->priority, right->id);
 +  }
-+  if (mode == AgentModelSelectionMode::kQuality) {
-+    return std::tuple(-left->quality_score, left->latency_score,
-+                      KnownCostKey(*left), -left->priority, left->id) <
-+           std::tuple(-right->quality_score, right->latency_score,
-+                      KnownCostKey(*right), -right->priority, right->id);
++  if (input.mode == AgentModelSelectionMode::kQuality) {
++    return std::tuple(-left->quality_score, left->latency_score, left_cost,
++                      -left->priority, left->id) <
++           std::tuple(-right->quality_score, right->latency_score, right_cost,
++                      -right->priority, right->id);
 +  }
-+  return std::tuple(-left->priority, -left->quality_score,
-+                    left->latency_score, KnownCostKey(*left), left->id) <
++  return std::tuple(-left->priority, -left->quality_score, left->latency_score,
++                    left_cost, left->id) <
 +         std::tuple(-right->priority, -right->quality_score,
-+                    right->latency_score, KnownCostKey(*right), right->id);
++                    right->latency_score, right_cost, right->id);
 +}
 +
 +std::optional<AgentModelRoutePlan> SelectFixedRoute(
@@ -2358,6 +3438,8 @@ index 0000000000..58de5ce394
 +        entry.destination == plan.primary) {
 +      plan.primary_cost_microusd_per_million_tokens =
 +          entry.cost_microusd_per_million_tokens;
++      plan.primary_profile = entry.generation_policy.default_profile;
++      plan.primary_token_prices = entry.token_prices;
 +      break;
 +    }
 +  }
@@ -2378,7 +3460,7 @@ index 0000000000..58de5ce394
 +    }
 +  }
 +  std::ranges::sort(candidates, [&input](const auto* left, const auto* right) {
-+    return ComesBefore(left, right, input.mode);
++    return ComesBefore(left, right, input);
 +  });
 +  return candidates;
 +}
@@ -2395,6 +3477,12 @@ index 0000000000..58de5ce394
 +      .reason = input.mode == AgentModelSelectionMode::kLocalOnly
 +                    ? "automatic_local_only"
 +                    : "automatic_policy"};
++  const bool basic = input.requirements.reasoning == AgentReasoningNeed::kBasic;
++  const bool strong =
++      input.requirements.reasoning == AgentReasoningNeed::kStrong;
++  plan.primary_profile =
++      candidates.front()->generation_policy.Select(false, basic, strong);
++  plan.primary_token_prices = candidates.front()->token_prices;
 +  const auto fallback = std::ranges::find_if(
 +      candidates.begin() + 1, candidates.end(), [&plan](const auto* candidate) {
 +        return candidate->destination != plan.primary;
@@ -2403,6 +3491,9 @@ index 0000000000..58de5ce394
 +    plan.fallback = (*fallback)->destination;
 +    plan.fallback_cost_microusd_per_million_tokens =
 +        (*fallback)->cost_microusd_per_million_tokens;
++    plan.fallback_profile =
++        (*fallback)->generation_policy.Select(false, basic, strong);
++    plan.fallback_token_prices = (*fallback)->token_prices;
 +  }
 +  return plan;
 +}
@@ -2411,8 +3502,10 @@ index 0000000000..58de5ce394
 +
 +bool AgentModelCatalogEntry::IsValid() const {
 +  return !id.empty() && id.size() <= 128u && destination.IsValid() &&
-+         quality_score >= 0 && quality_score <= 100 && latency_score >= 0 &&
-+         latency_score <= 100 && priority >= -1000 && priority <= 1000 &&
++         generation_policy.IsValid(destination.provider) &&
++         token_prices.IsValid() && quality_score >= 0 && quality_score <= 100 &&
++         latency_score >= 0 && latency_score <= 100 && priority >= -1000 &&
++         priority <= 1000 &&
 +         (!cost_microusd_per_million_tokens ||
 +          *cost_microusd_per_million_tokens >= 0);
 +}
@@ -2444,10 +3537,10 @@ index 0000000000..58de5ce394
 +}  // namespace aegis::agent
 diff --git a/chrome/browser/aegis/agent/agent_model_router.h b/chrome/browser/aegis/agent/agent_model_router.h
 new file mode 100644
-index 0000000000..eea254e90a
+index 0000000000..bdf9f5d7d0
 --- /dev/null
 +++ b/chrome/browser/aegis/agent/agent_model_router.h
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,91 @@
 +// Copyright 2026 GCSA
 +// Browser-owned deterministic generation-model routing.
 +
@@ -2502,6 +3595,8 @@ index 0000000000..eea254e90a
 +  // Unknown cost remains null and is never treated as free.
 +  std::optional<int64_t> cost_microusd_per_million_tokens;
 +  int priority = 0;
++  AgentGenerationPolicy generation_policy;
++  AgentTokenPrices token_prices;
 +
 +  bool IsValid() const;
 +};
@@ -2524,6 +3619,10 @@ index 0000000000..eea254e90a
 +  AgentModelSelectionMode mode = AgentModelSelectionMode::kFixed;
 +  int catalog_revision = 0;
 +  std::string reason;
++  AgentGenerationProfile primary_profile;
++  AgentGenerationProfile fallback_profile;
++  AgentTokenPrices primary_token_prices;
++  AgentTokenPrices fallback_token_prices;
 +};
 +
 +std::optional<AgentModelRoutePlan> SelectAgentModelRoute(
@@ -2535,10 +3634,10 @@ index 0000000000..eea254e90a
 +#endif  // CHROME_BROWSER_AEGIS_AGENT_AGENT_MODEL_ROUTER_H_
 diff --git a/chrome/browser/aegis/agent/agent_model_router_unittest.cc b/chrome/browser/aegis/agent/agent_model_router_unittest.cc
 new file mode 100644
-index 0000000000..13cda640fa
+index 0000000000..e355c8eb6b
 --- /dev/null
 +++ b/chrome/browser/aegis/agent/agent_model_router_unittest.cc
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,158 @@
 +// Copyright 2026 GCSA
 +
 +#include "chrome/browser/aegis/agent/agent_model_router.h"
@@ -2595,6 +3694,28 @@ index 0000000000..13cda640fa
 +  EXPECT_FALSE(plan->fallback);
 +  EXPECT_EQ(plan->mode, AgentModelSelectionMode::kFixed);
 +  EXPECT_EQ(plan->primary_cost_microusd_per_million_tokens, 42);
++}
++
++TEST(AgentModelRouterTest, CostPolicyUsesSplitRatesAndSelectedBudget) {
++  AgentModelSelectionInput input;
++  input.mode = AgentModelSelectionMode::kCost;
++  input.requirements.reasoning = AgentReasoningNeed::kBasic;
++  auto expensive =
++      Entry("expensive", Destination("expensive"), 100, 1, std::nullopt);
++  expensive.token_prices = {.input = 100, .cached_input = 10, .output = 500};
++  expensive.generation_policy.basic_profile.max_output_tokens = 16000;
++  auto cheap = Entry("cheap", Destination("cheap"), 70, 50, std::nullopt);
++  cheap.token_prices = {.input = 100, .cached_input = 10, .output = 500};
++  cheap.generation_policy.basic_profile.max_output_tokens = 2000;
++  input.catalog = {expensive, cheap};
++  std::string error;
++  auto plan = SelectAgentModelRoute(input, &error);
++  ASSERT_TRUE(plan) << error;
++  EXPECT_EQ(plan->primary.model, "cheap");
++  input.catalog[1].token_prices.output.reset();
++  plan = SelectAgentModelRoute(input, &error);
++  ASSERT_TRUE(plan) << error;
++  EXPECT_EQ(plan->primary.model, "expensive");
 +}
 +
 +TEST(AgentModelRouterTest, RejectsEmptyOrUnauthorizedPool) {
@@ -2676,7 +3797,7 @@ index 0000000000..13cda640fa
 +}  // namespace
 +}  // namespace aegis::agent
 diff --git a/chrome/browser/aegis/agent/agent_planner.cc b/chrome/browser/aegis/agent/agent_planner.cc
-index 91905f5fa4..0681cd05e3 100644
+index 91905f5fa4..9081ae11d9 100644
 --- a/chrome/browser/aegis/agent/agent_planner.cc
 +++ b/chrome/browser/aegis/agent/agent_planner.cc
 @@ -408,6 +408,36 @@ bool RouteTargetsSiteHomepage(const AgentGoalRoute& route,
@@ -2789,7 +3910,7 @@ index 91905f5fa4..0681cd05e3 100644
  bool AgentGoalRequiresPageEvidence(std::string_view user_goal) {
    const std::string requested = RequestedGoalText(user_goal);
    if (GoalContainsAny(requested,
-@@ -944,6 +990,10 @@ std::optional<AgentTaskPlan> ParseAndValidateTaskPlan(
+@@ -944,6 +990,15 @@ std::optional<AgentTaskPlan> ParseAndValidateTaskPlan(
    plan.scope.allowed_tab_ids = maximum_scope.allowed_tab_ids;
    plan.scope.budgets = maximum_scope.budgets;
    plan.scope.model_destination = maximum_scope.model_destination;
@@ -2797,6 +3918,11 @@ index 91905f5fa4..0681cd05e3 100644
 +      maximum_scope.model_fallback_destination;
 +  plan.scope.model_selection_mode = maximum_scope.model_selection_mode;
 +  plan.scope.model_catalog_revision = maximum_scope.model_catalog_revision;
++  plan.scope.model_generation_profile = maximum_scope.model_generation_profile;
++  plan.scope.fallback_generation_profile =
++      maximum_scope.fallback_generation_profile;
++  plan.scope.model_token_prices = maximum_scope.model_token_prices;
++  plan.scope.fallback_token_prices = maximum_scope.fallback_token_prices;
  
    base::flat_set<std::string> step_ids;
    for (const base::Value& value : *steps) {
@@ -2817,10 +3943,18 @@ index 26a7ebc949..f3b67167c9 100644
  // Product discovery cannot silently gain shopping authority, and a named-site
  // request cannot be redirected to a general search engine or unrelated host.
 diff --git a/chrome/browser/aegis/agent/agent_task.cc b/chrome/browser/aegis/agent/agent_task.cc
-index b50916692b..32e38d6d8c 100644
+index b50916692b..282d79041e 100644
 --- a/chrome/browser/aegis/agent/agent_task.cc
 +++ b/chrome/browser/aegis/agent/agent_task.cc
-@@ -183,6 +183,30 @@ bool AgentTask::HasExpired(base::Time now) const {
+@@ -2,6 +2,7 @@
+ 
+ #include "chrome/browser/aegis/agent/agent_task.h"
+ 
++#include <algorithm>
+ #include <utility>
+ 
+ #include "base/check.h"
+@@ -183,6 +184,72 @@ bool AgentTask::HasExpired(base::Time now) const {
    return now - created_at_ >= scope_.budgets.max_duration;
  }
  
@@ -2848,11 +3982,53 @@ index b50916692b..32e38d6d8c 100644
 +  model_routing_metrics_.fallback_used = true;
 +}
 +
++bool AgentTask::RecordModelAttempt(AgentModelAttempt attempt) {
++  const bool duplicate =
++      !attempt.observation_id.empty() &&
++      std::ranges::any_of(
++          model_routing_metrics_.attempts, [&attempt](const auto& item) {
++            return item.observation_id == attempt.observation_id;
++          });
++  if (!attempt.IsValid() || duplicate ||
++      model_routing_metrics_.attempts.size() >= 1000) {
++    model_routing_metrics_.attempts_complete = false;
++    return false;
++  }
++  model_routing_metrics_.attempts.push_back(std::move(attempt));
++  return true;
++}
++
++bool AgentTask::CompleteModelAttempt(const AgentModelAttempt& observation) {
++  if (observation.observation_id.empty() || !observation.IsValid()) {
++    return false;
++  }
++  for (auto& attempt : model_routing_metrics_.attempts) {
++    if (attempt.observation_id != observation.observation_id) {
++      continue;
++    }
++    if (attempt.completed) {
++      return false;
++    }
++    attempt.input_tokens = observation.input_tokens;
++    attempt.output_tokens = observation.output_tokens;
++    attempt.cached_input_tokens = observation.cached_input_tokens;
++    attempt.reasoning_tokens = observation.reasoning_tokens;
++    attempt.latency_ms = observation.latency_ms;
++    attempt.succeeded = observation.succeeded;
++    attempt.completed = true;
++    RecordModelObservation(attempt.input_tokens.value_or(0),
++                           attempt.output_tokens.value_or(0),
++                           base::Milliseconds(attempt.latency_ms));
++    return true;
++  }
++  return false;
++}
++
  void AgentTask::AddObserver(AgentTaskObserver* observer) {
    observers_.AddObserver(observer);
  }
 diff --git a/chrome/browser/aegis/agent/agent_task.h b/chrome/browser/aegis/agent/agent_task.h
-index 60979dfc73..8ff8583f3f 100644
+index 60979dfc73..cdc027ca93 100644
 --- a/chrome/browser/aegis/agent/agent_task.h
 +++ b/chrome/browser/aegis/agent/agent_task.h
 @@ -72,6 +72,9 @@ class AgentTask {
@@ -2865,7 +4041,7 @@ index 60979dfc73..8ff8583f3f 100644
  
    bool TransitionTo(AgentTaskState next, std::string reason);
    // Records a browser-verified informational event without changing state.
-@@ -89,6 +92,11 @@ class AgentTask {
+@@ -89,6 +92,13 @@ class AgentTask {
    bool AdoptOwnedTab(int32_t tab_id);
    bool ReleaseOwnedTab(int32_t tab_id);
    bool HasExpired(base::Time now) const;
@@ -2874,10 +4050,12 @@ index 60979dfc73..8ff8583f3f 100644
 +                              int64_t output_tokens,
 +                              base::TimeDelta latency);
 +  void RecordModelFallback();
++  bool RecordModelAttempt(AgentModelAttempt attempt);
++  bool CompleteModelAttempt(const AgentModelAttempt& observation);
  
    void AddObserver(AgentTaskObserver* observer);
    void RemoveObserver(AgentTaskObserver* observer);
-@@ -114,6 +122,7 @@ class AgentTask {
+@@ -114,6 +124,7 @@ class AgentTask {
    int tool_calls_used_ = 0;
    int model_calls_used_ = 0;
    int network_requests_used_ = 0;
@@ -2886,10 +4064,19 @@ index 60979dfc73..8ff8583f3f 100644
    const base::Time created_at_;
    std::vector<AgentTaskEvent> events_;
 diff --git a/chrome/browser/aegis/agent/agent_task_store.cc b/chrome/browser/aegis/agent/agent_task_store.cc
-index 6631324425..ed1089f5bc 100644
+index 6631324425..81399fbb61 100644
 --- a/chrome/browser/aegis/agent/agent_task_store.cc
 +++ b/chrome/browser/aegis/agent/agent_task_store.cc
-@@ -10,6 +10,7 @@
+@@ -1,6 +1,8 @@
+ // Copyright 2026 GCSA
+ 
+ #include "chrome/browser/aegis/agent/agent_task_store.h"
++#include "chrome/browser/aegis/agent/agent_generation_profile_json.h"
++#include "chrome/browser/aegis/agent/agent_model_accounting_json.h"
+ 
+ #include <algorithm>
+ #include <cctype>
+@@ -10,6 +12,7 @@
  #include "base/containers/flat_set.h"
  #include "base/json/json_reader.h"
  #include "base/json/json_writer.h"
@@ -2897,20 +4084,20 @@ index 6631324425..ed1089f5bc 100644
  #include "base/strings/string_util.h"
  #include "sql/statement.h"
  #include "sql/transaction.h"
-@@ -19,9 +20,9 @@ namespace aegis::agent {
+@@ -19,9 +22,9 @@ namespace aegis::agent {
  
  namespace {
  
 -// v8 增加持久化的摘要失败状态；旧程序不认识该状态，不能继续读取/覆写。
 -constexpr int kCurrentVersion = 8;
 -constexpr int kCompatibleVersion = 8;
-+// v9 adds bounded task-level model routing observations.
-+constexpr int kCurrentVersion = 9;
-+constexpr int kCompatibleVersion = 9;
++// v10 adds immutable generation profiles and per-attempt accounting in JSON.
++constexpr int kCurrentVersion = 10;
++constexpr int kCompatibleVersion = 10;
  constexpr size_t kMaxSummaryBytes = 4096;
  
  constexpr char kCreateTasksSql[] = R"(
-@@ -35,6 +36,7 @@ constexpr char kCreateTasksSql[] = R"(
+@@ -35,6 +38,7 @@ constexpr char kCreateTasksSql[] = R"(
      tool_calls_used INTEGER NOT NULL DEFAULT 0,
      model_calls_used INTEGER NOT NULL DEFAULT 0,
      network_requests_used INTEGER NOT NULL DEFAULT 0,
@@ -2918,7 +4105,7 @@ index 6631324425..ed1089f5bc 100644
      created_us INTEGER NOT NULL,
      updated_us INTEGER NOT NULL
    ))";
-@@ -120,6 +122,74 @@ std::optional<std::string> SerializePlanSteps(const AgentTaskPlan& plan) {
+@@ -120,6 +124,74 @@ std::optional<std::string> SerializePlanSteps(const AgentTaskPlan& plan) {
               : std::nullopt;
  }
  
@@ -2993,16 +4180,14 @@ index 6631324425..ed1089f5bc 100644
  }  // namespace
  
  AgentTaskStore::AgentTaskStore(base::FilePath database_path, bool in_memory)
-@@ -202,11 +272,21 @@ bool AgentTaskStore::Initialize() {
+@@ -202,6 +274,22 @@ bool AgentTaskStore::Initialize() {
      return false;
    }
    if (meta_table_.GetVersionNumber() == 7 &&
--      (!meta_table_.SetVersionNumber(kCurrentVersion) ||
--       !meta_table_.SetCompatibleVersionNumber(kCompatibleVersion))) {
 +      !meta_table_.SetVersionNumber(8)) {
-     database_.Close();
-     return false;
-   }
++    database_.Close();
++    return false;
++  }
 +  if (meta_table_.GetVersionNumber() == 8) {
 +    if ((!database_.DoesColumnExist("agent_tasks", "model_routing_json") &&
 +         !database_.Execute(
@@ -3014,10 +4199,11 @@ index 6631324425..ed1089f5bc 100644
 +      return false;
 +    }
 +  }
-   if (meta_table_.GetVersionNumber() != kCurrentVersion ||
-       !transaction.Commit()) {
++  if (meta_table_.GetVersionNumber() == 9 &&
+       (!meta_table_.SetVersionNumber(kCurrentVersion) ||
+        !meta_table_.SetCompatibleVersionNumber(kCompatibleVersion))) {
      database_.Close();
-@@ -258,6 +338,7 @@ bool AgentTaskStore::SaveTask(const AgentTask& task,
+@@ -258,6 +346,7 @@ bool AgentTaskStore::SaveTask(const AgentTask& task,
        .tool_calls_used = task.tool_calls_used(),
        .model_calls_used = task.model_calls_used(),
        .network_requests_used = task.network_requests_used(),
@@ -3025,7 +4211,7 @@ index 6631324425..ed1089f5bc 100644
        .created_at = task.created_at(),
    };
    return SaveTaskRecord(std::move(record));
-@@ -269,7 +350,9 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
+@@ -269,7 +358,9 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
      return false;
    }
    const std::string scope_json = SerializeScope(record.scope);
@@ -3036,7 +4222,7 @@ index 6631324425..ed1089f5bc 100644
      return false;
    }
    sql::Transaction transaction(&database_);
-@@ -281,7 +364,8 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
+@@ -281,7 +372,8 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
        SQL_FROM_HERE,
        "UPDATE agent_tasks SET state=?,mode=?,goal_summary=?,scope_json=?,"
        "has_external_side_effect=?,tool_calls_used=?,model_calls_used=?,"
@@ -3046,7 +4232,7 @@ index 6631324425..ed1089f5bc 100644
    update.BindInt(0, static_cast<int>(record.state));
    update.BindInt(1, static_cast<int>(record.mode));
    update.BindString(2, record.goal_summary);
-@@ -290,8 +374,9 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
+@@ -290,8 +382,9 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
    update.BindInt(5, record.tool_calls_used);
    update.BindInt(6, record.model_calls_used);
    update.BindInt(7, record.network_requests_used);
@@ -3058,7 +4244,7 @@ index 6631324425..ed1089f5bc 100644
    if (!update.Run()) {
      return false;
    }
-@@ -303,8 +388,8 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
+@@ -303,8 +396,8 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
        SQL_FROM_HERE,
        "INSERT INTO agent_tasks(task_id,state,mode,goal_summary,scope_json,"
        "has_external_side_effect,tool_calls_used,model_calls_used,"
@@ -3069,7 +4255,7 @@ index 6631324425..ed1089f5bc 100644
    insert.BindString(0, record.task_id);
    insert.BindInt(1, static_cast<int>(record.state));
    insert.BindInt(2, static_cast<int>(record.mode));
-@@ -314,8 +399,9 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
+@@ -314,8 +407,9 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
    insert.BindInt(6, record.tool_calls_used);
    insert.BindInt(7, record.model_calls_used);
    insert.BindInt(8, record.network_requests_used);
@@ -3081,7 +4267,7 @@ index 6631324425..ed1089f5bc 100644
    return insert.Run() && transaction.Commit();
  }
  
-@@ -352,7 +438,8 @@ std::vector<StoredAgentTask> AgentTaskStore::LoadUnfinishedTasks() {
+@@ -352,7 +446,8 @@ std::vector<StoredAgentTask> AgentTaskStore::LoadUnfinishedTasks() {
        SQL_FROM_HERE,
        "SELECT task_id,state,mode,goal_summary,scope_json,"
        "has_external_side_effect,tool_calls_used,model_calls_used,"
@@ -3091,7 +4277,7 @@ index 6631324425..ed1089f5bc 100644
        "WHERE state NOT IN (10,11,12,13) OR "
        "(state=10 AND EXISTS(SELECT 1 FROM agent_monitors "
        "WHERE agent_monitors.task_id=agent_tasks.task_id)) "
-@@ -374,8 +461,15 @@ std::vector<StoredAgentTask> AgentTaskStore::LoadUnfinishedTasks() {
+@@ -374,8 +469,15 @@ std::vector<StoredAgentTask> AgentTaskStore::LoadUnfinishedTasks() {
      task.tool_calls_used = statement.ColumnInt(6);
      task.model_calls_used = statement.ColumnInt(7);
      task.network_requests_used = statement.ColumnInt(8);
@@ -3109,7 +4295,7 @@ index 6631324425..ed1089f5bc 100644
      if (task.has_external_side_effect ||
          task.state == AgentTaskState::kAwaitingActionApproval ||
          task.state == AgentTaskState::kUserTakeover) {
-@@ -590,11 +684,24 @@ std::optional<AgentTaskScope> AgentTaskStore::DeserializeScope(
+@@ -590,11 +692,28 @@ std::optional<AgentTaskScope> AgentTaskStore::DeserializeScope(
    const base::ListValue* data_classes = value.FindList("allowed_data_classes");
    const base::DictValue* budgets = value.FindDict("budgets");
    const base::DictValue* destination = value.FindDict("model_destination");
@@ -3123,7 +4309,11 @@ index 6631324425..ed1089f5bc 100644
 +                                   fallback_destination;
 +  const size_t expected_size = (metadata_window ? 7u : 6u) +
 +                               (has_routing_binding ? 2u : 0u) +
-+                               (fallback_destination ? 1u : 0u);
++                               (fallback_destination ? 1u : 0u) +
++                               value.contains("model_generation_profile") +
++                               value.contains("fallback_generation_profile") +
++                               value.contains("model_token_prices") +
++                               value.contains("fallback_token_prices");
 +  if (value.size() != expected_size ||
        (metadata_window && !metadata_window->is_int()) || !origins || !tab_ids ||
        !tools || !data_classes || !budgets || !destination ||
@@ -3135,7 +4325,7 @@ index 6631324425..ed1089f5bc 100644
        origins->size() > 64u || tab_ids->size() > 20u || tools->size() > 128u ||
        data_classes->size() > 7u) {
      return std::nullopt;
-@@ -665,9 +772,70 @@ std::optional<AgentTaskScope> AgentTaskStore::DeserializeScope(
+@@ -665,9 +784,97 @@ std::optional<AgentTaskScope> AgentTaskStore::DeserializeScope(
    scope.model_destination.provider = *provider;
    scope.model_destination.endpoint = *endpoint;
    scope.model_destination.model = *model;
@@ -3173,6 +4363,16 @@ index 6631324425..ed1089f5bc 100644
 +        .endpoint = *fallback_endpoint,
 +        .model = *fallback_model};
 +  }
++  if (!ReadGenerationProfile(value, "model_generation_profile",
++                             &scope.model_generation_profile) ||
++      !ReadGenerationProfile(value, "fallback_generation_profile",
++                             &scope.fallback_generation_profile) ||
++      !ReadTokenPrices(value, "model_token_prices",
++                       &scope.model_token_prices) ||
++      !ReadTokenPrices(value, "fallback_token_prices",
++                       &scope.fallback_token_prices)) {
++    return std::nullopt;
++  }
    return scope.IsValid() ? std::make_optional(std::move(scope)) : std::nullopt;
  }
  
@@ -3191,10 +4391,27 @@ index 6631324425..ed1089f5bc 100644
 +  const bool has_cost_snapshot =
 +      value->contains("primary_model_cost_microusd_per_million_tokens") ||
 +      value->contains("fallback_model_cost_microusd_per_million_tokens");
-+  if (value->size() != (has_cost_snapshot ? 14u : 12u)) {
++  const bool has_attempts = value->contains("attempts");
++  if (value->size() !=
++      (has_cost_snapshot ? 14u : 12u) + (has_attempts ? 2u : 0u)) {
 +    return std::nullopt;
 +  }
 +  AgentModelRoutingMetrics metrics;
++  if (has_attempts) {
++    const auto* attempts = value->FindList("attempts");
++    const auto complete = value->FindBool("attempts_complete");
++    if (!attempts || attempts->size() > 1000 || !complete) {
++      return std::nullopt;
++    }
++    metrics.attempts_complete = *complete;
++    for (const auto& item : *attempts) {
++      auto attempt = ReadModelAttempt(item);
++      if (!attempt) {
++        return std::nullopt;
++      }
++      metrics.attempts.push_back(std::move(*attempt));
++    }
++  }
 +  if (!PopulateRequiredRoutingMetrics(*value, &metrics) ||
 +      (has_cost_snapshot && !PopulateRoutingCostSnapshot(*value, &metrics))) {
 +    return std::nullopt;
@@ -3206,13 +4423,21 @@ index 6631324425..ed1089f5bc 100644
  bool AgentTaskStore::DeleteTask(const std::string& task_id) {
    if (!initialized_ || task_id.empty()) {
      return false;
-@@ -822,7 +990,55 @@ std::string AgentTaskStore::SerializeScope(const AgentTaskScope& scope) {
+@@ -822,7 +1029,69 @@ std::string AgentTaskStore::SerializeScope(const AgentTaskScope& scope) {
    destination.Set("endpoint", scope.model_destination.endpoint);
    destination.Set("model", scope.model_destination.model);
    value.Set("model_destination", std::move(destination));
 +  value.Set("model_selection_mode",
 +            static_cast<int>(scope.model_selection_mode));
 +  value.Set("model_catalog_revision", scope.model_catalog_revision);
++  value.Set("model_generation_profile",
++            SerializeGenerationProfile(scope.model_generation_profile));
++  value.Set("fallback_generation_profile",
++            SerializeGenerationProfile(scope.fallback_generation_profile));
++  value.Set("model_token_prices",
++            SerializeTokenPrices(scope.model_token_prices));
++  value.Set("fallback_token_prices",
++            SerializeTokenPrices(scope.fallback_token_prices));
 +  if (scope.model_fallback_destination) {
 +    base::DictValue fallback;
 +    fallback.Set("kind",
@@ -3234,6 +4459,12 @@ index 6631324425..ed1089f5bc 100644
 +    return std::string();
 +  }
 +  base::DictValue value;
++  base::ListValue attempts;
++  for (const auto& attempt : metrics.attempts) {
++    attempts.Append(SerializeModelAttempt(attempt));
++  }
++  value.Set("attempts", std::move(attempts));
++  value.Set("attempts_complete", metrics.attempts_complete);
 +  value.Set("typesafe_attempted", metrics.typesafe_attempted);
 +  value.Set("typesafe_qualified", metrics.typesafe_qualified);
 +  value.Set("typesafe_outcome", metrics.typesafe_outcome);
@@ -3263,7 +4494,7 @@ index 6631324425..ed1089f5bc 100644
    return base::JSONWriter::Write(value, &output) ? output : std::string();
  }
 diff --git a/chrome/browser/aegis/agent/agent_task_store.h b/chrome/browser/aegis/agent/agent_task_store.h
-index 750dea9505..408684832c 100644
+index 750dea9505..f156fef1dc 100644
 --- a/chrome/browser/aegis/agent/agent_task_store.h
 +++ b/chrome/browser/aegis/agent/agent_task_store.h
 @@ -35,6 +35,7 @@ struct StoredAgentTask {
@@ -3282,26 +4513,20 @@ index 750dea9505..408684832c 100644
    base::Time created_at;
  };
  
-@@ -115,6 +117,8 @@ class AgentTaskStore {
+@@ -115,6 +117,11 @@ class AgentTaskStore {
  
    static std::optional<AgentTaskScope> DeserializeScope(
        std::string_view scope_json);
 +  static std::optional<AgentModelRoutingMetrics>
 +  DeserializeModelRoutingMetrics(std::string_view metrics_json);
++  // Redacted allowlisted observations, also exposed for local evaluation.
++  static std::string SerializeModelRoutingMetrics(
++      const AgentModelRoutingMetrics& metrics);
    // Goals and persisted summaries share the same secret/control-character
    // boundary. Callers must reject unsafe values before queueing asynchronous
    // storage work so an invalid task is never exposed to the UI.
-@@ -128,6 +132,8 @@ class AgentTaskStore {
- 
-  private:
-   static std::string SerializeScope(const AgentTaskScope& scope);
-+  static std::string SerializeModelRoutingMetrics(
-+      const AgentModelRoutingMetrics& metrics);
-   static int64_t SerializeTime(base::Time time);
-   static base::Time DeserializeTime(int64_t value);
- 
 diff --git a/chrome/browser/aegis/agent/agent_task_store_unittest.cc b/chrome/browser/aegis/agent/agent_task_store_unittest.cc
-index f1e5687b44..a4ec16874d 100644
+index f1e5687b44..9e21ab8903 100644
 --- a/chrome/browser/aegis/agent/agent_task_store_unittest.cc
 +++ b/chrome/browser/aegis/agent/agent_task_store_unittest.cc
 @@ -38,6 +38,18 @@ TEST(AegisAgentTaskStoreTest, SavesOnlyRedactedMetadataAndRecoversSafely) {
@@ -3342,7 +4567,7 @@ index f1e5687b44..a4ec16874d 100644
      std::optional<AgentTaskScope> restored_scope =
          AgentTaskStore::DeserializeScope(recovered[0].scope_json);
      ASSERT_TRUE(restored_scope);
-@@ -127,6 +151,32 @@ TEST(AegisAgentTaskStoreTest, RoundTripsBrowserBoundWindowMetadataScope) {
+@@ -127,6 +151,97 @@ TEST(AegisAgentTaskStoreTest, RoundTripsBrowserBoundWindowMetadataScope) {
    EXPECT_FALSE(restored->AllowsTab(41));
  }
  
@@ -3354,6 +4579,9 @@ index f1e5687b44..a4ec16874d 100644
 +  AgentTaskScope scope = StoreTestScope();
 +  scope.model_selection_mode = AgentModelSelectionMode::kQuality;
 +  scope.model_catalog_revision = 12;
++  scope.model_generation_profile = {"low", 4096};
++  scope.fallback_generation_profile = {"high", 16384};
++  scope.model_token_prices = {.input = 100, .cached_input = 20, .output = 500};
 +  scope.model_fallback_destination = scope.model_destination;
 +  scope.model_fallback_destination->model = "fixture-backup";
 +  AgentTask task("automatic-model-binding", "route fixture", AgentMode::kAsk,
@@ -3366,16 +4594,78 @@ index f1e5687b44..a4ec16874d 100644
 +  EXPECT_EQ(restored->model_selection_mode,
 +            AgentModelSelectionMode::kQuality);
 +  EXPECT_EQ(restored->model_catalog_revision, 12);
++  EXPECT_EQ(restored->model_generation_profile.effort, "low");
++  EXPECT_EQ(restored->fallback_generation_profile.max_output_tokens, 16384);
++  EXPECT_EQ(restored->model_token_prices.cached_input, 20);
++  auto changed = *restored;
++  changed.model_generation_profile.effort = "high";
++  EXPECT_FALSE(changed.IsNoBroaderThan(scope));
 +  ASSERT_TRUE(restored->model_fallback_destination);
 +  EXPECT_EQ(restored->model_fallback_destination->model, "fixture-backup");
 +  EXPECT_TRUE(restored->IsNoBroaderThan(scope));
 +  EXPECT_TRUE(scope.IsNoBroaderThan(*restored));
 +}
 +
++TEST(AegisAgentTaskStoreTest,
++     ObservationIdsKeepOverlappingCallsAndPendingUsage) {
++  AgentTask task("observation-fixture", "fixture", AgentMode::kAsk,
++                 StoreTestScope());
++  ASSERT_TRUE(task.RecordModelAttempt({.model = "primary",
++                                       .effort = "low",
++                                       .prices = {.input = 100, .output = 200},
++                                       .observation_id = "first",
++                                       .completed = false}));
++  ASSERT_TRUE(task.RecordModelAttempt({.model = "backup",
++                                       .effort = "high",
++                                       .prices = {.input = 300, .output = 400},
++                                       .observation_id = "second",
++                                       .completed = false}));
++  AgentModelAttempt second{.input_tokens = 10,
++                           .output_tokens = 20,
++                           .latency_ms = 300,
++                           .succeeded = true,
++                           .observation_id = "second"};
++  ASSERT_TRUE(task.CompleteModelAttempt(second));
++  EXPECT_FALSE(task.CompleteModelAttempt(second));
++  EXPECT_EQ(task.model_routing_metrics().model_output_tokens, 20);
++  auto restored = AgentTaskStore::DeserializeModelRoutingMetrics(
++      AgentTaskStore::SerializeModelRoutingMetrics(
++          task.model_routing_metrics()));
++  ASSERT_TRUE(restored);
++  ASSERT_EQ(restored->attempts.size(), 2u);
++  EXPECT_FALSE(restored->attempts[0].completed);
++  EXPECT_FALSE(restored->attempts[0].input_tokens);
++  EXPECT_EQ(restored->attempts[1].model, "backup");
++  EXPECT_EQ(restored->attempts[1].prices.output, 400);
++  EXPECT_EQ(restored->attempts[1].latency_ms, 300);
++}
++
++TEST(AegisAgentTaskStoreTest, RoundTripsAttemptUnknownUsageAndFrozenPrices) {
++  AgentModelRoutingMetrics metrics;
++  metrics.attempts_complete = true;
++  metrics.attempts.push_back(
++      {.model = "small",
++       .effort = "low",
++       .input_tokens = 100,
++       .cached_input_tokens = 50,
++       .output_tokens = 20,
++       .reasoning_tokens = 10,
++       .prices = {.input = 100, .cached_input = 20, .output = 500}});
++  metrics.attempts.push_back({.kind = "typesafe", .model = "jev"});
++  auto restored = AgentTaskStore::DeserializeModelRoutingMetrics(
++      AgentTaskStore::SerializeModelRoutingMetrics(metrics));
++  ASSERT_TRUE(restored);
++  ASSERT_EQ(restored->attempts.size(), 2u);
++  EXPECT_EQ(restored->attempts[0].cached_input_tokens, 50);
++  EXPECT_EQ(restored->attempts[0].prices.output, 500);
++  EXPECT_FALSE(restored->attempts[1].input_tokens);
++  EXPECT_FALSE(restored->attempts[1].prices.input);
++}
++
  TEST(AegisAgentTaskStoreTest, RejectsBroadenedOrMalformedStoredScope) {
    EXPECT_FALSE(AgentTaskStore::DeserializeScope("not-json"));
    EXPECT_FALSE(AgentTaskStore::DeserializeScope(R"({})"));
-@@ -380,9 +430,64 @@ TEST(AegisAgentTaskStoreTest, MigratesVersionSevenWithoutLosingMonitorState) {
+@@ -380,9 +495,64 @@ TEST(AegisAgentTaskStoreTest, MigratesVersionSevenWithoutLosingMonitorState) {
    sql::Database inspected("AegisAgent");
    ASSERT_TRUE(inspected.Open(path));
    sql::MetaTable meta;
@@ -3383,8 +4673,8 @@ index f1e5687b44..a4ec16874d 100644
 -  EXPECT_EQ(meta.GetVersionNumber(), 8);
 -  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 8);
 +  ASSERT_TRUE(meta.Init(&inspected, 9, 9));
-+  EXPECT_EQ(meta.GetVersionNumber(), 9);
-+  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 9);
++  EXPECT_EQ(meta.GetVersionNumber(), 10);
++  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 10);
 +}
 +
 +TEST(AegisAgentTaskStoreTest,
@@ -3443,7 +4733,7 @@ index f1e5687b44..a4ec16874d 100644
  }
  
  TEST(AegisAgentTaskStoreTest,
-@@ -432,9 +537,9 @@ TEST(AegisAgentTaskStoreTest, RejectsFutureVersionWithoutRewritingDatabase) {
+@@ -432,9 +602,9 @@ TEST(AegisAgentTaskStoreTest, RejectsFutureVersionWithoutRewritingDatabase) {
      sql::Database future("AegisAgent");
      ASSERT_TRUE(future.Open(path));
      sql::MetaTable meta;
@@ -3457,13 +4747,16 @@ index f1e5687b44..a4ec16874d 100644
    std::string before;
    ASSERT_TRUE(base::ReadFileToString(path, &before));
 diff --git a/chrome/browser/aegis/agent/agent_types.cc b/chrome/browser/aegis/agent/agent_types.cc
-index c519c331eb..0f39508233 100644
+index c519c331eb..9e2a6af5c4 100644
 --- a/chrome/browser/aegis/agent/agent_types.cc
 +++ b/chrome/browser/aegis/agent/agent_types.cc
-@@ -61,6 +61,16 @@ bool AgentModelDestination::IsValid() const {
+@@ -61,6 +61,19 @@ bool AgentModelDestination::IsValid() const {
  
  bool AgentTaskScope::IsValid() const {
    if (!budgets.IsValid() || !model_destination.IsValid() ||
++      !model_generation_profile.IsValid() ||
++      !fallback_generation_profile.IsValid() || !model_token_prices.IsValid() ||
++      !fallback_token_prices.IsValid() ||
 +      (model_fallback_destination &&
 +       (!model_fallback_destination->IsValid() ||
 +        *model_fallback_destination == model_destination)) ||
@@ -3477,23 +4770,30 @@ index c519c331eb..0f39508233 100644
        allowed_tools.empty() || allowed_tools.size() > 128u ||
        allowed_origins.size() > 64u || allowed_tab_ids.size() > 20u ||
        allowed_data_classes.empty() || allowed_data_classes.size() > 6u ||
-@@ -106,6 +116,10 @@ bool AgentTaskScope::AllowsDataClass(AgentDataClass data_class) const {
+@@ -106,6 +119,14 @@ bool AgentTaskScope::AllowsDataClass(AgentDataClass data_class) const {
  bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
    if (!budgets.IsNoBroaderThan(other.budgets) ||
        model_destination != other.model_destination ||
 +      model_selection_mode != other.model_selection_mode ||
 +      model_catalog_revision != other.model_catalog_revision ||
++      model_generation_profile != other.model_generation_profile ||
++      fallback_generation_profile != other.fallback_generation_profile ||
++      model_token_prices != other.model_token_prices ||
++      fallback_token_prices != other.fallback_token_prices ||
 +      (model_fallback_destination &&
 +       model_fallback_destination != other.model_fallback_destination) ||
        !IsSubset(allowed_tab_ids, other.allowed_tab_ids) ||
        (tab_metadata_window_id != 0 &&
         tab_metadata_window_id != other.tab_metadata_window_id) ||
-@@ -120,6 +134,18 @@ bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
+@@ -120,6 +141,21 @@ bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
        });
  }
  
 +bool AgentModelRoutingMetrics::IsValid() const {
-+  return typesafe_outcome.size() <= 64u && typesafe_model.size() <= 128u &&
++  return attempts.size() <= 1000 &&
++         std::ranges::all_of(attempts,
++                             [](const auto& item) { return item.IsValid(); }) &&
++         typesafe_outcome.size() <= 64u && typesafe_model.size() <= 128u &&
 +         typesafe_decisions.size() <= 512u && typesafe_input_tokens >= 0 &&
 +         typesafe_output_tokens >= 0 && typesafe_latency_ms >= 0 &&
 +         (!primary_model_cost_microusd_per_million_tokens ||
@@ -3508,10 +4808,19 @@ index c519c331eb..0f39508233 100644
    return tab_id > 0 && !frame_token.empty() && !document_token.empty() &&
           committed_url.is_valid() && committed_url.SchemeIsHTTPOrHTTPS();
 diff --git a/chrome/browser/aegis/agent/agent_types.h b/chrome/browser/aegis/agent/agent_types.h
-index 56e532b901..99e8dce48e 100644
+index 56e532b901..00bb1c0eb2 100644
 --- a/chrome/browser/aegis/agent/agent_types.h
 +++ b/chrome/browser/aegis/agent/agent_types.h
-@@ -100,6 +100,16 @@ struct AgentModelDestination {
+@@ -8,6 +8,8 @@
+ #include <optional>
+ #include <string>
+ #include <vector>
++#include "chrome/browser/aegis/agent/agent_generation_profile.h"
++#include "chrome/browser/aegis/agent/agent_model_accounting.h"
+ 
+ #include "base/containers/flat_set.h"
+ #include "base/time/time.h"
+@@ -100,6 +102,16 @@ struct AgentModelDestination {
    bool operator==(const AgentModelDestination&) const = default;
  };
  
@@ -3528,7 +4837,7 @@ index 56e532b901..99e8dce48e 100644
  struct AgentTaskScope {
    std::vector<url::Origin> allowed_origins;
    base::flat_set<int32_t> allowed_tab_ids;
-@@ -108,7 +118,15 @@ struct AgentTaskScope {
+@@ -108,7 +120,19 @@ struct AgentTaskScope {
    base::flat_set<std::string> allowed_tools;
    base::flat_set<AgentDataClass> allowed_data_classes;
    AgentBudgets budgets;
@@ -3541,10 +4850,14 @@ index 56e532b901..99e8dce48e 100644
 +  AgentModelSelectionMode model_selection_mode =
 +      AgentModelSelectionMode::kFixed;
 +  int model_catalog_revision = 0;
++  AgentGenerationProfile model_generation_profile;
++  AgentGenerationProfile fallback_generation_profile;
++  AgentTokenPrices model_token_prices;
++  AgentTokenPrices fallback_token_prices;
  
    bool IsValid() const;
    bool AllowsOrigin(const GURL& url) const;
-@@ -118,6 +136,27 @@ struct AgentTaskScope {
+@@ -118,6 +142,29 @@ struct AgentTaskScope {
    bool IsNoBroaderThan(const AgentTaskScope& other) const;
  };
  
@@ -3565,6 +4878,8 @@ index 56e532b901..99e8dce48e 100644
 +  int64_t model_input_tokens = 0;
 +  int64_t model_output_tokens = 0;
 +  int64_t model_latency_ms = 0;
++  std::vector<AgentModelAttempt> attempts;
++  bool attempts_complete = false;
 +
 +  bool IsValid() const;
 +};
@@ -3730,10 +5045,10 @@ index 0000000000..2ce991b48c
 +#endif  // CHROME_BROWSER_AEGIS_AGENT_TYPESAFE_CHOICE_CONTRACT_H_
 diff --git a/chrome/browser/aegis/agent/typesafe_goal_response_parser.cc b/chrome/browser/aegis/agent/typesafe_goal_response_parser.cc
 new file mode 100644
-index 0000000000..8ee1a07506
+index 0000000000..a534efcae0
 --- /dev/null
 +++ b/chrome/browser/aegis/agent/typesafe_goal_response_parser.cc
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,272 @@
 +// Copyright 2026 GCSA
 +
 +#include "chrome/browser/aegis/agent/typesafe_goal_response_parser.h"
@@ -3824,6 +5139,7 @@ index 0000000000..8ee1a07506
 +  std::string model;
 +  int input_tokens = 0;
 +  int output_tokens = 0;
++  bool usage_present = false;
 +};
 +
 +TypeSafeChoiceValue UnknownChoice() {
@@ -3889,14 +5205,16 @@ index 0000000000..8ee1a07506
 +    input_tokens = *parsed_input;
 +    output_tokens = *parsed_output;
 +  }
-+  return TypeSafeGoalChoices{.workflow = std::move(*workflow),
-+                             .entry_kind = std::move(*entry_kind),
-+                             .reasoning_need = std::move(*reasoning_need),
-+                             .context_need = std::move(*context_need),
-+                             .output_need = std::move(*output_need),
-+                             .model = *model,
-+                             .input_tokens = input_tokens,
-+                             .output_tokens = output_tokens};
++  return TypeSafeGoalChoices{
++      .workflow = std::move(*workflow),
++      .entry_kind = std::move(*entry_kind),
++      .reasoning_need = std::move(*reasoning_need),
++      .context_need = std::move(*context_need),
++      .output_need = std::move(*output_need),
++      .model = *model,
++      .input_tokens = input_tokens,
++      .output_tokens = output_tokens,
++      .usage_present = root->FindDict("usage") != nullptr};
 +}
 +
 +std::optional<AgentWorkflowKind> WorkflowForChoice(std::string_view choice) {
@@ -3998,16 +5316,17 @@ index 0000000000..8ee1a07506
 +      .context_need = std::move(choices->context_need),
 +      .output_need = std::move(choices->output_need),
 +      .input_tokens = choices->input_tokens,
-+      .output_tokens = choices->output_tokens};
++      .output_tokens = choices->output_tokens,
++      .usage_present = choices->usage_present};
 +}
 +
 +}  // namespace aegis::agent
 diff --git a/chrome/browser/aegis/agent/typesafe_goal_response_parser.h b/chrome/browser/aegis/agent/typesafe_goal_response_parser.h
 new file mode 100644
-index 0000000000..371a81fd62
+index 0000000000..17969668dc
 --- /dev/null
 +++ b/chrome/browser/aegis/agent/typesafe_goal_response_parser.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,46 @@
 +// Copyright 2026 GCSA
 +
 +#ifndef CHROME_BROWSER_AEGIS_AGENT_TYPESAFE_GOAL_RESPONSE_PARSER_H_
@@ -4037,6 +5356,7 @@ index 0000000000..371a81fd62
 +  TypeSafeChoiceValue output_need;
 +  int input_tokens = 0;
 +  int output_tokens = 0;
++  bool usage_present = false;
 +  base::TimeDelta latency;
 +};
 +
@@ -4742,10 +6062,10 @@ index 81940f356c..f390d3d85e 100644
    background: color-mix(in srgb, var(--danger) 12%, transparent);
    border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
 diff --git a/chrome/browser/resources/aegis_agent/agent.html b/chrome/browser/resources/aegis_agent/agent.html
-index 112c334c83..5c6c66ec41 100644
+index 112c334c83..2ec08cb8dd 100644
 --- a/chrome/browser/resources/aegis_agent/agent.html
 +++ b/chrome/browser/resources/aegis_agent/agent.html
-@@ -84,15 +84,64 @@
+@@ -84,15 +84,78 @@
              <select id="model-options" hidden></select>
              <label for="model-api-key" id="api-key-label"></label>
              <input id="model-api-key" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
@@ -4763,6 +6083,20 @@ index 112c334c83..5c6c66ec41 100644
 +            <input id="model-latency-score" type="number" min="0" max="100" value="50">
 +            <label for="model-cost" id="model-cost-label"></label>
 +            <input id="model-cost" type="number" min="0" placeholder="$i18n{modelCostUnknown}">
++            <label for="model-efforts">$i18n{supportedEfforts}</label>
++            <input id="model-efforts" type="text" placeholder="low,medium,high" maxlength="128">
++            <label for="model-profile-default">$i18n{defaultProfile}</label>
++            <input id="model-profile-default" type="text" placeholder="medium:8192" maxlength="32">
++            <label for="model-profile-basic">$i18n{basicProfile}</label>
++            <input id="model-profile-basic" type="text" placeholder="low:2048" maxlength="32">
++            <label for="model-profile-strong">$i18n{strongProfile}</label>
++            <input id="model-profile-strong" type="text" placeholder="high:16384" maxlength="32">
++            <label for="model-input-price">$i18n{inputTokenPrice}</label>
++            <input id="model-input-price" type="number" min="0">
++            <label for="model-cache-price">$i18n{cachedTokenPrice}</label>
++            <input id="model-cache-price" type="number" min="0">
++            <label for="model-output-price">$i18n{outputTokenPrice}</label>
++            <input id="model-output-price" type="number" min="0">
 +          </div>
 +          <div class="model-capabilities">
 +            <label><input id="model-supports-tools" type="checkbox" checked>
@@ -4810,8 +6144,21 @@ index 112c334c83..5c6c66ec41 100644
        <section id="target-card" class="target-card">
          <span id="target-label" class="eyebrow"></span>
          <strong id="target-value"></strong>
+@@ -119,6 +182,12 @@
+         <button id="start-button" type="button" hidden disabled></button>
+       </section>
+ 
++      <details id="routing-observations-details" class="card" hidden>
++        <summary>$i18n{routingObservations}</summary>
++        <textarea id="routing-observations" readonly rows="5"
++            aria-label="$i18n{routingObservations}"></textarea>
++      </details>
++
+       <section id="result-card" class="card result-card" hidden>
+         <h2 id="result-title"></h2>
+         <p id="result-partial-note" class="help" hidden></p>
 diff --git a/chrome/browser/resources/aegis_agent/agent.ts b/chrome/browser/resources/aegis_agent/agent.ts
-index 327e05f428..7d4c607d01 100644
+index 327e05f428..ff35e5221e 100644
 --- a/chrome/browser/resources/aegis_agent/agent.ts
 +++ b/chrome/browser/resources/aegis_agent/agent.ts
 @@ -6,11 +6,17 @@ import {loadTimeData} from '//resources/js/load_time_data.js';
@@ -4845,10 +6192,12 @@ index 327e05f428..7d4c607d01 100644
  let autoRunTaskId = '';
  let autoRunInFlight = false;
  let activeView: 'task'|'automation' = 'task';
-@@ -248,6 +257,28 @@ function renderPlan(plan: PlanSummary|null, hasTask: boolean, state: string) {
+@@ -248,6 +257,31 @@ function renderPlan(plan: PlanSummary|null, hasTask: boolean, state: string) {
    addDefinition(
        scope, loadTimeData.getString('provider'),
        `${plan.provider} · ${plan.model} · ${plan.destination}`);
++  addDefinition(scope, loadTimeData.getString('generationProfile'),
++      `${plan.reasoningEffort || 'default'} · ${plan.maxOutputTokens || 'auto'}`);
 +  if (plan.fallbackModel) {
 +    addDefinition(
 +        scope, loadTimeData.getString('fallbackModel'),
@@ -4869,12 +6218,13 @@ index 327e05f428..7d4c607d01 100644
 +  addDefinition(
 +      scope, loadTimeData.getString('estimatedModelCost'),
 +      plan.estimatedModelCostMicrousd ?
-+      `${plan.estimatedModelCostMicrousd} µUSD` :
-+      loadTimeData.getString('modelCostUnknown'));
++      `${plan.estimatedModelCostMicrousd} µUSD · ` +
++          loadTimeData.getString(plan.estimatedCostComplete ? 'costComplete' : 'costPartial') :
++      loadTimeData.getString('runtimeCostUnknown'));
    addDefinition(scope, loadTimeData.getString('risk'), plan.maxRisk);
    addDefinition(
        scope, loadTimeData.getString('origins'), plan.origins.join(', '));
-@@ -485,6 +516,51 @@ function renderModel(next: TaskSnapshot) {
+@@ -485,6 +519,51 @@ function renderModel(next: TaskSnapshot) {
    element<HTMLInputElement>('model-api-key').disabled = modelBusy;
    element<HTMLButtonElement>('detect-models-button').disabled = modelBusy;
    element<HTMLButtonElement>('save-model-button').disabled = modelBusy;
@@ -4926,15 +6276,31 @@ index 327e05f428..7d4c607d01 100644
  }
  
  function friendlyError(error: string, hasPlan: boolean): string {
-@@ -631,6 +707,7 @@ function render(next: TaskSnapshot) {
+@@ -599,6 +678,13 @@ function maybeAutoRun(next: TaskSnapshot) {
+   }
+ }
+ 
++function renderRoutingObservations(next: TaskSnapshot) {
++  const hasTask = Boolean(next.taskId);
++  element('routing-observations-details').hidden = !hasTask;
++  element<HTMLTextAreaElement>('routing-observations').value =
++      hasTask ? next.routingObservationsJson || '{}' : '';
++}
++
+ function render(next: TaskSnapshot) {
+   snapshot = next;
+   element('status').dataset['tone'] = statusTone(next);
+@@ -631,7 +717,9 @@ function render(next: TaskSnapshot) {
        busy || !next.modelConfigured || !automationGoal.value.trim();
    renderView();
    renderModel(next);
 +  renderTypeSafe(next);
    renderPlan(next.plan || null, Boolean(next.taskId), next.state);
++  renderRoutingObservations(next);
    renderResult(next);
    renderTimeline(next);
-@@ -751,6 +828,21 @@ function initializeLabels() {
+   renderMonitors(next.monitors);
+@@ -751,6 +839,21 @@ function initializeLabels() {
    text('api-key-label', 'apiKeyLabel');
    text('detect-models-button', 'detectModels');
    text('save-model-button', 'saveModel');
@@ -4956,7 +6322,7 @@ index 327e05f428..7d4c607d01 100644
    text('approval-title', 'waitingApproval');
    text('approval-arguments-label', 'exactArguments');
    text('approval-fingerprint-label', 'actionFingerprint');
-@@ -969,6 +1061,128 @@ async function saveModel() {
+@@ -969,6 +1072,148 @@ async function saveModel() {
    }
  }
  
@@ -4996,6 +6362,18 @@ index 327e05f428..7d4c607d01 100644
 +  return Number.isInteger(value) ? Math.min(100, Math.max(0, value)) : 50;
 +}
 +
++function readGenerationProfile(id: string) {
++  const value = element<HTMLInputElement>(id).value.trim();
++  if (!value) {
++    return {effort: '', maxOutputTokens: 0};
++  }
++  if (!/^(none|minimal|low|medium|high|xhigh)?:[0-9]+$/.test(value)) {
++    return {effort: '', maxOutputTokens: -1};
++  }
++  const [effort, budget] = value.split(':');
++  return {effort: effort || '', maxOutputTokens: Number(budget)};
++}
++
 +function addCurrentModelToPool() {
 +  if (!snapshot) {
 +    return;
@@ -5028,6 +6406,14 @@ index 327e05f428..7d4c607d01 100644
 +    latencyScore: boundedScore('model-latency-score'),
 +    costMicrousdPerMillionTokens: cost,
 +    priority: 0,
++    supportedEfforts: element<HTMLInputElement>('model-efforts').value
++                         .split(',').map(value => value.trim()).filter(Boolean),
++    defaultProfile: readGenerationProfile('model-profile-default'),
++    basicProfile: readGenerationProfile('model-profile-basic'),
++    strongProfile: readGenerationProfile('model-profile-strong'),
++    inputPrice: element<HTMLInputElement>('model-input-price').value.trim(),
++    cachedInputPrice: element<HTMLInputElement>('model-cache-price').value.trim(),
++    outputPrice: element<HTMLInputElement>('model-output-price').value.trim(),
 +  };
 +  const pool = snapshot.modelPool.filter(candidate => candidate.id !== entry.id);
 +  pool.push(entry);
@@ -5085,7 +6471,7 @@ index 327e05f428..7d4c607d01 100644
  function bindActions() {
    element('plan-button').addEventListener('click', () => withBusy(async () => {
      const goal = element<HTMLTextAreaElement>('goal').value.trim();
-@@ -1003,6 +1217,20 @@ function bindActions() {
+@@ -1003,6 +1248,20 @@ function bindActions() {
    element('model-base-url').addEventListener('input', resetDetectedModels);
    element('model-api-key').addEventListener('input', resetDetectedModels);
    element('save-model-button').addEventListener('click', saveModel);
@@ -5107,10 +6493,10 @@ index 327e05f428..7d4c607d01 100644
      proxy.handler.pause(snapshot?.taskId || '')));
    element('resume-button').addEventListener('click', () => withBusy(() =>
 diff --git a/chrome/browser/ui/webui/aegis_agent/aegis_agent.mojom b/chrome/browser/ui/webui/aegis_agent/aegis_agent.mojom
-index 845e09d644..46376a7da7 100644
+index 845e09d644..7bcf516012 100644
 --- a/chrome/browser/ui/webui/aegis_agent/aegis_agent.mojom
 +++ b/chrome/browser/ui/webui/aegis_agent/aegis_agent.mojom
-@@ -15,6 +15,36 @@ enum Workflow {
+@@ -15,6 +15,48 @@ enum Workflow {
    kShopping = 3,
  };
  
@@ -5129,6 +6515,11 @@ index 845e09d644..46376a7da7 100644
 +  kLocalOnly = 4,
 +};
 +
++struct GenerationProfile {
++  string effort;
++  int32 max_output_tokens;
++};
++
 +struct ModelPoolEntry {
 +  string id;
 +  string provider;
@@ -5142,12 +6533,19 @@ index 845e09d644..46376a7da7 100644
 +  int32 latency_score;
 +  string cost_microusd_per_million_tokens;
 +  int32 priority;
++  array<string> supported_efforts;
++  GenerationProfile default_profile;
++  GenerationProfile basic_profile;
++  GenerationProfile strong_profile;
++  string input_price;
++  string cached_input_price;
++  string output_price;
 +};
 +
  struct PlanStep {
    string step_id;
    string title;
-@@ -35,6 +65,21 @@ struct PlanSummary {
+@@ -35,6 +77,25 @@ struct PlanSummary {
    string provider;
    string model;
    string destination;
@@ -5166,10 +6564,14 @@ index 845e09d644..46376a7da7 100644
 +  string model_output_tokens;
 +  string model_latency_ms;
 +  string estimated_model_cost_microusd;
++  string reasoning_effort;
++  int32 max_output_tokens;
++  bool estimated_cost_complete;
++  string routing_observations_json;
    string max_risk;
    array<PlanStep> steps;
  };
-@@ -97,6 +142,12 @@ struct TaskSnapshot {
+@@ -97,12 +158,19 @@ struct TaskSnapshot {
    string model_provider;
    string model_base_url;
    string model_name;
@@ -5182,7 +6584,14 @@ index 845e09d644..46376a7da7 100644
    int32 active_tab_id;
    string active_origin;
    string invocation_context;
-@@ -132,6 +183,14 @@ interface PageHandler {
+   string suggested_goal;
+   string task_id;
+   string state;
++  string routing_observations_json;
+   string mode;
+   string goal;
+   PlanSummary? plan;
+@@ -132,6 +200,14 @@ interface PageHandler {
                   string api_key,
                   bool clear_api_key) => (TaskSnapshot snapshot);
  
@@ -5198,7 +6607,7 @@ index 845e09d644..46376a7da7 100644
        => (bool ok, string error, array<string> models);
  
 diff --git a/chrome/browser/ui/webui/aegis_agent/aegis_agent_page_handler.cc b/chrome/browser/ui/webui/aegis_agent/aegis_agent_page_handler.cc
-index caba66fc96..32163c5f73 100644
+index caba66fc96..a7528fd769 100644
 --- a/chrome/browser/ui/webui/aegis_agent/aegis_agent_page_handler.cc
 +++ b/chrome/browser/ui/webui/aegis_agent/aegis_agent_page_handler.cc
 @@ -10,6 +10,8 @@
@@ -5210,8 +6619,150 @@ index caba66fc96..32163c5f73 100644
  #include "base/strings/string_number_conversions.h"
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
-@@ -40,11 +42,64 @@ namespace {
+@@ -18,8 +20,9 @@
+ #include "chrome/browser/aegis/aegis_service_factory.h"
+ #include "chrome/browser/aegis/agent/aegis_agent_service.h"
+ #include "chrome/browser/aegis/agent/aegis_agent_service_factory.h"
+-#include "chrome/browser/aegis/agent/agent_policy_broker.h"
+ #include "chrome/browser/aegis/agent/agent_monitor_summary.h"
++#include "chrome/browser/aegis/agent/agent_policy_broker.h"
++#include "chrome/browser/aegis/agent/agent_task_store.h"
+ #include "chrome/browser/aegis/agent/agent_workflow.h"
+ #include "chrome/browser/aegis/model_provider_policy.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -38,13 +41,195 @@
  
+ namespace {
+ 
++bool ParseOptionalPrice(const std::string& text,
++                        std::optional<int64_t>* price) {
++  if (text.empty()) {
++    return true;
++  }
++  int64_t parsed = 0;
++  if (!base::StringToInt64(text, &parsed) || parsed < 0) {
++    return false;
++  }
++  *price = parsed;
++  return true;
++}
++
++std::string FormatOptionalPrice(const std::optional<int64_t>& price) {
++  return price ? base::NumberToString(*price) : std::string();
++}
++
++std::optional<aegis::agent::AgentModelCatalogEntry> ReadModelPoolEntry(
++    const aegis_agent::mojom::ModelPoolEntryPtr& item) {
++  int64_t cost = 0;
++  if (!item ||
++      (!item->cost_microusd_per_million_tokens.empty() &&
++       (!base::StringToInt64(item->cost_microusd_per_million_tokens, &cost) ||
++        cost < 0))) {
++    return std::nullopt;
++  }
++  aegis::agent::AgentModelCatalogEntry entry{
++      .id = item->id,
++      .destination = {.provider = item->provider,
++                      .endpoint = item->base_url,
++                      .model = item->model},
++      .enabled = item->enabled,
++      .authorized = true,
++      .supports_tool_calls = item->supports_tool_calls,
++      .supports_long_context = item->supports_long_context,
++      .supports_strong_reasoning = item->supports_strong_reasoning,
++      .quality_score = item->quality_score,
++      .latency_score = item->latency_score,
++      .priority = item->priority};
++  if (!item->cost_microusd_per_million_tokens.empty()) {
++    entry.cost_microusd_per_million_tokens = cost;
++  }
++  if (!item->default_profile || !item->basic_profile || !item->strong_profile) {
++    return std::nullopt;
++  }
++  entry.generation_policy.supported_efforts = item->supported_efforts;
++  entry.generation_policy.default_profile = {
++      item->default_profile->effort, item->default_profile->max_output_tokens};
++  entry.generation_policy.basic_profile = {
++      item->basic_profile->effort, item->basic_profile->max_output_tokens};
++  entry.generation_policy.strong_profile = {
++      item->strong_profile->effort, item->strong_profile->max_output_tokens};
++  if (!ParseOptionalPrice(item->input_price, &entry.token_prices.input) ||
++      !ParseOptionalPrice(item->cached_input_price,
++                          &entry.token_prices.cached_input) ||
++      !ParseOptionalPrice(item->output_price, &entry.token_prices.output)) {
++    return std::nullopt;
++  }
++  return entry;
++}
++
++aegis_agent::mojom::ModelPoolEntryPtr BuildModelPoolEntry(
++    const aegis::agent::AgentModelCatalogEntry& entry) {
++  auto value = aegis_agent::mojom::ModelPoolEntry::New();
++  value->id = entry.id;
++  value->provider = entry.destination.provider;
++  value->base_url = entry.destination.endpoint;
++  value->model = entry.destination.model;
++  value->enabled = entry.enabled;
++  value->supports_tool_calls = entry.supports_tool_calls;
++  value->supports_long_context = entry.supports_long_context;
++  value->supports_strong_reasoning = entry.supports_strong_reasoning;
++  value->quality_score = entry.quality_score;
++  value->latency_score = entry.latency_score;
++  value->cost_microusd_per_million_tokens =
++      entry.cost_microusd_per_million_tokens
++          ? base::NumberToString(*entry.cost_microusd_per_million_tokens)
++          : std::string();
++  value->priority = entry.priority;
++  value->input_price = FormatOptionalPrice(entry.token_prices.input);
++  value->cached_input_price =
++      FormatOptionalPrice(entry.token_prices.cached_input);
++  value->output_price = FormatOptionalPrice(entry.token_prices.output);
++  value->supported_efforts = entry.generation_policy.supported_efforts;
++  value->default_profile = aegis_agent::mojom::GenerationProfile::New(
++      entry.generation_policy.default_profile.effort,
++      entry.generation_policy.default_profile.max_output_tokens);
++  value->basic_profile = aegis_agent::mojom::GenerationProfile::New(
++      entry.generation_policy.basic_profile.effort,
++      entry.generation_policy.basic_profile.max_output_tokens);
++  value->strong_profile = aegis_agent::mojom::GenerationProfile::New(
++      entry.generation_policy.strong_profile.effort,
++      entry.generation_policy.strong_profile.max_output_tokens);
++  return value;
++}
++
++void FillRoutingCost(const aegis::agent::AgentTask* task,
++                     const aegis::agent::AgentModelRoutingMetrics& metrics,
++                     aegis_agent::mojom::PlanSummary* value) {
++  long double known_cost = 0;
++  bool any_known_cost = false;
++  value->estimated_cost_complete = metrics.attempts_complete;
++  size_t recorded_task_calls = 0;
++  for (const auto& attempt : metrics.attempts) {
++    recorded_task_calls += attempt.phase == "task";
++    const auto cost = aegis::agent::EstimateAgentAttemptMicrousd(attempt);
++    value->estimated_cost_complete &= cost.has_value();
++    any_known_cost |= cost.has_value();
++    known_cost += cost.value_or(0);
++  }
++  value->estimated_cost_complete &=
++      recorded_task_calls == static_cast<size_t>(task->model_calls_used());
++  if (any_known_cost) {
++    value->estimated_model_cost_microusd =
++        base::NumberToString(static_cast<double>(known_cost));
++  }
++}
++
++std::string ExportRoutingObservations(const aegis::agent::AgentTask& task) {
++  auto metrics = task.model_routing_metrics();
++  const size_t recorded_task_calls = std::ranges::count_if(
++      metrics.attempts, [](const auto& attempt) { return attempt.phase == "task"; });
++  metrics.attempts_complete &= std::ranges::all_of(
++      metrics.attempts, [](const auto& attempt) { return attempt.completed; });
++  metrics.attempts_complete &=
++      recorded_task_calls == static_cast<size_t>(task.model_calls_used());
++  return aegis::agent::AgentTaskStore::SerializeModelRoutingMetrics(metrics);
++}
++
  using aegis::agent::AgentDataClass;
  using aegis::agent::AgentMode;
 +using aegis::agent::AgentContextNeed;
@@ -5275,7 +6826,7 @@ index caba66fc96..32163c5f73 100644
  const char* ModeName(AgentMode mode) {
    switch (mode) {
      case AgentMode::kAsk:
-@@ -364,6 +419,17 @@ bool IncludesOrigin(const std::vector<url::Origin>& origins, const GURL& url) {
+@@ -364,6 +549,17 @@ bool IncludesOrigin(const std::vector<url::Origin>& origins, const GURL& url) {
    });
  }
  
@@ -5293,7 +6844,7 @@ index caba66fc96..32163c5f73 100644
  bool HasUserSetting(PrefService* prefs, const char* name) {
    const PrefService::Preference* preference =
        prefs ? prefs->FindPreference(name) : nullptr;
-@@ -376,6 +442,23 @@ aegis::AegisService* CoreServiceForProfile(Profile* profile) {
+@@ -376,6 +572,23 @@ aegis::AegisService* CoreServiceForProfile(Profile* profile) {
  
  }  // namespace
  
@@ -5317,7 +6868,7 @@ index caba66fc96..32163c5f73 100644
  AegisAgentPageHandler::AegisAgentPageHandler(
      Profile* profile,
      BrowserWindowInterface* browser,
-@@ -410,6 +493,12 @@ AegisAgentPageHandler::AegisAgentPageHandler(
+@@ -410,6 +623,12 @@ AegisAgentPageHandler::AegisAgentPageHandler(
    if (service_) {
      ObserveTask(service_->MostRecentTask());
    }
@@ -5330,7 +6881,7 @@ index caba66fc96..32163c5f73 100644
  }
  
  void AegisAgentPageHandler::ShowUI() {
-@@ -467,6 +556,84 @@ void AegisAgentPageHandler::ConfigureModel(const std::string& provider,
+@@ -467,6 +686,65 @@ void AegisAgentPageHandler::ConfigureModel(const std::string& provider,
                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
  }
  
@@ -5376,32 +6927,13 @@ index caba66fc96..32163c5f73 100644
 +  std::vector<aegis::agent::AgentModelCatalogEntry> catalog;
 +  catalog.reserve(model_pool.size());
 +  for (const auto& item : model_pool) {
-+    int64_t cost = 0;
-+    if (!item ||
-+        (!item->cost_microusd_per_million_tokens.empty() &&
-+         (!base::StringToInt64(item->cost_microusd_per_million_tokens, &cost) ||
-+          cost < 0))) {
++    auto entry = ReadModelPoolEntry(item);
++    if (!entry) {
 +      last_error_ = "Agent model routing settings are invalid";
 +      std::move(callback).Run(BuildSnapshot());
 +      return;
 +    }
-+    aegis::agent::AgentModelCatalogEntry entry{
-+        .id = item->id,
-+        .destination = {.provider = item->provider,
-+                        .endpoint = item->base_url,
-+                        .model = item->model},
-+        .enabled = item->enabled,
-+        .authorized = true,
-+        .supports_tool_calls = item->supports_tool_calls,
-+        .supports_long_context = item->supports_long_context,
-+        .supports_strong_reasoning = item->supports_strong_reasoning,
-+        .quality_score = item->quality_score,
-+        .latency_score = item->latency_score,
-+        .priority = item->priority};
-+    if (!item->cost_microusd_per_million_tokens.empty()) {
-+      entry.cost_microusd_per_million_tokens = cost;
-+    }
-+    catalog.push_back(std::move(entry));
++    catalog.push_back(std::move(*entry));
 +  }
 +  if (!core_service->SetAgentModelRoutingSettings(
 +          *converted_mode, std::move(catalog), &last_error_)) {
@@ -5415,7 +6947,7 @@ index caba66fc96..32163c5f73 100644
  void AegisAgentPageHandler::ListModels(const std::string& provider,
                                         const std::string& base_url,
                                         const std::string& api_key,
-@@ -505,8 +672,13 @@ void AegisAgentPageHandler::CreateTask(
+@@ -505,8 +783,13 @@ void AegisAgentPageHandler::CreateTask(
    const std::optional<AgentMode> converted_mode = ConvertMode(mode);
    const std::optional<AgentWorkflowKind> converted_workflow =
        ConvertWorkflow(workflow);
@@ -5431,7 +6963,7 @@ index caba66fc96..32163c5f73 100644
    std::optional<std::vector<url::Origin>> requested_origins;
    if (!approved_origins.empty()) {
      requested_origins = ParseApprovedOrigins(approved_origins);
-@@ -522,8 +694,10 @@ void AegisAgentPageHandler::CreateTask(
+@@ -522,8 +805,10 @@ void AegisAgentPageHandler::CreateTask(
               resolved_goal.size() > 4096u || invalid_explicit_origins ||
               !IsValidSchedule(*converted_mode, schedule_interval_minutes)) {
      last_error_ = "Task input is invalid";
@@ -5444,7 +6976,7 @@ index caba66fc96..32163c5f73 100644
    } else {
      const AgentWorkflowKind resolved_workflow =
          aegis::agent::ConstrainWorkflowToUserIntent(resolved_goal,
-@@ -547,6 +721,8 @@ void AegisAgentPageHandler::CreateTask(
+@@ -547,6 +832,8 @@ void AegisAgentPageHandler::CreateTask(
      CreateResolvedTask(std::move(resolved_goal), *converted_mode,
                         resolved_workflow, std::move(requested_origins),
                         explicit_url, browser_only, use_current_page,
@@ -5453,7 +6985,7 @@ index caba66fc96..32163c5f73 100644
                         std::move(callback));
      return;
    }
-@@ -595,6 +771,8 @@ void AegisAgentPageHandler::OnGoalRouted(
+@@ -595,6 +882,8 @@ void AegisAgentPageHandler::OnGoalRouted(
    CreateResolvedTask(std::move(goal), mode, route->workflow,
                       std::move(requested_origins), std::move(routed_url),
                       browser_only, use_current_page,
@@ -5462,7 +6994,7 @@ index caba66fc96..32163c5f73 100644
                       std::move(callback));
  }
  
-@@ -606,9 +784,21 @@ void AegisAgentPageHandler::CreateResolvedTask(
+@@ -606,9 +895,21 @@ void AegisAgentPageHandler::CreateResolvedTask(
      std::optional<GURL> routed_url,
      bool browser_only,
      bool use_current_page,
@@ -5486,7 +7018,7 @@ index caba66fc96..32163c5f73 100644
    tabs::TabInterface* tab = ContentTab(browser_);
    GURL task_url = tab ? tab->GetURL() : GURL();
    std::optional<std::vector<url::Origin>> origins;
-@@ -641,7 +831,7 @@ void AegisAgentPageHandler::CreateResolvedTask(
+@@ -641,7 +942,7 @@ void AegisAgentPageHandler::CreateResolvedTask(
        origins = AutomaticTaskOrigins(task_url);
      }
    }
@@ -5495,7 +7027,7 @@ index caba66fc96..32163c5f73 100644
      last_error_ = "A related page could not be opened for this task";
      std::move(callback).Run(BuildSnapshot());
      return;
-@@ -650,10 +840,15 @@ void AegisAgentPageHandler::CreateResolvedTask(
+@@ -650,10 +951,19 @@ void AegisAgentPageHandler::CreateResolvedTask(
        mode == AgentMode::kAutomate
            ? aegis::agent::BuildAgentAutomationScope(
                  workflow, std::move(*origins), {tab->GetHandle().raw_value()},
@@ -5509,11 +7041,15 @@ index caba66fc96..32163c5f73 100644
 +    scope->model_fallback_destination = model_route->fallback;
 +    scope->model_selection_mode = model_route->mode;
 +    scope->model_catalog_revision = model_route->catalog_revision;
++    scope->model_generation_profile = model_route->primary_profile;
++    scope->fallback_generation_profile = model_route->fallback_profile;
++    scope->model_token_prices = model_route->primary_token_prices;
++    scope->fallback_token_prices = model_route->fallback_token_prices;
 +  }
    if (scope && browser_only && GoalRequestsWindowTabMetadata(goal) &&
        browser_ && browser_->GetProfile() == profile_ &&
        !profile_->IsOffTheRecord() &&
-@@ -661,8 +856,15 @@ void AegisAgentPageHandler::CreateResolvedTask(
+@@ -661,8 +971,15 @@ void AegisAgentPageHandler::CreateResolvedTask(
        !browser_->IsDeleteScheduled()) {
      scope->tab_metadata_window_id = browser_->GetSessionID().id();
    }
@@ -5530,7 +7066,7 @@ index caba66fc96..32163c5f73 100644
              : nullptr;
    if (!task) {
      last_error_ = "Task scope could not be created";
-@@ -844,6 +1046,16 @@ void AegisAgentPageHandler::OnModelConfigured(ConfigureModelCallback callback,
+@@ -844,6 +1161,16 @@ void AegisAgentPageHandler::OnModelConfigured(ConfigureModelCallback callback,
    std::move(callback).Run(BuildSnapshot());
  }
  
@@ -5547,7 +7083,7 @@ index caba66fc96..32163c5f73 100644
  void AegisAgentPageHandler::OnModelsListed(ListModelsCallback callback,
                                             bool ok,
                                             std::string error,
-@@ -921,10 +1133,37 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
+@@ -921,10 +1248,20 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
      snapshot->model_provider = core_service->ConfiguredModelProvider();
      snapshot->model_base_url = core_service->ConfiguredModelBaseUrl();
      snapshot->model_name = core_service->ConfiguredModelName();
@@ -5556,24 +7092,7 @@ index caba66fc96..32163c5f73 100644
 +    snapshot->model_catalog_revision =
 +        core_service->AgentModelCatalogRevision();
 +    for (const auto& entry : core_service->AgentModelCatalog()) {
-+      auto value = aegis_agent::mojom::ModelPoolEntry::New();
-+      value->id = entry.id;
-+      value->provider = entry.destination.provider;
-+      value->base_url = entry.destination.endpoint;
-+      value->model = entry.destination.model;
-+      value->enabled = entry.enabled;
-+      value->supports_tool_calls = entry.supports_tool_calls;
-+      value->supports_long_context = entry.supports_long_context;
-+      value->supports_strong_reasoning = entry.supports_strong_reasoning;
-+      value->quality_score = entry.quality_score;
-+      value->latency_score = entry.latency_score;
-+      value->cost_microusd_per_million_tokens =
-+          entry.cost_microusd_per_million_tokens
-+              ? base::NumberToString(
-+                    *entry.cost_microusd_per_million_tokens)
-+              : std::string();
-+      value->priority = entry.priority;
-+      snapshot->model_pool.push_back(std::move(value));
++      snapshot->model_pool.push_back(BuildModelPoolEntry(entry));
 +    }
 +    snapshot->typesafe_enabled =
 +        core_service->IsTypeSafeGoalRoutingEnabled();
@@ -5586,7 +7105,7 @@ index caba66fc96..32163c5f73 100644
          HasUserSetting(prefs, aegis::prefs::kModelProvider) &&
          HasUserSetting(prefs, aegis::prefs::kModelBaseUrl) &&
          HasUserSetting(prefs, aegis::prefs::kModelName) && provider &&
-@@ -933,7 +1172,25 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
+@@ -933,7 +1270,25 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
                                    snapshot->model_base_url)
              .has_value() &&
          aegis::IsValidModelName(*provider, snapshot->model_name);
@@ -5612,7 +7131,15 @@ index caba66fc96..32163c5f73 100644
    tabs::TabInterface* tab = ContentTab(browser_);
    if (tab) {
      snapshot->active_tab_id = tab->GetHandle().raw_value();
-@@ -1029,6 +1286,48 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
+@@ -988,6 +1343,7 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
+     return snapshot;
+   }
+   snapshot->task_id = task->id();
++  snapshot->routing_observations_json = ExportRoutingObservations(*task);
+   snapshot->state = aegis::agent::AgentTaskStateToString(task->state());
+   snapshot->mode = ModeName(task->mode());
+   snapshot->goal = task->goal();
+@@ -1029,6 +1385,41 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
                  aegis::agent::AgentModelDestination::Kind::kLoopback
              ? "loopback"
              : "cloud";
@@ -5630,6 +7157,11 @@ index caba66fc96..32163c5f73 100644
 +              : "cloud";
 +    }
 +    const auto& metrics = task->model_routing_metrics();
++    const auto& effective_profile =
++        metrics.fallback_used ? plan->scope.fallback_generation_profile
++                              : plan->scope.model_generation_profile;
++    plan_value->reasoning_effort = effective_profile.effort;
++    plan_value->max_output_tokens = effective_profile.max_output_tokens;
 +    plan_value->typesafe_outcome = metrics.typesafe_outcome;
 +    plan_value->typesafe_model = metrics.typesafe_model;
 +    plan_value->typesafe_decisions = metrics.typesafe_decisions;
@@ -5644,20 +7176,8 @@ index caba66fc96..32163c5f73 100644
 +        base::NumberToString(metrics.model_output_tokens);
 +    plan_value->model_latency_ms =
 +        base::NumberToString(metrics.model_latency_ms);
-+    const std::optional<int64_t>& active_cost =
-+        metrics.fallback_used
-+            ? metrics.fallback_model_cost_microusd_per_million_tokens
-+            : metrics.primary_model_cost_microusd_per_million_tokens;
-+    if (active_cost) {
-+      base::CheckedNumeric<int64_t> estimated_cost(metrics.model_input_tokens);
-+      estimated_cost += metrics.model_output_tokens;
-+      estimated_cost *= *active_cost;
-+      estimated_cost /= 1000000;
-+      if (estimated_cost.IsValid()) {
-+        plan_value->estimated_model_cost_microusd = base::NumberToString(
-+            static_cast<long long>(estimated_cost.ValueOrDie()));
-+      }
-+    }
++    FillRoutingCost(task, metrics, plan_value.get());
++    plan_value->routing_observations_json = snapshot->routing_observations_json;
      plan_value->max_risk = RiskName(max_risk);
      snapshot->plan = std::move(plan_value);
    }
@@ -5744,10 +7264,10 @@ index 205f1a5117..1865ca0fe1 100644
  };
  
 diff --git a/chrome/browser/ui/webui/aegis_agent/aegis_agent_ui.cc b/chrome/browser/ui/webui/aegis_agent/aegis_agent_ui.cc
-index dabeefae93..944cbff1aa 100644
+index dabeefae93..0a6ab00b34 100644
 --- a/chrome/browser/ui/webui/aegis_agent/aegis_agent_ui.cc
 +++ b/chrome/browser/ui/webui/aegis_agent/aegis_agent_ui.cc
-@@ -132,6 +132,45 @@ void AddStrings(content::WebUIDataSource* source) {
+@@ -132,6 +132,70 @@ void AddStrings(content::WebUIDataSource* source) {
        "API 金鑰（選填）");
    add("detectModels", "Detect models", "检测可用模型", "偵測可用模型");
    add("saveModel", "Save model settings", "保存模型设置", "儲存模型設定");
@@ -5760,6 +7280,31 @@ index dabeefae93..944cbff1aa 100644
 +  add("modelRoutingCost", "Auto · cost", "自动 · 成本", "自動 · 成本");
 +  add("modelRoutingLocalOnly", "Auto · local only", "自动 · 仅本地",
 +      "自動 · 僅本機");
++  add("supportedEfforts", "Model-supported efforts (comma separated)",
++      "模型支持的 effort（逗号分隔）", "模型支援的 effort（逗號分隔）");
++  add("inputTokenPrice", "Input price (µUSD / 1M tokens)",
++      "输入单价（µUSD / 百万 token）", "輸入單價（µUSD / 百萬 token）");
++  add("cachedTokenPrice", "Cached input price (µUSD / 1M tokens)",
++      "缓存输入单价（µUSD / 百万 token）", "快取輸入單價（µUSD / 百萬 token）");
++  add("outputTokenPrice", "Output price including reasoning (µUSD / 1M tokens)",
++      "输出单价含推理（µUSD / 百万 token）",
++      "輸出單價含推理（µUSD / 百萬 token）");
++  add("costComplete", "Complete estimate", "完整估算", "完整估算");
++  add("runtimeCostUnknown", "Unknown: usage or prices unavailable",
++      "未知：缺少用量或单价", "未知：缺少用量或單價");
++  add("routingObservations", "Copy routing observations (JSON)",
++      "复制路由观测（JSON）", "複製路由觀測（JSON）");
++  add("costPartial", "Partial estimate; some usage or prices unknown",
++      "部分估算：存在未知用量或单价", "部分估算：存在未知用量或單價");
++  add("defaultProfile", "Default effort:output limit (empty: provider default)",
++      "默认 effort:输出预算（空白沿用供应商默认）",
++      "預設 effort:輸出預算（空白沿用供應商預設）");
++  add("basicProfile", "Simple task effort:output limit",
++      "简单任务 effort:输出预算", "簡單任務 effort:輸出預算");
++  add("strongProfile", "Complex task effort:output limit",
++      "复杂任务 effort:输出预算", "複雜任務 effort:輸出預算");
++  add("generationProfile", "Effective effort / output limit",
++      "实际 effort / 输出预算", "實際 effort / 輸出預算");
 +  add("modelQualityScore", "Evaluated quality (0–100)",
 +      "评测质量（0–100）", "評測品質（0–100）");
 +  add("modelLatencyScore", "Latency score (lower is faster)",
@@ -5788,12 +7333,12 @@ index dabeefae93..944cbff1aa 100644
 +      "生成模型用量");
 +  add("fallbackUsed", "Fallback used", "已使用备用模型",
 +      "已使用備用模型");
-+  add("estimatedModelCost", "Estimated generation cost",
-+      "生成模型估算成本", "生成模型估算成本");
++  add("estimatedModelCost", "Estimated task cost including routing",
++      "任务费用估算（含路由）", "任務費用估算（含路由）");
    add("modelDetected", "Model list retrieved", "模型列表获取成功",
        "模型清單取得成功");
    add("modelSaved", "Model settings saved", "模型设置已保存", "模型設定已儲存");
-@@ -153,6 +192,41 @@ void AddStrings(content::WebUIDataSource* source) {
+@@ -153,6 +217,41 @@ void AddStrings(content::WebUIDataSource* source) {
        "kept for retry. Re-enter the key if one is needed.",
        "暂时无法确认保存结果，已保留非敏感输入供重试。如需密钥，请重新输入。",
        "暫時無法確認儲存結果，已保留非敏感輸入供重試。如需金鑰，請重新輸入。");

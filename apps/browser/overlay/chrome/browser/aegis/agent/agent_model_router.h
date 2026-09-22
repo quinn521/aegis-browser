@@ -52,6 +52,8 @@ struct AgentModelCatalogEntry {
   // Unknown cost remains null and is never treated as free.
   std::optional<int64_t> cost_microusd_per_million_tokens;
   int priority = 0;
+  AgentGenerationPolicy generation_policy;
+  AgentTokenPrices token_prices;
 
   bool IsValid() const;
 };
@@ -74,6 +76,10 @@ struct AgentModelRoutePlan {
   AgentModelSelectionMode mode = AgentModelSelectionMode::kFixed;
   int catalog_revision = 0;
   std::string reason;
+  AgentGenerationProfile primary_profile;
+  AgentGenerationProfile fallback_profile;
+  AgentTokenPrices primary_token_prices;
+  AgentTokenPrices fallback_token_prices;
 };
 
 std::optional<AgentModelRoutePlan> SelectAgentModelRoute(

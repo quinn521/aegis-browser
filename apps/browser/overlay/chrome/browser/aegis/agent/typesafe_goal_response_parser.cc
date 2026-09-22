@@ -88,6 +88,7 @@ struct TypeSafeGoalChoices {
   std::string model;
   int input_tokens = 0;
   int output_tokens = 0;
+  bool usage_present = false;
 };
 
 TypeSafeChoiceValue UnknownChoice() {
@@ -153,14 +154,16 @@ std::optional<TypeSafeGoalChoices> ParseGoalChoices(std::string_view body,
     input_tokens = *parsed_input;
     output_tokens = *parsed_output;
   }
-  return TypeSafeGoalChoices{.workflow = std::move(*workflow),
-                             .entry_kind = std::move(*entry_kind),
-                             .reasoning_need = std::move(*reasoning_need),
-                             .context_need = std::move(*context_need),
-                             .output_need = std::move(*output_need),
-                             .model = *model,
-                             .input_tokens = input_tokens,
-                             .output_tokens = output_tokens};
+  return TypeSafeGoalChoices{
+      .workflow = std::move(*workflow),
+      .entry_kind = std::move(*entry_kind),
+      .reasoning_need = std::move(*reasoning_need),
+      .context_need = std::move(*context_need),
+      .output_need = std::move(*output_need),
+      .model = *model,
+      .input_tokens = input_tokens,
+      .output_tokens = output_tokens,
+      .usage_present = root->FindDict("usage") != nullptr};
 }
 
 std::optional<AgentWorkflowKind> WorkflowForChoice(std::string_view choice) {
@@ -262,7 +265,8 @@ std::optional<TypeSafeGoalAnalysis> TypeSafeGoalResponseParser::Parse(
       .context_need = std::move(choices->context_need),
       .output_need = std::move(choices->output_need),
       .input_tokens = choices->input_tokens,
-      .output_tokens = choices->output_tokens};
+      .output_tokens = choices->output_tokens,
+      .usage_present = choices->usage_present};
 }
 
 }  // namespace aegis::agent

@@ -257,6 +257,8 @@ function renderPlan(plan: PlanSummary|null, hasTask: boolean, state: string) {
   addDefinition(
       scope, loadTimeData.getString('provider'),
       `${plan.provider} · ${plan.model} · ${plan.destination}`);
+  addDefinition(scope, loadTimeData.getString('generationProfile'),
+      `${plan.reasoningEffort || 'default'} · ${plan.maxOutputTokens || 'auto'}`);
   if (plan.fallbackModel) {
     addDefinition(
         scope, loadTimeData.getString('fallbackModel'),
@@ -277,8 +279,9 @@ function renderPlan(plan: PlanSummary|null, hasTask: boolean, state: string) {
   addDefinition(
       scope, loadTimeData.getString('estimatedModelCost'),
       plan.estimatedModelCostMicrousd ?
-      `${plan.estimatedModelCostMicrousd} µUSD` :
-      loadTimeData.getString('modelCostUnknown'));
+      `${plan.estimatedModelCostMicrousd} µUSD · ` +
+          loadTimeData.getString(plan.estimatedCostComplete ? 'costComplete' : 'costPartial') :
+      loadTimeData.getString('runtimeCostUnknown'));
   addDefinition(scope, loadTimeData.getString('risk'), plan.maxRisk);
   addDefinition(
       scope, loadTimeData.getString('origins'), plan.origins.join(', '));
@@ -675,6 +678,13 @@ function maybeAutoRun(next: TaskSnapshot) {
   }
 }
 
+function renderRoutingObservations(next: TaskSnapshot) {
+  const hasTask = Boolean(next.taskId);
+  element('routing-observations-details').hidden = !hasTask;
+  element<HTMLTextAreaElement>('routing-observations').value =
+      hasTask ? next.routingObservationsJson || '{}' : '';
+}
+
 function render(next: TaskSnapshot) {
   snapshot = next;
   element('status').dataset['tone'] = statusTone(next);
@@ -709,6 +719,7 @@ function render(next: TaskSnapshot) {
   renderModel(next);
   renderTypeSafe(next);
   renderPlan(next.plan || null, Boolean(next.taskId), next.state);
+  renderRoutingObservations(next);
   renderResult(next);
   renderTimeline(next);
   renderMonitors(next.monitors);
@@ -1097,6 +1108,18 @@ function boundedScore(id: string): number {
   return Number.isInteger(value) ? Math.min(100, Math.max(0, value)) : 50;
 }
 
+function readGenerationProfile(id: string) {
+  const value = element<HTMLInputElement>(id).value.trim();
+  if (!value) {
+    return {effort: '', maxOutputTokens: 0};
+  }
+  if (!/^(none|minimal|low|medium|high|xhigh)?:[0-9]+$/.test(value)) {
+    return {effort: '', maxOutputTokens: -1};
+  }
+  const [effort, budget] = value.split(':');
+  return {effort: effort || '', maxOutputTokens: Number(budget)};
+}
+
 function addCurrentModelToPool() {
   if (!snapshot) {
     return;
@@ -1129,6 +1152,14 @@ function addCurrentModelToPool() {
     latencyScore: boundedScore('model-latency-score'),
     costMicrousdPerMillionTokens: cost,
     priority: 0,
+    supportedEfforts: element<HTMLInputElement>('model-efforts').value
+                         .split(',').map(value => value.trim()).filter(Boolean),
+    defaultProfile: readGenerationProfile('model-profile-default'),
+    basicProfile: readGenerationProfile('model-profile-basic'),
+    strongProfile: readGenerationProfile('model-profile-strong'),
+    inputPrice: element<HTMLInputElement>('model-input-price').value.trim(),
+    cachedInputPrice: element<HTMLInputElement>('model-cache-price').value.trim(),
+    outputPrice: element<HTMLInputElement>('model-output-price').value.trim(),
   };
   const pool = snapshot.modelPool.filter(candidate => candidate.id !== entry.id);
   pool.push(entry);

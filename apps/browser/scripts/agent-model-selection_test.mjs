@@ -13,7 +13,7 @@ assert(!html.includes('<datalist') && !html.includes('list="model-options"'));
 const tree = ts.createSourceFile('agent.ts', source, ts.ScriptTarget.Latest, true);
 const names = ['option', 'renderModel', 'resetDetectedModels', 'selectDetectedModel',
   'syncDetectedModel', 'detectModels', 'friendlyModelError', 'bindActions',
-  'saveModel', 'saveModelRouting', 'showModelSaveError'];
+  'saveModel', 'saveModelRouting', 'showModelSaveError', 'readGenerationProfile'];
 const functions = tree.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text));
 assert.equal(functions.length, names.length);
 const code = ts.transpileModule(functions.map(node => node.getText(tree)).join('\n'), {
@@ -171,5 +171,17 @@ await check('路由模式在忙碌渲染前冻结并按用户选择提交', asyn
   await h.context.saveModelRouting([]);
   assert.equal(h.savedRouting.length, 1);
   assert.equal(h.savedRouting[0][0], 3);
+});
+await check('推理 profile 保留默认、解析配置并拒绝错误预算格式', async () => {
+  const h = harness();
+  const read = value => {
+    h.field('profile').value = value;
+    return JSON.parse(JSON.stringify(h.context.readGenerationProfile('profile')));
+  };
+  assert.deepEqual(read(''), {effort: '', maxOutputTokens: 0});
+  assert.deepEqual(read('high:16384'), {effort: 'high', maxOutputTokens: 16384});
+  assert.deepEqual(read(':4096'), {effort: '', maxOutputTokens: 4096});
+  assert.equal(read('high:invalid').maxOutputTokens, -1);
+  assert.equal(read('ultra:4096').maxOutputTokens, -1);
 });
 console.log(`模型选择回归 ${passed}/${passed}，另含 HTML 结构检查；非实机验收。`);

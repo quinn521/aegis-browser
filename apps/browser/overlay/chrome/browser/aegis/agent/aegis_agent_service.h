@@ -19,6 +19,7 @@
 #include "chrome/browser/aegis/agent/aegis_actor_bridge.h"
 #include "chrome/browser/aegis/agent/aegis_browser_tools.h"
 #include "chrome/browser/aegis/agent/agent_execution.h"
+#include "chrome/browser/aegis/agent/agent_model_client.h"
 #include "chrome/browser/aegis/agent/agent_model_router.h"
 #include "chrome/browser/aegis/agent/agent_planner.h"
 #include "chrome/browser/aegis/agent/agent_policy_broker.h"
@@ -116,6 +117,7 @@ class AegisAgentService : public KeyedService {
   void SetTypeSafeGoalRouterClientForTesting(
       std::unique_ptr<TypeSafeGoalRouterClient> client);
   void CancelPendingGoalRouting();
+  void InvalidatePendingModelDispatches();
   void SetTaskModelClientForTesting(const std::string& task_id,
                                     std::unique_ptr<AgentModelClient> client);
   bool AcceptModelPlan(const std::string& task_id,
@@ -211,8 +213,28 @@ class AegisAgentService : public KeyedService {
   bool TryReadOnlyPlanningRecovery(const std::string& task_id,
                                    std::string* error);
   bool PersistTask(const AgentTask& task);
-  void RecordTaskModelObservation(const std::string& task_id,
-                                  const AgentModelParseResult& result);
+  void StartObservedModelRequest(AgentTask* task,
+                                 AgentModelClient* client,
+                                 AgentModelClientConfig config,
+                                 AgentModelRequest request,
+                                 AgentModelClient::Callback callback);
+  void OnModelAttemptStored(std::string task_id,
+                            std::string observation_id,
+                            std::pair<uint64_t, uint64_t> dispatch_token,
+                            base::WeakPtr<AgentModelClient> client,
+                            AgentModelClientConfig config,
+                            AgentModelRequest request,
+                            AgentModelClient::Callback callback,
+                            bool saved);
+  void StopDispatchForConfigurationChange(const std::string& task_id);
+  void OnObservedModelResult(std::string task_id,
+                             std::string observation_id,
+                             uint64_t task_generation,
+                             base::TimeTicks started,
+                             AgentModelClient::Callback callback,
+                             bool ok,
+                             std::string error,
+                             AgentModelParseResult result);
   AgentTaskStoreRecord MakeTaskStoreRecord(const AgentTask& task) const;
   bool PersistPlan(const std::string& task_id,
                    const AgentTaskPlan& plan,
@@ -397,7 +419,8 @@ class AegisAgentService : public KeyedService {
   std::map<std::string, std::pair<size_t, int>> plan_progress_;
   std::map<std::string, std::unique_ptr<AgentModelClient>> model_clients_;
   std::map<std::string, std::string> model_request_ids_;
-  std::map<std::string, base::TimeTicks> model_request_started_at_;
+  uint64_t model_dispatch_generation_ = 0;
+  std::map<std::string, uint64_t> task_dispatch_generations_;
   std::unique_ptr<AgentModelClient> goal_router_client_;
   std::string goal_router_request_id_;
   std::unique_ptr<TypeSafeGoalRouterClient> typesafe_goal_router_client_;
@@ -407,6 +430,8 @@ class AegisAgentService : public KeyedService {
   std::optional<AgentGoalRoute> goal_route_for_testing_;
   AgentModelRequirements last_goal_model_requirements_;
   AgentModelRoutingMetrics last_goal_routing_metrics_;
+  AgentModelAttempt pending_goal_model_attempt_;
+  base::TimeTicks goal_model_started_at_;
   std::map<std::string, std::unique_ptr<ExecutionRuntime>> executions_;
   std::map<std::string, AgentModelCapabilityTracker> model_capabilities_;
   std::map<std::string, ActionResults> action_results_;

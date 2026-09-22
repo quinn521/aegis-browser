@@ -1,6 +1,8 @@
 // Copyright 2026 GCSA
 
 #include "chrome/browser/aegis/agent/agent_task_store.h"
+#include "chrome/browser/aegis/agent/agent_generation_profile_json.h"
+#include "chrome/browser/aegis/agent/agent_model_accounting_json.h"
 
 #include <algorithm>
 #include <cctype>
@@ -20,9 +22,9 @@ namespace aegis::agent {
 
 namespace {
 
-// v9 adds bounded task-level model routing observations.
-constexpr int kCurrentVersion = 9;
-constexpr int kCompatibleVersion = 9;
+// v10 adds immutable generation profiles and per-attempt accounting in JSON.
+constexpr int kCurrentVersion = 10;
+constexpr int kCompatibleVersion = 10;
 constexpr size_t kMaxSummaryBytes = 4096;
 
 constexpr char kCreateTasksSql[] = R"(
@@ -286,6 +288,12 @@ bool AgentTaskStore::Initialize() {
       database_.Close();
       return false;
     }
+  }
+  if (meta_table_.GetVersionNumber() == 9 &&
+      (!meta_table_.SetVersionNumber(kCurrentVersion) ||
+       !meta_table_.SetCompatibleVersionNumber(kCompatibleVersion))) {
+    database_.Close();
+    return false;
   }
   if (meta_table_.GetVersionNumber() != kCurrentVersion ||
       !transaction.Commit()) {
@@ -693,7 +701,11 @@ std::optional<AgentTaskScope> AgentTaskStore::DeserializeScope(
                                    fallback_destination;
   const size_t expected_size = (metadata_window ? 7u : 6u) +
                                (has_routing_binding ? 2u : 0u) +
-                               (fallback_destination ? 1u : 0u);
+                               (fallback_destination ? 1u : 0u) +
+                               value.contains("model_generation_profile") +
+                               value.contains("fallback_generation_profile") +
+                               value.contains("model_token_prices") +
+                               value.contains("fallback_token_prices");
   if (value.size() != expected_size ||
       (metadata_window && !metadata_window->is_int()) || !origins || !tab_ids ||
       !tools || !data_classes || !budgets || !destination ||
@@ -806,6 +818,16 @@ std::optional<AgentTaskScope> AgentTaskStore::DeserializeScope(
         .endpoint = *fallback_endpoint,
         .model = *fallback_model};
   }
+  if (!ReadGenerationProfile(value, "model_generation_profile",
+                             &scope.model_generation_profile) ||
+      !ReadGenerationProfile(value, "fallback_generation_profile",
+                             &scope.fallback_generation_profile) ||
+      !ReadTokenPrices(value, "model_token_prices",
+                       &scope.model_token_prices) ||
+      !ReadTokenPrices(value, "fallback_token_prices",
+                       &scope.fallback_token_prices)) {
+    return std::nullopt;
+  }
   return scope.IsValid() ? std::make_optional(std::move(scope)) : std::nullopt;
 }
 
@@ -824,10 +846,27 @@ AgentTaskStore::DeserializeModelRoutingMetrics(
   const bool has_cost_snapshot =
       value->contains("primary_model_cost_microusd_per_million_tokens") ||
       value->contains("fallback_model_cost_microusd_per_million_tokens");
-  if (value->size() != (has_cost_snapshot ? 14u : 12u)) {
+  const bool has_attempts = value->contains("attempts");
+  if (value->size() !=
+      (has_cost_snapshot ? 14u : 12u) + (has_attempts ? 2u : 0u)) {
     return std::nullopt;
   }
   AgentModelRoutingMetrics metrics;
+  if (has_attempts) {
+    const auto* attempts = value->FindList("attempts");
+    const auto complete = value->FindBool("attempts_complete");
+    if (!attempts || attempts->size() > 1000 || !complete) {
+      return std::nullopt;
+    }
+    metrics.attempts_complete = *complete;
+    for (const auto& item : *attempts) {
+      auto attempt = ReadModelAttempt(item);
+      if (!attempt) {
+        return std::nullopt;
+      }
+      metrics.attempts.push_back(std::move(*attempt));
+    }
+  }
   if (!PopulateRequiredRoutingMetrics(*value, &metrics) ||
       (has_cost_snapshot && !PopulateRoutingCostSnapshot(*value, &metrics))) {
     return std::nullopt;
@@ -993,6 +1032,14 @@ std::string AgentTaskStore::SerializeScope(const AgentTaskScope& scope) {
   value.Set("model_selection_mode",
             static_cast<int>(scope.model_selection_mode));
   value.Set("model_catalog_revision", scope.model_catalog_revision);
+  value.Set("model_generation_profile",
+            SerializeGenerationProfile(scope.model_generation_profile));
+  value.Set("fallback_generation_profile",
+            SerializeGenerationProfile(scope.fallback_generation_profile));
+  value.Set("model_token_prices",
+            SerializeTokenPrices(scope.model_token_prices));
+  value.Set("fallback_token_prices",
+            SerializeTokenPrices(scope.fallback_token_prices));
   if (scope.model_fallback_destination) {
     base::DictValue fallback;
     fallback.Set("kind",
@@ -1014,6 +1061,12 @@ std::string AgentTaskStore::SerializeModelRoutingMetrics(
     return std::string();
   }
   base::DictValue value;
+  base::ListValue attempts;
+  for (const auto& attempt : metrics.attempts) {
+    attempts.Append(SerializeModelAttempt(attempt));
+  }
+  value.Set("attempts", std::move(attempts));
+  value.Set("attempts_complete", metrics.attempts_complete);
   value.Set("typesafe_attempted", metrics.typesafe_attempted);
   value.Set("typesafe_qualified", metrics.typesafe_qualified);
   value.Set("typesafe_outcome", metrics.typesafe_outcome);

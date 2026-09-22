@@ -119,6 +119,9 @@ class AgentTaskStore {
       std::string_view scope_json);
   static std::optional<AgentModelRoutingMetrics>
   DeserializeModelRoutingMetrics(std::string_view metrics_json);
+  // Redacted allowlisted observations, also exposed for local evaluation.
+  static std::string SerializeModelRoutingMetrics(
+      const AgentModelRoutingMetrics& metrics);
   // Goals and persisted summaries share the same secret/control-character
   // boundary. Callers must reject unsafe values before queueing asynchronous
   // storage work so an invalid task is never exposed to the UI.
@@ -132,8 +135,6 @@ class AgentTaskStore {
 
  private:
   static std::string SerializeScope(const AgentTaskScope& scope);
-  static std::string SerializeModelRoutingMetrics(
-      const AgentModelRoutingMetrics& metrics);
   static int64_t SerializeTime(base::Time time);
   static base::Time DeserializeTime(int64_t value);
 

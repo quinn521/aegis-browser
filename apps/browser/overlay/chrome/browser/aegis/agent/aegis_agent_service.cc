@@ -272,6 +272,30 @@ const AgentModelDestination& ActiveModelDestination(const AgentTask& task) {
              : task.scope().model_destination;
 }
 
+const AgentGenerationProfile& ActiveGenerationProfile(const AgentTask& task) {
+  return task.model_routing_metrics().fallback_used
+             ? task.scope().fallback_generation_profile
+             : task.scope().model_generation_profile;
+}
+
+void PopulateAttemptUsage(const AgentModelParseResult& result,
+                          AgentModelAttempt* attempt) {
+  // All live Agent requests are non-streaming. For a stream, the latest usage
+  // event is the cumulative total, not an additional independently billed call.
+  for (const auto& event : result.events) {
+    if (event.type == AgentModelEventType::kUsage) {
+      attempt->input_tokens = event.usage.billing_complete
+                                  ? std::make_optional(event.usage.input_tokens)
+                                  : std::nullopt;
+      attempt->output_tokens = event.usage.output_tokens;
+      attempt->cached_input_tokens = event.usage.cached_input_tokens;
+      attempt->reasoning_tokens = event.usage.reasoning_tokens;
+    }
+  }
+  attempt->succeeded =
+      result.ok() && result.failure == AgentModelRequestFailure::kNone;
+}
+
 std::string TypeSafeDecisionSummary(const TypeSafeGoalAnalysis& analysis) {
   return base::StrCat(
       {"workflow=", analysis.workflow.choice, ":",
@@ -681,6 +705,7 @@ AgentModelRoutingMetrics AegisAgentService::CurrentGoalRoutingMetrics(
   }
   AgentModelRoutingMetrics metrics;
   metrics.typesafe_outcome = "not_required";
+  metrics.attempts_complete = true;
   return metrics;
 }
 
@@ -849,6 +874,7 @@ void AegisAgentService::RouteGoal(std::string goal,
       DefaultModelRequirements(requested_workflow);
   last_goal_routing_metrics_ = AgentModelRoutingMetrics();
   last_goal_routing_metrics_.typesafe_outcome = "not_attempted";
+  last_goal_routing_metrics_.attempts_complete = true;
   const uint64_t generation = ++goal_route_generation_;
   pending_goal_route_callback_ = std::move(callback);
   AegisService* settings = AegisServiceFactory::GetForProfileIfExists(profile_);
@@ -951,11 +977,20 @@ void AegisAgentService::RouteGoalAttempt(std::string goal,
   request.user_prompt = *prompt;
   request.tools.push_back(BuildRouteGoalToolDefinition());
   request.required_tool_name = "agent.route_goal";
-  request.reasoning_effort = "none";
-  request.disable_model_thinking = ShouldDisableLocalQwenThinking(*destination);
-  request.max_output_tokens =
-      AgentModelToolOutputTokenLimit(request.required_tool_name);
+  request.reasoning_effort = route->primary_profile.effort;
+  request.disable_model_thinking = (request.reasoning_effort.empty() ||
+                                    request.reasoning_effort == "none") &&
+                                   ShouldDisableLocalQwenThinking(*destination);
+  request.max_output_tokens = AgentGenerationOutputLimit(
+      route->primary_profile,
+      AgentModelToolOutputTokenLimit(request.required_tool_name));
   request.stream = false;
+  pending_goal_model_attempt_ = {.kind = "generation",
+                                 .model = request.model,
+                                 .effort = request.reasoning_effort,
+                                 .prices = route->primary_token_prices};
+  pending_goal_model_attempt_.phase = "screening";
+  goal_model_started_at_ = base::TimeTicks::Now();
   std::optional<AgentModelClient::RequestId> request_id =
       goal_router_client_->Start(
           std::move(*config), std::move(request),
@@ -1027,6 +1062,17 @@ void AegisAgentService::OnTypeSafeGoalRouteResult(
       typesafe_goal_router_client_
           ? typesafe_goal_router_client_->last_latency().InMilliseconds()
           : 0;
+  AgentModelAttempt screening{
+      .kind = "typesafe",
+      .model = analysis ? analysis->model : "",
+      .latency_ms = last_goal_routing_metrics_.typesafe_latency_ms,
+      .succeeded = ok};
+  screening.phase = "screening";
+  if (analysis && analysis->usage_present) {
+    screening.input_tokens = analysis->input_tokens;
+    screening.output_tokens = analysis->output_tokens;
+  }
+  last_goal_routing_metrics_.attempts.push_back(std::move(screening));
   if (ok && analysis) {
     analysis->requirements.requires_tool_calls = true;
     last_goal_model_requirements_ = analysis->requirements;
@@ -1085,6 +1131,11 @@ void AegisAgentService::OnGoalRouteModelResult(
     std::string error,
     AgentModelParseResult result) {
   goal_router_request_id_.clear();
+  PopulateAttemptUsage(result, &pending_goal_model_attempt_);
+  pending_goal_model_attempt_.latency_ms =
+      (base::TimeTicks::Now() - goal_model_started_at_).InMilliseconds();
+  last_goal_routing_metrics_.attempts.push_back(
+      std::move(pending_goal_model_attempt_));
   if (!ok) {
     if (repair_attempt == 0 && !result.error.empty()) {
       RouteGoalAttempt(std::move(goal), requested_workflow,
@@ -1245,23 +1296,20 @@ void AegisAgentService::RequestPlanAttempt(const std::string& task_id,
   request.user_prompt = std::move(*prompt);
   request.tools.push_back(BuildSubmitPlanToolDefinition());
   request.required_tool_name = "agent.submit_plan";
-  request.reasoning_effort = "none";
+  request.reasoning_effort = ActiveGenerationProfile(*task).effort;
   request.disable_model_thinking =
+      (request.reasoning_effort.empty() ||
+       request.reasoning_effort == "none") &&
       ShouldDisableLocalQwenThinking(active_destination);
-  request.max_output_tokens =
-      AgentModelToolOutputTokenLimit(request.required_tool_name);
+  request.max_output_tokens = AgentGenerationOutputLimit(
+      ActiveGenerationProfile(*task),
+      AgentModelToolOutputTokenLimit(request.required_tool_name));
   request.stream = false;
-  std::optional<AgentModelClient::RequestId> request_id =
-      client_it->second->Start(
-          std::move(*config), std::move(request),
-          base::BindOnce(&AegisAgentService::OnPlanModelResult,
-                         weak_ptr_factory_.GetWeakPtr(), task_id,
-                         repair_attempt, using_fallback,
-                         std::move(callback)));
-  if (request_id && client_it->second->busy()) {
-    model_request_ids_[task_id] = std::move(*request_id);
-    model_request_started_at_[task_id] = base::TimeTicks::Now();
-  }
+  StartObservedModelRequest(
+      task, client_it->second.get(), std::move(*config), std::move(request),
+      base::BindOnce(&AegisAgentService::OnPlanModelResult,
+                     weak_ptr_factory_.GetWeakPtr(), task_id, repair_attempt,
+                     using_fallback, std::move(callback)));
 }
 
 void AegisAgentService::OnPlanModelResult(const std::string& task_id,
@@ -1272,7 +1320,6 @@ void AegisAgentService::OnPlanModelResult(const std::string& task_id,
                                           std::string error,
                                           AgentModelParseResult result) {
   model_request_ids_.erase(task_id);
-  RecordTaskModelObservation(task_id, result);
   AgentTask* task = GetTask(task_id);
   if (!task || task->state() != AgentTaskState::kPlanning) {
     std::move(callback).Run(false, "planning task is no longer active");
@@ -1537,6 +1584,7 @@ bool AegisAgentService::CancelTask(const std::string& task_id) {
 }
 
 void AegisAgentService::CancelAllForDisable() {
+  InvalidatePendingModelDispatches();
   CancelPendingGoalRouting();
   monitor_timer_.Stop();
   monitor_url_checks_.clear();
@@ -1833,21 +1881,19 @@ void AegisAgentService::RequestNextModelTurn(const std::string& task_id) {
   }
   request.tools.push_back(std::move(*tool));
   request.required_tool_name = expected_tool;
-  request.reasoning_effort = "none";
+  request.reasoning_effort = ActiveGenerationProfile(*task).effort;
   request.disable_model_thinking =
+      (request.reasoning_effort.empty() ||
+       request.reasoning_effort == "none") &&
       ShouldDisableLocalQwenThinking(active_destination);
-  request.max_output_tokens = AgentModelToolOutputTokenLimit(expected_tool);
+  request.max_output_tokens =
+      AgentGenerationOutputLimit(ActiveGenerationProfile(*task),
+                                 AgentModelToolOutputTokenLimit(expected_tool));
   request.stream = false;
-  std::optional<AgentModelClient::RequestId> request_id =
-      client_it->second->Start(
-          std::move(*config), std::move(request),
-          base::BindOnce(&AegisAgentService::OnExecutionModelResult,
-                         weak_ptr_factory_.GetWeakPtr(), task_id,
-                         expected_tool));
-  if (request_id && client_it->second->busy()) {
-    model_request_ids_[task_id] = std::move(*request_id);
-    model_request_started_at_[task_id] = base::TimeTicks::Now();
-  }
+  StartObservedModelRequest(
+      task, client_it->second.get(), std::move(*config), std::move(request),
+      base::BindOnce(&AegisAgentService::OnExecutionModelResult,
+                     weak_ptr_factory_.GetWeakPtr(), task_id, expected_tool));
 }
 
 void AegisAgentService::EnsureFreshObservationThenContinue(
@@ -2008,7 +2054,6 @@ void AegisAgentService::OnExecutionModelResult(const std::string& task_id,
                                                std::string error,
                                                AgentModelParseResult result) {
   model_request_ids_.erase(task_id);
-  RecordTaskModelObservation(task_id, result);
   auto runtime_it = executions_.find(task_id);
   AgentTask* task = GetTask(task_id);
   const AgentTaskPlan* plan = GetPlan(task_id);
@@ -4000,10 +4045,13 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
       g_browser_process ? g_browser_process->GetApplicationLocale() : "en");
   request.tools.push_back(BuildAgentMonitorSummaryTool());
   request.required_tool_name = "agent.summarize_monitor";
-  request.reasoning_effort = "none";
+  request.reasoning_effort = ActiveGenerationProfile(*owner).effort;
   request.disable_model_thinking =
+      (request.reasoning_effort.empty() ||
+       request.reasoning_effort == "none") &&
       ShouldDisableLocalQwenThinking(ActiveModelDestination(*owner));
-  request.max_output_tokens = 2048;
+  request.max_output_tokens =
+      AgentGenerationOutputLimit(ActiveGenerationProfile(*owner), 2048);
   request.stream = false;
   check.timer.Start(
       FROM_HERE,
@@ -4012,14 +4060,10 @@ void AegisAgentService::RequestMonitorSummary(const std::string& monitor_id,
           ModelProviderChatTimeout(config->provider, GURL(config->base_url)) +
               base::Seconds(5)),
       base::BindOnce(check.fail, AgentMonitorCheckStatus::kSummaryUnavailable));
-  const std::optional<AgentModelClient::RequestId> summary_request_id =
-      check.summary_client->Start(
-      std::move(*config), std::move(request),
+  StartObservedModelRequest(
+      owner, check.summary_client.get(), std::move(*config), std::move(request),
       base::BindOnce(&AegisAgentService::OnMonitorSummaryResult,
                      weak_ptr_factory_.GetWeakPtr(), monitor_id, request_id));
-  if (summary_request_id && check.summary_client->busy()) {
-    model_request_started_at_[owner->id()] = base::TimeTicks::Now();
-  }
 }
 
 void AegisAgentService::OnMonitorSummaryResult(const std::string& monitor_id,
@@ -4032,7 +4076,6 @@ void AegisAgentService::OnMonitorSummaryResult(const std::string& monitor_id,
       it->second->request_id != request_id || !it->second->summary_input) {
     return;
   }
-  RecordTaskModelObservation(it->second->monitor.task_id, result);
   auto observation =
       ok ? AttachAgentMonitorSummary(it->second->pending_observation,
                                      *it->second->summary_input, result,
@@ -4436,6 +4479,7 @@ bool AegisAgentService::Transition(const std::string& task_id,
   if (state == AgentTaskState::kPausedByUser ||
       state == AgentTaskState::kUserTakeover ||
       (IsTerminalState(state) && state != AgentTaskState::kCompleted)) {
+    ++task_dispatch_generations_[task_id];
     std::erase_if(monitor_url_checks_, [&](const auto& entry) {
       return entry.second->monitor.task_id == task_id;
     });
@@ -4490,27 +4534,147 @@ bool AegisAgentService::PersistTask(const AgentTask& task) {
   return true;
 }
 
-void AegisAgentService::RecordTaskModelObservation(
-    const std::string& task_id,
-    const AgentModelParseResult& result) {
-  AgentTask* task = GetTask(task_id);
-  auto started = model_request_started_at_.find(task_id);
-  if (!task || started == model_request_started_at_.end()) {
+void AegisAgentService::StartObservedModelRequest(
+    AgentTask* task,
+    AgentModelClient* client,
+    AgentModelClientConfig config,
+    AgentModelRequest request,
+    AgentModelClient::Callback callback) {
+  const std::string observation_id =
+      base::Uuid::GenerateRandomV4().AsLowercaseString();
+  AgentModelAttempt attempt{
+      .kind = "generation",
+      .model = request.model,
+      .effort = request.reasoning_effort,
+      .prices = task->model_routing_metrics().fallback_used
+                    ? task->scope().fallback_token_prices
+                    : task->scope().model_token_prices,
+      .observation_id = observation_id,
+      .completed = false};
+  if (!storage_ready_ || !task->RecordModelAttempt(std::move(attempt))) {
+    std::move(callback).Run(
+        false, "model observation storage unavailable",
+        {.failure = AgentModelRequestFailure::kConfiguration});
     return;
   }
-  const base::TimeDelta latency = base::TimeTicks::Now() - started->second;
-  model_request_started_at_.erase(started);
-  int64_t input_tokens = 0;
-  int64_t output_tokens = 0;
-  for (const AgentModelEvent& event : result.events) {
-    if (event.type == AgentModelEventType::kUsage &&
-        event.usage.input_tokens >= 0 && event.usage.output_tokens >= 0) {
-      input_tokens += event.usage.input_tokens;
-      output_tokens += event.usage.output_tokens;
+  // Commit the unknown-usage placeholder before any network request. A crash,
+  // cancellation, or lost callback therefore cannot erase an incurred call.
+  task_store_.AsyncCall(&AgentTaskStore::SaveTaskRecord)
+      .WithArgs(MakeTaskStoreRecord(*task))
+      .Then(base::BindOnce(&AegisAgentService::OnModelAttemptStored,
+                           weak_ptr_factory_.GetWeakPtr(), task->id(),
+                           observation_id,
+                           std::pair(model_dispatch_generation_,
+                                     task_dispatch_generations_[task->id()]),
+                           client->GetWeakPtr(),
+                           std::move(config), std::move(request),
+                           std::move(callback)));
+}
+
+void AegisAgentService::OnModelAttemptStored(
+    std::string task_id,
+    std::string observation_id,
+    std::pair<uint64_t, uint64_t> dispatch_token,
+    base::WeakPtr<AgentModelClient> client,
+    AgentModelClientConfig config,
+    AgentModelRequest request,
+    AgentModelClient::Callback callback,
+    bool saved) {
+  // A resumed task can be Running again, but its old prompt is still revoked.
+  // Do not invoke its stale continuation against the new execution runtime.
+  if (dispatch_token.second != task_dispatch_generations_[task_id]) {
+    return;
+  }
+  if (dispatch_token.first != model_dispatch_generation_) {
+    StopDispatchForConfigurationChange(task_id);
+    std::move(callback).Run(
+        false, "model settings changed; resume or retry the task",
+        {.failure = AgentModelRequestFailure::kConfiguration});
+    return;
+  }
+  AgentTask* task = GetTask(task_id);
+  if (!saved || !client || !IsEnabled() || !storage_ready_ || !task ||
+      (task->state() != AgentTaskState::kPlanning &&
+       task->state() != AgentTaskState::kRunning &&
+       task->state() != AgentTaskState::kReflecting &&
+       task->state() != AgentTaskState::kCompleted)) {
+    std::move(callback).Run(
+        false, "model dispatch cancelled or storage failed",
+        {.failure = AgentModelRequestFailure::kConfiguration});
+    return;
+  }
+  const auto request_id = client->Start(
+      std::move(config), std::move(request),
+      base::BindOnce(&AegisAgentService::OnObservedModelResult,
+                     weak_ptr_factory_.GetWeakPtr(), task_id, observation_id,
+                     dispatch_token.second, base::TimeTicks::Now(),
+                     std::move(callback)));
+  auto owned = model_clients_.find(task_id);
+  if (request_id && client && client->busy() && owned != model_clients_.end() &&
+      owned->second.get() == client.get()) {
+    model_request_ids_[task_id] = *request_id;
+  }
+}
+
+void AegisAgentService::OnObservedModelResult(
+    std::string task_id,
+    std::string observation_id,
+    uint64_t task_generation,
+    base::TimeTicks started,
+    AgentModelClient::Callback callback,
+    bool ok,
+    std::string error,
+    AgentModelParseResult result) {
+  if (AgentTask* task = GetTask(task_id)) {
+    AgentModelAttempt observation{
+        .latency_ms = (base::TimeTicks::Now() - started).InMilliseconds(),
+        .observation_id = observation_id};
+    PopulateAttemptUsage(result, &observation);
+    observation.succeeded = ok;
+    if (task->CompleteModelAttempt(observation)) {
+      PersistTask(*task);
     }
   }
-  task->RecordModelObservation(input_tokens, output_tokens, latency);
+  if (task_generation == task_dispatch_generations_[task_id]) {
+    std::move(callback).Run(ok, std::move(error), std::move(result));
+  }
+}
+
+void AegisAgentService::InvalidatePendingModelDispatches() {
+  ++model_dispatch_generation_;
+}
+
+void AegisAgentService::StopDispatchForConfigurationChange(
+    const std::string& task_id) {
+  AgentTask* task = GetTask(task_id);
+  if (!task) {
+    return;
+  }
+  const std::string reason =
+      "model settings changed; resume or retry with the current configuration";
+  if (task->state() == AgentTaskState::kPlanning) {
+    Transition(task_id, AgentTaskState::kFailed, reason);
+  } else if (task->state() == AgentTaskState::kRunning ||
+             task->state() == AgentTaskState::kReflecting) {
+    if (TaskUsesActor(*task)) {
+      actor_bridge_.PauseTask(task_id, /*by_user=*/true);
+    }
+    if (auto it = executions_.find(task_id); it != executions_.end()) {
+      it->second->needs_fresh_observation = TaskUsesActor(*task);
+    }
+    if (task->state() != AgentTaskState::kPausedByUser) {
+      Transition(task_id, AgentTaskState::kPausedByUser, reason);
+    }
+  } else if (task->state() == AgentTaskState::kCompleted) {
+    // A completed monitor owner has no running task to pause. End this check;
+    // the normal monitor scheduler can start a fresh check later.
+    std::erase_if(monitor_page_checks_, [&](const auto& entry) {
+      return entry.second->monitor.task_id == task_id;
+    });
+  }
+  task->RecordEvent("model settings changed", reason);
   PersistTask(*task);
+  NotifyServiceSnapshotChanged();
 }
 
 AgentTaskStoreRecord AegisAgentService::MakeTaskStoreRecord(
@@ -4618,6 +4782,7 @@ void AegisAgentService::OnCriticalStoreWriteFinished(bool ok) {
     return;
   }
   storage_ready_ = false;
+  InvalidatePendingModelDispatches();
   monitor_timer_.Stop();
   monitor_url_checks_.clear();
   monitor_page_checks_.clear();

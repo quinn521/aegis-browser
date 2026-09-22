@@ -97,6 +97,8 @@ class AgentTask {
                               int64_t output_tokens,
                               base::TimeDelta latency);
   void RecordModelFallback();
+  bool RecordModelAttempt(AgentModelAttempt attempt);
+  bool CompleteModelAttempt(const AgentModelAttempt& observation);
 
   void AddObserver(AgentTaskObserver* observer);
   void RemoveObserver(AgentTaskObserver* observer);

@@ -21,30 +21,48 @@ bool MeetsRequirements(const AgentModelCatalogEntry& entry,
           entry.supports_strong_reasoning);
 }
 
-auto KnownCostKey(const AgentModelCatalogEntry& entry) {
-  return std::tuple(!entry.cost_microusd_per_million_tokens.has_value(),
-                    entry.cost_microusd_per_million_tokens.value_or(0));
+auto KnownCostKey(const AgentModelCatalogEntry& entry,
+                  const AgentModelRequirements& requirements) {
+  const auto profile = entry.generation_policy.Select(
+      false, requirements.reasoning == AgentReasoningNeed::kBasic,
+      requirements.reasoning == AgentReasoningNeed::kStrong);
+  // Conservative comparison estimate, not a bill: assume uncached input and
+  // the selected output cap. Both candidates use the same input-size heuristic.
+  const long double input =
+      requirements.context == AgentContextNeed::kLong ? 16384 : 1024;
+  const long double output = AgentGenerationOutputLimit(
+      profile,
+      requirements.output == AgentOutputNeed::kShortExtraction ? 1024 : 8192);
+  if (entry.token_prices.input && entry.token_prices.output) {
+    return std::tuple(false, input * *entry.token_prices.input +
+                                 output * *entry.token_prices.output);
+  }
+  return std::tuple(
+      !entry.cost_microusd_per_million_tokens.has_value(),
+      (input + output) * entry.cost_microusd_per_million_tokens.value_or(0));
 }
 
 bool ComesBefore(const AgentModelCatalogEntry* left,
                  const AgentModelCatalogEntry* right,
-                 AgentModelSelectionMode mode) {
-  if (mode == AgentModelSelectionMode::kCost) {
-    return std::tuple(KnownCostKey(*left), -left->quality_score,
-                      left->latency_score, -left->priority, left->id) <
-           std::tuple(KnownCostKey(*right), -right->quality_score,
-                      right->latency_score, -right->priority, right->id);
+                 const AgentModelSelectionInput& input) {
+  const auto left_cost = KnownCostKey(*left, input.requirements);
+  const auto right_cost = KnownCostKey(*right, input.requirements);
+  if (input.mode == AgentModelSelectionMode::kCost) {
+    return std::tuple(left_cost, -left->quality_score, left->latency_score,
+                      -left->priority, left->id) <
+           std::tuple(right_cost, -right->quality_score, right->latency_score,
+                      -right->priority, right->id);
   }
-  if (mode == AgentModelSelectionMode::kQuality) {
-    return std::tuple(-left->quality_score, left->latency_score,
-                      KnownCostKey(*left), -left->priority, left->id) <
-           std::tuple(-right->quality_score, right->latency_score,
-                      KnownCostKey(*right), -right->priority, right->id);
+  if (input.mode == AgentModelSelectionMode::kQuality) {
+    return std::tuple(-left->quality_score, left->latency_score, left_cost,
+                      -left->priority, left->id) <
+           std::tuple(-right->quality_score, right->latency_score, right_cost,
+                      -right->priority, right->id);
   }
-  return std::tuple(-left->priority, -left->quality_score,
-                    left->latency_score, KnownCostKey(*left), left->id) <
+  return std::tuple(-left->priority, -left->quality_score, left->latency_score,
+                    left_cost, left->id) <
          std::tuple(-right->priority, -right->quality_score,
-                    right->latency_score, KnownCostKey(*right), right->id);
+                    right->latency_score, right_cost, right->id);
 }
 
 std::optional<AgentModelRoutePlan> SelectFixedRoute(
@@ -63,6 +81,8 @@ std::optional<AgentModelRoutePlan> SelectFixedRoute(
         entry.destination == plan.primary) {
       plan.primary_cost_microusd_per_million_tokens =
           entry.cost_microusd_per_million_tokens;
+      plan.primary_profile = entry.generation_policy.default_profile;
+      plan.primary_token_prices = entry.token_prices;
       break;
     }
   }
@@ -83,7 +103,7 @@ std::vector<const AgentModelCatalogEntry*> EligibleCandidates(
     }
   }
   std::ranges::sort(candidates, [&input](const auto* left, const auto* right) {
-    return ComesBefore(left, right, input.mode);
+    return ComesBefore(left, right, input);
   });
   return candidates;
 }
@@ -100,6 +120,12 @@ AgentModelRoutePlan BuildAutomaticRoute(
       .reason = input.mode == AgentModelSelectionMode::kLocalOnly
                     ? "automatic_local_only"
                     : "automatic_policy"};
+  const bool basic = input.requirements.reasoning == AgentReasoningNeed::kBasic;
+  const bool strong =
+      input.requirements.reasoning == AgentReasoningNeed::kStrong;
+  plan.primary_profile =
+      candidates.front()->generation_policy.Select(false, basic, strong);
+  plan.primary_token_prices = candidates.front()->token_prices;
   const auto fallback = std::ranges::find_if(
       candidates.begin() + 1, candidates.end(), [&plan](const auto* candidate) {
         return candidate->destination != plan.primary;
@@ -108,6 +134,9 @@ AgentModelRoutePlan BuildAutomaticRoute(
     plan.fallback = (*fallback)->destination;
     plan.fallback_cost_microusd_per_million_tokens =
         (*fallback)->cost_microusd_per_million_tokens;
+    plan.fallback_profile =
+        (*fallback)->generation_policy.Select(false, basic, strong);
+    plan.fallback_token_prices = (*fallback)->token_prices;
   }
   return plan;
 }
@@ -116,8 +145,10 @@ AgentModelRoutePlan BuildAutomaticRoute(
 
 bool AgentModelCatalogEntry::IsValid() const {
   return !id.empty() && id.size() <= 128u && destination.IsValid() &&
-         quality_score >= 0 && quality_score <= 100 && latency_score >= 0 &&
-         latency_score <= 100 && priority >= -1000 && priority <= 1000 &&
+         generation_policy.IsValid(destination.provider) &&
+         token_prices.IsValid() && quality_score >= 0 && quality_score <= 100 &&
+         latency_score >= 0 && latency_score <= 100 && priority >= -1000 &&
+         priority <= 1000 &&
          (!cost_microusd_per_million_tokens ||
           *cost_microusd_per_million_tokens >= 0);
 }
