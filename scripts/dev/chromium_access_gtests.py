@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Iterable
+from typing import Callable, Iterable
 
 ROOT = Path(__file__).resolve().parents[2]
 BROWSER = ROOT / "apps" / "browser"
@@ -257,8 +257,17 @@ def run_target(
     autoninja: str,
     jobs: int,
     build_jobs: int = 4,
+    evidence: dict[str, object] | None = None,
+    save: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     label, ninja_target, binary_name = target
+    row = evidence if evidence is not None else {}
+    row.update(label=label, ninjaTarget=ninja_target, binary=binary_name,
+               build="RUNNING", listing="NOT_RUN", runtime="NOT_RUN")
+    def persist() -> None:
+        if save is not None:
+            save()
+    persist()
     build_log = report / f"{binary_name}.build.log"
     list_log = report / f"{binary_name}.list.log"
     test_log = report / f"{binary_name}.test.log"
@@ -274,12 +283,16 @@ def run_target(
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError(f"compiled GTest binary is missing: {binary}")
 
+    row.update(build="PASS", binarySha256=sha256(binary), listing="RUNNING")
+    persist()
     run_logged([str(binary), "--gtest_list_tests"], cwd=src, env=env, log=list_log)
     listed = list_log.read_text(encoding="utf-8")
     test_count = count_gtests(listed)
     if test_count <= 0:
         raise ValueError(f"GTest target reported zero tests: {label}")
 
+    row.update(listing="PASS", tests=test_count, runtime="RUNNING")
+    persist()
     run_logged(
         [
             str(binary),
@@ -291,7 +304,11 @@ def run_target(
         env=env,
         log=test_log,
     )
+    if sha256(binary) != row["binarySha256"]:
+        raise ValueError(f"test binary changed during execution: {binary}")
+    row["runtime"] = "PASS"
     return {
+        **row,
         "label": label,
         "ninjaTarget": ninja_target,
         "binary": binary_name,
@@ -360,6 +377,28 @@ def write_summary(result: dict[str, object], report: Path) -> None:
     (report / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def record_error(error: Exception, path: Path) -> None:
+    parts = [str(error)]
+    for attr in ("output", "stderr"):
+        value = getattr(error, attr, None)
+        if value:
+            parts.append(value.decode(errors="replace") if isinstance(value, bytes) else str(value))
+    path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+    write_json(path.with_suffix(path.suffix + ".json"), {
+        "command": getattr(error, "cmd", None),
+        "exitCode": getattr(error, "returncode", None),
+    })
+
+
+def verify_stable(sources: list[tuple[Path, str, str]], args_file: Path, args_hash: str) -> None:
+    for repo, label, head in sources:
+        require_clean(repo, label, ignore_submodules=True)
+        if git(repo, "rev-parse", "HEAD") != head:
+            raise ValueError(f"{label} HEAD changed during execution")
+    if sha256(args_file) != args_hash:
+        raise ValueError("GN arguments changed during execution")
+
+
 def execute(options: argparse.Namespace) -> Path:
     src = resolve_chromium_root() / "src"
     if not (src / "BUILD.gn").is_file():
@@ -375,6 +414,7 @@ def execute(options: argparse.Namespace) -> Path:
     result = {"startedAt": now(), "status": "preflight", "targets": rows,
               "targetCount": 0, "testCount": 0, "selectedTargets": sorted(selected)}
     lock = acquire_lock(src)
+    stable_inputs = None
     try:
         write_json(state, result)
         require_clean(ROOT, "product", ignore_submodules=True)
@@ -417,6 +457,8 @@ def execute(options: argparse.Namespace) -> Path:
                               for directory in (PATCH_DIR, OVERLAY_DIR)
                               for p in sorted(directory.rglob("*")) if p.is_file()},
                       status="generating")
+        stable_inputs = ([(ROOT, "product", product_head), (src, "Chromium", chromium_head),
+                          (v8, "V8", v8_head)], args_file, args_hash)
         write_json(state, result)
         run_logged([gn, "gen", str(out), f"--args={args_text}", "--check"],
                    cwd=src, env=env, log=report / "gn.log")
@@ -429,31 +471,40 @@ def execute(options: argparse.Namespace) -> Path:
             try:
                 row.update(run_target(target, src=src, out=out, report=report, env=env,
                                       autoninja=autoninja, jobs=options.jobs,
-                                      build_jobs=options.build_jobs))
+                                      build_jobs=options.build_jobs, evidence=row,
+                                      save=lambda: write_json(state, result)))
             except Exception as error:
                 row.update(result="FAIL", error=str(error))
+                for stage in ("build", "listing", "runtime"):
+                    if row.get(stage) == "RUNNING":
+                        row[stage] = "FAIL"
                 raise
             result["targetCount"] += 1
             result["testCount"] += row["tests"]
             write_json(state, result)
-        for repo, label, head in ((ROOT, "product", product_head),
-                                  (src, "Chromium", chromium_head), (v8, "V8", v8_head)):
-            require_clean(repo, label, ignore_submodules=True)
-            if git(repo, "rev-parse", "HEAD") != head:
-                raise ValueError(f"{label} HEAD changed during execution")
-        if sha256(args_file) != args_hash:
-            raise ValueError("GN arguments changed during execution")
-        result["sourceStable"] = True
         result["status"] = "PASS" if len(selected) == len(TARGETS) else "PARTIAL_PASS"
         return report
     except Exception as error:
         result.update(status="FAIL", error=str(error))
+        record_error(error, report / "failure.log")
         raise
     finally:
+        primary_failed = "error" in result
+        stability_error = None
+        if stable_inputs is not None:
+            try:
+                verify_stable(*stable_inputs)
+                result["sourceStable"] = True
+            except Exception as error:
+                stability_error = error
+                result.update(sourceStable=False, status="FAIL", stabilityError=str(error))
+                record_error(error, report / "source-stability.log")
         result["finishedAt"] = now()
         write_json(state, result)
         write_summary(result, report)
         lock.rmdir()
+        if stability_error is not None and not primary_failed:
+            raise stability_error
 
 
 def parser() -> argparse.ArgumentParser:

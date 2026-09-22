@@ -78,6 +78,41 @@ class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
             self.assertTrue(all(t["result"] == "NOT_RUN" for t in result["targets"]))
             self.assertFalse((root / ".aegis-access-gtest-lock").exists())
 
+    def test_failed_gn_retains_primary_and_post_source_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            (root / "src").mkdir()
+            (root / "src/BUILD.gn").write_text("")
+            report = root / "report"
+            options = sut.parser().parse_args(["--report-dir", str(report)])
+            failure = subprocess.CalledProcessError(7, ["fake-gn"], output="original GN diagnostic")
+            with mock.patch.object(sut, "resolve_chromium_root", return_value=root), \
+                    mock.patch.object(sut, "require_clean"), \
+                    mock.patch.object(sut, "git", return_value="h"), \
+                    mock.patch.object(sut, "is_ancestor", return_value=True), \
+                    mock.patch.object(sut, "verify_tree", return_value="tree"), \
+                    mock.patch.object(sut, "tool", return_value="/usr/bin/false"), \
+                    mock.patch.object(sut, "run_logged", side_effect=failure), \
+                    mock.patch.object(sut, "verify_stable", side_effect=ValueError("source mutated")) as stable:
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    sut.execute(options)
+            self.assertEqual(caught.exception.returncode, 7)
+            stable.assert_called_once()
+            result = json.loads((report / "result.json").read_text())
+            self.assertFalse(result["sourceStable"])
+            self.assertIn("source mutated", result["stabilityError"])
+            self.assertIn("original GN diagnostic", (report / "failure.log").read_text())
+
+    def test_record_error_preserves_git_stdout_and_stderr(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "failure.log"
+            error = subprocess.CalledProcessError(1, ["git", "apply"],
+                                                 output="patch does not apply", stderr="specific.cc:7")
+            sut.record_error(error, path)
+            self.assertIn("patch does not apply", path.read_text())
+            self.assertIn("specific.cc:7", path.read_text())
+            self.assertEqual(json.loads(path.with_suffix(".log.json").read_text())["exitCode"], 1)
+
     def test_target_inventory_is_complete_and_unique(self):
         self.assertEqual(len(sut.TARGETS), 17)
         labels = [item[0] for item in sut.TARGETS]
@@ -200,6 +235,16 @@ SuiteTwo/Variant.
             self.assertTrue((report / "fake_unittests.build.log").is_file())
             self.assertTrue((report / "fake_unittests.list.log").is_file())
             self.assertTrue((report / "fake_unittests.test.log").is_file())
+            binary.write_text(binary.read_text() + "\nraise SystemExit(7)\n")
+            row = {}
+            with self.assertRaises(subprocess.CalledProcessError):
+                sut.run_target(("//fake:fake_unittests", "fake:fake_unittests", "fake_unittests"),
+                               src=src, out=out, report=report, env=env,
+                               autoninja=str(autoninja), jobs=1, evidence=row)
+            self.assertEqual(row["tests"], 2)
+            self.assertEqual(row["binarySha256"], sut.sha256(binary))
+            self.assertEqual(row["build"], "PASS")
+            self.assertEqual(row["listing"], "PASS")
 
     def test_acquire_lock_rejects_candidate_or_parallel_run(self):
         with tempfile.TemporaryDirectory() as root:
