@@ -2,6 +2,10 @@
 
 更新日期：2026-09-22。续接基线：`origin/develop@c08b6321fe2878ba62c8d9757a3f4ae4e4f17470`（[#164](https://github.com/quinn521/aegis-browser/pull/164) 已合并）。本次落实该方案的工作拆分、双窗口职责和状态快照，没有新增产品代码或运行验收。
 
+## 2026-09-22：F 独立 transport scope 准入增量
+
+本增量补齐普通网站 mutation 在同 host 或 DNS label 后缀已存在异组 PROXY 时的发布前拒绝，不重复旧 trusted-site UI 候选或 #155/#156 重试语义。#161 runner、#163 GN 修复与 #166 模型路由补丁 0161 已经进入当前基线；本增量在其后顺序编号为 0162。实现、验收不变量、实际模型路由与证据边界见 [F Handoff](transport-scope-handoff-20260922.zh-CN.md)。standalone 行为检查已通过，nativeImpact 为 REQUIRED；固定 Chromium unit/browser runtime 未执行通过前保持 NOT_RUN，G0 仍 UNVERIFIED。
+
 ## 当前依据与结论
 
 行为和完整门槛以[冻结修订 4](spec.zh-CN.md)为准；实施技术决策见[架构复核与实施方案](architecture-review-20260922.zh-CN.md)；逐项事实写入[A/PF 台账](acceptance-tracker.zh-CN.md)；下一工作窗口及证据边界见[Handoff](handoff-20260920.zh-CN.md)。历史 P0 切片保留在[p0-implementation](p0-implementation.zh-CN.md)。

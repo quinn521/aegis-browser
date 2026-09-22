@@ -1,0 +1,488 @@
+From 1345735f96b32958e04cb6df493fda1e2fffadf4 Mon Sep 17 00:00:00 2001
+From: quinn521 <287940781+quinn521@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 20:35:25 +0800
+Subject: [PATCH] fix(access): reject conflicting site proxy transport groups
+
+---
+ chrome/browser/aegis/BUILD.gn                 |   2 +
+ ...proxying_url_loader_factory_browsertest.cc |  71 +++++++++++
+ .../access/access_service_coordinator.cc      |  14 +--
+ .../access_service_coordinator_unittest.cc    | 118 +++++++++++++++---
+ .../access_route_planner_contract_test.h      |  63 ++++++++++
+ .../access_route_planner_native_test.cc       |   2 +
+ .../access_route_planner_unittest.cc          |  10 ++
+ .../aegis_access/site_proxy_rule_group.cc     |  21 ++++
+ .../aegis_access/site_proxy_rule_group.h      |  18 +++
+ 9 files changed, 293 insertions(+), 26 deletions(-)
+
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index 93b385350a9a78f0360e44d4658432d1184d5033..d50cb76f9ed70e9c33dd2b813862ea2ab8d9fb62 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -287,6 +287,8 @@ if (!is_android) {
+       "//chrome/browser/aegis/access:access_proxying_url_loader_factory",
+       "//chrome/browser/aegis/access:access_published_request_runtime",
+       "//chrome/browser/aegis/access:access_request_dispatch_state",
++      "//chrome/browser/aegis/access:access_rule_store",
++      "//chrome/browser/aegis/access:access_service_coordinator",
+       "//chrome/browser/bookmarks",
+       "//chrome/browser/net:impl",
+       "//chrome/browser/notifications:test_support",
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c34271ea97 100644
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+@@ -11,6 +11,7 @@
+ #include "base/files/file_path.h"
+ #include "base/functional/bind.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/run_loop.h"
+ #include "base/test/run_until.h"
+ #include "base/test/test_future.h"
+ #include "build/chromeos_buildflags.h"
+@@ -20,6 +21,7 @@
+ #include "chrome/browser/aegis/access/access_proxy_selection_generation_source.h"
+ #include "chrome/browser/aegis/access/access_published_request_runtime.h"
+ #include "chrome/browser/aegis/access/access_request_dispatch_state.h"
++#include "chrome/browser/aegis/access/access_service_coordinator.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/net/profile_network_context_service.h"
+ #include "chrome/browser/net/profile_network_context_service_factory.h"
+@@ -55,6 +57,10 @@ namespace aegis::access {
+ 
+ class AccessRuleStoreTestPeer {
+  public:
++  static StoreStatus Import(AccessRuleStore* store, StoredAccessRule rule) {
++    return store->ImportIndependentRuleForTesting(std::move(rule));
++  }
++
+   static AccessStoreBinding Ephemeral(const OwnershipKey& owner) {
+     return AccessStoreBinding(AccessStoreKind::kEphemeralProfile, owner.channel,
+                               "prepared-browser-test", owner.profile_token, {}, {});
+@@ -809,6 +815,26 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+     }
+   }
+ 
++  std::optional<aegis_access::RequestCancellationSelector> CurrentSiteSelector() {
++    const auto metadata = BuildBrowserOwnedRequestMetadata(
++        browser()->profile(), base::BindRepeating(
++            &AccessProxyingURLLoaderFactoryBrowserTest::web_contents,
++            base::Unretained(this)),
++        web_contents()->GetPrimaryMainFrame()->GetFrameTreeNodeId(), std::nullopt);
++    if (!metadata.metadata) {
++      return std::nullopt;
++    }
++    const auto context = aegis_access::CanonicalizeBrowserOwnedRequest(
++        *metadata.metadata, target_url());
++    if (!context.context) {
++      return std::nullopt;
++    }
++    const auto& value = *context.context;
++    return aegis_access::RequestCancellationSelector{
++        value.owner(), value.document_token(), value.pending_navigation_token(),
++        value.top_level_site(), value.exact_host(), value.scheme(), value.port()};
++  }
++
+   std::atomic<size_t> origin_requests_{0};
+   std::atomic<size_t> proxy_requests_{0};
+   net::test_server::EmbeddedTestServer target_origin_;
+@@ -875,6 +901,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+   EXPECT_EQ(prepared.value->committed_policy_generation, 0u);
+ }
+ 
++IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
++                       ConflictingSiteProxyGroupPreservesNavigationRoute) {
++  PublishProxyPolicy(/*publish_endpoint=*/true);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), target_url()));
++  auto* runtime = AccessPublishedRequestRuntime::Get(browser()->profile());
++  ASSERT_TRUE(runtime);
++  const auto* published = runtime->GetPublishedPolicySnapshot(*owner_);
++  ASSERT_TRUE(published);
++  const auto published_before = *published;
++  auto store = std::make_unique<AccessRuleStore>(
++      AccessRuleStoreTestPeer::Ephemeral(*owner_));
++  ASSERT_EQ(store->Open(), StoreStatus::kValid);
++  StoredAccessRule independent;
++  independent.policy = published_before.rules.front();
++  independent.source = StoredRuleSource::kTestFixture;
++  independent.lifetime = StoredRuleLifetime::kPersistent;
++  ASSERT_EQ(AccessRuleStoreTestPeer::Import(store.get(), independent),
++            StoreStatus::kValid);
++  auto request = PreparedNavigationRequest(*owner_);
++  for (auto& member : request.candidate_members) {
++    member.proxy_group_id = "conflicting-group";
++  }
++  const auto selector = CurrentSiteSelector();
++  ASSERT_TRUE(selector);
++  const auto selection_before = transport_->CurrentSelection(*owner_);
++  auto* coordinator = AccessServiceCoordinator::GetOrCreate(browser()->profile());
++  ASSERT_TRUE(coordinator);
++  base::test::TestFuture<AccessMutationTransactionResult> result;
++  coordinator->CommitSiteGroupMutation(std::move(store), request, *selector,
++                                        result.GetCallback());
++  ASSERT_TRUE(result.Wait());
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(result.Get().status,
++            AccessMutationTransactionStatus::kUnsupportedTransportScope);
++  EXPECT_EQ(*runtime->GetPublishedPolicySnapshot(*owner_), published_before);
++  EXPECT_EQ(transport_->CurrentSelection(*owner_), selection_before);
++  EXPECT_EQ(coordinator->state_generation(), 0u);
++  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
++  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(
++      browser(), target_url().Resolve("/after-rejected-site-mutation")));
++  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
++                     /*proxy_delta=*/1u);
++}
++
+ #if !BUILDFLAG(IS_CHROMEOS)
+ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                        MainNavigationRoutingIsolatedAcrossProfiles) {
+diff --git a/chrome/browser/aegis/access/access_service_coordinator.cc b/chrome/browser/aegis/access/access_service_coordinator.cc
+index a98eb1d5f6faae75486b3c4f63b4c194966d8b33..0ce21c40dc52118f74677e089b6b383fc7e969d2 100644
+--- a/chrome/browser/aegis/access/access_service_coordinator.cc
++++ b/chrome/browser/aegis/access/access_service_coordinator.cc
+@@ -226,16 +226,14 @@ AccessServiceCoordinator::ValidateTransportScope(
+   if (!matcher.value) {
+     return Result(AccessMutationTransactionStatus::kUnsupportedTransportScope);
+   }
+-  const auto& host = transaction.identity.selector.exact_host;
++  const aegis_access::SiteProxyTransportRule candidate{
++      transaction.identity.selector.exact_host, false, mode,
++      transaction.pending.candidate.members.front().policy.proxy_group_id};
+   const bool incompatible = std::ranges::any_of(
+       matcher.value->rules, [&](const AccessPolicyRule& rule) {
+-        const bool overlaps = rule.destination_host == host ||
+-                              (rule.include_subdomains &&
+-                               host.ends_with("." + rule.destination_host));
+-        const bool opposite =
+-            (mode == AccessMode::kDirect && rule.mode == AccessMode::kProxy) ||
+-            (mode == AccessMode::kProxy && rule.mode == AccessMode::kDirect);
+-        return overlaps && opposite;
++        return !aegis_access::IsSiteProxyTransportCompatible(
++            candidate, {rule.destination_host, rule.include_subdomains,
++                        rule.mode, rule.proxy_group_id});
+       });
+   if (incompatible) {
+     return Result(AccessMutationTransactionStatus::kUnsupportedTransportScope);
+diff --git a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
+index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474e85bd2b5 100644
+--- a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
++++ b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
+@@ -160,6 +160,45 @@ class AccessMutationTransactionTest : public AccessServiceCoordinatorTest {
+     return selector;
+   }
+ 
++  void ImportOtherSiteProxyRule(AccessRuleStore* store,
++                                const std::string& proxy_group) {
++    StoredAccessRule independent;
++    independent.policy = {
++        .rule_id = "other-site-proxy",
++        .owner = owner_,
++        .scope = PolicyScope::kSite,
++        .top_level_site = "https://other.example",
++        .destination_host = "news.example",
++        .schemes = {RequestScheme::kHttps},
++        .ports = {PortScope::kAllBrowserPermitted, {}},
++        .mode = AccessMode::kProxy,
++        .proxy_group_id = proxy_group,
++        .protection_override = ProtectionOverride::kNone,
++        .row_revision = 1,
++        .last_operation_sequence = 1,
++    };
++    independent.source = StoredRuleSource::kTestFixture;
++    independent.lifetime = StoredRuleLifetime::kPersistent;
++    ASSERT_EQ(AccessRuleStoreTestPeer::Import(store, independent),
++              StoreStatus::kValid);
++  }
++
++  void ConfigurePrimaryProxyGroup() {
++    auto* source =
++        AccessProxySelectionGenerationSource::GetOrCreate(profile_.get());
++    ASSERT_TRUE(source);
++    const auto selection = source->CommitSelection(
++        {"proxy-group", "endpoint", "lease", "assignment", 1});
++    ASSERT_EQ(selection.status,
++              aegis_access::ProxySelectionGenerationCommitStatus::kCommitted);
++    const aegis_access::RegisteredProxyEndpoint endpoint{
++        "registration", "proxy-group", owner_,
++        {7, 2, selection.generation, transport_->network_epoch(), 5},
++        aegis_access::RegisteredProxyTransport::kHttp, "127.0.0.1", 18080};
++    ASSERT_TRUE(transport_->PublishProxySelection(
++        {}, {"news.example", "other.example"}, endpoint));
++  }
++
+   base::ScopedTempDir directory_;
+   std::unique_ptr<TestingProfile> profile_;
+   AccessNetworkContextTransport* transport_ = nullptr;
+@@ -413,24 +452,7 @@ TEST_F(AccessMutationTransactionTest, EphemeralStoreSurvivesConsecutiveMutations
+ TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication) {
+   auto store = OpenStore();
+   auto* retained_store = store.get();
+-  StoredAccessRule independent;
+-  independent.policy = {
+-      .rule_id = "other-site-proxy",
+-      .owner = owner_,
+-      .scope = PolicyScope::kSite,
+-      .top_level_site = "https://other.example",
+-      .destination_host = "news.example",
+-      .schemes = {RequestScheme::kHttps},
+-      .ports = {PortScope::kAllBrowserPermitted, {}},
+-      .mode = AccessMode::kProxy,
+-      .proxy_group_id = "independent-proxy",
+-      .protection_override = ProtectionOverride::kNone,
+-      .row_revision = 1,
+-      .last_operation_sequence = 1,
+-  };
+-  independent.source = StoredRuleSource::kTestFixture;
+-  independent.lifetime = StoredRuleLifetime::kPersistent;
+-  ASSERT_EQ(AccessRuleStoreTestPeer::Import(store.get(), independent), StoreStatus::kValid);
++  ImportOtherSiteProxyRule(store.get(), "independent-proxy");
+   const auto before = store->ReadCommittedSnapshot(owner_.storage_partition_token);
+   ASSERT_TRUE(before.value);
+   base::test::TestFuture<AccessMutationTransactionResult> result;
+@@ -446,6 +468,66 @@ TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication)
+   EXPECT_EQ(coordinator_->state_generation(), 0u);
+ }
+ 
++TEST_F(AccessMutationTransactionTest,
++       DifferentSameHostProxyGroupsFailBeforePublication) {
++  ConfigurePrimaryProxyGroup();
++  task_environment_.RunUntilIdle();
++  auto store = OpenStore();
++  auto* retained_store = store.get();
++  ImportOtherSiteProxyRule(store.get(), "independent-proxy");
++  const auto before = store->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(before.value);
++  const auto selection_before = transport_->CurrentSelection(owner_);
++  auto mutation = Mutation();
++  for (auto& member : mutation.candidate_members) {
++    member.mode = AccessMode::kProxy;
++    member.proxy_group_id = "proxy-group";
++  }
++  base::test::TestFuture<AccessMutationTransactionResult> result;
++  coordinator_->CommitSiteGroupMutation(std::move(store), mutation, Selector(),
++                                        result.GetCallback());
++  task_environment_.RunUntilIdle();
++  ASSERT_TRUE(result.IsReady());
++  EXPECT_EQ(result.Get().status,
++            AccessMutationTransactionStatus::kUnsupportedTransportScope);
++  EXPECT_EQ(result.Get().store_status, StoreStatus::kValid);
++  EXPECT_FALSE(client_->metadata);
++  EXPECT_FALSE(client_->reply);
++  const auto after = retained_store->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(after.value);
++  EXPECT_EQ(*after.value, *before.value);
++  EXPECT_EQ(transport_->CurrentSelection(owner_), selection_before);
++  EXPECT_EQ(coordinator_->state_generation(), 0u);
++}
++
++TEST_F(AccessMutationTransactionTest,
++       SameHostSameProxyGroupRemainsPublishable) {
++  ConfigurePrimaryProxyGroup();
++  auto store = OpenStore();
++  auto* retained_store = store.get();
++  ImportOtherSiteProxyRule(store.get(), "proxy-group");
++  auto mutation = Mutation();
++  for (auto& member : mutation.candidate_members) {
++    member.mode = AccessMode::kProxy;
++    member.proxy_group_id = "proxy-group";
++  }
++  base::test::TestFuture<AccessMutationTransactionResult> result;
++  coordinator_->CommitSiteGroupMutation(std::move(store), mutation, Selector(),
++                                        result.GetCallback());
++  task_environment_.RunUntilIdle();
++  ASSERT_TRUE(client_->metadata);
++  ASSERT_TRUE(client_->reply);
++  EXPECT_EQ(client_->metadata->proxy_group_id, "proxy-group");
++  std::move(client_->reply).Run(true);
++  ASSERT_TRUE(result.Wait());
++  EXPECT_EQ(result.Get().status, AccessMutationTransactionStatus::kCommitted);
++  const auto snapshot = retained_store->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(snapshot.value);
++  EXPECT_EQ(snapshot.value->site_groups.size(), 1u);
++  EXPECT_EQ(snapshot.value->independent_rules.size(), 1u);
++  EXPECT_EQ(coordinator_->state_generation(), 1u);
++}
++
+ TEST_F(AccessMutationTransactionTest, ForgedSelectorDoesNotPrepareMutation) {
+   auto selector = Selector();
+   selector.owner.profile_token = "other-profile";
+diff --git a/components/aegis_access/access_route_planner_contract_test.h b/components/aegis_access/access_route_planner_contract_test.h
+index be8ac8f2497fe12df365840b4993d06de8da6115..0ec34d7a49f2eeb1041041f61e5164f2b9fd9747 100644
+--- a/components/aegis_access/access_route_planner_contract_test.h
++++ b/components/aegis_access/access_route_planner_contract_test.h
+@@ -174,6 +174,69 @@ inline void ExpectUnknown(ContractTestObserver& observer,
+               GroupPresence::kPresent, GroupSelection::kUnknown, error);
+ }
+ 
++inline void RunSiteProxyTransportUnitTests(ContractTestObserver& observer) {
++  const SiteProxyTransportRule candidate{
++      "news.example", false, AccessMode::kProxy, "group-a"};
++  observer.Expect(IsSiteProxyTransportCompatible(candidate, candidate),
++                  "transport accepts the same proxy group");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      candidate, {"news.example", false, AccessMode::kProxy,
++                                  "group-b"}),
++                  "transport rejects a different proxy group on the same host");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      candidate, {"example", true, AccessMode::kProxy, "group-b"}),
++                  "transport rejects an overlapping suffix with another group");
++  observer.Expect(IsSiteProxyTransportCompatible(
++                      candidate, {"example", true, AccessMode::kProxy, "group-a"}),
++                  "transport permits an overlapping suffix in the same group");
++  observer.Expect(IsSiteProxyTransportCompatible(
++                      candidate, {"other.example", false, AccessMode::kProxy,
++                                  "group-b"}),
++                  "transport preserves unrelated host rules");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      {"news.example", false, AccessMode::kProxy, ""}, candidate),
++                  "transport rejects a proxy candidate with no group");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      {"", false, AccessMode::kDirect, ""}, candidate),
++                  "transport rejects an empty candidate host");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      {"news.example", true, AccessMode::kProxy, "group-a"},
++                      candidate),
++                  "ordinary mutations cannot widen to subdomains");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      {"news.example", false, AccessMode::kDirect, "group-a"},
++                      candidate),
++                  "direct candidates cannot carry a proxy group");
++  observer.Expect(!IsSiteProxyTransportCompatible(
++                      {"news.example", false, AccessMode::kReject, ""}, candidate),
++                  "ordinary mutations do not admit debug reject candidates");
++}
++
++inline void RunSiteProxyTransportRegressionTests(ContractTestObserver& observer) {
++  const SiteProxyTransportRule proxy{
++      "news.example", false, AccessMode::kProxy, "group-a"};
++  const SiteProxyTransportRule direct{
++      "news.example", false, AccessMode::kDirect, ""};
++  observer.Expect(!IsSiteProxyTransportCompatible(proxy, direct) &&
++                      !IsSiteProxyTransportCompatible(direct, proxy),
++                  "existing opposite-mode conflict rejection remains symmetric");
++  observer.Expect(IsSiteProxyTransportCompatible(direct, direct),
++                  "same-host direct rules remain compatible");
++  observer.Expect(IsSiteProxyTransportCompatible(
++                      proxy, {"news.example", false, AccessMode::kReject, ""}),
++                  "transport compatibility does not remove independent rejection");
++  observer.Expect(IsSiteProxyTransportCompatible(
++                      proxy, {"ews.example", true, AccessMode::kProxy, "group-b"}),
++                  "suffix overlap requires a complete DNS label");
++  observer.Expect(IsSiteProxyTransportCompatible(
++                      proxy, {"example", false, AccessMode::kProxy, "group-b"}),
++                  "an exact parent host does not cover its subdomains");
++  observer.Expect(IsSiteProxyTransportCompatible(
++                      proxy, {"child.news.example", true, AccessMode::kProxy,
++                              "group-b"}),
++                  "a child suffix does not cover its parent");
++}
++
+ inline void RunSiteProxyRuleGroupContractTests(
+     ContractTestObserver& observer) {
+   SiteProxyRuleGroup group = ValidGroup();
+diff --git a/components/aegis_access/access_route_planner_native_test.cc b/components/aegis_access/access_route_planner_native_test.cc
+index a816020091b192c78895d2c6d33ab057053c184a..022baace04bb714e02962dc8704f50482e0095c3 100644
+--- a/components/aegis_access/access_route_planner_native_test.cc
++++ b/components/aegis_access/access_route_planner_native_test.cc
+@@ -47,6 +47,8 @@ int main() {
+   NativeObserver observer;
+   aegis_access::test::RunRoutePlannerContractTests(observer);
+   aegis_access::test::RunSiteProxyRuleGroupContractTests(observer);
++  aegis_access::test::RunSiteProxyTransportUnitTests(observer);
++  aegis_access::test::RunSiteProxyTransportRegressionTests(observer);
+   aegis_access::test::RunRequestOwnershipRegistryUnitTests(observer);
+   aegis_access::test::RunRequestOwnershipRegistryRegressionTests(observer);
+   aegis_access::test::RunTargetedRequestCancellationUnitTests(observer);
+diff --git a/components/aegis_access/access_route_planner_unittest.cc b/components/aegis_access/access_route_planner_unittest.cc
+index 2bbf910517dcbeac6691af262524485889afa3b5..0d01482eb6595e59ba3bb0997906c3b33d57f9d0 100644
+--- a/components/aegis_access/access_route_planner_unittest.cc
++++ b/components/aegis_access/access_route_planner_unittest.cc
+@@ -25,5 +25,15 @@ TEST(SiteProxyRuleGroupTest, CompleteAtomicGroupContract) {
+   RunSiteProxyRuleGroupContractTests(observer);
+ }
+ 
++TEST(SiteProxyRuleGroupTest, TransportCompatibilityUnit) {
++  GtestObserver observer;
++  RunSiteProxyTransportUnitTests(observer);
++}
++
++TEST(SiteProxyRuleGroupTest, TransportCompatibilityRegression) {
++  GtestObserver observer;
++  RunSiteProxyTransportRegressionTests(observer);
++}
++
+ }  // namespace
+ }  // namespace aegis_access::test
+diff --git a/components/aegis_access/site_proxy_rule_group.cc b/components/aegis_access/site_proxy_rule_group.cc
+index 0525f77bf3ba50b2ab94cf5db84456be9e9a2c6e..dfaad9e6f8ae377aaec852676036f0b25dd9da06 100644
+--- a/components/aegis_access/site_proxy_rule_group.cc
++++ b/components/aegis_access/site_proxy_rule_group.cc
+@@ -25,6 +25,27 @@ bool HasCompleteSchemeSet(const std::vector<RequestScheme>& schemes) {
+ 
+ }  // namespace
+ 
++bool IsSiteProxyTransportCompatible(const SiteProxyTransportRule& candidate,
++                                    const SiteProxyTransportRule& existing) {
++  if (candidate.host.empty() || candidate.include_subdomains ||
++      (candidate.mode != AccessMode::kDirect &&
++       candidate.mode != AccessMode::kProxy) ||
++      (candidate.mode == AccessMode::kProxy) == candidate.proxy_group_id.empty()) {
++    return false;
++  }
++  const bool overlaps =
++      candidate.host == existing.host ||
++      (existing.include_subdomains && !existing.host.empty() &&
++       candidate.host.size() > existing.host.size() &&
++       candidate.host.ends_with(existing.host) &&
++       candidate.host[candidate.host.size() - existing.host.size() - 1] == '.');
++  if (!overlaps || existing.mode == AccessMode::kReject) {
++    return true;
++  }
++  return candidate.mode == existing.mode &&
++         candidate.proxy_group_id == existing.proxy_group_id;
++}
++
+ GroupValidation ValidateSiteProxyRuleGroup(
+     const OwnershipKey& expected_owner,
+     const SiteProxyRuleGroup* group,
+diff --git a/components/aegis_access/site_proxy_rule_group.h b/components/aegis_access/site_proxy_rule_group.h
+index 69e71ed6de87de9c47d2c6a7e8e5fe5aa181633e..3a13ec2ed6f65b16bca1f67e6bf0fe6d766d93ce 100644
+--- a/components/aegis_access/site_proxy_rule_group.h
++++ b/components/aegis_access/site_proxy_rule_group.h
+@@ -5,6 +5,7 @@
+ 
+ #include <cstdint>
+ #include <string>
++#include <string_view>
+ #include <vector>
+ 
+ #include "components/aegis_access/access_route_types.h"
+@@ -99,6 +100,23 @@ struct GroupValidation {
+       default;
+ };
+ 
++// A borrowed view of a validated rule's host-level transport requirements.
++// Ownership, canonical host spelling and rule shape are validated by the
++// caller. This check does not grant authority or match a request's site scope.
++struct SiteProxyTransportRule {
++  std::string_view host;
++  bool include_subdomains = false;
++  AccessMode mode = AccessMode::kInvalid;
++  std::string_view proxy_group_id;
++};
++
++// Ordinary site mutations cover one exact host and all browser-permitted
++// schemes/ports. The current partition transport cannot distinguish top-level
++// sites, ports or schemes for that host. Reject overlapping rules requiring
++// a different mode or proxy group before publishing a candidate.
++bool IsSiteProxyTransportCompatible(const SiteProxyTransportRule& candidate,
++                                    const SiteProxyTransportRule& existing);
++
+ // Validates the atomic HTTP/HTTPS member pair supplied by a trusted adapter.
+ // expected_owner comes from the native service/storage context, independently
+ // of the stored group. The other inputs must already contain canonical
+-- 
+2.54.0 (Apple Git-157)
+
