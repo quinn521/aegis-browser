@@ -13,12 +13,14 @@ const suspiciousSnapshot: PageSnapshot = {
 };
 
 function cloneSettings(
-  overrides: Partial<AegisSettings> = {},
+  overrides: Partial<Omit<AegisSettings, "modules">> & {
+    modules?: Partial<AegisSettings["modules"]>;
+  } = {},
 ): AegisSettings {
   return {
     ...DEFAULT_SETTINGS,
     ...overrides,
-    modules: { ...(overrides.modules ?? DEFAULT_SETTINGS.modules) },
+    modules: { ...DEFAULT_SETTINGS.modules, ...overrides.modules },
     trackerWhitelist: [
       ...(overrides.trackerWhitelist ?? DEFAULT_SETTINGS.trackerWhitelist),
     ],
@@ -31,6 +33,19 @@ function cloneSettings(
     phishAllowlist: [
       ...(overrides.phishAllowlist ?? DEFAULT_SETTINGS.phishAllowlist),
     ],
+  };
+}
+
+function makeCookie(overrides: Partial<StorageCookie> = {}): StorageCookie {
+  return {
+    name: "analytics",
+    value: "1",
+    domain: "example.com",
+    path: "/",
+    secure: true,
+    httpOnly: false,
+    session: true,
+    ...overrides,
   };
 }
 
@@ -54,7 +69,6 @@ function makeHarness(initialSettings = cloneSettings()) {
       currentSettings = cloneSettings({
         ...currentSettings,
         ...patch,
-        modules: patch.modules ?? currentSettings.modules,
       });
       return cloneSettings(currentSettings);
     },
@@ -132,7 +146,7 @@ describe("PolicyEngine", () => {
     expect(harness.clearRules).not.toHaveBeenCalled();
   });
 
-  it("refreshes tracker rules for tracker-relevant settings", async () => {
+  it("publishes updated whitelist domains and removes stale exemptions", async () => {
     const harness = makeHarness();
     const engine = new PolicyEngine(harness.ports);
     await engine.init();
@@ -140,6 +154,29 @@ describe("PolicyEngine", () => {
     await engine.updateSettings({ trackerWhitelist: ["trusted.example"] });
 
     expect(harness.applyRules).toHaveBeenCalledTimes(2);
+    const initialRules = harness.applyRules.mock.calls[1][0];
+    expect(initialRules.length).toBeGreaterThan(0);
+    for (const rule of initialRules) {
+      expect(rule.excludedDomains).toEqual(["trusted.example"]);
+    }
+
+    await engine.updateSettings({ trackerWhitelist: ["replacement.example"] });
+
+    expect(harness.applyRules).toHaveBeenCalledTimes(3);
+    const replacementRules = harness.applyRules.mock.calls[2][0];
+    expect(replacementRules.length).toBeGreaterThan(0);
+    for (const rule of replacementRules) {
+      expect(rule.excludedDomains).toEqual(["replacement.example"]);
+    }
+
+    await engine.updateSettings({ trackerWhitelist: [] });
+
+    expect(harness.applyRules).toHaveBeenCalledTimes(4);
+    const clearedRules = harness.applyRules.mock.calls[3][0];
+    expect(clearedRules.length).toBeGreaterThan(0);
+    for (const rule of clearedRules) {
+      expect(rule.excludedDomains ?? []).toEqual([]);
+    }
   });
 
   it("clears rules when tracker protection is disabled and reapplies on enable", async () => {
@@ -239,7 +276,6 @@ describe("PolicyEngine", () => {
     const harness = makeHarness(
       cloneSettings({
         modules: {
-          ...DEFAULT_SETTINGS.modules,
           phish: false,
         },
       }),
@@ -315,7 +351,6 @@ describe("PolicyEngine", () => {
     const harness = makeHarness(
       cloneSettings({
         modules: {
-          ...DEFAULT_SETTINGS.modules,
           privacyAi: false,
         },
       }),
@@ -344,33 +379,21 @@ describe("PolicyEngine", () => {
     const engine = new PolicyEngine(harness.ports);
     await engine.init();
 
-    const necessary: StorageCookie = {
-      name: "session",
-      value: "1",
-      domain: "example.com",
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      session: true,
-    };
-    const analytics: StorageCookie = {
-      name: "analytics",
-      value: "1",
-      domain: "example.com",
-      path: "/",
-      secure: true,
-      httpOnly: false,
-      session: true,
-    };
+    const necessary = makeCookie({ name: "_ga" });
+    const analytics = makeCookie();
 
     harness.listCookies.mockResolvedValueOnce([necessary, analytics]);
     harness.classifyCookie.mockImplementation((cookie) =>
-      cookie.name === "session" ? "necessary" : "analytics",
+      cookie.name === "_ga" ? "necessary" : "analytics",
     );
 
     await expect(
       engine.enforceCookiePolicy("https://example.com/"),
     ).resolves.toBe(1);
+    expect(harness.classifyCookie).toHaveBeenCalledTimes(2);
+    expect(harness.classifyCookie).toHaveBeenCalledWith(necessary);
+    expect(harness.classifyCookie).toHaveBeenCalledWith(analytics);
+    expect(harness.removeCookie).not.toHaveBeenCalledWith(necessary);
     expect(harness.removeCookie).toHaveBeenCalledTimes(1);
     expect(harness.removeCookie).toHaveBeenCalledWith(analytics);
   });
@@ -380,15 +403,7 @@ describe("PolicyEngine", () => {
     const engine = new PolicyEngine(harness.ports);
     await engine.init();
 
-    const analytics: StorageCookie = {
-      name: "analytics",
-      value: "1",
-      domain: "example.com",
-      path: "/",
-      secure: true,
-      httpOnly: false,
-      session: true,
-    };
+    const analytics = makeCookie();
 
     harness.listCookies.mockResolvedValueOnce([analytics]);
     harness.classifyCookie.mockReturnValueOnce("analytics");
@@ -403,7 +418,6 @@ describe("PolicyEngine", () => {
     const harness = makeHarness(
       cloneSettings({
         modules: {
-          ...DEFAULT_SETTINGS.modules,
           phish: false,
         },
       }),
@@ -509,15 +523,7 @@ describe("PolicyEngine", () => {
     const engine = new PolicyEngine(harness.ports);
     await engine.init();
 
-    const analytics: StorageCookie = {
-      name: "_ga",
-      value: "1",
-      domain: ".trusted.example",
-      path: "/",
-      secure: true,
-      httpOnly: false,
-      session: true,
-    };
+    const analytics = makeCookie({ name: "_ga", domain: ".trusted.example" });
     harness.listCookies.mockResolvedValueOnce([analytics]);
     harness.classifyCookie.mockReturnValueOnce("analytics");
 
@@ -531,15 +537,7 @@ describe("PolicyEngine", () => {
     const engine = new PolicyEngine(harness.ports);
     await engine.init();
 
-    const analytics: StorageCookie = {
-      name: "_ga",
-      value: "1",
-      domain: "example.com",
-      path: "/",
-      secure: true,
-      httpOnly: false,
-      session: true,
-    };
+    const analytics = makeCookie({ name: "_ga" });
     harness.listCookies.mockResolvedValueOnce([analytics]);
 
     await expect(engine.enforceCookiePolicy()).resolves.toBe(1);
