@@ -1,3 +1,34 @@
+From 0965196f0b8963bed5dfb718d0b01e28e5765bac Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Tue, 22 Sep 2026 13:16:58 +0800
+Subject: [PATCH] fix: restore native GN dependency ownership
+
+Give shared test support one owner, export public header dependencies,
+and add missing direct include dependencies. Synchronize affected overlay
+BUILD files with the transport patch; retain the fixed Chromium pin.
+---
+ chrome/browser/BUILD.gn                       |  2 +
+ chrome/browser/actor/BUILD.gn                 |  2 +
+ chrome/browser/aegis/BUILD.gn                 | 50 ++++++++++++++++---
+ chrome/browser/devtools/BUILD.gn              |  4 ++
+ chrome/browser/download/BUILD.gn              |  2 +
+ chrome/browser/download/download_ui_model.cc  |  2 +-
+ chrome/browser/net/BUILD.gn                   |  6 ++-
+ chrome/browser/prefs/BUILD.gn                 |  7 ++-
+ chrome/browser/profiles/BUILD.gn              |  2 +
+ chrome/browser/ui/toolbar/BUILD.gn            |  4 ++
+ .../ui/toolbar/pinned_toolbar/BUILD.gn        |  4 ++
+ chrome/browser/ui/webui/aegis/BUILD.gn        |  2 +
+ chrome/browser/ui/webui/downloads/BUILD.gn    |  7 +++
+ .../webui/downloads/downloads_list_tracker.cc |  2 +-
+ chrome/browser/ui/webui/help/BUILD.gn         | 13 +++--
+ chrome/test/BUILD.gn                          |  5 ++
+ components/aegis_access/BUILD.gn              | 29 ++++++++---
+ .../internal/common/parallel_download_utils.h |  4 +-
+ .../public/common/parallel_download_configs.h |  5 ++
+ net/dns/BUILD.gn                              |  1 +
+ 20 files changed, 126 insertions(+), 27 deletions(-)
+
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 index 9488a27700..71c6764361 100644
 --- a/chrome/browser/BUILD.gn
@@ -535,3 +566,5 @@ index d97fb126e1..24cf8b2b8f 100644
      "//chrome/test/*",
      "//content/shell:content_shell_lib",
      "//content/test:*",
+-- 
+2.54.0 (Apple Git-157)
