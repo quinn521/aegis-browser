@@ -181,6 +181,8 @@ def replay_tree(repo: Path, base: str, patches: Path, overlay: Path | None = Non
             )
         if overlay is not None:
             entries = []
+            gitlinks = {row.split("\t", 1)[1] for row in git(repo, "ls-files", "--stage", env=env).splitlines()
+                        if row.startswith("160000 ")}
             for path in sorted(overlay.rglob("*")):
                 if path.is_symlink():
                     raise ValueError(f"overlay symlinks are not supported: {path}")
@@ -189,6 +191,10 @@ def replay_tree(repo: Path, base: str, patches: Path, overlay: Path | None = Non
                 relative = path.relative_to(overlay).as_posix()
                 if any(part == ".git" for part in path.relative_to(overlay).parts):
                     raise ValueError(f"unsafe overlay path: {relative}")
+                if any(relative == link or relative.startswith(link + "/") for link in gitlinks):
+                    if relative.startswith("v8/"):
+                        continue  # V8 overlays are verified in the separate V8 repository.
+                    raise ValueError(f"overlay maps into an unsupported submodule: {relative}")
                 blob = git(repo, "hash-object", "-w", "--", str(path))
                 mode = "100755" if path.stat().st_mode & 0o111 else "100644"
                 entries.append(f"{mode} {blob}\t{relative}\0")
@@ -431,7 +437,7 @@ def execute(options: argparse.Namespace) -> Path:
         v8_head = git(v8, "rev-parse", "HEAD")
         if not is_ancestor(v8, v8_base, v8_head):
             raise ValueError("pinned V8 commit is not an ancestor of the checkout")
-        v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR)
+        v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR, OVERLAY_DIR / "v8")
         out = Path(options.out).expanduser().resolve() if options.out else src / "out" / "AegisAccessTests"
         if not out.is_relative_to(src / "out"):
             raise ValueError("output must be inside this candidate's src/out")

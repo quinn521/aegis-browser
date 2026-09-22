@@ -14,6 +14,30 @@ import chromium_access_gtests as sut
 
 
 class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
+    def test_chromium_overlay_preserves_v8_gitlink(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            repo, patches, overlay = (root / n for n in ("repo", "patches", "overlay"))
+            for directory in (repo, patches, overlay):
+                directory.mkdir()
+            sut.git(repo, "init", "-q")
+            sut.git(repo, "config", "user.name", "Fixture")
+            sut.git(repo, "config", "user.email", "fixture@example.invalid")
+            (repo / "source").write_text("base\n")
+            sut.git(repo, "add", ".")
+            sut.git(repo, "commit", "-qm", "base")
+            v8 = sut.git(repo, "rev-parse", "HEAD")
+            sut.git(repo, "update-index", "--add", "--cacheinfo", f"160000,{v8},v8")
+            sut.git(repo, "commit", "-qm", "v8 link")
+            base = sut.git(repo, "rev-parse", "HEAD")
+            (repo / "source").write_text("patched\n")
+            (patches / "a.patch").write_text(sut.git(repo, "diff", "--", "source") + "\n")
+            (patches / "series").write_text("a.patch\n")
+            (overlay / "v8").mkdir()
+            (overlay / "v8/source").write_text("v8 overlay\n")
+            tree = sut.replay_tree(repo, base, patches, overlay)
+            self.assertEqual(sut.git(repo, "ls-tree", tree, "v8"), f"160000 commit {v8}\tv8")
+
     def test_real_patch_overlay_identity_rejects_drift_and_extra_files(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -67,7 +91,7 @@ class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
             (root / "src").mkdir()
             (root / "src/BUILD.gn").write_text("")
             report = root / "report"
-            options = sut.parser().parse_args(["--report-dir", str(report)])
+            options = sut.parser().parse_args(["--report-dir", str(report), "--min-free-gib", "1"])
             with mock.patch.object(sut, "resolve_chromium_root", return_value=root), \
                     mock.patch.object(sut, "require_clean", side_effect=ValueError("dirty")):
                 with self.assertRaisesRegex(ValueError, "dirty"):
@@ -84,7 +108,7 @@ class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
             (root / "src").mkdir()
             (root / "src/BUILD.gn").write_text("")
             report = root / "report"
-            options = sut.parser().parse_args(["--report-dir", str(report)])
+            options = sut.parser().parse_args(["--report-dir", str(report), "--min-free-gib", "1"])
             failure = subprocess.CalledProcessError(7, ["fake-gn"], output="original GN diagnostic")
             with mock.patch.object(sut, "resolve_chromium_root", return_value=root), \
                     mock.patch.object(sut, "require_clean"), \
