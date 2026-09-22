@@ -14,6 +14,41 @@ import chromium_access_gtests as sut
 
 
 class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
+    def test_product_commit_during_admission_is_rejected(self):
+        with tempfile.TemporaryDirectory() as root:
+            product = Path(root)
+            sut.git(product, "init", "-q")
+            sut.git(product, "config", "user.name", "Fixture")
+            sut.git(product, "config", "user.email", "fixture@example.invalid")
+            file = product / "overlay"
+            file.write_text("A")
+            sut.git(product, "add", ".")
+            sut.git(product, "commit", "-qm", "A")
+            original_git = sut.git
+
+            def repo_git(repo, *args, **kwargs):
+                if repo == product:
+                    return original_git(repo, *args, **kwargs)
+                return "head"
+            mutated = False
+
+            def mutate_product(*_args):
+                nonlocal mutated
+                if not mutated:
+                    file.write_text("B")
+                    original_git(product, "add", ".")
+                    original_git(product, "commit", "-qm", "B")
+                    mutated = True
+                return "tree"
+            with mock.patch.object(sut, "ROOT", product), \
+                    mock.patch.object(sut, "require_clean"), \
+                    mock.patch.object(sut, "git", side_effect=repo_git), \
+                    mock.patch.object(sut, "is_ancestor", return_value=True), \
+                    mock.patch.object(sut, "verify_tree", side_effect=mutate_product):
+                with self.assertRaisesRegex(ValueError, "product HEAD changed during source admission"):
+                    sut.verify_sources(Path("/candidate"))
+            self.assertTrue(mutated)
+
     def test_command_boundary_rejects_shell_strings_and_unsafe_executables(self):
         with tempfile.TemporaryDirectory() as root:
             not_executable = Path(root) / "data"

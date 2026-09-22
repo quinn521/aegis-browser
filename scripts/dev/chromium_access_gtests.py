@@ -402,6 +402,8 @@ def verify_stable(sources: list[tuple[Path, str, str]], args_file: Path, args_ha
 
 def verify_sources(src: Path) -> dict[str, object]:
     require_clean(ROOT, "product", ignore_submodules=True)
+    product_head = git(ROOT, "rev-parse", "HEAD")
+    product_tree = git(ROOT, "rev-parse", product_head + "^{tree}")
     require_clean(src, "Chromium", ignore_submodules=True)
     pin = read_pin(COMMIT_FILE)
     head = git(src, "rev-parse", "HEAD")
@@ -415,8 +417,10 @@ def verify_sources(src: Path) -> dict[str, object]:
     if not is_ancestor(v8, v8_base, v8_head):
         raise ValueError("pinned V8 commit is not an ancestor of the checkout")
     v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR, OVERLAY_DIR / "v8")
-    return {"productHead": git(ROOT, "rev-parse", "HEAD"),
-            "productTree": git(ROOT, "rev-parse", "HEAD^{tree}"),
+    require_clean(ROOT, "product", ignore_submodules=True)
+    if git(ROOT, "rev-parse", "HEAD") != product_head:
+        raise ValueError("product HEAD changed during source admission")
+    return {"productHead": product_head, "productTree": product_tree,
             "chromiumVersion": read_pin(VERSION_FILE), "chromiumPin": pin,
             "chromiumHead": head, "chromiumTree": tree,
             "sourceComposition": "pinned base + ordered patches + exact product overlay",
