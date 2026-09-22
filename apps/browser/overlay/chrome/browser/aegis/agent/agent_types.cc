@@ -61,6 +61,16 @@ bool AgentModelDestination::IsValid() const {
 
 bool AgentTaskScope::IsValid() const {
   if (!budgets.IsValid() || !model_destination.IsValid() ||
+      (model_fallback_destination &&
+       (!model_fallback_destination->IsValid() ||
+        *model_fallback_destination == model_destination)) ||
+      static_cast<int>(model_selection_mode) <
+          static_cast<int>(AgentModelSelectionMode::kFixed) ||
+      static_cast<int>(model_selection_mode) >
+          static_cast<int>(AgentModelSelectionMode::kLocalOnly) ||
+      model_catalog_revision < 0 ||
+      (model_selection_mode == AgentModelSelectionMode::kFixed &&
+       model_fallback_destination) ||
       allowed_tools.empty() || allowed_tools.size() > 128u ||
       allowed_origins.size() > 64u || allowed_tab_ids.size() > 20u ||
       allowed_data_classes.empty() || allowed_data_classes.size() > 6u ||
@@ -106,6 +116,10 @@ bool AgentTaskScope::AllowsDataClass(AgentDataClass data_class) const {
 bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
   if (!budgets.IsNoBroaderThan(other.budgets) ||
       model_destination != other.model_destination ||
+      model_selection_mode != other.model_selection_mode ||
+      model_catalog_revision != other.model_catalog_revision ||
+      (model_fallback_destination &&
+       model_fallback_destination != other.model_fallback_destination) ||
       !IsSubset(allowed_tab_ids, other.allowed_tab_ids) ||
       (tab_metadata_window_id != 0 &&
        tab_metadata_window_id != other.tab_metadata_window_id) ||
@@ -118,6 +132,18 @@ bool AgentTaskScope::IsNoBroaderThan(const AgentTaskScope& other) const {
         return std::ranges::find(other.allowed_origins, origin) !=
                other.allowed_origins.end();
       });
+}
+
+bool AgentModelRoutingMetrics::IsValid() const {
+  return typesafe_outcome.size() <= 64u && typesafe_model.size() <= 128u &&
+         typesafe_decisions.size() <= 512u && typesafe_input_tokens >= 0 &&
+         typesafe_output_tokens >= 0 && typesafe_latency_ms >= 0 &&
+         (!primary_model_cost_microusd_per_million_tokens ||
+          *primary_model_cost_microusd_per_million_tokens >= 0) &&
+         (!fallback_model_cost_microusd_per_million_tokens ||
+          *fallback_model_cost_microusd_per_million_tokens >= 0) &&
+         model_input_tokens >= 0 && model_output_tokens >= 0 &&
+         model_latency_ms >= 0;
 }
 
 bool AgentDocumentRef::IsValid() const {

@@ -75,9 +75,24 @@ struct AgentModelEvent {
   AgentModelUsage usage;
 };
 
+enum class AgentModelRequestFailure {
+  kNone = 0,
+  kBusy = 1,
+  kConfiguration = 2,
+  kNetwork = 3,
+  kTimeout = 4,
+  kRateLimited = 5,
+  kServiceUnavailable = 6,
+  kHttpPermanent = 7,
+  kResponseFormat = 8,
+};
+
+bool IsTransientAgentModelFailure(AgentModelRequestFailure failure);
+
 struct AgentModelParseResult {
   std::vector<AgentModelEvent> events;
   std::string error;
+  AgentModelRequestFailure failure = AgentModelRequestFailure::kNone;
 
   bool ok() const { return error.empty(); }
 };

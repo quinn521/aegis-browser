@@ -990,6 +990,10 @@ std::optional<AgentTaskPlan> ParseAndValidateTaskPlan(
   plan.scope.allowed_tab_ids = maximum_scope.allowed_tab_ids;
   plan.scope.budgets = maximum_scope.budgets;
   plan.scope.model_destination = maximum_scope.model_destination;
+  plan.scope.model_fallback_destination =
+      maximum_scope.model_fallback_destination;
+  plan.scope.model_selection_mode = maximum_scope.model_selection_mode;
+  plan.scope.model_catalog_revision = maximum_scope.model_catalog_revision;
 
   base::flat_set<std::string> step_ids;
   for (const base::Value& value : *steps) {

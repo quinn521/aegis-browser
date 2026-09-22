@@ -36,6 +36,18 @@ constexpr char kValidResponse[] = R"({
     "entry_kind":{
       "type":"choice","choice":"web_search","confidence":0.90,
       "probabilities":{"browser_only":0.05,"web_search":0.95}
+    },
+    "reasoning_need":{
+      "type":"choice","choice":"strong","confidence":0.91,
+      "probabilities":{"unknown":0.03,"basic":0.06,"strong":0.91}
+    },
+    "context_need":{
+      "type":"choice","choice":"long","confidence":0.88,
+      "probabilities":{"unknown":0.04,"short":0.08,"long":0.88}
+    },
+    "output_need":{
+      "type":"choice","choice":"comprehensive","confidence":0.90,
+      "probabilities":{"unknown":0.02,"short_extraction":0.03,"comprehensive":0.90,"multi_step":0.05}
     }
   },
   "usage":{"input_tokens":42,"output_tokens":18}
@@ -55,7 +67,8 @@ class TypeSafeGoalRouterClientTest : public testing::Test {
 };
 
 TEST_F(TypeSafeGoalRouterClientTest, SendsOnlyBoundedGoalDecisionRequest) {
-  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> done;
+  base::test::TestFuture<bool, std::string,
+                         std::optional<TypeSafeGoalAnalysis>> done;
   ASSERT_TRUE(client_.Start(kGoal, kApiKey, done.GetCallback()));
   const GURL endpoint(kTypeSafeSystemOneEndpoint);
   factory_.WaitForRequest(endpoint);
@@ -81,8 +94,9 @@ TEST_F(TypeSafeGoalRouterClientTest, SendsOnlyBoundedGoalDecisionRequest) {
   EXPECT_EQ(payload->size(), 3u);
   const base::DictValue* questions = payload->FindDict("questions");
   ASSERT_TRUE(questions);
-  EXPECT_EQ(questions->size(), 2u);
-  for (std::string_view name : {"workflow", "entry_kind"}) {
+  EXPECT_EQ(questions->size(), 5u);
+  for (std::string_view name : {"workflow", "entry_kind", "reasoning_need",
+                                "context_need", "output_need"}) {
     const base::DictValue* question = questions->FindDict(name);
     ASSERT_TRUE(question);
     EXPECT_EQ(question->size(), 3u);
@@ -101,9 +115,18 @@ TEST_F(TypeSafeGoalRouterClientTest, SendsOnlyBoundedGoalDecisionRequest) {
                                                           kValidResponse));
   EXPECT_TRUE(done.Get<0>()) << done.Get<1>();
   ASSERT_TRUE(done.Get<2>());
-  EXPECT_EQ(done.Get<2>()->workflow, AgentWorkflowKind::kResearch);
-  EXPECT_EQ(done.Get<2>()->entry_kind, AgentGoalEntryKind::kWebSearch);
-  EXPECT_EQ(done.Get<2>()->target, kGoal);
+  EXPECT_EQ(done.Get<2>()->route.workflow, AgentWorkflowKind::kResearch);
+  EXPECT_EQ(done.Get<2>()->route.entry_kind, AgentGoalEntryKind::kWebSearch);
+  EXPECT_EQ(done.Get<2>()->route.target, kGoal);
+  EXPECT_EQ(done.Get<2>()->requirements.reasoning,
+            AgentReasoningNeed::kStrong);
+  EXPECT_EQ(done.Get<2>()->requirements.context, AgentContextNeed::kLong);
+  EXPECT_EQ(done.Get<2>()->requirements.output,
+            AgentOutputNeed::kComprehensive);
+  EXPECT_EQ(done.Get<2>()->model, "jev-1.13.0");
+  EXPECT_EQ(done.Get<2>()->input_tokens, 42);
+  EXPECT_EQ(done.Get<2>()->output_tokens, 18);
+  EXPECT_GE(done.Get<2>()->latency, base::TimeDelta());
 }
 
 TEST_F(TypeSafeGoalRouterClientTest,
@@ -136,7 +159,8 @@ TEST_F(TypeSafeGoalRouterClientTest,
 }
 
 TEST_F(TypeSafeGoalRouterClientTest, DoesNotRetryHttpFailure) {
-  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> done;
+  base::test::TestFuture<bool, std::string,
+                         std::optional<TypeSafeGoalAnalysis>> done;
   ASSERT_TRUE(client_.Start(kGoal, kApiKey, done.GetCallback()));
   const GURL endpoint(kTypeSafeSystemOneEndpoint);
   factory_.WaitForRequest(endpoint);
@@ -147,7 +171,8 @@ TEST_F(TypeSafeGoalRouterClientTest, DoesNotRetryHttpFailure) {
 }
 
 TEST_F(TypeSafeGoalRouterClientTest, CancelSettlesCallbackAndStopsRequest) {
-  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> done;
+  base::test::TestFuture<bool, std::string,
+                         std::optional<TypeSafeGoalAnalysis>> done;
   const std::optional<std::string> request_id =
       client_.Start(kGoal, kApiKey, done.GetCallback());
   ASSERT_TRUE(request_id);
@@ -160,7 +185,8 @@ TEST_F(TypeSafeGoalRouterClientTest, CancelSettlesCallbackAndStopsRequest) {
 
 TEST_F(TypeSafeGoalRouterClientTest,
        CancelledRequestDoesNotAffectReplacementRequest) {
-  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> first;
+  base::test::TestFuture<bool, std::string,
+                         std::optional<TypeSafeGoalAnalysis>> first;
   const std::optional<std::string> first_id =
       client_.Start(kGoal, kApiKey, first.GetCallback());
   ASSERT_TRUE(first_id);
@@ -168,7 +194,8 @@ TEST_F(TypeSafeGoalRouterClientTest,
   factory_.WaitForRequest(endpoint);
   ASSERT_TRUE(client_.Cancel(*first_id));
 
-  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>>
+  base::test::TestFuture<bool, std::string,
+                         std::optional<TypeSafeGoalAnalysis>>
       replacement;
   const std::optional<std::string> replacement_id =
       client_.Start(kGoal, kApiKey, replacement.GetCallback());
@@ -182,7 +209,8 @@ TEST_F(TypeSafeGoalRouterClientTest,
 }
 
 TEST_F(TypeSafeGoalRouterClientTest, TimesOutWithoutRetry) {
-  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> done;
+  base::test::TestFuture<bool, std::string,
+                         std::optional<TypeSafeGoalAnalysis>> done;
   ASSERT_TRUE(client_.Start(kGoal, kApiKey, done.GetCallback()));
   factory_.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
   task_environment_.FastForwardBy(base::Seconds(2));

@@ -183,6 +183,30 @@ bool AgentTask::HasExpired(base::Time now) const {
   return now - created_at_ >= scope_.budgets.max_duration;
 }
 
+bool AgentTask::SetInitialModelRoutingMetrics(
+    AgentModelRoutingMetrics metrics) {
+  if (!metrics.IsValid()) {
+    return false;
+  }
+  model_routing_metrics_ = std::move(metrics);
+  return true;
+}
+
+void AgentTask::RecordModelObservation(int64_t input_tokens,
+                                       int64_t output_tokens,
+                                       base::TimeDelta latency) {
+  if (input_tokens < 0 || output_tokens < 0 || latency.is_negative()) {
+    return;
+  }
+  model_routing_metrics_.model_input_tokens += input_tokens;
+  model_routing_metrics_.model_output_tokens += output_tokens;
+  model_routing_metrics_.model_latency_ms += latency.InMilliseconds();
+}
+
+void AgentTask::RecordModelFallback() {
+  model_routing_metrics_.fallback_used = true;
+}
+
 void AgentTask::AddObserver(AgentTaskObserver* observer) {
   observers_.AddObserver(observer);
 }

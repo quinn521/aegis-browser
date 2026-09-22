@@ -35,6 +35,7 @@ struct StoredAgentTask {
   int tool_calls_used = 0;
   int model_calls_used = 0;
   int network_requests_used = 0;
+  AgentModelRoutingMetrics model_routing_metrics;
   base::Time created_at;
   base::Time updated_at;
   RecoveryDisposition recovery = RecoveryDisposition::kRequireFreshConsent;
@@ -59,6 +60,7 @@ struct AgentTaskStoreRecord {
   int tool_calls_used = 0;
   int model_calls_used = 0;
   int network_requests_used = 0;
+  AgentModelRoutingMetrics model_routing_metrics;
   base::Time created_at;
 };
 
@@ -115,6 +117,8 @@ class AgentTaskStore {
 
   static std::optional<AgentTaskScope> DeserializeScope(
       std::string_view scope_json);
+  static std::optional<AgentModelRoutingMetrics>
+  DeserializeModelRoutingMetrics(std::string_view metrics_json);
   // Goals and persisted summaries share the same secret/control-character
   // boundary. Callers must reject unsafe values before queueing asynchronous
   // storage work so an invalid task is never exposed to the UI.
@@ -128,6 +132,8 @@ class AgentTaskStore {
 
  private:
   static std::string SerializeScope(const AgentTaskScope& scope);
+  static std::string SerializeModelRoutingMetrics(
+      const AgentModelRoutingMetrics& metrics);
   static int64_t SerializeTime(base::Time time);
   static base::Time DeserializeTime(int64_t value);
 

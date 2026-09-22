@@ -132,6 +132,45 @@ void AddStrings(content::WebUIDataSource* source) {
       "API 金鑰（選填）");
   add("detectModels", "Detect models", "检测可用模型", "偵測可用模型");
   add("saveModel", "Save model settings", "保存模型设置", "儲存模型設定");
+  add("modelRoutingMode", "Model routing", "模型路由", "模型路由");
+  add("modelRoutingFixed", "Fixed model", "固定模型", "固定模型");
+  add("modelRoutingBalanced", "Auto · balanced", "自动 · 均衡",
+      "自動 · 均衡");
+  add("modelRoutingQuality", "Auto · quality", "自动 · 质量",
+      "自動 · 品質");
+  add("modelRoutingCost", "Auto · cost", "自动 · 成本", "自動 · 成本");
+  add("modelRoutingLocalOnly", "Auto · local only", "自动 · 仅本地",
+      "自動 · 僅本機");
+  add("modelQualityScore", "Evaluated quality (0–100)",
+      "评测质量（0–100）", "評測品質（0–100）");
+  add("modelLatencyScore", "Latency score (lower is faster)",
+      "延迟评分（越低越快）", "延遲評分（越低越快）");
+  add("modelCost", "Cost in micro-USD / 1M tokens",
+      "成本（微美元 / 百万 token）", "成本（微美元 / 百萬 token）");
+  add("modelCostUnknown", "Leave empty if unknown", "未知请留空",
+      "未知請留空");
+  add("modelSupportsTools", "Tool calls", "支持工具调用", "支援工具呼叫");
+  add("modelSupportsLongContext", "Long context", "支持长上下文",
+      "支援長上下文");
+  add("modelSupportsStrongReasoning", "Strong reasoning", "支持强推理",
+      "支援強推理");
+  add("addModelPool", "Add current model to pool", "将当前模型加入池",
+      "將目前模型加入池");
+  add("removeModelPool", "Remove", "移除", "移除");
+  add("modelRoutingSaved", "Model routing saved", "模型路由已保存",
+      "模型路由已儲存");
+  add("modelRoutingError", "Model routing settings are invalid",
+      "模型路由设置无效", "模型路由設定無效");
+  add("fallbackModel", "Authorized fallback", "已授权备用模型",
+      "已授權備用模型");
+  add("typesafeObservation", "TypeSafe used for this task",
+      "本任务 TypeSafe 观测", "本任務 TypeSafe 觀測");
+  add("modelUsage", "Generation model usage", "生成模型用量",
+      "生成模型用量");
+  add("fallbackUsed", "Fallback used", "已使用备用模型",
+      "已使用備用模型");
+  add("estimatedModelCost", "Estimated generation cost",
+      "生成模型估算成本", "生成模型估算成本");
   add("modelDetected", "Model list retrieved", "模型列表获取成功",
       "模型清單取得成功");
   add("modelSaved", "Model settings saved", "模型设置已保存", "模型設定已儲存");

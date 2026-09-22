@@ -20,6 +20,13 @@
 
 namespace aegis::agent {
 
+bool IsTransientAgentModelFailure(AgentModelRequestFailure failure) {
+  return failure == AgentModelRequestFailure::kNetwork ||
+         failure == AgentModelRequestFailure::kTimeout ||
+         failure == AgentModelRequestFailure::kRateLimited ||
+         failure == AgentModelRequestFailure::kServiceUnavailable;
+}
+
 bool IsQwenModelName(std::string_view model) {
   const std::string normalized = base::ToLowerASCII(model);
   for (size_t start = normalized.find("qwen"); start != std::string::npos;

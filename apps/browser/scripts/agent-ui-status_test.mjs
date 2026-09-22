@@ -135,18 +135,24 @@ const modelCode = ts.transpileModule(modelFunctions.map(node => node.getText(tre
 const savedModel = {
   modelConfigured: true, modelProvider: 'openai',
   modelBaseUrl: 'http://127.0.0.1:8000/v1', modelName: 'previous-model', lastError: '',
+  modelSelectionMode: 0, modelPool: [],
 };
 const requestedModel = 'Qwen3.6-35B-A3B-Uncensored-Heretic-MLX-4bit';
 function modelHarness(initial = savedModel) {
   const fields = new Map();
   const field = name => {
-    if (!fields.has(name)) fields.set(name, {value: '', textContent: '', disabled: false, open: true});
+    if (!fields.has(name)) fields.set(name, {
+      value: '', textContent: '', disabled: false, open: true,
+      replaceChildren() {}, append() {}, addEventListener() {},
+    });
     return fields.get(name);
   };
   const calls = [];
   let response = {snapshot: {...savedModel, modelName: requestedModel}};
   const sandbox = vm.createContext({
-    element: field, modelBusy: false, modelFormInitialized: false, snapshot: initial,
+    element: field, modelBusy: false, modelRoutingBusy: false,
+    modelFormInitialized: false, snapshot: initial,
+    document: {createElement: tag => new TestElement(tag)},
     loadTimeData: {getString: key => key},
     proxy: {handler: {configureModel: async (...args) => {
       calls.push(args);
@@ -268,7 +274,7 @@ const typesafeCode = ts.transpileModule(
     {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText;
 function typesafeHarness(initial = {
   typesafeEnabled: false, typesafeKeyConfigured: false,
-  typesafeSettingsError: 0, lastError: '',
+  typesafeSettingsError: 0, lastError: '', modelSelectionMode: 0,
 }) {
   const fields = new Map();
   const field = name => {
@@ -282,6 +288,7 @@ function typesafeHarness(initial = {
   const sandbox = vm.createContext({
     element: field, typesafeBusy: false, typesafeEnabledDirty: false,
     snapshot: initial, loadTimeData: {getString: key => key},
+    ModelSelectionMode: {kLocalOnly: 4},
     TypeSafeSettingsError: {kNone: 0, kValidation: 1, kStorage: 2, kSuperseded: 3},
     proxy: {handler: {configureTypeSafe: async (...args) => {
       calls.push(args);
@@ -385,6 +392,7 @@ const actionContext = vm.createContext({
   Workflow: {kResearch: 0, kBrowserSteward: 1, kSafeDownload: 2, kShopping: 3},
   AgentMode: {kAct: 1, kAutomate: 2}, selectedWorkflow: null,
   detectModels: () => {}, saveModel: () => {},
+  addCurrentModelToPool: () => {}, saveModelRouting: () => {}, snapshot: null,
   selectDetectedModel: () => {}, syncDetectedModel: () => {}, resetDetectedModels: () => {},
   proxy: {handler: {createTask: async (...args) => {
     actionCalls.push(args); return {snapshot: {taskId: ''}};

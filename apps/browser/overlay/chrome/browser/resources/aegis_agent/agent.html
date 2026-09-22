@@ -84,11 +84,36 @@
             <select id="model-options" hidden></select>
             <label for="model-api-key" id="api-key-label"></label>
             <input id="model-api-key" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
+            <label for="model-routing-mode" id="model-routing-mode-label"></label>
+            <select id="model-routing-mode">
+              <option value="0">$i18n{modelRoutingFixed}</option>
+              <option value="1">$i18n{modelRoutingBalanced}</option>
+              <option value="2">$i18n{modelRoutingQuality}</option>
+              <option value="3">$i18n{modelRoutingCost}</option>
+              <option value="4">$i18n{modelRoutingLocalOnly}</option>
+            </select>
+            <label for="model-quality-score" id="model-quality-label"></label>
+            <input id="model-quality-score" type="number" min="0" max="100" value="50">
+            <label for="model-latency-score" id="model-latency-label"></label>
+            <input id="model-latency-score" type="number" min="0" max="100" value="50">
+            <label for="model-cost" id="model-cost-label"></label>
+            <input id="model-cost" type="number" min="0" placeholder="$i18n{modelCostUnknown}">
+          </div>
+          <div class="model-capabilities">
+            <label><input id="model-supports-tools" type="checkbox" checked>
+              <span id="model-supports-tools-label"></span></label>
+            <label><input id="model-supports-long-context" type="checkbox" checked>
+              <span id="model-supports-long-context-label"></span></label>
+            <label><input id="model-supports-strong-reasoning" type="checkbox" checked>
+              <span id="model-supports-strong-reasoning-label"></span></label>
           </div>
           <div class="model-actions">
             <button id="detect-models-button" type="button"></button>
             <button id="save-model-button" class="primary" type="button"></button>
+            <button id="add-model-pool-button" type="button"></button>
           </div>
+          <ul id="model-pool" class="model-pool"></ul>
+          <p id="model-routing-feedback" class="help" role="status"></p>
           <p id="model-feedback" class="help" role="status"></p>
         </div>
       </details>

@@ -38,6 +38,18 @@ TEST(AegisAgentTaskStoreTest, SavesOnlyRedactedMetadataAndRecoversSafely) {
     ASSERT_TRUE(store.Initialize());
     AgentTask task("task-1", "goal stays in memory", AgentMode::kAct,
                    StoreTestScope());
+    AgentModelRoutingMetrics routing_metrics{
+        .typesafe_attempted = true,
+        .typesafe_qualified = true,
+        .typesafe_outcome = "qualified",
+        .typesafe_model = "jev-1.13.0",
+        .typesafe_decisions = "workflow=research:0.92",
+        .typesafe_input_tokens = 42,
+        .typesafe_output_tokens = 18,
+        .typesafe_latency_ms = 860,
+        .primary_model_cost_microusd_per_million_tokens = 125,
+        .fallback_model_cost_microusd_per_million_tokens = 250};
+    ASSERT_TRUE(task.SetInitialModelRoutingMetrics(routing_metrics));
     ASSERT_TRUE(task.TransitionTo(AgentTaskState::kPlanning, "test"));
     ASSERT_TRUE(
         task.TransitionTo(AgentTaskState::kAwaitingTaskConsent, "test"));
@@ -63,6 +75,18 @@ TEST(AegisAgentTaskStoreTest, SavesOnlyRedactedMetadataAndRecoversSafely) {
     EXPECT_EQ(recovered[0].tool_calls_used, 2);
     EXPECT_EQ(recovered[0].model_calls_used, 1);
     EXPECT_EQ(recovered[0].network_requests_used, 1);
+    EXPECT_TRUE(recovered[0].model_routing_metrics.typesafe_qualified);
+    EXPECT_EQ(recovered[0].model_routing_metrics.typesafe_model,
+              "jev-1.13.0");
+    EXPECT_EQ(recovered[0].model_routing_metrics.typesafe_latency_ms, 860);
+    EXPECT_EQ(recovered[0]
+                  .model_routing_metrics
+                  .primary_model_cost_microusd_per_million_tokens,
+              125);
+    EXPECT_EQ(recovered[0]
+                  .model_routing_metrics
+                  .fallback_model_cost_microusd_per_million_tokens,
+              250);
     std::optional<AgentTaskScope> restored_scope =
         AgentTaskStore::DeserializeScope(recovered[0].scope_json);
     ASSERT_TRUE(restored_scope);
@@ -125,6 +149,32 @@ TEST(AegisAgentTaskStoreTest, RoundTripsBrowserBoundWindowMetadataScope) {
   EXPECT_TRUE(restored->IsNoBroaderThan(scope));
   EXPECT_TRUE(scope.IsNoBroaderThan(*restored));
   EXPECT_FALSE(restored->AllowsTab(41));
+}
+
+TEST(AegisAgentTaskStoreTest, RoundTripsFrozenAutomaticModelBinding) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  AgentTaskStore store(temp_dir.GetPath().AppendASCII("tasks.sqlite"));
+  ASSERT_TRUE(store.Initialize());
+  AgentTaskScope scope = StoreTestScope();
+  scope.model_selection_mode = AgentModelSelectionMode::kQuality;
+  scope.model_catalog_revision = 12;
+  scope.model_fallback_destination = scope.model_destination;
+  scope.model_fallback_destination->model = "fixture-backup";
+  AgentTask task("automatic-model-binding", "route fixture", AgentMode::kAsk,
+                 scope);
+  ASSERT_TRUE(store.SaveTask(task, "route fixture", false));
+  const auto tasks = store.LoadUnfinishedTasks();
+  ASSERT_EQ(tasks.size(), 1u);
+  auto restored = AgentTaskStore::DeserializeScope(tasks[0].scope_json);
+  ASSERT_TRUE(restored);
+  EXPECT_EQ(restored->model_selection_mode,
+            AgentModelSelectionMode::kQuality);
+  EXPECT_EQ(restored->model_catalog_revision, 12);
+  ASSERT_TRUE(restored->model_fallback_destination);
+  EXPECT_EQ(restored->model_fallback_destination->model, "fixture-backup");
+  EXPECT_TRUE(restored->IsNoBroaderThan(scope));
+  EXPECT_TRUE(scope.IsNoBroaderThan(*restored));
 }
 
 TEST(AegisAgentTaskStoreTest, RejectsBroadenedOrMalformedStoredScope) {
@@ -380,9 +430,64 @@ TEST(AegisAgentTaskStoreTest, MigratesVersionSevenWithoutLosingMonitorState) {
   sql::Database inspected("AegisAgent");
   ASSERT_TRUE(inspected.Open(path));
   sql::MetaTable meta;
-  ASSERT_TRUE(meta.Init(&inspected, 8, 8));
-  EXPECT_EQ(meta.GetVersionNumber(), 8);
-  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 8);
+  ASSERT_TRUE(meta.Init(&inspected, 9, 9));
+  EXPECT_EQ(meta.GetVersionNumber(), 9);
+  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 9);
+}
+
+TEST(AegisAgentTaskStoreTest,
+     MigratesActualVersionEightSchemaWithoutRoutingMetricsColumn) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const auto path = temp_dir.GetPath().AppendASCII("version-eight.sqlite");
+  {
+    AgentTaskStore store(path);
+    ASSERT_TRUE(store.Initialize());
+    AgentTask task("version-eight-task", "legacy task", AgentMode::kAsk,
+                   StoreTestScope());
+    ASSERT_TRUE(store.SaveTask(task, "legacy task", false));
+  }
+  {
+    sql::Database legacy("AegisAgent");
+    ASSERT_TRUE(legacy.Open(path));
+    ASSERT_TRUE(legacy.DoesColumnExist("agent_tasks", "model_routing_json"));
+    ASSERT_TRUE(legacy.Execute(
+        "ALTER TABLE agent_tasks DROP COLUMN model_routing_json"));
+    ASSERT_FALSE(legacy.DoesColumnExist("agent_tasks", "model_routing_json"));
+    sql::MetaTable meta;
+    ASSERT_TRUE(meta.Init(&legacy, 8, 8));
+    ASSERT_TRUE(meta.SetVersionNumber(8));
+    ASSERT_TRUE(meta.SetCompatibleVersionNumber(8));
+  }
+  AgentTaskStore migrated(path);
+  ASSERT_TRUE(migrated.Initialize());
+  const auto tasks = migrated.LoadUnfinishedTasks();
+  ASSERT_EQ(tasks.size(), 1u);
+  EXPECT_EQ(tasks[0].task_id, "version-eight-task");
+  EXPECT_FALSE(tasks[0].model_routing_metrics.typesafe_attempted);
+  sql::Database inspected("AegisAgent");
+  ASSERT_TRUE(inspected.Open(path));
+  EXPECT_TRUE(inspected.DoesColumnExist("agent_tasks", "model_routing_json"));
+}
+
+TEST(AegisAgentTaskStoreTest, ReadsPreCostSnapshotRoutingMetrics) {
+  const auto metrics = AgentTaskStore::DeserializeModelRoutingMetrics(R"({
+    "typesafe_attempted":true,
+    "typesafe_qualified":false,
+    "typesafe_outcome":"fallback",
+    "typesafe_model":"",
+    "typesafe_decisions":"",
+    "typesafe_input_tokens":0,
+    "typesafe_output_tokens":0,
+    "typesafe_latency_ms":"10",
+    "fallback_used":false,
+    "model_input_tokens":"20",
+    "model_output_tokens":"30",
+    "model_latency_ms":"40"
+  })");
+  ASSERT_TRUE(metrics);
+  EXPECT_FALSE(metrics->primary_model_cost_microusd_per_million_tokens);
+  EXPECT_FALSE(metrics->fallback_model_cost_microusd_per_million_tokens);
 }
 
 TEST(AegisAgentTaskStoreTest,
@@ -432,9 +537,9 @@ TEST(AegisAgentTaskStoreTest, RejectsFutureVersionWithoutRewritingDatabase) {
     sql::Database future("AegisAgent");
     ASSERT_TRUE(future.Open(path));
     sql::MetaTable meta;
-    ASSERT_TRUE(meta.Init(&future, 9, 9));
-    ASSERT_TRUE(meta.SetVersionNumber(9));
-    ASSERT_TRUE(meta.SetCompatibleVersionNumber(9));
+    ASSERT_TRUE(meta.Init(&future, 10, 10));
+    ASSERT_TRUE(meta.SetVersionNumber(10));
+    ASSERT_TRUE(meta.SetCompatibleVersionNumber(10));
   }
   std::string before;
   ASSERT_TRUE(base::ReadFileToString(path, &before));

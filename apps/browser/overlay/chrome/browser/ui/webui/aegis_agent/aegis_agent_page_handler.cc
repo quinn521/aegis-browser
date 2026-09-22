@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/notreached.h"
+#include "base/numerics/safe_math.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -41,10 +42,48 @@ namespace {
 
 using aegis::agent::AgentDataClass;
 using aegis::agent::AgentMode;
+using aegis::agent::AgentContextNeed;
+using aegis::agent::AgentModelRequirements;
+using aegis::agent::AgentOutputNeed;
+using aegis::agent::AgentReasoningNeed;
 using aegis::agent::AgentRiskLevel;
 using aegis::agent::AgentTask;
 using aegis::agent::AgentTaskState;
 using aegis::agent::AgentWorkflowKind;
+
+std::optional<aegis::agent::AgentModelSelectionMode>
+ConvertModelSelectionMode(aegis_agent::mojom::ModelSelectionMode mode) {
+  switch (mode) {
+    case aegis_agent::mojom::ModelSelectionMode::kFixed:
+      return aegis::agent::AgentModelSelectionMode::kFixed;
+    case aegis_agent::mojom::ModelSelectionMode::kBalanced:
+      return aegis::agent::AgentModelSelectionMode::kBalanced;
+    case aegis_agent::mojom::ModelSelectionMode::kQuality:
+      return aegis::agent::AgentModelSelectionMode::kQuality;
+    case aegis_agent::mojom::ModelSelectionMode::kCost:
+      return aegis::agent::AgentModelSelectionMode::kCost;
+    case aegis_agent::mojom::ModelSelectionMode::kLocalOnly:
+      return aegis::agent::AgentModelSelectionMode::kLocalOnly;
+  }
+  return std::nullopt;
+}
+
+aegis_agent::mojom::ModelSelectionMode ConvertModelSelectionMode(
+    aegis::agent::AgentModelSelectionMode mode) {
+  switch (mode) {
+    case aegis::agent::AgentModelSelectionMode::kFixed:
+      return aegis_agent::mojom::ModelSelectionMode::kFixed;
+    case aegis::agent::AgentModelSelectionMode::kBalanced:
+      return aegis_agent::mojom::ModelSelectionMode::kBalanced;
+    case aegis::agent::AgentModelSelectionMode::kQuality:
+      return aegis_agent::mojom::ModelSelectionMode::kQuality;
+    case aegis::agent::AgentModelSelectionMode::kCost:
+      return aegis_agent::mojom::ModelSelectionMode::kCost;
+    case aegis::agent::AgentModelSelectionMode::kLocalOnly:
+      return aegis_agent::mojom::ModelSelectionMode::kLocalOnly;
+  }
+  NOTREACHED();
+}
 
 aegis_agent::mojom::TypeSafeSettingsError ConvertTypeSafeSettingsError(
     aegis::TypeSafeSettingsError error) {
@@ -380,6 +419,17 @@ bool IncludesOrigin(const std::vector<url::Origin>& origins, const GURL& url) {
   });
 }
 
+AgentModelRequirements ModelRequirementsForWorkflow(
+    AgentWorkflowKind workflow) {
+  return {.reasoning = workflow == AgentWorkflowKind::kResearch ||
+                               workflow == AgentWorkflowKind::kShopping
+                           ? AgentReasoningNeed::kStrong
+                           : AgentReasoningNeed::kBasic,
+          .context = AgentContextNeed::kUnknown,
+          .output = AgentOutputNeed::kMultiStep,
+          .requires_tool_calls = true};
+}
+
 bool HasUserSetting(PrefService* prefs, const char* name) {
   const PrefService::Preference* preference =
       prefs ? prefs->FindPreference(name) : nullptr;
@@ -533,6 +583,57 @@ void AegisAgentPageHandler::ConfigureTypeSafe(
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
 
+void AegisAgentPageHandler::ConfigureModelRouting(
+    aegis_agent::mojom::ModelSelectionMode mode,
+    std::vector<aegis_agent::mojom::ModelPoolEntryPtr> model_pool,
+    ConfigureModelRoutingCallback callback) {
+  last_error_.clear();
+  aegis::AegisService* core_service = CoreServiceForProfile(profile_);
+  const auto converted_mode = ConvertModelSelectionMode(mode);
+  if (!core_service || !converted_mode || model_pool.size() > 8u) {
+    last_error_ = "Agent model routing settings are invalid";
+    std::move(callback).Run(BuildSnapshot());
+    return;
+  }
+  std::vector<aegis::agent::AgentModelCatalogEntry> catalog;
+  catalog.reserve(model_pool.size());
+  for (const auto& item : model_pool) {
+    int64_t cost = 0;
+    if (!item ||
+        (!item->cost_microusd_per_million_tokens.empty() &&
+         (!base::StringToInt64(item->cost_microusd_per_million_tokens, &cost) ||
+          cost < 0))) {
+      last_error_ = "Agent model routing settings are invalid";
+      std::move(callback).Run(BuildSnapshot());
+      return;
+    }
+    aegis::agent::AgentModelCatalogEntry entry{
+        .id = item->id,
+        .destination = {.provider = item->provider,
+                        .endpoint = item->base_url,
+                        .model = item->model},
+        .enabled = item->enabled,
+        .authorized = true,
+        .supports_tool_calls = item->supports_tool_calls,
+        .supports_long_context = item->supports_long_context,
+        .supports_strong_reasoning = item->supports_strong_reasoning,
+        .quality_score = item->quality_score,
+        .latency_score = item->latency_score,
+        .priority = item->priority};
+    if (!item->cost_microusd_per_million_tokens.empty()) {
+      entry.cost_microusd_per_million_tokens = cost;
+    }
+    catalog.push_back(std::move(entry));
+  }
+  if (!core_service->SetAgentModelRoutingSettings(
+          *converted_mode, std::move(catalog), &last_error_)) {
+    std::move(callback).Run(BuildSnapshot());
+    return;
+  }
+  PushSnapshot();
+  std::move(callback).Run(BuildSnapshot());
+}
+
 void AegisAgentPageHandler::ListModels(const std::string& provider,
                                        const std::string& base_url,
                                        const std::string& api_key,
@@ -571,8 +672,13 @@ void AegisAgentPageHandler::CreateTask(
   const std::optional<AgentMode> converted_mode = ConvertMode(mode);
   const std::optional<AgentWorkflowKind> converted_workflow =
       ConvertWorkflow(workflow);
-  const std::optional<aegis::agent::AgentModelDestination> model_destination =
-      service_ ? service_->ConfiguredModelDestination() : std::nullopt;
+  std::string initial_model_route_error;
+  const std::optional<aegis::agent::AgentModelRoutePlan> initial_model_route =
+      service_ && converted_workflow
+          ? service_->SelectModelRoute(
+                ModelRequirementsForWorkflow(*converted_workflow),
+                &initial_model_route_error)
+          : std::nullopt;
   std::optional<std::vector<url::Origin>> requested_origins;
   if (!approved_origins.empty()) {
     requested_origins = ParseApprovedOrigins(approved_origins);
@@ -588,8 +694,10 @@ void AegisAgentPageHandler::CreateTask(
              resolved_goal.size() > 4096u || invalid_explicit_origins ||
              !IsValidSchedule(*converted_mode, schedule_interval_minutes)) {
     last_error_ = "Task input is invalid";
-  } else if (!model_destination) {
-    last_error_ = "Configure a valid Agent model provider before planning";
+  } else if (!initial_model_route) {
+    last_error_ = initial_model_route_error.empty()
+                      ? "Configure an authorized Agent model before planning"
+                      : std::move(initial_model_route_error);
   } else {
     const AgentWorkflowKind resolved_workflow =
         aegis::agent::ConstrainWorkflowToUserIntent(resolved_goal,
@@ -613,6 +721,8 @@ void AegisAgentPageHandler::CreateTask(
     CreateResolvedTask(std::move(resolved_goal), *converted_mode,
                        resolved_workflow, std::move(requested_origins),
                        explicit_url, browser_only, use_current_page,
+                       ModelRequirementsForWorkflow(resolved_workflow),
+                       /*route_was_required=*/false,
                        std::move(callback));
     return;
   }
@@ -661,6 +771,8 @@ void AegisAgentPageHandler::OnGoalRouted(
   CreateResolvedTask(std::move(goal), mode, route->workflow,
                      std::move(requested_origins), std::move(routed_url),
                      browser_only, use_current_page,
+                     service_->LastGoalModelRequirements(),
+                     /*route_was_required=*/true,
                      std::move(callback));
 }
 
@@ -672,9 +784,21 @@ void AegisAgentPageHandler::CreateResolvedTask(
     std::optional<GURL> routed_url,
     bool browser_only,
     bool use_current_page,
+    AgentModelRequirements model_requirements,
+    bool route_was_required,
     CreateTaskCallback callback) {
-  const std::optional<aegis::agent::AgentModelDestination> model_destination =
-      service_ ? service_->ConfiguredModelDestination() : std::nullopt;
+  std::string model_route_error;
+  const std::optional<aegis::agent::AgentModelRoutePlan> model_route =
+      service_ ? service_->SelectModelRoute(model_requirements,
+                                            &model_route_error)
+               : std::nullopt;
+  if (!model_route) {
+    last_error_ = model_route_error.empty()
+                      ? "No authorized Agent model is available"
+                      : std::move(model_route_error);
+    std::move(callback).Run(BuildSnapshot());
+    return;
+  }
   tabs::TabInterface* tab = ContentTab(browser_);
   GURL task_url = tab ? tab->GetURL() : GURL();
   std::optional<std::vector<url::Origin>> origins;
@@ -707,7 +831,7 @@ void AegisAgentPageHandler::CreateResolvedTask(
       origins = AutomaticTaskOrigins(task_url);
     }
   }
-  if (!tab || !origins || !model_destination) {
+  if (!tab || !origins) {
     last_error_ = "A related page could not be opened for this task";
     std::move(callback).Run(BuildSnapshot());
     return;
@@ -716,10 +840,15 @@ void AegisAgentPageHandler::CreateResolvedTask(
       mode == AgentMode::kAutomate
           ? aegis::agent::BuildAgentAutomationScope(
                 workflow, std::move(*origins), {tab->GetHandle().raw_value()},
-                *model_destination)
+                model_route->primary)
           : aegis::agent::BuildAgentWorkflowScope(
                 workflow, std::move(*origins), {tab->GetHandle().raw_value()},
-                *model_destination);
+                model_route->primary);
+  if (scope) {
+    scope->model_fallback_destination = model_route->fallback;
+    scope->model_selection_mode = model_route->mode;
+    scope->model_catalog_revision = model_route->catalog_revision;
+  }
   if (scope && browser_only && GoalRequestsWindowTabMetadata(goal) &&
       browser_ && browser_->GetProfile() == profile_ &&
       !profile_->IsOffTheRecord() &&
@@ -727,8 +856,15 @@ void AegisAgentPageHandler::CreateResolvedTask(
       !browser_->IsDeleteScheduled()) {
     scope->tab_metadata_window_id = browser_->GetSessionID().id();
   }
+  aegis::agent::AgentModelRoutingMetrics routing_metrics =
+      service_->CurrentGoalRoutingMetrics(route_was_required);
+  routing_metrics.primary_model_cost_microusd_per_million_tokens =
+      model_route->primary_cost_microusd_per_million_tokens;
+  routing_metrics.fallback_model_cost_microusd_per_million_tokens =
+      model_route->fallback_cost_microusd_per_million_tokens;
   AgentTask* task =
-      scope ? service_->CreateTask(std::move(goal), mode, std::move(*scope))
+      scope ? service_->CreateTask(std::move(goal), mode, std::move(*scope),
+                                   std::move(routing_metrics))
             : nullptr;
   if (!task) {
     last_error_ = "Task scope could not be created";
@@ -997,13 +1133,37 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
     snapshot->model_provider = core_service->ConfiguredModelProvider();
     snapshot->model_base_url = core_service->ConfiguredModelBaseUrl();
     snapshot->model_name = core_service->ConfiguredModelName();
+    snapshot->model_selection_mode = ConvertModelSelectionMode(
+        core_service->ConfiguredAgentModelSelectionMode());
+    snapshot->model_catalog_revision =
+        core_service->AgentModelCatalogRevision();
+    for (const auto& entry : core_service->AgentModelCatalog()) {
+      auto value = aegis_agent::mojom::ModelPoolEntry::New();
+      value->id = entry.id;
+      value->provider = entry.destination.provider;
+      value->base_url = entry.destination.endpoint;
+      value->model = entry.destination.model;
+      value->enabled = entry.enabled;
+      value->supports_tool_calls = entry.supports_tool_calls;
+      value->supports_long_context = entry.supports_long_context;
+      value->supports_strong_reasoning = entry.supports_strong_reasoning;
+      value->quality_score = entry.quality_score;
+      value->latency_score = entry.latency_score;
+      value->cost_microusd_per_million_tokens =
+          entry.cost_microusd_per_million_tokens
+              ? base::NumberToString(
+                    *entry.cost_microusd_per_million_tokens)
+              : std::string();
+      value->priority = entry.priority;
+      snapshot->model_pool.push_back(std::move(value));
+    }
     snapshot->typesafe_enabled =
         core_service->IsTypeSafeGoalRoutingEnabled();
     snapshot->typesafe_key_configured = core_service->HasTypeSafeApiKey();
     PrefService* prefs = profile_->GetPrefs();
     const std::optional<aegis::ModelProvider> provider =
         aegis::ParseModelProvider(snapshot->model_provider);
-    snapshot->model_configured =
+    const bool fixed_model_configured =
         HasUserSetting(prefs, aegis::prefs::kModelProvider) &&
         HasUserSetting(prefs, aegis::prefs::kModelBaseUrl) &&
         HasUserSetting(prefs, aegis::prefs::kModelName) && provider &&
@@ -1012,6 +1172,23 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
                                   snapshot->model_base_url)
             .has_value() &&
         aegis::IsValidModelName(*provider, snapshot->model_name);
+    const bool automatic_model_configured =
+        core_service->ConfiguredAgentModelSelectionMode() !=
+            aegis::agent::AgentModelSelectionMode::kFixed &&
+        std::ranges::any_of(
+            core_service->AgentModelCatalog(),
+            [core_service](const aegis::agent::AgentModelCatalogEntry& entry) {
+              const bool local_only =
+                  core_service->ConfiguredAgentModelSelectionMode() ==
+                  aegis::agent::AgentModelSelectionMode::kLocalOnly;
+              return entry.enabled && entry.authorized &&
+                     entry.supports_tool_calls &&
+                     (!local_only ||
+                      entry.destination.kind !=
+                          aegis::agent::AgentModelDestination::Kind::kCloud);
+            });
+    snapshot->model_configured =
+        fixed_model_configured || automatic_model_configured;
   }
   snapshot->typesafe_settings_error = typesafe_settings_error_;
   tabs::TabInterface* tab = ContentTab(browser_);
@@ -1109,6 +1286,48 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
                 aegis::agent::AgentModelDestination::Kind::kLoopback
             ? "loopback"
             : "cloud";
+    plan_value->model_selection_mode =
+        ConvertModelSelectionMode(plan->scope.model_selection_mode);
+    if (plan->scope.model_fallback_destination) {
+      plan_value->fallback_provider =
+          plan->scope.model_fallback_destination->provider;
+      plan_value->fallback_model =
+          plan->scope.model_fallback_destination->model;
+      plan_value->fallback_destination =
+          plan->scope.model_fallback_destination->kind ==
+                  aegis::agent::AgentModelDestination::Kind::kLoopback
+              ? "loopback"
+              : "cloud";
+    }
+    const auto& metrics = task->model_routing_metrics();
+    plan_value->typesafe_outcome = metrics.typesafe_outcome;
+    plan_value->typesafe_model = metrics.typesafe_model;
+    plan_value->typesafe_decisions = metrics.typesafe_decisions;
+    plan_value->typesafe_input_tokens = metrics.typesafe_input_tokens;
+    plan_value->typesafe_output_tokens = metrics.typesafe_output_tokens;
+    plan_value->typesafe_latency_ms =
+        base::NumberToString(metrics.typesafe_latency_ms);
+    plan_value->fallback_used = metrics.fallback_used;
+    plan_value->model_input_tokens =
+        base::NumberToString(metrics.model_input_tokens);
+    plan_value->model_output_tokens =
+        base::NumberToString(metrics.model_output_tokens);
+    plan_value->model_latency_ms =
+        base::NumberToString(metrics.model_latency_ms);
+    const std::optional<int64_t>& active_cost =
+        metrics.fallback_used
+            ? metrics.fallback_model_cost_microusd_per_million_tokens
+            : metrics.primary_model_cost_microusd_per_million_tokens;
+    if (active_cost) {
+      base::CheckedNumeric<int64_t> estimated_cost(metrics.model_input_tokens);
+      estimated_cost += metrics.model_output_tokens;
+      estimated_cost *= *active_cost;
+      estimated_cost /= 1000000;
+      if (estimated_cost.IsValid()) {
+        plan_value->estimated_model_cost_microusd = base::NumberToString(
+            static_cast<long long>(estimated_cost.ValueOrDie()));
+      }
+    }
     plan_value->max_risk = RiskName(max_risk);
     snapshot->plan = std::move(plan_value);
   }
