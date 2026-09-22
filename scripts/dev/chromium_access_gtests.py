@@ -449,8 +449,8 @@ def execute(options: argparse.Namespace) -> Path:
         if free_gib < options.min_free_gib:
             raise ValueError(f"not enough free space: {free_gib:.1f} GiB")
         env = execution_env()
-        gn = tool("gn", env)
-        autoninja = tool("autoninja", env)
+        gn = tool(options.gn or "gn", env)
+        autoninja = tool(options.ninja or "autoninja", env)
         result.update(productHead=product_head, productTree=git(ROOT, "rev-parse", "HEAD^{tree}"),
                       chromiumVersion=read_pin(VERSION_FILE), chromiumPin=chromium_pin,
                       chromiumHead=chromium_head, chromiumTree=chromium_tree,
@@ -458,6 +458,8 @@ def execute(options: argparse.Namespace) -> Path:
                       v8Base=v8_base, v8Head=v8_head, v8Tree=v8_tree,
                       argsFile=str(args_file), argsSha256=args_hash,
                       productArgsSha256=sha256(ARGS_FILE), outDir=str(out),
+                      tools={"gn": {"path": gn, "sha256": sha256(Path(gn))},
+                             "build": {"path": autoninja, "sha256": sha256(Path(autoninja))}},
                       freeGiBAtStart=round(free_gib, 2),
                       inputs={str(p.relative_to(BROWSER)): sha256(p)
                               for directory in (PATCH_DIR, OVERLAY_DIR)
@@ -516,6 +518,8 @@ def execute(options: argparse.Namespace) -> Path:
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description=__doc__)
     value.add_argument("--out", help="isolated Chromium output directory")
+    value.add_argument("--gn", help="explicit executable GN path, e.g. candidate buildtools/mac/gn")
+    value.add_argument("--ninja", help="explicit executable Ninja path; default uses autoninja")
     value.add_argument("--args-file", help="explicit local GN args; recorded separately from product args")
     value.add_argument("--target", action="append", choices=[t[2] for t in TARGETS],
                        help="run selected executables; omitted targets stay NOT_RUN")
