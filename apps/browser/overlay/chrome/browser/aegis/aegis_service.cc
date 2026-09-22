@@ -1972,6 +1972,7 @@ void AegisService::PersistModelConfiguration(const std::string& provider,
                                              const std::string& model) {
   if (auto* agent_service =
           agent::AegisAgentServiceFactory::GetForProfileIfExists(profile_)) {
+    agent_service->CancelPendingGoalRouting();
     agent_service->InvalidatePendingModelDispatches();
   }
   prefs_->SetString(prefs::kModelProvider, provider);

@@ -979,7 +979,8 @@ void AegisAgentPageHandler::CreateResolvedTask(
       model_route->fallback_cost_microusd_per_million_tokens;
   AgentTask* task =
       scope ? service_->CreateTask(std::move(goal), mode, std::move(*scope),
-                                   std::move(routing_metrics))
+                                   std::move(routing_metrics),
+                                   route_was_required)
             : nullptr;
   if (!task) {
     last_error_ = "Task scope could not be created";
@@ -1307,6 +1308,8 @@ aegis_agent::mojom::TaskSnapshotPtr AegisAgentPageHandler::BuildSnapshot() {
   snapshot->state = "idle";
   snapshot->last_error = last_error_;
   if (service_) {
+    snapshot->goal_route_observations_json =
+        service_->UnboundGoalRouteObservationsJson();
     for (const aegis::agent::AgentMonitorDefinition& monitor :
          service_->GetAllMonitors()) {
       auto value = aegis_agent::mojom::MonitorSummary::New();

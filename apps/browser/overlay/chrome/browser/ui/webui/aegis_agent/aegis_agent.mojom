@@ -172,6 +172,7 @@ struct TaskSnapshot {
   string state;
   string routing_observations_json;
   string mode;
+  string goal_route_observations_json;
   string goal;
   PlanSummary? plan;
   string result_summary;

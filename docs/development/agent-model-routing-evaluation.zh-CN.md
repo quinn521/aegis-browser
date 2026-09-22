@@ -86,6 +86,8 @@ node apps/browser/scripts/evaluate-agent-model-routing.mjs input.json report.jso
 
 归一化前检查 `attempts_complete`，为 false 的旧任务不能充当完整成本证据。每个 `completed=false` 的占位 attempt 必须保留，所有用量按 `null` 导入；不得删除占位后把剩余列表作为全量。`observation_id` 用于原始材料中的逐次核对，不作为正确性标签。任务恢复不能补出供应商未返回的用量。
 
+快筛发生在任务创建前，独立的“未关联任务的快筛记录”保存这部分失败或取消记录；实验不得仅从成功创建的任务采样。未创建任务时可将路由 UUID 用作核算记录的 `taskId`，映射到原本的 case/repeat/arm，最终状态由实验实际结果确定。成功关联任务后，快筛调用由任务记录统计一次，不再把关联的独立记录重复相加。历史导出有容量边界，实验期间应及时留存原始记录，而非依赖浏览器作为长期账单档案。
+
 ## 报告与验收
 
 | 输出 | 口径 |

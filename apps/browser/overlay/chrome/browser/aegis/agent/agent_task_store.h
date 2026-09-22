@@ -69,10 +69,28 @@ struct StoredAgentPlanEntry {
   StoredAgentPlan stored_plan;
 };
 
+enum class AgentGoalRouteStatus {
+  kPending = 0,
+  kCompleted = 1,
+  kCancelled = 2,
+};
+
+// Redacted accounting for goal screening that exists before a task. It never
+// stores the goal, prompt, provider endpoint, credentials, or model response.
+struct AgentGoalRouteObservation {
+  std::string route_id;
+  std::string task_id;
+  AgentGoalRouteStatus status = AgentGoalRouteStatus::kPending;
+  AgentModelRoutingMetrics metrics;
+  base::Time created_at;
+  base::Time updated_at;
+};
+
 struct StoredAgentState {
   std::vector<StoredAgentTask> tasks;
   std::vector<StoredAgentPlanEntry> plans;
   std::vector<AgentMonitorDefinition> monitors;
+  std::vector<AgentGoalRouteObservation> goal_routes;
 };
 
 // Profile-local storage for resumable metadata and redacted action summaries.
@@ -93,6 +111,10 @@ class AgentTaskStore {
                 std::string goal_summary,
                 bool has_external_side_effect);
   bool SaveTaskRecord(AgentTaskStoreRecord record);
+  bool SaveTaskRecordAndBindGoalRoute(AgentTaskStoreRecord record,
+                                      const std::string& route_id);
+  bool SaveGoalRouteObservation(AgentGoalRouteObservation observation);
+  std::vector<AgentGoalRouteObservation> LoadGoalRouteObservations();
   bool AppendActionSummary(const std::string& task_id,
                            const std::string& action_id,
                            const std::string& tool_name,
@@ -134,6 +156,8 @@ class AgentTaskStore {
   bool IsInitializedForTesting() const { return initialized_; }
 
  private:
+  bool SaveTaskRecordInternal(AgentTaskStoreRecord record,
+                              std::optional<std::string> route_id);
   static std::string SerializeScope(const AgentTaskScope& scope);
   static int64_t SerializeTime(base::Time time);
   static base::Time DeserializeTime(int64_t value);

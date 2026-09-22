@@ -476,6 +476,21 @@ rendererContext.renderRoutingObservations({taskId: '', plan: null});
 assert.equal(element('routing-observations-details').hidden, true);
 assert.equal(element('routing-observations').value, '');
 console.log('PASS: 无计划失败/取消/规划/暂停均可复制观测，离开任务清空观测（DOM）');
+const unboundRoutes = '[{"route_id":"cancelled-route","status":"cancelled","attempts":[]}]';
+for (const taskId of ['', 'previous-unrelated-task']) {
+  rendererContext.renderRoutingObservations({
+    taskId, plan: null, routingObservationsJson: '{"task":"previous"}',
+    goalRouteObservationsJson: unboundRoutes,
+  });
+  assert.equal(element('goal-route-observations-details').hidden, false);
+  assert.equal(element('goal-route-observations').value, unboundRoutes);
+  assert.equal(element('routing-observations').value,
+      taskId ? '{"task":"previous"}' : '');
+}
+rendererContext.renderRoutingObservations({taskId: '', goalRouteObservationsJson: '[]'});
+assert.equal(element('goal-route-observations-details').hidden, true);
+assert.equal(element('goal-route-observations').value, '');
+console.log('PASS: 未建任务快筛记录独立显示，不冒充旧任务，空历史清除（DOM）');
 vm.runInContext(ts.transpileModule(planRenderer.getText(tree), {
   compilerOptions: {target: ts.ScriptTarget.ES2022},
 }).outputText, rendererContext);

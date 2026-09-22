@@ -242,6 +242,93 @@ TEST(AegisAgentTaskStoreTest, RoundTripsAttemptUnknownUsageAndFrozenPrices) {
   EXPECT_FALSE(restored->attempts[1].prices.input);
 }
 
+TEST(AegisAgentTaskStoreTest,
+     PersistsIndependentGoalRoutesWithoutOverwritingUnknownUsage) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const base::FilePath path =
+      temp_dir.GetPath().AppendASCII("goal-routes.sqlite");
+  const base::Time created = base::Time::Now() - base::Minutes(1);
+  {
+    AgentTaskStore store(path);
+    ASSERT_TRUE(store.Initialize());
+    AgentGoalRouteObservation first{
+        .route_id = "11111111-1111-4111-8111-111111111111",
+        .status = AgentGoalRouteStatus::kPending,
+        .created_at = created,
+        .updated_at = created,
+    };
+    first.metrics.typesafe_attempted = true;
+    first.metrics.typesafe_outcome = "started";
+    first.metrics.attempts.push_back(
+        {.kind = "typesafe",
+         .phase = "screening",
+         .observation_id = "typesafe-pending",
+         .completed = false});
+    ASSERT_TRUE(store.SaveGoalRouteObservation(first));
+
+    first.status = AgentGoalRouteStatus::kCancelled;
+    first.metrics.attempts_complete = false;
+    first.updated_at = base::Time::Now();
+    ASSERT_TRUE(store.SaveGoalRouteObservation(first));
+
+    AgentGoalRouteObservation second{
+        .route_id = "22222222-2222-4222-8222-222222222222",
+        .status = AgentGoalRouteStatus::kCompleted,
+        .created_at = base::Time::Now(),
+        .updated_at = base::Time::Now(),
+    };
+    second.metrics.typesafe_outcome = "fallback";
+    second.metrics.attempts_complete = true;
+    second.metrics.attempts.push_back(
+        {.model = "fixture-model",
+         .effort = "low",
+         .succeeded = false,
+         .phase = "screening",
+         .observation_id = "generation-failed"});
+    ASSERT_TRUE(store.SaveGoalRouteObservation(second));
+    EXPECT_FALSE(store.SaveTaskRecordAndBindGoalRoute(
+        {.task_id = "44444444-4444-4444-8444-444444444444",
+         .state = AgentTaskState::kDraft,
+         .mode = AgentMode::kAsk,
+         .goal_summary = "mismatched routed task",
+         .scope = StoreTestScope(),
+         .created_at = base::Time::Now()},
+        second.route_id));
+    EXPECT_TRUE(store.LoadUnfinishedTasks().empty());
+    AgentModelRoutingMetrics task_metrics = second.metrics;
+    task_metrics.primary_model_cost_microusd_per_million_tokens = 1234;
+    ASSERT_TRUE(store.SaveTaskRecordAndBindGoalRoute(
+        {.task_id = "33333333-3333-4333-8333-333333333333",
+         .state = AgentTaskState::kDraft,
+         .mode = AgentMode::kAsk,
+         .goal_summary = "redacted routed task",
+         .scope = StoreTestScope(),
+         .model_routing_metrics = std::move(task_metrics),
+         .created_at = base::Time::Now()},
+        second.route_id));
+  }
+
+  AgentTaskStore restarted(path);
+  ASSERT_TRUE(restarted.Initialize());
+  const auto observations = restarted.LoadGoalRouteObservations();
+  ASSERT_EQ(observations.size(), 2u);
+  EXPECT_EQ(observations[0].route_id,
+            "11111111-1111-4111-8111-111111111111");
+  EXPECT_EQ(observations[0].status, AgentGoalRouteStatus::kCancelled);
+  ASSERT_EQ(observations[0].metrics.attempts.size(), 1u);
+  EXPECT_FALSE(observations[0].metrics.attempts[0].completed);
+  EXPECT_FALSE(observations[0].metrics.attempts[0].input_tokens);
+  EXPECT_EQ(observations[1].route_id,
+            "22222222-2222-4222-8222-222222222222");
+  EXPECT_EQ(observations[1].task_id,
+            "33333333-3333-4333-8333-333333333333");
+  ASSERT_EQ(observations[1].metrics.attempts.size(), 1u);
+  EXPECT_TRUE(observations[1].metrics.attempts[0].completed);
+  EXPECT_FALSE(observations[1].metrics.attempts[0].input_tokens);
+  EXPECT_FALSE(observations[1].metrics.attempts[0].output_tokens);
+}
+
 TEST(AegisAgentTaskStoreTest, RejectsBroadenedOrMalformedStoredScope) {
   EXPECT_FALSE(AgentTaskStore::DeserializeScope("not-json"));
   EXPECT_FALSE(AgentTaskStore::DeserializeScope(R"({})"));
@@ -496,8 +583,8 @@ TEST(AegisAgentTaskStoreTest, MigratesVersionSevenWithoutLosingMonitorState) {
   ASSERT_TRUE(inspected.Open(path));
   sql::MetaTable meta;
   ASSERT_TRUE(meta.Init(&inspected, 9, 9));
-  EXPECT_EQ(meta.GetVersionNumber(), 10);
-  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 10);
+  EXPECT_EQ(meta.GetVersionNumber(), 11);
+  EXPECT_EQ(meta.GetCompatibleVersionNumber(), 11);
 }
 
 TEST(AegisAgentTaskStoreTest,
@@ -602,9 +689,9 @@ TEST(AegisAgentTaskStoreTest, RejectsFutureVersionWithoutRewritingDatabase) {
     sql::Database future("AegisAgent");
     ASSERT_TRUE(future.Open(path));
     sql::MetaTable meta;
-    ASSERT_TRUE(meta.Init(&future, 10, 10));
-    ASSERT_TRUE(meta.SetVersionNumber(10));
-    ASSERT_TRUE(meta.SetCompatibleVersionNumber(10));
+    ASSERT_TRUE(meta.Init(&future, 11, 11));
+    ASSERT_TRUE(meta.SetVersionNumber(12));
+    ASSERT_TRUE(meta.SetCompatibleVersionNumber(12));
   }
   std::string before;
   ASSERT_TRUE(base::ReadFileToString(path, &before));

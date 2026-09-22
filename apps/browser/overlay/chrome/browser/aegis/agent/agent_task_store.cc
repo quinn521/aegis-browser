@@ -14,6 +14,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
+#include "base/uuid.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
 #include "url/origin.h"
@@ -22,9 +23,9 @@ namespace aegis::agent {
 
 namespace {
 
-// v10 adds immutable generation profiles and per-attempt accounting in JSON.
-constexpr int kCurrentVersion = 10;
-constexpr int kCompatibleVersion = 10;
+// v11 adds a task-independent ledger for paid goal-screening calls.
+constexpr int kCurrentVersion = 11;
+constexpr int kCompatibleVersion = 11;
 constexpr size_t kMaxSummaryBytes = 4096;
 
 constexpr char kCreateTasksSql[] = R"(
@@ -85,6 +86,16 @@ constexpr char kCreatePlansSql[] = R"(
     updated_us INTEGER NOT NULL
   ))";
 
+constexpr char kCreateGoalRoutesSql[] = R"(
+  CREATE TABLE IF NOT EXISTS agent_goal_routes(
+    route_id TEXT PRIMARY KEY NOT NULL,
+    task_id TEXT NOT NULL DEFAULT '',
+    status INTEGER NOT NULL,
+    model_routing_json TEXT NOT NULL,
+    created_us INTEGER NOT NULL,
+    updated_us INTEGER NOT NULL
+  ))";
+
 bool IsValidStoredState(int state) {
   return state >= static_cast<int>(AgentTaskState::kDraft) &&
          state <= static_cast<int>(AgentTaskState::kExpired);
@@ -93,6 +104,19 @@ bool IsValidStoredState(int state) {
 bool IsValidStoredMode(int mode) {
   return mode >= static_cast<int>(AgentMode::kAsk) &&
          mode <= static_cast<int>(AgentMode::kAutomate);
+}
+
+bool IsValidGoalRouteStatus(int status) {
+  return status >= static_cast<int>(AgentGoalRouteStatus::kPending) &&
+         status <= static_cast<int>(AgentGoalRouteStatus::kCancelled);
+}
+
+bool IsValidGoalRouteObservation(const AgentGoalRouteObservation& observation) {
+  return base::Uuid::ParseCaseInsensitive(observation.route_id).is_valid() &&
+         observation.task_id.size() <= 64u &&
+         observation.metrics.IsValid() && !observation.created_at.is_null() &&
+         !observation.updated_at.is_null() &&
+         observation.updated_at >= observation.created_at;
 }
 
 bool IsSafePlanStepId(std::string_view value) {
@@ -192,6 +216,20 @@ bool PopulateRoutingCostSnapshot(const base::DictValue& value,
   return true;
 }
 
+std::optional<std::string> SerializeScreeningAttempts(
+    const AgentModelRoutingMetrics& metrics) {
+  base::ListValue attempts;
+  for (const auto& attempt : metrics.attempts) {
+    if (attempt.phase == "screening") {
+      attempts.Append(SerializeModelAttempt(attempt));
+    }
+  }
+  std::string json;
+  return base::JSONWriter::Write(attempts, &json)
+             ? std::make_optional(std::move(json))
+             : std::nullopt;
+}
+
 }  // namespace
 
 AgentTaskStore::AgentTaskStore(base::FilePath database_path, bool in_memory)
@@ -217,7 +255,8 @@ bool AgentTaskStore::Initialize() {
       !database_.Execute(kCreateTasksSql) ||
       !database_.Execute(kCreateActionsSql) ||
       !database_.Execute(kCreateMonitorsSql) ||
-      !database_.Execute(kCreatePlansSql)) {
+      !database_.Execute(kCreatePlansSql) ||
+      !database_.Execute(kCreateGoalRoutesSql)) {
     database_.Close();
     return false;
   }
@@ -290,6 +329,11 @@ bool AgentTaskStore::Initialize() {
     }
   }
   if (meta_table_.GetVersionNumber() == 9 &&
+      !meta_table_.SetVersionNumber(10)) {
+    database_.Close();
+    return false;
+  }
+  if (meta_table_.GetVersionNumber() == 10 &&
       (!meta_table_.SetVersionNumber(kCurrentVersion) ||
        !meta_table_.SetCompatibleVersionNumber(kCompatibleVersion))) {
     database_.Close();
@@ -330,6 +374,7 @@ std::optional<StoredAgentState> AgentTaskStore::InitializeAndLoad(
     }
   }
   state.monitors = LoadMonitors();
+  state.goal_routes = LoadGoalRouteObservations();
   return state;
 }
 
@@ -353,6 +398,21 @@ bool AgentTaskStore::SaveTask(const AgentTask& task,
 }
 
 bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
+  return SaveTaskRecordInternal(std::move(record), std::nullopt);
+}
+
+bool AgentTaskStore::SaveTaskRecordAndBindGoalRoute(
+    AgentTaskStoreRecord record,
+    const std::string& route_id) {
+  if (!base::Uuid::ParseCaseInsensitive(route_id).is_valid()) {
+    return false;
+  }
+  return SaveTaskRecordInternal(std::move(record), route_id);
+}
+
+bool AgentTaskStore::SaveTaskRecordInternal(
+    AgentTaskStoreRecord record,
+    std::optional<std::string> route_id) {
   if (!initialized_ || record.task_id.empty() ||
       !IsSafeSummary(record.goal_summary)) {
     return false;
@@ -366,6 +426,28 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
   sql::Transaction transaction(&database_);
   if (!transaction.Begin()) {
     return false;
+  }
+  if (route_id) {
+    sql::Statement route(database_.GetCachedStatement(
+        SQL_FROM_HERE,
+        "SELECT status,task_id,model_routing_json FROM agent_goal_routes "
+        "WHERE route_id=?"));
+    route.BindString(0, *route_id);
+    if (!route.Step() ||
+        route.ColumnInt(0) !=
+            static_cast<int>(AgentGoalRouteStatus::kCompleted) ||
+        !route.ColumnString(1).empty()) {
+      return false;
+    }
+    auto route_metrics =
+        DeserializeModelRoutingMetrics(route.ColumnString(2));
+    if (!route_metrics) {
+      return false;
+    }
+    if (SerializeScreeningAttempts(*route_metrics) !=
+        SerializeScreeningAttempts(record.model_routing_metrics)) {
+      return false;
+    }
   }
 
   sql::Statement update(database_.GetCachedStatement(
@@ -388,29 +470,107 @@ bool AgentTaskStore::SaveTaskRecord(AgentTaskStoreRecord record) {
   if (!update.Run()) {
     return false;
   }
-  if (database_.GetLastChangeCount() == 1) {
-    return transaction.Commit();
+  if (database_.GetLastChangeCount() != 1) {
+    sql::Statement insert(database_.GetCachedStatement(
+        SQL_FROM_HERE,
+        "INSERT INTO agent_tasks(task_id,state,mode,goal_summary,scope_json,"
+        "has_external_side_effect,tool_calls_used,model_calls_used,"
+        "network_requests_used,model_routing_json,created_us,updated_us) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"));
+    insert.BindString(0, record.task_id);
+    insert.BindInt(1, static_cast<int>(record.state));
+    insert.BindInt(2, static_cast<int>(record.mode));
+    insert.BindString(3, record.goal_summary);
+    insert.BindString(4, scope_json);
+    insert.BindBool(5, record.has_external_side_effect);
+    insert.BindInt(6, record.tool_calls_used);
+    insert.BindInt(7, record.model_calls_used);
+    insert.BindInt(8, record.network_requests_used);
+    insert.BindString(9, metrics_json);
+    insert.BindInt64(10, SerializeTime(record.created_at));
+    insert.BindInt64(11, SerializeTime(base::Time::Now()));
+    if (!insert.Run()) {
+      return false;
+    }
   }
+  if (route_id) {
+    sql::Statement bind(database_.GetCachedStatement(
+        SQL_FROM_HERE,
+        "UPDATE agent_goal_routes SET task_id=?,updated_us=? WHERE "
+        "route_id=? AND task_id='' AND status=?"));
+    bind.BindString(0, record.task_id);
+    bind.BindInt64(1, SerializeTime(base::Time::Now()));
+    bind.BindString(2, *route_id);
+    bind.BindInt(3, static_cast<int>(AgentGoalRouteStatus::kCompleted));
+    if (!bind.Run() || database_.GetLastChangeCount() != 1) {
+      return false;
+    }
+  }
+  return transaction.Commit();
+}
 
-  sql::Statement insert(database_.GetCachedStatement(
+bool AgentTaskStore::SaveGoalRouteObservation(
+    AgentGoalRouteObservation observation) {
+  if (!initialized_ || !observation.task_id.empty() ||
+      !IsValidGoalRouteObservation(observation)) {
+    return false;
+  }
+  const std::string metrics_json =
+      SerializeModelRoutingMetrics(observation.metrics);
+  if (metrics_json.empty()) {
+    return false;
+  }
+  sql::Statement statement(database_.GetCachedStatement(
       SQL_FROM_HERE,
-      "INSERT INTO agent_tasks(task_id,state,mode,goal_summary,scope_json,"
-      "has_external_side_effect,tool_calls_used,model_calls_used,"
-      "network_requests_used,model_routing_json,created_us,updated_us) "
-      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"));
-  insert.BindString(0, record.task_id);
-  insert.BindInt(1, static_cast<int>(record.state));
-  insert.BindInt(2, static_cast<int>(record.mode));
-  insert.BindString(3, record.goal_summary);
-  insert.BindString(4, scope_json);
-  insert.BindBool(5, record.has_external_side_effect);
-  insert.BindInt(6, record.tool_calls_used);
-  insert.BindInt(7, record.model_calls_used);
-  insert.BindInt(8, record.network_requests_used);
-  insert.BindString(9, metrics_json);
-  insert.BindInt64(10, SerializeTime(record.created_at));
-  insert.BindInt64(11, SerializeTime(base::Time::Now()));
-  return insert.Run() && transaction.Commit();
+      "INSERT INTO agent_goal_routes(route_id,task_id,status,"
+      "model_routing_json,created_us,updated_us) VALUES(?,?,?,?,?,?) "
+      "ON CONFLICT(route_id) DO UPDATE SET task_id=excluded.task_id,"
+      "status=excluded.status,model_routing_json=excluded.model_routing_json,"
+      "updated_us=excluded.updated_us"));
+  statement.BindString(0, observation.route_id);
+  statement.BindString(1, observation.task_id);
+  statement.BindInt(2, static_cast<int>(observation.status));
+  statement.BindString(3, metrics_json);
+  statement.BindInt64(4, SerializeTime(observation.created_at));
+  statement.BindInt64(5, SerializeTime(observation.updated_at));
+  return statement.Run();
+}
+
+std::vector<AgentGoalRouteObservation>
+AgentTaskStore::LoadGoalRouteObservations() {
+  std::vector<AgentGoalRouteObservation> observations;
+  if (!initialized_) {
+    return observations;
+  }
+  sql::Statement statement(database_.GetCachedStatement(
+      SQL_FROM_HERE,
+      "SELECT route_id,task_id,status,model_routing_json,created_us,updated_us "
+      "FROM agent_goal_routes ORDER BY updated_us DESC LIMIT 1000"));
+  while (statement.Step()) {
+    const int status = statement.ColumnInt(2);
+    const auto metrics =
+        DeserializeModelRoutingMetrics(statement.ColumnString(3));
+    AgentGoalRouteObservation observation{
+        .route_id = statement.ColumnString(0),
+        .task_id = statement.ColumnString(1),
+        .status = static_cast<AgentGoalRouteStatus>(status),
+        .metrics = metrics.value_or(AgentModelRoutingMetrics()),
+        .created_at = DeserializeTime(statement.ColumnInt64(4)),
+        .updated_at = DeserializeTime(statement.ColumnInt64(5)),
+    };
+    if (!IsValidGoalRouteStatus(status) || !metrics ||
+        !IsValidGoalRouteObservation(observation)) {
+      observations.clear();
+      return observations;
+    }
+    observations.push_back(std::move(observation));
+  }
+  if (!statement.Succeeded()) {
+    observations.clear();
+  } else {
+    std::ranges::reverse(observations);
+  }
+  return observations;
 }
 
 bool AgentTaskStore::AppendActionSummary(const std::string& task_id,
@@ -935,8 +1095,15 @@ bool AgentTaskStore::Prune(base::Time unfinished_before,
       "updated_us < ?) OR (state NOT IN (10,11,12,13) AND updated_us < ?)"));
   delete_tasks.BindInt64(0, SerializeTime(completed_before));
   delete_tasks.BindInt64(1, SerializeTime(unfinished_before));
+  sql::Statement delete_goal_routes(database_.GetCachedStatement(
+      SQL_FROM_HERE,
+      "DELETE FROM agent_goal_routes WHERE (status IN (1,2) AND updated_us "
+      "< ?) OR (status=0 AND updated_us < ?)"));
+  delete_goal_routes.BindInt64(0, SerializeTime(completed_before));
+  delete_goal_routes.BindInt64(1, SerializeTime(unfinished_before));
   return delete_actions.Run() && delete_monitors.Run() && delete_plans.Run() &&
-         delete_tasks.Run() && transaction.Commit();
+         delete_tasks.Run() && delete_goal_routes.Run() &&
+         transaction.Commit();
 }
 
 // static

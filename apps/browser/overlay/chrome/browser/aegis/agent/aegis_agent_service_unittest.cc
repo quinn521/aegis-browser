@@ -536,6 +536,114 @@ TEST_F(AegisAgentServiceTest, TypeSafeRoutesHighConfidenceGoalBeforeLocalModel) 
 }
 
 TEST_F(AegisAgentServiceTest,
+       GoalScreeningIsDurableBeforeDispatchAndBindsWithoutDuplication) {
+  ASSERT_TRUE(ConfigureTypeSafeGoalRouting());
+  network::TestURLLoaderFactory factory;
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+
+  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> result;
+  service->RouteGoal("Compare three USB hubs", AgentWorkflowKind::kResearch,
+                     result.GetCallback());
+  EXPECT_EQ(factory.NumPending(), 0);
+  DrainTaskRunners();
+  factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
+
+  auto pending_value = base::JSONReader::Read(
+      service->UnboundGoalRouteObservationsJson(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(pending_value);
+  const auto* pending = pending_value->GetIfList();
+  ASSERT_TRUE(pending);
+  ASSERT_EQ(pending->size(), 1u);
+  const std::string* pending_status =
+      (*pending)[0].GetDict().FindString("status");
+  ASSERT_TRUE(pending_status);
+  EXPECT_EQ(*pending_status, "pending");
+  const auto* pending_metrics =
+      (*pending)[0].GetDict().FindDict("routing_metrics");
+  ASSERT_TRUE(pending_metrics);
+  const auto* pending_attempts = pending_metrics->FindList("attempts");
+  ASSERT_TRUE(pending_attempts);
+  ASSERT_EQ(pending_attempts->size(), 1u);
+  EXPECT_EQ((*pending_attempts)[0].GetDict().FindBool("completed"), false);
+
+  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
+      kTypeSafeSystemOneEndpoint,
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})"));
+  EXPECT_TRUE(result.Get<0>()) << result.Get<1>();
+  FlushTaskStore(service);
+
+  const AgentModelRoutingMetrics metrics =
+      service->CurrentGoalRoutingMetrics(/*route_was_required=*/true);
+  ASSERT_EQ(metrics.attempts.size(), 1u);
+  EXPECT_TRUE(metrics.attempts[0].completed);
+  EXPECT_FALSE(metrics.attempts[0].input_tokens);
+  EXPECT_FALSE(metrics.attempts[0].output_tokens);
+  AgentTask* task = service->CreateTask(
+      "Compare three USB hubs", AgentMode::kAsk, ServiceTestScope(), metrics,
+      /*bind_current_goal_route=*/true);
+  ASSERT_TRUE(task);
+  FlushTaskStore(service);
+  EXPECT_EQ(service->UnboundGoalRouteObservationsJson(), "[]");
+  EXPECT_EQ(task->model_routing_metrics().attempts.size(), 1u);
+}
+
+TEST_F(AegisAgentServiceTest,
+       CancelledScreeningKeepsUnknownAttemptAndNextRouteSeparate) {
+  ASSERT_TRUE(ConfigureTypeSafeGoalRouting());
+  network::TestURLLoaderFactory factory;
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+
+  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> first;
+  service->RouteGoal("Compare three USB hubs", AgentWorkflowKind::kResearch,
+                     first.GetCallback());
+  DrainTaskRunners();
+  factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
+  service->CancelPendingGoalRouting();
+  EXPECT_FALSE(first.Get<0>());
+  FlushTaskStore(service);
+
+  auto cancelled_value = base::JSONReader::Read(
+      service->UnboundGoalRouteObservationsJson(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(cancelled_value);
+  const auto* cancelled = cancelled_value->GetIfList();
+  ASSERT_TRUE(cancelled);
+  ASSERT_EQ(cancelled->size(), 1u);
+  const std::string* cancelled_status =
+      (*cancelled)[0].GetDict().FindString("status");
+  ASSERT_TRUE(cancelled_status);
+  EXPECT_EQ(*cancelled_status, "cancelled");
+  const auto* metrics =
+      (*cancelled)[0].GetDict().FindDict("routing_metrics");
+  ASSERT_TRUE(metrics);
+  const auto* attempts = metrics->FindList("attempts");
+  ASSERT_TRUE(attempts);
+  ASSERT_EQ(attempts->size(), 1u);
+  EXPECT_EQ((*attempts)[0].GetDict().FindBool("completed"), false);
+  EXPECT_TRUE((*attempts)[0].GetDict().Find("input_tokens")->is_none());
+
+  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> second;
+  service->RouteGoal("Compare three docks", AgentWorkflowKind::kResearch,
+                     second.GetCallback());
+  DrainTaskRunners();
+  factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
+  auto two_routes_value = base::JSONReader::Read(
+      service->UnboundGoalRouteObservationsJson(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(two_routes_value);
+  ASSERT_TRUE(two_routes_value->is_list());
+  EXPECT_EQ(two_routes_value->GetList().size(), 2u);
+  service->CancelPendingGoalRouting();
+  EXPECT_FALSE(second.Get<0>());
+}
+
+TEST_F(AegisAgentServiceTest,
        LocalOnlyModeBypassesTypeSafeAndUsesAuthorizedLocalPool) {
   AegisService* settings = ConfigureTypeSafeGoalRouting();
   ASSERT_TRUE(settings);

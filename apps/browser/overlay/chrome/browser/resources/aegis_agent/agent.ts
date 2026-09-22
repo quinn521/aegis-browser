@@ -683,6 +683,11 @@ function renderRoutingObservations(next: TaskSnapshot) {
   element('routing-observations-details').hidden = !hasTask;
   element<HTMLTextAreaElement>('routing-observations').value =
       hasTask ? next.routingObservationsJson || '{}' : '';
+  const routes = next.goalRouteObservationsJson || '[]';
+  const hasRoutes = routes !== '[]';
+  element('goal-route-observations-details').hidden = !hasRoutes;
+  element<HTMLTextAreaElement>('goal-route-observations').value =
+      hasRoutes ? routes : '';
 }
 
 function render(next: TaskSnapshot) {

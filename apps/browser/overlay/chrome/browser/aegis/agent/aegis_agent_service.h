@@ -90,12 +90,14 @@ class AegisAgentService : public KeyedService {
   }
   AgentModelRoutingMetrics CurrentGoalRoutingMetrics(
       bool route_was_required) const;
+  std::string UnboundGoalRouteObservationsJson() const;
 
   AgentTask* CreateTask(
       std::string goal,
       AgentMode mode,
       AgentTaskScope scope,
-      AgentModelRoutingMetrics routing_metrics = AgentModelRoutingMetrics());
+      AgentModelRoutingMetrics routing_metrics = AgentModelRoutingMetrics(),
+      bool bind_current_goal_route = false);
   AgentTask* GetTask(const std::string& task_id);
   const AgentTask* GetTask(const std::string& task_id) const;
   AgentTask* MostRecentTask();
@@ -213,6 +215,8 @@ class AegisAgentService : public KeyedService {
   bool TryReadOnlyPlanningRecovery(const std::string& task_id,
                                    std::string* error);
   bool PersistTask(const AgentTask& task);
+  bool PersistTaskAndBindGoalRoute(const AgentTask& task,
+                                   const std::string& route_id);
   void StartObservedModelRequest(AgentTask* task,
                                  AgentModelClient* client,
                                  AgentModelClientConfig config,
@@ -332,10 +336,35 @@ class AegisAgentService : public KeyedService {
                          AgentModelParseResult result);
   void RouteGoalAttempt(std::string goal,
                         AgentWorkflowKind requested_workflow,
+                        uint64_t route_generation,
                         int repair_attempt,
                         std::string previous_error,
                         GoalRouteCallback callback);
-  void OnGoalRouteModelResult(std::string goal,
+  void OnInitialGoalRouteStored(uint64_t generation,
+                                std::string goal,
+                                AgentWorkflowKind requested_workflow,
+                                bool saved);
+  void OnTypeSafeGoalRouteAttemptStored(
+      uint64_t generation,
+      uint64_t settings_generation,
+      std::string observation_id,
+      std::string goal,
+      AgentWorkflowKind requested_workflow,
+      std::string api_key,
+      bool saved);
+  void OnGoalRouteModelAttemptStored(
+      uint64_t generation,
+      std::string observation_id,
+      std::string goal,
+      AgentWorkflowKind requested_workflow,
+      int repair_attempt,
+      AgentModelClientConfig config,
+      AgentModelRequest request,
+      GoalRouteCallback callback,
+      bool saved);
+  void OnGoalRouteModelResult(uint64_t generation,
+                              std::string observation_id,
+                              std::string goal,
                               AgentWorkflowKind requested_workflow,
                               int repair_attempt,
                               GoalRouteCallback callback,
@@ -345,6 +374,7 @@ class AegisAgentService : public KeyedService {
   void OnTypeSafeGoalRouteResult(
       uint64_t generation,
       uint64_t settings_generation,
+      std::string observation_id,
       std::string goal,
       AgentWorkflowKind requested_workflow,
       bool ok,
@@ -354,6 +384,19 @@ class AegisAgentService : public KeyedService {
                            bool ok,
                            std::string error,
                            std::optional<AgentGoalRoute> route);
+  void OnGoalRoutingFinalized(uint64_t generation,
+                              bool ok,
+                              std::string error,
+                              std::optional<AgentGoalRoute> route,
+                              bool saved);
+  void PersistCurrentGoalRouteObservation(
+      AgentGoalRouteStatus status,
+      base::OnceCallback<void(bool)> callback);
+  bool CompleteGoalRouteAttempt(std::string_view observation_id,
+                                AgentModelAttempt completion);
+  void OnGoalRouteObservationBound(std::string route_id,
+                                   std::string task_id,
+                                   bool bound);
   void RequestNextModelTurn(const std::string& task_id);
   void EnsureFreshObservationThenContinue(const std::string& task_id,
                                           bool force_refresh);
@@ -430,8 +473,9 @@ class AegisAgentService : public KeyedService {
   std::optional<AgentGoalRoute> goal_route_for_testing_;
   AgentModelRequirements last_goal_model_requirements_;
   AgentModelRoutingMetrics last_goal_routing_metrics_;
-  AgentModelAttempt pending_goal_model_attempt_;
-  base::TimeTicks goal_model_started_at_;
+  std::string current_goal_route_id_;
+  std::vector<AgentGoalRouteObservation> goal_route_observations_;
+  std::map<std::string, base::TimeTicks> goal_route_attempt_started_at_;
   std::map<std::string, std::unique_ptr<ExecutionRuntime>> executions_;
   std::map<std::string, AgentModelCapabilityTracker> model_capabilities_;
   std::map<std::string, ActionResults> action_results_;

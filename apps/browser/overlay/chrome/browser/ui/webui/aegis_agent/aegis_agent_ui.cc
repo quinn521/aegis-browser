@@ -155,6 +155,8 @@ void AddStrings(content::WebUIDataSource* source) {
       "未知：缺少用量或单价", "未知：缺少用量或單價");
   add("routingObservations", "Copy routing observations (JSON)",
       "复制路由观测（JSON）", "複製路由觀測（JSON）");
+  add("unboundRoutingObservations", "Screening records without a task (JSON)",
+      "未关联任务的快筛记录（JSON）", "未關聯任務的快篩記錄（JSON）");
   add("costPartial", "Partial estimate; some usage or prices unknown",
       "部分估算：存在未知用量或单价", "部分估算：存在未知用量或單價");
   add("defaultProfile", "Default effort:output limit (empty: provider default)",
