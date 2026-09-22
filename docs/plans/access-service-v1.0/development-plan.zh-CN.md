@@ -19,11 +19,11 @@ W0–W6 是本计划的工作包，不改变冻结 P0–P8 和 G0–G3 的定义
 | 工作包 | 对应冻结单元 | 工作与前置条件 | 退出证据 |
 | --- | --- | --- | --- |
 | W0 固定 Chromium 底座 | P0 | 刷新 #161/相关源码修复和 #162 状态，冻结新候选；修复真实 GN/编译问题，复用可信候选校验 runner；不修改其他任务的构建工作区 | 当前候选全部必需 Access unit、既有真实入口矩阵实际 PASS；零匹配/部分运行不算完成；保留全部目标、过滤器、日志、退出码和来源树 |
-| W1 请求级路由原型 | P0/P1/P2 | W0 关闭现有基线欠账后，在隔离候选验证可信上下文从 Browser 到实际 proxy/stream 的载体、每组多端点注册与连接隔离；先交接口清单，再实现最小并发场景 | A/B 同 CDN 异组、不同 host 异组、scheme/port、DIRECT/PROXY/REJECT、redirect、POST/PATCH、两 Profile、旧连接及 Network Service 重启的正反路径；接口和性能风险有明确结论 |
+| W1 请求级路由原型 | P0/P1/P2 | W0 关闭现有基线欠账后，在隔离候选验证可信上下文从 Browser 到实际 proxy/stream 的载体、每组多端点注册与连接隔离；先交接口清单，再实现最小并发场景；同阶段完成固定 Chromium 的最小 HTTP/SOCKS5 Profile 认证与隔离原型 | A/B 同 CDN 异组、不同 host 异组、scheme/port、DIRECT/PROXY/REJECT、redirect、POST/PATCH、两 Profile、旧连接及 Network Service 重启的正反路径；A78 的两入口最小认证/隔离用例实际运行；接口和性能风险有明确结论 |
 | W2 Vision 计量可行性 | P0 的早期风险实验；支持后续 P3c/P3d | 与 W0/W1 并行；绑定受控 Linux 服务端、固定 Xray/配置/内核、权威计数点、集中账本与预算原型。资源未就绪就记录 BLOCKED | 长连接未结束时计量、额度耗尽截断、崩溃/重启/失联恢复和 splice 对照；先冻结误差预算再测量；不把 Stats API 轮询当数据面额度执行 |
 | W3 最小纵向闭环 | P1/P2/P3/P5/P6 子集 | W0/W1/W2 各自证据满足前置条件；单执行节点、有限预置测试账户；接可信网站开关、真实身份/节点代次、持久化和 UI 状态 | 同一浏览器产物：网站开启 → HTTP→REALITY → 故障不直连 → Network Service 重启恢复 → 两 Profile 不串用；候选提交失败/取消/旧 ACK 不误报、不重放 |
 | W4 受控 Alpha | P3a/P3b/P3c/P3d/P4/P5/P6 的 G1 范围 | 在 W3 上补安装访客/账户、签名配置/续期/撤销、自动保持/切换、三策略/两动作、真实账本/限速公平、渠道原生能力隔离 | 按原规范逐项判断 G0 后再判断 G1；真实切换用两个受控执行实例验证，单节点故障拒绝不冒充切换；限定容量、用户、网络与未覆盖项 |
-| W5 完整功能候选 | P1–P7 完整面 | 补 SOCKS5 认证、WS+TLS 兼容出站、OTR/Guest、完整采集/终止与 WebSocket/preconnect/BFCache/prerender/通用 prefetch/SW update 等适用矩阵 | 原 G2 的全部适用 A/PF 项通过；两个逻辑节点 fixture 不替代实际多节点拓扑验收；不得把 frame prefetch helper 扩大为全部预取支持 |
+| W5 完整功能候选 | P1–P7 完整面 | 在 W1 认证原型基础上完成 SOCKS5 全矩阵、WS+TLS 兼容出站、OTR/Guest、完整采集/终止与 WebSocket/preconnect/BFCache/prerender/通用 prefetch/SW update 等适用矩阵 | 原 G2 的全部适用 A/PF 项通过；两个逻辑节点 fixture 不替代实际多节点拓扑验收；不得把 frame prefetch helper 扩大为全部预取支持 |
 | W6 可分发候选 | P8 | 在 G2 精确产物上完成四渠道、Mac 支持矩阵、签名公证、Helper/Xray 完整性、安装升级回滚和故障/性能回归 | 原 G3 的最终包、部署、规模与回滚证据；发布动作另按项目授权 |
 
 W2 提前的是架构可行性实验，不宣布依赖完整 P3a 的生产 P3c 已完成。W3 是工程验证里程碑，缺少完整调试、权益、切换或 P0 其他要求时不叫 G1，也不能自动判 G0。G0 的原有代理组合、BLOCK 在途/缓存、HTTP/SOCKS 认证、渠道/身份、资源及 Vision 风险等条件全部保留。
@@ -31,6 +31,8 @@ W2 提前的是架构可行性实验，不宣布依赖完整 P3a 的生产 P3c �
 ## W0/W1 的最小验证集合
 
 先执行 coordinator/store/runtime/transport/dispatch/tracker 的必要 unit，以及已有真实导航、redirect、Worker/SharedWorker/Service Worker、missing endpoint、BLOCK、LoadingPredictor 和 frame prefetch 回归；包括 `MainNavigationConsumesPreparedSnapshotBeforeCommit` 与 `MainNavigationRoutingIsolatedAcrossProfiles`。源码中存在测试名不等于目标确实收录，必须记录实际可枚举测试、匹配数和结果。#161 报告的 17 个 Access 可执行目标是候选 runner 的范围线索，不替代真实 browser_tests，也不是永久固定数量。
+
+W1 同时承担 A78 的早期认证可行性验证：固定 Chromium 实际通过正确 Profile 凭据，拒绝无效/跨 Profile 凭据和外部连接，不向未登记代理提供秘密，关闭 Profile 后会话失效。现有 adapter 只支持 HTTP，不能从 Xray 配置用户密码推断浏览器 SOCKS5 已支持；需要在原型中完成浏览器认证适配并运行证据。该项未通过时 W1 保持 BLOCKED，W4 不得判 G0/G1；W5 保留 SOCKS5 全协议/出站/临时上下文矩阵。
 
 W1 新增路由实验见[技术方案第 2、5 节](architecture-review-20260922.zh-CN.md)。旧 host 保护与新增请求级能力分开验收：冲突拒绝的负路径不能代替多组并存正路径。精确 API、池键、cache/credential 隔离以及最低开销尚待原型证明；未证明前暂停更多规则和入口扩展。
 

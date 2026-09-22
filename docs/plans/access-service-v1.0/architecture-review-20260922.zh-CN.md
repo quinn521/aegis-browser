@@ -60,6 +60,8 @@ QUIC/Alt-Svc/UDP 旁路按冻结协议覆盖明确阻止或受控降级到已验
 
 Network Service 重启必须使旧 registration、ACK 和 request capability 失效；新 context 先完成可信 owner、当前快照/端点注册及精确 ACK，再开放受约束新请求。Chromium 会重建断开的 factory，但这不等于 Aegis 自定义策略自动恢复。[重启机制](https://chromium.googlesource.com/chromium/src/+/main/services/network/README.md)
 
+W1 还必须完成 P0/A78 的最小 HTTP/SOCKS5 Profile 认证与隔离原型，再进入 G0 判断。当前 adapter 仅支持 HTTP；Chromium 官方说明原生 SOCKSv5 不提供认证，因此本项目的 SOCKS5 需要在固定版本做浏览器认证适配，不能只配置 Xray 用户密码。正确凭据成功、错误/跨 Profile 凭据拒绝、仅 loopback、未登记代理不获凭据及 Profile 关闭后认证失效均须实际运行；失败时阻止 G0/G1。W5 才扩展完整两入站×两出站及临时上下文矩阵。[Chromium SOCKS5 边界](https://chromium.googlesource.com/chromium/src/+/HEAD/net/docs/proxy.md)
+
 ### 2.4 事务与迁移
 
 继续使用 PREPARED journal → 完整候选发布 → 执行点精确 ACK → durable commit → finalize。区分 durable intent、候选 runtime、UI pending/committed；ACK 只证明接收和对应执行状态，不证明真实流量走对出口。
@@ -103,7 +105,7 @@ W2 在实际 Linux 服务端适用路径及客户端适用快路径绑定 Xray c
 | 工作包 | 最小证据 | 冻结关联 |
 | --- | --- | --- |
 | W0 固定 native 底座 | 同一候选下必要 unit/browser targets 实际编译运行；候选、工具、过滤器、匹配数、退出码与首个失败可追溯；已有必需入口矩阵不缩减 | P0，G0 部分证据 |
-| W1 请求级路由 | 两顶层网站共用 CDN 的 X/Y、DIRECT/PROXY/REJECT；不同 host 异组；scheme/port/redirect；两个 Profile；旧连接/身份/配置与重启；首次 POST/PATCH 不重复不旁路 | A10/A11/A15/A16/A53/A76/A108/A113/A115，PF01–PF03；各行仅相应用例 |
+| W1 请求级路由 | 两顶层网站共用 CDN 的 X/Y、DIRECT/PROXY/REJECT；不同 host 异组；scheme/port/redirect；两个 Profile；旧连接/身份/配置与重启；首次 POST/PATCH 不重复不旁路；HTTP/SOCKS5 最小认证/隔离原型 | A10/A11/A15/A16/A53/A76/A78/A108/A113/A115，PF01–PF03；各行仅相应用例 |
 | W2 计量可行性 | 固定真实拓扑长连接计量、耗尽、故障恢复和快路径对照；性能与误差原始数据 | A118、PF04/PF09；其他账本/额度行需继续逐项映射 |
 | W3 最小纵向验证 | 可信网站开关 → 真实 HTTP→REALITY → 失败关闭 → Network Service 重启恢复 → 两 Profile；两个 UI 观察同一真实状态，持久化失败不显示成功 | P1/P2/P3/P5/P6 的子集，不单独等于 G0/G1 |
 | W4–W6 扩展与交付 | 完整 G1；再补 P1–P7 全部适用项及 PF，最后最终包 | G1 → G2 → G3 原定义不变 |
