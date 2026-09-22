@@ -14,6 +14,38 @@ import chromium_access_gtests as sut
 
 
 class ChromiumAccessGTestsRunnerTests(unittest.TestCase):
+    def test_command_boundary_rejects_shell_strings_and_unsafe_executables(self):
+        with tempfile.TemporaryDirectory() as root:
+            not_executable = Path(root) / "data"
+            not_executable.write_text("not a tool")
+            for command in ("echo unsafe", [], ["python", "-V"], [str(not_executable)],
+                            [sys.executable, "null\0byte"], [sys.executable, 1]):
+                with self.subTest(command=command), self.assertRaises(ValueError):
+                    sut.command_argv(command)
+            marker = Path(root) / "must-not-exist"
+            payload = f"$(touch {marker}); `touch {marker}`"
+            result = sut.run_process([sys.executable, "-c", "import sys; print(sys.argv[1])", payload])
+            self.assertEqual(result.stdout.strip(), payload)
+            self.assertFalse(marker.exists())
+
+    def test_disk_space_rejects_before_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            options = sut.parser().parse_args([])
+            with mock.patch.object(sut, "verify_sources", return_value={}), \
+                    mock.patch.object(sut.shutil, "disk_usage", return_value=mock.Mock(free=0)):
+                with self.assertRaisesRegex(ValueError, "not enough free space"):
+                    sut.prepare_build(options, root / "src", root, {})
+
+    def test_nonancestor_pin_rejects_before_patch_verification(self):
+        with mock.patch.object(sut, "require_clean"), \
+                mock.patch.object(sut, "git", return_value="head"), \
+                mock.patch.object(sut, "is_ancestor", return_value=False), \
+                mock.patch.object(sut, "verify_tree") as replay:
+            with self.assertRaisesRegex(ValueError, "not an ancestor"):
+                sut.verify_sources(Path("/candidate"))
+        replay.assert_not_called()
+
     def test_chromium_overlay_preserves_v8_gitlink(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
@@ -241,15 +273,9 @@ SuiteTwo/Variant.
             binary.chmod(0o755)
             env = dict(os.environ, AEGIS_TEST_TRACE=str(trace))
 
+            context = sut.TargetContext(src, out, report, env, str(autoninja), 3)
             result = sut.run_target(
-                ("//fake:fake_unittests", "fake:fake_unittests", "fake_unittests"),
-                src=src,
-                out=out,
-                report=report,
-                env=env,
-                autoninja=str(autoninja),
-                jobs=3,
-            )
+                ("//fake:fake_unittests", "fake:fake_unittests", "fake_unittests"), context)
 
             self.assertEqual(result["tests"], 2)
             self.assertEqual(result["result"], "PASS")
@@ -263,8 +289,7 @@ SuiteTwo/Variant.
             row = {}
             with self.assertRaises(subprocess.CalledProcessError):
                 sut.run_target(("//fake:fake_unittests", "fake:fake_unittests", "fake_unittests"),
-                               src=src, out=out, report=report, env=env,
-                               autoninja=str(autoninja), jobs=1, evidence=row)
+                               context, evidence=row)
             self.assertEqual(row["tests"], 2)
             self.assertEqual(row["binarySha256"], sut.sha256(binary))
             self.assertEqual(row["build"], "PASS")

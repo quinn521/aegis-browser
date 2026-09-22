@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+from dataclasses import dataclass
 import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
-from typing import Callable, Iterable
+from typing import Iterable
 
 ROOT = Path(__file__).resolve().parents[2]
 BROWSER = ROOT / "apps" / "browser"
@@ -116,24 +116,42 @@ def tool(name: str, env: dict[str, str] | None = None) -> str:
     return str(Path(found).resolve(strict=True))
 
 
+def command_argv(command: Iterable[str]) -> list[str]:
+    if isinstance(command, (str, bytes)):
+        raise ValueError("commands must be an argv sequence, never a shell string")
+    argv = list(command)
+    if not argv or any(not isinstance(arg, str) or "\0" in arg for arg in argv):
+        raise ValueError("command arguments must be non-NUL strings")
+    executable = Path(argv[0])
+    if not executable.is_absolute():
+        raise ValueError("command executable must be an absolute path")
+    resolved = executable.resolve(strict=True)
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
+        raise ValueError(f"command is not executable: {resolved}")
+    return [str(resolved), *argv[1:]]
+
+
+def run_process(command: Iterable[str], *, cwd=None, env=None,
+                output=subprocess.PIPE, input_text=None, check=True):
+    argv = command_argv(command)
+    # Only validated executable paths and separate literal arguments cross this boundary.
+    return subprocess.run(argv, cwd=cwd, env=env, input=input_text, stdout=output,
+                          stderr=subprocess.STDOUT, text=True, shell=False, check=check)
+
+
 def git(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
-    return subprocess.check_output(
-        [tool("git", env), "-C", str(repo), *args],
-        env=env,
-        text=True,
-        stderr=subprocess.STDOUT,
-    ).strip()
+    env = env if env is not None else execution_env()
+    return run_process([tool("git", env), "-C", str(repo), *args], env=env).stdout.strip()
 
 
 def is_ancestor(repo: Path, base: str, head: str) -> bool:
-    result = subprocess.run(
-        [tool("git"), "-C", str(repo), "merge-base", "--is-ancestor", base, head],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
+    env = execution_env()
+    result = run_process(
+        [tool("git", env), "-C", str(repo), "merge-base", "--is-ancestor", base, head],
+        env=env, check=False,
     )
     if result.returncode not in (0, 1):
-        raise RuntimeError("git merge-base failed while validating Chromium identity")
+        result.check_returncode()
     return result.returncode == 0
 
 
@@ -162,12 +180,38 @@ def require_clean(repo: Path, label: str, *, ignore_submodules: bool = False) ->
         raise ValueError(f"{label} checkout is dirty: {repo}")
 
 
+def overlay_entry(repo: Path, overlay: Path, path: Path, gitlinks: set[str]) -> str:
+    if path.is_symlink():
+        raise ValueError(f"overlay symlinks are not supported: {path}")
+    if not path.is_file():
+        return ""
+    relative = path.relative_to(overlay).as_posix()
+    if ".git" in path.relative_to(overlay).parts:
+        raise ValueError(f"unsafe overlay path: {relative}")
+    for link in gitlinks:
+        if relative == link or relative.startswith(link + "/"):
+            if relative.startswith("v8/"):
+                return ""  # Verified independently in the V8 repository.
+            raise ValueError(f"overlay maps into an unsupported submodule: {relative}")
+    blob = git(repo, "hash-object", "-w", "--", str(path))
+    mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+    return f"{mode} {blob}\t{relative}\0"
+
+
+def apply_overlay(repo: Path, overlay: Path, env: dict[str, str]) -> None:
+    gitlinks = {row.split("\t", 1)[1] for row in git(repo, "ls-files", "--stage", env=env).splitlines()
+                if row.startswith("160000 ")}
+    entries = (overlay_entry(repo, overlay, path, gitlinks) for path in sorted(overlay.rglob("*")))
+    run_process([tool("git", env), "-C", str(repo), "update-index", "-z", "--index-info"],
+                env=env, input_text="".join(entries))
+
+
 def replay_tree(repo: Path, base: str, patches: Path, overlay: Path | None = None) -> str:
     fd, index_name = tempfile.mkstemp(prefix="aegis-access-tree-")
     os.close(fd)
     index = Path(index_name)
     index.unlink()
-    env = dict(os.environ, GIT_INDEX_FILE=str(index))
+    env = dict(execution_env(), GIT_INDEX_FILE=str(index))
     try:
         git(repo, "read-tree", base, env=env)
         for name in series(patches):
@@ -180,29 +224,7 @@ def replay_tree(repo: Path, base: str, patches: Path, overlay: Path | None = Non
                 env=env,
             )
         if overlay is not None:
-            entries = []
-            gitlinks = {row.split("\t", 1)[1] for row in git(repo, "ls-files", "--stage", env=env).splitlines()
-                        if row.startswith("160000 ")}
-            for path in sorted(overlay.rglob("*")):
-                if path.is_symlink():
-                    raise ValueError(f"overlay symlinks are not supported: {path}")
-                if not path.is_file():
-                    continue
-                relative = path.relative_to(overlay).as_posix()
-                if any(part == ".git" for part in path.relative_to(overlay).parts):
-                    raise ValueError(f"unsafe overlay path: {relative}")
-                if any(relative == link or relative.startswith(link + "/") for link in gitlinks):
-                    if relative.startswith("v8/"):
-                        continue  # V8 overlays are verified in the separate V8 repository.
-                    raise ValueError(f"overlay maps into an unsupported submodule: {relative}")
-                blob = git(repo, "hash-object", "-w", "--", str(path))
-                mode = "100755" if path.stat().st_mode & 0o111 else "100644"
-                entries.append(f"{mode} {blob}\t{relative}\0")
-            subprocess.run(
-                [tool("git"), "-C", str(repo), "update-index", "-z", "--index-info"],
-                input="".join(entries), text=True, env=env, check=True,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
+            apply_overlay(repo, overlay, env)
         return git(repo, "write-tree", env=env)
     finally:
         index.unlink(missing_ok=True)
@@ -238,14 +260,7 @@ def run_logged(
     argv = list(command)
     started = now()
     with log.open("w", encoding="utf-8") as stream:
-        completed = subprocess.run(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdout=stream,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
+        completed = run_process(argv, cwd=cwd, env=env, output=stream, check=False)
     write_json(log.with_suffix(log.suffix + ".json"), {
         "command": argv, "cwd": str(cwd), "startedAt": started,
         "finishedAt": now(), "exitCode": completed.returncode,
@@ -253,78 +268,58 @@ def run_logged(
     completed.check_returncode()
 
 
-def run_target(
-    target: tuple[str, str, str],
-    *,
-    src: Path,
-    out: Path,
-    report: Path,
-    env: dict[str, str],
-    autoninja: str,
-    jobs: int,
-    build_jobs: int = 4,
-    evidence: dict[str, object] | None = None,
-    save: Callable[[], None] | None = None,
-) -> dict[str, object]:
+@dataclass
+class TargetContext:
+    src: Path
+    out: Path
+    report: Path
+    env: dict[str, str]
+    ninja: str
+    jobs: int
+    build_jobs: int = 4
+
+
+def build_target(target, context: TargetContext, row, save) -> Path:
     label, ninja_target, binary_name = target
-    row = evidence if evidence is not None else {}
     row.update(label=label, ninjaTarget=ninja_target, binary=binary_name,
                build="RUNNING", listing="NOT_RUN", runtime="NOT_RUN")
-    def persist() -> None:
-        if save is not None:
-            save()
-    persist()
-    build_log = report / f"{binary_name}.build.log"
-    list_log = report / f"{binary_name}.list.log"
-    test_log = report / f"{binary_name}.test.log"
-
-    run_logged(
-        [autoninja, "-C", str(out), f"-j{build_jobs}", ninja_target],
-        cwd=src,
-        env=env,
-        log=build_log,
-    )
-
-    binary = out / binary_name
+    save()
+    log = context.report / f"{binary_name}.build.log"
+    run_logged([context.ninja, "-C", str(context.out), f"-j{context.build_jobs}", ninja_target],
+               cwd=context.src, env=context.env, log=log)
+    binary = context.out / binary_name
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError(f"compiled GTest binary is missing: {binary}")
+    row.update(build="PASS", binarySha256=sha256(binary), buildLog=log.name)
+    return binary
 
-    row.update(build="PASS", binarySha256=sha256(binary), listing="RUNNING")
-    persist()
-    run_logged([str(binary), "--gtest_list_tests"], cwd=src, env=env, log=list_log)
-    listed = list_log.read_text(encoding="utf-8")
-    test_count = count_gtests(listed)
-    if test_count <= 0:
-        raise ValueError(f"GTest target reported zero tests: {label}")
 
-    row.update(listing="PASS", tests=test_count, runtime="RUNNING")
+def list_target(binary: Path, context: TargetContext, row, save) -> None:
+    row["listing"] = "RUNNING"
+    save()
+    log = context.report / f"{binary.name}.list.log"
+    run_logged([str(binary), "--gtest_list_tests"], cwd=context.src, env=context.env, log=log)
+    tests = count_gtests(log.read_text(encoding="utf-8"))
+    if tests <= 0:
+        raise ValueError(f"GTest target reported zero tests: {row['label']}")
+    row.update(listing="PASS", tests=tests, listLog=log.name)
+
+
+def run_target(target, context: TargetContext, evidence=None, save=None) -> dict[str, object]:
+    row = evidence if evidence is not None else {}
+    persist = save if save is not None else lambda: None
+    binary = build_target(target, context, row, persist)
+    list_target(binary, context, row, persist)
+    row["runtime"] = "RUNNING"
     persist()
-    run_logged(
-        [
-            str(binary),
-            f"--test-launcher-jobs={jobs}",
-            "--test-launcher-retry-limit=0",
-            "--test-launcher-print-test-stdio=always",
-        ],
-        cwd=src,
-        env=env,
-        log=test_log,
-    )
+    log = context.report / f"{binary.name}.test.log"
+    run_logged([str(binary), f"--test-launcher-jobs={context.jobs}",
+                "--test-launcher-retry-limit=0", "--test-launcher-print-test-stdio=always"],
+               cwd=context.src, env=context.env, log=log)
     if sha256(binary) != row["binarySha256"]:
         raise ValueError(f"test binary changed during execution: {binary}")
-    row["runtime"] = "PASS"
-    return {
-        **row,
-        "label": label,
-        "ninjaTarget": ninja_target,
-        "binary": binary_name,
-        "binarySha256": sha256(binary),
-        "tests": test_count,
-        "result": "PASS",
-        "buildLog": build_log.name,
-        "listLog": list_log.name,
-        "testLog": test_log.name,
-    }
+    row.update(runtime="PASS", result="PASS", testLog=log.name)
+    return row
 
 
 def resolve_chromium_root() -> Path:
@@ -405,6 +400,100 @@ def verify_stable(sources: list[tuple[Path, str, str]], args_file: Path, args_ha
         raise ValueError("GN arguments changed during execution")
 
 
+def verify_sources(src: Path) -> dict[str, object]:
+    require_clean(ROOT, "product", ignore_submodules=True)
+    require_clean(src, "Chromium", ignore_submodules=True)
+    pin = read_pin(COMMIT_FILE)
+    head = git(src, "rev-parse", "HEAD")
+    if not is_ancestor(src, pin, head):
+        raise ValueError("pinned Chromium commit is not an ancestor of the checkout")
+    tree = verify_tree(src, pin, PATCH_DIR, OVERLAY_DIR)
+    v8 = src / "v8"
+    v8_base = git(src, "rev-parse", pin + ":v8")
+    require_clean(v8, "V8", ignore_submodules=True)
+    v8_head = git(v8, "rev-parse", "HEAD")
+    if not is_ancestor(v8, v8_base, v8_head):
+        raise ValueError("pinned V8 commit is not an ancestor of the checkout")
+    v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR, OVERLAY_DIR / "v8")
+    return {"productHead": git(ROOT, "rev-parse", "HEAD"),
+            "productTree": git(ROOT, "rev-parse", "HEAD^{tree}"),
+            "chromiumVersion": read_pin(VERSION_FILE), "chromiumPin": pin,
+            "chromiumHead": head, "chromiumTree": tree,
+            "sourceComposition": "pinned base + ordered patches + exact product overlay",
+            "v8Base": v8_base, "v8Head": v8_head, "v8Tree": v8_tree}
+
+
+def prepare_build(options, src: Path, report: Path, result):
+    result.update(verify_sources(src))
+    out = Path(options.out).expanduser().resolve() if options.out else src / "out" / "AegisAccessTests"
+    if not out.is_relative_to(src / "out"):
+        raise ValueError("output must be inside this candidate's src/out")
+    args_file = Path(options.args_file).expanduser().resolve() if options.args_file else ARGS_FILE
+    args_text = args_file.read_text(encoding="utf-8")
+    args_hash = sha256(args_file)
+    (report / "args.gn").write_text(args_text, encoding="utf-8")
+    free_gib = shutil.disk_usage(src).free / 1024**3
+    if free_gib < options.min_free_gib:
+        raise ValueError(f"not enough free space: {free_gib:.1f} GiB")
+    env = execution_env()
+    gn = tool(options.gn or "gn", env)
+    ninja = tool(options.ninja or "autoninja", env)
+    result.update(argsFile=str(args_file), argsSha256=args_hash,
+                  productArgsSha256=sha256(ARGS_FILE), outDir=str(out),
+                  tools={"gn": {"path": gn, "sha256": sha256(Path(gn))},
+                         "build": {"path": ninja, "sha256": sha256(Path(ninja))}},
+                  freeGiBAtStart=round(free_gib, 2), inputs=input_hashes(), status="generating")
+    sources = [(ROOT, "product", result["productHead"]),
+               (src, "Chromium", result["chromiumHead"]), (src / "v8", "V8", result["v8Head"])]
+    context = TargetContext(src, out, report, env, ninja, options.jobs, options.build_jobs)
+    return context, (sources, args_file, args_hash), [gn, "gen", str(out), f"--args={args_text}", "--check"]
+
+
+def input_hashes() -> dict[str, str]:
+    return {str(path.relative_to(BROWSER)): sha256(path)
+            for directory in (PATCH_DIR, OVERLAY_DIR)
+            for path in sorted(directory.rglob("*")) if path.is_file()}
+
+
+def run_targets(context, targets, selected, result, state) -> None:
+    result["status"] = "testing"
+    for target, row in zip(targets, result["targets"]):
+        if target[2] not in selected:
+            continue
+        row["result"] = "BUILDING"
+        write_json(state, result)
+        try:
+            run_target(target, context, row, lambda: write_json(state, result))
+        except Exception as error:
+            row.update(result="FAIL", error=str(error))
+            for stage in ("build", "listing", "runtime"):
+                if row.get(stage) == "RUNNING":
+                    row[stage] = "FAIL"
+            raise
+        result["targetCount"] += 1
+        result["testCount"] += row["tests"]
+        write_json(state, result)
+    result["status"] = "PASS" if len(selected) == len(TARGETS) else "PARTIAL_PASS"
+
+
+def finish_run(result, stable_inputs, report, state) -> None:
+    primary_failed = "error" in result
+    stability_error = None
+    if stable_inputs is not None:
+        try:
+            verify_stable(*stable_inputs)
+            result["sourceStable"] = True
+        except Exception as error:
+            stability_error = error
+            result.update(sourceStable=False, status="FAIL", stabilityError=str(error))
+            record_error(error, report / "source-stability.log")
+    result["finishedAt"] = now()
+    write_json(state, result)
+    write_summary(result, report)
+    if stability_error is not None and not primary_failed:
+        raise stability_error
+
+
 def execute(options: argparse.Namespace) -> Path:
     src = resolve_chromium_root() / "src"
     if not (src / "BUILD.gn").is_file():
@@ -423,96 +512,20 @@ def execute(options: argparse.Namespace) -> Path:
     stable_inputs = None
     try:
         write_json(state, result)
-        require_clean(ROOT, "product", ignore_submodules=True)
-        require_clean(src, "Chromium", ignore_submodules=True)
-        product_head = git(ROOT, "rev-parse", "HEAD")
-        chromium_pin = read_pin(COMMIT_FILE)
-        chromium_head = git(src, "rev-parse", "HEAD")
-        if not is_ancestor(src, chromium_pin, chromium_head):
-            raise ValueError("pinned Chromium commit is not an ancestor of the checkout")
-        chromium_tree = verify_tree(src, chromium_pin, PATCH_DIR, OVERLAY_DIR)
-        v8_base = git(src, "rev-parse", chromium_pin + ":v8")
-        v8 = src / "v8"
-        require_clean(v8, "V8", ignore_submodules=True)
-        v8_head = git(v8, "rev-parse", "HEAD")
-        if not is_ancestor(v8, v8_base, v8_head):
-            raise ValueError("pinned V8 commit is not an ancestor of the checkout")
-        v8_tree = verify_tree(v8, v8_base, V8_PATCH_DIR, OVERLAY_DIR / "v8")
-        out = Path(options.out).expanduser().resolve() if options.out else src / "out" / "AegisAccessTests"
-        if not out.is_relative_to(src / "out"):
-            raise ValueError("output must be inside this candidate's src/out")
-        args_file = Path(options.args_file).expanduser().resolve() if options.args_file else ARGS_FILE
-        args_text = args_file.read_text(encoding="utf-8")
-        args_hash = sha256(args_file)
-        (report / "args.gn").write_text(args_text, encoding="utf-8")
-        free_gib = shutil.disk_usage(src).free / 1024**3
-        if free_gib < options.min_free_gib:
-            raise ValueError(f"not enough free space: {free_gib:.1f} GiB")
-        env = execution_env()
-        gn = tool(options.gn or "gn", env)
-        autoninja = tool(options.ninja or "autoninja", env)
-        result.update(productHead=product_head, productTree=git(ROOT, "rev-parse", "HEAD^{tree}"),
-                      chromiumVersion=read_pin(VERSION_FILE), chromiumPin=chromium_pin,
-                      chromiumHead=chromium_head, chromiumTree=chromium_tree,
-                      sourceComposition="pinned base + ordered patches + exact product overlay",
-                      v8Base=v8_base, v8Head=v8_head, v8Tree=v8_tree,
-                      argsFile=str(args_file), argsSha256=args_hash,
-                      productArgsSha256=sha256(ARGS_FILE), outDir=str(out),
-                      tools={"gn": {"path": gn, "sha256": sha256(Path(gn))},
-                             "build": {"path": autoninja, "sha256": sha256(Path(autoninja))}},
-                      freeGiBAtStart=round(free_gib, 2),
-                      inputs={str(p.relative_to(BROWSER)): sha256(p)
-                              for directory in (PATCH_DIR, OVERLAY_DIR)
-                              for p in sorted(directory.rglob("*")) if p.is_file()},
-                      status="generating")
-        stable_inputs = ([(ROOT, "product", product_head), (src, "Chromium", chromium_head),
-                          (v8, "V8", v8_head)], args_file, args_hash)
+        context, stable_inputs, command = prepare_build(options, src, report, result)
         write_json(state, result)
-        run_logged([gn, "gen", str(out), f"--args={args_text}", "--check"],
-                   cwd=src, env=env, log=report / "gn.log")
-        result["status"] = "testing"
-        for target, row in zip(targets, rows):
-            if target[2] not in selected:
-                continue
-            row["result"] = "BUILDING"
-            write_json(state, result)
-            try:
-                row.update(run_target(target, src=src, out=out, report=report, env=env,
-                                      autoninja=autoninja, jobs=options.jobs,
-                                      build_jobs=options.build_jobs, evidence=row,
-                                      save=lambda: write_json(state, result)))
-            except Exception as error:
-                row.update(result="FAIL", error=str(error))
-                for stage in ("build", "listing", "runtime"):
-                    if row.get(stage) == "RUNNING":
-                        row[stage] = "FAIL"
-                raise
-            result["targetCount"] += 1
-            result["testCount"] += row["tests"]
-            write_json(state, result)
-        result["status"] = "PASS" if len(selected) == len(TARGETS) else "PARTIAL_PASS"
+        run_logged(command, cwd=src, env=context.env, log=report / "gn.log")
+        run_targets(context, targets, selected, result, state)
         return report
     except Exception as error:
         result.update(status="FAIL", error=str(error))
         record_error(error, report / "failure.log")
         raise
     finally:
-        primary_failed = "error" in result
-        stability_error = None
-        if stable_inputs is not None:
-            try:
-                verify_stable(*stable_inputs)
-                result["sourceStable"] = True
-            except Exception as error:
-                stability_error = error
-                result.update(sourceStable=False, status="FAIL", stabilityError=str(error))
-                record_error(error, report / "source-stability.log")
-        result["finishedAt"] = now()
-        write_json(state, result)
-        write_summary(result, report)
-        lock.rmdir()
-        if stability_error is not None and not primary_failed:
-            raise stability_error
+        try:
+            finish_run(result, stable_inputs, report, state)
+        finally:
+            lock.rmdir()
 
 
 def parser() -> argparse.ArgumentParser:
