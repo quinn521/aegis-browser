@@ -1,6 +1,6 @@
 # Aegis 访问服务 V1.0：架构复核与实施技术方案
 
-日期：2026-09-22。源码基线：`quinn521/aegis-browser:develop@c4ffb50a0d8efc684aa1ba0022daf5113def19a6`。性质：文档设计决策，产品实现和运行验证仍待完成。
+日期：2026-09-22。源码基线：`quinn521/aegis-browser:develop@dd53b6ec4827b2f8ce730a428a81278aefd05bc5`。性质：文档设计决策，产品实现和运行验证仍待完成。
 
 本文调整实施技术方案、风险验证顺序和首阶段部署规模，不修改[冻结修订 4](spec.zh-CN.md)的用户行为、A01–A118、PF01–PF13 或 G0–G3。`freeze.json` 及其保护文件保持原字节；本文不能成为降级冻结要求的豁免。若原型证明原合同不可实现，提交失败证据、明确行为差异和规范修订，再评审冻结；不能仅修改清单哈希或检查脚本放行。执行顺序见[开发计划](development-plan.zh-CN.md)，下一窗口见[Handoff](handoff-20260920.zh-CN.md)。
 
@@ -13,10 +13,10 @@
 | `AccessServiceCoordinator` 已有普通 DIRECT/PROXY 的 PREPARED、候选发布、精确 ACK、durable commit、回滚和幂等重试 | 不能继续写成“只有生命周期空壳”；也不代表可信 UI、身份/节点生产提交或完整 BLOCK/ALLOW 已接通 | 复用已有事务边界，补真实入口与恢复验证 |
 | `AccessNetworkContextTransport::PartitionState` 只有一个 endpoint 和 exact-host 列表 | 规则可按顶层 SchemefulSite、目标 host、scheme/port、代理组区分，执行层无法完整表达并存路由 | 请求级路由能力是扩展规则和入口前的关键依赖 |
 | PR #162 在 `a7de699bf8916c81e918be7ede423feaa7a6f7a0` 拒绝相交 host 的异组候选，仍为 OPEN/Draft | 这是保护性拒绝，未合入基线，也不提供完整按站点/代理组选路 | 保留保护直到新传输用真实正反路径证明可替代；测试不同 host/不同组，不能只测相交 host |
-| PR #161 当前 H 为 `45837a33c3a4585a25e1a663a01944c49c4cd882`；body 中运行证据绑定旧 H `26e7cd5…` | 旧报告曾在 GN 检查遇到 28 条依赖诊断，不能据此断言新 H 仍是相同失败或已修好 | 重新核验新 H 的候选、首个失败和全部实际执行目标；本次未重跑 native |
+| runner #161 已合入 `f598ccd8792ec0fc30031a74595fe48a2d54db96`；GN 修复 #163 已合入当前 `dd53b6e…` | #163 最终 H `988c509…` 报告原参数完整 GN 检查 PASS（31,751 targets），随后 Ninja 在 bundled LLD 解析 macOS 27 SDK target 时失败，未运行 GTest | GN 修复不等于 native/runtime PASS；核验当前候选、工具/SDK、独立参数变体与实际运行，不能复用旧失败或局部成功放行 |
 | Xray 用户统计存在，但持久账本和传输预算不是 Stats API 的同义词 | 某些 splice 路径统计延迟，适用性取决于固定版本、真实入站/出站和操作系统 | 将计量/截断/崩溃恢复提前为独立 P0 验证，与浏览器底座并行 |
 
-源码依据：[传输状态](https://github.com/quinn521/aegis-browser/blob/c4ffb50a0d8efc684aa1ba0022daf5113def19a6/apps/browser/overlay/chrome/browser/aegis/access/access_network_context_transport.h)、[请求派发](https://github.com/quinn521/aegis-browser/blob/c4ffb50a0d8efc684aa1ba0022daf5113def19a6/apps/browser/overlay/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc)、[协调器](https://github.com/quinn521/aegis-browser/blob/c4ffb50a0d8efc684aa1ba0022daf5113def19a6/apps/browser/overlay/chrome/browser/aegis/access/access_service_coordinator.cc)。开放 PR 只表示独立候选，接续前刷新状态。
+源码依据：[传输状态](https://github.com/quinn521/aegis-browser/blob/c4ffb50a0d8efc684aa1ba0022daf5113def19a6/apps/browser/overlay/chrome/browser/aegis/access/access_network_context_transport.h)、[请求派发](https://github.com/quinn521/aegis-browser/blob/c4ffb50a0d8efc684aa1ba0022daf5113def19a6/apps/browser/overlay/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc)、[协调器](https://github.com/quinn521/aegis-browser/blob/c4ffb50a0d8efc684aa1ba0022daf5113def19a6/apps/browser/overlay/chrome/browser/aegis/access/access_service_coordinator.cc)。[#161](https://github.com/quinn521/aegis-browser/pull/161) 与 [#163](https://github.com/quinn521/aegis-browser/pull/163) 的状态来自本次 GitHub 回读，native 结果引用 #163 对其最终候选的报告，本轮未重新运行。开放 #162 仍是独立候选；其旧 0160 与已合入 GN 的 0160 需在接续时重新协调编号/基线并验证，不能直接拼接旧序列。
 
 ## 2. 请求级路由决策
 

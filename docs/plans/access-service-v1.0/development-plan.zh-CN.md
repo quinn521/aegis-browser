@@ -1,6 +1,6 @@
 # Aegis 访问服务 V1.0：当前开发计划
 
-更新日期：2026-09-22。源码基线：`origin/develop@c4ffb50a0d8efc684aa1ba0022daf5113def19a6`。本次仅调整文档和实施顺序，没有新增产品代码或运行验收。
+更新日期：2026-09-22。源码基线：`origin/develop@dd53b6ec4827b2f8ce730a428a81278aefd05bc5`。本次仅调整文档和实施顺序，没有新增产品代码或运行验收。
 
 ## 当前依据与结论
 
@@ -10,7 +10,7 @@
 
 当前已有普通 DIRECT/PROXY coordinator、候选快照发布、执行 ACK、durable commit、幂等重试以及多个浏览器入口的源码回归。可信 `SetSiteProxy` 用户闭环、身份/节点生产提交、真实 Xray、计量/额度和完整请求矩阵尚未闭合。host 级单 endpoint transport 仍不足以实现全部规则语义；拒绝冲突不能代替不同路由并存。
 
-截至本次读源/PR 元数据核验，没有新增固定 Chromium/GTest 或真实服务 PASS；**G0 继续 UNVERIFIED，G1–G3 未达到**。#161 新 HEAD 的 native 结果须重新核验，旧 HEAD 的 GN 失败只保留为历史证据，不能直接移植到新 HEAD。
+截至本次读源/PR 元数据核验，没有新增固定 Chromium/GTest 或真实服务 PASS；**G0 继续 UNVERIFIED，G1–G3 未达到**。#161 runner 与 #163 GN 修复已合入当前基线。#163 最终候选报告完整 GN 检查 PASS，之后 Ninja 遇到 bundled LLD 与 macOS 27 SDK target 的兼容失败；记录 `use_lld=false` 的独立本地参数变体在继续构建，未有 GTest PASS。本轮未运行 native，合并与 GN 成功均不替代当前候选运行证据。
 
 ## 实施顺序与依赖
 
@@ -18,7 +18,7 @@ W0–W6 是本计划的工作包，不改变冻结 P0–P8 和 G0–G3 的定义
 
 | 工作包 | 对应冻结单元 | 工作与前置条件 | 退出证据 |
 | --- | --- | --- | --- |
-| W0 固定 Chromium 底座 | P0 | 刷新 #161/相关源码修复和 #162 状态，冻结新候选；修复真实 GN/编译问题，复用可信候选校验 runner；不修改其他任务的构建工作区 | 当前候选全部必需 Access unit、既有真实入口矩阵实际 PASS；零匹配/部分运行不算完成；保留全部目标、过滤器、日志、退出码和来源树 |
+| W0 固定 Chromium 底座 | P0 | 复用已合入 #161 runner/#163 GN 修复，刷新 #162 基线与补丁编号；冻结新候选，核对 LLD/SDK 与独立参数变体的真实编译结果；不修改其他任务的构建工作区 | 当前候选全部必需 Access unit、既有真实入口矩阵实际 PASS；零匹配/部分运行不算完成；保留全部目标、过滤器、日志、退出码和来源树 |
 | W1 请求级路由原型 | P0/P1/P2 | W0 关闭现有基线欠账后，在隔离候选验证可信上下文从 Browser 到实际 proxy/stream 的载体、每组多端点注册与连接隔离；先交接口清单，再实现最小并发场景；同阶段完成固定 Chromium 的最小 HTTP/SOCKS5 Profile 认证与隔离原型 | A/B 同 CDN 异组、不同 host 异组、scheme/port、DIRECT/PROXY/REJECT、redirect、POST/PATCH、两 Profile、旧连接及 Network Service 重启的正反路径；A78 的两入口最小认证/隔离用例实际运行；接口和性能风险有明确结论 |
 | W2 Vision 计量可行性 | P0 的早期风险实验；支持后续 P3c/P3d | 与 W0/W1 并行；绑定受控 Linux 服务端、固定 Xray/配置/内核、权威计数点、集中账本与预算原型。资源未就绪就记录 BLOCKED | 长连接未结束时计量、额度耗尽截断、崩溃/重启/失联恢复和 splice 对照；先冻结误差预算再测量；不把 Stats API 轮询当数据面额度执行 |
 | W3 最小纵向闭环 | P1/P2/P3/P5/P6 子集 | W0/W1/W2 各自证据满足前置条件；单执行节点、有限预置测试账户；接可信网站开关、真实身份/节点代次、持久化和 UI 状态 | 同一浏览器产物：网站开启 → HTTP→REALITY → 故障不直连 → Network Service 重启恢复 → 两 Profile 不串用；候选提交失败/取消/旧 ACK 不误报、不重放 |
