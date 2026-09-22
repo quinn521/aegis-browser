@@ -91,22 +91,6 @@ struct TypeSafeGoalChoices {
   bool usage_present = false;
 };
 
-TypeSafeChoiceValue UnknownChoice() {
-  return {.choice = "unknown", .confidence = 0.0};
-}
-
-std::optional<TypeSafeChoiceValue> ParseOptionalChoice(
-    const base::DictValue* answers,
-    std::string_view name,
-    std::span<const std::string_view> allowed_options,
-    std::string* error) {
-  const base::DictValue* answer = answers->FindDict(name);
-  if (!answer) {
-    return UnknownChoice();
-  }
-  return ParseChoice(answer, allowed_options, error);
-}
-
 std::optional<TypeSafeGoalChoices> ParseGoalChoices(std::string_view body,
                                                     std::string* error) {
   std::optional<base::DictValue> root =
@@ -131,13 +115,19 @@ std::optional<TypeSafeGoalChoices> ParseGoalChoices(std::string_view body,
   if (!entry_kind) {
     return std::nullopt;
   }
-  std::optional<TypeSafeChoiceValue> reasoning_need = ParseOptionalChoice(
-      answers, "reasoning_need", kReasoningNeedOptions, error);
-  std::optional<TypeSafeChoiceValue> context_need = ParseOptionalChoice(
-      answers, "context_need", kContextNeedOptions, error);
-  std::optional<TypeSafeChoiceValue> output_need = ParseOptionalChoice(
-      answers, "output_need", kOutputNeedOptions, error);
-  if (!reasoning_need || !context_need || !output_need) {
+  std::optional<TypeSafeChoiceValue> reasoning_need = ParseChoice(
+      answers->FindDict("reasoning_need"), kReasoningNeedOptions, error);
+  if (!reasoning_need) {
+    return std::nullopt;
+  }
+  std::optional<TypeSafeChoiceValue> context_need = ParseChoice(
+      answers->FindDict("context_need"), kContextNeedOptions, error);
+  if (!context_need) {
+    return std::nullopt;
+  }
+  std::optional<TypeSafeChoiceValue> output_need = ParseChoice(
+      answers->FindDict("output_need"), kOutputNeedOptions, error);
+  if (!output_need) {
     return std::nullopt;
   }
   int input_tokens = 0;

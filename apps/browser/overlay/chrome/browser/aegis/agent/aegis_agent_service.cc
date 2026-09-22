@@ -265,6 +265,17 @@ AgentModelRequirements DefaultModelRequirements(
           .requires_tool_calls = true};
 }
 
+AgentModelRequirements GoalQualificationModelRequirements() {
+  // Goal qualification runs before TypeSafe can replace a UI workflow hint
+  // with measured requirements. Admit any model that can execute a basic
+  // tool-using task; the qualified requirements are enforced before the
+  // route is returned and again when the task is created.
+  return {.reasoning = AgentReasoningNeed::kBasic,
+          .context = AgentContextNeed::kUnknown,
+          .output = AgentOutputNeed::kMultiStep,
+          .requires_tool_calls = true};
+}
+
 const AgentModelDestination& ActiveModelDestination(const AgentTask& task) {
   return task.model_routing_metrics().fallback_used &&
                  task.scope().model_fallback_destination
@@ -940,6 +951,17 @@ void AegisAgentService::RouteGoal(std::string goal,
                             std::nullopt);
     return;
   }
+  std::string admission_error;
+  if (!SelectModelRoute(GoalQualificationModelRequirements(),
+                        &admission_error)) {
+    std::move(callback).Run(
+        false,
+        admission_error.empty()
+            ? "Configure an authorized Agent model before planning"
+            : std::move(admission_error),
+        std::nullopt);
+    return;
+  }
   // A rejected concurrent request must not overwrite the requirements or
   // evidence owned by the request that is already in flight.
   last_goal_model_requirements_ =
@@ -1274,6 +1296,17 @@ void AegisAgentService::OnTypeSafeGoalRouteResult(
     *route = ConstrainGoalRouteToUserIntent(goal, std::move(*route));
     std::string validation_error;
     if (ValidateAndNormalizeGoalRoute(&*route, &validation_error)) {
+      std::string model_route_error;
+      if (!SelectModelRoute(last_goal_model_requirements_,
+                            &model_route_error)) {
+        CompleteGoalRouting(
+            generation, false,
+            model_route_error.empty()
+                ? "No authorized Agent model is available"
+                : std::move(model_route_error),
+            std::nullopt);
+        return;
+      }
       CompleteGoalRouting(generation, true, std::string(), std::move(route));
       return;
     }

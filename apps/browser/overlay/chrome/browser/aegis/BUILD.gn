@@ -439,6 +439,8 @@ test("aegis_browser_unittests") {
       "//chrome/browser/actor/ui:test_support",
       "//chrome/browser/ui/tabs:tab_strip",
       "//chrome/browser/ui/webui/aegis",
+      "//chrome/browser/ui/webui/aegis_agent",
+      "//chrome/browser/ui/webui/aegis_agent:impl",
       "//chrome/common/aegis",
       "//components/actor/core",
       "//components/download/public/common:public",

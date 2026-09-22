@@ -26,6 +26,7 @@
 #include "chrome/browser/aegis/agent/typesafe_goal_router_client.h"
 #include "chrome/browser/aegis/aegis_service.h"
 #include "chrome/browser/aegis/aegis_service_factory.h"
+#include "chrome/browser/ui/webui/aegis_agent/aegis_agent_page_handler.h"
 #include "chrome/common/actor/action_result.h"
 #include "chrome/common/aegis/features.h"
 #include "chrome/common/aegis/pref_names.h"
@@ -527,12 +528,208 @@ TEST_F(AegisAgentServiceTest, TypeSafeRoutesHighConfidenceGoalBeforeLocalModel) 
   factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
   ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
       kTypeSafeSystemOneEndpoint,
-      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})"));
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"basic":0.05,"strong":0.05}},"context_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short":0.05,"long":0.05}},"output_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short_extraction":0.03,"comprehensive":0.03,"multi_step":0.04}}}})"));
   EXPECT_TRUE(result.Get<0>()) << result.Get<1>();
   ASSERT_TRUE(result.Get<2>());
   EXPECT_EQ(result.Get<2>()->entry_kind, AgentGoalEntryKind::kWebSearch);
   EXPECT_EQ(result.Get<2>()->target, "Compare three USB hubs");
   EXPECT_FALSE(factory.IsPending("http://127.0.0.1:8765/v1/responses"));
+}
+
+TEST_F(AegisAgentServiceTest,
+       PageHandlerDefersResearchAdmissionUntilTypeSafeQualification) {
+  AegisService* settings = ConfigureTypeSafeGoalRouting();
+  ASSERT_TRUE(settings);
+  AgentModelCatalogEntry basic = ServiceModelEntry(
+      "basic-only", "http://127.0.0.1:8771/v1", "basic-fixture", 10);
+  basic.supports_strong_reasoning = false;
+  std::string routing_error;
+  ASSERT_TRUE(settings->SetAgentModelRoutingSettings(
+      AgentModelSelectionMode::kBalanced, {basic}, &routing_error))
+      << routing_error;
+
+  network::TestURLLoaderFactory factory;
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+  AegisAgentPageHandler handler(
+      profile_, /*browser=*/nullptr, /*ui=*/nullptr,
+      mojo::PendingRemote<aegis_agent::mojom::Page>(),
+      mojo::PendingReceiver<aegis_agent::mojom::PageHandler>());
+  base::test::TestFuture<aegis_agent::mojom::TaskSnapshotPtr> result;
+  handler.CreateTask("Find today's weather in Shanghai",
+                     aegis_agent::mojom::AgentMode::kAsk,
+                     aegis_agent::mojom::Workflow::kResearch,
+                     /*approved_origins=*/{},
+                     /*schedule_interval_minutes=*/0, result.GetCallback());
+
+  DrainTaskRunners();
+  ASSERT_EQ(factory.NumPending(), 1);
+  EXPECT_TRUE(factory.IsPending(kTypeSafeSystemOneEndpoint));
+  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
+      kTypeSafeSystemOneEndpoint,
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"basic","confidence":0.9,"probabilities":{"unknown":0.05,"basic":0.9,"strong":0.05}},"context_need":{"type":"choice","choice":"short","confidence":0.9,"probabilities":{"unknown":0.05,"short":0.9,"long":0.05}},"output_need":{"type":"choice","choice":"multi_step","confidence":0.9,"probabilities":{"unknown":0.03,"short_extraction":0.03,"comprehensive":0.04,"multi_step":0.9}}}})"));
+  ASSERT_TRUE(result.Get());
+  EXPECT_EQ(service->LastGoalModelRequirements().reasoning,
+            AgentReasoningNeed::kBasic);
+}
+
+TEST_F(AegisAgentServiceTest,
+       TypeSafeBasicQualificationAdmitsBasicOnlyPoolAfterIntentConstraint) {
+  AegisService* settings = ConfigureTypeSafeGoalRouting();
+  ASSERT_TRUE(settings);
+  AgentModelCatalogEntry basic = ServiceModelEntry(
+      "basic-only", "http://127.0.0.1:8771/v1", "basic-fixture", 10);
+  basic.supports_strong_reasoning = false;
+  std::string routing_error;
+  ASSERT_TRUE(settings->SetAgentModelRoutingSettings(
+      AgentModelSelectionMode::kBalanced, {basic}, &routing_error))
+      << routing_error;
+
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  const AgentModelRequirements predicted_research{
+      .reasoning = AgentReasoningNeed::kStrong,
+      .context = AgentContextNeed::kUnknown,
+      .output = AgentOutputNeed::kMultiStep,
+      .requires_tool_calls = true};
+  EXPECT_FALSE(service->SelectModelRoute(predicted_research, &routing_error));
+
+  network::TestURLLoaderFactory factory;
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> result;
+  service->RouteGoal("List my tabs", AgentWorkflowKind::kResearch,
+                     result.GetCallback());
+  factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
+  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
+      kTypeSafeSystemOneEndpoint,
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"basic","confidence":0.9,"probabilities":{"unknown":0.05,"basic":0.9,"strong":0.05}},"context_need":{"type":"choice","choice":"short","confidence":0.9,"probabilities":{"unknown":0.05,"short":0.9,"long":0.05}},"output_need":{"type":"choice","choice":"multi_step","confidence":0.9,"probabilities":{"unknown":0.03,"short_extraction":0.03,"comprehensive":0.04,"multi_step":0.9}}}})"));
+
+  EXPECT_TRUE(result.Get<0>()) << result.Get<1>();
+  ASSERT_TRUE(result.Get<2>());
+  EXPECT_EQ(result.Get<2>()->workflow,
+            AgentWorkflowKind::kBrowserSteward);
+  EXPECT_EQ(result.Get<2>()->entry_kind, AgentGoalEntryKind::kBrowserOnly);
+  EXPECT_EQ(service->LastGoalModelRequirements().reasoning,
+            AgentReasoningNeed::kBasic);
+  const std::optional<AgentModelRoutePlan> qualified_route =
+      service->SelectModelRoute(service->LastGoalModelRequirements(),
+                                &routing_error);
+  ASSERT_TRUE(qualified_route) << routing_error;
+  EXPECT_EQ(qualified_route->primary.model, "basic-fixture");
+  EXPECT_TRUE(service->CurrentGoalRoutingMetrics(true).typesafe_qualified);
+}
+
+TEST_F(AegisAgentServiceTest,
+       GoalQualificationRejectsDisabledOrNoToolPoolBeforeDispatch) {
+  AegisService* settings = ConfigureTypeSafeGoalRouting();
+  ASSERT_TRUE(settings);
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  network::TestURLLoaderFactory factory;
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+
+  for (const bool disable : {true, false}) {
+    AgentModelCatalogEntry unavailable = ServiceModelEntry(
+        disable ? "disabled" : "no-tools",
+        "http://127.0.0.1:8772/v1", "unavailable-fixture", 10);
+    unavailable.supports_strong_reasoning = false;
+    unavailable.enabled = !disable;
+    unavailable.supports_tool_calls = disable;
+    std::string routing_error;
+    ASSERT_TRUE(settings->SetAgentModelRoutingSettings(
+        AgentModelSelectionMode::kBalanced, {unavailable}, &routing_error))
+        << routing_error;
+
+    base::test::TestFuture<bool, std::string,
+                           std::optional<AgentGoalRoute>> result;
+    service->RouteGoal("List my tabs", AgentWorkflowKind::kResearch,
+                       result.GetCallback());
+    DrainTaskRunners();
+    ASSERT_TRUE(result.IsReady());
+    EXPECT_FALSE(result.Get<0>());
+    EXPECT_THAT(result.Get<1>(), HasSubstr("no authorized model"));
+    EXPECT_EQ(factory.NumPending(), 0);
+  }
+}
+
+TEST_F(AegisAgentServiceTest,
+       TypeSafeStrongQualificationDoesNotDowngradeToBasicOnlyPool) {
+  AegisService* settings = ConfigureTypeSafeGoalRouting();
+  ASSERT_TRUE(settings);
+  AgentModelCatalogEntry basic = ServiceModelEntry(
+      "basic-only", "http://127.0.0.1:8773/v1", "basic-fixture", 10);
+  basic.supports_strong_reasoning = false;
+  std::string routing_error;
+  ASSERT_TRUE(settings->SetAgentModelRoutingSettings(
+      AgentModelSelectionMode::kBalanced, {basic}, &routing_error))
+      << routing_error;
+
+  network::TestURLLoaderFactory factory;
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> result;
+  service->RouteGoal("Compare three USB hubs", AgentWorkflowKind::kResearch,
+                     result.GetCallback());
+  factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
+  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
+      kTypeSafeSystemOneEndpoint,
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"strong","confidence":0.9,"probabilities":{"unknown":0.05,"basic":0.05,"strong":0.9}},"context_need":{"type":"choice","choice":"long","confidence":0.9,"probabilities":{"unknown":0.05,"short":0.05,"long":0.9}},"output_need":{"type":"choice","choice":"comprehensive","confidence":0.9,"probabilities":{"unknown":0.03,"short_extraction":0.03,"comprehensive":0.9,"multi_step":0.04}}}})"));
+
+  EXPECT_FALSE(result.Get<0>());
+  EXPECT_THAT(result.Get<1>(), HasSubstr("no authorized model"));
+  EXPECT_EQ(service->LastGoalModelRequirements().reasoning,
+            AgentReasoningNeed::kStrong);
+  EXPECT_TRUE(service->CurrentGoalRoutingMetrics(true).typesafe_qualified);
+  EXPECT_FALSE(factory.IsPending("http://127.0.0.1:8773/v1/responses"));
+}
+
+TEST_F(AegisAgentServiceTest,
+       MalformedTypeSafeCapabilitiesPreserveStrongFallbackRequirements) {
+  AegisService* settings = ConfigureTypeSafeGoalRouting();
+  ASSERT_TRUE(settings);
+  AgentModelCatalogEntry basic = ServiceModelEntry(
+      "basic-only", "http://127.0.0.1:8774/v1", "basic-fixture", 10);
+  basic.supports_strong_reasoning = false;
+  std::string routing_error;
+  ASSERT_TRUE(settings->SetAgentModelRoutingSettings(
+      AgentModelSelectionMode::kBalanced, {basic}, &routing_error))
+      << routing_error;
+
+  network::TestURLLoaderFactory factory;
+  AegisAgentService* service =
+      AegisAgentServiceFactory::GetForProfile(profile_);
+  ASSERT_TRUE(service);
+  service->SetTypeSafeGoalRouterClientForTesting(
+      std::make_unique<TypeSafeGoalRouterClient>(factory.GetSafeWeakWrapper()));
+  service->SetGoalRouterClientForTesting(
+      std::make_unique<AgentModelClient>(factory.GetSafeWeakWrapper()));
+  base::test::TestFuture<bool, std::string, std::optional<AgentGoalRoute>> result;
+  service->RouteGoal("Compare three USB hubs", AgentWorkflowKind::kResearch,
+                     result.GetCallback());
+  factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
+  ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
+      kTypeSafeSystemOneEndpoint,
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})"));
+
+  EXPECT_FALSE(result.Get<0>());
+  EXPECT_THAT(result.Get<1>(), HasSubstr("no authorized model"));
+  EXPECT_EQ(service->LastGoalModelRequirements().reasoning,
+            AgentReasoningNeed::kStrong);
+  const AgentModelRoutingMetrics metrics =
+      service->CurrentGoalRoutingMetrics(/*route_was_required=*/true);
+  EXPECT_FALSE(metrics.typesafe_qualified);
+  EXPECT_EQ(metrics.typesafe_outcome, "fallback");
+  EXPECT_FALSE(factory.IsPending("http://127.0.0.1:8774/v1/responses"));
 }
 
 TEST_F(AegisAgentServiceTest,
@@ -572,7 +769,7 @@ TEST_F(AegisAgentServiceTest,
 
   ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
       kTypeSafeSystemOneEndpoint,
-      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})"));
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.9,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"basic":0.05,"strong":0.05}},"context_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short":0.05,"long":0.05}},"output_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short_extraction":0.03,"comprehensive":0.03,"multi_step":0.04}}}})"));
   EXPECT_TRUE(result.Get<0>()) << result.Get<1>();
   FlushTaskStore(service);
 
@@ -792,7 +989,7 @@ TEST_F(AegisAgentServiceTest,
   factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
   ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
       kTypeSafeSystemOneEndpoint,
-      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.79,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})"));
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"research","confidence":0.79,"probabilities":{"research":0.91,"browser_steward":0.03,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"basic":0.05,"strong":0.05}},"context_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short":0.05,"long":0.05}},"output_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short_extraction":0.03,"comprehensive":0.03,"multi_step":0.04}}}})"));
   factory.WaitForRequest(local_endpoint);
   EXPECT_EQ(factory.NumPending(), 1);
   ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
@@ -821,7 +1018,7 @@ TEST_F(AegisAgentServiceTest,
   factory.WaitForRequest(GURL(kTypeSafeSystemOneEndpoint));
   ASSERT_TRUE(factory.SimulateResponseForPendingRequest(
       kTypeSafeSystemOneEndpoint,
-      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"browser_steward","confidence":0.9,"probabilities":{"research":0.03,"browser_steward":0.91,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}}}})"));
+      R"({"model":"jev-1.13.0","answers":{"workflow":{"type":"choice","choice":"browser_steward","confidence":0.9,"probabilities":{"research":0.03,"browser_steward":0.91,"safe_download":0.03,"shopping":0.03}},"entry_kind":{"type":"choice","choice":"web_search","confidence":0.9,"probabilities":{"browser_only":0.05,"web_search":0.95}},"reasoning_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"basic":0.05,"strong":0.05}},"context_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short":0.05,"long":0.05}},"output_need":{"type":"choice","choice":"unknown","confidence":0.9,"probabilities":{"unknown":0.9,"short_extraction":0.03,"comprehensive":0.03,"multi_step":0.04}}}})"));
   factory.WaitForRequest(local_endpoint);
   EXPECT_EQ(factory.NumPending(), 1);
   ASSERT_TRUE(factory.SimulateResponseForPendingRequest(

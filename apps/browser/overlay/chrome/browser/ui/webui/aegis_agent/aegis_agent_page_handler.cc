@@ -783,13 +783,6 @@ void AegisAgentPageHandler::CreateTask(
   const std::optional<AgentMode> converted_mode = ConvertMode(mode);
   const std::optional<AgentWorkflowKind> converted_workflow =
       ConvertWorkflow(workflow);
-  std::string initial_model_route_error;
-  const std::optional<aegis::agent::AgentModelRoutePlan> initial_model_route =
-      service_ && converted_workflow
-          ? service_->SelectModelRoute(
-                ModelRequirementsForWorkflow(*converted_workflow),
-                &initial_model_route_error)
-          : std::nullopt;
   std::optional<std::vector<url::Origin>> requested_origins;
   if (!approved_origins.empty()) {
     requested_origins = ParseApprovedOrigins(approved_origins);
@@ -805,10 +798,6 @@ void AegisAgentPageHandler::CreateTask(
              resolved_goal.size() > 4096u || invalid_explicit_origins ||
              !IsValidSchedule(*converted_mode, schedule_interval_minutes)) {
     last_error_ = "Task input is invalid";
-  } else if (!initial_model_route) {
-    last_error_ = initial_model_route_error.empty()
-                      ? "Configure an authorized Agent model before planning"
-                      : std::move(initial_model_route_error);
   } else {
     const AgentWorkflowKind resolved_workflow =
         aegis::agent::ConstrainWorkflowToUserIntent(resolved_goal,
