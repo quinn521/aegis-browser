@@ -1,15 +1,19 @@
-From 1e418e37e1407830880841dde1a96f1aefbb3059 Mon Sep 17 00:00:00 2001
+From e3f13036f5a615a7fd14b0714576251cf9f4bcc6 Mon Sep 17 00:00:00 2001
 From: quinn521 <287940781+quinn521@users.noreply.github.com>
-Date: Wed, 23 Sep 2026 07:59:39 +0800
+Date: Wed, 23 Sep 2026 08:34:27 +0800
 Subject: [PATCH] fix(access): reject conflicting site proxy transport groups
 
 ---
  chrome/browser/aegis/BUILD.gn                 |   2 +
+ .../access_proxying_url_loader_factory.h      |   1 +
  ...proxying_url_loader_factory_browsertest.cc |  71 +++++++++++
+ .../access_proxying_url_tracked_request.cc    |   2 +
+ .../access/access_published_request_runtime.h |   3 +-
  .../access/access_request_dispatch_state.h    |   3 +-
  .../browser/aegis/access/access_rule_store.cc |  16 +--
  .../access/access_rule_store_unittest.cc      |  25 ++++
  .../access/access_service_coordinator.cc      |  14 +--
+ .../aegis/access/access_service_coordinator.h |   3 +-
  .../access_service_coordinator_unittest.cc    | 118 +++++++++++++++---
  .../aegis_access/access_policy_evaluator.h    |   1 +
  .../access_route_planner_contract_test.h      |  63 ++++++++++
@@ -17,7 +21,7 @@ Subject: [PATCH] fix(access): reject conflicting site proxy transport groups
  .../access_route_planner_unittest.cc          |  10 ++
  .../aegis_access/site_proxy_rule_group.cc     |  21 ++++
  .../aegis_access/site_proxy_rule_group.h      |  18 +++
- 13 files changed, 329 insertions(+), 35 deletions(-)
+ 17 files changed, 336 insertions(+), 37 deletions(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 93b385350a9a78f0360e44d4658432d1184d5033..d50cb76f9ed70e9c33dd2b813862ea2ab8d9fb62 100644
@@ -32,6 +36,18 @@ index 93b385350a9a78f0360e44d4658432d1184d5033..d50cb76f9ed70e9c33dd2b813862ea2a
        "//chrome/browser/bookmarks",
        "//chrome/browser/net:impl",
        "//chrome/browser/notifications:test_support",
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+index d1ce8950623d063c50ce77b757ca981ce922291d..a2edc318f8948f94faa6b687cf562f8ab911365e 100644
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
+@@ -12,6 +12,7 @@
+ #include "base/containers/unique_ptr_adapters.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
++#include "chrome/browser/aegis/access/access_browser_request_adapter.h"
+ #include "components/aegis_access/request_policy_context.h"
+ #include "content/public/browser/frame_tree_node_id.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c34271ea97 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
@@ -142,6 +158,40 @@ index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c3
  #if !BUILDFLAG(IS_CHROMEOS)
  IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                         MainNavigationRoutingIsolatedAcrossProfiles) {
+diff --git a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
+index 4ced1887a765cf6b53073ea59b576d4263f74924..c8a66d8ad6cbd71fcdc8e8a89d5972a9c2422fb4 100644
+--- a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
+@@ -13,6 +13,8 @@
+ #include "net/base/net_errors.h"
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/cpp/url_loader_completion_status.h"
++#include "services/network/public/mojom/early_hints.mojom.h"
++#include "services/network/public/mojom/url_response_head.mojom.h"
+ 
+ namespace aegis::access {
+ namespace {
+diff --git a/chrome/browser/aegis/access/access_published_request_runtime.h b/chrome/browser/aegis/access/access_published_request_runtime.h
+index a4ac8de7e101ec7763e0520957f2ba95ad18b961..48be85326f7401666a4fc34c147e65636d6ec298 100644
+--- a/chrome/browser/aegis/access/access_published_request_runtime.h
++++ b/chrome/browser/aegis/access/access_published_request_runtime.h
+@@ -8,6 +8,7 @@
+ #include <optional>
+ #include <string>
+ 
++#include "base/memory/raw_ptr.h"
+ #include "base/supports_user_data.h"
+ #include "chrome/browser/aegis/access/access_rule_store.h"
+ #include "components/aegis_access/access_policy_evaluator.h"
+@@ -90,7 +91,7 @@ class AccessPublishedRequestRuntime : public base::SupportsUserData::Data {
+   AccessPolicyPublicationResult PublishPolicySnapshot(
+       const StoredPolicySnapshot& stored);
+ 
+-  Profile* const profile_;
++  const raw_ptr<Profile> profile_;
+   std::map<std::string, aegis_access::PublishedAccessPolicySnapshot>
+       policy_snapshots_;
+ };
 diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.h b/chrome/browser/aegis/access/access_request_dispatch_state.h
 index 813c8b752a47810c2ef950228fb154e5ce49665d..374dc11136a22e068e44d11d7b0a4c8a88b11d09 100644
 --- a/chrome/browser/aegis/access/access_request_dispatch_state.h
@@ -295,6 +345,27 @@ index a98eb1d5f6faae75486b3c4f63b4c194966d8b33..0ce21c40dc52118f74677e089b6b383f
        });
    if (incompatible) {
      return Result(AccessMutationTransactionStatus::kUnsupportedTransportScope);
+diff --git a/chrome/browser/aegis/access/access_service_coordinator.h b/chrome/browser/aegis/access/access_service_coordinator.h
+index d2ab100a8b73c91c1314361ad8cff90b27020a66..ee42e777e0e0338f91097c5900eeb23397e901aa 100644
+--- a/chrome/browser/aegis/access/access_service_coordinator.h
++++ b/chrome/browser/aegis/access/access_service_coordinator.h
+@@ -8,6 +8,7 @@
+ #include <optional>
+ 
+ #include "base/functional/callback_forward.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/supports_user_data.h"
+ #include "base/timer/timer.h"
+@@ -102,7 +103,7 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
+       base::OnceCallback<void(AccessMutationTransactionResult)> completion,
+       AccessMutationTransactionResult result);
+ 
+-  Profile* const profile_;
++  const raw_ptr<Profile> profile_;
+   std::unique_ptr<AccessRuleStore> store_;
+   uint64_t state_generation_ = 0;
+   bool mutation_in_flight_ = false;
 diff --git a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
 index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474e85bd2b5 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
