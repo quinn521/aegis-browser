@@ -161,3 +161,4 @@
 0160-fix-native-gn-dependency-wiring.patch
 0161-feat-aegis-route-agent-tasks-across-model-pool.patch
 0162-fix-access-reject-conflicting-site-proxy-groups.patch
+0163-fix-history-routing-without-synced-sidebar.patch

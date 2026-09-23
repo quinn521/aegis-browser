@@ -974,10 +974,11 @@ expected_access_tail="$(cat <<'EOF'
 0160-fix-native-gn-dependency-wiring.patch
 0161-feat-aegis-route-agent-tasks-across-model-pool.patch
 0162-fix-access-reject-conflicting-site-proxy-groups.patch
+0163-fix-history-routing-without-synced-sidebar.patch
 EOF
 )"
-[[ "$(tail -n 48 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "patch tail must retain model routing 0161 before Access transport 0162"
+[[ "$(tail -n 49 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "patch tail must retain Access transport 0162 before History 0163"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
