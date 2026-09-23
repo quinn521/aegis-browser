@@ -117,9 +117,11 @@ ownership_support_block="$(
   fail "shared ownership support must remain test-only"
 [[ "$ownership_support_block" == *'sources = [ "request_ownership_registry_test_support.cc" ]'* ]] ||
   fail "shared ownership support must compile its out-of-line implementation"
+[[ "$ownership_support_block" == *'"//base",'* ]] ||
+  fail "shared ownership support must expose its raw_ptr base dependency"
 [[ "$ownership_support_block" == *'public = [ "request_ownership_registry_test_support.h" ]'* ]] ||
   fail "shared ownership support must publish its header"
-[[ "$ownership_support_block" == *'public_deps = [ ":request_ownership_registry" ]'* ]] ||
+[[ "$ownership_support_block" == *'public_deps = ['*'":request_ownership_registry",'*'"//base",'* ]] ||
   fail "shared ownership support must export the registry header dependency"
 [[ "$(rg -F -c '"request_ownership_registry_test_support.h"' "$COMPONENT_BUILD")" == 1 ]] ||
   fail "shared ownership support header must have exactly one owner"
