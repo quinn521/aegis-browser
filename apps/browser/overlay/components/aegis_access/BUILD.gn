@@ -246,6 +246,7 @@ test("aegis_access_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
     "//net:test_support",
     "//services/network:network_service",

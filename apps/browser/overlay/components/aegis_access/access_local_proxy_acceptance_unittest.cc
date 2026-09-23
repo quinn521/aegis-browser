@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/notreached.h"
 #include "base/test/task_environment.h"
+#include "mojo/core/embedder/embedder.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/base/isolation_info.h"
 #include "net/base/load_flags.h"
@@ -111,6 +112,8 @@ void CountProxyRequest(std::atomic<size_t>* connect_counter,
 
 class AccessLocalProxyAcceptanceTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() { mojo::core::Init(); }
+
   AccessLocalProxyAcceptanceTest()
       : task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
         http_origin_(net::test_server::EmbeddedTestServer::TYPE_HTTP),
