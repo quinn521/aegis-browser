@@ -163,3 +163,4 @@
 0162-fix-access-reject-conflicting-site-proxy-groups.patch
 0163-fix-history-routing-without-synced-sidebar.patch
 0164-fix-settings-relaunch-test-dom-access.patch
+0165-fix-access-proxy-acceptance-mojo-init.patch

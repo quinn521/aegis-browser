@@ -925,6 +925,8 @@ fi
   "$SERIES_FILE")" == 1 ]] || fail "patch 0150 must appear once in series"
 [[ "$(rg -F -c '0151-fix-aegis-identity-generation-state-style.patch' \
   "$SERIES_FILE")" == 1 ]] || fail "patch 0151 must appear once in series"
+[[ "$(rg -F -c '0165-fix-access-proxy-acceptance-mojo-init.patch' \
+  "$SERIES_FILE")" == 1 ]] || fail "patch 0165 must appear once in series"
 expected_access_tail="$(cat <<'EOF'
 0115-feat-aegis-add-trusted-policy-context-matching.patch
 0116-feat-aegis-add-access-rule-store-recovery.patch
@@ -976,10 +978,11 @@ expected_access_tail="$(cat <<'EOF'
 0162-fix-access-reject-conflicting-site-proxy-groups.patch
 0163-fix-history-routing-without-synced-sidebar.patch
 0164-fix-settings-relaunch-test-dom-access.patch
+0165-fix-access-proxy-acceptance-mojo-init.patch
 EOF
 )"
-[[ "$(tail -n 50 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "patch tail must retain History 0163 before Settings 0164"
+[[ "$(tail -n 51 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "patch tail must retain Settings 0164 before Mojo 0165"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
