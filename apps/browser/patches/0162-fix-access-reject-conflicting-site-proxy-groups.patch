@@ -1,19 +1,23 @@
-From 1345735f96b32958e04cb6df493fda1e2fffadf4 Mon Sep 17 00:00:00 2001
+From 1e418e37e1407830880841dde1a96f1aefbb3059 Mon Sep 17 00:00:00 2001
 From: quinn521 <287940781+quinn521@users.noreply.github.com>
-Date: Tue, 22 Sep 2026 20:35:25 +0800
+Date: Wed, 23 Sep 2026 07:59:39 +0800
 Subject: [PATCH] fix(access): reject conflicting site proxy transport groups
 
 ---
  chrome/browser/aegis/BUILD.gn                 |   2 +
  ...proxying_url_loader_factory_browsertest.cc |  71 +++++++++++
+ .../access/access_request_dispatch_state.h    |   3 +-
+ .../browser/aegis/access/access_rule_store.cc |  16 +--
+ .../access/access_rule_store_unittest.cc      |  25 ++++
  .../access/access_service_coordinator.cc      |  14 +--
  .../access_service_coordinator_unittest.cc    | 118 +++++++++++++++---
+ .../aegis_access/access_policy_evaluator.h    |   1 +
  .../access_route_planner_contract_test.h      |  63 ++++++++++
  .../access_route_planner_native_test.cc       |   2 +
  .../access_route_planner_unittest.cc          |  10 ++
  .../aegis_access/site_proxy_rule_group.cc     |  21 ++++
  .../aegis_access/site_proxy_rule_group.h      |  18 +++
- 9 files changed, 293 insertions(+), 26 deletions(-)
+ 13 files changed, 329 insertions(+), 35 deletions(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 93b385350a9a78f0360e44d4658432d1184d5033..d50cb76f9ed70e9c33dd2b813862ea2ab8d9fb62 100644
@@ -138,6 +142,132 @@ index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c3
  #if !BUILDFLAG(IS_CHROMEOS)
  IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                         MainNavigationRoutingIsolatedAcrossProfiles) {
+diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.h b/chrome/browser/aegis/access/access_request_dispatch_state.h
+index 813c8b752a47810c2ef950228fb154e5ce49665d..374dc11136a22e068e44d11d7b0a4c8a88b11d09 100644
+--- a/chrome/browser/aegis/access/access_request_dispatch_state.h
++++ b/chrome/browser/aegis/access/access_request_dispatch_state.h
+@@ -7,6 +7,7 @@
+ #include <string>
+ 
+ #include "base/functional/callback_forward.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/supports_user_data.h"
+ #include "chrome/browser/aegis/access/access_network_context_transport.h"
+@@ -92,7 +93,7 @@ class AccessRequestDispatchState : public base::SupportsUserData::Data {
+       base::OnceCallback<void(bool)> completion,
+       bool acknowledged);
+ 
+-  Profile* const profile_;
++  const raw_ptr<Profile> profile_;
+   aegis_access::RequestDispatchBarrierRegistry barriers_;
+   aegis_access::RequestOwnershipRegistry ownership_;
+   aegis_access::PolicyPublicationAckTracker publication_acks_;
+diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
+index 887352c040e2f41cef9e8005da4c20bdda4b9bc4..b3b9b6afe3c989cad3204da73730dc982494f5fc 100644
+--- a/chrome/browser/aegis/access/access_rule_store.cc
++++ b/chrome/browser/aegis/access/access_rule_store.cc
+@@ -119,7 +119,7 @@ constexpr char kCreateJournalSql[] = R"sql(
+     after_image TEXT NOT NULL
+   ))sql";
+ 
+-bool IsKnownChannel(ChannelNamespace channel) {
++bool IsKnownStoreChannel(ChannelNamespace channel) {
+   switch (channel) {
+     case ChannelNamespace::kDev:
+     case ChannelNamespace::kAlpha:
+@@ -169,8 +169,8 @@ OwnershipKey OwnerFor(const AccessStoreBinding& binding,
+   return {binding.channel(), binding.runtime_profile_token(), partition};
+ }
+ 
+-bool IsCompleteOwner(const OwnershipKey& owner) {
+-  return IsKnownChannel(owner.channel) && Bounded(owner.profile_token) &&
++bool IsBoundedStoreOwner(const OwnershipKey& owner) {
++  return IsKnownStoreChannel(owner.channel) && Bounded(owner.profile_token) &&
+          Bounded(owner.storage_partition_token);
+ }
+ 
+@@ -331,7 +331,7 @@ bool ValidateStoredRule(const StoredAccessRule& rule,
+                         const OwnershipKey& owner,
+                         bool independent) {
+   const AccessPolicyRule& policy = rule.policy;
+-  if (!IsCompleteOwner(owner) || policy.owner != owner ||
++  if (!IsBoundedStoreOwner(owner) || policy.owner != owner ||
+       !Bounded(policy.rule_id) ||
+       !IsCanonicalHostLike(policy.destination_host) ||
+       policy.row_revision == 0 || policy.last_operation_sequence == 0 ||
+@@ -480,7 +480,7 @@ bool IsPreparedCandidateValid(const PendingMutationRecord& expected) {
+            expected.committed_policy_generation != 0 ||
+            expected.candidate.policy_generation !=
+                expected.operation_sequence ||
+-           !IsCompleteOwner(expected.owner) ||
++           !IsBoundedStoreOwner(expected.owner) ||
+            expected.candidate.group.owner != expected.owner);
+ }
+ 
+@@ -555,7 +555,7 @@ AccessRuleStore::~AccessRuleStore() {
+ 
+ bool AccessRuleStore::IsBindingValid() const {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  if (!IsKnownChannel(binding_.channel()) ||
++  if (!IsKnownStoreChannel(binding_.channel()) ||
+       !Bounded(binding_.durable_profile_id()) ||
+       !Bounded(binding_.runtime_profile_token())) {
+     return false;
+@@ -973,7 +973,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::PrepareSiteGroupMutation(
+     return MutationError(StoreStatus::kInvalidArgument, "invalid_request");
+   }
+   const OwnershipKey expected_owner = request.candidate_group.owner;
+-  if (!IsCompleteOwner(expected_owner) ||
++  if (!IsBoundedStoreOwner(expected_owner) ||
+       expected_owner.channel != binding_.channel() ||
+       expected_owner.profile_token != binding_.runtime_profile_token() ||
+       request.candidate_group.revision != 0 ||
+@@ -1587,7 +1587,7 @@ StoreResult<PendingMutationRecord> AccessRuleStore::CommitPreparedMutation(
+ 
+ StoreResult<MatcherRuleSetCandidate> AccessRuleStore::AdaptMatcherSnapshot(
+     const StoredPolicySnapshot& stored) {
+-  if (!IsCompleteOwner(stored.owner) || stored.policy_generation == 0) {
++  if (!IsBoundedStoreOwner(stored.owner) || stored.policy_generation == 0) {
+     return {StoreStatus::kCorrupt, std::nullopt, "invalid_snapshot_header"};
+   }
+   MatcherRuleSetCandidate matcher;
+diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/browser/aegis/access/access_rule_store_unittest.cc
+index 0d3a873624429d651dcd7dc2fba7a9bdfa418210..51f763a101ca8cc78842297cc6be580a43a4de5e 100644
+--- a/chrome/browser/aegis/access/access_rule_store_unittest.cc
++++ b/chrome/browser/aegis/access/access_rule_store_unittest.cc
+@@ -870,6 +870,31 @@ TEST(AccessRuleStoreTest, AdapterRejectsInvalidAtomicSiteGroups) {
+   expect_rejected(mismatched_toggle);
+ }
+ 
++TEST(AccessRuleStoreTest, AdapterPreservesBoundedOwnerValidation) {
++  // The shared owner helper only checks for nonempty tokens. Storage must
++  // retain its stricter length bound when resolving the two helpers' names.
++  for (const size_t length : {size_t{0}, size_t{256}, size_t{257}}) {
++    for (const bool profile_token : {false, true}) {
++      StoredPolicySnapshot snapshot;
++      snapshot.owner = Owner();
++      snapshot.policy_generation = 1;
++      std::string& token = profile_token
++                               ? snapshot.owner.profile_token
++                               : snapshot.owner.storage_partition_token;
++      token.assign(length, 'a');
++      const auto result = AccessRuleStore::AdaptMatcherSnapshot(snapshot);
++      EXPECT_EQ(result.status, length == 256 ? StoreStatus::kValid
++                                            : StoreStatus::kCorrupt);
++      EXPECT_EQ(result.value.has_value(), length == 256);
++    }
++  }
++  StoredPolicySnapshot invalid_channel;
++  invalid_channel.owner = Owner(ChannelNamespace::kInvalid);
++  invalid_channel.policy_generation = 1;
++  EXPECT_EQ(AccessRuleStore::AdaptMatcherSnapshot(invalid_channel).status,
++            StoreStatus::kCorrupt);
++}
++
+ TEST(AccessRuleStoreTest, AdapterRejectsSnapshotGenerationMismatch) {
+   StoredPolicySnapshot stale_group = StoredSnapshotForAdapter(7, 8);
+   StoreResult<MatcherRuleSetCandidate> result =
 diff --git a/chrome/browser/aegis/access/access_service_coordinator.cc b/chrome/browser/aegis/access/access_service_coordinator.cc
 index a98eb1d5f6faae75486b3c4f63b4c194966d8b33..0ce21c40dc52118f74677e089b6b383fc7e969d2 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator.cc
@@ -308,6 +438,18 @@ index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474
  TEST_F(AccessMutationTransactionTest, ForgedSelectorDoesNotPrepareMutation) {
    auto selector = Selector();
    selector.owner.profile_token = "other-profile";
+diff --git a/components/aegis_access/access_policy_evaluator.h b/components/aegis_access/access_policy_evaluator.h
+index 46bf6e5cce18a57f1225285da958f89bcf605688..7e4197d8b6332f6e928aac96a918dea2e708eeb9 100644
+--- a/components/aegis_access/access_policy_evaluator.h
++++ b/components/aegis_access/access_policy_evaluator.h
+@@ -8,6 +8,7 @@
+ #include <vector>
+ 
+ #include "components/aegis_access/request_policy_context.h"
++#include "components/aegis_access/site_proxy_rule_group.h"
+ 
+ namespace aegis_access {
+ 
 diff --git a/components/aegis_access/access_route_planner_contract_test.h b/components/aegis_access/access_route_planner_contract_test.h
 index be8ac8f2497fe12df365840b4993d06de8da6115..0ec34d7a49f2eeb1041041f61e5164f2b9fd9747 100644
 --- a/components/aegis_access/access_route_planner_contract_test.h
@@ -485,4 +627,3 @@ index 69e71ed6de87de9c47d2c6a7e8e5fe5aa181633e..3a13ec2ed6f65b16bca1f67e6bf0fe6d
  // of the stored group. The other inputs must already contain canonical
 -- 
 2.54.0 (Apple Git-157)
-
