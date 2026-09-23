@@ -1249,12 +1249,11 @@ StoreResult<PendingMutationRecord> AccessRuleStore::LoadMutation(
                : MutationError(StoreStatus::kIoError, "mutation_read_failed");
   }
   const int state = row.ColumnInt(1);
-  if ((prepared_only && state != kPrepared) || state < kPrepared ||
-      state > kSuperseded) {
-    return MutationError(state < kPrepared || state > kSuperseded
-                             ? StoreStatus::kCorrupt
-                             : StoreStatus::kMissing,
-                         "mutation_not_prepared");
+  if (state < kPrepared || state > kSuperseded) {
+    return MutationError(StoreStatus::kCorrupt, "invalid_mutation_state");
+  }
+  if (prepared_only && state != kPrepared) {
+    return MutationError(StoreStatus::kConflict, "mutation_not_prepared");
   }
   const std::string trusted_path =
       binding_.kind() == AccessStoreKind::kPersistentProfile
