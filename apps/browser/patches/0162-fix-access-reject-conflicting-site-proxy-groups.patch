@@ -1,30 +1,35 @@
-From e3f13036f5a615a7fd14b0714576251cf9f4bcc6 Mon Sep 17 00:00:00 2001
-From: quinn521 <287940781+quinn521@users.noreply.github.com>
-Date: Wed, 23 Sep 2026 08:34:27 +0800
-Subject: [PATCH] fix(access): reject conflicting site proxy transport groups
+From 9ac421be7f3c4424fce98d87bae009a9b4cdae8a Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 23 Sep 2026 08:43:13 +0800
+Subject: [PATCH] fix: complete Chromium native test compile compatibility
 
 ---
  chrome/browser/aegis/BUILD.gn                 |   2 +
+ ...ess_browser_request_adapter_browsertest.cc |   1 +
  .../access_proxying_url_loader_factory.h      |   1 +
- ...proxying_url_loader_factory_browsertest.cc |  71 +++++++++++
+ ...proxying_url_loader_factory_browsertest.cc |  73 +++++++++++
  .../access_proxying_url_tracked_request.cc    |   2 +
  .../access/access_published_request_runtime.h |   3 +-
  .../access/access_request_dispatch_state.h    |   3 +-
  .../browser/aegis/access/access_rule_store.cc |  16 +--
  .../access/access_rule_store_unittest.cc      |  25 ++++
- .../access/access_service_coordinator.cc      |  14 +--
+ .../access/access_service_coordinator.cc      |  14 +-
  .../aegis/access/access_service_coordinator.h |   3 +-
- .../access_service_coordinator_unittest.cc    | 118 +++++++++++++++---
+ .../access_service_coordinator_unittest.cc    | 123 +++++++++++++++---
+ components/aegis_access/BUILD.gn              |   1 +
  .../aegis_access/access_policy_evaluator.h    |   1 +
- .../access_route_planner_contract_test.h      |  63 ++++++++++
+ .../access_route_planner_contract_test.h      |  63 +++++++++
  .../access_route_planner_native_test.cc       |   2 +
  .../access_route_planner_unittest.cc          |  10 ++
- .../aegis_access/site_proxy_rule_group.cc     |  21 ++++
+ ...request_ownership_registry_test_support.cc |  63 +++++++++
+ .../request_ownership_registry_test_support.h |  58 +++------
+ .../aegis_access/site_proxy_rule_group.cc     |  21 +++
  .../aegis_access/site_proxy_rule_group.h      |  18 +++
- 17 files changed, 336 insertions(+), 37 deletions(-)
+ 21 files changed, 422 insertions(+), 81 deletions(-)
+ create mode 100644 components/aegis_access/request_ownership_registry_test_support.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index 93b385350a9a78f0360e44d4658432d1184d5033..d50cb76f9ed70e9c33dd2b813862ea2ab8d9fb62 100644
+index 93b385350a..d50cb76f9e 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
 @@ -287,6 +287,8 @@ if (!is_android) {
@@ -36,8 +41,20 @@ index 93b385350a9a78f0360e44d4658432d1184d5033..d50cb76f9ed70e9c33dd2b813862ea2a
        "//chrome/browser/bookmarks",
        "//chrome/browser/net:impl",
        "//chrome/browser/notifications:test_support",
+diff --git a/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc b/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
+index 719d230de8..0318a679f7 100644
+--- a/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
++++ b/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc
+@@ -15,6 +15,7 @@
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
+ #include "content/public/test/prerender_test_util.h"
+ #include "net/base/schemeful_site.h"
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
-index d1ce8950623d063c50ce77b757ca981ce922291d..a2edc318f8948f94faa6b687cf562f8ab911365e 100644
+index d1ce895062..a2edc318f8 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.h
 @@ -12,6 +12,7 @@
@@ -49,7 +66,7 @@ index d1ce8950623d063c50ce77b757ca981ce922291d..a2edc318f8948f94faa6b687cf562f8a
  #include "content/public/browser/frame_tree_node_id.h"
  #include "mojo/public/cpp/bindings/receiver_set.h"
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c34271ea97 100644
+index bb7418a7af..da8f2c8b8c 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 @@ -11,6 +11,7 @@
@@ -68,7 +85,17 @@ index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c3
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/net/profile_network_context_service.h"
  #include "chrome/browser/net/profile_network_context_service_factory.h"
-@@ -55,6 +57,10 @@ namespace aegis::access {
+@@ -37,7 +39,9 @@
+ #include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/storage_partition_config.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_test.h"
+ #include "content/public/test/browser_test_utils.h"
++#include "net/dns/mock_host_resolver.h"
+ #include "net/http/http_status_code.h"
+ #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+ #include "net/test/embedded_test_server/embedded_test_server.h"
+@@ -55,6 +59,10 @@ namespace aegis::access {
  
  class AccessRuleStoreTestPeer {
   public:
@@ -79,7 +106,7 @@ index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c3
    static AccessStoreBinding Ephemeral(const OwnershipKey& owner) {
      return AccessStoreBinding(AccessStoreKind::kEphemeralProfile, owner.channel,
                                "prepared-browser-test", owner.profile_token, {}, {});
-@@ -809,6 +815,26 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
+@@ -809,6 +817,26 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
      }
    }
  
@@ -106,7 +133,7 @@ index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c3
    std::atomic<size_t> origin_requests_{0};
    std::atomic<size_t> proxy_requests_{0};
    net::test_server::EmbeddedTestServer target_origin_;
-@@ -875,6 +901,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -875,6 +903,51 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
    EXPECT_EQ(prepared.value->committed_policy_generation, 0u);
  }
  
@@ -159,7 +186,7 @@ index bb7418a7aff8c538ccd3129c3acd174a8745c1dc..7b3b084d468cab4c7e1a22938867f8c3
  IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                         MainNavigationRoutingIsolatedAcrossProfiles) {
 diff --git a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
-index 4ced1887a765cf6b53073ea59b576d4263f74924..c8a66d8ad6cbd71fcdc8e8a89d5972a9c2422fb4 100644
+index 4ced1887a7..c8a66d8ad6 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
 @@ -13,6 +13,8 @@
@@ -172,7 +199,7 @@ index 4ced1887a765cf6b53073ea59b576d4263f74924..c8a66d8ad6cbd71fcdc8e8a89d5972a9
  namespace aegis::access {
  namespace {
 diff --git a/chrome/browser/aegis/access/access_published_request_runtime.h b/chrome/browser/aegis/access/access_published_request_runtime.h
-index a4ac8de7e101ec7763e0520957f2ba95ad18b961..48be85326f7401666a4fc34c147e65636d6ec298 100644
+index a4ac8de7e1..48be85326f 100644
 --- a/chrome/browser/aegis/access/access_published_request_runtime.h
 +++ b/chrome/browser/aegis/access/access_published_request_runtime.h
 @@ -8,6 +8,7 @@
@@ -193,7 +220,7 @@ index a4ac8de7e101ec7763e0520957f2ba95ad18b961..48be85326f7401666a4fc34c147e6563
        policy_snapshots_;
  };
 diff --git a/chrome/browser/aegis/access/access_request_dispatch_state.h b/chrome/browser/aegis/access/access_request_dispatch_state.h
-index 813c8b752a47810c2ef950228fb154e5ce49665d..374dc11136a22e068e44d11d7b0a4c8a88b11d09 100644
+index 813c8b752a..374dc11136 100644
 --- a/chrome/browser/aegis/access/access_request_dispatch_state.h
 +++ b/chrome/browser/aegis/access/access_request_dispatch_state.h
 @@ -7,6 +7,7 @@
@@ -214,7 +241,7 @@ index 813c8b752a47810c2ef950228fb154e5ce49665d..374dc11136a22e068e44d11d7b0a4c8a
    aegis_access::RequestOwnershipRegistry ownership_;
    aegis_access::PolicyPublicationAckTracker publication_acks_;
 diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
-index 887352c040e2f41cef9e8005da4c20bdda4b9bc4..b3b9b6afe3c989cad3204da73730dc982494f5fc 100644
+index 887352c040..b3b9b6afe3 100644
 --- a/chrome/browser/aegis/access/access_rule_store.cc
 +++ b/chrome/browser/aegis/access/access_rule_store.cc
 @@ -119,7 +119,7 @@ constexpr char kCreateJournalSql[] = R"sql(
@@ -283,7 +310,7 @@ index 887352c040e2f41cef9e8005da4c20bdda4b9bc4..b3b9b6afe3c989cad3204da73730dc98
    }
    MatcherRuleSetCandidate matcher;
 diff --git a/chrome/browser/aegis/access/access_rule_store_unittest.cc b/chrome/browser/aegis/access/access_rule_store_unittest.cc
-index 0d3a873624429d651dcd7dc2fba7a9bdfa418210..51f763a101ca8cc78842297cc6be580a43a4de5e 100644
+index 0d3a873624..51f763a101 100644
 --- a/chrome/browser/aegis/access/access_rule_store_unittest.cc
 +++ b/chrome/browser/aegis/access/access_rule_store_unittest.cc
 @@ -870,6 +870,31 @@ TEST(AccessRuleStoreTest, AdapterRejectsInvalidAtomicSiteGroups) {
@@ -319,7 +346,7 @@ index 0d3a873624429d651dcd7dc2fba7a9bdfa418210..51f763a101ca8cc78842297cc6be580a
    StoredPolicySnapshot stale_group = StoredSnapshotForAdapter(7, 8);
    StoreResult<MatcherRuleSetCandidate> result =
 diff --git a/chrome/browser/aegis/access/access_service_coordinator.cc b/chrome/browser/aegis/access/access_service_coordinator.cc
-index a98eb1d5f6faae75486b3c4f63b4c194966d8b33..0ce21c40dc52118f74677e089b6b383fc7e969d2 100644
+index a98eb1d5f6..0ce21c40dc 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator.cc
 +++ b/chrome/browser/aegis/access/access_service_coordinator.cc
 @@ -226,16 +226,14 @@ AccessServiceCoordinator::ValidateTransportScope(
@@ -346,7 +373,7 @@ index a98eb1d5f6faae75486b3c4f63b4c194966d8b33..0ce21c40dc52118f74677e089b6b383f
    if (incompatible) {
      return Result(AccessMutationTransactionStatus::kUnsupportedTransportScope);
 diff --git a/chrome/browser/aegis/access/access_service_coordinator.h b/chrome/browser/aegis/access/access_service_coordinator.h
-index d2ab100a8b73c91c1314361ad8cff90b27020a66..ee42e777e0e0338f91097c5900eeb23397e901aa 100644
+index d2ab100a8b..ee42e777e0 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator.h
 +++ b/chrome/browser/aegis/access/access_service_coordinator.h
 @@ -8,6 +8,7 @@
@@ -367,10 +394,18 @@ index d2ab100a8b73c91c1314361ad8cff90b27020a66..ee42e777e0e0338f91097c5900eeb233
    uint64_t state_generation_ = 0;
    bool mutation_in_flight_ = false;
 diff --git a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
-index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474e85bd2b5 100644
+index a2c2bb90ae..5a7bee173d 100644
 --- a/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
 +++ b/chrome/browser/aegis/access/access_service_coordinator_unittest.cc
-@@ -160,6 +160,45 @@ class AccessMutationTransactionTest : public AccessServiceCoordinatorTest {
+@@ -6,6 +6,7 @@
+ #include <optional>
+ 
+ #include "base/files/scoped_temp_dir.h"
++#include "base/memory/raw_ptr.h"
+ #include "base/test/test_future.h"
+ #include "chrome/browser/aegis/access/access_network_context_transport.h"
+ #include "chrome/browser/aegis/access/access_published_request_runtime.h"
+@@ -160,10 +161,49 @@ class AccessMutationTransactionTest : public AccessServiceCoordinatorTest {
      return selector;
    }
  
@@ -415,8 +450,14 @@ index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474
 +
    base::ScopedTempDir directory_;
    std::unique_ptr<TestingProfile> profile_;
-   AccessNetworkContextTransport* transport_ = nullptr;
-@@ -413,24 +452,7 @@ TEST_F(AccessMutationTransactionTest, EphemeralStoreSurvivesConsecutiveMutations
+-  AccessNetworkContextTransport* transport_ = nullptr;
+-  AccessServiceCoordinator* coordinator_ = nullptr;
++  raw_ptr<AccessNetworkContextTransport> transport_ = nullptr;
++  raw_ptr<AccessServiceCoordinator> coordinator_ = nullptr;
+   OwnershipKey owner_;
+   std::unique_ptr<HeldPolicyClient> client_;
+ };
+@@ -413,24 +453,7 @@ TEST_F(AccessMutationTransactionTest, EphemeralStoreSurvivesConsecutiveMutations
  TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication) {
    auto store = OpenStore();
    auto* retained_store = store.get();
@@ -442,7 +483,7 @@ index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474
    const auto before = store->ReadCommittedSnapshot(owner_.storage_partition_token);
    ASSERT_TRUE(before.value);
    base::test::TestFuture<AccessMutationTransactionResult> result;
-@@ -446,6 +468,66 @@ TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication)
+@@ -446,6 +469,66 @@ TEST_F(AccessMutationTransactionTest, MixedSameHostScopesFailBeforePublication)
    EXPECT_EQ(coordinator_->state_generation(), 0u);
  }
  
@@ -509,8 +550,20 @@ index a2c2bb90aeb59e90f91579c7eea17a2d82342f57..0579f41921b5f76444d447ca95b32474
  TEST_F(AccessMutationTransactionTest, ForgedSelectorDoesNotPrepareMutation) {
    auto selector = Selector();
    selector.owner.profile_token = "other-profile";
+diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
+index 96c5a602ad..ca139d9e86 100644
+--- a/components/aegis_access/BUILD.gn
++++ b/components/aegis_access/BUILD.gn
+@@ -261,6 +261,7 @@ test("aegis_access_unittests") {
+ 
+ source_set("request_ownership_registry_test_support") {
+   testonly = true
++  sources = [ "request_ownership_registry_test_support.cc" ]
+   public = [ "request_ownership_registry_test_support.h" ]
+   public_deps = [ ":request_ownership_registry" ]
+   visibility = [
 diff --git a/components/aegis_access/access_policy_evaluator.h b/components/aegis_access/access_policy_evaluator.h
-index 46bf6e5cce18a57f1225285da958f89bcf605688..7e4197d8b6332f6e928aac96a918dea2e708eeb9 100644
+index 46bf6e5cce..7e4197d8b6 100644
 --- a/components/aegis_access/access_policy_evaluator.h
 +++ b/components/aegis_access/access_policy_evaluator.h
 @@ -8,6 +8,7 @@
@@ -522,7 +575,7 @@ index 46bf6e5cce18a57f1225285da958f89bcf605688..7e4197d8b6332f6e928aac96a918dea2
  namespace aegis_access {
  
 diff --git a/components/aegis_access/access_route_planner_contract_test.h b/components/aegis_access/access_route_planner_contract_test.h
-index be8ac8f2497fe12df365840b4993d06de8da6115..0ec34d7a49f2eeb1041041f61e5164f2b9fd9747 100644
+index be8ac8f249..0ec34d7a49 100644
 --- a/components/aegis_access/access_route_planner_contract_test.h
 +++ b/components/aegis_access/access_route_planner_contract_test.h
 @@ -174,6 +174,69 @@ inline void ExpectUnknown(ContractTestObserver& observer,
@@ -596,7 +649,7 @@ index be8ac8f2497fe12df365840b4993d06de8da6115..0ec34d7a49f2eeb1041041f61e5164f2
      ContractTestObserver& observer) {
    SiteProxyRuleGroup group = ValidGroup();
 diff --git a/components/aegis_access/access_route_planner_native_test.cc b/components/aegis_access/access_route_planner_native_test.cc
-index a816020091b192c78895d2c6d33ab057053c184a..022baace04bb714e02962dc8704f50482e0095c3 100644
+index a816020091..022baace04 100644
 --- a/components/aegis_access/access_route_planner_native_test.cc
 +++ b/components/aegis_access/access_route_planner_native_test.cc
 @@ -47,6 +47,8 @@ int main() {
@@ -609,7 +662,7 @@ index a816020091b192c78895d2c6d33ab057053c184a..022baace04bb714e02962dc8704f5048
    aegis_access::test::RunRequestOwnershipRegistryRegressionTests(observer);
    aegis_access::test::RunTargetedRequestCancellationUnitTests(observer);
 diff --git a/components/aegis_access/access_route_planner_unittest.cc b/components/aegis_access/access_route_planner_unittest.cc
-index 2bbf910517dcbeac6691af262524485889afa3b5..0d01482eb6595e59ba3bb0997906c3b33d57f9d0 100644
+index 2bbf910517..0d01482eb6 100644
 --- a/components/aegis_access/access_route_planner_unittest.cc
 +++ b/components/aegis_access/access_route_planner_unittest.cc
 @@ -25,5 +25,15 @@ TEST(SiteProxyRuleGroupTest, CompleteAtomicGroupContract) {
@@ -628,8 +681,175 @@ index 2bbf910517dcbeac6691af262524485889afa3b5..0d01482eb6595e59ba3bb0997906c3b3
 +
  }  // namespace
  }  // namespace aegis_access::test
+diff --git a/components/aegis_access/request_ownership_registry_test_support.cc b/components/aegis_access/request_ownership_registry_test_support.cc
+new file mode 100644
+index 0000000000..e9c458e15a
+--- /dev/null
++++ b/components/aegis_access/request_ownership_registry_test_support.cc
+@@ -0,0 +1,63 @@
++// Copyright 2026 GCSA
++
++#include "components/aegis_access/request_ownership_registry_test_support.h"
++
++#include <utility>
++
++namespace aegis_access::test {
++
++RecordingTerminationHandle::RecordingTerminationHandle(int* call_count)
++    : call_count_(call_count) {}
++
++RecordingTerminationHandle::RecordingTerminationHandle(
++    int* call_count,
++    RequestOwnershipRegistry* registry,
++    std::string request_id,
++    OwnershipKey owner,
++    GenerationTuple generations,
++    bool* erased_before_callback)
++    : call_count_(call_count),
++      registry_(registry),
++      request_id_(std::move(request_id)),
++      owner_(std::move(owner)),
++      generations_(generations),
++      erased_before_callback_(erased_before_callback) {}
++
++RecordingTerminationHandle::~RecordingTerminationHandle() = default;
++
++void RecordingTerminationHandle::Terminate() {
++  ++*call_count_;
++  if (registry_ && erased_before_callback_) {
++    *erased_before_callback_ =
++        registry_->Lookup(request_id_, owner_, generations_).status ==
++        RequestOwnershipStatus::kNotFound;
++  }
++}
++
++BatchVisibilityTerminationHandle::BatchVisibilityTerminationHandle(
++    int* call_count,
++    RequestOwnershipRegistry* registry,
++    OwnershipKey owner,
++    std::vector<WatchedRequest> watched,
++    bool* all_erased_before_callback)
++    : call_count_(call_count),
++      registry_(registry),
++      owner_(std::move(owner)),
++      watched_(std::move(watched)),
++      all_erased_before_callback_(all_erased_before_callback) {}
++
++BatchVisibilityTerminationHandle::~BatchVisibilityTerminationHandle() = default;
++
++void BatchVisibilityTerminationHandle::Terminate() {
++  ++*call_count_;
++  bool all_erased = true;
++  for (const auto& watched : watched_) {
++    if (registry_->Lookup(watched.request_id, owner_, watched.generations)
++            .status != RequestOwnershipStatus::kNotFound) {
++      all_erased = false;
++    }
++  }
++  *all_erased_before_callback_ &= all_erased;
++}
++
++}  // namespace aegis_access::test
+diff --git a/components/aegis_access/request_ownership_registry_test_support.h b/components/aegis_access/request_ownership_registry_test_support.h
+index 482d10c4d0..c863b86e7a 100644
+--- a/components/aegis_access/request_ownership_registry_test_support.h
++++ b/components/aegis_access/request_ownership_registry_test_support.h
+@@ -8,6 +8,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/memory/raw_ptr.h"
+ #include "components/aegis_access/request_ownership_registry.h"
+ 
+ namespace aegis_access::test {
+@@ -45,38 +46,25 @@ inline RequestOwnershipRecord ProfileOwnershipRecord(
+ 
+ class RecordingTerminationHandle final : public RequestTerminationHandle {
+  public:
+-  explicit RecordingTerminationHandle(int* call_count)
+-      : call_count_(call_count) {}
++  explicit RecordingTerminationHandle(int* call_count);
+ 
+   RecordingTerminationHandle(int* call_count,
+                              RequestOwnershipRegistry* registry,
+                              std::string request_id,
+                              OwnershipKey owner,
+                              GenerationTuple generations,
+-                             bool* erased_before_callback)
+-      : call_count_(call_count),
+-        registry_(registry),
+-        request_id_(std::move(request_id)),
+-        owner_(std::move(owner)),
+-        generations_(generations),
+-        erased_before_callback_(erased_before_callback) {}
+-
+-  void Terminate() override {
+-    ++*call_count_;
+-    if (registry_ && erased_before_callback_) {
+-      *erased_before_callback_ =
+-          registry_->Lookup(request_id_, owner_, generations_).status ==
+-          RequestOwnershipStatus::kNotFound;
+-    }
+-  }
++                             bool* erased_before_callback);
++  ~RecordingTerminationHandle() override;
++
++  void Terminate() override;
+ 
+  private:
+-  int* call_count_;
+-  RequestOwnershipRegistry* registry_ = nullptr;
++  raw_ptr<int> call_count_;
++  raw_ptr<RequestOwnershipRegistry> registry_ = nullptr;
+   std::string request_id_;
+   OwnershipKey owner_;
+   GenerationTuple generations_;
+-  bool* erased_before_callback_ = nullptr;
++  raw_ptr<bool> erased_before_callback_ = nullptr;
+ };
+ 
+ inline RequestOwnershipRecord PendingOwnershipRecord(
+@@ -129,31 +117,17 @@ class BatchVisibilityTerminationHandle final : public RequestTerminationHandle {
+       RequestOwnershipRegistry* registry,
+       OwnershipKey owner,
+       std::vector<WatchedRequest> watched,
+-      bool* all_erased_before_callback)
+-      : call_count_(call_count),
+-        registry_(registry),
+-        owner_(std::move(owner)),
+-        watched_(std::move(watched)),
+-        all_erased_before_callback_(all_erased_before_callback) {}
+-
+-  void Terminate() override {
+-    ++*call_count_;
+-    bool all_erased = true;
+-    for (const auto& watched : watched_) {
+-      if (registry_->Lookup(watched.request_id, owner_, watched.generations)
+-              .status != RequestOwnershipStatus::kNotFound) {
+-        all_erased = false;
+-      }
+-    }
+-    *all_erased_before_callback_ &= all_erased;
+-  }
++      bool* all_erased_before_callback);
++  ~BatchVisibilityTerminationHandle() override;
++
++  void Terminate() override;
+ 
+  private:
+-  int* call_count_;
+-  RequestOwnershipRegistry* registry_;
++  raw_ptr<int> call_count_;
++  raw_ptr<RequestOwnershipRegistry> registry_;
+   OwnershipKey owner_;
+   std::vector<WatchedRequest> watched_;
+-  bool* all_erased_before_callback_;
++  raw_ptr<bool> all_erased_before_callback_;
+ };
+ 
+ }  // namespace aegis_access::test
 diff --git a/components/aegis_access/site_proxy_rule_group.cc b/components/aegis_access/site_proxy_rule_group.cc
-index 0525f77bf3ba50b2ab94cf5db84456be9e9a2c6e..dfaad9e6f8ae377aaec852676036f0b25dd9da06 100644
+index 0525f77bf3..dfaad9e6f8 100644
 --- a/components/aegis_access/site_proxy_rule_group.cc
 +++ b/components/aegis_access/site_proxy_rule_group.cc
 @@ -25,6 +25,27 @@ bool HasCompleteSchemeSet(const std::vector<RequestScheme>& schemes) {
@@ -661,7 +881,7 @@ index 0525f77bf3ba50b2ab94cf5db84456be9e9a2c6e..dfaad9e6f8ae377aaec852676036f0b2
      const OwnershipKey& expected_owner,
      const SiteProxyRuleGroup* group,
 diff --git a/components/aegis_access/site_proxy_rule_group.h b/components/aegis_access/site_proxy_rule_group.h
-index 69e71ed6de87de9c47d2c6a7e8e5fe5aa181633e..3a13ec2ed6f65b16bca1f67e6bf0fe6d766d93ce 100644
+index 69e71ed6de..3a13ec2ed6 100644
 --- a/components/aegis_access/site_proxy_rule_group.h
 +++ b/components/aegis_access/site_proxy_rule_group.h
 @@ -5,6 +5,7 @@
@@ -698,3 +918,4 @@ index 69e71ed6de87de9c47d2c6a7e8e5fe5aa181633e..3a13ec2ed6f65b16bca1f67e6bf0fe6d
  // of the stored group. The other inputs must already contain canonical
 -- 
 2.54.0 (Apple Git-157)
+

@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/raw_ptr.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
@@ -201,8 +202,8 @@ class AccessMutationTransactionTest : public AccessServiceCoordinatorTest {
 
   base::ScopedTempDir directory_;
   std::unique_ptr<TestingProfile> profile_;
-  AccessNetworkContextTransport* transport_ = nullptr;
-  AccessServiceCoordinator* coordinator_ = nullptr;
+  raw_ptr<AccessNetworkContextTransport> transport_ = nullptr;
+  raw_ptr<AccessServiceCoordinator> coordinator_ = nullptr;
   OwnershipKey owner_;
   std::unique_ptr<HeldPolicyClient> client_;
 };
