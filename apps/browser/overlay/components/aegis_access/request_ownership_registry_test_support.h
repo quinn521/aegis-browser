@@ -8,11 +8,21 @@
 #include <utility>
 #include <vector>
 
-#include "base/memory/raw_ptr.h"
 #include "components/aegis_access/request_ownership_registry.h"
+
+#if __has_include("base/memory/raw_ptr.h")
+#include "base/memory/raw_ptr.h"
+#endif
 
 namespace aegis_access::test {
 
+#if __has_include("base/memory/raw_ptr.h")
+template <typename T>
+using RegistryTestPtr = raw_ptr<T>;
+#else
+template <typename T>
+using RegistryTestPtr = T*;
+#endif
 
 class RequestOwnershipRegistryTestObserver {
  public:
@@ -59,12 +69,12 @@ class RecordingTerminationHandle final : public RequestTerminationHandle {
   void Terminate() override;
 
  private:
-  raw_ptr<int> call_count_;
-  raw_ptr<RequestOwnershipRegistry> registry_ = nullptr;
+  RegistryTestPtr<int> call_count_;
+  RegistryTestPtr<RequestOwnershipRegistry> registry_ = nullptr;
   std::string request_id_;
   OwnershipKey owner_;
   GenerationTuple generations_;
-  raw_ptr<bool> erased_before_callback_ = nullptr;
+  RegistryTestPtr<bool> erased_before_callback_ = nullptr;
 };
 
 inline RequestOwnershipRecord PendingOwnershipRecord(
@@ -123,11 +133,11 @@ class BatchVisibilityTerminationHandle final : public RequestTerminationHandle {
   void Terminate() override;
 
  private:
-  raw_ptr<int> call_count_;
-  raw_ptr<RequestOwnershipRegistry> registry_;
+  RegistryTestPtr<int> call_count_;
+  RegistryTestPtr<RequestOwnershipRegistry> registry_;
   OwnershipKey owner_;
   std::vector<WatchedRequest> watched_;
-  raw_ptr<bool> all_erased_before_callback_;
+  RegistryTestPtr<bool> all_erased_before_callback_;
 };
 
 }  // namespace aegis_access::test

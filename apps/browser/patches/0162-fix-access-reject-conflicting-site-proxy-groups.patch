@@ -1,7 +1,8 @@
-From 9ac421be7f3c4424fce98d87bae009a9b4cdae8a Mon Sep 17 00:00:00 2001
+From 10f33ae9d6c7be16991f65426766ed36ea8b4896 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Wed, 23 Sep 2026 08:43:13 +0800
-Subject: [PATCH] fix: complete Chromium native test compile compatibility
+Date: Wed, 23 Sep 2026 08:46:27 +0800
+Subject: [PATCH] fix: preserve standalone and Chromium native test
+ compatibility
 
 ---
  chrome/browser/aegis/BUILD.gn                 |   2 +
@@ -22,10 +23,10 @@ Subject: [PATCH] fix: complete Chromium native test compile compatibility
  .../access_route_planner_native_test.cc       |   2 +
  .../access_route_planner_unittest.cc          |  10 ++
  ...request_ownership_registry_test_support.cc |  63 +++++++++
- .../request_ownership_registry_test_support.h |  58 +++------
+ .../request_ownership_registry_test_support.h |  68 ++++------
  .../aegis_access/site_proxy_rule_group.cc     |  21 +++
  .../aegis_access/site_proxy_rule_group.h      |  18 +++
- 21 files changed, 422 insertions(+), 81 deletions(-)
+ 21 files changed, 432 insertions(+), 81 deletions(-)
  create mode 100644 components/aegis_access/request_ownership_registry_test_support.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
@@ -751,18 +752,30 @@ index 0000000000..e9c458e15a
 +
 +}  // namespace aegis_access::test
 diff --git a/components/aegis_access/request_ownership_registry_test_support.h b/components/aegis_access/request_ownership_registry_test_support.h
-index 482d10c4d0..c863b86e7a 100644
+index 482d10c4d0..aa47832bd1 100644
 --- a/components/aegis_access/request_ownership_registry_test_support.h
 +++ b/components/aegis_access/request_ownership_registry_test_support.h
-@@ -8,6 +8,7 @@
- #include <utility>
- #include <vector>
+@@ -10,8 +10,19 @@
  
-+#include "base/memory/raw_ptr.h"
  #include "components/aegis_access/request_ownership_registry.h"
  
++#if __has_include("base/memory/raw_ptr.h")
++#include "base/memory/raw_ptr.h"
++#endif
++
  namespace aegis_access::test {
-@@ -45,38 +46,25 @@ inline RequestOwnershipRecord ProfileOwnershipRecord(
+ 
++#if __has_include("base/memory/raw_ptr.h")
++template <typename T>
++using RegistryTestPtr = raw_ptr<T>;
++#else
++template <typename T>
++using RegistryTestPtr = T*;
++#endif
+ 
+ class RequestOwnershipRegistryTestObserver {
+  public:
+@@ -45,38 +56,25 @@ inline RequestOwnershipRecord ProfileOwnershipRecord(
  
  class RecordingTerminationHandle final : public RequestTerminationHandle {
   public:
@@ -799,17 +812,17 @@ index 482d10c4d0..c863b86e7a 100644
   private:
 -  int* call_count_;
 -  RequestOwnershipRegistry* registry_ = nullptr;
-+  raw_ptr<int> call_count_;
-+  raw_ptr<RequestOwnershipRegistry> registry_ = nullptr;
++  RegistryTestPtr<int> call_count_;
++  RegistryTestPtr<RequestOwnershipRegistry> registry_ = nullptr;
    std::string request_id_;
    OwnershipKey owner_;
    GenerationTuple generations_;
 -  bool* erased_before_callback_ = nullptr;
-+  raw_ptr<bool> erased_before_callback_ = nullptr;
++  RegistryTestPtr<bool> erased_before_callback_ = nullptr;
  };
  
  inline RequestOwnershipRecord PendingOwnershipRecord(
-@@ -129,31 +117,17 @@ class BatchVisibilityTerminationHandle final : public RequestTerminationHandle {
+@@ -129,31 +127,17 @@ class BatchVisibilityTerminationHandle final : public RequestTerminationHandle {
        RequestOwnershipRegistry* registry,
        OwnershipKey owner,
        std::vector<WatchedRequest> watched,
@@ -839,12 +852,12 @@ index 482d10c4d0..c863b86e7a 100644
   private:
 -  int* call_count_;
 -  RequestOwnershipRegistry* registry_;
-+  raw_ptr<int> call_count_;
-+  raw_ptr<RequestOwnershipRegistry> registry_;
++  RegistryTestPtr<int> call_count_;
++  RegistryTestPtr<RequestOwnershipRegistry> registry_;
    OwnershipKey owner_;
    std::vector<WatchedRequest> watched_;
 -  bool* all_erased_before_callback_;
-+  raw_ptr<bool> all_erased_before_callback_;
++  RegistryTestPtr<bool> all_erased_before_callback_;
  };
  
  }  // namespace aegis_access::test

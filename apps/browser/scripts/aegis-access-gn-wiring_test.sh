@@ -115,6 +115,8 @@ ownership_support_block="$(
 )"
 [[ "$ownership_support_block" == *'testonly = true'* ]] ||
   fail "shared ownership support must remain test-only"
+[[ "$ownership_support_block" == *'sources = [ "request_ownership_registry_test_support.cc" ]'* ]] ||
+  fail "shared ownership support must compile its out-of-line implementation"
 [[ "$ownership_support_block" == *'public = [ "request_ownership_registry_test_support.h" ]'* ]] ||
   fail "shared ownership support must publish its header"
 [[ "$ownership_support_block" == *'public_deps = [ ":request_ownership_registry" ]'* ]] ||
