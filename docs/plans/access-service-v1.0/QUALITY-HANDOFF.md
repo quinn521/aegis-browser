@@ -6,7 +6,7 @@
 
 - 初始盘点 D：`7f74e0a4e971f91d08d90536e429aba7b82cf37d`；原生执行前纳入仅 README 排版的 #176，当前 B=`42f48b535f4ff0c302b6c4e98762fcee86495e1c`。最终交付 H 由运行报告/Git PR 绑定；M、S 尚未生成，不能用 B 冒充它们。
 - 产品工作树：`/Volumes/ExternalSSD/repositories/aegis-browser-worktrees/access-w0-quality-20260924`，分支 `codex/access-w0-quality-20260924`。
-- Q 新候选：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/src`；从闲置 H13 副本进行 APFS clone，仅复用构建输入；复制已完成，第一候选已完成准入/构建并暴露两项 fixture 失败，下一修复候选待重验。计划保留相对输出 `out/Pr129Verification`，绝不把复制来的二进制当成新 H 证据。
+- Q 新候选：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/src`；从闲置 H13 副本进行 APFS clone，仅复用构建输入；复制已完成，前两候选已完成准入并保留 runtime/编译失败，第三修复候选待重验。计划保留相对输出 `out/Pr129Verification`，绝不把复制来的二进制当成新 H 证据。
 - Chromium 固定 `151.0.7922.77` / `ff37cfca210138f2a40b843b4a8195ab7e4fc7ff`；新 patched tree、V8、参数/二进制哈希与 sourceStable 须由新候选实际生成。
 - 首轮资源核验：外盘 APFS 挂载、可写，约 350 GiB 可用；重型构建前重查。
 - 其他任务：PID 64342 / PPID 63161，`evidence/pr23-c9b07b7/native-two-targets.py`，产品 H=`c9b07b72d249b5e1ac1978e11f863b2d953e668a`，source=`aegis-chromium-phase3-20260922/pr23-088fc98/src`，out=`out/Pr129Verification`；其 `.aegis-pr23-native-slot` 与 `.aegis-ci-lock` 归原任务。Q 不 kill/reset/replay，不在它运行时启动第二个重型 Ninja。以上 PID 只是观测快照，启动前重新检查。
@@ -39,6 +39,15 @@ browser binary SHA-256=`603a83cb2ad79f798fff517105e2e54ad2d8898cd5d512fbf3c14488
 | 独立 Review | 产品代码 Astra/high CLEAR；外部 browser driver 的 actual out args 稳定性 P2 修后同 reviewer CLEAR。代码 CLEAR 不消除上述真实失败 |
 
 Q evidence 根：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/evidence/`。`native-attempt1/`、`browser-attempt1/` 和 `navigation-diagnostic1/` 保存命令、退出码、二进制 hash、summary 与原始日志；不要覆盖 attempt 或删除失败记录。0171 修三个 Profile unit 的 Chrome suite/任务环境，0172 将自动 favicon 与业务请求计数分开；两项均属测试设施修复，修后运行仍待证明。
+
+## 第二候选与编译失败归档
+
+第二候选 H=`745bf3c1d2b3f80e406311b422d94f567fd8a7dc`，tree=`fc0398a30d91d8a56319c78152aea5c1e138f10a`，B 不变。local full PASS/sourceStable=true，source admission 2 PASS/sourceStable=true，Chromium tree=`93c55d2db0a3922495cf231d027638f818e1bd8c`。托管 CI run `35970171524` attempt 1 的 quality/quality-gate SUCCESS；M=`eab204f274f4f782cc9cfb21b16ab20c7531b4dd` 的父提交精确为 B/H、tree 与 H 相同。
+
+- `native-attempt2/result.json`：**FAIL/sourceStable=true**，前 11 targets/86 tests PASS，包含 adapter 全部 5 项，证明 bootstrap 修复已实际运行；第 12 dispatch_state unit 因测试替身 `bool* terminated_` 违反 Chromium raw_ptr 检查而编译失败，后 5 targets NOT_RUN。实际 out args 前后 hash 相同。
+- `browser-attempt2/result.json`：**FAIL/sourceStable=true**，新增 favicon helper 的 `GURL::path_piece()` 不在固定 151 API 中，编译失败，0 项 runtime；不能复用第一候选的枚举/运行结果。
+- 第二候选的独立代码 Review 曾给 CLEAR，实际编译暴露上述 API 错误后，同 reviewer 已明确撤回 CLEAR，修正为未通过，后续修复必须由同 reviewer 复审并实际编译运行。
+- 后续补丁修测试替身非空引用与其生命周期，以及固定版本路径 API；不关闭编译检查、不放宽计数断言。第三候选 17 unit / 41 browser 仍待重验，前两轮失败保留。
 
 ## 最小完成矩阵
 
