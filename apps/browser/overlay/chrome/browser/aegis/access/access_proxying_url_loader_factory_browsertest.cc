@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "base/base64.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -953,6 +954,26 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       DataDocumentWithoutPolicyPreservesNativeSubresource) {
+  const GURL resource = target_url().Resolve("/data-document-health");
+  const std::string markup =
+      "<!doctype html><script>window.resourceDone = "
+      "fetch('" + resource.spec() +
+      "', {mode:'no-cors',cache:'no-store'})"
+      ".then(() => 'loaded', () => 'error');</script>";
+  const GURL data_page("data:text/html;base64," + base::Base64Encode(markup));
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), data_page));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.resourceDone")
+                .ExtractString(),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        ParserEarlySubresourceWaitsForCommittedDocument) {
   const size_t healthy_origin_before =
       origin_requests_.load(std::memory_order_relaxed);
@@ -1018,6 +1039,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   // them through the downstream factory.
   AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
       browser()->profile(), web_contents()->GetPrimaryMainFrame(),
+      url::Origin::Create(worker_page_url()),
       std::numeric_limits<int64_t>::max(), builder);
   scoped_refptr<network::SharedURLLoaderFactory> pending_factory =
       std::move(builder).Finish(

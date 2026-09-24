@@ -23,6 +23,9 @@
 
 class GURL;
 class Profile;
+namespace url {
+class Origin;
+}
 
 namespace content {
 class RenderFrameHost;
@@ -80,6 +83,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   static void MaybeProxyDocumentSubresource(
       Profile* profile,
       content::RenderFrameHost* frame,
+      const url::Origin& request_initiator,
       std::optional<int64_t> navigation_id,
       network::URLLoaderFactoryBuilder& factory_builder);
   static void MaybeProxyWorkerMainResource(

@@ -33,6 +33,7 @@
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
+#include "url/origin.h"
 
 namespace aegis::access {
 namespace {
@@ -520,12 +521,24 @@ AccessProxyingURLLoaderFactory::~AccessProxyingURLLoaderFactory() {
 void AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
     Profile* profile,
     content::RenderFrameHost* frame,
+    const url::Origin& request_initiator,
     std::optional<int64_t> navigation_id,
     network::URLLoaderFactoryBuilder& factory_builder) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (navigation_id.has_value()) {
     if (!aegis::IsAegisProfileSupported(profile) || !frame ||
-        frame->GetBrowserContext() != profile) {
+        frame->GetBrowserContext() != profile ||
+        !request_initiator.GetURL().SchemeIsHTTPOrHTTPS()) {
+      return;
+    }
+    // Publication requires this same transport and configured partition.
+    // Resolve only Profile ownership here: the new document identity does
+    // not exist until commit, and the current RFH may still hold the old one.
+    const AccessBrowserRequestMetadataResult partition_metadata =
+        BuildBrowserOwnedProfileRequestMetadata(profile,
+                                                frame->GetStoragePartition());
+    if (partition_metadata.status != AccessBrowserRequestMetadataStatus::kOk ||
+        !partition_metadata.metadata.has_value()) {
       return;
     }
     content::WebContents* contents =
