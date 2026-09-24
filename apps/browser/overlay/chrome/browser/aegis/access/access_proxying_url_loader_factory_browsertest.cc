@@ -206,7 +206,7 @@ ServiceWorkerProxyReply(std::atomic<size_t>* counter,
 
 std::unique_ptr<net::test_server::HttpResponse> IgnoreAutomaticFavicon(
     const net::test_server::HttpRequest& request) {
-  if (request.GetURL().path_piece() != "/favicon.ico") {
+  if (request.GetURL().path() != "/favicon.ico") {
     return nullptr;
   }
 
