@@ -4,7 +4,7 @@
 
 ## 冻结来源与所有权
 
-- 产品起点 B/D：`7f74e0a4e971f91d08d90536e429aba7b82cf37d`；最终交付 H、PR merge candidate M、合并 S 尚未生成，不能用 B 冒充它们。
+- 初始盘点 D：`7f74e0a4e971f91d08d90536e429aba7b82cf37d`；原生执行前纳入仅 README 排版的 #176，当前 B=`42f48b535f4ff0c302b6c4e98762fcee86495e1c`。最终交付 H 由运行报告/Git PR 绑定；M、S 尚未生成，不能用 B 冒充它们。
 - 产品工作树：`/Volumes/ExternalSSD/repositories/aegis-browser-worktrees/access-w0-quality-20260924`，分支 `codex/access-w0-quality-20260924`。
 - Q 新候选：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/src`；从闲置 H13 副本进行 APFS clone，仅复用构建输入；复制已完成，当前尚未准入/构建。计划保留相对输出 `out/Pr129Verification`，绝不把复制来的二进制当成新 H 证据。
 - Chromium 固定 `151.0.7922.77` / `ff37cfca210138f2a40b843b4a8195ab7e4fc7ff`；新 patched tree、V8、参数/二进制哈希与 sourceStable 须由新候选实际生成。
