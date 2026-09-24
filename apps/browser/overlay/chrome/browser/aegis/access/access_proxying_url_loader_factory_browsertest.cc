@@ -70,6 +70,7 @@
 #include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -557,7 +558,8 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
             "window.aegisFetchState = 'pending';"
             "fetch($1, {mode: 'no-cors'})"
             ".then(() => { window.aegisFetchState = 'resolved'; })"
-            ".catch(() => { window.aegisFetchState = 'blocked'; });",
+            ".catch(() => { window.aegisFetchState = 'blocked'; });"
+            "true;",
             url.spec())));
   }
 
@@ -623,7 +625,9 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     auto request = std::make_unique<network::ResourceRequest>();
     request->method = "GET";
     request->url = url;
-    request->destination = network::mojom::RequestDestination::kDocument;
+    request->load_flags = net::LOAD_PREFETCH;
+    request->mode = network::mojom::RequestMode::kNoCors;
+    request->destination = network::mojom::RequestDestination::kEmpty;
     auto loader = network::SimpleURLLoader::Create(
         std::move(request), TRAFFIC_ANNOTATION_FOR_TESTS);
     base::test::TestFuture<std::optional<std::string>> result;
@@ -1603,6 +1607,77 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   ASSERT_EQ(RunPrefetch(target_url()), "loaded");
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
                      /*proxy_delta=*/1u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       TargetLoaderDisconnectWaitsForClientCompletion) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+  auto* dispatch_state =
+      AccessRequestDispatchState::GetOrCreate(browser()->profile());
+  ASSERT_NE(dispatch_state, nullptr);
+  const size_t ownership_before = dispatch_state->ownership().size();
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  network::TestURLLoaderFactory terminal(/*observe_loader_requests=*/true);
+  network::URLLoaderFactoryBuilder builder;
+  AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
+      browser()->profile(), web_contents()->GetPrimaryMainFrame(),
+      worker_page_url(), std::nullopt, builder);
+  ASSERT_EQ(builder.num_interceptors(), 1u);
+  scoped_refptr<network::SharedURLLoaderFactory> factory =
+      std::move(builder).Finish(terminal.GetSafeWeakWrapper());
+
+  const GURL completed_url = target_url().Resolve("/relay-complete");
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = completed_url;
+  request->request_initiator = url::Origin::Create(worker_page_url());
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), TRAFFIC_ANNOTATION_FOR_TESTS);
+  base::test::TestFuture<std::optional<std::string>> result;
+  loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+      factory.get(), result.GetCallback());
+  terminal.WaitForRequest(completed_url);
+  ASSERT_EQ(terminal.NumPending(), 1);
+  ASSERT_EQ(dispatch_state->ownership().size(), ownership_before + 1u);
+  ASSERT_NE(terminal.pending_requests()->front().test_url_loader, nullptr);
+
+  // The downstream control pipe closes before its independent client pipe
+  // delivers OnComplete. This order must not turn a successful response into
+  // a connection error or remove its ownership record prematurely.
+  terminal.pending_requests()->front().test_url_loader.reset();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(result.IsReady());
+  EXPECT_EQ(dispatch_state->ownership().size(), ownership_before + 1u);
+  ASSERT_TRUE(terminal.SimulateResponseForPendingRequest(
+      completed_url.spec(), "relay-ok"));
+  ASSERT_TRUE(result.Wait());
+  EXPECT_EQ(result.Get(), std::optional<std::string>("relay-ok"));
+  EXPECT_EQ(loader->NetError(), net::OK);
+  EXPECT_EQ(dispatch_state->ownership().size(), ownership_before);
+
+  // A real downstream client disconnect without OnComplete still cleans up.
+  const GURL disconnected_url = target_url().Resolve("/relay-disconnect");
+  auto disconnected_request = std::make_unique<network::ResourceRequest>();
+  disconnected_request->url = disconnected_url;
+  disconnected_request->request_initiator =
+      url::Origin::Create(worker_page_url());
+  auto disconnected_loader = network::SimpleURLLoader::Create(
+      std::move(disconnected_request), TRAFFIC_ANNOTATION_FOR_TESTS);
+  base::test::TestFuture<std::optional<std::string>> disconnected_result;
+  disconnected_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+      factory.get(), disconnected_result.GetCallback());
+  terminal.WaitForRequest(disconnected_url);
+  ASSERT_EQ(terminal.NumPending(), 1);
+  EXPECT_EQ(dispatch_state->ownership().size(), ownership_before + 1u);
+  terminal.pending_requests()->front().test_url_loader.reset();
+  terminal.pending_requests()->front().client.reset();
+  ASSERT_TRUE(disconnected_result.Wait());
+  EXPECT_NE(disconnected_loader->NetError(), net::OK);
+  EXPECT_EQ(dispatch_state->ownership().size(), ownership_before);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,

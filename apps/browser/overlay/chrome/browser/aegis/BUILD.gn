@@ -320,6 +320,7 @@ if (!is_android) {
       "//content/test:test_support",
       "//mojo/public/cpp/bindings",
       "//net:test_support",
+      "//services/network:test_support",
       "//services/network/public/cpp",
       "//testing/gtest",
       "//ui/message_center/public/cpp",
