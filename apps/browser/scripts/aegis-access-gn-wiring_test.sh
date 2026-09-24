@@ -44,6 +44,7 @@ SERVICE_WORKER_SUBRESOURCE_PATCH_FILE="$BROWSER_DIR/patches/0145-feat-aegis-gate
 SERVICE_WORKER_SCRIPT_PATCH_FILE="$BROWSER_DIR/patches/0146-feat-aegis-gate-process-service-worker-script-traffic.patch"
 PREFETCH_PATCH_FILE="$BROWSER_DIR/patches/0147-feat-aegis-gate-frame-prefetch-traffic.patch"
 BROWSER_PROCESS_PREFETCH_PATCH_FILE="$BROWSER_DIR/patches/0148-feat-aegis-gate-loading-predictor-prefetch.patch"
+PROFILE_TEST_BOOTSTRAP_PATCH_FILE="$BROWSER_DIR/patches/0171-fix-access-profile-unit-test-bootstrap.patch"
 BROWSER_TEST_DEPS_PATCH_FILE="$BROWSER_DIR/patches/0149-fix-aegis-browser-test-direct-gn-deps.patch"
 ACCESS_COORDINATOR_PATCH_FILE="$BROWSER_DIR/patches/0150-feat-aegis-add-access-service-coordinator-lifecycle.patch"
 IDENTITY_GENERATION_STYLE_PATCH_FILE="$BROWSER_DIR/patches/0151-fix-aegis-identity-generation-state-style.patch"
@@ -184,6 +185,21 @@ rg -Fq 'test("access_service_coordinator_unittests")' "$ACCESS_BUILD" ||
 coordinator_test_block="$(awk '/^test\("access_service_coordinator_unittests"\)/,/^}/' "$ACCESS_BUILD")"
 [[ "$coordinator_test_block" == *'":access_proxy_selection_generation_source",'* ]] ||
   fail "coordinator test must directly depend on the proxy selection generation source"
+for profile_test in \
+  access_browser_request_adapter_unittests \
+  access_identity_generation_source_unittests \
+  access_proxy_selection_generation_source_unittests; do
+  profile_test_block="$(awk -v target="$profile_test" \
+    '$0 == "test(\"" target "\") {" { inside = 1 } inside { print } inside && $0 == "}" { exit }' \
+    "$ACCESS_BUILD")"
+  [[ "$profile_test_block" == *'"//chrome/test:test_support_unit",'* ]] ||
+    fail "$profile_test must initialize Chrome paths, resources, and Mojo"
+  [[ "$profile_test_block" != *'"//base/test:run_all_unittests",'* ]] ||
+    fail "$profile_test must not link the base-only test main"
+done
+[[ "$(rg -F -c '+    "//chrome/test:test_support_unit",' \
+  "$PROFILE_TEST_BOOTSTRAP_PATCH_FILE")" == 3 ]] ||
+  fail "patch 0171 must bootstrap all three Profile-owning unit targets"
 rg -Fq 'MainNavigationRoutingIsolatedAcrossProfiles' "$BROWSER_PROXY_TEST" ||
   fail "browser proxy regression must cover real two-Profile navigation isolation"
 rg -Fq '+source_set("access_service_coordinator")' "$ACCESS_COORDINATOR_PATCH_FILE" ||
@@ -984,10 +1000,11 @@ expected_access_tail="$(cat <<'EOF'
 0168-fix-access-proxy-connect-allowlist-host.patch
 0169-fix-access-conflict-on-superseded-mutation.patch
 0170-test-access-loading-predictor-prefetch-routing.patch
+0171-fix-access-profile-unit-test-bootstrap.patch
 EOF
 )"
-[[ "$(tail -n 56 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "patch tail must retain TypeSafe 0162-0163 before Access patches 0164-0170"
+[[ "$(tail -n 57 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "patch tail must retain TypeSafe 0162-0163 before Access patches 0164-0171"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
