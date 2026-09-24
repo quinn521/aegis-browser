@@ -1617,6 +1617,12 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   auto* dispatch_state =
       AccessRequestDispatchState::GetOrCreate(browser()->profile());
   ASSERT_NE(dispatch_state, nullptr);
+  // Navigation and automatic page requests can finish after NavigateToURL.
+  // Establish an empty registry before asserting exact relay ownership
+  // transitions; an unrelated completion could otherwise hide the new entry.
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return dispatch_state->ownership().size() == 0u; }))
+      << "Previous request ownership did not quiesce";
   const size_t ownership_before = dispatch_state->ownership().size();
   const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
   const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
