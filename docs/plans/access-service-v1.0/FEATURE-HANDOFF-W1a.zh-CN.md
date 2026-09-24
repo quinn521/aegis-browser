@@ -49,6 +49,8 @@ PR [#178](https://github.com/quinn521/aegis-browser/pull/178) 的旧 H=`eda9dfd1
 
 协调者还转述 Q 的固定 Chromium `Hceb6ead` netlog：缺 endpoint 的 frame prefetch 曾走 DIRECT，origin 收到 GET 并返回 HTTP 200，cache created 而非 cache hit。本切片未亲自复跑该现场，完整提交身份及实验记录以 Q 报告为准；生产旁路由 Q 修复。现有模型“已提交 PROXY 缺 endpoint 不退 native”的回归仍保留，但不能将其 PASS 当作真实 frame prefetch 或 G0 验收。
 
+Q 后续对照报告，普通 canonical URL 在已发布代理策略、缺 endpoint 时也能走 DIRECT 并从 origin 收到 HTTP 200；尾点 URL 发布策略后的实际浏览器请求同样曾到达 origin。因而生产待验证范围包括普通文档子资源、尾点子资源与 frame prefetch，不能只按尾点规则故障收口。Q 正定位固定 Chromium 的 factory 创建及文档提交生命周期接线，是否同一根因尚未确定；最终须分别用真实浏览器入口、origin/proxy 请求计数和失败关闭断言验证。本 PR 的模型、独立复审及托管 CI 均不关闭这些生产缺陷，也不把 W0/G0 升级为通过。
+
 同一独立评审者在后续 H=`ecb87f32998ec06eb1b8f182bd7c6205a9ec85f2` 发现 IPv4 单尾点边界：Node URL 将 `127.0.0.1.` 先归一为 `127.0.0.1`，旧模型因原始配置与请求混用检查而接受非规范本站规则、或使已发布快照的请求按非预期 native 派发。Q 随后用固定 Chromium 151 GURL 动态实验明确：配置原始 host/site 拒绝尾点或非 canonical 拼写；请求按解析后的 host/site 决策，IPv4 单尾点、`%2e` 与 `127.1.` 同 canonical IPv4 路由；DNS 尾点和 IPv4 双尾点仍保留并在已有快照/恢复约束下拒绝。从未发布快照且无恢复约束继续原生。F 仅修 Node 合同模型和本 W1a 文档；Q 的实验不是本模型执行的 Chromium 验收，仍以 Q 原始回执为准。旧 H 的 review/CI 不能转用到本次修复候选。
 
 Q 给出的实验索引为 `/Volumes/ExternalSSD/repositories/access-ipv4-dot-diagnostic-18ldxaa3`；其 manifest 报告 compile/run 均 exit 0，`probe.cc` SHA-256 `18fb49cd6fc465b9e9cb8aded3411bf47c8b65cda98965dc2a6c2ba284e78ad3`，`result.log` SHA-256 `2d4b7500a12a7eee8907f4e23dc1e3bb78913e0fdc48c96b5b811d32a6883dee`。这些身份由 Q 转交，F 未亲自执行 Chromium probe；新 H 的模型、完整本地门和同评审者复审须另行记录。
