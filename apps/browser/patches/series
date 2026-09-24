@@ -174,3 +174,4 @@
 0173-test-access-dispatch-termination-raw-ref.patch
 0174-test-access-favicon-gurl-path-api.patch
 0175-test-access-pac-serialization-fixture.patch
+0176-fix-access-reject-trailing-dot-host.patch

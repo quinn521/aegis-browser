@@ -390,6 +390,28 @@ TEST_F(AccessNetworkContextTransportTest,
   EXPECT_EQ(transport_->CurrentSelection(endpoint.owner), previous);
 }
 
+TEST_F(AccessNetworkContextTransportTest,
+       RejectsTrailingDotReplacementAndCaptureWithoutChangingSelection) {
+  auto delegate = CreateDelegate({});
+  ASSERT_TRUE(delegate);
+  const auto endpoint = EndpointFor({});
+  ASSERT_TRUE(transport_->PublishProxySelection({}, {kTargetHost}, endpoint));
+  const auto previous = *transport_->CurrentSelection(endpoint.owner);
+  auto candidate = previous;
+  candidate.exact_hosts = {"target.example."};
+
+  EXPECT_FALSE(
+      transport_->ReplaceSelection(endpoint.owner, previous, candidate));
+  EXPECT_FALSE(transport_
+                   ->CaptureSelectedProxyEndpoint(
+                       endpoint.owner, endpoint.proxy_group_id,
+                       "target.example.")
+                   .has_value());
+  EXPECT_EQ(transport_->CurrentSelection(endpoint.owner), previous);
+  transport_->FlushClientsForTesting({});
+  ExpectProxyResolution(delegate.get(), "https://target.example/");
+}
+
 TEST_F(AccessNetworkContextTransportTest, ExactCandidateRequiresEveryContext) {
   auto first = CreateDelegate({});
   auto second = CreateDelegate({});
@@ -720,6 +742,8 @@ TEST_F(AccessNetworkContextTransportTest,
       partition, {kTargetHost, kTargetHost}, endpoint));
   EXPECT_FALSE(transport_->PublishProxySelection(
       partition, {"TARGET.example"}, endpoint));
+  EXPECT_FALSE(transport_->PublishProxySelection(
+      partition, {"target.example."}, endpoint));
   transport_->FlushClientsForTesting(partition);
 
   ExpectProxyResolution(delegate.get(),

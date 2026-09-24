@@ -82,6 +82,7 @@ class AccessRuleStoreTestPeer {
 namespace {
 
 constexpr char kTargetHost[] = "target.example";
+constexpr char kTrailingDotTargetHost[] = "target.example.";
 constexpr char kUnselectedRedirectHost[] = "redirect-unselected.example";
 constexpr char kProxyGroup[] = "proxy-group-browser-test";
 
@@ -329,6 +330,7 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     InProcessBrowserTest::SetUpOnMainThread();
 
     host_resolver()->AddRule(kTargetHost, "127.0.0.1");
+    host_resolver()->AddRule(kTrailingDotTargetHost, "127.0.0.1");
     host_resolver()->AddRule(kUnselectedRedirectHost, "127.0.0.1");
 
     target_origin_.RegisterRequestHandler(
@@ -469,6 +471,16 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
   }
 
   bool FetchTarget() { return Fetch(target_url()); }
+
+  bool FetchNoStore(const GURL& url) {
+    return content::EvalJs(
+               web_contents(),
+               content::JsReplace(
+                   "fetch($1, {mode: 'no-cors', cache: 'no-store'})"
+                   ".then(() => true).catch(() => false)",
+                   url.spec()))
+        .ExtractBool();
+  }
 
   std::optional<std::string> FetchBrowserProcessPrefetchOnPartition(
       content::StoragePartition* partition,
@@ -878,6 +890,65 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
     return origin_requests_.load(std::memory_order_relaxed) == 1u;
   }));
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       TrailingDotHostStaysNativeWithoutPolicyAndBlocksAfterPublish) {
+  const GURL trailing_url =
+      target_origin_.GetURL(kTrailingDotTargetHost, "/resource");
+  ASSERT_EQ(trailing_url.host(), kTrailingDotTargetHost);
+
+  const size_t healthy_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t healthy_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(FetchNoStore(trailing_url));
+  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+  const size_t origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  EXPECT_FALSE(FetchNoStore(trailing_url));
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
+
+  ASSERT_TRUE(FetchNoStore(target_url()));
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/1u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       TrailingDotTopFrameBlocksCanonicalSubresourceAfterPublish) {
+  const GURL trailing_page =
+      target_origin_.GetURL(kTrailingDotTargetHost, "/worker-page");
+  ASSERT_EQ(trailing_page.host(), kTrailingDotTargetHost);
+  const size_t healthy_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t healthy_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), trailing_page));
+  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+
+  const size_t native_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t native_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(FetchNoStore(target_url()));
+  ExpectRoutingDelta(native_origin_before, native_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+  const size_t origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  EXPECT_FALSE(FetchNoStore(target_url()));
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
