@@ -204,6 +204,18 @@ ServiceWorkerProxyReply(std::atomic<size_t>* counter,
   return BuildServiceWorkerReply(counter, request, /*proxy_response=*/true);
 }
 
+std::unique_ptr<net::test_server::HttpResponse> IgnoreAutomaticFavicon(
+    const net::test_server::HttpRequest& request) {
+  if (request.GetURL().path_piece() != "/favicon.ico") {
+    return nullptr;
+  }
+
+  // Chromium fetches this after navigation; only route-test resources count.
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_NO_CONTENT);
+  return response;
+}
+
 std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
     std::atomic<size_t>* counter,
     const char* body,
@@ -319,10 +331,14 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
     host_resolver()->AddRule(kTargetHost, "127.0.0.1");
     host_resolver()->AddRule(kUnselectedRedirectHost, "127.0.0.1");
 
+    target_origin_.RegisterRequestHandler(
+        base::BindRepeating(&IgnoreAutomaticFavicon));
     target_origin_.RegisterRequestHandler(base::BindRepeating(
         &ServiceWorkerOriginReply, base::Unretained(&origin_requests_)));
     target_origin_.RegisterRequestHandler(base::BindRepeating(
         &CountAndReply, base::Unretained(&origin_requests_), "origin"));
+    proxy_server_.RegisterRequestHandler(
+        base::BindRepeating(&IgnoreAutomaticFavicon));
     proxy_server_.RegisterRequestHandler(base::BindRepeating(
         &ServiceWorkerProxyReply, base::Unretained(&proxy_requests_)));
     proxy_server_.RegisterRequestHandler(base::BindRepeating(
@@ -869,7 +885,8 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), target_url()));
   EXPECT_TRUE(base::test::RunUntil([&] {
     return origin_requests_.load(std::memory_order_relaxed) == 1u;
-  }));
+  })) << "origin=" << origin_requests_.load(std::memory_order_relaxed)
+      << " proxy=" << proxy_requests_.load(std::memory_order_relaxed);
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
 }
 
