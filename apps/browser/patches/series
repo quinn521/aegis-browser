@@ -185,3 +185,4 @@
 0184-test-access-same-frame-disable-bfcache.patch
 0185-fix-non-network-document-prefetch-default.patch
 0186-test-access-cancelled-document-factory-clones.patch
+0187-fix-restricted-document-prefetch-factories.patch
