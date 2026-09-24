@@ -487,3 +487,103 @@ test('regression: stale ACK cannot replace later BLOCK; close invalidates issuer
   assert.equal(issue(model, issuer, 'https://cdn.example/', 'revived').reason,
     'untrusted_or_unknown_issuer');
 });
+
+test('regression: restart retains committed constraints without blocking unrelated native routes', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('restoring-profile');
+  const rules = [
+    { id: 'profile-proxy', scope: 'profile', exactHost: 'cdn.example',
+      scheme: 'https', port: 443, mode: 'PROXY', groupId: 'shopping' },
+    { id: 'site-direct', scope: 'site', topLevelSite: 'https://shop.test',
+      exactHost: 'cdn.example', scheme: 'https', port: 443, mode: 'DIRECT' },
+    { id: 'profile-block', scope: 'profile', exactHost: 'blocked.test',
+      scheme: 'https', port: 443, mode: 'REJECT' },
+  ];
+  const oldIssuer = prepare(model, routeOwner, 'context-1', {
+    rules, endpoints: [fixture.endpoints[0]],
+  });
+  assert.equal(model.evaluate(issue(model, oldIssuer, 'https://cdn.example/', 'old-shop')).reason,
+    'DIRECT');
+  assert.equal(model.evaluate(issue(model, oldIssuer, 'https://cdn.example/', 'old-mail',
+    'https://mail.test')).action, 'proxy');
+  assert.equal(model.restart(routeOwner, 'context-2').ok, true);
+  const issuer = model.trustedIssuer(routeOwner);
+  const constrained = model.evaluate(issue(model, issuer, 'https://cdn.example/',
+    'restoring-mail', 'https://mail.test'));
+  assert.deepEqual([constrained.action, constrained.reason],
+    ['wait-fail', 'restoring_constrained_route']);
+  assert.equal(model.dispatch(constrained).ok, false);
+  const blocked = model.evaluate(issue(model, issuer, 'https://blocked.test/', 'restoring-block'));
+  assert.deepEqual([blocked.action, blocked.reason],
+    ['wait-fail', 'restoring_constrained_route']);
+  assert.equal(model.dispatch(blocked).ok, false);
+  const opaque = model.evaluate(model.issueRequest({ issuer,
+    attribution: { kind: 'opaque', activeTab: 'shop', nak: 'shop' },
+    target: 'https://cdn.example/', method: 'GET', requestId: 'restoring-opaque' }));
+  assert.equal(opaque.action, 'wait-fail');
+  const siteDirect = model.evaluate(issue(model, issuer, 'https://cdn.example/',
+    'restoring-shop'));
+  assert.deepEqual([siteDirect.action, siteDirect.reason], ['native', 'no_access_snapshot']);
+  const unrelated = model.evaluate(issue(model, issuer, 'https://ordinary.test/',
+    'restoring-unrelated'));
+  assert.deepEqual([unrelated.action, unrelated.reason], ['native', 'no_access_snapshot']);
+  assert.equal(model.dispatch(unrelated).ok, true);
+  assert.equal(model.restart(routeOwner, 'context-3').ok, true);
+  const twice = model.evaluate(issue(model, model.trustedIssuer(routeOwner),
+    'https://cdn.example/', 'restoring-twice', 'https://mail.test'));
+  assert.equal(twice.action, 'wait-fail');
+  assert.equal(model.close(routeOwner).ok, true);
+  assert.equal(model.restart(routeOwner, 'context-4').ok, true);
+  const reopenedIssuer = model.trustedIssuer(routeOwner);
+  assert.equal(model.evaluate(issue(model, reopenedIssuer, 'https://cdn.example/',
+    'reopened-constrained', 'https://mail.test')).action, 'wait-fail');
+  assert.equal(model.evaluate(issue(model, reopenedIssuer, 'https://ordinary.test/',
+    'reopened-native')).action, 'native');
+});
+
+test('regression: sent POST tombstone survives restart and forbids same-hop replay', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('post-restart');
+  const issuer = prepare(model, routeOwner, 'context-1', {
+    rules: [fixture.routes[0]], endpoints: [fixture.endpoints[0]],
+  });
+  const first = issue(model, issuer, 'https://cdn.example/', 'same-post',
+    'https://shop.test', { method: 'POST' });
+  assert.equal(model.dispatch(model.evaluate(first)).ok, true);
+  assert.equal(model.restart(routeOwner, 'context-2').ok, true);
+  const newIssuer = model.trustedIssuer(routeOwner);
+  const sameHop = issue(model, newIssuer, 'https://cdn.example/', 'same-post',
+    'https://shop.test', { method: 'POST' });
+  assert.equal(model.evaluate(sameHop).action, 'wait-fail');
+  const nextCommon = { ...fixture.commonGenerations, network_epoch: 5 };
+  assert.equal(model.registerEndpoint({ owner: routeOwner, incarnation: 'context-2',
+    group: 'shopping', registrationId: 'post-new-context',
+    endpointIdentity: endpointIdentity(18101), tuple: tuple(11, nextCommon) }).ok, true);
+  const publication = model.publishSnapshot({ owner: routeOwner, incarnation: 'context-2',
+    commonGenerations: nextCommon, rules: [fixture.routes[0]],
+    endpoints: [{ groupId: 'shopping', registrationId: 'post-new-context' }] });
+  assert.equal(model.acknowledgeModelSnapshot(publication.receipt).ok, true);
+  assert.equal(model.evaluate(sameHop).action, 'proxy');
+  assert.equal(model.dispatch(model.evaluate(sameHop)).reason, 'already_sent');
+  const fresh = issue(model, newIssuer, 'https://cdn.example/', 'fresh-post',
+    'https://shop.test', { method: 'POST' });
+  assert.equal(model.dispatch(model.evaluate(fresh)).ok, true);
+});
+
+test('regression: registration ID cannot be reused after unregister, restart or close', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('registration-history');
+  assert.equal(model.restart(routeOwner, 'context-1').ok, true);
+  const register = (incarnation, credentialIdentity) => model.registerEndpoint({
+    owner: routeOwner, incarnation, group: 'shopping', registrationId: 'r1',
+    endpointIdentity: { ...endpointIdentity(18101), credentialIdentity }, tuple: tuple(11),
+  });
+  assert.equal(register('context-1', 'first-credential').ok, true);
+  assert.equal(model.unregisterEndpoint(routeOwner, 'r1'), true);
+  assert.equal(register('context-1', 'new-credential').reason, 'registration_id_reused');
+  assert.equal(model.restart(routeOwner, 'context-2').ok, true);
+  assert.equal(register('context-2', 'third-credential').reason, 'registration_id_reused');
+  assert.equal(model.close(routeOwner).ok, true);
+  assert.equal(model.restart(routeOwner, 'context-3').ok, true);
+  assert.equal(register('context-3', 'fourth-credential').reason, 'registration_id_reused');
+});

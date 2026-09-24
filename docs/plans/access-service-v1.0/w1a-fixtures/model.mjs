@@ -56,6 +56,9 @@ function ruleKey(rule) {
 export class RequestRoutingContractModel {
   #owners = new Map();
   #seenIncarnations = new Map();
+  #usedRegistrationIds = new Map();
+  #sentHops = new Map();
+  #lastCommittedRules = new Map();
   #issuers = new WeakMap();
   #issued = new WeakMap();
   #decisions = new WeakMap();
@@ -70,9 +73,22 @@ export class RequestRoutingContractModel {
     if (seen.has(newIncarnation)) return fail('incarnation_not_advanced');
     seen.add(newIncarnation);
     this.#seenIncarnations.set(key, seen);
+    const prior = this.#owners.get(key);
+    const restoreRules = prior?.active?.rules ?? prior?.restoreRules ??
+      this.#lastCommittedRules.get(key) ?? [];
+    const pendingBlocks = [
+      ...(prior?.pendingBlocks ?? []),
+      ...(prior?.pending?.rules.filter((rule) => rule.mode === 'REJECT') ?? []),
+    ];
+    const usedRegistrationIds = this.#usedRegistrationIds.get(key) ?? new Set();
+    const sentHops = this.#sentHops.get(key) ?? new Set();
+    this.#usedRegistrationIds.set(key, usedRegistrationIds);
+    this.#sentHops.set(key, sentHops);
     this.#owners.set(key, {
       owner: copy(owner), incarnation: newIncarnation, registrations: new Map(),
-      pending: null, active: null, sentHops: new Set(),
+      pending: null, active: null, sentHops, usedRegistrationIds,
+      restoreRules: Object.freeze([...restoreRules]),
+      pendingBlocks: Object.freeze([...pendingBlocks]),
     });
     return Object.freeze({ ok: true, incarnation: newIncarnation });
   }
@@ -102,11 +118,12 @@ export class RequestRoutingContractModel {
         endpointIdentity.port > 65535 || !endpointIdentity?.credentialIdentity) {
       return fail('invalid_registration');
     }
-    if (state.registrations.has(registrationId)) return fail('duplicate_registration');
+    if (state.usedRegistrationIds.has(registrationId)) return fail('registration_id_reused');
     state.registrations.set(registrationId, Object.freeze({
       group, registrationId, endpointIdentity: Object.freeze(copy(endpointIdentity)),
       tuple: Object.freeze(copy(tuple)), incarnation,
     }));
+    state.usedRegistrationIds.add(registrationId);
     return Object.freeze({ ok: true, registrationId });
   }
 
@@ -163,6 +180,9 @@ export class RequestRoutingContractModel {
     }
     state.active = state.pending;
     state.pending = null;
+    this.#lastCommittedRules.set(receipt.ownerKey, state.active.rules);
+    state.restoreRules = Object.freeze([]);
+    state.pendingBlocks = Object.freeze([]);
     return Object.freeze({ ok: true, snapshotId: receipt.snapshotId });
   }
 
@@ -220,7 +240,27 @@ export class RequestRoutingContractModel {
     let group = null;
     let entry = null;
     if (!snapshot) {
-      if (issued.requireProxy) { action = 'wait-fail'; reason = 'required_snapshot_missing'; }
+      const targetRules = state.restoreRules.filter((rule) =>
+        rule.exactHost === issued.target.host &&
+        rule.scheme === issued.target.scheme && rule.port === issued.target.port);
+      const matching = targetRules.filter((rule) => rule.scope === 'profile' ||
+        (issued.attribution.kind === 'site' &&
+          rule.topLevelSite === issued.attribution.topLevelSite));
+      const rule = matching.find((candidate) => candidate.scope === 'site') ?? matching[0];
+      const ambiguousSiteConstraint = issued.attribution.kind === 'opaque' &&
+        targetRules.some((candidate) => candidate.scope === 'site' &&
+          candidate.mode !== 'DIRECT');
+      const pendingBlock = state.pendingBlocks.some((candidate) =>
+        candidate.exactHost === issued.target.host &&
+        candidate.scheme === issued.target.scheme && candidate.port === issued.target.port &&
+        (candidate.scope === 'profile' || issued.attribution.kind === 'opaque' ||
+          candidate.topLevelSite === issued.attribution.topLevelSite));
+      const wasConstrained = pendingBlock || ambiguousSiteConstraint ||
+        (rule && rule.mode !== 'DIRECT');
+      if (issued.requireProxy || wasConstrained) {
+        action = 'wait-fail';
+        reason = wasConstrained ? 'restoring_constrained_route' : 'required_snapshot_missing';
+      }
       else reason = 'no_access_snapshot';
     } else {
       const matching = snapshot.rules.filter((rule) =>
