@@ -1,0 +1,23 @@
+# W1a request routing contract fixture
+
+**Evidence level: `CONTRACT_MODEL_ONLY`.** This directory contains a pure Node oracle and hand-written scenario inputs for the [W1a design](../w1a-request-routing-design.zh-CN.md). It is not production routing code or a Chromium adapter. The test output always reports `native=NOT_RUN; browser=NOT_RUN; authNetwork=NOT_RUN`. Passing these tests does not complete W0, W1, G0, native integration, proxy authentication, or browser acceptance.
+
+Run directly from the repository root:
+
+```sh
+node --test docs/plans/access-service-v1.0/w1a-fixtures/model.test.mjs
+```
+
+The existing `pnpm ci:test` discovery also runs the thin entry at `scripts/ci/tests/w1a-request-routing-contract.test.mjs`. Its direct command is:
+
+```sh
+node --test scripts/ci/tests/w1a-request-routing-contract.test.mjs
+```
+
+`scenarios.json` supplies explicit common generations, group selection generations, site rules, and endpoint identities. `model.test.mjs` asserts the expected actions, registration IDs, exact send count per logical `(requestId, hop)`, and stale/forged rejection. Positive and negative cases cover simultaneous same-CDN and different-host groups, exact scheme and effective port, all six mode transitions for **new** requests, redirects, POST/PATCH once-only dispatch, two Profiles plus OTR and a separate partition, restart and close, candidate model ACK, missing and forged context, five individual generation changes, and same-address new registration. A policy or registration candidate is fully checked before becoming pending; only its exact model receipt can activate it. A later pending BLOCK supersedes an earlier candidate receipt. The fixture does not model the immediate pre-ACK BLOCK barrier, durable commit, or in-flight per-stream cancellation; those require production tests.
+
+The model's actual API is `restart(owner, incarnation)`, `close(owner)`, `trustedIssuer(owner)`, `registerEndpoint(...)`, `publishSnapshot({owner, commonGenerations, incarnation, rules, endpoints})`, `acknowledgeModelSnapshot(receipt)`, `issueRequest({issuer, attribution, target, method, requestId, hop, requireProxy})`, `evaluate(issued)`, `dispatch(decision)`, `redirect(issued, {target, method, navigation, nextTopLevelSite})`, and `authorizeCredentialLookup(decision, {owner, registrationId, transport})`. Each registration carries a complete `GenerationTuple`; snapshot common generations contain policy, identity, network epoch, and base proxy config, while selection is group-specific and comes from the bound registration. Decisions and pool keys include the exact group registration, full five-field tuple, owner, and NetworkContext incarnation. Registration IDs are never reused after restart in the fixture. The model rejects reuse of an old incarnation or trusted issuer.
+
+`DIRECT` and unmatched `PRESERVE_NATIVE` return the current native base proxy config generation; they do not assert physical direct connectivity. With no Access snapshot, an unrestricted request preserves native routing, while a request with `requireProxy` waits/fails. This oracle accepts only pre-normalized lowercase exact hosts, supplied schemeful top-level site, `http`/`https`/`ws`/`wss`, and effective port. Suffix rules, IDNA, public/private suffix calculation, full production matcher precedence, protection and managed restrictions, cache/SW/BFCache gates, and Chromium redirect method/body computation are `NOT_MODELED`. For a main-frame redirect the trusted caller supplies the new site; subresources retain their original trusted site. A legitimate 307/308 hop may carry a POST body, but this model represents only its route and once-only logical send. It never manufactures or replays a body.
+
+`trustedIssuer` and private object identity make the test oracle reject plain-object forgeries. They are **not** proof that renderer input, Mojo IPC, URLLoader control, or a real Network Service cannot be forged. `acknowledgeModelSnapshot` is a model state transition, not a `CustomProxyConfigClient` or runtime ACK. `authorizeCredentialLookup` returns only a credential **identity** when owner, registration, transport, incarnation, and active snapshot match; it contains no secret and proves no handshake. Actual HTTP forward and CONNECT handling must verify 407 behavior, correct and incorrect credentials, and that `Proxy-Authorization` is never sent to the origin. SOCKS5 needs its own authenticated Profile binding and failure tests in fixed Chromium. Those checks, proxy outlet and origin logs, and network-service restart belong to W1b/W1c and W5.
