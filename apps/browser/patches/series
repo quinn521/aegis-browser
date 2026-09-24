@@ -190,3 +190,4 @@
 0189-fix-access-prefetch-test-requests.patch
 0190-test-access-relay-ownership-quiescence.patch
 0191-test-access-clear-disconnected-loader-fixture.patch
+0192-test-prefetch-cache-complete-type.patch
