@@ -1294,7 +1294,6 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
       original_result);
   auto clone_loader = start_queued(
       clone.get(), target_url().Resolve("/cancel-clone"), clone_result);
-  clone.FlushForTesting();
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(original_result.IsReady());
   EXPECT_FALSE(clone_result.IsReady());

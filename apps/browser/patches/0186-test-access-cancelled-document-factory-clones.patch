@@ -5,8 +5,8 @@ Subject: [PATCH] Test cancelled document navigation closes pending factory
  clones
 
 ---
- ...proxying_url_loader_factory_browsertest.cc | 82 +++++++++++++++++++
- 1 file changed, 82 insertions(+)
+ ...proxying_url_loader_factory_browsertest.cc | 81 +++++++++++++++++++
+ 1 file changed, 81 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 index 2646a08..30db0d0 100644
@@ -21,7 +21,7 @@ index 2646a08..30db0d0 100644
  #include "content/public/browser/render_frame_host.h"
  #include "content/public/browser/storage_partition.h"
  #include "content/public/browser/storage_partition_config.h"
-@@ -1232,6 +1234,86 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+@@ -1232,6 +1234,85 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                       /*proxy_delta=*/0u);
  }
  
@@ -85,7 +85,6 @@ index 2646a08..30db0d0 100644
 +      original_result);
 +  auto clone_loader = start_queued(
 +      clone.get(), target_url().Resolve("/cancel-clone"), clone_result);
-+  clone.FlushForTesting();
 +  base::RunLoop().RunUntilIdle();
 +  EXPECT_FALSE(original_result.IsReady());
 +  EXPECT_FALSE(clone_result.IsReady());
@@ -110,4 +109,3 @@ index 2646a08..30db0d0 100644
   public:
 -- 
 2.54.0 (Apple Git-157)
-
