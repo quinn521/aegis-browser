@@ -193,4 +193,4 @@ Q 第二候选 H745bf3c 执行补记：11 targets/86 tests 通过后 dispatch_st
 
 Q 第三候选 Hceb6ead：设施编译修复已过，但 transport 尾点 host 接纳及 frame prefetch 缺 endpoint 直连暴露产品缺陷。NetLog 已证实后者 DIRECT/HTTP200；native 总门和 browser 总门均 FAIL/sourceStable。尾点按保守拒绝设计修复，保无 snapshot 的 native 边界；prefetch 另定位实际入口。局部通过与剩余目标补充诊断不升级 W0/G0 或131主行，详见 QUALITY-HANDOFF 第三候选记录。
 
-Q 后续候选状态：0175–0186 的局部源码/编译/browser 证据与失败归档见 QUALITY-HANDOFF。已准入 Hc6f14c2 的 browser 构建主动中断、0 runtime；独立预审发现 HTTP URL 的 MHTML 子帧原禁网 default 可被 prefetch 重建为网络 factory。0187 已补 RFHI 可信资格与真实 MHTML 子帧回归，pending Clone 测试设施也已修正，但新候选尚未实际准入/运行。W0 未完成，G0 继续 UNVERIFIED，131 个主行判定不变。
+Q 后续候选状态：0175–0186 的局部源码/编译/browser 证据与失败归档见 QUALITY-HANDOFF。已准入 Hc6f14c2 的 browser 构建主动中断、0 runtime；独立预审发现 HTTP URL 的 MHTML 子帧原禁网 default 可被 prefetch 重建为网络 factory。0187 已补 RFHI 可信资格与真实 MHTML 子帧回归，pending Clone 测试设施也已修正；H882c354 的六关键对象编译 PASS/sourceStable，完整链接和 runtime 未验。W0 未完成，G0 继续 UNVERIFIED，131 个主行判定不变。

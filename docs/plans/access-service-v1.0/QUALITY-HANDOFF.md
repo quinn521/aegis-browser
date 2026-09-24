@@ -1,6 +1,6 @@
 # QUALITY-HANDOFF：W0 固定 Chromium 验证
 
-更新：2026-09-24。负责人 Q；本记录是当前执行入口，历史 PR 或构建报告各保留自己的身份。W0 未完成，G0 UNVERIFIED；本轮不新增 required gate。
+更新：2026-09-24 11:30 UTC（六对象编译后、全矩阵前快照）。负责人 Q；本记录是执行入口，后续结果以各 attempt 的原始报告和 PR 精确 H 说明继续登记。历史 PR 或构建报告各保留自己的身份。W0 未完成，G0 UNVERIFIED；本轮不新增 required gate。
 
 ## 冻结来源与所有权
 
@@ -68,7 +68,7 @@ Q evidence 根：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/e
 - H=`79e89a07565f11345082c285b426ea0b2a2c535d`：source admission 8 与定向对象编译通过；`browser-document-diagnostic8` 实际 9 项通过、1 项失败，sourceStable=true。失败的旧 Clone 用例在 RFH 身份前置断言处停止，未触达 Clone 请求。独立预审发现 sandbox HTTP opaque origin 可跳过 wrapper、预提交 prefetch 被误中止、重建 bundle 丢失特殊 factory；此 H 未通过审查。
 - H=`f8ccc94dd6ffa0bc2a2b1d1360c4d5155755fe92`：0181–0184 与 overlay 准入 9、local full 通过；`browser-attempt9` 在 GN 检查发现 Chrome browser test 引用 Content 私有头，0 项 runtime。H=`d89d1f272d7342ef55068e03f2e5424411590f5c` 改用公开 RFH API，source admission 10 通过；`browser-attempt10` 因独立预审发现非 HTTP 受限 default factory 被替换，在 Ninja 351/2316 时主动中断，0 项 runtime、sourceStable=true。
 - H=`c6f14c2ed670dd2b8ed714def9caa17850758655`：0185 保留非 HTTP 原 default，0186 增加真实导航取消回归，source admission 11 通过；`browser-attempt11` 构建中主动中断，0 项 runtime、sourceStable=true。独立预审指出 0186 的 pending Clone 同步 Flush 会等待尚未绑定的对端而挂起；后续 5fd9a25 删去该 Flush。另有更重要的 P1：MHTML 子帧最终 URL 可为 HTTP，但原 default 是禁网 factory，0185 仍只凭 HTTP URL 将它重建为普通网络 factory。
-- 当前代码候选含 0187：仅在 RFHI 确实创建 NetworkService default 时记录可信资格并允许 prefetch 重建；MHTML/WebUI 等原受限 default 保持原 bundle，restricted/recursive 路径在新建跨源 factory 前拒绝。新增真实 HTTP MHTML 子帧 `content_browsertests` 回归。H=`1ac4756…` 为纳入 0187 后的代码头；随后文档提交使最终 H 继续变化。0187 只有 patch 预检和静态接线通过，尚无本候选 source admission、编译或运行证据；独立最终复审也未完成。
+- 0187 仅在 RFHI 确实创建 NetworkService default 时记录可信资格并允许 prefetch 重建；MHTML/WebUI 等原受限 default 保持原 bundle，restricted/recursive 路径在新建跨源 factory 前拒绝。新增真实 HTTP MHTML 子帧 `content_browsertests` 回归。独立复审发现初稿变量作用域编译阻塞，H=`882c354357b8e7f4e9e9948e144bd99188a57e76` 已修复；`source-attempt13` PASS/sourceStable，Chromium tree=`b97227ce6ad046a51681903d57be496b33c29bad`。`compile-0187-objects13` 的 RFHI、prefetch service、Chrome hook/Aegis factory 与 browser fixture 六对象全部编译 PASS/sourceStable，**无完整链接或 runtime**。同一 Astra/high 静态复审暂无未关闭 P1/P2；最终复审仍须绑定新 H 的实际运行证据。
 
 以上 source admission 是补丁与 overlay 的精确来源检查，不是编译或运行通过。后续最终 H 仍需 local full、全部 17 个 native target、扩展 Chrome browser 矩阵、独立 `content_browsertests` 的 prefetch 回归、同一审查人的最终复审及托管 PR 精确 B/H/M 检查；#177 保持 Draft，不合并。台账 131 个主行与 G0 均不升级。
 
