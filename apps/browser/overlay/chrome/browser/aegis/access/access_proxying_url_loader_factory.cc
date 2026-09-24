@@ -3,6 +3,7 @@
 #include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
 #include "chrome/browser/aegis/access/access_proxying_url_tracked_request.h"
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -222,7 +223,6 @@ CaptureProfileOnlyProxyFactoryMetadata(Profile* profile,
 class PendingDocumentFactory : public content::WebContentsObserver {
  public:
   using CompletionCallback = base::OnceCallback<void(
-      PendingDocumentFactory*,
       std::optional<aegis_access::BrowserOwnedRequestMetadata>,
       std::optional<content::WeakDocumentPtr>)>;
 
@@ -294,7 +294,7 @@ class PendingDocumentFactory : public content::WebContentsObserver {
     // callback frame. Completing on the next UI task also keeps queued Mojo
     // requests unbound until the document identity has been captured.
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(on_complete_), this,
+        FROM_HERE, base::BindOnce(std::move(on_complete_),
                                   std::move(metadata), std::move(document)));
   }
 
@@ -357,11 +357,14 @@ class BrowserContextData : public base::SupportsUserData::Data {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
     BrowserContextData* self = GetOrCreate(profile);
     auto [receiver, target] = factory_builder.Append();
-    self->pending_documents_.emplace(std::make_unique<PendingDocumentFactory>(
-        profile, contents, frame, navigation_id, std::move(receiver),
-        std::move(target),
-        base::BindOnce(&BrowserContextData::CompletePendingDocument,
-                       self->weak_factory_.GetWeakPtr())));
+    const uint64_t pending_id = ++self->next_pending_id_;
+    self->pending_documents_.emplace(
+        pending_id,
+        std::make_unique<PendingDocumentFactory>(
+            profile, contents, frame, navigation_id, std::move(receiver),
+            std::move(target),
+            base::BindOnce(&BrowserContextData::CompletePendingDocument,
+                           self->weak_factory_.GetWeakPtr(), pending_id)));
   }
 
   void RemoveProxy(AccessProxyingURLLoaderFactory* proxy) {
@@ -383,14 +386,14 @@ class BrowserContextData : public base::SupportsUserData::Data {
   }
 
   void CompletePendingDocument(
-      PendingDocumentFactory* pending,
+      uint64_t pending_id,
       std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata,
       std::optional<content::WeakDocumentPtr> document) {
     DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-    auto it = pending_documents_.find(pending);
+    auto it = pending_documents_.find(pending_id);
     CHECK(it != pending_documents_.end());
-    auto node = pending_documents_.extract(it);
-    std::unique_ptr<PendingDocumentFactory> owned = std::move(node.value());
+    std::unique_ptr<PendingDocumentFactory> owned = std::move(it->second);
+    pending_documents_.erase(it);
     content::RenderFrameHost* frame =
         document ? document->AsRenderFrameHostIfValid() : nullptr;
     if (!metadata || !frame || !frame->GetPage().IsPrimary() ||
@@ -415,8 +418,9 @@ class BrowserContextData : public base::SupportsUserData::Data {
   std::set<std::unique_ptr<AccessProxyingURLLoaderFactory>,
            base::UniquePtrComparator>
       proxies_;
-  std::set<std::unique_ptr<PendingDocumentFactory>, base::UniquePtrComparator>
+  std::map<uint64_t, std::unique_ptr<PendingDocumentFactory>>
       pending_documents_;
+  uint64_t next_pending_id_ = 0;
   base::WeakPtrFactory<BrowserContextData> weak_factory_{this};
 };
 

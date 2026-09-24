@@ -177,3 +177,4 @@
 0176-fix-access-reject-trailing-dot-host.patch
 0177-fix-access-document-prefetch-factory.patch
 0178-fix-access-precommit-document-factory.patch
+0179-fix-access-pending-document-callback-lifetime.patch
