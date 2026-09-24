@@ -69,7 +69,7 @@ registration 以 owner/group 为索引，以不可复用 registration ID 作精�
 
 `proxy intent`/恢复中约束来自受信 snapshot 或正在恢复的 owner 状态。没有可信 attribution 时 site rule 不可命中；不能把缺失上下文简单等价于无规则。无规则且不存在受约束恢复范围才可走 native；已知受约束但缺 owner/tuple/registration 则在发送前 wait/fail。
 
-**canonical 尾点边界（2026-09-24 定界）：** 配置准入拒绝 `exactHost` 或本站 `topLevelSite` 的尾点 host，不把 `target.example.` 静默 strip 成 `target.example`。固定 Chromium 的 SchemefulSite/PSL 保留尾点并视作不同 site，matcher 不去尾点。已有已发布快照时，请求目标 host 或可信顶层网站 host 带尾点须在派发前 fail closed，即使快照里没有匹配规则；重启恢复中的已提交快照/约束也不能被空 active 指针误判成从未配置。只有确实从未发布快照、且没有恢复约束的 factory，才按原生配置处理该输入。此 Node fixture 只固定合同；Chromium 入口接线和真实流量仍须由后续生产测试证明。
+**canonical 尾点边界（2026-09-24 Q 固定 Chromium 151 GURL 实验定界）：** 配置侧 `exactHost` 和本站 `topLevelSite` 是原始待准入值；拒绝尾点和其他非 canonical 拼写，不靠解析后丢失的原始拼写补救。请求侧使用可信 GURL/SchemefulSite 解析后的 canonical host/site 判定，不能自行检查或恢复原始 authority。Q 观察到 `https://127.0.0.1.`、`https://127.0.0.1%2e` 和 `https://127.1.` 均归一到 `https://127.0.0.1/`，SchemefulSite 同值；这些请求按 canonical IPv4 规则正常判路。DNS `target.example.` / `%2e` 保留尾点，IPv4 双尾点 `127.0.0.1..` 也保留且不作为 IP，故已有已发布快照时对解析后仍带尾点的目标或可信顶层网站 fail closed，即使无匹配规则；重启恢复中的已提交快照/约束同样适用。从未发布快照且无恢复约束的 factory 沿原生配置。`[::1].` 是无效 GURL。本 Node fixture 只固定上述对象边界；生产 Browser/Network Service 接线和真实流量仍须独立证明。
 
 ## 4. Browser → 实际 proxy/stream 的可实施 API 清单
 
@@ -189,7 +189,7 @@ lookupCredentialAuthorization(decision, registration) -> authorized | refused
 
 registry 与 issueRequest 只暴露给模型中的可信调用侧；用伪造 plain object、旧 token、跨 owner 和 duplicate dispatch 作反例。规则可限于 exact host + scheme + effective port + site/profile scope，不另写第二套完整生产 matcher；不支持后缀/IDNA/完整策略优先级时明确 NOT_MODELED。`acknowledgeModelSnapshot` 仅表示模型状态转换，不等于 Chromium 的 publication ACK。
 
-尾点反例同时覆盖配置 `exactHost`/本站 `topLevelSite` 准入、已发布快照下首次与 redirect 请求的目标/顶层网站、无匹配规则，以及重启恢复。断言是明确拒绝且 send=0，不接受 strip 后按另一条规则放行。从未发布且无恢复约束的尾点输入保留 native 正对照；模型绿灯不替代实际 Browser/Network Service 准入和出口观测。
+尾点反例分别覆盖原始配置 `exactHost`/本站 `topLevelSite` 准入，以及解析后仍带尾点的请求目标/顶层网站在首次、redirect、无匹配规则和重启恢复时拒绝且 send=0。IPv4 单尾点及等价拼写经 GURL 归一后应与 canonical IPv4 同路，不能因为原始文本尾点而误拒；双尾点与 DNS 尾点仍拒绝。从未发布且无恢复约束的输入保留 native 正对照。模型绿灯不替代实际 Browser/Network Service 准入和出口观测。
 
 每个用例保留输入、预期 action/group/key、实际 send count、state transition；正常控制与拒绝反例成对。最低覆盖第 8 节模型列，独立测试规则错误、缺 endpoint、伪造 owner、组不符、五元组逐字段过期、旧 incarnation ACK、同地址换 registration、native 当前配置恢复。测试不能只比较实现自己生成的字符串；必须用手写 oracle 断言 X/Y 选择、send 次数和不得出现的 fallback。模型的报告写明未执行 browser/native/auth/network，并可由 `node --test` 在隔离目录运行，不需要安装服务或启动监听。
 

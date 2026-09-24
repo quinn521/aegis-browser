@@ -678,6 +678,9 @@ test('regression: never-published owner keeps trailing-dot initial and redirect 
   for (const [requestId, target, topSite] of [
     ['native-target-tail', 'https://unmatched.example./', 'https://shop.test'],
     ['native-site-tail', 'https://unmatched.example/', 'https://shop.test.'],
+    ['native-ip-single-tail', 'https://127.0.0.1./', 'https://shop.test'],
+    ['native-ip-double-tail', 'https://127.0.0.1../', 'https://shop.test'],
+    ['native-ip-site-tail', 'https://unmatched.example/', 'https://127.0.0.1.'],
   ]) {
     const decision = model.evaluate(issue(model, issuer, target, requestId, topSite));
     assert.deepEqual([decision.action, decision.reason], ['native', 'no_access_snapshot']);
@@ -716,4 +719,102 @@ test('regression: restoring committed proxy constraint rejects trailing-dot targ
     'restoring-site-tail', 'https://shop.test.'));
   assert.deepEqual([siteTail.action, siteTail.reason], ['wait-fail', 'noncanonical_request']);
   assert.equal(model.dispatch(siteTail).reason, 'noncanonical_request');
+});
+
+test('unit: raw noncanonical IPv4 site and exact host cannot enter a rule', () => {
+  for (const [id, exactHost, topLevelSite] of [
+    ['site-dot', 'target.example', 'https://127.0.0.1.'],
+    ['site-encoded-dot', 'target.example', 'https://127.0.0.1%2e'],
+    ['site-short-ip', 'target.example', 'https://127.1.'],
+    ['site-port', 'target.example', 'https://127.0.0.1:8443'],
+    ['host-dot', '127.0.0.1.', 'https://shop.test'],
+    ['host-encoded-dot', '127.0.0.1%2e', 'https://shop.test'],
+    ['host-short-ip', '127.1.', 'https://shop.test'],
+    ['dns-site-encoded-dot', 'target.example', 'https://shop.test%2e'],
+    ['dns-host-encoded-dot', 'target.example%2e', 'https://shop.test'],
+  ]) {
+    const model = new RequestRoutingContractModel();
+    const routeOwner = owner(`raw-${id}`);
+    assert.equal(model.restart(routeOwner, 'context-1').ok, true);
+    const publication = model.publishSnapshot({ owner: routeOwner, incarnation: 'context-1',
+      commonGenerations: fixture.commonGenerations,
+      rules: [{ id, scope: 'site', topLevelSite, exactHost,
+        scheme: 'https', port: 443, mode: 'REJECT' }], endpoints: [] });
+    assert.equal(publication.reason, 'invalid_or_conflicting_rule', id);
+  }
+});
+
+test('regression: parsed IPv4 single-dot target and site match canonical routes', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('parsed-ipv4');
+  const rules = [
+    { id: 'canonical-ip-target', scope: 'profile', exactHost: '127.0.0.1',
+      scheme: 'https', port: 443, mode: 'REJECT' },
+    { id: 'canonical-ip-site', scope: 'site', topLevelSite: 'https://127.0.0.1',
+      exactHost: 'resource.test', scheme: 'https', port: 443, mode: 'PROXY',
+      groupId: 'shopping' },
+  ];
+  const issuer = prepare(model, routeOwner, 'context-1', {
+    rules, endpoints: [fixture.endpoints[0]],
+  });
+  for (const [index, rawTarget] of [
+    'https://127.0.0.1./', 'https://127.0.0.1%2e/', 'https://127.1./',
+  ].entries()) {
+    const decision = model.evaluate(issue(model, issuer, rawTarget, `ip-target-${index}`));
+    assert.deepEqual([decision.action, decision.reason], ['reject', 'REJECT'], rawTarget);
+    assert.equal(model.dispatch(decision).reason, 'locally_rejected');
+  }
+  for (const [index, rawSite] of [
+    'https://127.0.0.1.', 'https://127.0.0.1%2e', 'https://127.1.',
+  ].entries()) {
+    const decision = model.evaluate(issue(model, issuer, 'https://resource.test/',
+      `ip-site-${index}`, rawSite));
+    assert.deepEqual([decision.action, decision.registrationId], ['proxy', 'shop-r1'], rawSite);
+    assert.equal(model.dispatch(decision).ok, true);
+  }
+  const initial = issue(model, issuer, 'https://unrelated.test/', 'ip-redirect');
+  assert.equal(model.dispatch(model.evaluate(initial)).ok, true);
+  const redirected = model.redirect(initial, { target: 'https://resource.test/',
+    method: 'GET', navigation: 'main', nextTopLevelSite: 'https://127.0.0.1.' });
+  assert.equal(model.evaluate(redirected).registrationId, 'shop-r1');
+  assert.equal(model.dispatch(model.evaluate(redirected)).ok, true);
+});
+
+test('regression: parsed DNS dot and IPv4 double dot remain fail closed', () => {
+  const model = new RequestRoutingContractModel();
+  const issuer = prepare(model, owner('parsed-dotted'), 'context-1', {
+    rules: [], endpoints: [],
+  });
+  for (const [index, target, site] of [
+    ['dns-target', 'https://target.example./', 'https://shop.test'],
+    ['dns-encoded-target', 'https://target.example%2e/', 'https://shop.test'],
+    ['dns-site', 'https://safe.test/', 'https://target.example.'],
+    ['double-ip-target', 'https://127.0.0.1../', 'https://shop.test'],
+    ['double-ip-site', 'https://safe.test/', 'https://127.0.0.1..'],
+  ]) {
+    const decision = model.evaluate(issue(model, issuer, target, `${index}`, site));
+    assert.deepEqual([decision.action, decision.reason],
+      ['wait-fail', 'noncanonical_request'], index);
+    assert.equal(model.dispatch(decision).reason, 'noncanonical_request');
+  }
+  const invalidIpv6 = model.issueRequest({ issuer,
+    attribution: { kind: 'site', topLevelSite: 'https://shop.test' },
+    target: 'https://[::1]./', method: 'GET', requestId: 'invalid-ipv6' });
+  assert.equal(invalidIpv6.reason, 'invalid_request');
+});
+
+test('regression: normalized IPv4 proxy with lost endpoint does not fall back native', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('ipv4-missing-endpoint');
+  const issuer = prepare(model, routeOwner, 'context-1', {
+    rules: [{ id: 'ip-proxy', scope: 'profile', exactHost: '127.0.0.1',
+      scheme: 'https', port: 443, mode: 'PROXY', groupId: 'shopping' }],
+    endpoints: [fixture.endpoints[0]],
+  });
+  assert.equal(model.unregisterEndpoint(routeOwner, 'shop-r1'), true);
+  const decision = model.evaluate(issue(model, issuer, 'https://127.0.0.1./',
+    'lost-ip-endpoint'));
+  assert.deepEqual([decision.action, decision.reason],
+    ['wait-fail', 'registration_unavailable']);
+  assert.equal(model.dispatch(decision).reason, 'registration_unavailable');
 });

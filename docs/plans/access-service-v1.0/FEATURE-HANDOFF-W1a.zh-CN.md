@@ -45,9 +45,13 @@ mise exec -- node scripts/ci/run-quality.mjs \
 
 ## 2026-09-24 新发现：canonical 尾点与生产入口
 
-PR [#178](https://github.com/quinn521/aegis-browser/pull/178) 的旧 H=`eda9dfd156f823c88484e528e5b97928aab73571` 曾把模型输入称为 canonical，但模型实际接受尾点 `exactHost`，且已发布 `target.example` REJECT/PROXY 时，首次或 redirect 的 `https://target.example./` 会走 `native` 并可派发。修复前的直接 Node 回归为 29 项中 21 PASS、8 FAIL；修复后需以新 H 的直接/CI/full 和同一独立评审者复审为准，旧 CLEAR 不再足以覆盖该发现。Q 的定界是拒绝尾点而非 strip：配置 `exactHost`/本站 `topLevelSite` 拒绝尾点；有已发布快照或恢复约束时，请求目标或顶层网站尾点 fail closed；从未发布且无恢复约束时保留 native。此模型修复不证明生产入口已接通。
+PR [#178](https://github.com/quinn521/aegis-browser/pull/178) 的旧 H=`eda9dfd156f823c88484e528e5b97928aab73571` 曾把模型输入称为 canonical，但模型实际接受尾点 `exactHost`，且已发布 `target.example` REJECT/PROXY 时，首次或 redirect 的 `https://target.example./` 会走 `native` 并可派发。修复前的直接 Node 回归为 29 项中 21 PASS、8 FAIL；修复后需以新 H 的直接/CI/full 和同一独立评审者复审为准，旧 CLEAR 不再足以覆盖该发现。配置原始 `exactHost`/本站 `topLevelSite` 拒绝尾点；请求只对**解析后仍有尾点**的目标或顶层网站在已发布快照/恢复约束下 fail closed，IPv4 单尾点等价输入的后续定界见下文；从未发布且无恢复约束时保留 native。此模型修复不证明生产入口已接通。
 
 协调者还转述 Q 的固定 Chromium `Hceb6ead` netlog：缺 endpoint 的 frame prefetch 曾走 DIRECT，origin 收到 GET 并返回 HTTP 200，cache created 而非 cache hit。本切片未亲自复跑该现场，完整提交身份及实验记录以 Q 报告为准；生产旁路由 Q 修复。现有模型“已提交 PROXY 缺 endpoint 不退 native”的回归仍保留，但不能将其 PASS 当作真实 frame prefetch 或 G0 验收。
+
+同一独立评审者在后续 H=`ecb87f32998ec06eb1b8f182bd7c6205a9ec85f2` 发现 IPv4 单尾点边界：Node URL 将 `127.0.0.1.` 先归一为 `127.0.0.1`，旧模型因原始配置与请求混用检查而接受非规范本站规则、或使已发布快照的请求按非预期 native 派发。Q 随后用固定 Chromium 151 GURL 动态实验明确：配置原始 host/site 拒绝尾点或非 canonical 拼写；请求按解析后的 host/site 决策，IPv4 单尾点、`%2e` 与 `127.1.` 同 canonical IPv4 路由；DNS 尾点和 IPv4 双尾点仍保留并在已有快照/恢复约束下拒绝。从未发布快照且无恢复约束继续原生。F 仅修 Node 合同模型和本 W1a 文档；Q 的实验不是本模型执行的 Chromium 验收，仍以 Q 原始回执为准。旧 H 的 review/CI 不能转用到本次修复候选。
+
+Q 给出的实验索引为 `/Volumes/ExternalSSD/repositories/access-ipv4-dot-diagnostic-18ldxaa3`；其 manifest 报告 compile/run 均 exit 0，`probe.cc` SHA-256 `18fb49cd6fc465b9e9cb8aded3411bf47c8b65cda98965dc2a6c2ba284e78ad3`，`result.log` SHA-256 `2d4b7500a12a7eee8907f4e23dc1e3bb78913e0fdc48c96b5b811d32a6883dee`。这些身份由 Q 转交，F 未亲自执行 Chromium probe；新 H 的模型、完整本地门和同评审者复审须另行记录。
 
 ## W2：仅整理实验输入
 

@@ -34,11 +34,27 @@ function parseTarget(target) {
   }
 }
 
-function hasTrailingDotSiteHost(site) {
+function canonicalSite(site) {
   try {
-    return new URL(site).hostname.endsWith('.');
+    const url = new URL(site);
+    if (!['http:', 'https:'].includes(url.protocol)) return null;
+    return `${url.protocol}//${url.hostname}`;
   } catch {
-    return false;
+    return null;
+  }
+}
+
+function isCanonicalConfigSite(site) {
+  const canonical = canonicalSite(site);
+  return canonical === site && !new URL(site).hostname.endsWith('.');
+}
+
+function canonicalExactHost(host) {
+  try {
+    const url = new URL(`https://${host}/`);
+    return url.port ? null : url.hostname;
+  } catch {
+    return null;
   }
 }
 
@@ -47,10 +63,10 @@ function validRule(rule) {
     ['site', 'profile'].includes(rule.scope) &&
     (rule.scope === 'profile' ? rule.topLevelSite === undefined :
       (typeof rule.topLevelSite === 'string' && rule.topLevelSite.length > 0 &&
-        !hasTrailingDotSiteHost(rule.topLevelSite))) &&
+        isCanonicalConfigSite(rule.topLevelSite))) &&
     typeof rule.exactHost === 'string' && rule.exactHost.length > 0 &&
-    rule.exactHost === rule.exactHost.toLowerCase() &&
     !rule.exactHost.endsWith('.') &&
+    canonicalExactHost(rule.exactHost) === rule.exactHost &&
     supportedSchemes.has(rule.scheme) &&
     Number.isInteger(rule.port) && rule.port > 0 && rule.port <= 65535 &&
     supportedModes.has(rule.mode) &&
@@ -215,8 +231,12 @@ export class RequestRoutingContractModel {
         (attribution.kind === 'site' && !attribution.topLevelSite)) {
       return fail('invalid_request');
     }
+    const site = attribution.kind === 'site' ? canonicalSite(attribution.topLevelSite) : null;
+    if (attribution.kind === 'site' && !site) return fail('invalid_request');
+    const issuedAttribution = attribution.kind === 'site'
+      ? { ...attribution, topLevelSite: site } : attribution;
     const issued = Object.freeze({
-      requestId, hop, method, target: parsed, attribution: Object.freeze(copy(attribution)),
+      requestId, hop, method, target: parsed, attribution: Object.freeze(copy(issuedAttribution)),
       requireProxy: Boolean(requireProxy), owner: Object.freeze(copy(state.owner)),
       incarnation: state.incarnation,
     });
@@ -255,7 +275,7 @@ export class RequestRoutingContractModel {
     let entry = null;
     const noncanonicalRequest = issued.target.host.endsWith('.') ||
       (issued.attribution.kind === 'site' &&
-        hasTrailingDotSiteHost(issued.attribution.topLevelSite));
+        new URL(issued.attribution.topLevelSite).hostname.endsWith('.'));
     if (noncanonicalRequest && (snapshot || state.restoringPublishedSnapshot ||
         state.pendingBlocks.length > 0)) {
       action = 'wait-fail';
