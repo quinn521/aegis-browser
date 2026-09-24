@@ -6,7 +6,7 @@
 
 - 初始盘点 D：`7f74e0a4e971f91d08d90536e429aba7b82cf37d`；原生执行前纳入仅 README 排版的 #176，当前 B=`42f48b535f4ff0c302b6c4e98762fcee86495e1c`。最终交付 H 由运行报告/Git PR 绑定；M、S 尚未生成，不能用 B 冒充它们。
 - 产品工作树：`/Volumes/ExternalSSD/repositories/aegis-browser-worktrees/access-w0-quality-20260924`，分支 `codex/access-w0-quality-20260924`。
-- Q 新候选：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/src`；从闲置 H13 副本进行 APFS clone，仅复用构建输入；复制已完成，前两候选已完成准入并保留 runtime/编译失败，第三修复候选待重验。计划保留相对输出 `out/Pr129Verification`，绝不把复制来的二进制当成新 H 证据。
+- Q 新候选：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/src`；从闲置 H13 副本进行 APFS clone，仅复用构建输入。各次 source admission 和失败报告独立保存；相对输出 `out/Pr129Verification` 可增量复用构建对象，但二进制和运行结果必须重新绑定最终 H。
 - Chromium 固定 `151.0.7922.77` / `ff37cfca210138f2a40b843b4a8195ab7e4fc7ff`；新 patched tree、V8、参数/二进制哈希与 sourceStable 须由新候选实际生成。
 - 首轮资源核验：外盘 APFS 挂载、可写，约 350 GiB 可用；重型构建前重查。
 - 其他任务：PID 64342 / PPID 63161，`evidence/pr23-c9b07b7/native-two-targets.py`，产品 H=`c9b07b72d249b5e1ac1978e11f863b2d953e668a`，source=`aegis-chromium-phase3-20260922/pr23-088fc98/src`，out=`out/Pr129Verification`；其 `.aegis-pr23-native-slot` 与 `.aegis-ci-lock` 归原任务。Q 不 kill/reset/replay，不在它运行时启动第二个重型 Ninja。以上 PID 只是观测快照，启动前重新检查。
@@ -59,7 +59,17 @@ Q evidence 根：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/e
 
 尾点边界经独立 Astra/xhigh 只读检查：transport、请求 context 和内存规则校验需一致拒绝尾点，Store 已拒绝；不将尾点静默剥离并合并 site。固定 Chromium 的 GURL/PSL/site 及 Network Service host 匹配保留尾点。保留 factory 先查 snapshot 的顺序：无 published snapshot 的有效尾点网站仍 native；存在 snapshot 时尾点目标或 top-level-site fail-closed，包括没有匹配规则的请求。请求侧拒绝是本轮保守设计选择，规范要求统一处理但未规定唯一算法。新增真实入口回归须证明有效 DNS 正路径与发布后零 origin/proxy 增量；模型反例不替代浏览器证据。
 
-当前下一候选修复 PAC fixture 与尾点产品边界；frame prefetch 直连另做固定 Chromium 入口诊断和修复。保留原 41 项并纳入新增回归，新的实际枚举数量必须记录。W0/G0 不因上述局部通过升级。
+0175–0176 修正 PAC fixture 和尾点边界，0177–0186 继续修复文档 factory、prefetch 和身份绑定；下节记录后续候选的独立结果。保留原 41 项并纳入新增回归，最终二进制的实际枚举数量必须记录。W0/G0 不因上述局部通过升级。
+
+## 后续候选与仍待闭合的浏览器边界
+
+- H=`1de11ad6d6f9e017cb6a25ca2a774faf1e821a3d`：local full、source admission 4 通过；定向 native 两目标 79 项通过。定向浏览器的三条真实 routing 用例仍走 DIRECT。静态定位到 RFHI 在提交前建立 document subresource factory，原 Aegis wrapper 只接受 active RFH；不能用这 79 项推断浏览器通过。
+- H=`acf57e72e6c33b2cee0187091c9a5666b9b36795`：local full、source admission 5 通过。浏览器定向构建在 SDK 缺失 `usr/local/lib` 目录处链接失败，0 项 runtime。Q 将 SDK26.5 复制到自己的输出目录并补空目录后，独立 LLD 探针通过；未改系统 SDK。
+- H=`79e89a07565f11345082c285b426ea0b2a2c535d`：source admission 8 与定向对象编译通过；`browser-document-diagnostic8` 实际 9 项通过、1 项失败，sourceStable=true。失败的旧 Clone 用例在 RFH 身份前置断言处停止，未触达 Clone 请求。独立预审发现 sandbox HTTP opaque origin 可跳过 wrapper、预提交 prefetch 被误中止、重建 bundle 丢失特殊 factory；此 H 未通过审查。
+- H=`f8ccc94dd6ffa0bc2a2b1d1360c4d5155755fe92`：0181–0184 与 overlay 准入 9、local full 通过；`browser-attempt9` 在 GN 检查发现 Chrome browser test 引用 Content 私有头，0 项 runtime。H=`d89d1f272d7342ef55068e03f2e5424411590f5c` 改用公开 RFH API，source admission 10 通过；`browser-attempt10` 因独立预审发现非 HTTP 受限 default factory 被替换，在 Ninja 351/2316 时主动中断，0 项 runtime、sourceStable=true。
+- H=`c6f14c2ed670dd2b8ed714def9caa17850758655`：0185 保留非 HTTP 原 default，0186 增加真实导航取消回归，source admission 11 通过；`browser-attempt11` 构建中主动中断，0 项 runtime、sourceStable=true。独立预审指出 0186 的 pending Clone 同步 Flush 会等待尚未绑定的对端而挂起；随后 H=`5fd9a25…` 删去该 Flush，尚未准入或运行。另有更重要的 P1：MHTML 子帧最终 URL 可为 HTTP，但原 default 是禁网 factory，0185 仍只凭 HTTP URL 将它重建为普通网络 factory。正在要求从 bundle 构建处传可信的原 factory 可联网资格并补 MHTML 回归；最终 H 尚未冻结。
+
+以上 source admission 是补丁与 overlay 的精确来源检查，不是编译或运行通过。后续最终 H 仍需 local full、全部 17 个 native target、扩展 Chrome browser 矩阵、独立 `content_browsertests` 的 prefetch 回归、同一审查人的最终复审及托管 PR 精确 B/H/M 检查；#177 保持 Draft，不合并。台账 131 个主行与 G0 均不升级。
 
 ## 最小完成矩阵
 
@@ -85,7 +95,7 @@ Q evidence 根：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/e
 | `access_rule_store_unittests` | PASS，35 tests | NOT_RUN；缺新候选执行证据 |
 | `access_published_request_runtime_unittests` | NOT_RUN | NOT_RUN；缺新候选执行证据 |
 
-Access browser suite `AccessProxyingURLLoaderFactoryBrowserTest` 保留 38 个源码定义，新增 `AccessLoadingPredictorPrefetchBrowserTest` 3 项，共 41 项。必须从新二进制重新枚举，不将源码计数视为实际匹配数。历史 clone 只含 3/17 个 unit 二进制，另 14 个需要构建。
+第三候选 Access browser suite 包含 38 个 `AccessProxyingURLLoaderFactoryBrowserTest` 源码定义和 3 个 `AccessLoadingPredictorPrefetchBrowserTest`，共 41 项；后续候选又新增回归，最终数量以新二进制的实际非零枚举为准。历史 clone 只含 3/17 个 unit 二进制，另 14 个需要构建。
 
 | 必需入口 | 源码映射 / 范围 | 当前缺口 |
 | --- | --- | --- |
