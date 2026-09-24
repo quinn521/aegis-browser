@@ -6,7 +6,7 @@
 
 Q 冻结起点 `7f74e0a4e971f91d08d90536e429aba7b82cf37d`。#162 最终 H13=`4670c4dd…` 已合并为 S=`ca4e1b24…`；已回读其三目标 96 tests 的 `PARTIAL_PASS` 与三组 browser fixture PASS 原始记录。它们属于历史 H13，不为新候选或下表 131 个主行补造 PASS。完整测试名、原始报告路径/哈希、当前执行结果与缺口类别集中于 [QUALITY-HANDOFF](QUALITY-HANDOFF.md)。
 
-当前 17 个 unit targets 和 38 个 Access browser tests 只完成源码盘点，新候选执行 `NOT_RUN`；本轮另新增 3 个真实 LoadingPredictor `PrefetchManager::Start` 入口 fixture 源码，待最终 H 枚举运行。S04 的 helper 边界仍有效。旧 #162 Draft/BUILDING 状态仅属于下节注明的历史时间点。本轮不修改 131 个主行的判定或冻结规范。
+第一候选 Hcf2329a 实际完成前 10 个 unit targets 共 81 tests 后遇第 11 个 adapter 启动崩溃；browser 实际枚举 41 项，1 项通过后因 favicon 计数污染失败。两次整体为 FAIL/sourceStable=true，后续新候选执行 `NOT_RUN`；本轮另新增 3 个真实 LoadingPredictor `PrefetchManager::Start` 入口 fixture 源码，待最终 H 枚举运行。S04 的 helper 边界仍有效。旧 #162 Draft/BUILDING 状态仅属于下节注明的历史时间点。本轮不修改 131 个主行的判定或冻结规范。
 
 ## 历史：2026-09-22 架构复核后的待执行映射
 
