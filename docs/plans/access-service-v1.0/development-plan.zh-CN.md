@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | Q：固定基线与矩阵 | `7f74e0a…` 冻结；17 个 unit 目标有 GN 源码声明；Access browser 源码定义 38 项 | 目标声明和测试源码不代替实际二进制枚举；在 Q 最终候选逐项运行 |
 | Q：历史 #162 核验 | H13 三目标 16+45+35，native `PARTIAL_PASS`；Access 冲突导航/History/Settings 三组 PASS | 保留 H13 身份、原始路径与哈希；不恢复 H12/`682997a…` 的构建指令 |
-| Q：W0 剩余执行 | 第三候选 Hceb6ead 的 native/browser 均 FAIL；后续候选修 PAC、尾点、文档 factory 与 prefetch 后，独立预审仍发现 HTTP URL 的 MHTML 子帧原禁网 default 被重建为可联网 factory。最新已准入的 Hc6f14c2 尚无 browser runtime；详见 QUALITY-HANDOFF | 保留全部失败与主动中断回执；从原 bundle 构建处传递可信可联网资格、补 MHTML/取消回归，冻结新 H 后重跑 local full、17 target、Chrome 与 Content browser 矩阵，同 reviewer 复审及托管 CI；Q 继续持有独立构建时段 |
+| Q：W0 剩余执行 | 第三候选 Hceb6ead 的 native/browser 均 FAIL；后续候选的独立预审发现 MHTML HTTP 子帧原禁网 default 被重建为可联网 factory。0187 已以 RFHI 可信资格修复源码并加入真实 MHTML 回归，但新 H 尚无固定 Chromium runtime；详见 QUALITY-HANDOFF | 保留全部失败与主动中断回执；对 0187 候选重跑 source admission、local full、17 target、Chrome 与 Content browser 矩阵，同 reviewer 复审及托管 CI；Q 继续持有独立构建时段 |
 | Q：LoadingPredictor 回归设施 | 新增真实 `PrefetchManager::Start` 三项 regression 源码；已有 helper 和模式选择 unit 不足以替代 | 最终 H 实际 build/list/run 验证；当前缺运行证据，不是已证实产品语义失败 |
 | F：W1a 接口/fixture 准备 | 与 Q 独立；#166 模型路由后续工作 DEFERRED | 可并行准备 W1a，不操作 Q source/out/锁；W0 关闭后再推进 W1b/W1c |
 | W2 服务端实验 | 执行资源/负责人未绑定，BLOCKED（实验执行） | 可准备协议；实际部署或付费 API 调用需另有授权 |
