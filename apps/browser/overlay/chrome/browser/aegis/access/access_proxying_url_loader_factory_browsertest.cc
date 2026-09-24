@@ -1492,9 +1492,8 @@ class AccessLoadingPredictorPrefetchBrowserTest
   }
 
  protected:
-  std::optional<int> StartPrefetchAndWait() {
+  std::optional<int> StartPrefetchAndWait(const GURL& resource_url) {
     const GURL navigation_url = web_contents()->GetLastCommittedURL();
-    const GURL resource_url = target_url();
     LoadingPredictorPrefetchCompletion completion(navigation_url, resource_url);
     predictors::PrefetchManager manager(completion.GetDelegateWeakPtr(),
                                         browser()->profile());
@@ -1521,7 +1520,7 @@ IN_PROC_BROWSER_TEST_F(AccessLoadingPredictorPrefetchBrowserTest,
   const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
   const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
 
-  const std::optional<int> completion_error = StartPrefetchAndWait();
+  const std::optional<int> completion_error = StartPrefetchAndWait(target_url());
   ASSERT_TRUE(completion_error.has_value());
   EXPECT_EQ(*completion_error, net::OK);
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
@@ -1534,7 +1533,7 @@ IN_PROC_BROWSER_TEST_F(AccessLoadingPredictorPrefetchBrowserTest,
   const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
   const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
 
-  const std::optional<int> completion_error = StartPrefetchAndWait();
+  const std::optional<int> completion_error = StartPrefetchAndWait(target_url());
   ASSERT_TRUE(completion_error.has_value());
   EXPECT_EQ(*completion_error, net::OK);
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
@@ -1543,11 +1542,25 @@ IN_PROC_BROWSER_TEST_F(AccessLoadingPredictorPrefetchBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AccessLoadingPredictorPrefetchBrowserTest,
                        WithoutEndpointFailsClosed) {
+  // Prove this fixture can observe a completed origin request before checking
+  // that a selected host with no endpoint sends nothing to either server.
+  const size_t healthy_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t healthy_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  const std::optional<int> healthy_error = StartPrefetchAndWait(
+      target_url().Resolve("/loading-predictor-health"));
+  ASSERT_TRUE(healthy_error.has_value());
+  ASSERT_EQ(*healthy_error, net::OK);
+  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+
   PublishProxyPolicy(/*publish_endpoint=*/false);
   const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
   const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
 
-  const std::optional<int> completion_error = StartPrefetchAndWait();
+  const std::optional<int> completion_error = StartPrefetchAndWait(
+      target_url().Resolve("/loading-predictor-blocked"));
   ASSERT_TRUE(completion_error.has_value());
   EXPECT_NE(*completion_error, net::OK);
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,

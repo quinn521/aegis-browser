@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
-Date: Thu, 24 Sep 2026 07:01:54 +0000
+Date: Thu, 24 Sep 2026 07:06:07 +0000
 Subject: [PATCH] test(access): cover LoadingPredictor prefetch routing
 
 Exercise PrefetchManager::Start through its production URL loader setup
@@ -8,7 +8,7 @@ against controlled origin and proxy servers. Assert native, selected
 proxy, and missing-endpoint fail-closed routing after completion.
 
 ---
- 2 files changed, 149 insertions(+), 1 deletion(-)
+ 2 files changed, 162 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index d50cb76..a64e3ab 100644
@@ -25,7 +25,7 @@ index d50cb76..a64e3ab 100644
        "//chrome/browser/profiles:profile",
        "//chrome/browser/profiles:profile_manager",
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
-index da8f2c8..b32a91f 100644
+index da8f2c8..76a2931 100644
 --- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 @@ -7,12 +7,16 @@
@@ -73,7 +73,7 @@ index da8f2c8..b32a91f 100644
  #include "services/network/public/mojom/fetch_api.mojom-shared.h"
  #include "testing/gtest/include/gtest/gtest.h"
  #include "url/gurl.h"
-@@ -1409,5 +1419,140 @@
+@@ -1409,5 +1419,153 @@
    EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
  }
  
@@ -150,9 +150,8 @@ index da8f2c8..b32a91f 100644
 +  }
 +
 + protected:
-+  std::optional<int> StartPrefetchAndWait() {
++  std::optional<int> StartPrefetchAndWait(const GURL& resource_url) {
 +    const GURL navigation_url = web_contents()->GetLastCommittedURL();
-+    const GURL resource_url = target_url();
 +    LoadingPredictorPrefetchCompletion completion(navigation_url, resource_url);
 +    predictors::PrefetchManager manager(completion.GetDelegateWeakPtr(),
 +                                        browser()->profile());
@@ -179,7 +178,7 @@ index da8f2c8..b32a91f 100644
 +  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
 +  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
 +
-+  const std::optional<int> completion_error = StartPrefetchAndWait();
++  const std::optional<int> completion_error = StartPrefetchAndWait(target_url());
 +  ASSERT_TRUE(completion_error.has_value());
 +  EXPECT_EQ(*completion_error, net::OK);
 +  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
@@ -192,7 +191,7 @@ index da8f2c8..b32a91f 100644
 +  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
 +  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
 +
-+  const std::optional<int> completion_error = StartPrefetchAndWait();
++  const std::optional<int> completion_error = StartPrefetchAndWait(target_url());
 +  ASSERT_TRUE(completion_error.has_value());
 +  EXPECT_EQ(*completion_error, net::OK);
 +  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
@@ -201,11 +200,25 @@ index da8f2c8..b32a91f 100644
 +
 +IN_PROC_BROWSER_TEST_F(AccessLoadingPredictorPrefetchBrowserTest,
 +                       WithoutEndpointFailsClosed) {
++  // Prove this fixture can observe a completed origin request before checking
++  // that a selected host with no endpoint sends nothing to either server.
++  const size_t healthy_origin_before =
++      origin_requests_.load(std::memory_order_relaxed);
++  const size_t healthy_proxy_before =
++      proxy_requests_.load(std::memory_order_relaxed);
++  const std::optional<int> healthy_error = StartPrefetchAndWait(
++      target_url().Resolve("/loading-predictor-health"));
++  ASSERT_TRUE(healthy_error.has_value());
++  ASSERT_EQ(*healthy_error, net::OK);
++  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
++                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
++
 +  PublishProxyPolicy(/*publish_endpoint=*/false);
 +  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
 +  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
 +
-+  const std::optional<int> completion_error = StartPrefetchAndWait();
++  const std::optional<int> completion_error = StartPrefetchAndWait(
++      target_url().Resolve("/loading-predictor-blocked"));
 +  ASSERT_TRUE(completion_error.has_value());
 +  EXPECT_NE(*completion_error, net::OK);
 +  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
