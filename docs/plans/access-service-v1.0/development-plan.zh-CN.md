@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | Q：固定基线与矩阵 | `7f74e0a…` 冻结；17 个 unit 目标有 GN 源码声明；Access browser 源码定义 38 项 | 目标声明和测试源码不代替实际二进制枚举；在 Q 最终候选逐项运行 |
 | Q：历史 #162 核验 | H13 三目标 16+45+35，native `PARTIAL_PASS`；Access 冲突导航/History/Settings 三组 PASS | 保留 H13 身份、原始路径与哈希；不恢复 H12/`682997a…` 的构建指令 |
-| Q：W0 剩余执行 | 第二候选 H745bf3c：native FAIL（11 targets/86 tests 通过含 adapter 修复；dispatch_state raw_ptr 编译失败）；browser FAIL（固定 GURL API 编译错误，0 runtime） | 保留 attempt 1/2，继续修 fixture 非空引用/生命周期和固定 API；新 H 同 reviewer 复审和全门重验，Q 继续持有独立构建时段 |
+| Q：W0 剩余执行 | 第三候选 Hceb6ead：native FAIL（transport 6 项）；browser FAIL（10 PASS 后缺端点 frame prefetch 实际直连） | 保留 attempt 1–3，修 PAC fixture、尾点准入/请求边界及 frame prefetch 直连；新 H 同 reviewer 复审和完整扩展矩阵重验，Q 继续持有独立构建时段 |
 | Q：LoadingPredictor 回归设施 | 新增真实 `PrefetchManager::Start` 三项 regression 源码；已有 helper 和模式选择 unit 不足以替代 | 最终 H 实际 build/list/run 验证；当前缺运行证据，不是已证实产品语义失败 |
 | F：W1a 接口/fixture 准备 | 与 Q 独立；#166 模型路由后续工作 DEFERRED | 可并行准备 W1a，不操作 Q source/out/锁；W0 关闭后再推进 W1b/W1c |
 | W2 服务端实验 | 执行资源/负责人未绑定，BLOCKED（实验执行） | 可准备协议；实际部署或付费 API 调用需另有授权 |

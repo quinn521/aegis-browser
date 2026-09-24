@@ -49,6 +49,18 @@ Q evidence 根：`/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/e
 - 第二候选的独立代码 Review 曾给 CLEAR，实际编译暴露上述 API 错误后，同 reviewer 已明确撤回 CLEAR，修正为未通过，后续修复必须由同 reviewer 复审并实际编译运行。
 - 后续补丁修测试替身非空引用与其生命周期，以及固定版本路径 API；不关闭编译检查、不放宽计数断言。第三候选 17 unit / 41 browser 仍待重验，前两轮失败保留。
 
+## 第三候选：完成设施修复后暴露产品边界缺陷
+
+第三候选 H=`ceb6eade5f6ddd71e9571bbd5df1367fca04dd70`，tree=`814adc044ee92ad8c410d6d4d3fa1ad6569dcb66`。local full/source admission 3 PASS/sourceStable=true；Chromium tree=`a6805f88563723b3083d101ebd7760d9cd5572b0`。定向 dispatch_state/browser_tests 编译和链接 PASS/sourceStable=true，不能当 runtime。托管 CI `35971446141` attempt 1 SUCCESS，M=`57e24c424669cfe01649dd0d502bebce0f89f7b3` 的父提交精确为 B/H、tree 一致；独立静态复审未发现 P1/P2，未替代运行验证。
+
+- `native-attempt3` **FAIL/sourceStable=true**：前 14 targets/102 tests PASS；transport 31 tests 实际 25 PASS/6 FAIL，其中 5 项为固定 Chromium PAC 序列化不含分号后空格，1 项为 transport 错误接纳尾点 host。后两个目标在独立 `native-tail-diagnostic3` 中 store 35/runtime 9 PASS，结果是 PARTIAL_PASS，不能拼成完整门 PASS。
+- `browser-attempt3` **FAIL/sourceStable=true**：41 项实际枚举，前 10 PASS（包括 favicon 修复后的导航、PREPARED/Profile 隔离、frame prefetch native/proxy）；第 11 `PrefetchWithoutEndpointFailsClosed` 得到 loaded 而非 error，后 30 NOT_RUN。失败 ASSERT 之后的 origin/proxy 计数并未执行，不能从无计数报错推断没有请求。
+- `prefetch-diagnostic3` 同 H/二进制精确复现 FAIL/sourceStable=true。NetLog 的 target `/resource` 请求带 Sec-Purpose:prefetch，新建 cache entry，代理解析 DIRECT，实际 GET 获得 HTTP 200 / Content-Length 6（origin）。这是缺 endpoint 的真实直连缺陷，不是 DOM 事件格式或 cache hit。
+
+尾点边界经独立 Astra/xhigh 只读检查：transport、请求 context 和内存规则校验需一致拒绝尾点，Store 已拒绝；不将尾点静默剥离并合并 site。固定 Chromium 的 GURL/PSL/site 及 Network Service host 匹配保留尾点。保留 factory 先查 snapshot 的顺序：无 published snapshot 的有效尾点网站仍 native；存在 snapshot 时尾点目标或 top-level-site fail-closed，包括没有匹配规则的请求。请求侧拒绝是本轮保守设计选择，规范要求统一处理但未规定唯一算法。新增真实入口回归须证明有效 DNS 正路径与发布后零 origin/proxy 增量；模型反例不替代浏览器证据。
+
+当前下一候选修复 PAC fixture 与尾点产品边界；frame prefetch 直连另做固定 Chromium 入口诊断和修复。保留原 41 项并纳入新增回归，新的实际枚举数量必须记录。W0/G0 不因上述局部通过升级。
+
 ## 最小完成矩阵
 
 17 个目标在本轮源代码 BUILD.gn 中均有声明。下列“历史”专指上述 H13 receipt，NOT_RUN 不断言从未在其他候选执行。第一候选失败详情见上节；下一修复候选每项目标必须实际枚举非零测试并执行，记录命令/退出码、summary、二进制哈希、sourceStable。

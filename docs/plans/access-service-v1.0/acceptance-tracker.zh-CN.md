@@ -190,3 +190,5 @@ Q 冻结起点 `7f74e0a4e971f91d08d90536e429aba7b82cf37d`。#162 最终 H13=`467
 更新某一主行前，逐个列出冻结断言的适用子场景与实际观察，分别给出 `PASS`、`FAIL`、`BLOCKED` 或 `NOT_RUN`；局部结果需保持 `PARTIAL` 并注明剩余项。PF 指标还要记录规范规定的样本、规模、分布、计时起止及设备/网络条件。A90 的最终包证据与 A114 的文档预览独立登记，不能从源码或本地质量门推断发布就绪。
 
 Q 第二候选 H745bf3c 执行补记：11 targets/86 tests 通过后 dispatch_state 测试 raw_ptr 编译失败；browser 固定 API 编译失败、0 runtime。保留整体 FAIL/sourceStable 和未运行范围，131 主行不变，第三候选重验待执行。
+
+Q 第三候选 Hceb6ead：设施编译修复已过，但 transport 尾点 host 接纳及 frame prefetch 缺 endpoint 直连暴露产品缺陷。NetLog 已证实后者 DIRECT/HTTP200；native 总门和 browser 总门均 FAIL/sourceStable。尾点按保守拒绝设计修复，保无 snapshot 的 native 边界；prefetch 另定位实际入口。局部通过与剩余目标补充诊断不升级 W0/G0 或131主行，详见 QUALITY-HANDOFF 第三候选记录。
