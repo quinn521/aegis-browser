@@ -6,6 +6,7 @@
 
 - 起始 B：`7f74e0a4e971f91d08d90536e429aba7b82cf37d`，已刷新 `origin/develop`；当时 `origin/main == upstream/main == c1399852270c1bbce612dbea1558266d6fc57162`。
 - 冻结候选前再次刷新并快进到 PR base `42f48b535f4ff0c302b6c4e98762fcee86495e1c`（#176 仅调整三份 README 排版）；设计引用的产品调用链没有变化。最终本地门仍在快进后的候选重新运行。
+- 2026-09-25 对齐新 base：[Q 的 #177](https://github.com/quinn521/aegis-browser/pull/177) 已 squash 合入 `develop`，S=`43e4e55070d098986585034616029588a75e104d`。其合并前 H=`1f86a6e218c2bccebf2654c266a4d6e2ab0e2e37` 的固定 Chromium 回执记录 native 17 个目标/181 项、Chrome browser 56 项、Content 6 项通过；S 的 push CI `36039414436`（quality/quality-gate）与 `36039414451`（C++）均成功。H 的固定 Chromium 运行证据不能冒充 S 的浏览器运行，也不等于 W0 全部完成；Q 的 #177 描述仍标记 W0 open、G0 UNVERIFIED。本 PR 已将 S 纳入分支，最终 W1a 的 B/H/M 与检查另按新 base 核验。
 - GitHub 实时回读确认 [#162](https://github.com/quinn521/aegis-browser/pull/162) 已合并，H=`4670c4dd5f24db61f38f102cc60475658e63554a`，S=`ca4e1b24c750746d6e20a83fa58f1d2500791d02`。旧架构/主 Handoff 的 Draft、BUILDING 文字属于历史快照。其窄范围 native/browser 证据不能转用于本 PR，也不代表 W0 完成。
 - 本切片不修改生产 overlay、patch 或 transport；不重做 host 冲突拒绝。模型的多组正路径只验证拟议合同，生产的多组并存仍待 W1b。
 - Q 独占 Chromium candidate/out/锁及共享开发计划、主 Handoff、验收台账。本任务没有写入该现场、运行 Ninja 或改变共享台账。
@@ -49,7 +50,7 @@ PR [#178](https://github.com/quinn521/aegis-browser/pull/178) 的旧 H=`eda9dfd1
 
 协调者还转述 Q 的固定 Chromium `Hceb6ead` netlog：缺 endpoint 的 frame prefetch 曾走 DIRECT，origin 收到 GET 并返回 HTTP 200，cache created 而非 cache hit。本切片未亲自复跑该现场，完整提交身份及实验记录以 Q 报告为准；生产旁路由 Q 修复。现有模型“已提交 PROXY 缺 endpoint 不退 native”的回归仍保留，但不能将其 PASS 当作真实 frame prefetch 或 G0 验收。
 
-Q 后续对照报告，普通 canonical URL 在已发布代理策略、缺 endpoint 时也能走 DIRECT 并从 origin 收到 HTTP 200；尾点 URL 发布策略后的实际浏览器请求同样曾到达 origin。因而生产待验证范围包括普通文档子资源、尾点子资源与 frame prefetch，不能只按尾点规则故障收口。Q 正定位固定 Chromium 的 factory 创建及文档提交生命周期接线，是否同一根因尚未确定；最终须分别用真实浏览器入口、origin/proxy 请求计数和失败关闭断言验证。本 PR 的模型、独立复审及托管 CI 均不关闭这些生产缺陷，也不把 W0/G0 升级为通过。
+在 #177 合并前，Q 的对照报告还显示普通 canonical URL 在已发布代理策略、缺 endpoint 时走 DIRECT 并从 origin 收到 HTTP 200；尾点 URL 发布策略后的实际浏览器请求同样曾到达 origin。因此当时的生产失败范围包括普通文档子资源、尾点子资源与 frame prefetch，不能只按尾点规则故障收口。Q 后续将原因定位到提交前创建的 document factory 与文档身份激活时序，并在 #177 的固定 Chromium 候选验证了修复。该历史故障及其修复不改变本 PR 的证据边界：W1a 模型、独立复审和托管 CI 不替代 S 的浏览器验收，也不把 W0/G0 升级为通过。
 
 同一独立评审者在后续 H=`ecb87f32998ec06eb1b8f182bd7c6205a9ec85f2` 发现 IPv4 单尾点边界：Node URL 将 `127.0.0.1.` 先归一为 `127.0.0.1`，旧模型因原始配置与请求混用检查而接受非规范本站规则、或使已发布快照的请求按非预期 native 派发。Q 随后用固定 Chromium 151 GURL 动态实验明确：配置原始 host/site 拒绝尾点或非 canonical 拼写；请求按解析后的 host/site 决策，IPv4 单尾点、`%2e` 与 `127.1.` 同 canonical IPv4 路由；DNS 尾点和 IPv4 双尾点仍保留并在已有快照/恢复约束下拒绝。从未发布快照且无恢复约束继续原生。F 仅修 Node 合同模型和本 W1a 文档；Q 的实验不是本模型执行的 Chromium 验收，仍以 Q 原始回执为准。旧 H 的 review/CI 不能转用到本次修复候选。
 
