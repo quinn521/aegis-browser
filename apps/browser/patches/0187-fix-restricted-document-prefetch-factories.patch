@@ -1,6 +1,6 @@
-From 8c2d077bb7335343a369d87ca889b00f59d29a5f Mon Sep 17 00:00:00 2001
+From cdac6d55e0797c836d5fedad78b6b44f71f8b242 Mon Sep 17 00:00:00 2001
 From: Codex <codex@example.invalid>
-Date: Thu, 24 Sep 2026 18:43:35 +0800
+Date: Thu, 24 Sep 2026 18:53:44 +0800
 Subject: [PATCH] Preserve restricted document defaults across prefetch paths
 
 ---
@@ -337,19 +337,19 @@ index 5d472c5..2d3467f 100644
    PrefetchURLLoaderServiceContext&
    prefetch_url_loader_service_context_for_testing() {
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
-index 9ca9cab..b3e3578 100644
+index 9ca9cab..3904675 100644
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
-@@ -12917,6 +12917,9 @@ void RenderFrameHostImpl::CommitNavigation(
-     // Set up the default factory.
-     mojo::PendingRemote<network::mojom::URLLoaderFactory>
-         pending_default_factory;
-+    auto document_default_factory_kind =
-+        SubresourceProxyingURLLoaderService::DocumentDefaultFactoryKind::
-+            kPreserve;
+@@ -12892,6 +12892,9 @@ void RenderFrameHostImpl::CommitNavigation(
  
-     // See if this is for WebUI.
-     const auto& webui_schemes = URLDataManagerBackend::GetWebUISchemes();
+   std::unique_ptr<blink::PendingURLLoaderFactoryBundle>
+       subresource_loader_factories;
++  auto document_default_factory_kind =
++      SubresourceProxyingURLLoaderService::DocumentDefaultFactoryKind::
++          kPreserve;
+   if (!is_same_document || is_first_navigation) {
+     recreate_default_url_loader_factory_after_network_service_crash_ = false;
+     subresource_loader_factories =
 @@ -12973,6 +12976,9 @@ void RenderFrameHostImpl::CommitNavigation(
        // Otherwise default to a Network Service-backed loader from the
        // appropriate NetworkContext.
