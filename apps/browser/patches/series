@@ -179,3 +179,7 @@
 0178-fix-access-precommit-document-factory.patch
 0179-fix-access-pending-document-callback-lifetime.patch
 0180-fix-access-precommit-document-eligibility.patch
+0181-fix-access-document-prefetch-and-opaque-sandbox.patch
+0182-fix-access-auxiliary-document-factory-context.patch
+0183-test-access-sandbox-recreation-prefetch.patch
+0184-test-access-same-frame-disable-bfcache.patch

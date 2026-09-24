@@ -45,11 +45,13 @@
 #include "components/aegis_access/access_identity_generation_state.h"
 #include "components/aegis_access/access_proxy_selection_generation_state.h"
 #include "components/aegis_access/request_policy_context.h"
+#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_features.h"
+#include "content/public/test/back_forward_cache_util.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -246,6 +248,58 @@ std::unique_ptr<net::test_server::HttpResponse> ParserEarlyPageReply(
   return response;
 }
 
+std::unique_ptr<net::test_server::HttpResponse> SandboxedPageReply(
+    std::atomic<size_t>* counter,
+    net::test_server::EmbeddedTestServer* origin,
+    const net::test_server::HttpRequest& request) {
+  if (request.GetURL().path() != "/sandboxed-page") {
+    return nullptr;
+  }
+  counter->fetch_add(1, std::memory_order_relaxed);
+  const bool healthy = request.relative_url.find("healthy") !=
+                       std::string::npos;
+  const char* resource = healthy ? "/resource?sandbox-healthy"
+                                 : "/resource?sandbox-blocked";
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->AddCustomHeader("Content-Security-Policy",
+                            "sandbox allow-scripts");
+  response->set_content(
+      "<!doctype html><script>window.sandboxFetchDone = "
+      "fetch('" + origin->GetURL(kTargetHost, resource).spec() +
+      "', {mode:'no-cors',cache:'no-store'})"
+      ".then(() => 'loaded', () => 'error');</script>");
+  response->set_content_type("text/html");
+  return response;
+}
+
+std::unique_ptr<net::test_server::HttpResponse> SandboxedPrefetchPageReply(
+    std::atomic<size_t>* counter,
+    net::test_server::EmbeddedTestServer* origin,
+    const net::test_server::HttpRequest& request) {
+  if (request.GetURL().path() != "/sandboxed-prefetch-page") {
+    return nullptr;
+  }
+  counter->fetch_add(1, std::memory_order_relaxed);
+  const bool healthy = request.relative_url.find("healthy") !=
+                       std::string::npos;
+  const char* resource = healthy ? "/resource?sandbox-prefetch-healthy"
+                                 : "/resource?sandbox-prefetch-blocked";
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->AddCustomHeader("Content-Security-Policy",
+                            "sandbox allow-scripts");
+  response->set_content(
+      "<!doctype html><script>window.prefetchDone = new Promise(resolve => "
+      "window.resolvePrefetch = resolve)</script>"
+      "<link rel='prefetch' as='document' href='" +
+      origin->GetURL(kTargetHost, resource).spec() +
+      "' onload=\"resolvePrefetch('loaded')\" "
+      "onerror=\"resolvePrefetch('error')\">");
+  response->set_content_type("text/html");
+  return response;
+}
+
 std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
     std::atomic<size_t>* counter,
     const char* body,
@@ -379,6 +433,12 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
         base::BindRepeating(&IgnoreAutomaticFavicon));
     target_origin_.RegisterRequestHandler(base::BindRepeating(
         &ParserEarlyPageReply, base::Unretained(&origin_requests_),
+        base::Unretained(&target_origin_)));
+    target_origin_.RegisterRequestHandler(base::BindRepeating(
+        &SandboxedPageReply, base::Unretained(&origin_requests_),
+        base::Unretained(&target_origin_)));
+    target_origin_.RegisterRequestHandler(base::BindRepeating(
+        &SandboxedPrefetchPageReply, base::Unretained(&origin_requests_),
         base::Unretained(&target_origin_)));
     target_origin_.RegisterRequestHandler(base::BindRepeating(
         &ServiceWorkerOriginReply, base::Unretained(&origin_requests_)));
@@ -1017,6 +1077,114 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       SandboxedHttpWithoutPolicyPreservesNativePath) {
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/sandboxed-page?healthy")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.sandboxFetchDone")
+                .ExtractString(),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/2u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       SandboxedHttpWithMissingEndpointFailsClosed) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/sandboxed-page?healthy")));
+  ASSERT_EQ(content::EvalJs(web_contents(), "window.sandboxFetchDone")
+                .ExtractString(),
+            "loaded");
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/sandboxed-page?blocked")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.sandboxFetchDone")
+                .ExtractString(),
+            "error");
+  // The unselected page is served, while its selected target is blocked.
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+  EXPECT_EQ(content::EvalJs(
+                web_contents(),
+                "fetch('" + target_url().Resolve("/resource?sandbox-postcommit")
+                                  .spec() +
+                    "', {mode:'no-cors',cache:'no-store'})"
+                    ".then(() => 'loaded', () => 'error')")
+                .ExtractString(),
+            "error");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+
+  // A newly created factory for this already committed opaque document must
+  // still carry its trusted HTTP document URL and fail closed.
+  auto* frame = static_cast<content::RenderFrameHostImpl*>(
+      web_contents()->GetPrimaryMainFrame());
+  ASSERT_TRUE(frame->GetLastCommittedOrigin().opaque());
+  mojo::Remote<network::mojom::URLLoaderFactory> recreated_factory;
+  frame->CreateNetworkServiceDefaultFactory(
+      recreated_factory.BindNewPipeAndPassReceiver());
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = target_url().Resolve("/resource?sandbox-recreated");
+  request->request_initiator = frame->GetLastCommittedOrigin();
+  request->load_flags = net::LOAD_BYPASS_CACHE;
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), TRAFFIC_ANNOTATION_FOR_TESTS);
+  base::test::TestFuture<std::optional<std::string>> result;
+  loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+      recreated_factory.get(), result.GetCallback());
+  ASSERT_TRUE(result.Wait());
+  EXPECT_EQ(loader->NetError(), net::ERR_BLOCKED_BY_CLIENT);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       SandboxedHttpWithSelectedEndpointFailsClosed) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/sandboxed-page?healthy")));
+  ASSERT_EQ(content::EvalJs(web_contents(), "window.sandboxFetchDone")
+                .ExtractString(),
+            "loaded");
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/sandboxed-page?blocked")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.sandboxFetchDone")
+                .ExtractString(),
+            "error");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       SandboxedHttpPrefetchWithPolicyFailsClosed) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      target_origin_.GetURL("localhost", "/sandboxed-prefetch-page?healthy")));
+  ASSERT_EQ(content::EvalJs(web_contents(), "window.prefetchDone")
+                .ExtractString(),
+            "loaded");
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      target_origin_.GetURL("localhost", "/sandboxed-prefetch-page?blocked")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.prefetchDone")
+                .ExtractString(),
+            "error");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        PendingDocumentFactoryClosesWhenTabIsDestroyed) {
   ASSERT_NE(ui_test_utils::NavigateToURLWithDisposition(
                 browser(), worker_page_url(),
@@ -1039,7 +1207,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   // them through the downstream factory.
   AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
       browser()->profile(), web_contents()->GetPrimaryMainFrame(),
-      url::Origin::Create(worker_page_url()),
+      worker_page_url(),
       std::numeric_limits<int64_t>::max(), builder);
   scoped_refptr<network::SharedURLLoaderFactory> pending_factory =
       std::move(builder).Finish(
@@ -1079,6 +1247,8 @@ class AccessProxyingURLLoaderFactorySameFrameBrowserTest
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactorySameFrameBrowserTest,
                        SameFrameOldDocumentFactoryCloneAbortsWithoutPolicy) {
+  content::DisableBackForwardCacheForTesting(
+      web_contents(), content::BackForwardCache::TEST_REQUIRES_NO_CACHING);
   const GURL first_page = worker_page_url();
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), first_page));
   content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();

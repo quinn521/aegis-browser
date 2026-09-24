@@ -23,9 +23,6 @@
 
 class GURL;
 class Profile;
-namespace url {
-class Origin;
-}
 
 namespace content {
 class RenderFrameHost;
@@ -69,7 +66,8 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       std::optional<int64_t> navigation_id,
       std::optional<int> profile_only_render_process_id,
       content::StoragePartition* profile_only_storage_partition,
-      aegis_access::BrowserOwnedRequestMetadata factory_metadata,
+      aegis_access::OwnershipKey factory_owner,
+      std::optional<aegis_access::BrowserOwnedRequestMetadata> factory_metadata,
       mojo::PendingReceiver<network::mojom::URLLoaderFactory> loader_receiver,
       mojo::PendingRemote<network::mojom::URLLoaderFactory> target_factory,
       std::optional<content::WeakDocumentPtr> document,
@@ -83,7 +81,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   static void MaybeProxyDocumentSubresource(
       Profile* profile,
       content::RenderFrameHost* frame,
-      const url::Origin& request_initiator,
+      const GURL& document_url,
       std::optional<int64_t> navigation_id,
       network::URLLoaderFactoryBuilder& factory_builder);
   static void MaybeProxyWorkerMainResource(
@@ -187,7 +185,9 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
   const std::optional<int64_t> navigation_id_;
   const std::optional<int> profile_only_render_process_id_;
   const raw_ptr<content::StoragePartition> profile_only_storage_partition_;
-  const aegis_access::BrowserOwnedRequestMetadata factory_metadata_;
+  const aegis_access::OwnershipKey factory_owner_;
+  const std::optional<aegis_access::BrowserOwnedRequestMetadata>
+      factory_metadata_;
   const std::optional<content::WeakDocumentPtr> document_;
 
   mojo::ReceiverSet<network::mojom::URLLoaderFactory> proxy_receivers_;
