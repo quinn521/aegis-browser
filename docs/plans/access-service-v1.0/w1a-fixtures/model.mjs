@@ -34,13 +34,23 @@ function parseTarget(target) {
   }
 }
 
+function hasTrailingDotSiteHost(site) {
+  try {
+    return new URL(site).hostname.endsWith('.');
+  } catch {
+    return false;
+  }
+}
+
 function validRule(rule) {
   return typeof rule?.id === 'string' && rule.id.length > 0 &&
     ['site', 'profile'].includes(rule.scope) &&
     (rule.scope === 'profile' ? rule.topLevelSite === undefined :
-      (typeof rule.topLevelSite === 'string' && rule.topLevelSite.length > 0)) &&
+      (typeof rule.topLevelSite === 'string' && rule.topLevelSite.length > 0 &&
+        !hasTrailingDotSiteHost(rule.topLevelSite))) &&
     typeof rule.exactHost === 'string' && rule.exactHost.length > 0 &&
     rule.exactHost === rule.exactHost.toLowerCase() &&
+    !rule.exactHost.endsWith('.') &&
     supportedSchemes.has(rule.scheme) &&
     Number.isInteger(rule.port) && rule.port > 0 && rule.port <= 65535 &&
     supportedModes.has(rule.mode) &&
@@ -74,6 +84,8 @@ export class RequestRoutingContractModel {
     seen.add(newIncarnation);
     this.#seenIncarnations.set(key, seen);
     const prior = this.#owners.get(key);
+    const restoringPublishedSnapshot = prior?.active ? true :
+      (prior?.restoringPublishedSnapshot ?? this.#lastCommittedRules.has(key));
     const restoreRules = prior?.active?.rules ?? prior?.restoreRules ??
       this.#lastCommittedRules.get(key) ?? [];
     const pendingBlocks = [
@@ -89,6 +101,7 @@ export class RequestRoutingContractModel {
       pending: null, active: null, sentHops, usedRegistrationIds,
       restoreRules: Object.freeze([...restoreRules]),
       pendingBlocks: Object.freeze([...pendingBlocks]),
+      restoringPublishedSnapshot,
     });
     return Object.freeze({ ok: true, incarnation: newIncarnation });
   }
@@ -183,6 +196,7 @@ export class RequestRoutingContractModel {
     this.#lastCommittedRules.set(receipt.ownerKey, state.active.rules);
     state.restoreRules = Object.freeze([]);
     state.pendingBlocks = Object.freeze([]);
+    state.restoringPublishedSnapshot = false;
     return Object.freeze({ ok: true, snapshotId: receipt.snapshotId });
   }
 
@@ -239,7 +253,14 @@ export class RequestRoutingContractModel {
     let reason = 'PRESERVE_NATIVE';
     let group = null;
     let entry = null;
-    if (!snapshot) {
+    const noncanonicalRequest = issued.target.host.endsWith('.') ||
+      (issued.attribution.kind === 'site' &&
+        hasTrailingDotSiteHost(issued.attribution.topLevelSite));
+    if (noncanonicalRequest && (snapshot || state.restoringPublishedSnapshot ||
+        state.pendingBlocks.length > 0)) {
+      action = 'wait-fail';
+      reason = 'noncanonical_request';
+    } else if (!snapshot) {
       const targetRules = state.restoreRules.filter((rule) =>
         rule.exactHost === issued.target.host &&
         rule.scheme === issued.target.scheme && rule.port === issued.target.port);

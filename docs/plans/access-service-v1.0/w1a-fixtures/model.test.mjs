@@ -587,3 +587,133 @@ test('regression: registration ID cannot be reused after unregister, restart or 
   assert.equal(model.restart(routeOwner, 'context-3').ok, true);
   assert.equal(register('context-3', 'fourth-credential').reason, 'registration_id_reused');
 });
+
+test('unit: publication refuses a trailing-dot exactHost rule', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('canonical-rule');
+  assert.equal(model.restart(routeOwner, 'context-1').ok, true);
+  const rejected = model.publishSnapshot({ owner: routeOwner, incarnation: 'context-1',
+    commonGenerations: fixture.commonGenerations,
+    rules: [{ id: 'blocked', scope: 'profile', exactHost: 'target.example.',
+      scheme: 'https', port: 443, mode: 'REJECT' }], endpoints: [] });
+  assert.equal(rejected.reason, 'invalid_or_conflicting_rule');
+});
+
+for (const mode of ['REJECT', 'PROXY']) {
+  for (const requestPath of ['initial', 'redirect']) {
+    test(`regression: ${mode} trailing-dot ${requestPath} cannot dispatch native`, () => {
+    const model = new RequestRoutingContractModel();
+    const rule = { id: 'protected', scope: 'profile', exactHost: 'target.example',
+      scheme: 'https', port: 443, mode,
+      ...(mode === 'PROXY' ? { groupId: 'shopping' } : {}) };
+    const issuer = prepare(model, owner(`canonical-${mode}`), 'context-1', {
+      rules: [rule], endpoints: mode === 'PROXY' ? [fixture.endpoints[0]] : [],
+    });
+    const canonical = model.evaluate(issue(model, issuer, 'https://target.example/',
+      `${mode}-canonical`));
+    assert.equal(canonical.action, mode === 'REJECT' ? 'reject' : 'proxy');
+
+    const assertNoNativeSend = (issued, label) => {
+      assert.equal(issued.ok, undefined, label);
+      const decision = model.evaluate(issued);
+      assert.deepEqual([decision.action, decision.reason],
+        ['wait-fail', 'noncanonical_request'], label);
+      assert.equal(model.dispatch(decision).reason, 'noncanonical_request', label);
+    };
+    if (requestPath === 'initial') {
+      assertNoNativeSend(issue(model, issuer, 'https://target.example./',
+        `${mode}-first`), `${mode} initial trailing-dot target`);
+    } else {
+      const initial = issue(model, issuer, 'https://unrelated.example/', `${mode}-redirect`);
+      assert.equal(model.dispatch(model.evaluate(initial)).ok, true);
+      const redirected = model.redirect(initial, { target: 'https://target.example./',
+        method: 'GET', navigation: 'subresource' });
+      assertNoNativeSend(redirected, `${mode} redirected trailing-dot target`);
+    }
+    });
+  }
+}
+
+test('unit: publication refuses a trailing-dot site topLevelSite', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('canonical-site-rule');
+  assert.equal(model.restart(routeOwner, 'context-1').ok, true);
+  const rejected = model.publishSnapshot({ owner: routeOwner, incarnation: 'context-1',
+    commonGenerations: fixture.commonGenerations,
+    rules: [{ id: 'site-block', scope: 'site', topLevelSite: 'https://shop.test.',
+      exactHost: 'target.example', scheme: 'https', port: 443, mode: 'REJECT' }],
+    endpoints: [] });
+  assert.equal(rejected.reason, 'invalid_or_conflicting_rule');
+});
+
+test('regression: published snapshot rejects trailing-dot target and top site even unmatched', () => {
+  const model = new RequestRoutingContractModel();
+  const issuer = prepare(model, owner('published-canonical'), 'context-1', {
+    rules: [], endpoints: [],
+  });
+  for (const [requestId, target, topSite] of [
+    ['target-tail', 'https://unmatched.example./', 'https://shop.test'],
+    ['site-tail', 'https://unmatched.example/', 'https://shop.test.'],
+  ]) {
+    const decision = model.evaluate(issue(model, issuer, target, requestId, topSite));
+    assert.deepEqual([decision.action, decision.reason],
+      ['wait-fail', 'noncanonical_request'], requestId);
+    assert.equal(model.dispatch(decision).reason, 'noncanonical_request');
+  }
+  const initial = issue(model, issuer, 'https://unmatched.example/', 'site-tail-redirect');
+  assert.equal(model.dispatch(model.evaluate(initial)).ok, true);
+  const redirected = model.redirect(initial, { target: 'https://unmatched.example/',
+    method: 'GET', navigation: 'main', nextTopLevelSite: 'https://shop.test.' });
+  const redirectDecision = model.evaluate(redirected);
+  assert.deepEqual([redirectDecision.action, redirectDecision.reason],
+    ['wait-fail', 'noncanonical_request']);
+  assert.equal(model.dispatch(redirectDecision).reason, 'noncanonical_request');
+});
+
+test('regression: never-published owner keeps trailing-dot initial and redirect native', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('never-published');
+  assert.equal(model.restart(routeOwner, 'context-1').ok, true);
+  const issuer = model.trustedIssuer(routeOwner);
+  for (const [requestId, target, topSite] of [
+    ['native-target-tail', 'https://unmatched.example./', 'https://shop.test'],
+    ['native-site-tail', 'https://unmatched.example/', 'https://shop.test.'],
+  ]) {
+    const decision = model.evaluate(issue(model, issuer, target, requestId, topSite));
+    assert.deepEqual([decision.action, decision.reason], ['native', 'no_access_snapshot']);
+    assert.equal(model.dispatch(decision).ok, true);
+  }
+  for (const [index, target, navigation, nextTopLevelSite] of [
+    [0, 'https://unmatched.example./', 'subresource', undefined],
+    [1, 'https://unmatched.example/', 'main', 'https://shop.test.'],
+  ]) {
+    const initial = issue(model, issuer, 'https://unmatched.example/',
+      `native-redirect-${index}`);
+    assert.equal(model.dispatch(model.evaluate(initial)).ok, true);
+    const redirected = model.redirect(initial, { target, method: 'GET', navigation,
+      nextTopLevelSite });
+    const decision = model.evaluate(redirected);
+    assert.deepEqual([decision.action, decision.reason], ['native', 'no_access_snapshot']);
+    assert.equal(model.dispatch(decision).ok, true);
+  }
+});
+
+test('regression: restoring committed proxy constraint rejects trailing-dot target without flag', () => {
+  const model = new RequestRoutingContractModel();
+  const routeOwner = owner('restoring-canonical');
+  prepare(model, routeOwner, 'context-1', {
+    rules: [{ id: 'proxy', scope: 'profile', exactHost: 'target.example',
+      scheme: 'https', port: 443, mode: 'PROXY', groupId: 'shopping' }],
+    endpoints: [fixture.endpoints[0]],
+  });
+  assert.equal(model.restart(routeOwner, 'context-2').ok, true);
+  const issuer = model.trustedIssuer(routeOwner);
+  const decision = model.evaluate(issue(model, issuer, 'https://target.example./',
+    'restoring-tail'));
+  assert.deepEqual([decision.action, decision.reason], ['wait-fail', 'noncanonical_request']);
+  assert.equal(model.dispatch(decision).reason, 'noncanonical_request');
+  const siteTail = model.evaluate(issue(model, issuer, 'https://unmatched.example/',
+    'restoring-site-tail', 'https://shop.test.'));
+  assert.deepEqual([siteTail.action, siteTail.reason], ['wait-fail', 'noncanonical_request']);
+  assert.equal(model.dispatch(siteTail).reason, 'noncanonical_request');
+});

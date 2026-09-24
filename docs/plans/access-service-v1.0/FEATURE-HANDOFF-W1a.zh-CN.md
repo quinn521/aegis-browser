@@ -43,6 +43,12 @@ mise exec -- node scripts/ci/run-quality.mjs \
 - W1b 开始前取得 Q 的完整 W0 回执，然后将本设计拟新增 API 逐点落实到固定 Chromium；同 PR 交付真实 unit 和入口 regression。
 - W1c 必须另行证明旧连接与缓存不串用、Network Service 重启及 HTTP/SOCKS5 最小认证。源码 hook 或模拟凭据查询不能替代实际握手。
 
+## 2026-09-24 新发现：canonical 尾点与生产入口
+
+PR [#178](https://github.com/quinn521/aegis-browser/pull/178) 的旧 H=`eda9dfd156f823c88484e528e5b97928aab73571` 曾把模型输入称为 canonical，但模型实际接受尾点 `exactHost`，且已发布 `target.example` REJECT/PROXY 时，首次或 redirect 的 `https://target.example./` 会走 `native` 并可派发。修复前的直接 Node 回归为 29 项中 21 PASS、8 FAIL；修复后需以新 H 的直接/CI/full 和同一独立评审者复审为准，旧 CLEAR 不再足以覆盖该发现。Q 的定界是拒绝尾点而非 strip：配置 `exactHost`/本站 `topLevelSite` 拒绝尾点；有已发布快照或恢复约束时，请求目标或顶层网站尾点 fail closed；从未发布且无恢复约束时保留 native。此模型修复不证明生产入口已接通。
+
+协调者还转述 Q 的固定 Chromium `Hceb6ead` netlog：缺 endpoint 的 frame prefetch 曾走 DIRECT，origin 收到 GET 并返回 HTTP 200，cache created 而非 cache hit。本切片未亲自复跑该现场，完整提交身份及实验记录以 Q 报告为准；生产旁路由 Q 修复。现有模型“已提交 PROXY 缺 endpoint 不退 native”的回归仍保留，但不能将其 PASS 当作真实 frame prefetch 或 G0 验收。
+
 ## W2：仅整理实验输入
 
 本轮未绑定受控 Linux 环境、执行负责人或真实服务配置，W2 执行保持 BLOCKED。以下输入齐备并获得相应执行授权后，才可按[架构实验协议](architecture-review-20260922.zh-CN.md#3-vision计量与额度的提前验证)开展实验：
