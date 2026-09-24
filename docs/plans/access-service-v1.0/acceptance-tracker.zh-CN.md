@@ -2,7 +2,13 @@
 
 创建于 2026-09-20（Asia/Shanghai），来源是[冻结规范修订 4](spec.zh-CN.md)第 11、14 节的全部 **A01–A118 与 PF01–PF13，共 131 个主行**。下表场景列逐字摘取冻结表的场景/指标列，判定条件仍以规范原文为准。此表是当前映射、执行与证据的唯一台账；[开发计划](development-plan.zh-CN.md)给出推进顺序，[交接](handoff-20260920.zh-CN.md)给出来源快照。新增产品功能须同 PR 交付并在最终 HEAD 实际执行 unit 与真实入口 regression；文档改动不需要补造产品测试。
 
-## 2026-09-22 架构复核后的待执行映射
+## 2026-09-24 W0 当前执行证据
+
+Q 冻结起点 `7f74e0a4e971f91d08d90536e429aba7b82cf37d`。#162 最终 H13=`4670c4dd…` 已合并为 S=`ca4e1b24…`；已回读其三目标 96 tests 的 `PARTIAL_PASS` 与三组 browser fixture PASS 原始记录。它们属于历史 H13，不为新候选或下表 131 个主行补造 PASS。完整测试名、原始报告路径/哈希、当前执行结果与缺口类别集中于 [QUALITY-HANDOFF](QUALITY-HANDOFF.md)。
+
+当前 17 个 unit targets 和 38 个 Access browser tests 只完成源码盘点，新候选执行 `NOT_RUN`；本轮另新增 3 个真实 LoadingPredictor `PrefetchManager::Start` 入口 fixture 源码，待最终 H 枚举运行。S04 的 helper 边界仍有效。旧 #162 Draft/BUILDING 状态仅属于下节注明的历史时间点。本轮不修改 131 个主行的判定或冻结规范。
+
+## 历史：2026-09-22 架构复核后的待执行映射
 
 #164 合并后续接：基线 `c08b632…`；#162 候选已更新到 `682997a…` / 补丁 0161。06:15 UTC 快照确认 Q 正代 F 编译 Coordinator，所选双目标与单一 browser fixture 尚无 runtime 结果。该窄范围交付与 W0 全矩阵分别判定；本次只更新[技术方案的增量合同](architecture-review-20260922.zh-CN.md)、[计划的双窗口执行板](development-plan.zh-CN.md)和[Handoff 身份/接续入口](handoff-20260920.zh-CN.md)，以下 131 个主行状态与既有 S01–S12 证据不变。
 
