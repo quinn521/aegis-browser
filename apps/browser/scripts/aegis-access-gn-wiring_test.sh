@@ -1014,10 +1014,11 @@ expected_access_tail="$(cat <<'EOF'
 0182-fix-access-auxiliary-document-factory-context.patch
 0183-test-access-sandbox-recreation-prefetch.patch
 0184-test-access-same-frame-disable-bfcache.patch
+0185-fix-non-network-document-prefetch-default.patch
 EOF
 )"
-[[ "$(tail -n 70 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
-  fail "patch tail must retain TypeSafe 0162-0163 before Access patches 0164-0184"
+[[ "$(tail -n 71 "$SERIES_FILE")" == "$expected_access_tail" ]] ||
+  fail "patch tail must retain TypeSafe 0162-0163 before Access patches 0164-0185"
 
 # The developer build still requests only Chromium's production chrome target.
 # root_extra_deps makes the test discoverable from test-only gn_all and does
