@@ -295,6 +295,14 @@ TEST(AccessPolicyEvaluatorTest, InvalidStoredNormalizationFailsClosed) {
   EXPECT_EQ(trailing_host_result.policy_state, PolicyState::kInvalid);
   EXPECT_EQ(trailing_host_result.reason, PolicyMatchReason::kInvalidRule);
 
+  AccessPolicyRule trailing_ip_host =
+      Rule("trailing-ip-host", PolicyScope::kProfile, "127.0.0.1.",
+           AccessMode::kProxy);
+  const PolicyMatchResult trailing_ip_host_result = EvaluateAccessPolicy(
+      DocumentContext(), Snapshot({trailing_ip_host}));
+  EXPECT_EQ(trailing_ip_host_result.policy_state, PolicyState::kInvalid);
+  EXPECT_EQ(trailing_ip_host_result.reason, PolicyMatchReason::kInvalidRule);
+
   AccessPolicyRule trailing_site =
       Rule("trailing-site", PolicyScope::kSite, "cdn.example.test",
            AccessMode::kProxy);

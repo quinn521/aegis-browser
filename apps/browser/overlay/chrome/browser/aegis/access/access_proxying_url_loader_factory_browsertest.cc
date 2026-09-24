@@ -224,6 +224,19 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
   counter->fetch_add(1, std::memory_order_relaxed);
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_code(net::HTTP_OK);
+  if (request.relative_url.find("/startup-prefetch-page") !=
+      std::string::npos) {
+    response->set_content(
+        "<!doctype html><script>"
+        "window.prefetchDone = new Promise(resolve => "
+        "  window.resolvePrefetch = resolve);"
+        "</script><link rel='prefetch' as='document' "
+        "href='/startup-prefetch-resource' "
+        "onload=\"resolvePrefetch('loaded')\" "
+        "onerror=\"resolvePrefetch('error')\">");
+    response->set_content_type("text/html");
+    return response;
+  }
   if (request.relative_url.find("/worker-page") != std::string::npos) {
     response->set_content("<!doctype html><title>worker-main</title>");
     response->set_content_type("text/html");
@@ -1105,6 +1118,20 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       StartupMarkupPrefetchWithoutPolicyPreservesNativePath) {
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL(kTargetHost, "/startup-prefetch-page")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.prefetchDone")
+                .ExtractString(),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/2u,
+                     /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
                        PrefetchUsesSelectedProxy) {
   size_t origin_before = 0;
   size_t proxy_before = 0;
@@ -1121,11 +1148,39 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   size_t origin_before = 0;
   size_t proxy_before = 0;
   PreparePrefetchTest(&origin_before, &proxy_before);
-  PublishProxyPolicy(/*publish_endpoint=*/false);
 
-  ASSERT_EQ(RunPrefetch(target_url()), "error");
+  ASSERT_EQ(RunPrefetch(target_url().Resolve("/prefetch-endpoint-health")),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+  origin_before = origin_requests_.load(std::memory_order_relaxed);
+  proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  ASSERT_EQ(RunPrefetch(target_url().Resolve("/prefetch-no-endpoint")), "error");
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
                      /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       PrefetchUsesCurrentPolicyForNewUrls) {
+  size_t origin_before = 0;
+  size_t proxy_before = 0;
+  PreparePrefetchTest(&origin_before, &proxy_before);
+
+  ASSERT_EQ(RunPrefetch(target_url().Resolve("/prefetch-before-policy")),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+  origin_before = origin_requests_.load(std::memory_order_relaxed);
+  proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_EQ(RunPrefetch(target_url().Resolve("/prefetch-after-policy")),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/1u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,

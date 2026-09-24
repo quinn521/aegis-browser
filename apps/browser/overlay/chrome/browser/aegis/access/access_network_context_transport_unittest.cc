@@ -787,6 +787,8 @@ TEST_F(AccessNetworkContextTransportTest, RejectsNonCanonicalHostSelection) {
       partition, {"TARGET.example"}, endpoint));
   EXPECT_FALSE(transport_->PublishProxySelection(
       partition, {"target.example."}, endpoint));
+  EXPECT_FALSE(transport_->PublishProxySelection(
+      partition, {"127.0.0.1."}, endpoint));
 }
 
 }  // namespace
