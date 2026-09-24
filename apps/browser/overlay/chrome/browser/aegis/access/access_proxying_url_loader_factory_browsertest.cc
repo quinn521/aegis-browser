@@ -69,6 +69,7 @@
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/cpp/url_loader_factory_builder.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/test/test_url_loader_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -1675,6 +1676,40 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   terminal.pending_requests()->front().client.reset();
   ASSERT_TRUE(disconnected_result.Wait());
   EXPECT_NE(disconnected_loader->NetError(), net::OK);
+  EXPECT_EQ(dispatch_state->ownership().size(), ownership_before);
+
+  // A BLOCK barrier must also terminate a request during the interval after
+  // control-pipe disconnect but before client completion or watchdog expiry.
+  const GURL blocked_url = target_url().Resolve("/relay-blocked");
+  auto blocked_request = std::make_unique<network::ResourceRequest>();
+  blocked_request->url = blocked_url;
+  blocked_request->request_initiator = url::Origin::Create(worker_page_url());
+  auto blocked_loader = network::SimpleURLLoader::Create(
+      std::move(blocked_request), TRAFFIC_ANNOTATION_FOR_TESTS);
+  base::test::TestFuture<std::optional<std::string>> blocked_result;
+  blocked_loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+      factory.get(), blocked_result.GetCallback());
+  terminal.WaitForRequest(blocked_url);
+  ASSERT_EQ(terminal.NumPending(), 1);
+  ASSERT_EQ(dispatch_state->ownership().size(), ownership_before + 1u);
+  terminal.pending_requests()->back().test_url_loader.reset();
+  base::RunLoop().RunUntilIdle();
+  ASSERT_FALSE(blocked_result.IsReady());
+  EXPECT_EQ(dispatch_state->ownership().size(), ownership_before + 1u);
+
+  aegis_access::RequestCancellationSelector selector;
+  BuildCancellationSelector(blocked_url, &selector);
+  const AccessBlockAndCancelResult barrier_result =
+      dispatch_state->InstallBlockBarrierAndCancelMatching(
+          {"relay-control-disconnected", 1, std::move(selector)});
+  EXPECT_EQ(barrier_result.barrier_status,
+            aegis_access::RequestDispatchBarrierStatus::kOk);
+  EXPECT_EQ(barrier_result.cancellation_status,
+            aegis_access::RequestOwnershipStatus::kOk);
+  EXPECT_EQ(barrier_result.matched_requests, 1u);
+  EXPECT_EQ(barrier_result.terminated_requests, 1u);
+  ASSERT_TRUE(blocked_result.Wait());
+  EXPECT_NE(blocked_loader->NetError(), net::OK);
   EXPECT_EQ(dispatch_state->ownership().size(), ownership_before);
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
                      /*proxy_delta=*/0u);
