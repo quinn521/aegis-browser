@@ -140,7 +140,7 @@ TEST_F(AccessNetworkContextTransportTest, OffPreservesNativeProxyResult) {
   const net::ProxyInfo result =
       Resolve(delegate.get(), "https://target.example/path");
   EXPECT_EQ(result.proxy_list().ToPacString(),
-            "PROXY native.example:3128; DIRECT");
+            "PROXY native.example:3128;DIRECT");
 }
 
 TEST_F(AccessNetworkContextTransportTest,
@@ -157,12 +157,12 @@ TEST_F(AccessNetworkContextTransportTest,
   const net::ProxyInfo other =
       Resolve(delegate.get(), "https://other.example/path");
   EXPECT_EQ(other.proxy_list().ToPacString(),
-            "PROXY native.example:3128; DIRECT");
+            "PROXY native.example:3128;DIRECT");
 
   const net::ProxyInfo subdomain =
       Resolve(delegate.get(), "https://sub.target.example/path");
   EXPECT_EQ(subdomain.proxy_list().ToPacString(),
-            "PROXY native.example:3128; DIRECT");
+            "PROXY native.example:3128;DIRECT");
 }
 
 TEST_F(AccessNetworkContextTransportTest,
@@ -367,7 +367,7 @@ TEST_F(AccessNetworkContextTransportTest, DirectCandidateRestoresNativeForOnlyTa
   transport_->FlushClientsForTesting({});
   EXPECT_EQ(Resolve(delegate.get(), "https://target.example/")
                 .proxy_list().ToPacString(),
-            "PROXY native.example:3128; DIRECT");
+            "PROXY native.example:3128;DIRECT");
   ExpectProxyResolution(delegate.get(), "https://other.example/");
   ASSERT_TRUE(transport_->ReplaceSelection(endpoint.owner, candidate, previous));
   transport_->FlushClientsForTesting({});
@@ -558,7 +558,7 @@ TEST_F(AccessNetworkContextTransportTest,
   const net::ProxyInfo restored =
       Resolve(delegate.get(), "https://target.example/");
   EXPECT_EQ(restored.proxy_list().ToPacString(),
-            "PROXY native.example:3128; DIRECT");
+            "PROXY native.example:3128;DIRECT");
 }
 
 TEST_F(AccessNetworkContextTransportTest, StoragePartitionsAreIsolated) {
@@ -579,7 +579,7 @@ TEST_F(AccessNetworkContextTransportTest, StoragePartitionsAreIsolated) {
   EXPECT_EQ(Resolve(isolated_delegate.get(), "https://target.example/")
                 .proxy_list()
                 .ToPacString(),
-            "PROXY native.example:3128; DIRECT");
+            "PROXY native.example:3128;DIRECT");
 }
 
 TEST_F(AccessNetworkContextTransportTest,
