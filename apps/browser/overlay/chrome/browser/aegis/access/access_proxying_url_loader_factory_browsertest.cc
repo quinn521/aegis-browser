@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,8 +48,11 @@
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
+#include "mojo/public/cpp/bindings/remote.h"
+#include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_status_code.h"
@@ -64,6 +68,7 @@
 #include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 
 namespace aegis::access {
 
@@ -217,6 +222,29 @@ std::unique_ptr<net::test_server::HttpResponse> IgnoreAutomaticFavicon(
   return response;
 }
 
+std::unique_ptr<net::test_server::HttpResponse> ParserEarlyPageReply(
+    std::atomic<size_t>* counter,
+    net::test_server::EmbeddedTestServer* origin,
+    const net::test_server::HttpRequest& request) {
+  if (request.GetURL().path() != "/parser-early-page") {
+    return nullptr;
+  }
+  counter->fetch_add(1, std::memory_order_relaxed);
+  const char* resource = request.relative_url.find("blocked") !=
+                                 std::string::npos
+                             ? "/resource?parser-blocked"
+                             : "/resource?parser-healthy";
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_code(net::HTTP_OK);
+  response->set_content(
+      "<!doctype html><script>window.parserFetchDone = "
+      "fetch('" + origin->GetURL(kTargetHost, resource).spec() +
+      "', {mode:'no-cors',cache:'no-store'})"
+      ".then(() => 'loaded', () => 'error');</script>");
+  response->set_content_type("text/html");
+  return response;
+}
+
 std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
     std::atomic<size_t>* counter,
     const char* body,
@@ -348,6 +376,9 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
 
     target_origin_.RegisterRequestHandler(
         base::BindRepeating(&IgnoreAutomaticFavicon));
+    target_origin_.RegisterRequestHandler(base::BindRepeating(
+        &ParserEarlyPageReply, base::Unretained(&origin_requests_),
+        base::Unretained(&target_origin_)));
     target_origin_.RegisterRequestHandler(base::BindRepeating(
         &ServiceWorkerOriginReply, base::Unretained(&origin_requests_)));
     target_origin_.RegisterRequestHandler(base::BindRepeating(
@@ -484,6 +515,22 @@ class AccessProxyingURLLoaderFactoryBrowserTest : public InProcessBrowserTest {
   }
 
   bool FetchTarget() { return Fetch(target_url()); }
+
+  int FetchWithFactory(network::mojom::URLLoaderFactory* factory,
+                       const GURL& url,
+                       const GURL& initiator_url) {
+    auto request = std::make_unique<network::ResourceRequest>();
+    request->url = url;
+    request->request_initiator = url::Origin::Create(initiator_url);
+    request->load_flags = net::LOAD_BYPASS_CACHE;
+    auto loader = network::SimpleURLLoader::Create(
+        std::move(request), TRAFFIC_ANNOTATION_FOR_TESTS);
+    base::test::TestFuture<std::optional<std::string>> result;
+    loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+        factory, result.GetCallback());
+    EXPECT_TRUE(result.Wait());
+    return loader->NetError();
+  }
 
   bool FetchNoStore(const GURL& url) {
     return content::EvalJs(
@@ -903,6 +950,150 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
     return origin_requests_.load(std::memory_order_relaxed) == 1u;
   }));
   EXPECT_EQ(proxy_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       ParserEarlySubresourceWaitsForCommittedDocument) {
+  const size_t healthy_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t healthy_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/parser-early-page?healthy")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.parserFetchDone")
+                .ExtractString(),
+            "loaded");
+  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
+                     /*origin_delta=*/2u, /*proxy_delta=*/0u);
+
+  PublishProxyPolicy(/*publish_endpoint=*/false);
+  const size_t blocked_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t blocked_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/parser-early-page?blocked")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.parserFetchDone")
+                .ExtractString(),
+            "error");
+  // The unselected page loads once; its parser-issued target request does not.
+  ExpectRoutingDelta(blocked_origin_before, blocked_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       ParserEarlySubresourceUsesSelectedProxy) {
+  PublishProxyPolicy(/*publish_endpoint=*/true);
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL("localhost", "/parser-early-page?healthy")));
+  EXPECT_EQ(content::EvalJs(web_contents(), "window.parserFetchDone")
+                .ExtractString(),
+            "loaded");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/1u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       PendingDocumentFactoryClosesWhenTabIsDestroyed) {
+  ASSERT_NE(ui_test_utils::NavigateToURLWithDisposition(
+                browser(), worker_page_url(),
+                WindowOpenDisposition::NEW_FOREGROUND_TAB,
+                ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP),
+            nullptr);
+  const size_t healthy_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t healthy_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_TRUE(FetchNoStore(target_url().Resolve("/pending-health")));
+  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+
+  network::URLLoaderFactoryBuilder builder;
+  // A synthetic never-committing navigation leaves the new wrapper endpoint
+  // pending. Destroying its WebContents must close queued requests, not run
+  // them through the downstream factory.
+  AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
+      browser()->profile(), web_contents()->GetPrimaryMainFrame(),
+      std::numeric_limits<int64_t>::max(), builder);
+  scoped_refptr<network::SharedURLLoaderFactory> pending_factory =
+      std::move(builder).Finish(
+          browser()->profile()
+              ->GetDefaultStoragePartition()
+              ->GetURLLoaderFactoryForBrowserProcess());
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = target_url().Resolve("/pending-cancelled");
+  request->request_initiator = url::Origin::Create(worker_page_url());
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), TRAFFIC_ANNOTATION_FOR_TESTS);
+  base::test::TestFuture<std::optional<std::string>> result;
+  loader->DownloadToStringOfUnboundedSizeUntilCrashAndDie(
+      pending_factory.get(), result.GetCallback());
+  base::RunLoop().RunUntilIdle();
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
+
+  browser()->tab_strip_model()->CloseWebContentsAt(
+      browser()->tab_strip_model()->active_index(), TabCloseTypes::CLOSE_NONE);
+  ASSERT_TRUE(result.Wait());
+  EXPECT_NE(loader->NetError(), net::OK);
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
+                     /*proxy_delta=*/0u);
+}
+
+class AccessProxyingURLLoaderFactorySameFrameBrowserTest
+    : public AccessProxyingURLLoaderFactoryBrowserTest {
+ public:
+  AccessProxyingURLLoaderFactorySameFrameBrowserTest() {
+    features_.InitAndDisableFeature(features::kRenderDocument);
+  }
+
+ private:
+  base::test::ScopedFeatureList features_;
+};
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactorySameFrameBrowserTest,
+                       SameFrameOldDocumentFactoryCloneAbortsWithoutPolicy) {
+  const GURL first_page = worker_page_url();
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), first_page));
+  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
+  ASSERT_NE(frame, nullptr);
+  const content::GlobalRenderFrameHostId frame_id = frame->GetGlobalId();
+  const content::WeakDocumentPtr first_document = frame->GetWeakDocumentPtr();
+
+  mojo::Remote<network::mojom::URLLoaderFactory> first_factory;
+  frame->CreateNetworkServiceDefaultFactory(
+      first_factory.BindNewPipeAndPassReceiver());
+  mojo::Remote<network::mojom::URLLoaderFactory> old_clone;
+  first_factory->Clone(old_clone.BindNewPipeAndPassReceiver());
+  const size_t healthy_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t healthy_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  EXPECT_EQ(FetchWithFactory(first_factory.get(),
+                             target_url().Resolve("/same-frame-health"),
+                             first_page),
+            net::OK);
+  ExpectRoutingDelta(healthy_origin_before, healthy_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), target_origin_.GetURL(kTargetHost, "/worker-page?second")));
+  ASSERT_EQ(web_contents()->GetPrimaryMainFrame()->GetGlobalId(), frame_id);
+  ASSERT_EQ(first_document.AsRenderFrameHostIfValid(), nullptr);
+  const size_t stale_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t stale_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  EXPECT_EQ(FetchWithFactory(old_clone.get(),
+                             target_url().Resolve("/same-frame-stale"),
+                             first_page),
+            net::ERR_ABORTED);
+  ExpectRoutingDelta(stale_origin_before, stale_proxy_before,
+                     /*origin_delta=*/0u, /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
