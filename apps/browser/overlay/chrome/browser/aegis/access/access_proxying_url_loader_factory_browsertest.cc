@@ -45,7 +45,6 @@
 #include "components/aegis_access/access_identity_generation_state.h"
 #include "components/aegis_access/access_proxy_selection_generation_state.h"
 #include "components/aegis_access/request_policy_context.h"
-#include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/storage_partition_config.h"
@@ -1121,8 +1120,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
 
   // A newly created factory for this already committed opaque document must
   // still carry its trusted HTTP document URL and fail closed.
-  auto* frame = static_cast<content::RenderFrameHostImpl*>(
-      web_contents()->GetPrimaryMainFrame());
+  content::RenderFrameHost* frame = web_contents()->GetPrimaryMainFrame();
   ASSERT_TRUE(frame->GetLastCommittedOrigin().opaque());
   mojo::Remote<network::mojom::URLLoaderFactory> recreated_factory;
   frame->CreateNetworkServiceDefaultFactory(
