@@ -1683,6 +1683,10 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   ASSERT_TRUE(disconnected_result.Wait());
   EXPECT_NE(disconnected_loader->NetError(), net::OK);
   EXPECT_EQ(dispatch_state->ownership().size(), ownership_before);
+  // TestURLLoaderFactory retains manually disconnected pending requests.
+  // Remove the consumed entry before WaitForRequest scans its client remote.
+  ASSERT_EQ(terminal.pending_requests()->size(), 1u);
+  terminal.pending_requests()->clear();
 
   // A BLOCK barrier must also terminate a request during the interval after
   // control-pipe disconnect but before client completion or watchdog expiry.
