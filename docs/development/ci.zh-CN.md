@@ -63,6 +63,8 @@ When high-risk review escalation is warranted, its effort takes precedence over 
   uncommitted work. These defaults do not authorize merging, release, credentials,
   or bypassing a required gate.
 
+架构设计须明确范围、模块边界、接口、不变量、验收用例和回滚办法；模型选择不能替代这些设计交付要求。
+
 普通低风险本地改动无需额外独立评审；日常开发 PR 与上游晋升 PR 仍须按下文完成独立 Review。模型分工不要求贡献者购买特定模型，也不替代服务端人工 Approve。
 
 所有 `feat(...)` 功能 PR 都必须在同一 PR 内同时交付两类可执行测试：**单元测试**直接验证新增逻辑、边界和错误返回；**回归测试**固定至少一个既有安全/兼容性不变量或本功能可能重新引入的历史故障。两类测试都必须在最终 HEAD 实际执行并通过，缺任一类不得合并；不能以静态字符串检查、仅编译通过、增加 mock 数量或其他模块的既有测试代替。若改动实际上只有文档，应使用 `docs(...)` 而不是用 `feat(...)` 绕过该门槛。
