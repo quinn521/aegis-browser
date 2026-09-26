@@ -4,7 +4,7 @@
 
 ## Q 新候选：取消、watchdog、缓存与 MHTML
 
-本候选在固定 Chromium 补 0197–0199，相关 Chromium 源码与产品 overlay 保持由有序 patch series 重放：
+本候选在固定 Chromium 补 0197–0200，相关 Chromium 源码与产品 overlay 保持由有序 patch series 重放：
 
 | 入口 | 新增断言与边界 |
 | --- | --- |

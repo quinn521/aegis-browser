@@ -2009,18 +2009,26 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
   terminal.WaitForRequest(cancelled_url);
   ASSERT_EQ(terminal.NumPending(), 1);
   ASSERT_EQ(dispatch_state->ownership().size(), 1u);
+  const base::TimeTicks target_disconnected_at = base::TimeTicks::Now();
   terminal.pending_requests()->front().test_url_loader.reset();
   base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(result.IsReady());
   ASSERT_EQ(dispatch_state->ownership().size(), 1u);
 
   loader.reset();
-  ASSERT_TRUE(base::test::RunUntil(
-      [&] { return dispatch_state->ownership().size() == 0u; }));
-  EXPECT_FALSE(result.IsReady());
-  ASSERT_TRUE(base::test::RunUntil([&] {
-    return !terminal.pending_requests()->front().client.is_connected();
-  }));
+  {
+    // The production watchdog starts after target disconnect and fires after
+    // 30 seconds. Cancellation must release ownership before that fallback.
+    base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(5));
+    ASSERT_TRUE(base::test::RunUntil(
+        [&] { return dispatch_state->ownership().size() == 0u; }));
+    EXPECT_FALSE(result.IsReady());
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return !terminal.pending_requests()->front().client.is_connected();
+    }));
+  }
+  EXPECT_LT(base::TimeTicks::Now() - target_disconnected_at,
+            base::Seconds(10));
   ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/0u,
                      /*proxy_delta=*/0u);
 }
