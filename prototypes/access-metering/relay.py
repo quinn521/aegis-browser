@@ -8,6 +8,7 @@ import secrets
 import socket
 import sys
 from pathlib import Path
+from typing import Callable
 
 from ledger import Ledger, LedgerError, MAX_PERMIT_BYTES
 
@@ -33,13 +34,14 @@ class MeteredRelay:
         self.clients: set[asyncio.Task[None]] = set()
 
     async def _pipe(self, source: socket.socket, destination: socket.socket,
-                    stream_id: str, direction: str) -> bool:
+                    stream_id: str, direction: str,
+                    note_activity: Callable[[], None]) -> bool:
         """Return True when the whole connection must stop (quota or failure)."""
         loop = asyncio.get_running_loop()
         sequence = 0
         try:
             while True:
-                data = await asyncio.wait_for(loop.sock_recv(source, self.chunk_bytes), self.io_timeout)
+                data = await loop.sock_recv(source, self.chunk_bytes)
                 if not data:
                     try:
                         destination.shutdown(socket.SHUT_WR)
@@ -65,7 +67,13 @@ class MeteredRelay:
                     self.pause_after_send_marker.write_text(permit.permit_id, encoding="ascii")
                     await asyncio.wait_for(asyncio.Event().wait(), 30.0)
                 self.ledger.complete(permit.permit_id, permit.granted_bytes)
+                note_activity()
                 if permit.granted_bytes < len(data):
+                    return True
+                # A zero remaining balance can include another direction's
+                # pending permit. Let that permit settle before closing.
+                balance = self.ledger.snapshot(self.account_id, self.period_id)
+                if balance.actual_bytes == balance.quota_bytes:
                     return True
         except (LedgerError, OSError, TimeoutError) as error:
             print(f"relay closed {direction}: {error}", file=sys.stderr, flush=True)
@@ -77,24 +85,49 @@ class MeteredRelay:
         origin = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         origin.setblocking(False)
         stream_id = secrets.token_hex(16)
+        tasks: set[asyncio.Task[bool]] = set()
+        idle: asyncio.Future[None] | None = None
+        idle_handle: asyncio.TimerHandle | None = None
         try:
             await asyncio.wait_for(loop.sock_connect(origin, ("127.0.0.1", self.origin_port)), self.io_timeout)
-            up = asyncio.create_task(self._pipe(client, origin, stream_id, "up"))
-            down = asyncio.create_task(self._pipe(origin, client, stream_id, "down"))
-            pending: set[asyncio.Task[bool]] = {up, down}
-            while pending:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                if any(task.result() for task in done):
-                    for task in pending:
-                        task.cancel()
-                    if pending:
-                        await asyncio.gather(*pending, return_exceptions=True)
+            idle = loop.create_future()
+
+            def expire_idle() -> None:
+                if not idle.done():
+                    idle.set_result(None)
+
+            idle_handle = loop.call_later(self.io_timeout, expire_idle)
+
+            def note_activity() -> None:
+                nonlocal idle_handle
+                if idle.done():
+                    return
+                idle_handle.cancel()
+                idle_handle = loop.call_later(self.io_timeout, expire_idle)
+
+            up = asyncio.create_task(self._pipe(client, origin, stream_id, "up", note_activity))
+            down = asyncio.create_task(self._pipe(origin, client, stream_id, "down", note_activity))
+            tasks = {up, down}
+            active_pipes = {up, down}
+            while active_pipes:
+                done, _ = await asyncio.wait(active_pipes | {idle}, return_when=asyncio.FIRST_COMPLETED)
+                if idle in done or any(task.result() for task in done if task in active_pipes):
                     break
+                active_pipes.difference_update(done)
         except (OSError, TimeoutError) as error:
             print(f"origin connection failed: {error}", file=sys.stderr, flush=True)
         finally:
+            if idle_handle is not None:
+                idle_handle.cancel()
+            if idle is not None and not idle.done():
+                idle.cancel()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
             client.close()
             origin.close()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     async def serve(self, listen_port: int) -> None:
         if not 0 <= listen_port <= 65535:

@@ -14,7 +14,8 @@ class _OriginServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 class EchoOrigin:
-    def __init__(self, port: int = 0, echo: bool = True):
+    def __init__(self, port: int = 0, echo: bool = True,
+                 push_count: int = 0, push_interval: float = 0.0):
         self.received_bytes = 0
         self.sent_bytes = 0
         self.lock = threading.Lock()
@@ -23,6 +24,14 @@ class EchoOrigin:
         class Handler(socketserver.BaseRequestHandler):
             def handle(self) -> None:
                 self.request.settimeout(3)
+                for _ in range(push_count):
+                    try:
+                        self.request.sendall(b"d")
+                    except OSError:
+                        return
+                    with owner.lock:
+                        owner.sent_bytes += 1
+                    time.sleep(push_interval)
                 while True:
                     try:
                         data = self.request.recv(4096)

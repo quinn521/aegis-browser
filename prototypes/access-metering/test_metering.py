@@ -173,12 +173,13 @@ class RelayTests(unittest.TestCase):
                 process.communicate(timeout=2)
 
     def _start_relay(self, quota: int, chunk: int = 4, marker: Path | None = None,
-                     after_send_marker: Path | None = None) -> int:
+                     after_send_marker: Path | None = None,
+                     io_timeout: float = 2.0) -> int:
         self.ledger.configure("account", "period-1", quota)
         command = [sys.executable, "-u", str(RELAY), "--db", str(self.db),
                    "--account", "account", "--period", "period-1", "--quota", str(quota),
                    "--origin-port", str(self.origin.port), "--chunk-bytes", str(chunk),
-                   "--io-timeout", "2"]
+                   "--io-timeout", str(io_timeout)]
         if marker is not None:
             command.extend(("--pause-after-prepare-marker", str(marker)))
         if after_send_marker is not None:
@@ -212,6 +213,60 @@ class RelayTests(unittest.TestCase):
             self.assertEqual((balance.actual_bytes, balance.held_bytes), (8 * round_number, 0))
             self.assertEqual(self.origin.counts(), (4 * round_number, 4 * round_number))
         self.assertEqual(self.origin.counts(), (12, 12))
+
+    def test_upload_only_activity_outlives_shared_idle_timeout(self) -> None:
+        sink = EchoOrigin(echo=False)
+        sink.start()
+        self.addCleanup(sink.close)
+        self.origin = sink
+        connection = self._connect(self._start_relay(80, chunk=1, io_timeout=0.45))
+        started = time.monotonic()
+        for count in range(1, 9):
+            connection.sendall(b"u")
+            wait_until(lambda: self.ledger.snapshot("account", "period-1").actual_bytes == count)
+            wait_until(lambda: sink.counts()[0] == count)
+            time.sleep(0.12)
+        self.assertGreater(time.monotonic() - started, 0.45)
+        connection.sendall(b"z")
+        wait_until(lambda: self.ledger.snapshot("account", "period-1").actual_bytes == 9)
+        wait_until(lambda: sink.counts()[0] == 9)
+        self.assertEqual(sink.counts(), (9, 0))
+
+    def test_download_only_activity_outlives_shared_idle_timeout(self) -> None:
+        source = EchoOrigin(echo=False, push_count=8, push_interval=0.12)
+        source.start()
+        self.addCleanup(source.close)
+        self.origin = source
+        connection = self._connect(self._start_relay(80, chunk=1, io_timeout=0.45))
+        started = time.monotonic()
+        for count in range(1, 9):
+            self.assertEqual(receive_exact(connection, 1), b"d")
+            wait_until(lambda: self.ledger.snapshot("account", "period-1").actual_bytes == count)
+        self.assertGreater(time.monotonic() - started, 0.45)
+        wait_until(lambda: source.counts()[1] == 8)
+        connection.sendall(b"u")
+        wait_until(lambda: self.ledger.snapshot("account", "period-1").actual_bytes == 9)
+        wait_until(lambda: source.counts()[0] == 1)
+        self.assertEqual(source.counts(), (1, 8))
+
+    def test_truly_idle_connection_closes_within_bound(self) -> None:
+        connection = self._connect(self._start_relay(8, io_timeout=0.35))
+        connection.settimeout(1.2)
+        self.assertEqual(connection.recv(1), b"")
+        self.assertEqual(self.ledger.snapshot("account", "period-1").actual_bytes, 0)
+        self.assertEqual(self.origin.counts(), (0, 0))
+
+    def test_exact_quota_closes_immediately_after_final_settlement(self) -> None:
+        connection = self._connect(self._start_relay(8, chunk=4, io_timeout=2))
+        connection.sendall(b"abcd")
+        self.assertEqual(receive_exact(connection, 4), b"abcd")
+        wait_until(lambda: self.ledger.snapshot("account", "period-1").actual_bytes == 8)
+        connection.settimeout(0.75)  # Fails if closure waits for the 2-second idle timeout.
+        self.assertEqual(connection.recv(1), b"")
+        self.assertEqual(self.origin.counts(), (4, 4))
+        balance = self.ledger.snapshot("account", "period-1")
+        self.assertEqual((balance.actual_bytes, balance.held_bytes,
+                          balance.remaining_bytes), (8, 0, 0))
 
     def test_actual_forwarding_stops_at_shared_two_direction_quota(self) -> None:
         connection = self._connect(self._start_relay(10))
