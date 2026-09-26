@@ -35,7 +35,8 @@ class MeteredRelay:
 
     async def _pipe(self, source: socket.socket, destination: socket.socket,
                     stream_id: str, direction: str,
-                    note_activity: Callable[[], None]) -> bool:
+                    note_activity: Callable[[], None],
+                    exhausted: asyncio.Future[None]) -> bool:
         """Return True when the whole connection must stop (quota or failure)."""
         loop = asyncio.get_running_loop()
         sequence = 0
@@ -68,28 +69,44 @@ class MeteredRelay:
                     await asyncio.wait_for(asyncio.Event().wait(), 30.0)
                 self.ledger.complete(permit.permit_id, permit.granted_bytes)
                 note_activity()
-                if permit.granted_bytes < len(data):
-                    return True
                 # A zero remaining balance can include another direction's
                 # pending permit. Let that permit settle before closing.
                 balance = self.ledger.snapshot(self.account_id, self.period_id)
                 if balance.actual_bytes == balance.quota_bytes:
+                    if not exhausted.done():
+                        exhausted.set_result(None)
+                    return True
+                if permit.granted_bytes < len(data):
                     return True
         except (LedgerError, OSError, TimeoutError) as error:
             print(f"relay closed {direction}: {error}", file=sys.stderr, flush=True)
             # If sendall or COMPLETE failed, the full durable permit stays held.
             return True
 
-    async def _client(self, client: socket.socket) -> None:
+    async def _client(self, client: socket.socket,
+                      exhausted: asyncio.Future[None]) -> None:
+        if exhausted.done():
+            client.close()
+            return
         loop = asyncio.get_running_loop()
         origin = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         origin.setblocking(False)
         stream_id = secrets.token_hex(16)
+        connect_task: asyncio.Task[None] | None = None
         tasks: set[asyncio.Task[bool]] = set()
         idle: asyncio.Future[None] | None = None
         idle_handle: asyncio.TimerHandle | None = None
         try:
-            await asyncio.wait_for(loop.sock_connect(origin, ("127.0.0.1", self.origin_port)), self.io_timeout)
+            connect_task = asyncio.create_task(
+                loop.sock_connect(origin, ("127.0.0.1", self.origin_port)))
+            connected, _ = await asyncio.wait(
+                {connect_task, exhausted}, timeout=self.io_timeout,
+                return_when=asyncio.FIRST_COMPLETED)
+            if exhausted in connected:
+                return
+            if connect_task not in connected:
+                raise TimeoutError("origin connect timed out")
+            await connect_task
             idle = loop.create_future()
 
             def expire_idle() -> None:
@@ -105,13 +122,15 @@ class MeteredRelay:
                 idle_handle.cancel()
                 idle_handle = loop.call_later(self.io_timeout, expire_idle)
 
-            up = asyncio.create_task(self._pipe(client, origin, stream_id, "up", note_activity))
-            down = asyncio.create_task(self._pipe(origin, client, stream_id, "down", note_activity))
+            up = asyncio.create_task(self._pipe(client, origin, stream_id, "up", note_activity, exhausted))
+            down = asyncio.create_task(self._pipe(origin, client, stream_id, "down", note_activity, exhausted))
             tasks = {up, down}
             active_pipes = {up, down}
             while active_pipes:
-                done, _ = await asyncio.wait(active_pipes | {idle}, return_when=asyncio.FIRST_COMPLETED)
-                if idle in done or any(task.result() for task in done if task in active_pipes):
+                done, _ = await asyncio.wait(active_pipes | {idle, exhausted},
+                                             return_when=asyncio.FIRST_COMPLETED)
+                if (idle in done or exhausted in done or
+                        any(task.result() for task in done if task in active_pipes)):
                     break
                 active_pipes.difference_update(done)
         except (OSError, TimeoutError) as error:
@@ -121,18 +140,27 @@ class MeteredRelay:
                 idle_handle.cancel()
             if idle is not None and not idle.done():
                 idle.cancel()
+            if connect_task is not None and not connect_task.done():
+                connect_task.cancel()
             for task in tasks:
                 if not task.done():
                     task.cancel()
             client.close()
             origin.close()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            cleanup = set(tasks)
+            if connect_task is not None:
+                cleanup.add(connect_task)
+            if cleanup:
+                await asyncio.gather(*cleanup, return_exceptions=True)
 
     async def serve(self, listen_port: int) -> None:
         if not 0 <= listen_port <= 65535:
             raise ValueError("invalid listen port")
         loop = asyncio.get_running_loop()
+        exhausted: asyncio.Future[None] = loop.create_future()
+        balance = self.ledger.snapshot(self.account_id, self.period_id)
+        if balance.actual_bytes == balance.quota_bytes:
+            exhausted.set_result(None)
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", listen_port))
@@ -144,7 +172,10 @@ class MeteredRelay:
             while True:
                 client, _ = await loop.sock_accept(listener)
                 client.setblocking(False)
-                task = asyncio.create_task(self._client(client))
+                if exhausted.done():
+                    client.close()
+                    continue
+                task = asyncio.create_task(self._client(client, exhausted))
                 self.clients.add(task)
                 task.add_done_callback(self.clients.discard)
         finally:
