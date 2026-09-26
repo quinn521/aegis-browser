@@ -63,16 +63,36 @@ export W1_EVIDENCE="<external-evidence-directory>"
 python3 scripts/dev/chromium_access_gtests.py \
   --out "$W1_OUT" --report-dir "$W1_EVIDENCE/native"
 test -x "$W1_OUT/browser_tests"
-"$W1_OUT/browser_tests" --gtest_list_tests > "$W1_EVIDENCE/browser-list.txt"
-rg -q '^AccessW1RouteBrowserTest\.' "$W1_EVIDENCE/browser-list.txt"
-rg -q '^AccessW1AuthBrowserTest\.' "$W1_EVIDENCE/browser-list.txt"
+test ! -e "$W1_EVIDENCE/browser-summary.json"  # 每轮使用新的证据目录
+"$W1_OUT/browser_tests" --gtest_list_tests \
+  --gtest_filter='AccessW1RouteBrowserTest.*:AccessW1AuthBrowserTest.*' \
+  > "$W1_EVIDENCE/browser-list.txt"
 "$W1_OUT/browser_tests" \
   --gtest_filter='AccessW1RouteBrowserTest.*:AccessW1AuthBrowserTest.*' \
-  --test-launcher-jobs=2 \
+  --gtest_repeat=1 --test-launcher-jobs=2 --test-launcher-retry-limit=0 \
+  --test-launcher-test-part-results-limit=-1 \
+  --test-launcher-total-shards=1 --test-launcher-shard-index=0 \
+  --test-launcher-summary-output="$W1_EVIDENCE/browser-summary.json" \
   > "$W1_EVIDENCE/browser.log" 2>&1
+python3 - "$W1_EVIDENCE/browser-list.txt" "$W1_EVIDENCE/browser-summary.json" <<'PY'
+from pathlib import Path
+import sys
+from scripts.dev.chromium_access_gtests import gtest_names, runtime_test_count
+
+suites = ("AccessW1RouteBrowserTest.", "AccessW1AuthBrowserTest.")
+listed = gtest_names(Path(sys.argv[1]).read_text(encoding="utf-8"))
+enabled = [name for name in listed if name.startswith(suites)
+           and not any(part.startswith("DISABLED_")
+                       for part in name.replace("/", ".").split("."))]
+if len(enabled) != len(set(enabled)) or any(
+    not any(name.startswith(suite) for name in enabled) for suite in suites
+):
+    raise SystemExit("missing or duplicate enabled W1 browser tests")
+print(f"W1 browser tests: {runtime_test_count(Path(sys.argv[2]), enabled)} PASS")
+PY
 ```
 
-这是未来候选的调用模板，变量值须由该候选的 owner 填写，实际 suite 名随实现同步修订。`browser_tests` 是否足以覆盖该候选的 Content/Network Service 边界，需根据 GN 枚举加跑适用目标；不得删减 W0 原有必需目标。测试列表、真实匹配数、失败/退出码、源码前后稳定性、产物及受控代理配置 hash 必须一并保存。负路径须与同产物健康正对照关联；不能以模型、helper 或仅编译成功替代真实入口。最终 HEAD 变化后重跑受影响层级、独立 Review 和托管检查，按 B/H/M/S 各自身份报告。
+这是未来候选的调用模板，变量值须由该候选的 owner 填写，实际 suite 名随实现同步修订。校验复用原生 runner 的清单/运行摘要规则：每个必需 suite 至少有一项启用用例，运行摘要必须与完整启用清单一致、恰好执行一次且成功；`GTEST_SKIP()` 在 `result_parts` 中留下的跳过也会被拒绝。`browser_tests` 是否足以覆盖该候选的 Content/Network Service 边界，需根据 GN 枚举加跑适用目标；不得删减 W0 原有必需目标。测试列表、真实匹配数、失败/退出码、源码前后稳定性、产物及受控代理配置 hash 必须一并保存。负路径须与同产物健康正对照关联；不能以模型、helper 或仅编译成功替代真实入口。最终 HEAD 变化后重跑受影响层级、独立 Review 和托管检查，按 B/H/M/S 各自身份报告。
 
 ## 交接结论
 
