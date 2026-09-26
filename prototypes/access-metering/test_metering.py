@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import select
 import socket
@@ -12,9 +13,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import Callable
+from unittest.mock import patch
 
 from ledger import Ledger, LedgerError, MAX_PENDING_PERMITS, MAX_PERMIT_BYTES
 from origin import EchoOrigin
+from relay import MeteredRelay
 
 
 RELAY = Path(__file__).with_name("relay.py")
@@ -389,6 +393,162 @@ class RelayTests(unittest.TestCase):
         second.sendall(b"abcdefgh")
         self.assertEqual(second.recv(1), b"")
         self.assertEqual(sink.counts(), (8, 0))
+
+
+class ConcurrentPermitTests(unittest.IsolatedAsyncioTestCase):
+    async def _exercise_existing_permit(self, quota: int, initial: bytes,
+                                        down_grant: int | None,
+                                        fire_previous_idle: bool = False) -> None:
+        """A denied direction must not cancel the other direction's saved permit."""
+        with tempfile.TemporaryDirectory(prefix="aegis-w2-interleave-") as directory:
+            ledger = Ledger(Path(directory) / "ledger.db")
+            ledger.configure("account", "period-1", quota)
+            loop = asyncio.get_running_loop()
+            send_down = asyncio.Event()
+            held_send_started = asyncio.Event()
+            release_held_send = asyncio.Event()
+            down_prepared = asyncio.Event()
+            origin_received = bytearray()
+            observed_grants: list[int | None] = []
+
+            class ManualIdleTimer:
+                def __init__(self, callback: Callable[[], None]):
+                    self.callback = callback
+                    self.cancelled = False
+
+                def cancel(self) -> None:
+                    self.cancelled = True
+
+                def fire(self) -> bool:
+                    if self.cancelled:
+                        return False
+                    self.callback()
+                    return True
+
+            idle_timers: list[ManualIdleTimer] = []
+
+            async def origin_handler(reader: asyncio.StreamReader,
+                                     writer: asyncio.StreamWriter) -> None:
+                async def send_response() -> None:
+                    await send_down.wait()
+                    writer.write(b"down")
+                    await writer.drain()
+
+                response = asyncio.create_task(send_response())
+                try:
+                    while data := await reader.read(4096):
+                        origin_received.extend(data)
+                finally:
+                    response.cancel()
+                    await asyncio.gather(response, return_exceptions=True)
+                    writer.close()
+                    await writer.wait_closed()
+
+            origin = await asyncio.start_server(origin_handler, "127.0.0.1", 0)
+            relay = MeteredRelay(ledger, "account", "period-1",
+                                 origin.sockets[0].getsockname()[1],
+                                 chunk_bytes=4, io_timeout=1.0)
+            serve = asyncio.create_task(relay.serve(0))
+            writer: asyncio.StreamWriter | None = None
+            original_sendall = loop.sock_sendall
+            original_call_later = loop.call_later
+            original_prepare = ledger.prepare
+
+            def controlled_call_later(delay: float, callback: Callable[..., object],
+                                      *args: object, **kwargs: object) -> object:
+                if fire_previous_idle and getattr(callback, "__name__", "") == "expire_idle":
+                    timer = ManualIdleTimer(callback)
+                    idle_timers.append(timer)
+                    return timer
+                return original_call_later(delay, callback, *args, **kwargs)
+
+            async def controlled_send(sock: socket.socket, data: bytes) -> None:
+                if data == b"hold":
+                    held_send_started.set()
+                    await release_held_send.wait()
+                await original_sendall(sock, data)
+
+            def observe_prepare(*args: object) -> object:
+                permit = original_prepare(*args)
+                if args[3] == "down":
+                    observed_grants.append(None if permit is None else permit.granted_bytes)
+                    down_prepared.set()
+                return permit
+
+            async def balance_reaches(actual: int, held: int) -> None:
+                deadline = loop.time() + 1.5
+                while loop.time() < deadline:
+                    balance = ledger.snapshot("account", "period-1")
+                    if (balance.actual_bytes, balance.held_bytes) == (actual, held):
+                        return
+                    await asyncio.sleep(0.01)
+                self.fail(f"expected actual={actual}, held={held}; got {balance}")
+
+            async def origin_receives(expected: bytes) -> None:
+                deadline = loop.time() + 1.5
+                while loop.time() < deadline and bytes(origin_received) != expected:
+                    await asyncio.sleep(0.01)
+                self.assertEqual(bytes(origin_received), expected)
+
+            try:
+                with patch.object(loop, "call_later", new=controlled_call_later), \
+                     patch.object(loop, "sock_sendall", new=controlled_send), \
+                     patch.object(ledger, "prepare", new=observe_prepare):
+                    for _ in range(150):
+                        if relay.listener is not None:
+                            break
+                        await asyncio.sleep(0.01)
+                    self.assertIsNotNone(relay.listener)
+                    client_reader, writer = await asyncio.open_connection(
+                        "127.0.0.1", relay.listener.getsockname()[1])
+                    if initial:
+                        writer.write(initial)
+                        await writer.drain()
+                        await balance_reaches(len(initial), 0)
+                        if fire_previous_idle:
+                            self.assertGreaterEqual(len(idle_timers), 2)
+                            previous_idle = idle_timers[-1]
+                    writer.write(b"hold")
+                    await writer.drain()
+                    await asyncio.wait_for(held_send_started.wait(), 1.5)
+                    await balance_reaches(len(initial), 4)
+                    send_down.set()
+                    await asyncio.wait_for(down_prepared.wait(), 1.5)
+                    self.assertEqual(observed_grants, [down_grant])
+                    if down_grant is not None:
+                        self.assertEqual(await asyncio.wait_for(
+                            client_reader.readexactly(down_grant), 1.5),
+                            b"down"[:down_grant])
+                        await balance_reaches(down_grant, 4)
+                    # The timer scheduled before this PREPARE must be canceled.
+                    # Firing it would cancel an otherwise valid held permit.
+                    if fire_previous_idle:
+                        self.assertFalse(previous_idle.fire())
+                    else:
+                        # Let the denied direction finish its close decision.
+                        await asyncio.sleep(0.2)
+                    release_held_send.set()
+                    await balance_reaches(quota, 0)
+                    await origin_receives(initial + b"hold")
+                    self.assertEqual(ledger.snapshot("account", "period-1").uncertain_bytes, 0)
+            finally:
+                release_held_send.set()
+                if writer is not None:
+                    writer.close()
+                    await writer.wait_closed()
+                serve.cancel()
+                await asyncio.gather(serve, return_exceptions=True)
+                origin.close()
+                await origin.wait_closed()
+
+    async def test_zero_remaining_does_not_cancel_other_direction_permit(self) -> None:
+        await self._exercise_existing_permit(8, b"init", None)
+
+    async def test_partial_grant_does_not_cancel_other_direction_permit(self) -> None:
+        await self._exercise_existing_permit(6, b"", 2)
+
+    async def test_prepare_cancels_previous_idle_deadline(self) -> None:
+        await self._exercise_existing_permit(8, b"init", None, fire_previous_idle=True)
 
 
 if __name__ == "__main__":

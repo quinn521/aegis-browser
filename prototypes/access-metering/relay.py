@@ -36,8 +36,9 @@ class MeteredRelay:
     async def _pipe(self, source: socket.socket, destination: socket.socket,
                     stream_id: str, direction: str,
                     note_activity: Callable[[], None],
-                    exhausted: asyncio.Future[None]) -> bool:
-        """Return True when the whole connection must stop (quota or failure)."""
+                    exhausted: asyncio.Future[None],
+                    live_permits: set[str]) -> bool:
+        """Return True for whole-connection failure; False ends only this direction."""
         loop = asyncio.get_running_loop()
         sequence = 0
         try:
@@ -54,7 +55,12 @@ class MeteredRelay:
                     self.account_id, self.period_id, stream_id, direction,
                     sequence, secrets.token_hex(16), len(data))
                 if permit is None:
-                    return True
+                    # Only a permit on this connection can still make progress.
+                    return not live_permits
+                live_permits.add(permit.permit_id)
+                # Give a durable permit a full idle interval to finish its
+                # bounded send, even when PREPARE begins near the idle deadline.
+                note_activity()
                 if self.pause_marker is not None:
                     # Fault injection: the marker is written only after durable PREPARE.
                     self.pause_marker.write_text(permit.permit_id, encoding="ascii")
@@ -68,6 +74,7 @@ class MeteredRelay:
                     self.pause_after_send_marker.write_text(permit.permit_id, encoding="ascii")
                     await asyncio.wait_for(asyncio.Event().wait(), 30.0)
                 self.ledger.complete(permit.permit_id, permit.granted_bytes)
+                live_permits.remove(permit.permit_id)
                 note_activity()
                 # A zero remaining balance can include another direction's
                 # pending permit. Let that permit settle before closing.
@@ -77,7 +84,7 @@ class MeteredRelay:
                         exhausted.set_result(None)
                     return True
                 if permit.granted_bytes < len(data):
-                    return True
+                    return not live_permits
         except (LedgerError, OSError, TimeoutError) as error:
             print(f"relay closed {direction}: {error}", file=sys.stderr, flush=True)
             # If sendall or COMPLETE failed, the full durable permit stays held.
@@ -94,6 +101,7 @@ class MeteredRelay:
         stream_id = secrets.token_hex(16)
         connect_task: asyncio.Task[None] | None = None
         tasks: set[asyncio.Task[bool]] = set()
+        live_permits: set[str] = set()
         idle: asyncio.Future[None] | None = None
         idle_handle: asyncio.TimerHandle | None = None
         try:
@@ -122,8 +130,10 @@ class MeteredRelay:
                 idle_handle.cancel()
                 idle_handle = loop.call_later(self.io_timeout, expire_idle)
 
-            up = asyncio.create_task(self._pipe(client, origin, stream_id, "up", note_activity, exhausted))
-            down = asyncio.create_task(self._pipe(origin, client, stream_id, "down", note_activity, exhausted))
+            up = asyncio.create_task(self._pipe(client, origin, stream_id, "up", note_activity,
+                                                exhausted, live_permits))
+            down = asyncio.create_task(self._pipe(origin, client, stream_id, "down", note_activity,
+                                                  exhausted, live_permits))
             tasks = {up, down}
             active_pipes = {up, down}
             while active_pipes:
