@@ -1,12 +1,12 @@
 # W1b/W1c 接口与验收准备交接
 
-日期：2026-09-26。核对基线 `origin/develop=64b5f605511d199a53da2442f62e8899eb8a8718`。本交接是 [W1a 设计](w1a-request-routing-design.zh-CN.md)与 [W1a 可执行模型](w1a-fixtures/README.md)之后的增量清单；下文的拟新增接口和测试 ID 均未进入生产代码。冻结行为以 [规范修订 4](spec.zh-CN.md)为准，执行顺序以 [开发计划](development-plan.zh-CN.md)为准。
+日期：2026-09-26。核对基线 `origin/develop=edd02853f65ab6a089defac29fd5c73c3cbbdeed`。本交接是 [W1a 设计](w1a-request-routing-design.zh-CN.md)与 [W1a 可执行模型](w1a-fixtures/README.md)之后的增量清单；下文的拟新增接口和测试 ID 均未进入生产代码。冻结行为以 [规范修订 4](spec.zh-CN.md)为准，执行顺序以 [开发计划](development-plan.zh-CN.md)为准。
 
 ## 前置门与本轮边界
 
-[W0 质量交接](QUALITY-HANDOFF.md)已记录选定固定 Chromium 矩阵的通过范围，也明确保留生产 MHTML 默认 factory 终态、relay watchdog/取消、完整缓存/BFCache/prerender BLOCK、性能和发布覆盖缺口。因此，**W0 未被该矩阵整体关闭，G0 仍为 `UNVERIFIED`**。Q 的后续候选、Review 和 CI 必须按其最终 SHA 重新回读；本交接不据 Draft PR 或历史回执放行 W1b/W1c。这里不修改 overlay、patch、GN、Xray、Network Service 或验收追踪表，亦不操作 Q 的源码、`out` 或锁。
+[W0 质量交接](QUALITY-HANDOFF.md)记录了原有矩阵和 #187 新增的 relay 取消/watchdog、缓存 REJECT、已提交 MHTML 预取早拒绝回归。#187 已合并到 develop，实际 `S=edd02853f65ab6a089defac29fd5c73c3cbbdeed`；其 [develop push run 36238830929/1](https://github.com/quinn521/aegis-browser/actions/runs/36238830929) 已按 S 验证通过，Q/I 的最终候选审查与固定 Chromium 回执关闭**有界 W0 底座工程**。这不证明生产 MHTML 默认 factory 回调的普遍终态、完整 BFCache/prerender BLOCK、性能、双 Profile/双出口、真实服务或分发；**G0 仍为 `UNVERIFIED`，131 个 A/PF 主行仍未逐项验收**。本交接不修改 overlay、patch、GN、Xray、Network Service 或验收追踪表，亦不操作 Q 的源码、`out` 或锁。
 
-进入任何 W1b/W1c 生产切片前，I/Q 需给出 W0 必需范围已闭合的明确回执，列出剩余项的结论、精确候选源码、真实入口矩阵、退出码和 `sourceStable=true`。随后每个 `feat(...)` PR 在最终 HEAD 同时执行新增逻辑的 unit 和至少一项真实入口 regression；[DEV CI 指南](../../development/ci.zh-CN.md)的本地全门、独立 Review、托管检查及适用固定 Chromium 证据分别核验。模型通过或本文完成均不改变 131 个 A/PF 主行的状态。
+有界 W0 底座已退出前置队列；W1b/W1c 可以按本清单开始生产切片，但它们自己的接口、真实流量和认证验收仍须分别完成。每个 `feat(...)` PR 在最终 HEAD 同时执行新增逻辑的 unit 和至少一项真实入口 regression；[DEV CI 指南](../../development/ci.zh-CN.md)的本地全门、独立 Review、托管检查及适用固定 Chromium 证据分别核验。模型通过或本文完成均不改变 G0 和 131 个 A/PF 主行的状态。
 
 ## 当前调用链与待实现的最小接口
 
@@ -50,17 +50,17 @@ node --test docs/plans/access-service-v1.0/w1a-fixtures/model.test.mjs
 
 只记录 `CONTRACT_MODEL_ONLY`；输出中的 `native/browser/authNetwork=NOT_RUN` 必须保留。两个入口会覆盖相同模型，不能相加为两套独立证据。fixture 只接受模型中的 IPv4 endpoint；即时 pre-ACK BLOCK、durable commit、既有流终止、真实缓存、Mojo 信任边界及实际认证均未被模拟。
 
-### W0 关闭且生产测试加入后的运行门
+### 生产测试加入后的运行门
 
 实现者先在隔离固定 Chromium 候选中完成源码准入，记录 Chromium/V8 pins、顺序 patch、overlay、GN args、工具与二进制 hash，并确认源码/产物未被其他任务修改。现有 `scripts/dev/chromium_access_gtests.py` 可运行 17 个 Access native targets，`--target` 选跑会标为 `PARTIAL_PASS`，不能冒充完整矩阵。新 native 用例须接入对应 GN target；浏览器用例须接入实际 `browser_tests`/适用 Content target。下面的 `AccessW1*` 名称是拟议 suite，**当前不存在**；未枚举到测试时立即停止，不能用零匹配退出码作 PASS。
 
 ```sh
-# 仅在 W0 前置满足、Q 释放候选且 F 获得独立固定源码/out 后运行。
+# 仅在 Q 释放重型资源且 F 获得独立固定源码/out 后运行。
 set -euo pipefail
 export CHROMIUM_ROOT="<isolated-fixed-chromium-root>"
 export W1_OUT="$CHROMIUM_ROOT/src/out/<isolated-w1-output>"
 export W1_EVIDENCE="<external-evidence-directory>"
-python3 scripts/dev/chromium_access_gtests.py \
+python3 -B scripts/dev/chromium_access_gtests.py \
   --out "$W1_OUT" --report-dir "$W1_EVIDENCE/native"
 test -x "$W1_OUT/browser_tests"
 test ! -e "$W1_EVIDENCE/browser-summary.json"  # 每轮使用新的证据目录
@@ -74,7 +74,7 @@ test ! -e "$W1_EVIDENCE/browser-summary.json"  # 每轮使用新的证据目录
   --test-launcher-total-shards=1 --test-launcher-shard-index=0 \
   --test-launcher-summary-output="$W1_EVIDENCE/browser-summary.json" \
   > "$W1_EVIDENCE/browser.log" 2>&1
-python3 - "$W1_EVIDENCE/browser-list.txt" "$W1_EVIDENCE/browser-summary.json" <<'PY'
+python3 -B - "$W1_EVIDENCE/browser-list.txt" "$W1_EVIDENCE/browser-summary.json" <<'PY'
 from pathlib import Path
 import sys
 from scripts.dev.chromium_access_gtests import gtest_names, runtime_test_count
@@ -92,7 +92,7 @@ print(f"W1 browser tests: {runtime_test_count(Path(sys.argv[2]), enabled)} PASS"
 PY
 ```
 
-这是未来候选的调用模板，变量值须由该候选的 owner 填写，实际 suite 名随实现同步修订。校验复用原生 runner 的清单/运行摘要规则：每个必需 suite 至少有一项启用用例，运行摘要必须与完整启用清单一致、恰好执行一次且成功；`GTEST_SKIP()` 在 `result_parts` 中留下的跳过也会被拒绝。`browser_tests` 是否足以覆盖该候选的 Content/Network Service 边界，需根据 GN 枚举加跑适用目标；不得删减 W0 原有必需目标。测试列表、真实匹配数、失败/退出码、源码前后稳定性、产物及受控代理配置 hash 必须一并保存。负路径须与同产物健康正对照关联；不能以模型、helper 或仅编译成功替代真实入口。最终 HEAD 变化后重跑受影响层级、独立 Review 和托管检查，按 B/H/M/S 各自身份报告。
+这是未来候选的调用模板，变量值须由该候选的 owner 填写，实际 suite 名随实现同步修订。`python3 -B` 防止内嵌校验导入仓库 runner 时在源码树生成 `__pycache__`。校验复用原生 runner 的清单/运行摘要规则：每个必需 suite 至少有一项启用用例，运行摘要必须与完整启用清单一致、恰好执行一次且成功；`GTEST_SKIP()` 在 `result_parts` 中留下的跳过也会被拒绝。`browser_tests` 是否足以覆盖该候选的 Content/Network Service 边界，需根据 GN 枚举加跑适用目标；不得删减 W0 原有必需目标。测试列表、真实匹配数、失败/退出码、源码前后稳定性、产物及受控代理配置 hash 必须一并保存。负路径须与同产物健康正对照关联；不能以模型、helper 或仅编译成功替代真实入口。最终 HEAD 变化后重跑受影响层级、独立 Review 和托管检查，按 B/H/M/S 各自身份报告。
 
 ## 交接结论
 
