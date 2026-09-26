@@ -14,7 +14,7 @@
 | 独立 Review | 同一最终 B/H/M 的 Astra/high 原始回执 `.artifacts/ci/pr177-final-independent-review.md`：CLEAR，未发现未关闭的确定 P1/P2，覆盖边界以原文为准 |
 | develop 实际推送 | S 的 CI run `36039414436` attempt 1 quality/quality-gate SUCCESS、C++ run `36039414451` attempt 1 SUCCESS；推送报告 `quality-evidence-36039414436-1` 的 testedSha=S、sourceStable=true |
 
-上述 Chromium 回执位于 `/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/evidence/`，本地质量及 Review 回执位于产品工作树的 `.artifacts/ci/`；它们均非 Git 提交内容，换机器须取得原始回执。原生构建使用记录中的 macOS 26.5 SDK / bundled LLD 本机参数变体。MHTML 普通分支用计数替代终端；relay watchdog/取消、完整缓存/BFCache/prerender BLOCK、性能与发布范围仍有独立覆盖缺口。故这里关闭的是 #177 已声明代码与测试证据审查，不把 W0/G0、131 个主行或其他候选判为已验收。
+上述 Chromium 回执位于 `/Volumes/ExternalSSD/repositories/aegis-chromium-w0-20260924/evidence/`，本地质量及 Review 回执位于产品工作树的 `.artifacts/ci/`；它们均非 Git 提交内容，换机器须取得原始回执。原生构建使用记录中的 macOS 26.5 SDK / bundled LLD 本机参数变体。MHTML 用例以带请求计数的 `TestURLLoaderFactory` 替代生产 `NotImplementedURLLoaderFactory`；它等待替身终态并断言 `ERR_NOT_IMPLEMENTED` 和请求计数，但未观察生产默认 factory 的真实终态回调（该默认 factory 在 DCHECK 下会触发 fatal）。relay watchdog/取消、完整缓存/BFCache/prerender BLOCK、性能与发布范围仍有独立覆盖缺口。故这里关闭的是 #177 已声明代码与测试证据审查，不把 W0/G0、131 个主行或其他候选判为已验收。
 
 ## PR #24 晋升及 #181 回流后的同产品树补充验证（2026-09-25）
 
@@ -29,7 +29,7 @@ develop 回流提交 `D=2b23b2c18541b5176d0354dfa128cd6bc21f02ab` 的 tree 为 `
 | 聚焦回归 | policy-first `data:` 导航 2/2 PASS（`published-data-s-attempt1/result.json`，SHA-256 `df92167f77498e5edc5006705bbafbc4061dd00e9038b24e1c8020405f2e2772`）；inline 文档 4/4 PASS（`inline-s-attempt1/result.json`，SHA-256 `0b0c43181e43fe023f0004866042d17aca9bf7998ea64757ae53094125ce0a2a`）；均 `sourceStable=true`。 |
 | develop 托管质量门 | D 的 push run `36089419885` attempt 1 中 `quality` 与 `quality-gate` SUCCESS；artifact `quality-evidence-36089419885-1`（id `10845305960`）报告 `result=PASS`、`testedSha=D`、`testedTree=126e0d3`、`sourceStable=true`、`nativeIntegration=REQUIRED`。独立 C++ push run `36089419763` SUCCESS。 |
 
-这组回执补强了同 tree 下的 W0 选定范围：17/181 Access 原生、62 项 Chrome Access、6 项 Content，以及 `data:`、inline 文档和真实 `PrefetchManager::Start` 入口回归。它仍未覆盖 relay watchdog 到期/调用方取消、MHTML 普通分支的终端结果、完整 HTTP 缓存/BFCache/prerender BLOCK、性能和发布矩阵；W0 的这些剩余项须继续单独验收。当前没有固定 Chromium 进程；S/D 对应的新证据根无锁。遗留 PR23 证据根保留旧锁标记，原 owner 进程已不在，所有权未确认前不得清理或复用。
+这组回执补强了同 tree 下的 W0 选定范围：17/181 Access 原生、62 项 Chrome Access、6 项 Content，以及 `data:`、inline 文档和真实 `PrefetchManager::Start` 入口回归。Content 的 `HttpMhtmlSubframePrefetchKeepsRestrictedDefault` 已实际通过，但使用上述 `TestURLLoaderFactory` 替身；生产 MHTML 默认 factory 的终态回调仍未观察。其他未覆盖项包括 relay watchdog 到期/调用方取消、完整 HTTP 缓存/BFCache/prerender BLOCK、性能和发布矩阵；W0 的这些剩余项须继续单独验收。当前没有固定 Chromium 进程；S/D 对应的新证据根无锁。遗留 PR23 证据根保留旧锁标记，原 owner 进程已不在，所有权未确认前不得清理或复用。
 
 G0 仍为 `UNVERIFIED`：同树矩阵不是两 Profile 的真实多策略/双出口、HTTP/SOCKS5 认证或 Network Service 重启与真实服务流量证明。验收追踪表中的 131 个 A/PF 主行仍为 `NOT_EVALUATED`；同 tree 回执只能补充局部测试映射，不能将主行升级为 PASS。要声称 D 的 Chromium 运行通过，仍需在 D 精确提交身份上生成独立准入和运行回执。
 
