@@ -313,6 +313,12 @@ std::unique_ptr<net::test_server::HttpResponse> CountAndReply(
   counter->fetch_add(1, std::memory_order_relaxed);
   auto response = std::make_unique<net::test_server::BasicHttpResponse>();
   response->set_code(net::HTTP_OK);
+  if (request.GetURL().path() == "/cacheable-resource") {
+    response->AddCustomHeader("Cache-Control", "public, max-age=3600");
+    response->set_content("origin-cache");
+    response->set_content_type("text/plain");
+    return response;
+  }
   if (request.relative_url.find("/startup-prefetch-page") !=
       std::string::npos) {
     response->set_content(
@@ -2442,6 +2448,49 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
     return proxy_requests_.load(std::memory_order_relaxed) == 1u;
   }));
   EXPECT_EQ(origin_requests_.load(std::memory_order_relaxed), 0u);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                       RejectPolicyBlocksCachedSubresourceDelivery) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), worker_page_url()));
+  const GURL cached_url =
+      target_origin_.GetURL(kTargetHost, "/cacheable-resource?block-after-hit");
+  auto fetch_body = [&](const GURL& url) {
+    return content::EvalJs(
+               web_contents(),
+               content::JsReplace(
+                   "fetch($1, {cache: 'force-cache'})"
+                   ".then(response => response.text())"
+                   ".catch(() => 'blocked')",
+                   url.spec()))
+        .ExtractString();
+  };
+
+  const size_t origin_before = origin_requests_.load(std::memory_order_relaxed);
+  const size_t proxy_before = proxy_requests_.load(std::memory_order_relaxed);
+  ASSERT_EQ(fetch_body(cached_url), "origin-cache");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+  ASSERT_EQ(fetch_body(cached_url), "origin-cache");
+  ExpectRoutingDelta(origin_before, proxy_before, /*origin_delta=*/1u,
+                     /*proxy_delta=*/0u);
+
+  PublishRejectPolicy();
+  const size_t blocked_origin_before =
+      origin_requests_.load(std::memory_order_relaxed);
+  const size_t blocked_proxy_before =
+      proxy_requests_.load(std::memory_order_relaxed);
+  EXPECT_EQ(fetch_body(cached_url), "blocked");
+  ExpectRoutingDelta(blocked_origin_before, blocked_proxy_before,
+                     /*origin_delta=*/0u, /*proxy_delta=*/0u);
+
+  // A fresh unmatched destination must still work, proving the observation
+  // path is healthy after REJECT publication.
+  const GURL healthy_url = target_origin_.GetURL(
+      kUnselectedRedirectHost, "/cacheable-resource?unmatched-health");
+  EXPECT_TRUE(Fetch(healthy_url));
+  ExpectRoutingDelta(blocked_origin_before, blocked_proxy_before,
+                     /*origin_delta=*/1u, /*proxy_delta=*/0u);
 }
 
 IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
