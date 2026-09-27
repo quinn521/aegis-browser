@@ -8,21 +8,55 @@
 
 本地只读资源登记中的 `TEST-PAGES-20260926` 是 VLESS + WS + TLS 候选，未显示 Vision `flow`、Linux/Xray 部署或权威字节计数点。该节点按用户要求保留为**相关开发完成后回测的 TODO**，此阶段不发测试流量；它不承担 W2 REALITY/Vision 计量验收。资源原图和脱敏记录保留在本机，不能进入公开仓库。
 
-## 双逻辑节点夹具的拟定决策
+## 本地状态机合同（修订候选）
 
-1. **另设租约状态机，不改现有 relay 的口径。** 两个逻辑节点使用不同 `nodeId`、`counterSessionId` 和各自的持久本地 journal，中心共享一个持久账本。仍以有限测试账户、固定 `periodId` 和整数目标连接双向字节为输入；节点名称和 Profile 名称只是 fixture 标签，不代表已鉴权身份。每次模拟使用额度前，节点先把该部分预算的本地占用写入 journal；崩溃窗口只能留下不确定量，不能重发同一预算。
-2. **中心先预留再授权。** 一次原子事务检查当前账户、周期和 `actual + held + 新租约字节 ≤ quota`，生成唯一 `leaseId`、节点代次 `epoch`、有限 `budgetBytes` 和截止时间。两个节点并发请求只能分享同一余额；没有中心确认、租约到期或代次被围栏后，不得新增模拟转发许可。首次实现使用可控时钟和固定小额预算，不确定真实 lease 大小/TTL。
-3. **报告累计水位，单调结算。** 每条 `NodeUsageRecord` 带 `leaseId`、`nodeId`、`counterSessionId`、`periodId`、`accountingVersion`、单调 `sequence` 与累计 `uplink/downlink`。中心只把相对已接受水位的非负增量从 `held` 移到 `actual`，且累计值不得超过该租约预算。完全相同的重发无新扣减；较旧且未接受的序号无新扣减；已接受的同序号不同内容、计数回退、跨节点/周期/版本的记录拒绝。允许序号跳跃但要求累计值单调，因为累计水位可覆盖漏掉的中间报告；持久保存已接受序号与内容摘要以识别冲突重发。
-4. **失联与重启保守处理。** 截止时间只停止继续使用租约，**不**自动返还未报告余额。旧租约保持 `held`，并把未能证明的部分标成 `uncertain`；节点重启后向中心领取新 epoch 和新 lease，开启新计数会话，不能清零旧用量或借旧 lease 再领。中心失联时重启节点不能自行换代。最小夹具不实现未使用余额回收；日后只有经验证的最终结算/失效证据，才可单独设计释放流程。中心故障时允许未重启节点仅在本地仍有效且 journal 证明尚有余额的租约内继续，无法持久证明的发送窗口仍按不确定量呈现，不能报告精确已消费。
-5. **周期隔离。** 最小夹具在旧周期有未决租约时拒绝 rollover；旧周期报告先结算到旧周期，绝不覆盖新周期余额/水位。增加额度只能由中心显式更新权益/预算，不能由切节点触发。
+仅使用有限测试账户、两个逻辑 `nodeId`、各自独立的 SQLite journal、一个中心 SQLite 账本和注入的可控时钟。账户/Profile/node 名称只是 fixture 标签，不等于服务端鉴权。使用代理解封装后目标连接的双向整数 byte 作为**模拟**计量口径；现有单 relay 保持独立。`accountingVersion` 在本夹具固定为 `fixture-target-bytes-v1`，真实部署的版本和计数点仍待绑定。
+
+### 1. 身份、重试与预留
+
+`start_session(accountId, periodId, nodeId, bootRequestId)` 的幂等键是操作类型加**全库唯一**的 `bootRequestId`；`grant(accountId, periodId, nodeId, counterSessionId, epoch, grantRequestId, requestedBytes)` 同理使用全库唯一的 `grantRequestId`。键和全部参数的规范化摘要、返回结果、生成的 epoch/session 或 lease/部分授权 byte，以及中心状态变更，均在同一个 `BEGIN IMMEDIATE` 事务提交。已有键同参数直接返回原结果，即使已到期、已换代或存储达到上限，也不续 TTL、不恢复旧 epoch、不重复预留；同键异参数拒绝。`requestedBytes` 为正且不超过 fixture 上限；额度仅剩一部分时保存实际部分授权，余额为 0 时保存明确拒绝结果。客户端丢失响应后必须重试原键，新请求要使用新键。
+
+中心对稳定主体 `(accountId, periodId, nodeId)` 持久保存最新 epoch。新 boot 键创建更高 epoch，并将该节点旧会话的未报告租约余额标为不确定；重试旧 boot 键只返回历史 epoch，不能改回当前值。授予新租约只接受当前 epoch/session。新 grant 的原子准入式为 `actual + held + granted ≤ quota`；不同节点请求在中心事务中串行，没有预设谁先得到完整额度。节点只有持久保存返回的 lease 后才能使用它。中心提交成功但响应或节点本地保存丢失，原 lease 仍占余额；重试原键可恢复同一结果。
+
+### 2. 旧节点、截止与本地 journal
+
+中心换代不能即时通知失联旧节点。旧节点若未获知围栏，在原租约截止前仍可能消耗**已经持久获准**的预算；中心继续保留该旧租约的 `held`，新会话只能申请账户余量。旧节点一旦从中心获知新 epoch，必须先把 `maxSeenEpoch` 持久写入本地 journal，再拒绝新的本地 PREPARE；它仍可报告旧租约已有的累计值供结算，不能用旧 epoch 再申请 grant。晚到的旧 grant 响应只包含原结果，不能降低 `maxSeenEpoch` 或清除已知围栏。需要立即停旧流的产品主张另需在线确认或数据面强制断连证据，本夹具不作该主张。
+
+节点在每次模拟发送前，先确认本地租约尚未截止且没有**已知**围栏，把 chunk 的方向和 byte 作为 PREPARE 持久写入本地 journal；紧接模拟发送前再检查时钟、围栏和预算。第二次检查失败时不发送，已预留 chunk 留在 journal 作为不确定量，不能自行返还或重用。发送后的本地 `COMPLETE` 与节点双向累计值在同一事务提交；只有该持久累计值能上报中心。重启打开原 journal：旧 PREPARE 不重发，已完成未上报的累计可以重报；没有中心确认的新 epoch/lease 时不继续发送。中心暂不可用但节点未重启时，只能在本地有效、未过期且 journal 证明尚有余额的旧租约内继续。截止时刻及之后停止新增 PREPARE/发送；截止、失联或换代绝不自动释放中心旧预留。
+
+### 3. 累计报告、边界与不确定量
+
+每条报告绑定 `leaseId/accountId/periodId/nodeId/counterSessionId/epoch/accountingVersion`，再带 `sequence/cumulativeUplink/cumulativeDownlink`。中心**先验证全部身份绑定和旧租约存在性**，再比较序号。每租约持久保存最后接受的序号、两向累计和最后记录摘要，存储为 O(1)：最新同序号同内容返回 ACK 和当前水位；最新同序号异内容拒绝；更旧序号一律返回 STALE 和当前水位，绝不增加用量，也不承诺检测其历史内容冲突。更高序号可跳号，但两向累计各自不得下降、合计不得超过该 lease 的授予额。节点把待发序号及其本地持久 `COMPLETE` 累计写入 journal，丢 ACK 后重报同一内容；ACK/STALE 中的水位不能补造本地消费、回退本地累计或释放本地 PREPARE。若中心水位高于节点持久累计，节点停止而不推断补账。
+
+中心在同一事务中保存水位、`actual` 增量、`held` 减量、`uncertain` 减量和报告结果；事务失败全部不变。`actual` 仅是中心已接受的节点持久 `COMPLETE` 累计，并非 origin 收到的权威字节。有效 lease 尚未上报的预算是 `held`，其中被中心明确获知为无法完整证明的剩余部分是 `uncertain`。中心仅在处理**已知换代**或显式 `expire_leases(now)` 时，把该 lease 未报告的余额标成 `uncertain`；普通只读 snapshot 不推断节点已崩溃，也不改变状态。节点崩溃但中心尚未获知时，余额仍为 `held`、`uncertain` 可为 0；重启换代或到期标记后成为不确定。后续合法旧租约累计报告按增量同时降低 `held` 和对应 `uncertain`。始终满足 `0 ≤ uncertain ≤ held`、`actual + held ≤ quota`。未报告余额没有自动失效回收路径。
+
+### 4. 周期与固定容量
+
+`rollover(accountId, oldPeriodId, newPeriodId, quota)` 与 grant 用同一中心事务锁串行；旧周期只要 `held > 0` 就拒绝。全部结算使 `held = 0` 后可切新周期；历史 `periodId` 永不复用。切换后，绑定旧租约的最新完全相同报告仍可得到 ACK，较旧报告得到 STALE，同号异内容拒绝；更高序号统一拒绝 `CLOSED_PERIOD`，以上均不能更改新周期余额。用量和权益增加只能由中心显式操作，切节点不重置。
+
+本夹具冻结上限：账户数 8、每账户周期数 8、会话 64、租约 64、boot/grant 键各 64、每节点 journal 记录 64、中心持久审计记录 256；所有外部 ID 的 UTF-8 长度最多 128 byte，单 chunk 最多 16 KiB，单 lease 最多 64 KiB，TTL 为正且在测试中固定。没有无界历史上报表；每租约仅保留最后水位/摘要。到任一上限时拒绝**新**会话、授权、PREPARE 或需新审计记录的状态变更，保留旧状态与已有请求键的只读幂等返回；不得为了腾位删除尚有效的键或未决租约。`MAX_*` 数值仅是可测试的 fixture 防护，不代表产品或 VPS 容量；持久审计满时不能把未完成结算冒充成功。
+
+### 5. 崩溃与事务窗口的明确观察
+
+下表每行从新的 `quota=4 B, lease=4 B` 数据库开始；先记录崩溃瞬间，再重开中心与节点数据库。中心尚未收到重启/到期通知时 `uncertain=0`；成功处理新 boot 后旧 lease 的未报告余额才转为 `uncertain=4`。`held` 在两个时点均不回涨或释放。
+
+| 注入位置 | 崩溃瞬间中心 `actual/held/uncertain` | 重开节点 journal 与后续动作 |
+| --- | --- | --- |
+| 中心 grant 已提交、节点保存 lease 前 | `0/4/0` | 无本地 lease；原 boot 下用相同 grant 键重试得原 lease；若改新 boot，旧 4 B 变不确定，不能重发旧预算 |
+| 本地 PREPARE 提交、模拟发送前 | `0/4/0` | 有未完成 PREPARE 4 B；不重发，受控 origin 收 0 B；新 boot 后中心 `0/4/4` |
+| 模拟发送后、本地 COMPLETE 提交前 | `0/4/0` | journal 仍只有 PREPARE；origin 可能收 4 B，无法精确恢复；新 boot 后中心 `0/4/4` |
+| 本地 COMPLETE 提交后、中心报告前 | `0/4/0` | journal 有已完成累计 4 B；新 boot 后先为 `0/4/4`，重报旧 lease 累计后为 `4/0/0` |
+| 中心累计结算提交后、ACK 到节点前 | `4/0/0` | journal 有已完成累计和待确认报告；重发同序号同内容仅获 ACK，中心仍 `4/0/0` |
+
+中心 grant/session/报告事务任一中途失败，在重开数据库后必须呈现全旧状态或全新状态；若失败发生在提交前，键、水位、审计与余额均无部分写入。节点 PREPARE/COMPLETE 事务失败也不能产生半条 journal 或半个累计；若发送已发生而 COMPLETE 失败，按上表第三行保留不确定量。普通只读 snapshot 不触发恢复或修改 `uncertain`。
 
 ## 最小实施与验证边界
 
-先新增独立的中心 `LeaseLedger` 和两个逻辑节点驱动，各用临时 SQLite 文件与可控时钟，不连接浏览器、Xray、外部代理或真实账户。保留现有 relay 与 21 项测试的语义；可复用其 `actual/held/uncertain` 术语，不把旧的每块 permit 当作跨节点 lease。实现前由服务端/账本负责人审查上面的状态机和字段归属。
+第一单元实现中心授权与有界幂等；第二单元实现节点 journal、可控时钟和围栏；第三单元实现累计上报、崩溃/重启与周期。建议分别放入 `prototypes/access-metering/lease_ledger.py`、`lease_node.py` 和 `test_lease_metering.py`，不改现有 relay 的计量语义。每项先用临时 SQLite 文件写失败单元测试，再实现；同一代码提交还需旧 relay 的额度/崩溃回归。初始测试独立新建数据库；串联测试明确继承前一步状态。两个并发 7 B 授权共享 10 B 账户时，只断言总授权 ≤10 B 和所有余额守恒，不硬编码哪个节点先拿 7 B。
 
-首个可审查代码单元需同时有单元与回归测试，至少覆盖：两节点并发授权的守恒式；同账户跨 Profile/节点切换额度连续；相同、乱序、跳序、冲突及越额累计报告；中心不可用时无新增授权；节点重启、租约到期后旧预留不回涨；旧周期记录不污染新周期；一个旧 relay 的额度/崩溃不变量仍通过。每个测试记录精确输入、中心状态及拒绝原因。上述均只证明本地状态机；不将测试映射为 A36/A37/A118、PF04/PF09 或 G0–G3 的真实 PASS。
+必须覆盖：boot/grant 响应丢失、并发同键重试、中心重启、部分授权旧键在到期/换代后的重试与异参数；离线旧节点与新 epoch 并存、重连、发送前到期和晚到旧响应；PREPARE 前、PREPARE 后发送前、发送后本地 COMPLETE 前、中心结算后 ACK 前四个崩溃窗口，重开数据库核对中心与节点状态，以及事务中途失败；错误 session 的旧序号、方向回退、乱序 STALE、越额；所有固定条数/长度上限到达并重启后仍 fail closed；`held > 0` 拒 rollover、全部结算后允许、旧报告不影响新周期，以及 rollover 与 grant 并发。每例记录输入、预期拒绝码和 `actual/held/uncertain/remaining`。这些仅是本地状态机证据，不把 A36/A37/A118、PF04/PF09 或 G0–G3 写成真实 PASS。
 
-本单元**暂不实现** RateLease、物理速率/突发、公平性、多 VPS、自动回收、网络/掉电等价、身份签发、真实数据面截断或 UI 推送。这些分别需要服务端适配、受控资源和冻结预算；PF09 不能从字节额度守恒推断。
+本单元暂不实现 RateLease、物理速率/突发、公平性、多 VPS、自动回收、网络/掉电等价、真实鉴权、Xray 数据面截断或 UI 推送。它们需要实际服务端适配、受控资源与冻结预算；PF09 不能从字节额度守恒推断。
 
 ## 真实实验仍缺的绑定
 
