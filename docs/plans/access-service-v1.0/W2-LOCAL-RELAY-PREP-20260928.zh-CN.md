@@ -17,7 +17,9 @@
 
 ## 有界终止与故障注入
 
-每个子进程及 socket 都有就绪、连接、空闲、marker 和回收超时；`finally` 关闭客户端、origin、监听器并等待子进程退出。任何错误、短写、超时、期限/围栏拒绝或额度耗尽都关闭受影响连接，不转 DIRECT、不回退到旧 lease。测试专用 marker 只在事务外暂停：`PREPARE` 提交后、单次 send 返回后；测试可在 marker 时 kill/restart，或原子改写临时整数时钟文件/写入新围栏再释放。测试专用中心失联开关只拒绝中心调用，属于故障注入，不模拟真实网络分区。所有 marker 路径由测试创建、等待有上限；不读取订阅或外部 URL。
+每个子进程及 socket 都有就绪、连接、空闲、marker 和回收超时；`finally` 关闭客户端、origin、监听器并等待子进程退出。数据面/节点 journal 错误、短写、超时、期限/围栏拒绝或额度耗尽关闭受影响连接，不转 DIRECT、不回退到旧 lease。**只有**测试失联 marker 在中心调用前抛出的专属 `CenterTemporarilyUnavailable` 属可继续的控制面错误：已有有效 lease 的进程保留原 pending 水位、不补造 ACK，继续处理下一个有界块；真实 `LeaseError`、身份/水位冲突、数据库损坏与节点 ACK 错误均锁住该 relay 的后续发送并关闭连接，不能按异常文字猜测为暂时失联。启动旧报告冲洗或新 boot/grant 时即使是该专属失联，也不开监听器。
+
+中心恢复后，在**下一块 PREPARE 之前**先重报 pending，再生成后续累计；若连接空闲，按至少 100 ms 的间隔尝试。每进程最多 32 次实际重报，达到上限就停止新发送、保留 pending 与 held；连接空闲截止和进程终止也会停止轮询。重试不持有 journal 事务、发送锁或 socket I/O 等待。一个 lease 同时最多有一条 pending；重报失败仍保留原记录。测试专用 marker 只在事务外暂停四处：`PREPARE` 提交后、单次 send 返回后、`COMPLETE` 提交后而中心报告前、中心报告已提交后而节点 ACK 前；各 marker 都在对应提交后、下一动作前，已释放 SQLite 事务和发送锁。测试可在 marker 时 kill/restart，或原子改写临时整数时钟文件/写入新围栏再释放。测试专用中心失联开关只拒绝中心调用，属于故障注入，不模拟真实网络分区。所有 marker 路径由测试创建、等待有上限；不读取订阅或外部 URL。
 
 ## 先写的测试输入和期望
 
@@ -30,5 +32,6 @@
 | PREPARE 后 kill relay；另例单次 send 返回并由 origin 确认收到后、COMPLETE 前 kill | 重开原 journal 不重发旧块；中心在获知新 boot 前 `actual=0,held=lease,uncertain=0`，新 boot 后旧未报告余额成为 uncertain；第二例 origin 可大于中心 actual，保留不确定量。 |
 | COMPLETE 后、中心报告前 kill；另例中心报告后、节点 ACK 前 kill | 重开重报旧 lease 的持久累计；中心最终只计一次，`actual` 不倒退、`held` 不回涨；origin 不再接收重复块。 |
 | 已获 lease 后启用中心失联，再传剩余合法块；重启时仍失联，随后恢复 | 在本地 lease/期限/围栏内可继续，报告 pending；无新授权或旧 session 复活。中心恢复后重报一次；超出已获预算的输入关闭，余额守恒。 |
+| 与上一项相同数据，但中心返回报告身份/水位冲突（非专属失联异常） | 锁住 relay 的后续发送并关闭连接；下次连接不再发 origin byte，pending 保留供诊断。不能把该错误归为可重试失联。 |
 
 断言除 `actual/held/uncertain/remaining` 外，还记录两个 origin 的收/发 byte、节点 `up/down/reserved`、chunk 状态、进程退出码和时间/阶段。模拟短写通过测试专用单次发送上限实现；正常路径仍调用真实非阻塞 socket syscall。若原设计无法在不持有网络等待锁的条件下实现上述复核和保守预留，先返回设计评审，不静默改成 `sock_sendall`。本批不做 RateLease、PF04/PF09 采样器或真实服务验收；截图 WS+TLS 回测仍为开发完成后的 TODO。
