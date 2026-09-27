@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
@@ -50,6 +51,8 @@ class NodeJournal:
         self.active_sessions: dict[tuple[str, str, str], str] = {}
         self.sent_chunks: set[str] = set()
         self.blocked_scopes: set[tuple[str, str, str]] = set()
+        self.blocked_all = False
+        self._send_lock = threading.RLock()
         try:
             flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY if create else os.O_RDONLY
             descriptor = os.open(self.path, flags | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -106,14 +109,14 @@ class NodeJournal:
             connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
+    def _transaction(self, *, run_fault_hook: bool = True) -> Iterator[sqlite3.Connection]:
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     self._check_database(connection)
                     yield connection
-                    if self.fail_before_commit is not None:
+                    if run_fault_hook and self.fail_before_commit is not None:
                         self.fail_before_commit()
                     connection.commit()
                 except BaseException:
@@ -145,7 +148,7 @@ class NodeJournal:
 
     def _usable(self, connection: sqlite3.Connection, lease: sqlite3.Row) -> None:
         scope = self._scope(lease)
-        if scope in self.blocked_scopes:
+        if self.blocked_all or scope in self.blocked_scopes:
             raise NodeError("fence not durably known")
         if self.active_sessions.get(scope) != lease["session_id"]:
             raise NodeError("inactive node session")
@@ -165,40 +168,52 @@ class NodeJournal:
         if session.node_id != self.node_id:
             raise NodeError("wrong node session")
         scope = session.account_id, session.period_id, session.node_id
-        with self._transaction() as connection:
-            if scope in self.blocked_scopes:
-                raise NodeError("blocked node scope")
-            old = connection.execute("SELECT * FROM sessions WHERE session_id=?",
-                                     (session.session_id,)).fetchone()
-            if old is not None and (old["account_id"], old["period_id"], old["node_id"],
-                                    old["epoch"]) != (*scope, session.epoch):
-                raise NodeError("conflicting local session")
-            if old is not None and self.active_sessions.get(scope) != session.session_id:
-                raise NodeError("reopened old session cannot send")
-            if session.epoch < self._fence(connection, scope):
-                raise NodeError("old epoch")
-            if old is None:
-                count = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-                if count >= MAX_JOURNAL_ROWS:
-                    raise NodeError("session journal capacity reached")
-                connection.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-                                   (session.session_id, *scope, session.epoch))
-            self._advance_fence(connection, scope, session.epoch)
-        self.active_sessions[scope] = session.session_id
+        with self._send_lock:
+            was_active = scope in self.active_sessions
+            try:
+                with self._transaction() as connection:
+                    if self.blocked_all or scope in self.blocked_scopes:
+                        raise NodeError("blocked node scope")
+                    old = connection.execute("SELECT * FROM sessions WHERE session_id=?",
+                                             (session.session_id,)).fetchone()
+                    if old is not None and (old["account_id"], old["period_id"],
+                                            old["node_id"], old["epoch"]) != (
+                                                *scope, session.epoch):
+                        raise NodeError("conflicting local session")
+                    if old is not None and self.active_sessions.get(scope) != session.session_id:
+                        raise NodeError("reopened old session cannot send")
+                    if session.epoch < self._fence(connection, scope):
+                        raise NodeError("old epoch")
+                    if old is None:
+                        count = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+                        if count >= MAX_JOURNAL_ROWS:
+                            raise NodeError("session journal capacity reached")
+                        connection.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
+                                           (session.session_id, *scope, session.epoch))
+                    self._advance_fence(connection, scope, session.epoch)
+            except BaseException:
+                if was_active:
+                    self.blocked_scopes.add(scope)
+                raise
+            self.active_sessions[scope] = session.session_id
 
     def learn_fence(self, account: str, period: str, node: str, epoch: int) -> None:
         scope = account, period, node
-        try:
-            if node != self.node_id:
-                raise NodeError("wrong fence owner")
-            for value, label in zip(scope, ("account", "period", "node")):
-                _name(value, label)
-            _integer(epoch, "epoch", 1)
-            with self._transaction() as connection:
-                self._advance_fence(connection, scope, epoch)
-        except BaseException:
-            self.blocked_scopes.add(scope)
-            raise
+        if node != self.node_id:
+            raise NodeError("wrong fence owner")
+        for value, label in zip(scope, ("account", "period", "node")):
+            _name(value, label)
+        with self._send_lock:
+            try:
+                _integer(epoch, "epoch", 1)
+                with self._transaction() as connection:
+                    self._advance_fence(connection, scope, epoch)
+            except BaseException:
+                if scope in self.active_sessions:
+                    self.blocked_scopes.add(scope)
+                else:
+                    self.blocked_all = True
+                raise
 
     def max_seen_epoch(self, account: str, period: str, node: str) -> int:
         with self._connection() as connection:
@@ -220,7 +235,7 @@ class NodeJournal:
             raise NodeError("wrong lease owner")
         with self._transaction() as connection:
             scope = lease.account_id, lease.period_id, lease.node_id
-            if scope in self.blocked_scopes or lease.epoch < self._fence(connection, scope):
+            if self.blocked_all or scope in self.blocked_scopes or lease.epoch < self._fence(connection, scope):
                 raise NodeError("known epoch fence")
             if self.active_sessions.get(scope) != lease.session_id:
                 raise NodeError("inactive node session")
@@ -271,17 +286,24 @@ class NodeJournal:
             return chunk_id
 
     def send(self, chunk_id: str, sink: Callable[[str, int], None]) -> None:
-        with self._transaction() as connection:
-            chunk = connection.execute("SELECT * FROM chunks WHERE chunk_id=?",
-                                       (chunk_id,)).fetchone()
-            if chunk is None or chunk["state"] != "PREPARED":
-                raise NodeError("chunk not ready to send")
-            lease = connection.execute("SELECT * FROM leases WHERE lease_id=?",
-                                       (chunk["lease_id"],)).fetchone()
-            self._usable(connection, lease)
-            connection.execute("UPDATE chunks SET state='SENDING' WHERE chunk_id=?", (chunk_id,))
-        sink(chunk["direction"], chunk["size"])
-        self.sent_chunks.add(chunk_id)
+        with self._send_lock:
+            with self._transaction() as connection:
+                chunk = connection.execute("SELECT * FROM chunks WHERE chunk_id=?",
+                                           (chunk_id,)).fetchone()
+                if chunk is None or chunk["state"] != "PREPARED":
+                    raise NodeError("chunk not ready to send")
+                lease = connection.execute("SELECT * FROM leases WHERE lease_id=?",
+                                           (chunk["lease_id"],)).fetchone()
+                self._usable(connection, lease)
+                connection.execute("UPDATE chunks SET state='SENDING' WHERE chunk_id=?", (chunk_id,))
+            # The durable transition may advance the clock. A second write lock keeps
+            # another journal handle from committing a fence before the simulated sink.
+            with self._transaction(run_fault_hook=False) as connection:
+                lease = connection.execute("SELECT * FROM leases WHERE lease_id=?",
+                                           (chunk["lease_id"],)).fetchone()
+                self._usable(connection, lease)
+                sink(chunk["direction"], chunk["size"])
+                self.sent_chunks.add(chunk_id)
 
     def complete(self, chunk_id: str) -> None:
         if chunk_id not in self.sent_chunks:

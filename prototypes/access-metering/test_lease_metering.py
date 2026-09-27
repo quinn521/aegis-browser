@@ -397,6 +397,22 @@ class NodeJournalTests(unittest.TestCase):
         with self.assertRaises(NodeError):
             self.node.prepare(self.lease.lease_id, "up", 1)
 
+    def test_failed_new_session_activation_blocks_old_prepared_and_new_sends(self) -> None:
+        prepared = self.node.prepare(self.lease.lease_id, "up", 1)
+        newer = self.center.start_session("acct", "p1", "A", "boot-next")
+        self.node.fail_before_commit = injected_failure
+        with self.assertRaisesRegex(RuntimeError, "injected"):
+            self.node.activate(newer)
+        self.node.fail_before_commit = None
+        received: list[tuple[str, int]] = []
+        with self.assertRaises(NodeError):
+            self.node.prepare(self.lease.lease_id, "up", 1)
+        with self.assertRaises(NodeError):
+            self.node.send(prepared, lambda direction, count: received.append((direction, count)))
+        self.assertEqual(received, [])
+        self.assertEqual(self.node.max_seen_epoch("acct", "p1", "A"), 1)
+        self.assertEqual(self.center.snapshot("acct", "p1").uncertain_bytes, 7)
+
     def test_failed_local_complete_keeps_chunk_unconfirmed_after_reopen(self) -> None:
         chunk = self.node.prepare(self.lease.lease_id, "up", 2)
         self.node.send(chunk, lambda direction, count: None)
@@ -487,6 +503,20 @@ class NodeJournalTests(unittest.TestCase):
         NodeJournal(missing, "A", self.clock.now, create=True)
         self.assertEqual(NodeJournal(missing, "A", self.clock.now).node_id, "A")
 
+    def test_expiry_during_sending_commit_prevents_sink(self) -> None:
+        prepared = self.node.prepare(self.lease.lease_id, "up", 1)
+        self.node.fail_before_commit = lambda: setattr(self.clock, "value", self.lease.expires_at)
+        received: list[tuple[str, int]] = []
+        with self.assertRaisesRegex(NodeError, "expired"):
+            self.node.send(prepared, lambda direction, count: received.append((direction, count)))
+        self.node.fail_before_commit = None
+        self.assertEqual(received, [])
+        self.assertEqual(self.node.local_balance(self.lease.lease_id), (0, 0, 1))
+        reopened = NodeJournal(self.path, "A", self.clock.now)
+        with self.assertRaises(NodeError):
+            reopened.send(prepared, lambda direction, count: received.append((direction, count)))
+        self.assertEqual(received, [])
+
     def test_prepare_failure_and_session_cap_fail_closed_after_reopen(self) -> None:
         self.node.fail_before_commit = injected_failure
         with self.assertRaisesRegex(RuntimeError, "injected"):
@@ -507,6 +537,20 @@ class NodeJournalTests(unittest.TestCase):
         self.assertEqual(reopened.max_seen_epoch("acct", "p1", "A"), 1)
         with self.assertRaisesRegex(NodeError, "capacity"):
             reopened.learn_fence("acct", "overflow", "A", 1)
+        self.assertTrue(reopened.blocked_all)
+        self.assertEqual(len(reopened.blocked_scopes), 0)
+
+    def test_rejected_fence_inputs_do_not_grow_failure_tracking(self) -> None:
+        for index in range(1000):
+            with self.assertRaises(LeaseError):
+                self.node.learn_fence("acct", "x" * 129 + str(index), "A", 2)
+        self.assertEqual(len(self.node.blocked_scopes), 0)
+        self.assertFalse(self.node.blocked_all)
+        with self.assertRaises(LeaseError):
+            self.node.learn_fence("acct", "p1", "A", 0)
+        self.assertEqual(len(self.node.blocked_scopes), 1)
+        with self.assertRaises(NodeError):
+            self.node.prepare(self.lease.lease_id, "up", 1)
 
     def test_node_rejects_oversized_session_and_lease_identifiers(self) -> None:
         with self.assertRaises(NodeError):
