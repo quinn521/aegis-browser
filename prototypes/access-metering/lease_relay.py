@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Callable
 
 from lease_ledger import Lease, LeaseError, LeaseLedger
-from lease_node import MAX_CHUNK_BYTES, MAX_NODE_LEASES, NodeError, NodeJournal
+from lease_node import (MAX_CHUNK_BYTES, MAX_NODE_LEASES, JournalStorageError,
+                        NodeError, NodeJournal)
 
 
 MAX_REPORT_RETRIES = 32
@@ -33,6 +34,7 @@ class LeaseRelay:
         self.lease: Lease | None = None
         self.fatal = False
         self.report_retries = 0
+        self.last_report_attempt: dict[str, int] = {}
         self.next_report_attempt = 0.0
 
     def _stop_sending(self) -> None:
@@ -55,15 +57,27 @@ class LeaseRelay:
                 raise TimeoutError(f"{stage} marker timed out")
             time.sleep(0.01)
 
-    def _flush_lease(self, lease_id: str) -> bool:
+    def _flush_lease(self, lease_id: str, *, replay_existing: bool = False) -> bool:
         """Return False only for the explicit temporary outage marker."""
         for _ in range(MAX_NODE_LEASES + 1):
-            record = self.node.pending_report(lease_id)
+            try:
+                record = self.node.pending_report(lease_id)
+            except NodeError:
+                self._stop_sending()
+                raise
             if record is None:
                 return True
+            retry = (replay_existing or
+                     self.last_report_attempt.get(lease_id) == record.sequence)
+            if retry and self.report_retries >= MAX_REPORT_RETRIES:
+                self._stop_sending()
+                raise NodeError("report retry limit reached")
             delay = self.next_report_attempt - time.monotonic()
             if delay > 0:
                 time.sleep(delay)
+            self.last_report_attempt[lease_id] = record.sequence
+            if retry:
+                self.report_retries += 1
             try:
                 if (self.args.report_conflict_marker is not None and
                         self.args.report_conflict_marker.exists()):
@@ -72,7 +86,6 @@ class LeaseRelay:
                 self._pause("reported")
                 self.node.ack(record, result)
             except CenterTemporarilyUnavailable:
-                self.report_retries += 1
                 self.next_report_attempt = time.monotonic() + REPORT_RETRY_INTERVAL
                 if self.report_retries >= MAX_REPORT_RETRIES:
                     self._stop_sending()
@@ -80,14 +93,16 @@ class LeaseRelay:
             except (LeaseError, NodeError):
                 self._stop_sending()
                 raise
-            self.report_retries = 0
             self.next_report_attempt = 0.0
+            if self.report_retries >= MAX_REPORT_RETRIES:
+                self._stop_sending()
+                raise NodeError("report retry limit reached")
         self._stop_sending()
         raise NodeError("report replay did not converge")
 
     def boot(self) -> None:
         for lease_id in self.node.lease_ids():
-            if not self._flush_lease(lease_id):
+            if not self._flush_lease(lease_id, replay_existing=True):
                 raise CenterTemporarilyUnavailable("old report not settled")
         boot_key = secrets.token_hex(16)
         session = self._center_call(self.center.start_session,
@@ -161,7 +176,7 @@ class LeaseRelay:
         except (CenterTemporarilyUnavailable, LeaseError, NodeError,
                 OSError, TimeoutError, ValueError) as error:
             print(f"lease relay closed: {error}", file=sys.stderr, flush=True)
-            if isinstance(error, (LeaseError, ValueError)):
+            if isinstance(error, (LeaseError, JournalStorageError, ValueError)):
                 self._stop_sending()
         finally:
             client.close()

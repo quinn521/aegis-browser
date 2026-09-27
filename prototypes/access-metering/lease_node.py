@@ -28,6 +28,10 @@ class NodeError(RuntimeError):
     """No simulated send may proceed without a durable local permit."""
 
 
+class JournalStorageError(NodeError):
+    """The journal cannot reliably prove or persist its accounting state."""
+
+
 def _node_valid(value: object, label: str, *, minimum: int | None = None,
                 maximum: int | None = None) -> None:
     try:
@@ -84,7 +88,7 @@ class NodeJournal:
                     connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 self._check_database(connection)
         except sqlite3.Error as error:
-            raise NodeError(f"journal unavailable: {error}") from error
+            raise JournalStorageError(f"journal unavailable: {error}") from error
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
@@ -101,11 +105,11 @@ class NodeJournal:
     @staticmethod
     def _check_database(connection: sqlite3.Connection) -> None:
         if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-            raise NodeError("journal integrity check failed")
+            raise JournalStorageError("journal integrity check failed")
         if connection.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
-            raise NodeError("unknown journal application id")
+            raise JournalStorageError("unknown journal application id")
         if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-            raise NodeError("unknown journal schema version")
+            raise JournalStorageError("unknown journal schema version")
         for table in ("fences", "sessions", "leases", "chunks", "pending"):
             connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
 
@@ -125,7 +129,7 @@ class NodeJournal:
                         connection.rollback()
                     raise
         except sqlite3.Error as error:
-            raise NodeError(f"journal unavailable: {error}") from error
+            raise JournalStorageError(f"journal unavailable: {error}") from error
 
     @staticmethod
     def _scope(row: sqlite3.Row) -> tuple[str, str, str]:

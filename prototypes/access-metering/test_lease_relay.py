@@ -11,9 +11,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from lease_ledger import LeaseLedger
-from lease_node import NodeJournal
+from lease_node import JournalStorageError, NodeError, NodeJournal
+from lease_relay import CenterTemporarilyUnavailable, LeaseRelay
 
 
 ROOT = Path(__file__).parent
@@ -360,6 +363,89 @@ class LeaseRelayProcessTests(unittest.TestCase):
         self.assertEqual(received, b"")
         self.assertEqual(self.counts(counts), (1, 0))
         self.assertEqual(center.snapshot("acct", "p1").actual_bytes, 0)
+
+
+class LeaseRelayFailureTests(unittest.TestCase):
+    @staticmethod
+    def relay() -> LeaseRelay:
+        relay = LeaseRelay.__new__(LeaseRelay)
+        relay.args = SimpleNamespace(fatal_marker=None, report_conflict_marker=None,
+                                     origin_port=1, io_timeout=1, chunk_bytes=4096)
+        relay.node = Mock()
+        relay.center = Mock()
+        relay.lease = SimpleNamespace(lease_id="lease")
+        relay.fatal = False
+        relay.report_retries = 0
+        relay.last_report_attempt = {}
+        relay.next_report_attempt = 0.0
+        relay._pause = Mock()
+        relay._center_call = Mock(return_value=object())
+        return relay
+
+    def test_pending_journal_error_latches_before_next_connection(self) -> None:
+        relay = self.relay()
+        relay.node.pending_report.side_effect = [NodeError("journal integrity"), None]
+        with self.assertRaises(NodeError):
+            relay._flush_lease("lease")
+        self.assertTrue(relay.fatal)
+        client, origin = Mock(spec=socket.socket), Mock(spec=socket.socket)
+        relay._transfer = Mock()
+        with patch("lease_relay.socket.create_connection", return_value=origin):
+            relay._client(client)
+        relay._transfer.assert_not_called()
+        relay.node.pending_report.assert_called_once_with("lease")
+        client.close.assert_called_once()
+        origin.close.assert_called_once()
+
+    def test_data_path_journal_storage_error_latches_relay(self) -> None:
+        relay = self.relay()
+        relay._flush_lease = Mock(return_value=True)
+        relay._transfer = Mock(side_effect=JournalStorageError("journal unavailable"))
+        client, origin = Mock(spec=socket.socket), Mock(spec=socket.socket)
+        client.recv.return_value = b"x"
+        with patch("lease_relay.socket.create_connection", return_value=origin), \
+             patch("lease_relay.select.select", return_value=([client], [], [])):
+            relay._client(client)
+        self.assertTrue(relay.fatal)
+        relay._transfer.reset_mock()
+        next_client, next_origin = Mock(spec=socket.socket), Mock(spec=socket.socket)
+        with patch("lease_relay.socket.create_connection", return_value=next_origin):
+            relay._client(next_client)
+        relay._transfer.assert_not_called()
+
+    def test_retry_cap_counts_successful_replays_across_recovery(self) -> None:
+        relay = self.relay()
+        pending = [None]
+        offline = [False]
+        relay.node.pending_report.side_effect = lambda _: pending[0]
+        relay.node.ack.side_effect = lambda *_: pending.__setitem__(0, None)
+
+        def center_call(*_args: object) -> object:
+            if offline[0]:
+                raise CenterTemporarilyUnavailable("test outage")
+            return object()
+
+        relay._center_call.side_effect = center_call
+        with patch("lease_relay.time.sleep"):
+            for sequence in range(1, 32):
+                pending[0] = SimpleNamespace(sequence=sequence)
+                offline[0] = True
+                self.assertFalse(relay._flush_lease("lease"))
+                offline[0] = False
+                self.assertTrue(relay._flush_lease("lease"))
+                self.assertFalse(relay.fatal)
+            self.assertEqual(relay.report_retries, 31)
+            pending[0] = SimpleNamespace(sequence=32)
+            offline[0] = True
+            self.assertFalse(relay._flush_lease("lease"))
+            self.assertFalse(relay._flush_lease("lease"))
+            self.assertEqual(relay.report_retries, 32)
+            self.assertTrue(relay.fatal)
+            self.assertEqual(pending[0].sequence, 32)
+            previous_attempts = relay._center_call.call_count
+            with self.assertRaises(NodeError):
+                relay._flush_lease("lease")
+            self.assertEqual(relay._center_call.call_count, previous_attempts)
 
 
 if __name__ == "__main__":
