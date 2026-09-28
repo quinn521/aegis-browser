@@ -80,15 +80,17 @@ def _unique(values: list[str], location: str) -> None:
         _reject(location, "duplicate identifier")
 
 
-def _no_sentinels(value: Any, location: str = "manifest") -> None:
+def _no_sentinels(value: Any, depth: int = 0) -> None:
+    if depth > 32:
+        _reject("manifest", "nesting limit exceeded")
     if type(value) is str and value.strip().casefold() in SENTINELS:
-        _reject(location, "unresolved placeholder")
+        _reject("manifest", "unresolved placeholder")
     if type(value) is dict:
-        for key, child in value.items():
-            _no_sentinels(child, f"{location}.{key}")
+        for child in value.values():
+            _no_sentinels(child, depth + 1)
     elif type(value) is list:
-        for index, child in enumerate(value):
-            _no_sentinels(child, f"{location}[{index}]")
+        for child in value:
+            _no_sentinels(child, depth + 1)
 
 
 def _resources(value: Any) -> dict[str, str]:
@@ -346,6 +348,8 @@ def read_manifest(path: Path) -> tuple[Any, str]:
                            parse_constant=_no_json_constant)
     except ManifestError:
         raise
+    except RecursionError as error:
+        raise ManifestError("manifest: excessive JSON nesting") from error
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ManifestError("manifest: invalid UTF-8 JSON") from error
     return value, hashlib.sha256(raw).hexdigest()

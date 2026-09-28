@@ -135,6 +135,28 @@ class SyntheticPreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestError, "local file unavailable"):
             read_manifest(self.path)
 
+    def test_deep_json_and_unknown_nested_keys_reject_without_echo(self) -> None:
+        self.path.write_text("[" * 1100 + "0" + "]" * 1100, encoding="ascii")
+        error = io.StringIO()
+        with redirect_stderr(error):
+            self.assertEqual(main(["--check-only", "--manifest", str(self.path)]), 2)
+        self.assertIn("LOCAL_PREFLIGHT_REJECTED", error.getvalue())
+        self.assertNotIn("RecursionError", error.getvalue())
+
+        nested: object = 0
+        for _ in range(40):
+            nested = [nested]
+        self.manifest["resources"]["nodeId"] = nested
+        self.reject("nesting limit exceeded")
+
+        self.manifest["resources"]["nodeId"] = {"synthetic-secret-key-marker": "TBD"}
+        self.path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        error = io.StringIO()
+        with redirect_stderr(error):
+            self.assertEqual(main(["--check-only", "--manifest", str(self.path)]), 2)
+        self.assertIn("unresolved placeholder", error.getvalue())
+        self.assertNotIn("synthetic-secret-key-marker", error.getvalue())
+
     def test_cli_rejects_real_resource_and_does_not_echo_input(self) -> None:
         self.manifest["resources"]["nodeId"] = "private-node.example"
         self.path.write_text(json.dumps(self.manifest), encoding="utf-8")
