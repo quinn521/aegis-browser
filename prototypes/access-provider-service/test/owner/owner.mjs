@@ -177,17 +177,26 @@ export class PhaseGate {
     catch(error){this.denied.push({action,reason:error instanceof OwnerError?error.code:'AUTHORITY_REJECTED'});throw error instanceof OwnerError?error:new OwnerError('OWNER_NOT_AUTHORIZED');}
   }
 }
+// Both the phase deadline and this command's cap begin before authorization.
+// The synchronous start callback is also the inert seam used by pure tests.
+export async function runAuthorizedCommand(owner,action,spec,{deadline,cleanup=false},start){
+  integer(spec.timeoutMs,1,CAPS.setupMs);
+  if(!Number.isFinite(deadline))refuse('OWNER_DEADLINE');
+  const end=Math.min(deadline,performance.now()+spec.timeoutMs);remainingMilliseconds(end,spec.timeoutMs);
+  await owner.gate.require(action);if(owner.signal.aborted&&!cleanup)refuse('OWNER_CANCELLED');
+  const timeoutMs=remainingMilliseconds(end,spec.timeoutMs);
+  return start({deadline:end,timeoutMs});
+}
 class Commands {
   children=new Set();sink=null;
   constructor(owner){this.owner=owner;}
-  async run(action,spec,{cleanup=false}={}){
-    await this.owner.gate.require(action);if(this.owner.signal.aborted&&!cleanup)refuse('OWNER_CANCELLED');
-    return new Promise((resolve,reject)=>{
+  async run(action,spec,{deadline,cleanup=false}){
+    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup},({deadline:end})=>new Promise((resolve,reject)=>{
       const child=spawn(spec.executable,spec.args,{env:spec.env,shell:false,stdio:['pipe','pipe','pipe']});
       const identity={child,action,spawnedAt:performance.now(),done:false};this.children.add(identity);
       let bytes=0,out=[],err=[],failure=null,killTimer,forceTimer;const maximum=2*MiB;
       const stop=code=>{failure??=new OwnerError(code);if(!identity.done){child.kill('SIGTERM');killTimer??=setTimeout(()=>{if(!identity.done)child.kill('SIGKILL');forceTimer=setTimeout(()=>{if(!identity.done)reject(new OwnerError('OWNER_CHILD_STOP_UNCONFIRMED'));},1000);},1000);}};
-      const abort=()=>stop('OWNER_CANCELLED'),timer=setTimeout(()=>stop('OWNER_COMMAND_DEADLINE'),spec.timeoutMs);
+      const abort=()=>stop('OWNER_CANCELLED'),timer=setTimeout(()=>stop('OWNER_COMMAND_DEADLINE'),Math.max(0,Math.floor(end-performance.now())));
       if(!cleanup)this.owner.signal.addEventListener('abort',abort,{once:true});
       const capture=(target,chunk)=>{bytes+=chunk.length;if(bytes>maximum){stop('OWNER_OUTPUT_LIMIT');return;}if(!spec.secret)target.push(chunk);};
       child.stdout.on('data',c=>capture(out,c));child.stderr.on('data',c=>capture(err,c));
@@ -199,7 +208,7 @@ class Commands {
         else resolve({stdout:Buffer.concat(out).toString('utf8'),stderr:Buffer.concat(err).toString('utf8')});
       });
       child.stdin.end(spec.stdin??undefined);if(this.owner.signal.aborted&&!cleanup)abort();
-    });
+    }));
   }
   stop(){for(const id of this.children)if(!id.done)id.child.kill('SIGTERM');}
 }
@@ -216,13 +225,14 @@ async function jsonFile(p){const s=await regular(p);if(s.size>2*MiB)refuse('OWNE
 const safeCode=e=>e instanceof OwnerError?e.code:'OWNER_OPERATION_FAILED';
 export class OwnerSupervisor {
   events=[];budget=new ConnectionBudget();owner=null;phase='new';proxy=null;
-  #controller=new AbortController();#setupStarted=null;#suiteTimer=null;#suiteDeadline=null;#secrets=null;#logDevice=null;#guestIdentity=null;#defaultState=null;#plan;#manifest;#commands;#bindingsFingerprint=null;#quotaProof=null;#executables={};
+  #controller=new AbortController();#setupDeadline=null;#suiteTimer=null;#suiteDeadline=null;#secrets=null;#logDevice=null;#guestIdentity=null;#defaultState=null;#plan;#manifest;#commands;#bindingsFingerprint=null;#quotaProof=null;#executables={};
   constructor({plan,manifest,authorize}){this.#plan=plan;this.#manifest=manifest;this.gate=new PhaseGate({runId:plan.runId,authorize});this.#commands=new Commands(this);}
   get plan(){return this.#plan;}get signal(){return this.#controller.signal;}
   get denied(){return [...this.gate.denied];}
   addEvent(event){if(this.events.length>=2048)this.events.shift();this.events.push(event);}
-  #remaining(){const n=this.#suiteDeadline!==null?this.#suiteDeadline-performance.now():CAPS.setupMs-(performance.now()-this.#setupStarted);if(n<=0)refuse('OWNER_SETUP_DEADLINE');return Math.floor(n);}
-  async #run(action,tool,args,options={}){return this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null,timeoutMs:Math.min(options.timeoutMs??30000,this.#remaining())}));}
+  #deadline(){const end=this.#suiteDeadline??this.#setupDeadline;if(end===null)refuse('OWNER_SETUP_DEADLINE');return end;}
+  #remaining(){const n=Math.floor(this.#deadline()-performance.now());if(n<1)refuse('OWNER_SETUP_DEADLINE');return n;}
+  async #run(action,tool,args,options={}){return this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null}),{deadline:this.#deadline()});}
   async #hostFree(){const p=this.#plan;const s=await fs.stat('/Volumes/ExternalSSD');if(!s.isDirectory()||await fs.realpath('/Volumes/ExternalSSD')!=='/Volumes/ExternalSSD'||await fs.realpath(p.worktree)!==p.worktree)refuse('OWNER_VOLUME');await fs.access(p.worktree,FC.W_OK);const v=await fs.statfs('/Volumes/ExternalSSD');return integer(v.bavail*v.bsize);}
   async #defaults(){
     const home=process.env.HOME;const paths=[home+'/.docker/config.json',home+'/.colima/default/colima.yaml',home+'/.ssh/config'];const state={};
@@ -231,13 +241,14 @@ export class OwnerSupervisor {
   }
   async preflight(){
     assertFixtureEnvironment();
-    await this.gate.require('preflight');if(this.phase!=='new')refuse('OWNER_PHASE');this.#setupStarted=performance.now();
+    const deadline=performance.now()+CAPS.setupMs;
+    await this.gate.require('preflight');if(this.phase!=='new')refuse('OWNER_PHASE');this.#setupDeadline=deadline;this.#remaining();
     if(process.versions.node!==PIN.node)refuse('OWNER_NODE_PIN');
     const free=await this.#hostFree();residualCapacity(free,100*GiB);
     const m=this.#manifest;if(!m||m.runId!==this.plan.runId)refuse('OWNER_MANIFEST');
     for(const [name,version] of [['colima',PIN.colima],['docker',PIN.docker],['pnpm',PIN.pnpm]]){
       const alias=command(this.plan,name,['--version']).executable;const executable=await resolveExecutable(alias,m.tools?.[name]);this.#executables[name]=executable;
-      const r=await this.#commands.run('preflight',command(this.plan,name,['--version'],{executable}));if(!r.stdout.includes(version))refuse('OWNER_TOOL_VERSION');
+      const r=await this.#run('preflight',name,['--version']);if(!r.stdout.includes(version))refuse('OWNER_TOOL_VERSION');
     }
     const vm=await regular(this.plan.vmImage);if(vm.size!==PIN.vmBytes||await fileHash(this.plan.vmImage)!==PIN.vmSha256)refuse('OWNER_VM_PIN');
     const layout=this.plan.ociLayout;if(!layout)refuse('OWNER_OCI_CACHE');
@@ -447,9 +458,10 @@ export class OwnerSupervisor {
   }
   cancel(code='OWNER_CANCELLED'){this.#controller.abort(new OwnerError(code));this.#commands.stop();}
   async cleanup({deadline=performance.now()+CAPS.cleanupMs}={}){
+    const end=Math.min(deadline,performance.now()+CAPS.cleanupMs);
     clearTimeout(this.#suiteTimer);const failures=[];try{await this.gate.require('cleanup');}catch(e){return {status:'CLEANUP_INCOMPLETE_RETAINED',owner:this.owner,denied:this.denied,code:safeCode(e)};}this.cancel();this.budget.close();
-    const end=Math.min(deadline,performance.now()+CAPS.cleanupMs);const attempt=async(action,tool,args)=>{
-      try{await this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:remainingMilliseconds(end,10000)}),{cleanup:true});}
+    const attempt=async(action,tool,args)=>{
+      try{await this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:end,cleanup:true});}
       catch(e){failures.push({action,code:safeCode(e)});}
     };
     try{if(this.proxy)await ownedRace(()=>this.proxy.close(remainingMilliseconds(end,1000)),{deadline:end});}catch(e){failures.push({action:'proxy-close',code:safeCode(e)});}
@@ -457,10 +469,10 @@ export class OwnerSupervisor {
     if(this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
     let confirmed=false;
     if(this.owner)try{
-      await this.gate.require('verify-stopped');const r=await this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',this.owner.containerId],{executable:this.#executables.docker??null,timeoutMs:remainingMilliseconds(end)}),{cleanup:true});
+      await this.gate.require('verify-stopped');const r=await this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',this.owner.containerId],{executable:this.#executables.docker??null}),{deadline:end,cleanup:true});
       confirmed=JSON.parse(r.stdout)[0].State.Running===false;
     }catch{ // A stopped VM makes Docker unavailable; exact profile stopped proof is required.
-      try{const r=await this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null,timeoutMs:remainingMilliseconds(end)}),{cleanup:true});const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
+      try{const r=await this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:end,cleanup:true});const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
     }
     if(this.#commands.children.size)failures.push({action:'children',code:'OWNER_CHILDREN_REMAIN'});
     if(!confirmed)failures.push({action:'verify-stopped',code:'OWNER_STOP_UNCONFIRMED'});
@@ -491,6 +503,6 @@ export async function capabilityAuthorizer(capabilityPath,plan){
   const sourceSha256=Object.fromEntries(reviewed.files.filter(f=>f.path.startsWith('prototypes/access-provider-service/test/owner/')).map(f=>[path.basename(f.path),f.sha256])),actions=new Set(cap.actions);
   return {manifest:{...cap.manifest,sourceSha256},authorize:async({runId,action})=>{
     if(runId!==cap.runId||Date.now()>=end||!actions.has(action))return false;
-    await checkReferences();await verifyReviewedSources(plan,reviewed);return true;
+    await checkReferences();await verifyReviewedSources(plan,reviewed);return Date.now()<end;
   }};
 }

@@ -14,7 +14,7 @@ import { fixtureBindings,keyPair } from '../fixtures.mjs';
 import { PostgresStore,createOwnedPool } from '../../store.mjs';
 import { ProviderError,canonical } from '../../proof.mjs';
 import { FrameDecoder,CommitTracker,WireProxy,WireError,WireLifetime,classifySql,errorSqlState,WIRE_LIMITS } from './wire-proxy.mjs';
-import { createPlan,command,colimaStartArgs,containerArgs,residualCapacity,ConnectionBudget,PhaseGate,OwnerSupervisor,OwnerError,ownedRace,CAPS,PIN,digest,remainingMilliseconds,resolveExecutable,regular,createContainerWithSecret,assertFixtureEnvironment,RUNTIME_SOURCE_FILES,verifyReviewedSources,capabilityAuthorizer } from './owner.mjs';
+import { createPlan,command,colimaStartArgs,containerArgs,residualCapacity,ConnectionBudget,PhaseGate,OwnerSupervisor,OwnerError,ownedRace,CAPS,PIN,digest,remainingMilliseconds,resolveExecutable,regular,createContainerWithSecret,assertFixtureEnvironment,RUNTIME_SOURCE_FILES,verifyReviewedSources,capabilityAuthorizer,runAuthorizedCommand } from './owner.mjs';
 import { budgetHarness,runCli,createResourceLifecycle,finishRuntime,persistentBindings } from './runner.mjs';
 import { validateAckReceipt,validateDeadlockEvidence,isClockDisconnect,registerFixtureAndClose } from './fault-cases.mjs';
 // Migrated from the prior artifact-only 23 tests; the original packet stays immutable.
@@ -30,6 +30,7 @@ const startup=()=>{const body=Buffer.from('user\0b1_app\0database\0b1\0\0'),b=Bu
 const sqlError=code=>frame('E',Buffer.concat([Buffer.from('S'),str('ERROR'),Buffer.from('C'),str(code),Buffer.from('M'),str('password secret SQL body must not appear'),Buffer.from([0])]));
 const step=(t,s,tag='SELECT 1',status='T')=>{t.frontend(query(s));assert.equal(t.backend(complete(tag)).forward,true);assert.equal(t.backend(ready(status)).forward,true);};
 const flush=()=>new Promise(r=>setImmediate(r));
+const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
 test('all imports and constructors are inert, default gate refuses runtime',async()=>{
   assert.equal(process.versions.node,PIN.node);
   const owner=new OwnerSupervisor({plan,manifest:{},authorize:async()=>false});const proxy=new WireProxy({backendPort:54321,authorize:async()=>{throw new Error('denied');}});
@@ -461,4 +462,94 @@ test('executable fixture pins the real target through a symlinked temp parent an
     await assert.rejects(resolveExecutable(alias,{...pin,bytes:pin.bytes+1}),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
     await assert.rejects(regular(alias),e=>e.code==='OWNER_REGULAR_FILE');
   }finally{await fs.rm(base,{recursive:true,force:true});}
+});
+
+for(const validation of ['references','sources'])test('capability expiry during actual pending '+validation+' validation denies command and listener authorization',async t=>{
+  const dir=await fs.mkdtemp(path.join(testFiles,'expiry-')),manifest=await measureReviewed(currentWorktree),manifestPath=path.join(dir,'sources.json'),receiptPath=path.join(dir,'review.json'),capPath=path.join(dir,'capability.json');
+  const manifestRaw=JSON.stringify(manifest),manifestHash=digest(manifestRaw),receiptRaw=JSON.stringify({decision:'CLEAR',reviewedIdentity:{runtimeSourceManifestSha256:manifestHash}});
+  let wall=Date.now();const end=wall+60000;t.mock.method(Date,'now',()=>wall);
+  await fs.writeFile(manifestPath,manifestRaw);await fs.writeFile(receiptPath,receiptRaw);
+  await fs.writeFile(capPath,JSON.stringify({status:'SOURCE_REVIEWED_RUNTIME_PHASE_ADMITTED',runId:U,actions:['preflight','start-owned-wire-proxy'],expiresAt:new Date(end).toISOString(),reviewedSources:{path:manifestPath,sha256:manifestHash},independentReview:{path:receiptPath,sha256:digest(receiptRaw)},manifest:{}}));
+  const authorization=await capabilityAuthorizer(capPath,{worktree:currentWorktree,runId:U}),gate=new PhaseGate({runId:U,authorize:authorization.authorize}),owner={gate,signal:new AbortController().signal};
+  let starts=0;const spec=command(plan,'colima',['--version']);
+  assert.equal(await runAuthorizedCommand(owner,'preflight',spec,{deadline:performance.now()+10000},()=>{starts++;return 'inert';}),'inert');
+  assert.equal(await authorization.authorize({runId:'b1234567-1234-4321-8765-123456789abc',action:'preflight'}),false);
+  const entered=deferred(),release=deferred(),method=validation==='references'?'readFile':'readdir',original=fs[method],target=validation==='references'?receiptPath:currentWorktree+'/prototypes/access-provider-service';let held=false;
+  t.mock.method(fs,method,async function(filename,...args){
+    if(filename===target&&!held){held=true;entered.resolve();await release.promise;}
+    return original.call(this,filename,...args);
+  });
+  const pending=runAuthorizedCommand(owner,'preflight',spec,{deadline:performance.now()+10000},()=>{starts++;});
+  try{
+    await entered.promise;wall=end;release.resolve();
+    await assert.rejects(pending,e=>e.code==='OWNER_NOT_AUTHORIZED');assert.equal(starts,1);assert.equal(held,true);
+    const proxy=new WireProxy({backendPort:54321,authorize:a=>gate.require(a)});
+    await assert.rejects(proxy.start(),e=>e.code==='OWNER_NOT_AUTHORIZED');await proxy.close();
+    assert.equal(gate.denied.length,2);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+
+for(const [phase,action] of [['setup','colima-start'],['suite','docker-start']])test('shared command path refuses exhausted '+phase+' deadline after otherwise valid authorization',async t=>{
+  let now=10,starts=0;t.mock.method(performance,'now',()=>now);
+  const entered=deferred(),release=deferred(),owner={gate:new PhaseGate({runId:U,authorize:async()=>{entered.resolve();await release.promise;return true;}}),signal:new AbortController().signal};
+  const pending=runAuthorizedCommand(owner,action,command(plan,'docker',['start','a'.repeat(64)]),{deadline:100},()=>{starts++;});
+  try{await entered.promise;now=100;release.resolve();await assert.rejects(pending,e=>e.code==='OWNER_DEADLINE');assert.equal(starts,0);assert.deepEqual(owner.gate.denied,[]);}
+  finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+
+test('shared command path consumes authorization time from both command cap and original phase remainder',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);
+  try{
+    for(const row of [{phaseEnd:90,cap:50,resume:30,end:60,left:30},{phaseEnd:40,cap:100,resume:25,end:40,left:15}]){
+      now=10;const entered=deferred(),release=deferred(),owner={gate:new PhaseGate({runId:U,authorize:async()=>{entered.resolve();await release.promise;return true;}}),signal:new AbortController().signal};
+      const pending=runAuthorizedCommand(owner,'docker-start',command(plan,'docker',['start','a'.repeat(64)],{timeoutMs:row.cap}),{deadline:row.phaseEnd},budget=>budget);
+      await entered.promise;now=row.resume;release.resolve();assert.deepEqual(await pending,{deadline:row.end,timeoutMs:row.left});
+    }
+  }finally{t.mock.restoreAll();}
+});
+
+test('shared command path retains authority and cancellation refusal; cleanup permission cannot renew deadlines',async t=>{
+  let now=10,starts=0,authorizations=0;t.mock.method(performance,'now',()=>now);
+  const controller=new AbortController(),owner={gate:new PhaseGate({runId:U,authorize:async()=>{authorizations++;return false;}}),signal:controller.signal},spec=command(plan,'docker',['stop','a'.repeat(64)],{timeoutMs:50}),start=()=>{starts++;return 'inert';};
+  try{
+    await assert.rejects(runAuthorizedCommand(owner,'docker-stop',spec,{deadline:100},start),e=>e.code==='OWNER_NOT_AUTHORIZED');assert.equal(starts,0);
+    owner.gate=new PhaseGate({runId:U,authorize:async()=>{authorizations++;return true;}});controller.abort();
+    await assert.rejects(runAuthorizedCommand(owner,'docker-stop',spec,{deadline:100},start),e=>e.code==='OWNER_CANCELLED');
+    assert.equal(await runAuthorizedCommand(owner,'docker-stop',spec,{deadline:100,cleanup:true},start),'inert');assert.equal(starts,1);
+    const before=authorizations;now=100;
+    for(const deadline of [100,NaN,Infinity])await assert.rejects(runAuthorizedCommand(owner,'docker-stop',spec,{deadline,cleanup:true},start),e=>e.code==='OWNER_DEADLINE');
+    assert.equal(starts,1);assert.equal(authorizations,before);
+  }finally{t.mock.restoreAll();}
+});
+
+test('owner setup budget includes its initial pending preflight authorization',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred();
+  const owner=new OwnerSupervisor({plan,manifest:{},authorize:async()=>{entered.resolve();await release.promise;return true;}}),pending=owner.preflight();
+  try{await entered.promise;now=10+CAPS.setupMs;release.resolve();await assert.rejects(pending,e=>e.code==='OWNER_SETUP_DEADLINE');assert.equal(owner.phase,'new');assert.deepEqual(owner.events,[]);}
+  finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+
+test('actual owner cleanup cannot start a command when authorization resumes after finishRuntime deadline',async t=>{
+  let now=0,lateCleanup;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),actions=[];
+  const owner=new OwnerSupervisor({plan,manifest:{},authorize:async({action})=>{actions.push(action);if(action==='docker-stop'){entered.resolve();await release.promise;}return true;}});
+  owner.owner={containerId:'a'.repeat(64)};owner.phase='provisioned';
+  const finishing=finishRuntime({owner:{cleanup:options=>(lateCleanup=owner.cleanup(options))}},{deadline:30});
+  const rejected=assert.rejects(finishing,e=>e.code==='OWNER_CLEANUP_INCOMPLETE'&&e.cleanup.status==='CLEANUP_INCOMPLETE_RETAINED');
+  try{
+    await entered.promise;await rejected;now=30;release.resolve();const receipt=await lateCleanup;
+    assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.ok(owner.signal.aborted);
+    assert.deepEqual(receipt.failures.filter(f=>['docker-stop','colima-stop'].includes(f.action)),[{action:'docker-stop',code:'OWNER_DEADLINE'},{action:'colima-stop',code:'OWNER_DEADLINE'}]);
+    assert.deepEqual(actions,['cleanup','docker-stop','verify-stopped']);assert.deepEqual(owner.events,[]);
+  }finally{release.resolve();await rejected;await lateCleanup?.catch(()=>{});t.mock.restoreAll();}
+});
+
+test('actual owner cleanup cap starts before initial cleanup authorization even with a farther caller deadline',async t=>{
+  let now=10,receipt;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),actions=[];
+  const owner=new OwnerSupervisor({plan,manifest:{},authorize:async({action})=>{actions.push(action);if(action==='cleanup'){entered.resolve();await release.promise;}return true;}});
+  owner.owner={containerId:'a'.repeat(64)};owner.phase='provisioned';const pending=owner.cleanup({deadline:10+2*CAPS.cleanupMs});
+  try{
+    await entered.promise;now=10+CAPS.cleanupMs;release.resolve();receipt=await pending;
+    assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.deepEqual(actions,['cleanup','verify-stopped']);
+    assert.ok(receipt.failures.some(f=>f.action==='docker-stop'&&f.code==='OWNER_DEADLINE'));assert.deepEqual(owner.events,[]);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
 });
