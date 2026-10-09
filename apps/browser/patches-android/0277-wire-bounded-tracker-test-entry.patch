@@ -1317,10 +1317,10 @@ index 0000000000000000000000000000000000000000..47a3b0346b93f263267e7ea7c20dc01f
 +}
 diff --git a/tools/aegis/current151_tracker/owned_leaf.cc b/tools/aegis/current151_tracker/owned_leaf.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f95da1675ea06c64149589f03a9ec6f39c74856b
+index 0000000000000000000000000000000000000000..832618b88a82a70e8b0d4261381fe5fa9f447196
 --- /dev/null
 +++ b/tools/aegis/current151_tracker/owned_leaf.cc
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,340 @@
 +// Copyright 2026 GCSA
 +// Sole creator/reaper of one direct child. This is NOT a GN/Ninja executor.
 +#include "tools/aegis/current151_tracker/bounded_runtime.h"
@@ -1636,8 +1636,9 @@ index 0000000000000000000000000000000000000000..f95da1675ea06c64149589f03a9ec6f3
 +      child.KillOwned();
 +  }
 +  FreshOwnerBoundary(STDIN_FILENO, &gate, deadline, boot);
++  const int child_status = child.Status();
 +  const bool leaf_success = gate.go_sent && child.Reaped() &&
-+      WIFEXITED(child.Status()) && WEXITSTATUS(child.Status()) == 0;
++      WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0;
 +  if (!leaf_success)
 +    gate.Fail();
 +  // Immutable provisional evidence. There is no authoritative accepted field:
