@@ -213,7 +213,10 @@ class Commands {
   stop(){for(const id of this.children)if(!id.done)id.child.kill('SIGTERM');}
 }
 async function fileHash(p){const h=createHash('sha256');for await(const chunk of createReadStream(p))h.update(chunk);return h.digest('hex');}
-async function privateFile(p,bytes,{exclusive=false}={}){const handle=await fs.open(p,FC.O_WRONLY|FC.O_CREAT|FC.O_NOFOLLOW|(exclusive?FC.O_EXCL:FC.O_TRUNC),0o600);try{await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}}
+async function privateFile(p,bytes,{exclusive=false,beforeWrite=()=>{}}={}){
+  beforeWrite();const handle=await fs.open(p,FC.O_WRONLY|FC.O_CREAT|FC.O_NOFOLLOW|(exclusive?FC.O_EXCL:FC.O_TRUNC),0o600);
+  try{beforeWrite();await handle.writeFile(bytes);beforeWrite();await handle.sync();}finally{await handle.close();}
+}
 export async function regular(p){const s=await fs.lstat(p);if(!s.isFile()||s.isSymbolicLink())refuse('OWNER_REGULAR_FILE');return s;}
 // Installed aliases may be Homebrew symlinks; immutable caches may not.
 export async function resolveExecutable(alias,pin) {
@@ -269,12 +272,16 @@ export class OwnerSupervisor {
     this.#defaultState=await this.#defaults();this.phase='preflight';return {status:'PREFLIGHT_INPUTS_VERIFIED_RUNTIME_NOT_STARTED',hostFree:free,compressedLayerBytes:compressed};
   }
   async #initRoots(){
-    await this.gate.require('create-owned-root');const p=this.plan;
-    for(const dir of [p.artifactRoot,path.dirname(p.colimaHome)]){try{await fs.lstat(dir);refuse('OWNER_EXISTING_ROOT');}catch(e){if(e.code!=='ENOENT')throw e;}await fs.mkdir(dir,{mode:0o700});}
-    await fs.mkdir(p.colimaHome,{mode:0o700});await fs.mkdir(p.dockerConfig,{mode:0o700});await fs.mkdir(p.results,{mode:0o700});
+    const deadline=this.#setupDeadline,check=()=>{if(this.signal.aborted)refuse('OWNER_CANCELLED');if(deadline===null||performance.now()>=deadline)refuse('OWNER_SETUP_DEADLINE');};
+    await this.gate.require('create-owned-root');check();const p=this.plan;
+    for(const dir of [p.artifactRoot,path.dirname(p.colimaHome)]){
+      try{await fs.lstat(dir);check();refuse('OWNER_EXISTING_ROOT');}catch(e){if(e.code!=='ENOENT')throw e;}
+      check();await fs.mkdir(dir,{mode:0o700});check();
+    }
+    for(const dir of [p.colimaHome,p.dockerConfig,p.results]){check();await fs.mkdir(dir,{mode:0o700});check();}
     this.#secrets=Object.fromEntries(['b1_bootstrap','b1_migrator','b1_app'].map(role=>[role,randomBytes(32).toString('hex')]));
-    await privateFile(p.artifactRoot+'/database-secrets.json',JSON.stringify(this.#secrets),{exclusive:true});
-    await privateFile(p.artifactRoot+'/identity.json',JSON.stringify({runId:p.runId,uid:p.uid,colimaHome:p.colimaHome,profile:p.profile,socket:p.socket,containerName:p.containerName,networkName:p.networkName}),{exclusive:true});
+    await privateFile(p.artifactRoot+'/database-secrets.json',JSON.stringify(this.#secrets),{exclusive:true,beforeWrite:check});
+    await privateFile(p.artifactRoot+'/identity.json',JSON.stringify({runId:p.runId,uid:p.uid,colimaHome:p.colimaHome,profile:p.profile,socket:p.socket,containerName:p.containerName,networkName:p.networkName}),{exclusive:true,beforeWrite:check});check();
   }
   async #logVolume(){
     const p=this.plan;
@@ -472,16 +479,29 @@ export class OwnerSupervisor {
   cancel(code='OWNER_CANCELLED'){this.#controller.abort(new OwnerError(code));this.#commands.stop();}
   async cleanup({deadline=performance.now()+CAPS.cleanupMs}={}){
     const end=Math.min(deadline,performance.now()+CAPS.cleanupMs);
-    clearTimeout(this.#suiteTimer);const failures=[];try{await this.gate.require('cleanup');}catch(e){return {status:'CLEANUP_INCOMPLETE_RETAINED',owner:this.owner,denied:this.denied,code:safeCode(e)};}this.cancel();this.budget.close();
+    clearTimeout(this.#suiteTimer);const failures=[];let cleanupCode,authorized=false;
+    // Terminal local retirement cannot depend on an external phase capability.
+    try{this.cancel();}catch(e){failures.push({action:'cancel',code:safeCode(e)});}
+    try{this.budget.close();}catch(e){failures.push({action:'budget-close',code:safeCode(e)});}
+    if(this.proxy){
+      const now=performance.now(),closeEnd=Number.isFinite(end)?Math.min(end,now+1000):now;
+      try{
+        // Call close even with zero wait budget: it retires the listener and
+        // transports synchronously before its bounded completion wait.
+        const closing=Promise.resolve(this.proxy.close(Math.max(0,Math.floor(closeEnd-now))));closing.catch(()=>{});
+        await ownedRace(()=>closing,{deadline:closeEnd});
+      }catch(e){failures.push({action:'proxy-close',code:safeCode(e)});}
+    }
+    try{remainingMilliseconds(end);await ownedRace(()=>this.gate.require('cleanup'),{deadline:end});remainingMilliseconds(end);authorized=true;}
+    catch(e){cleanupCode=safeCode(e);failures.push({action:'cleanup',code:cleanupCode});}
     const attempt=async(action,tool,args)=>{
       try{await this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:end,cleanup:true});}
       catch(e){failures.push({action,code:safeCode(e)});}
     };
-    try{if(this.proxy)await ownedRace(()=>this.proxy.close(remainingMilliseconds(end,1000)),{deadline:end});}catch(e){failures.push({action:'proxy-close',code:safeCode(e)});}
-    if(this.owner)await attempt('docker-stop','docker',['stop','--time','5',this.owner.containerId]);
-    if(this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
+    if(authorized&&this.owner)await attempt('docker-stop','docker',['stop','--time','5',this.owner.containerId]);
+    if(authorized&&this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
     let confirmed=false;
-    if(this.owner)try{
+    if(authorized&&this.owner)try{
       await this.gate.require('verify-stopped');const r=await this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',this.owner.containerId],{executable:this.#executables.docker??null}),{deadline:end,cleanup:true});
       confirmed=JSON.parse(r.stdout)[0].State.Running===false;
     }catch{ // A stopped VM makes Docker unavailable; exact profile stopped proof is required.
@@ -489,7 +509,7 @@ export class OwnerSupervisor {
     }
     if(this.#commands.children.size)failures.push({action:'children',code:'OWNER_CHILDREN_REMAIN'});
     if(!confirmed)failures.push({action:'verify-stopped',code:'OWNER_STOP_UNCONFIRMED'});
-    const receipt={status:failures.length?'CLEANUP_INCOMPLETE_RETAINED':'STOPPED_RETAINED',failures,denied:this.denied,owner:this.owner,plan:{colimaHome:this.plan.colimaHome,artifactRoot:this.plan.artifactRoot},dataRemoved:false,secretsRetained:true};
+    const receipt={status:failures.length?'CLEANUP_INCOMPLETE_RETAINED':'STOPPED_RETAINED',failures,denied:this.denied,owner:this.owner,plan:{colimaHome:this.plan.colimaHome,artifactRoot:this.plan.artifactRoot},dataRemoved:false,secretsRetained:true,...(cleanupCode?{code:cleanupCode}:{})};
     // Always retain failure identities; never remove a container/network/profile,
     // detach a foreign volume, or prune. A later same-owner continuation admits it.
     if(this.#logDevice!==null)try{await this.record('cleanup-'+randomBytes(6).toString('hex'),receipt);}catch{receipt.receiptWriteFailed=true;}

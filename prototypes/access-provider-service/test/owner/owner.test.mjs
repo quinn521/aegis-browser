@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { promises as fs } from 'node:fs';
+import { promises as fs,constants as FC } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -549,8 +549,8 @@ test('actual owner cleanup cap starts before initial cleanup authorization even 
   owner.owner={containerId:'a'.repeat(64)};owner.phase='provisioned';const pending=owner.cleanup({deadline:10+2*CAPS.cleanupMs});
   try{
     await entered.promise;now=10+CAPS.cleanupMs;release.resolve();receipt=await pending;
-    assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.deepEqual(actions,['cleanup','verify-stopped']);
-    assert.ok(receipt.failures.some(f=>f.action==='docker-stop'&&f.code==='OWNER_DEADLINE'));assert.deepEqual(owner.events,[]);
+    assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.deepEqual(actions,['cleanup']);
+    assert.ok(receipt.failures.some(f=>f.action==='cleanup'&&f.code==='OWNER_DEADLINE'));assert.deepEqual(owner.events,[]);
   }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
 });
 
@@ -678,4 +678,117 @@ for(const during of ['expiry','cancel','valid'])test('actual SQL transition chec
     assert.equal(migrations,during==='valid'?1:0);
     assert.throws(()=>owner.beginSql(),e=>e.code===(during==='valid'?'OWNER_SUITE_ALREADY_STARTED':during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));
   }finally{release.resolve();await pending.catch(()=>{});await owner.cleanup({deadline:now+100});t.mock.restoreAll();}
+});
+
+async function cleanupCapabilityFixture(){
+  const dir=await fs.mkdtemp(path.join(testFiles,'cleanup-cap-')),manifest=await measureReviewed(currentWorktree),manifestPath=path.join(dir,'sources.json'),receiptPath=path.join(dir,'review.json'),capPath=path.join(dir,'capability.json'),manifestRaw=JSON.stringify(manifest),manifestHash=digest(manifestRaw),receiptRaw=JSON.stringify({decision:'CLEAR',reviewedIdentity:{runtimeSourceManifestSha256:manifestHash}}),expires=Date.now()+60000;
+  await fs.writeFile(manifestPath,manifestRaw);await fs.writeFile(receiptPath,receiptRaw);
+  await fs.writeFile(capPath,JSON.stringify({status:'SOURCE_REVIEWED_RUNTIME_PHASE_ADMITTED',runId:U,actions:['start-owned-wire-proxy','cleanup'],expiresAt:new Date(expires).toISOString(),reviewedSources:{path:manifestPath,sha256:manifestHash},independentReview:{path:receiptPath,sha256:digest(receiptRaw)},manifest:{}}));
+  const plan=createPlan({worktree:currentWorktree,runId:U}),authorization=await capabilityAuthorizer(capPath,plan),owner=new OwnerSupervisor({plan,...authorization}),listener=inertListener();
+  owner.proxy=new WireProxy({backendPort:54321,authorize:a=>owner.gate.require(a),createListener:listener.create});
+  await owner.proxy.start({deadline:performance.now()+10000,signal:owner.signal});owner.owner={runId:U,containerId:'a'.repeat(64)};owner.phase='provisioned';
+  return {owner,listener,manifestPath,expires};
+}
+for(const refusal of ['source','capability'])test('actual cleanup retires the started proxy and budget before actual '+refusal+' authorization refusal',async t=>{
+  const {owner,listener,manifestPath,expires}=await cleanupCapabilityFixture(),identity=owner.owner,releaseBudget=owner.budget.reserve('helper'),require=owner.gate.require,actions=[];
+  t.mock.method(owner.gate,'require',function(action,...args){
+    actions.push(action);assert.ok(owner.signal.aborted);assert.equal(listener.state.closed,1);assert.throws(()=>owner.budget.reserve('helper'),e=>e.code==='OWNER_CLIENT_BUDGET');return require.call(this,action,...args);
+  });
+  if(refusal==='source')await fs.appendFile(manifestPath,' ');else t.mock.method(Date,'now',()=>expires);
+  try{
+    const receipt=await owner.cleanup({deadline:performance.now()+1000});
+    assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.equal(receipt.owner,identity);assert.equal(receipt.dataRemoved,false);assert.equal(receipt.secretsRetained,true);
+    assert.equal(receipt.code,refusal==='source'?'OWNER_REVIEW_SOURCE_CHANGED':'OWNER_NOT_AUTHORIZED');assert.deepEqual(actions,['cleanup']);assert.deepEqual(owner.events,[]);
+    await assert.rejects(owner.proxy.start({deadline:performance.now()+1000,signal:new AbortController().signal}),e=>e.code==='WIRE_ALREADY_STARTED');
+    assert.equal(owner.budget.state.used,2);releaseBudget();assert.equal(owner.budget.state.used,0);
+  }finally{releaseBudget();t.mock.restoreAll();}
+});
+test('actual cleanup starts local retirement even when its original wait budget is already exhausted',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const actions=[],listener=inertListener(),owner=new OwnerSupervisor({plan,manifest:{},authorize:async({action})=>{actions.push(action);return true;}});
+  owner.proxy=new WireProxy({backendPort:54321,authorize:a=>owner.gate.require(a),createListener:listener.create});await owner.proxy.start({deadline:100,signal:owner.signal});actions.length=0;
+  try{
+    now=100;const receipt=await owner.cleanup({deadline:100});assert.equal(listener.state.closed,1);assert.ok(owner.signal.aborted);assert.deepEqual(actions,[]);
+    assert.throws(()=>owner.budget.reserve('helper'),e=>e.code==='OWNER_CLIENT_BUDGET');assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');
+    assert.ok(receipt.failures.some(f=>f.action==='proxy-close'&&f.code==='OWNER_DEADLINE'));assert.equal(receipt.code,'OWNER_DEADLINE');
+    await assert.rejects(owner.proxy.start({deadline:200,signal:new AbortController().signal}),e=>e.code==='WIRE_ALREADY_STARTED');
+  }finally{t.mock.restoreAll();}
+});
+test('actual cleanup has retired local resources while external authorization is pending and cannot extend its deadline',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),actions=[],listener=inertListener(),owner=new OwnerSupervisor({plan,manifest:{},authorize:async({action})=>{actions.push(action);if(action==='cleanup'){entered.resolve();await release.promise;}return true;}});
+  owner.proxy=new WireProxy({backendPort:54321,authorize:a=>owner.gate.require(a),createListener:listener.create});await owner.proxy.start({deadline:100,signal:owner.signal});actions.length=0;owner.owner={containerId:'a'.repeat(64)};owner.phase='provisioned';const pending=owner.cleanup({deadline:50});
+  try{
+    await entered.promise;assert.ok(owner.signal.aborted);assert.equal(listener.state.closed,1);assert.throws(()=>owner.budget.reserve('helper'),e=>e.code==='OWNER_CLIENT_BUDGET');
+    now=50;release.resolve();const receipt=await pending;assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.equal(receipt.code,'OWNER_DEADLINE');assert.deepEqual(actions,['cleanup']);assert.deepEqual(owner.events,[]);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+test('actual cleanup keeps local retirement terminal through finish timeout, repeat teardown and late authorization completion',async t=>{
+  let now=10,lateCleanup;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),actions=[],listener=inertListener(),owner=new OwnerSupervisor({plan,manifest:{},authorize:async({action})=>{actions.push(action);if(action==='cleanup'){entered.resolve();await release.promise;}return true;}});
+  owner.proxy=new WireProxy({backendPort:54321,authorize:a=>owner.gate.require(a),createListener:listener.create});await owner.proxy.start({deadline:100,signal:owner.signal});actions.length=0;owner.owner={containerId:'a'.repeat(64)};owner.phase='provisioned';
+  const finishing=finishRuntime({owner:{cleanup:options=>(lateCleanup=owner.cleanup(options))}},{deadline:40}),rejected=assert.rejects(finishing,e=>e.code==='OWNER_CLEANUP_INCOMPLETE');
+  try{
+    await entered.promise;assert.equal(listener.state.closed,1);assert.ok(owner.signal.aborted);await rejected;now=40;
+    const again=await owner.cleanup({deadline:40});assert.equal(again.status,'CLEANUP_INCOMPLETE_RETAINED');assert.equal(listener.state.closed,2);
+    release.resolve();await lateCleanup;await flush();assert.deepEqual(actions,['cleanup']);assert.deepEqual(owner.events,[]);
+    await assert.rejects(owner.proxy.start({deadline:100,signal:new AbortController().signal}),e=>e.code==='WIRE_ALREADY_STARTED');assert.throws(()=>owner.budget.reserve('helper'),e=>e.code==='OWNER_CLIENT_BUDGET');
+  }finally{release.resolve();await rejected;await lateCleanup?.catch(()=>{});t.mock.restoreAll();}
+});
+test('actual cleanup retains a proxy close failure and still performs cancellation, budget closure and authority refusal',async t=>{
+  const listener=inertListener(),actions=[],owner=new OwnerSupervisor({plan,manifest:{},authorize:async({action})=>{actions.push(action);return action!=='cleanup';}});
+  owner.proxy=new WireProxy({backendPort:54321,authorize:a=>owner.gate.require(a),createListener:()=>{const server=listener.create();server.close=()=>{throw new OwnerError('OWNER_TEST_PROXY_CLOSE');};return server;}});await owner.proxy.start({deadline:performance.now()+1000,signal:owner.signal});actions.length=0;
+  try{
+    const receipt=await owner.cleanup({deadline:performance.now()+1000});assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.ok(owner.signal.aborted);assert.deepEqual(actions,['cleanup']);
+    assert.ok(receipt.failures.some(f=>f.action==='proxy-close'&&f.code==='OWNER_TEST_PROXY_CLOSE'));assert.throws(()=>owner.budget.reserve('helper'),e=>e.code==='OWNER_CLIENT_BUDGET');
+    await assert.rejects(owner.proxy.start({deadline:performance.now()+1000,signal:new AbortController().signal}),e=>e.code==='WIRE_ALREADY_STARTED');
+  }finally{t.mock.restoreAll();}
+});
+test('actual cleanup calls child cancellation and clears the suite watchdog before a throwing external authority',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);let suiteTimer;const schedule=globalThis.setTimeout,cleared=[],cancelled=[],clear=globalThis.clearTimeout;
+  t.mock.method(globalThis,'setTimeout',function(callback,ms,...args){const timer=schedule(callback,ms,...args);if(ms===CAPS.suiteMs)suiteTimer=timer;return timer;});
+  t.mock.method(globalThis,'clearTimeout',function(timer){cleared.push(timer);return clear(timer);});
+  const {owner}=await deadlineOwner(t,async({action})=>{if(action==='cleanup')throw new Error('inert authority throws');return true;}),cancel=owner.cancel;
+  t.mock.method(owner,'cancel',function(...args){cancelled.push('cancel');return cancel.apply(this,args);});owner.beginSql();
+  try{
+    const receipt=await owner.cleanup({deadline:100});assert.ok(suiteTimer);assert.ok(cleared.includes(suiteTimer));assert.deepEqual(cancelled,['cancel']);assert.ok(owner.signal.aborted);
+    assert.equal(receipt.code,'OWNER_NOT_AUTHORIZED');assert.throws(()=>owner.budget.reserve('helper'),e=>e.code==='OWNER_CLIENT_BUDGET');
+  }finally{if(suiteTimer)clear(suiteTimer);t.mock.restoreAll();}
+});
+
+function inertRootFiles(t,owner,{pause=null,entered=deferred(),release=deferred()}={}){
+  const p=owner.plan,roots=[p.artifactRoot,path.dirname(p.colimaHome)],dirs=[...roots,p.colimaHome,p.dockerConfig,p.results],files=[p.artifactRoot+'/database-secrets.json',p.artifactRoot+'/identity.json'],originalStat=fs.lstat,state={stats:[],mkdir:[],open:[],write:[],sync:[],closed:[]};let held=false;
+  const hold=async where=>{if(pause===where&&!held){held=true;entered.resolve();await release.promise;}};
+  t.mock.method(fs,'lstat',async function(filename,...args){if(!roots.includes(filename))return originalStat.call(this,filename,...args);state.stats.push(filename);await hold('stat');throw Object.assign(new Error('inert absent root'),{code:'ENOENT'});});
+  t.mock.method(fs,'mkdir',async(filename,options)=>{assert.ok(dirs.includes(filename));assert.deepEqual(options,{mode:0o700});state.mkdir.push(filename);await hold('mkdir');});
+  t.mock.method(fs,'open',async(filename,flags,mode)=>{
+    assert.ok(files.includes(filename));assert.equal(flags,FC.O_WRONLY|FC.O_CREAT|FC.O_NOFOLLOW|FC.O_EXCL);assert.equal(mode,0o600);state.open.push(filename);await hold(filename===files[1]?'identity-open':'open');
+    // Never persist, log or return credential bytes; these are inert handles.
+    return {writeFile:async()=>{state.write.push(filename);await hold('write');},sync:async()=>{state.sync.push(filename);await hold('sync');},close:async()=>{state.closed.push(filename);}};
+  });return {state,entered,release,files,held:()=>held};
+}
+for(const during of ['expiry','cancel'])test('actual provision refuses '+during+' during create-owned-root authorization with zero filesystem mutation',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),actions=[],{owner}=await deadlineOwner(t,async({action})=>{actions.push(action);if(action==='create-owned-root'){entered.resolve();await release.promise;}return true;}),end=10+CAPS.setupMs;
+  owner.phase='preflight';const {state}=inertRootFiles(t,owner);now=end-10;const pending=owner.provision();
+  try{
+    await entered.promise;if(during==='expiry')now=end;else owner.cancel();release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));
+    assert.deepEqual(state,{stats:[],mkdir:[],open:[],write:[],sync:[],closed:[]});assert.equal(owner.phase,'preflight');assert.deepEqual(actions,['preflight','provision','create-owned-root']);assert.deepEqual(owner.events,[]);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+for(const pause of ['stat','mkdir','open','write','sync','identity-open'])for(const during of ['expiry','cancel'])test('actual provision keeps the original setup boundary across inert '+pause+' await: '+during,async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const actions=[],{owner}=await deadlineOwner(t,async({action})=>{actions.push(action);return true;}),end=10+CAPS.setupMs;
+  owner.phase='preflight';const {state,entered,release,files}=inertRootFiles(t,owner,{pause});now=end-10;const pending=owner.provision();
+  try{
+    await entered.promise;assert.equal(state.write.filter(f=>f===files[1]).length,0);if(during==='expiry')now=end;else owner.cancel();release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));assert.equal(owner.phase,'preflight');assert.ok(!actions.includes('hdiutil-create'));assert.deepEqual(owner.events,[]);
+    assert.equal(state.mkdir.length,pause==='stat'?0:pause==='mkdir'?1:5);assert.equal(state.open.length,['stat','mkdir'].includes(pause)?0:pause==='identity-open'?2:1);
+    assert.equal(state.write.length,['write','sync','identity-open'].includes(pause)?1:0);assert.equal(state.sync.length,['sync','identity-open'].includes(pause)?1:0);
+    assert.equal(state.write.filter(f=>f===files[1]).length,0);assert.deepEqual(state.closed,state.open);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+test('actual provision preserves valid root and private identity admission while an external command remains denied',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const actions=[],{owner}=await deadlineOwner(t,async({action})=>{actions.push(action);return action!=='hdiutil-create';});
+  owner.phase='preflight';const {state,files}=inertRootFiles(t,owner);
+  try{
+    await assert.rejects(owner.provision(),e=>e.code==='OWNER_NOT_AUTHORIZED');assert.equal(state.mkdir.length,5);assert.deepEqual(state.open,files);assert.deepEqual(state.write,files);assert.deepEqual(state.sync,files);assert.deepEqual(state.closed,files);
+    assert.deepEqual(actions,['preflight','provision','create-owned-root','hdiutil-create']);assert.equal(owner.phase,'allocating');assert.deepEqual(owner.events,[]);
+  }finally{t.mock.restoreAll();}
 });
