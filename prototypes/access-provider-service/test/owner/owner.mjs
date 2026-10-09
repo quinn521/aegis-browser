@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { performance } from 'node:perf_hooks';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createOwnedPool, closeOwnedPool } from '../../store.mjs';
 import { WireProxy } from './wire-proxy.mjs';
 
@@ -179,20 +180,20 @@ export class PhaseGate {
 }
 // Both the phase deadline and this command's cap begin before authorization.
 // The synchronous start callback is also the inert seam used by pure tests.
-export async function runAuthorizedCommand(owner,action,spec,{deadline,cleanup=false},start){
+export async function runAuthorizedCommand(owner,action,spec,{deadline,cleanup=false,check=()=>{}},start){
   integer(spec.timeoutMs,1,CAPS.setupMs);
   if(!Number.isFinite(deadline))refuse('OWNER_DEADLINE');
-  const end=Math.min(deadline,performance.now()+spec.timeoutMs);remainingMilliseconds(end,spec.timeoutMs);
-  await owner.gate.require(action);if(owner.signal.aborted&&!cleanup)refuse('OWNER_CANCELLED');
+  const end=Math.min(deadline,performance.now()+spec.timeoutMs);check();remainingMilliseconds(end,spec.timeoutMs);
+  await owner.gate.require(action);check();if(owner.signal.aborted&&!cleanup)refuse('OWNER_CANCELLED');
   const timeoutMs=remainingMilliseconds(end,spec.timeoutMs);
   return start({deadline:end,timeoutMs});
 }
 class Commands {
   children=new Set();sink=null;
-  constructor(owner){this.owner=owner;}
-  async run(action,spec,{deadline,cleanup=false}){
-    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup},({deadline:end})=>new Promise((resolve,reject)=>{
-      const child=spawn(spec.executable,spec.args,{env:spec.env,shell:false,stdio:['pipe','pipe','pipe']});
+  constructor(owner,start=spawn,completed=()=>{}){this.owner=owner;this.start=start;this.completed=completed;}
+  async run(action,spec,{deadline,cleanup=false,check=()=>{}}){
+    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup,check},({deadline:end})=>new Promise((resolve,reject)=>{
+      const child=this.start(spec.executable,spec.args,{env:spec.env,shell:false,stdio:['pipe','pipe','pipe']});
       const identity={child,action,spawnedAt:performance.now(),done:false};this.children.add(identity);
       let bytes=0,out=[],err=[],failure=null,killTimer,forceTimer;const maximum=2*MiB;
       const stop=code=>{failure??=new OwnerError(code);if(!identity.done){child.kill('SIGTERM');killTimer??=setTimeout(()=>{if(!identity.done)child.kill('SIGKILL');forceTimer=setTimeout(()=>{if(!identity.done)reject(new OwnerError('OWNER_CHILD_STOP_UNCONFIRMED'));},1000);},1000);}};
@@ -204,8 +205,10 @@ class Commands {
       child.on('close',code=>{
         identity.done=true;this.children.delete(identity);clearTimeout(timer);clearTimeout(killTimer);clearTimeout(forceTimer);this.owner.signal.removeEventListener('abort',abort);
         this.owner.addEvent({action,exitCode:code,outputBytes:bytes,secret:spec.secret});
-        if(failure||code!==0)reject(failure??new OwnerError('OWNER_COMMAND_FAILED'));
-        else resolve({stdout:Buffer.concat(out).toString('utf8'),stderr:Buffer.concat(err).toString('utf8')});
+        const result={stdout:Buffer.concat(out).toString('utf8'),stderr:Buffer.concat(err).toString('utf8')};
+        // Only an acknowledged exact invocation may contribute observed IDs.
+        if(code===0&&!spec.secret&&bytes<=maximum&&(!failure||['OWNER_CANCELLED','OWNER_COMMAND_DEADLINE'].includes(failure.code)))this.completed(action,result);
+        if(failure||code!==0)reject(failure??new OwnerError('OWNER_COMMAND_FAILED'));else resolve(result);
       });
       child.stdin.end(spec.stdin??undefined);if(this.owner.signal.aborted&&!cleanup)abort();
     }));
@@ -213,9 +216,15 @@ class Commands {
   stop(){for(const id of this.children)if(!id.done)id.child.kill('SIGTERM');}
 }
 async function fileHash(p){const h=createHash('sha256');for await(const chunk of createReadStream(p))h.update(chunk);return h.digest('hex');}
-async function privateFile(p,bytes,{exclusive=false,beforeWrite=()=>{}}={}){
-  beforeWrite();const handle=await fs.open(p,FC.O_WRONLY|FC.O_CREAT|FC.O_NOFOLLOW|(exclusive?FC.O_EXCL:FC.O_TRUNC),0o600);
-  try{beforeWrite();await handle.writeFile(bytes);beforeWrite();await handle.sync();}finally{await handle.close();}
+async function privateFile(p,bytes,{exclusive=false,beforeWrite,wait,retire}={}){
+  if([beforeWrite,wait,retire].some(f=>typeof f!=='function'))refuse('OWNER_WRITE_ADMISSION_REQUIRED');
+  beforeWrite();const handle=await wait(()=>fs.open(p,FC.O_WRONLY|FC.O_CREAT|FC.O_NOFOLLOW|(exclusive?FC.O_EXCL:FC.O_TRUNC),0o600),{onLate:retire});let failure;
+  try{beforeWrite();await wait(()=>handle.writeFile(bytes));beforeWrite();await wait(()=>handle.sync());}
+  catch(error){failure=error;}
+  let retirementFailure;try{await retire(handle);}catch(error){retirementFailure=error;}
+  if(!failure)try{beforeWrite();}catch(error){failure=error;}
+  if(retirementFailure){if(failure)failure.retirementFailures=[...(failure.retirementFailures??[]),safeCode(retirementFailure)];else failure=retirementFailure;}
+  if(failure)throw failure;
 }
 export async function regular(p){const s=await fs.lstat(p);if(!s.isFile()||s.isSymbolicLink())refuse('OWNER_REGULAR_FILE');return s;}
 // Installed aliases may be Homebrew symlinks; immutable caches may not.
@@ -229,101 +238,214 @@ const safeCode=e=>e instanceof OwnerError?e.code:'OWNER_OPERATION_FAILED';
 export class OwnerSupervisor {
   events=[];budget=new ConnectionBudget();owner=null;phase='new';proxy=null;
   #controller=new AbortController();#setupDeadline=null;#suiteTimer=null;#suiteDeadline=null;#secrets=null;#logDevice=null;#guestIdentity=null;#defaultState=null;#plan;#manifest;#commands;#bindingsFingerprint=null;#quotaProof=null;#executables={};
-  constructor({plan,manifest,authorize}){this.#plan=plan;this.#manifest=manifest;this.gate=new PhaseGate({runId:plan.runId,authorize});this.#commands=new Commands(this);}
+  #operations=new AsyncLocalStorage();#preflightPromise=null;#provisionPromise=null;#cleanupEnd=null;#evidenceSlots=new Set();#listenerFactory;
+  #identities={network:null,container:null,mount:null,uncertainty:[],retirementFailures:[],evidenceFailures:[]};
+  constructor({plan,manifest,authorize,startCommand=spawn,createListener}){
+    if(typeof startCommand!=='function'||createListener!==undefined&&typeof createListener!=='function')refuse('OWNER_COMMAND_START');
+    this.#listenerFactory=createListener;
+    this.#plan=plan;this.#manifest=manifest;this.gate=new PhaseGate({runId:plan.runId,authorize});
+    this.#commands=new Commands(this,startCommand,(action,result)=>this.#completed(action,result));
+  }
   get plan(){return this.#plan;}get signal(){return this.#controller.signal;}
   get denied(){return [...this.gate.denied];}
   addEvent(event){if(this.events.length>=2048)this.events.shift();this.events.push(event);}
-  #deadline(){const end=this.#suiteDeadline??this.#setupDeadline;if(end===null)refuse('OWNER_SETUP_DEADLINE');return end;}
+  get retainedIdentity(){return structuredClone({runId:this.plan.runId,...this.#identities});}
+  #deadline(){const end=this.#operations.getStore()?.deadline??this.#suiteDeadline??this.#setupDeadline;if(end===null)refuse('OWNER_SETUP_DEADLINE');return end;}
   // A local lifetime check only; callers retain their existing action authority.
   // Capture once before awaiting, so a later phase transition cannot renew it.
   captureAdmission(phase='active'){
     if(!['setup','active'].includes(phase))refuse('OWNER_PHASE');
-    const deadline=phase==='setup'?this.#setupDeadline:this.#deadline(),check=()=>{
+    const parent=this.#operations.getStore();if(parent?.terminal)refuse('OWNER_TERMINAL_SCOPE');
+    const deadline=phase==='setup'?Math.min(this.#setupDeadline??NaN,parent?.deadline??Infinity):this.#deadline(),check=()=>{
       if(this.signal.aborted)refuse('OWNER_CANCELLED');
+      parent?.check();
       if(!Number.isFinite(deadline)||performance.now()>=deadline)refuse(phase==='setup'?'OWNER_SETUP_DEADLINE':'OWNER_DEADLINE');
     };check();return Object.freeze({deadline,check});
   }
-  #remaining(){const n=Math.floor(this.#deadline()-performance.now());if(n<1)refuse('OWNER_SETUP_DEADLINE');return n;}
-  async #run(action,tool,args,options={}){return this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null}),{deadline:this.#deadline()});}
-  async #hostFree(){const p=this.#plan;const s=await fs.stat('/Volumes/ExternalSSD');if(!s.isDirectory()||await fs.realpath('/Volumes/ExternalSSD')!=='/Volumes/ExternalSSD'||await fs.realpath(p.worktree)!==p.worktree)refuse('OWNER_VOLUME');await fs.access(p.worktree,FC.W_OK);const v=await fs.statfs('/Volumes/ExternalSSD');return integer(v.bavail*v.bsize);}
-  async #defaults(){
-    const home=process.env.HOME;const paths=[home+'/.docker/config.json',home+'/.colima/default/colima.yaml',home+'/.ssh/config'];const state={};
-    for(const p of paths){try{state[p]={sha256:await fileHash(p),realpath:await fs.realpath(p)};}catch(e){if(e.code!=='ENOENT')throw e;state[p]={absent:true};}}
-    return state;
+  async #operation(phase,work){
+    const admission=this.captureAdmission(phase),scope={deadline:admission.deadline,closed:false,terminal:false};
+    scope.check=()=>{admission.check();if(scope.closed)refuse('OWNER_OPERATION_SCOPE_ENDED');};
+    return this.#operations.run(scope,async()=>{try{scope.check();const result=await work(scope.check);scope.check();return result;}finally{scope.closed=true;}});
   }
-  async preflight(){
+  #scope(){const scope=this.#operations.getStore();if(!scope)refuse('OWNER_OPERATION_SCOPE_REQUIRED');scope.check();return scope;}
+  async #wait(operation,options={}){
+    const scope=this.#scope();
+    try{const value=await ownedRace(()=>{scope.check();return operation();},{deadline:scope.deadline,signal:scope.terminal?undefined:this.signal,...options});scope.check();return value;}
+    catch(error){scope.check();throw error;}
+  }
+  #fs(method,...args){const end=this.#scope().deadline;return this.#wait(()=>fs[method](...args),method==='open'?{onLate:h=>this.#retire(h,end)}:{});}
+  #authorize(action){return this.#wait(()=>this.gate.require(action));}
+  async #retire(handle,deadline){
+    // Retirement starts even when its acknowledgement can no longer be awaited.
+    let closing;try{closing=Promise.resolve(handle.close());closing.catch(()=>{});await ownedRace(()=>closing,{deadline:Math.min(deadline,performance.now()+1000)});}
+    catch(error){this.#rememberFailure('retirementFailures',{code:safeCode(error)});throw error;}
+  }
+  #writePrivate(filename,value,{exclusive=true}={}){
+    const scope=this.#scope();return privateFile(filename,value,{exclusive,beforeWrite:scope.check,wait:(f,o)=>this.#wait(f,o),retire:h=>this.#retire(h,scope.deadline)});
+  }
+  #rememberFailure(slot,value){
+    const code=/^[A-Z0-9_]{1,80}$/.test(value.code??'')?value.code:'OWNER_OPERATION_FAILED',list=this.#identities[slot];
+    if(list.length<16)list.push({code,...(value.action?{action:ACTIONS.includes(value.action)?value.action:'UNKNOWN_ACTION'}:{}),...(value.slot?{slot:value.slot==='cleanup'?'cleanup':'suite-accounting'}:{})});
+  }
+  #completed(action,result){
+    const id=result.stdout.trim();
+    if(['docker-network-create','docker-create'].includes(action)){
+      const slot=action==='docker-create'?'container':'network';
+      if(/^[0-9a-f]{64}$/.test(id))this.#identities[slot]={runId:this.plan.runId,action,id};
+      else this.#rememberFailure('uncertainty',{action,code:'OWNER_ALLOCATION_ID_UNKNOWN'});
+    }else if(['hdiutil-create','hdiutil-attach','colima-start'].includes(action)){
+      this.#rememberFailure('uncertainty',{action,code:'OWNER_ACKNOWLEDGED_NEEDS_MEASUREMENT'});
+    }
+  }
+  async #hash(filename){
+    const scope=this.#scope(),stream=createReadStream(filename),hash=createHash('sha256');
+    try{return await this.#wait(async()=>{for await(const chunk of stream){scope.check();hash.update(chunk);}return hash.digest('hex');});}
+    finally{stream.destroy();}
+  }
+  async #identityFile(value,{initial=false}={}){
+    const scope=this.#scope(),target=this.plan.artifactRoot+'/resource-identity.json',temp=initial?target:target+'.'+randomBytes(8).toString('hex')+'.tmp';
+    await this.#writePrivate(temp,JSON.stringify(value));scope.check();
+    if(!initial){await this.#fs('rename',temp,target);const dir=await this.#fs('open',this.plan.artifactRoot,FC.O_RDONLY);let failure;
+      try{await this.#wait(()=>dir.sync());}catch(error){failure=error;}
+      try{await this.#retire(dir,scope.deadline);}catch(error){if(failure)failure.retirementFailures=[safeCode(error)];else failure=error;}
+      if(failure)throw failure;scope.check();
+    }
+  }
+  async #routeParents(root,parent){
+    if(parent!==root&&!parent.startsWith(root+'/')||path.resolve(parent)!==parent)refuse('OWNER_LOG_ROUTE_PATH');
+    const inspect=async filename=>{const s=await this.#fs('lstat',filename);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==this.plan.uid||(s.mode&0o777)!==0o700)refuse('OWNER_LOG_ROUTE_PARENT');};
+    await inspect(root);let current=root;
+    for(const part of path.relative(root,parent).split(path.sep).filter(Boolean)){
+      current=path.join(current,part);try{await inspect(current);}catch(error){if(error.code!=='ENOENT')throw error;await this.#fs('mkdir',current,{mode:0o700});await inspect(current);}
+    }
+  }
+  #accounting(value){
+    const keys=['cases','registered','passed','notRun','zeroTestsSuccess'];
+    if(!value||Array.isArray(value)||Object.keys(value).sort().join()!==keys.sort().join()||!Array.isArray(value.cases)||value.cases.length<1||value.cases.length>256||value.zeroTestsSuccess!==false)refuse('OWNER_ACCOUNTING_SCHEMA');
+    const statuses=new Set(['PASS','FAIL','FAIL_CLEANUP','NOT_RUN_DEPENDENCY_FAILED','NOT_RUN_CANCELLED']);
+    for(const c of value.cases)if(!c||Object.keys(c).sort().join()!=='name,status'||typeof c.name!=='string'||c.name.length<1||c.name.length>256||!statuses.has(c.status))refuse('OWNER_ACCOUNTING_SCHEMA');
+    if(value.registered!==value.cases.length||value.passed!==value.cases.filter(c=>c.status==='PASS').length||value.notRun!==value.cases.filter(c=>c.status.startsWith('NOT_RUN')).length)refuse('OWNER_ACCOUNTING_SCHEMA');
+    return {reportedEvidence:true,registered:value.registered,passed:value.passed,notRun:value.notRun,zeroTestsSuccess:false,cases:value.cases.map(c=>({nameSha256:digest(c.name),status:c.status}))};
+  }
+  async #terminalEvidence(slot,value){
+    if(this.#cleanupEnd===null||!['cleanup','suite-accounting'].includes(slot))refuse('OWNER_TERMINAL_EVIDENCE_SCOPE');
+    if(this.#evidenceSlots.has(slot))refuse('OWNER_EVIDENCE_ALREADY_RECORDED');this.#evidenceSlots.add(slot);
+    const scope={deadline:this.#cleanupEnd,terminal:true,closed:false};scope.check=()=>{if(scope.closed)refuse('OWNER_OPERATION_SCOPE_ENDED');remainingMilliseconds(Math.min(scope.deadline,this.#cleanupEnd));};
+    return this.#operations.run(scope,async()=>{try{scope.check();return await this.#writeRecord(slot,value);}catch(error){this.#rememberFailure('evidenceFailures',{slot,code:safeCode(error)});throw error;}finally{scope.closed=true;}});
+  }
+  async #writeRecord(name,measurement){
+    await this.#assertLogRoutes();const s=await this.#fs('lstat',this.plan.results);
+    if(!s.isDirectory()||s.isSymbolicLink()||s.dev!==this.#logDevice||s.uid!==this.plan.uid||(s.mode&0o777)!==0o700)refuse('OWNER_RECEIPT_DIRECTORY');
+    const out=JSON.stringify({at:new Date().toISOString(),runId:this.plan.runId,measurement})+'\n';if(Buffer.byteLength(out)>MiB)refuse('OWNER_RECEIPT_LIMIT');
+    const filename=this.plan.results+'/'+name+'.json';await this.#writePrivate(filename,out);this.#scope();return filename;
+  }
+  #remaining(){const n=Math.floor(this.#deadline()-performance.now());if(n<1)refuse('OWNER_SETUP_DEADLINE');return n;}
+  async #run(action,tool,args,options={}){return this.#operation('active',async check=>{
+    try{return await this.#wait(()=>this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null}),{deadline:this.#deadline(),check}));}
+    catch(error){if(['docker-network-create','docker-create','hdiutil-create','hdiutil-attach','colima-start'].includes(action))this.#rememberFailure('uncertainty',{action,code:safeCode(error)});throw error;}
+  });}
+  async #hostFree(){return this.#operation('active',async()=>{const p=this.#plan;const s=await this.#fs('stat','/Volumes/ExternalSSD');if(!s.isDirectory()||await this.#fs('realpath','/Volumes/ExternalSSD')!=='/Volumes/ExternalSSD'||await this.#fs('realpath',p.worktree)!==p.worktree)refuse('OWNER_VOLUME');await this.#fs('access',p.worktree,FC.W_OK);const v=await this.#fs('statfs','/Volumes/ExternalSSD');return integer(v.bavail*v.bsize);
+    });
+  }
+  async #defaults(){return this.#operation('active',async()=>{
+    const home=process.env.HOME;const paths=[home+'/.docker/config.json',home+'/.colima/default/colima.yaml',home+'/.ssh/config'];const state={};
+    for(const p of paths){try{state[p]={sha256:await this.#hash(p),realpath:await this.#fs('realpath',p)};}catch(e){if(e.code!=='ENOENT')throw e;state[p]={absent:true};}}
+    return state;
+
+    });
+  }
+  preflight(){
+    if(this.#preflightPromise)return this.#preflightPromise;
+    this.#setupDeadline??=performance.now()+CAPS.setupMs;
+    this.#preflightPromise=this.#operation('setup',async()=>{
     assertFixtureEnvironment();
-    const deadline=performance.now()+CAPS.setupMs;
-    await this.gate.require('preflight');if(this.phase!=='new')refuse('OWNER_PHASE');this.#setupDeadline=deadline;this.#remaining();
+    await this.#authorize('preflight');if(this.phase!=='new')refuse('OWNER_PHASE');this.#remaining();
     if(process.versions.node!==PIN.node)refuse('OWNER_NODE_PIN');
     const free=await this.#hostFree();residualCapacity(free,100*GiB);
     const m=this.#manifest;if(!m||m.runId!==this.plan.runId)refuse('OWNER_MANIFEST');
     for(const [name,version] of [['colima',PIN.colima],['docker',PIN.docker],['pnpm',PIN.pnpm]]){
-      const alias=command(this.plan,name,['--version']).executable;const executable=await resolveExecutable(alias,m.tools?.[name]);this.#executables[name]=executable;
+      const alias=command(this.plan,name,['--version']).executable;const executable=await this.#wait(()=>resolveExecutable(alias,m.tools?.[name]));this.#executables[name]=executable;
       const r=await this.#run('preflight',name,['--version']);if(!r.stdout.includes(version))refuse('OWNER_TOOL_VERSION');
     }
-    const vm=await regular(this.plan.vmImage);if(vm.size!==PIN.vmBytes||await fileHash(this.plan.vmImage)!==PIN.vmSha256)refuse('OWNER_VM_PIN');
+    const vm=await this.#wait(()=>regular(this.plan.vmImage));if(vm.size!==PIN.vmBytes||await this.#hash(this.plan.vmImage)!==PIN.vmSha256)refuse('OWNER_VM_PIN');
     const layout=this.plan.ociLayout;if(!layout)refuse('OWNER_OCI_CACHE');
-    const manifest=await jsonFile(layout+'/blobs/sha256/'+PIN.imageDigest.slice(7));
-    if(await fileHash(layout+'/blobs/sha256/'+PIN.imageDigest.slice(7))!==PIN.imageDigest.slice(7)||manifest.config.digest!==PIN.configDigest)refuse('OWNER_OCI_MANIFEST');
-    const config=await jsonFile(layout+'/blobs/sha256/'+PIN.configDigest.slice(7));
-    if(await fileHash(layout+'/blobs/sha256/'+PIN.configDigest.slice(7))!==PIN.configDigest.slice(7)||config.os!=='linux'||config.architecture!=='arm64')refuse('OWNER_OCI_PLATFORM');
-    let compressed=0;for(const layer of manifest.layers){if(!/^sha256:[0-9a-f]{64}$/.test(layer.digest))refuse('OWNER_OCI_LAYER');const p=layout+'/blobs/sha256/'+layer.digest.slice(7),s=await regular(p);if(s.size!==layer.size||await fileHash(p)!==layer.digest.slice(7))refuse('OWNER_OCI_LAYER');compressed+=s.size;this.#remaining();}
+    const manifest=await this.#wait(()=>jsonFile(layout+'/blobs/sha256/'+PIN.imageDigest.slice(7)));
+    if(await this.#hash(layout+'/blobs/sha256/'+PIN.imageDigest.slice(7))!==PIN.imageDigest.slice(7)||manifest.config.digest!==PIN.configDigest)refuse('OWNER_OCI_MANIFEST');
+    const config=await this.#wait(()=>jsonFile(layout+'/blobs/sha256/'+PIN.configDigest.slice(7)));
+    if(await this.#hash(layout+'/blobs/sha256/'+PIN.configDigest.slice(7))!==PIN.configDigest.slice(7)||config.os!=='linux'||config.architecture!=='arm64')refuse('OWNER_OCI_PLATFORM');
+    let compressed=0;for(const layer of manifest.layers){if(!/^sha256:[0-9a-f]{64}$/.test(layer.digest))refuse('OWNER_OCI_LAYER');const p=layout+'/blobs/sha256/'+layer.digest.slice(7),s=await this.#wait(()=>regular(p));if(s.size!==layer.size||await this.#hash(p)!==layer.digest.slice(7))refuse('OWNER_OCI_LAYER');compressed+=s.size;this.#remaining();}
     if(compressed!==156463634||manifest.layers.length!==14)refuse('OWNER_OCI_SIZE');
     // Docker support is independently demonstrated for a supplied cache archive.
     // No implicit OCI conversion/load/pull and no startup-triggered download.
-    if(!m.imageImport||m.imageImport.protocol!=='REVIEWED_DOCKER_LOAD_ARCHIVE'||m.imageImport.imageDigest!==PIN.imageDigest||!this.plan.importArchive||m.imageImport.sha256!==await fileHash(this.plan.importArchive))refuse('OWNER_OCI_IMPORT_UNVERIFIED');
-    if((await regular(this.plan.importArchive)).size>8*GiB)refuse('OWNER_IMAGE_ARCHIVE_LIMIT');
+    if(!m.imageImport||m.imageImport.protocol!=='REVIEWED_DOCKER_LOAD_ARCHIVE'||m.imageImport.imageDigest!==PIN.imageDigest||!this.plan.importArchive||m.imageImport.sha256!==await this.#hash(this.plan.importArchive))refuse('OWNER_OCI_IMPORT_UNVERIFIED');
+    if((await this.#wait(()=>regular(this.plan.importArchive))).size>8*GiB)refuse('OWNER_IMAGE_ARCHIVE_LIMIT');
     // A source-bound exhaustive sink contract is an external prerequisite. A
     // boolean supplied by the candidate cannot substitute for its review receipt.
     if(!m.logRouting?.sourceReceipt||!m.logRouting.routes?.length||m.logRouting.vmImageSha256!==PIN.vmSha256||m.logRouting.guestBootPolicy!=='NO_PERSISTENT_LOG_SINKS_BEFORE_OWNED_SETUP')refuse('OWNER_LOG_ROUTING_UNVERIFIED');
-    const proof=await jsonFile(m.logRouting.sourceReceipt.path);if(await fileHash(m.logRouting.sourceReceipt.path)!==m.logRouting.sourceReceipt.sha256||proof.status!=='EXHAUSTIVE_LOG_SINKS_REVIEWED'||proof.runId!==this.plan.runId||proof.vmImageSha256!==PIN.vmSha256||JSON.stringify(proof.routes)!==JSON.stringify(m.logRouting.routes))refuse('OWNER_LOG_SOURCE_RECEIPT');
-    this.#defaultState=await this.#defaults();this.phase='preflight';return {status:'PREFLIGHT_INPUTS_VERIFIED_RUNTIME_NOT_STARTED',hostFree:free,compressedLayerBytes:compressed};
+    const proof=await this.#wait(()=>jsonFile(m.logRouting.sourceReceipt.path));if(await this.#hash(m.logRouting.sourceReceipt.path)!==m.logRouting.sourceReceipt.sha256||proof.status!=='EXHAUSTIVE_LOG_SINKS_REVIEWED'||proof.runId!==this.plan.runId||proof.vmImageSha256!==PIN.vmSha256||JSON.stringify(proof.routes)!==JSON.stringify(m.logRouting.routes))refuse('OWNER_LOG_SOURCE_RECEIPT');
+    const defaults=await this.#defaults();this.#scope();this.#defaultState=defaults;this.phase='preflight';return {status:'PREFLIGHT_INPUTS_VERIFIED_RUNTIME_NOT_STARTED',hostFree:free,compressedLayerBytes:compressed};
+
+    });return this.#preflightPromise;
   }
-  async #initRoots(){
+  async #initRoots(){return this.#operation('setup',async()=>{
     const deadline=this.#setupDeadline,check=()=>{if(this.signal.aborted)refuse('OWNER_CANCELLED');if(deadline===null||performance.now()>=deadline)refuse('OWNER_SETUP_DEADLINE');};
-    await this.gate.require('create-owned-root');check();const p=this.plan;
+    await this.#authorize('create-owned-root');check();const p=this.plan;
     for(const dir of [p.artifactRoot,path.dirname(p.colimaHome)]){
-      try{await fs.lstat(dir);check();refuse('OWNER_EXISTING_ROOT');}catch(e){if(e.code!=='ENOENT')throw e;}
-      check();await fs.mkdir(dir,{mode:0o700});check();
+      try{await this.#fs('lstat',dir);check();refuse('OWNER_EXISTING_ROOT');}catch(e){if(e.code!=='ENOENT')throw e;}
+      check();await this.#fs('mkdir',dir,{mode:0o700});check();
     }
-    for(const dir of [p.colimaHome,p.dockerConfig,p.results]){check();await fs.mkdir(dir,{mode:0o700});check();}
+    for(const dir of [p.colimaHome,p.dockerConfig,p.results]){check();await this.#fs('mkdir',dir,{mode:0o700});check();}
     this.#secrets=Object.fromEntries(['b1_bootstrap','b1_migrator','b1_app'].map(role=>[role,randomBytes(32).toString('hex')]));
-    await privateFile(p.artifactRoot+'/database-secrets.json',JSON.stringify(this.#secrets),{exclusive:true,beforeWrite:check});
-    await privateFile(p.artifactRoot+'/identity.json',JSON.stringify({runId:p.runId,uid:p.uid,colimaHome:p.colimaHome,profile:p.profile,socket:p.socket,containerName:p.containerName,networkName:p.networkName}),{exclusive:true,beforeWrite:check});check();
+    await this.#writePrivate(p.artifactRoot+'/database-secrets.json',JSON.stringify(this.#secrets));
+    await this.#writePrivate(p.artifactRoot+'/identity.json',JSON.stringify({runId:p.runId,uid:p.uid,colimaHome:p.colimaHome,profile:p.profile,socket:p.socket,containerName:p.containerName,networkName:p.networkName}));check();
+
+    });
   }
-  async #logVolume(){
+  async #logVolume(){return this.#operation('setup',async()=>{
     const p=this.plan;
     await this.#run('hdiutil-create','hdiutil',['create','-size','128m','-layout','NONE','-fs','HFS+','-volname','B1-'+p.runId,'-type','UDRW',p.logImage]);
-    if((await regular(p.logImage)).size>CAPS.results)refuse('OWNER_LOG_IMAGE_LIMIT');
+    if((await this.#wait(()=>regular(p.logImage))).size>CAPS.results)refuse('OWNER_LOG_IMAGE_LIMIT');
     await this.#run('hdiutil-attach','hdiutil',['attach','-nobrowse','-noautoopen','-mountpoint',p.results,p.logImage]);
-    const stat=await fs.stat(p.results),parent=await fs.stat(p.artifactRoot),v=await fs.statfs(p.results);
+    const stat=await this.#fs('stat',p.results),parent=await this.#fs('stat',p.artifactRoot),v=await this.#fs('statfs',p.results);
     if(stat.dev===parent.dev||v.blocks*v.bsize>CAPS.results)refuse('OWNER_LOG_FILESYSTEM_CAP');this.#logDevice=stat.dev;
+    this.#identities.mount={runId:p.runId,action:'hdiutil-attach',device:integer(stat.dev),path:p.results};
     const routes=this.#manifest.logRouting.routes;
     for(const r of routes){
       if(typeof r.path!=='string'||!r.path.startsWith(p.colimaHome+'/')||path.resolve(r.path)!==r.path||typeof r.sink!=='string'||!r.sink.startsWith(p.results+'/')||path.resolve(r.sink)!==r.sink||!['file','directory'].includes(r.kind))refuse('OWNER_LOG_ROUTE_PATH');
-      await fs.mkdir(path.dirname(r.path),{recursive:true,mode:0o700});await fs.mkdir(path.dirname(r.sink),{recursive:true,mode:0o700});
-      if(r.kind==='directory')await fs.mkdir(r.sink,{mode:0o700});else await privateFile(r.sink,'',{exclusive:true});
-      await fs.symlink(r.sink,r.path);if(!(await fs.lstat(r.path)).isSymbolicLink()||await fs.realpath(r.path)!==r.sink||(await fs.stat(r.path)).dev!==this.#logDevice)refuse('OWNER_LOG_ROUTE');
+      await this.#routeParents(p.colimaHome,path.dirname(r.path));await this.#routeParents(p.results,path.dirname(r.sink));
+      if(r.kind==='directory')await this.#fs('mkdir',r.sink,{mode:0o700});else await this.#writePrivate(r.sink,'');
+      await this.#fs('symlink',r.sink,r.path);if(!(await this.#fs('lstat',r.path)).isSymbolicLink()||await this.#fs('realpath',r.path)!==r.sink||(await this.#fs('stat',r.path)).dev!==this.#logDevice)refuse('OWNER_LOG_ROUTE');
     }
     await this.#assertLogRoutes();
+
+    });
   }
-  async #assertLogRoutes(){if(this.#logDevice===null)refuse('OWNER_LOG_NOT_MOUNTED');for(const r of this.#manifest.logRouting.routes){if(!(await fs.lstat(r.path)).isSymbolicLink()||await fs.realpath(r.path)!==r.sink||(await fs.stat(r.path)).dev!==this.#logDevice)refuse('OWNER_LOG_ROUTE_CHANGED');}const v=await fs.statfs(this.plan.results);if(v.blocks*v.bsize>CAPS.results)refuse('OWNER_LOG_FILESYSTEM_CAP');}
+  async #assertLogRoutes(){if(this.#logDevice===null)refuse('OWNER_LOG_NOT_MOUNTED');for(const r of this.#manifest.logRouting.routes){if(!(await this.#fs('lstat',r.path)).isSymbolicLink()||await this.#fs('realpath',r.path)!==r.sink||(await this.#fs('stat',r.path)).dev!==this.#logDevice)refuse('OWNER_LOG_ROUTE_CHANGED');}const v=await this.#fs('statfs',this.plan.results);if(v.blocks*v.bsize>CAPS.results)refuse('OWNER_LOG_FILESYSTEM_CAP');}
   async record(name,measurement){
-    if(!/^[a-z0-9-]{1,80}$/.test(name))refuse('OWNER_RECEIPT_NAME');await this.#assertLogRoutes();
-    const value={at:new Date().toISOString(),runId:this.plan.runId,measurement};const out=JSON.stringify(value)+'\n';if(Buffer.byteLength(out)>MiB)refuse('OWNER_RECEIPT_LIMIT');
-    await privateFile(this.plan.results+'/'+name+'.json',out,{exclusive:true});return this.plan.results+'/'+name+'.json';
+    if(arguments.length!==2||typeof name!=='string'||!/^[a-z0-9-]{1,80}$/.test(name)||name.startsWith('cleanup-')||name==='cleanup')refuse('OWNER_RECEIPT_NAME');
+    const standalone=!this.#operations.getStore();
+    if(name==='suite-accounting'){
+      if(!standalone||this.#cleanupEnd===null)refuse('OWNER_TERMINAL_EVIDENCE_SCOPE');
+      return this.#terminalEvidence('suite-accounting',this.#accounting(measurement));
+    }
+    return this.#operation('active',async()=>{if(standalone)await this.#authorize('inspect-owned-fixture');return this.#writeRecord(name,measurement);});
   }
-  async #guest(action,args=[],stdin=null){
-    const source=await fs.readFile(new URL('./guest.sh',import.meta.url),'utf8');
+  async #guest(action,args=[],stdin=null){return this.#operation('active',async()=>{
+    const source=await this.#fs('readFile',new URL('./guest.sh',import.meta.url),'utf8');
     if(this.#manifest.sourceSha256?.['guest.sh']!==digest(source))refuse('OWNER_GUEST_SOURCE_CHANGED');
     // No host sudo. Script and arguments execute inside the exact profile only.
     const r=await this.#run('guest-'+action,'colima',['ssh','--','sudo','-n','bash','-c',source,'b1-owner',this.plan.runId,action,...args],{stdin,secret:action==='secrets'});
     if(action==='secrets')return;return JSON.parse(r.stdout);
+
+    });
   }
-  async #dockerJson(action,args){const r=await this.#run(action,'docker',args);return JSON.parse(r.stdout);}
-  async provision(){
-    await this.gate.require('provision');if(this.phase!=='preflight')refuse('OWNER_PHASE');await this.#initRoots();this.phase='allocating';await this.#logVolume();
+  async #dockerJson(action,args){return this.#operation('active',async()=>{const r=await this.#run(action,'docker',args);return JSON.parse(r.stdout);
+    });
+  }
+  provision(){
+    if(this.#provisionPromise)return this.#provisionPromise;
+    this.#provisionPromise=this.#operation('setup',async()=>{
+    await this.#authorize('provision');if(this.phase!=='preflight')refuse('OWNER_PHASE');await this.#initRoots();this.#scope();this.phase='allocating';await this.#logVolume();
     // Routing exists and is measured before the first VM command.
     await this.#assertLogRoutes();await this.#run('colima-start','colima',colimaStartArgs(this.plan),{timeoutMs:600000});
     const vm=await this.#dockerJsonColima();await this.#validateVm(vm);await this.#guest('preflight');await this.#guest('prepare');
@@ -333,29 +455,33 @@ export class OwnerSupervisor {
     const net=await this.#run('docker-network-create','docker',['network','create','--internal','--label','b1.owner='+this.plan.runId,this.plan.networkName]);const networkId=net.stdout.trim();
     if(!/^[0-9a-f]{64}$/.test(networkId))refuse('OWNER_NETWORK_ID');
     // Bind sources must exist before Docker validates the create request.
-    const result=await createContainerWithSecret({writeSecret:()=>this.#guest('secrets',[],Object.values(this.#secrets).join('\n')+'\n'),create:()=>this.#run('docker-create','docker',containerArgs(this.plan,networkId))});const containerId=result.stdout.trim();if(!/^[0-9a-f]{64}$/.test(containerId))refuse('OWNER_CONTAINER_ID');
+    const result=await this.#wait(()=>createContainerWithSecret({writeSecret:()=>this.#guest('secrets',[],Object.values(this.#secrets).join('\n')+'\n'),create:()=>this.#run('docker-create','docker',containerArgs(this.plan,networkId))}));const containerId=result.stdout.trim();if(!/^[0-9a-f]{64}$/.test(containerId))refuse('OWNER_CONTAINER_ID');
     // Capture identities immediately so cancellation can stop only these IDs.
     this.owner=Object.freeze({runId:this.plan.runId,uid:this.plan.uid,artifactRoot:this.plan.artifactRoot,
       containerId,networkId,imageDigest:PIN.imageDigest,platform:PIN.platform,host:'127.0.0.1',port:0});
-    await privateFile(this.plan.artifactRoot+'/resource-identity.json',JSON.stringify(this.owner),{exclusive:true});
+    await this.#identityFile(this.owner,{initial:true});
     await this.#run('docker-cp-passwd','docker',['cp',containerId+':/etc/passwd',this.plan.results+'/container-passwd']);
-    const passwd=await fs.readFile(this.plan.results+'/container-passwd','utf8'),line=passwd.split('\n').find(s=>s.startsWith('postgres:'));if(!line)refuse('OWNER_POSTGRES_UID');
+    const passwd=await this.#fs('readFile',this.plan.results+'/container-passwd','utf8'),line=passwd.split('\n').find(s=>s.startsWith('postgres:'));if(!line)refuse('OWNER_POSTGRES_UID');
     const [,,pgUid,pgGid]=line.split(':');integer(Number(pgUid),1);integer(Number(pgGid),1);
     this.#quotaProof=await this.#guest('quota-test',[pgUid,pgGid]);if(this.#quotaProof.enospcObserved!==true||this.#quotaProof.furtherAllocationFailed!==true||this.#quotaProof.uid!==Number(pgUid)||this.#quotaProof.gid!==Number(pgGid))refuse('OWNER_ENOSPC_NOT_PROVEN');await this.record('durable-cap-negative-write',this.#quotaProof);
     this.#guestIdentity=await this.#guest('inspect');await this.#guest('sentinel');
-    await this.#run('docker-start','docker',['start',containerId]);this.phase='provisioned';
-    const observed=await this.#resources();this.backendPort=observed.backendPort;
+    await this.#run('docker-start','docker',['start',containerId]);this.#scope();this.phase='provisioned';
+    const observed=await this.#resources();this.#scope();this.backendPort=observed.backendPort;
     await this.#forwarder(this.backendPort);await this.#roles();
-    assertFixtureEnvironment();this.proxy=new WireProxy({backendPort:this.backendPort,authorize:a=>this.gate.require(a),onFailure:e=>{this.addEvent({wireFailure:safeCode(e)});}});
-    const front=await this.proxy.start({deadline:this.#deadline(),signal:this.signal});this.owner=Object.freeze({...this.owner,port:front});
-    await privateFile(this.plan.artifactRoot+'/resource-identity.json',JSON.stringify(this.owner));
+    assertFixtureEnvironment();this.proxy=new WireProxy({backendPort:this.backendPort,authorize:a=>this.#authorize(a),createListener:this.#listenerFactory,onFailure:e=>{this.addEvent({wireFailure:safeCode(e)});}});
+    const front=await this.#wait(()=>this.proxy.start({deadline:this.#deadline(),signal:this.signal}));this.#scope();this.owner=Object.freeze({...this.owner,port:front});
+    await this.#identityFile(this.owner);
     await this.verifyOwner(this.owner,'connect-owned-fixture');return this.owner;
+
+    });return this.#provisionPromise;
   }
-  async #dockerJsonColima(){const r=await this.#run('colima-status','colima',['status','--json']);return JSON.parse(r.stdout);}
-  async #validateVm(vm){
+  async #dockerJsonColima(){return this.#operation('active',async()=>{const r=await this.#run('colima-status','colima',['status','--json']);return JSON.parse(r.stdout);
+    });
+  }
+  async #validateVm(vm){return this.#operation('active',async()=>{
     // Version-bound observation schema is supplied by the independent collector.
     // Colima status alone is insufficient: generated config and guest facts agree.
-    const config=await fs.readFile(this.plan.colimaHome+'/b1-owner/colima.yaml','utf8');
+    const config=await this.#fs('readFile',this.plan.colimaHome+'/b1-owner/colima.yaml','utf8');
     const r=await this.#guest('preflight');
     if(r.cpu!==2||r.memoryBytes>CAPS.vmMemory||r.memoryBytes<2*GiB||r.swapBytes!==0||r.hostMounts.length!==0||r.rootFilesystemBytes>CAPS.rootDisk||r.rootFilesystemBytes<11*GiB||r.dockerFilesystemBytes>CAPS.vmDataDisk||r.dockerFilesystemBytes<15*GiB||r.rootDevice===r.dockerDevice)refuse('OWNER_VM_ISOLATION');
     const fields=this.#manifest.vmConfigFields;if(!fields)refuse('OWNER_VM_CONFIG_SCHEMA');
@@ -364,8 +490,10 @@ export class OwnerSupervisor {
     // No host mount and no change to ambient default configuration.
     if(!/mounts:\s*\[\]/.test(config)||JSON.stringify(await this.#defaults())!==JSON.stringify(this.#defaultState))refuse('OWNER_DEFAULT_OR_MOUNTS_CHANGED');
     await this.record('vm-isolation',{status:vm,guest:r,configurationSha256:digest(config)});
+
+    });
   }
-  async #resources(){
+  async #resources(){return this.#operation('active',async()=>{
     if(!this.owner)refuse('OWNER_RESOURCE_ID_REQUIRED');await this.#assertLogRoutes();
     const p=this.plan,o=this.owner,[c]=await this.#dockerJson('docker-inspect',['inspect',o.containerId]);
     const [n]=await this.#dockerJson('docker-network-inspect',['network','inspect',o.networkId]);
@@ -378,47 +506,53 @@ export class OwnerSupervisor {
     const publication=c.NetworkSettings.Ports?.['5432/tcp'];if(!publication||publication.length!==1||publication[0].HostIp!=='127.0.0.1')refuse('OWNER_PUBLICATION');
     const backendPort=Number(publication[0].HostPort);integer(backendPort,1,65535);
     if(Object.keys(n.Containers??{}).some(id=>id!==o.containerId))refuse('OWNER_FOREIGN_NETWORK_MEMBER');
-    const socket=await fs.lstat(p.socket);if(!socket.isSocket()||socket.uid!==p.uid)refuse('OWNER_SOCKET_IDENTITY');
+    const socket=await this.#fs('lstat',p.socket);if(!socket.isSocket()||socket.uid!==p.uid)refuse('OWNER_SOCKET_IDENTITY');
     const guest=await this.#guest('inspect');if(guest.quotaBytes!==CAPS.data||guest.blockSize!==4096||guest.blockCount!==524288||guest.mountType!=='ext4'||guest.backingFile!==p.guestRoot+'/data.ext4'||guest.swapBytes!==0||guest.secretModes!==true||guest.enospcProofExists!==true)refuse('OWNER_GUEST_CAP_OR_MODES');
     if(this.#guestIdentity&&['filesystemUuid','backingInode','loopDevice','mountDevice'].some(k=>guest[k]!==this.#guestIdentity[k]))refuse('OWNER_DATA_IDENTITY_CHANGED');
     const remaining=residualCapacity(await this.#hostFree(),guest.capacityParentFreeBytes,{hostReserve:GiB,guestReserve:0});
     return {backendPort,guest,remaining,container:{id:c.Id,image:c.Image,caps:{cpu:h.NanoCpus,memory:h.Memory,swap:h.MemorySwap,pids:h.PidsLimit,shm:h.ShmSize},mounts:c.Mounts,publication},network:{id:n.Id,internal:n.Internal},socket:{dev:socket.dev,ino:socket.ino,uid:socket.uid}};
+
+    });
   }
-  async #forwarder(port){
+  async #forwarder(port){return this.#operation('active',async()=>{
     const r=await this.#run('verify-forwarder','lsof',['-nP','-iTCP:'+port,'-sTCP:LISTEN','-FpuLn']);
     const lines=r.stdout.trim().split('\n'),pids=lines.filter(s=>/^p[0-9]+$/.test(s)).map(s=>Number(s.slice(1)));
     if(pids.length!==1||lines.filter(s=>s.startsWith('n')).some(s=>s!=='n127.0.0.1:'+port))refuse('OWNER_FORWARDER_BIND');
     const identity=await this.#run('verify-forwarder','ps',['-p',String(pids[0]),'-o','uid=,lstart=,command=']);
     const raw=identity.stdout.trim();if(!raw.startsWith(String(this.plan.uid)+' ')||!raw.includes(this.plan.colimaHome))refuse('OWNER_FORWARDER_IDENTITY');
     return {pid:pids[0],birthAndCommandHash:digest(raw),bind:'127.0.0.1:'+port};
+
+    });
   }
   connections({backend=false}={}){
     assertFixtureEnvironment();
-    if(!this.owner||!this.#secrets)refuse('OWNER_NOT_PROVISIONED');const port=backend?this.backendPort:this.owner.port;integer(port,1,65535);
+    if(!this.owner||!this.#secrets)refuse('OWNER_NOT_PROVISIONED');this.captureAdmission().check();const port=backend?this.backendPort:this.owner.port;integer(port,1,65535);
     return Object.fromEntries(Object.entries(this.#secrets).map(([role,password])=>[role,{host:'127.0.0.1',port,database:'b1',user:role,password}]));
   }
-  async withClient(role,callback,{backend=true}={}){
-    const phaseEnd=this.#deadline();
-    await this.gate.require('inspect-owned-fixture');if(this.signal.aborted)refuse('OWNER_CANCELLED');remainingMilliseconds(phaseEnd);
+  async withClient(role,callback,{backend=true}={}){return this.#operation('active',async()=>{
+    const operationScope=this.#scope(),phaseEnd=this.#deadline();
+    await this.#authorize('inspect-owned-fixture');if(this.signal.aborted)refuse('OWNER_CANCELLED');remainingMilliseconds(phaseEnd);
     const release=this.budget.reserve('helper',2);let pool,client;
     try{
       pool=createOwnedPool(this.connections({backend})[role]);pool.on('error',()=>{});
       const connectEnd=Math.min(phaseEnd,performance.now()+1500);
       client=await ownedRace(()=>{if(this.signal.aborted)refuse('OWNER_CANCELLED');remainingMilliseconds(connectEnd,1500);return pool.connect();},
         {signal:this.signal,deadline:connectEnd,onLate:c=>{c.connection?.stream?.destroy();c.release(true);}});
-      client.on('error',()=>{});let active=true;const deadline=Math.min(phaseEnd,performance.now()+5000),raw=client;
-      const check=()=>{if(!active||this.signal.aborted||performance.now()>=deadline)refuse('OWNER_CLIENT_SCOPE_ENDED');};
+      client.on('error',()=>{});operationScope.check();let active=true;const deadline=Math.min(phaseEnd,performance.now()+5000),raw=client;
+      const check=()=>{if(!active||this.signal.aborted||performance.now()>=deadline)refuse('OWNER_CLIENT_SCOPE_ENDED');try{operationScope.check();}catch{refuse('OWNER_CLIENT_SCOPE_ENDED');}};
       const guarded={query:(...args)=>{check();return raw.query(...args);}};
       try{return await ownedRace(()=>{check();return callback(guarded);},{signal:this.signal,deadline});}finally{active=false;}
     }finally{
       try{client?.connection?.stream?.destroy();client?.release(true);if(pool)await closeOwnedPool(pool,1000);}finally{release();}
     }
+
+    });
   }
-  async #roles(){
-    await this.gate.require('provision-roles');
+  async #roles(){return this.#operation('active',async()=>{
+    await this.#authorize('provision-roles');
     // Readiness is bounded. Only the verified loopback forwarder is contacted.
-    const deadline=performance.now()+30000;let ready=false;
-    while(performance.now()<deadline){try{await this.withClient('b1_bootstrap',c=>c.query('SELECT 1'));ready=true;break;}catch{await new Promise(r=>setTimeout(r,50));if(this.signal.aborted)refuse('OWNER_CANCELLED');}}
+    const deadline=Math.min(this.#deadline(),performance.now()+30000);let ready=false;
+    while(performance.now()<deadline){try{await this.withClient('b1_bootstrap',c=>c.query('SELECT 1'));ready=true;break;}catch{await this.#wait(()=>new Promise(r=>setTimeout(r,50)));if(this.signal.aborted)refuse('OWNER_CANCELLED');}}
     if(!ready)refuse('OWNER_DATABASE_NOT_READY');
     await this.withClient('b1_bootstrap',async c=>{
       const s=this.#secrets;if(Object.values(s).some(p=>!/^[0-9a-f]{64}$/.test(p)))refuse('OWNER_SECRET_FORMAT');
@@ -428,8 +562,10 @@ export class OwnerSupervisor {
       await c.query("CREATE ROLE b1_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '"+s.b1_app+"'");
       await c.query('REVOKE ALL ON DATABASE b1 FROM PUBLIC');await c.query('GRANT CONNECT ON DATABASE b1 TO b1_migrator,b1_app');await c.query('GRANT CREATE ON DATABASE b1 TO b1_migrator');await c.query('REVOKE ALL ON SCHEMA public FROM PUBLIC');
     });
+
+    });
   }
-  async #roleFacts(){
+  async #roleFacts(){return this.#operation('active',async()=>{
     return this.withClient('b1_bootstrap',async c=>{
       const {rows}=await c.query("SELECT rolname,rolsuper,rolcreatedb,rolcreaterole,rolreplication,has_database_privilege(rolname,'b1','CREATE') AS ddl,has_database_privilege(rolname,'b1','TEMP') AS temp,has_database_privilege(rolname,'b1','CONNECT') AS connect FROM pg_roles WHERE rolname IN ('b1_bootstrap','b1_migrator','b1_app') ORDER BY rolname");
       if(rows.length!==3)refuse('OWNER_ROLE_COUNT');for(const r of rows)if(r.rolname!=='b1_bootstrap'&&(r.rolsuper||r.rolcreatedb||r.rolcreaterole||r.rolreplication||r.temp||!r.connect||r.ddl!==(r.rolname==='b1_migrator')))refuse('OWNER_ROLE_GRANTS');
@@ -446,48 +582,61 @@ export class OwnerSupervisor {
       }
       return {roles:rows,settings,catalog};
     });
+
+    });
   }
-  async verifyOwner(candidate,action){
-    await this.gate.require(action);if(!this.owner||candidate!==this.owner)refuse('OWNER_CANDIDATE_IDENTITY');
+  async verifyOwner(candidate,action){return this.#operation('active',async()=>{
+    await this.#authorize(action);if(!this.owner||candidate!==this.owner)refuse('OWNER_CANDIDATE_IDENTITY');
     const measured=await this.#resources();if(measured.backendPort!==this.backendPort)refuse('OWNER_BACKEND_PORT_CHANGED');const forwarder=await this.#forwarder(measured.backendPort),roles=await this.#roleFacts();
     if(action==='create-fresh-schema'&&roles.settings.schema!==null)refuse('OWNER_SCHEMA_NOT_FRESH');
     if(action==='verify-health'&&!roles.catalog)refuse('OWNER_SCHEMA_NOT_MIGRATED');
     const files=['database-secrets.json','identity.json','resource-identity.json'];
-    for(const f of files){const s=await regular(this.plan.artifactRoot+'/'+f);if(s.uid!==this.plan.uid||(s.mode&0o777)!==0o600)refuse('OWNER_SECRET_MODE');}
-    for(const d of [this.plan.artifactRoot,this.plan.dockerConfig]){const s=await fs.lstat(d);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o777)!==0o700)refuse('OWNER_PRIVATE_DIRECTORY');}
+    for(const f of files){const s=await this.#wait(()=>regular(this.plan.artifactRoot+'/'+f));if(s.uid!==this.plan.uid||(s.mode&0o777)!==0o600)refuse('OWNER_SECRET_MODE');}
+    for(const d of [this.plan.artifactRoot,this.plan.dockerConfig]){const s=await this.#fs('lstat',d);if(!s.isDirectory()||s.isSymbolicLink()||(s.mode&0o777)!==0o700)refuse('OWNER_PRIVATE_DIRECTORY');}
     if(JSON.stringify(await this.#defaults())!==JSON.stringify(this.#defaultState))refuse('OWNER_DEFAULT_CHANGED');
     const rawRef=await this.record('admission-'+randomBytes(8).toString('hex'),{resources:measured,forwarder,roles,rolePhase:roles.catalog?'migrated-catalog':'provisioned-database'});
     return {...this.owner,storageFreeBytes:measured.remaining,dataQuotaBytes:measured.guest.quotaBytes,connectionLimit:Number(roles.settings.max_connections),cpuLimit:2,memoryLimitBytes:GiB,shmBytes:CAPS.shm,wallBudgetSeconds:1800,resultsQuotaBytes:CAPS.results,durabilityMountVerified:true,loopbackPublicationVerified:true,roleGrantsVerified:true,secretFileModesVerified:true,rolePhase:roles.catalog?'migrated-catalog':'provisioned-database',rawMeasurement:rawRef};
+
+    });
   }
   beginSql(){
+    this.#operations.getStore()?.check();
     if(this.#suiteTimer)refuse('OWNER_SUITE_ALREADY_STARTED');if(this.signal.aborted)refuse('OWNER_CANCELLED');
     const now=performance.now();if(this.#setupDeadline===null||now>=this.#setupDeadline)refuse('OWNER_SETUP_DEADLINE');
     this.#suiteDeadline=now+CAPS.suiteMs;this.#suiteTimer=setTimeout(()=>this.cancel('OWNER_SUITE_DEADLINE'),CAPS.suiteMs);
   }
   setBindingsFingerprint(fingerprint){if(!/^[0-9a-f]{64}$/.test(fingerprint)||this.#bindingsFingerprint&&this.#bindingsFingerprint!==fingerprint)refuse('OWNER_SIGNING_IDENTITY_CHANGED');this.#bindingsFingerprint=fingerprint;}
-  async #durableSnapshot(){return this.withClient('b1_bootstrap',async c=>{
+  async #durableSnapshot(){return this.#operation('active',async()=>{return this.withClient('b1_bootstrap',async c=>{
     const {rows:[control]}=await c.query('SELECT system_identifier::text FROM pg_control_system()');const {rows:[schema]}=await c.query("SELECT to_regnamespace('provider_b1')::text AS schema");const hashes={};
     if(schema.schema)for(const table of ['domains','domain_clocks','installations','pools','profiles','credentials','challenges','operations']){const {rows}=await c.query('SELECT to_jsonb(t)::text AS value FROM provider_b1.'+table+' t ORDER BY to_jsonb(t)::text');hashes[table]=digest(JSON.stringify(rows.map(r=>r.value)));}
     return {systemIdentifier:control.system_identifier,rowHashes:hashes,signingFingerprint:this.#bindingsFingerprint};
-  });}
-  async restartDatabase(candidate,kind){
+  });
+    });
+  }
+  async restartDatabase(candidate,kind){return this.#operation('active',async()=>{
     if(candidate!==this.owner||!['clean','crash'].includes(kind))refuse('OWNER_RESTART_KIND');await this.verifyOwner(candidate,'restart-owned-database');
     if(this.budget.state.used!==0)refuse('OWNER_ACTIVE_CLIENTS');const before=await this.#durableSnapshot();await this.#guest('verify-sentinel');
     await this.#run(kind==='clean'?'docker-stop':'docker-kill','docker',kind==='clean'?['stop','--time','5',this.owner.containerId]:['kill','--signal','KILL',this.owner.containerId]);
     await this.#run('docker-start','docker',['start',this.owner.containerId]);
     const after=await this.#waitSnapshot();if(JSON.stringify(before)!==JSON.stringify(after))refuse('OWNER_RESTART_DURABILITY');await this.#guest('verify-sentinel');await this.verifyOwner(this.owner,'verify-health');
     return this.record('restart-'+randomBytes(6).toString('hex'),{kind,before,after});
+
+    });
   }
-  async #waitSnapshot(){const end=performance.now()+30000;while(performance.now()<end){try{return await this.#durableSnapshot();}catch{if(this.signal.aborted)refuse('OWNER_CANCELLED');await new Promise(r=>setTimeout(r,50));}}refuse('OWNER_RESTART_NOT_READY');}
-  async restartVm(){
+  async #waitSnapshot(){return this.#operation('active',async()=>{const end=Math.min(this.#deadline(),performance.now()+30000);while(performance.now()<end){try{return await this.#durableSnapshot();}catch{if(this.signal.aborted)refuse('OWNER_CANCELLED');await this.#wait(()=>new Promise(r=>setTimeout(r,50)));}}refuse('OWNER_RESTART_NOT_READY');
+    });
+  }
+  async restartVm(){return this.#operation('active',async()=>{
     await this.verifyOwner(this.owner,'restart-owned-vm');if(this.budget.state.used!==0)refuse('OWNER_ACTIVE_CLIENTS');const before=await this.#durableSnapshot();
     await this.#run('colima-stop','colima',['stop']);await this.#run('colima-start','colima',colimaStartArgs(this.plan),{timeoutMs:600000});
     await this.#guest('prepare');await this.#run('docker-start','docker',['start',this.owner.containerId]);const after=await this.#waitSnapshot();
     if(JSON.stringify(before)!==JSON.stringify(after))refuse('OWNER_VM_RESTART_DURABILITY');await this.#guest('verify-sentinel');return this.record('vm-restart-'+randomBytes(6).toString('hex'),{before,after});
+
+    });
   }
   cancel(code='OWNER_CANCELLED'){this.#controller.abort(new OwnerError(code));this.#commands.stop();}
   async cleanup({deadline=performance.now()+CAPS.cleanupMs}={}){
-    const end=Math.min(deadline,performance.now()+CAPS.cleanupMs);
+    const requested=Math.min(deadline,performance.now()+CAPS.cleanupMs);this.#cleanupEnd=this.#cleanupEnd===null?requested:Math.min(this.#cleanupEnd,requested);const end=this.#cleanupEnd;
     clearTimeout(this.#suiteTimer);const failures=[];let cleanupCode,authorized=false;
     // Terminal local retirement cannot depend on an external phase capability.
     try{this.cancel();}catch(e){failures.push({action:'cancel',code:safeCode(e)});}
@@ -504,24 +653,27 @@ export class OwnerSupervisor {
     try{remainingMilliseconds(end);await ownedRace(()=>this.gate.require('cleanup'),{deadline:end});remainingMilliseconds(end);authorized=true;}
     catch(e){cleanupCode=safeCode(e);failures.push({action:'cleanup',code:cleanupCode});}
     const attempt=async(action,tool,args)=>{
-      try{await this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:end,cleanup:true});}
+      try{await this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:end,cleanup:true,check:()=>remainingMilliseconds(end)});}
       catch(e){failures.push({action,code:safeCode(e)});}
     };
-    if(authorized&&this.owner)await attempt('docker-stop','docker',['stop','--time','5',this.owner.containerId]);
+    const containerId=this.owner?.containerId??this.#identities.container?.id;
+    if(authorized&&containerId)await attempt('docker-stop','docker',['stop','--time','5',containerId]);
     if(authorized&&this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
     let confirmed=false;
-    if(authorized&&this.owner)try{
-      await this.gate.require('verify-stopped');const r=await this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',this.owner.containerId],{executable:this.#executables.docker??null}),{deadline:end,cleanup:true});
+    if(authorized&&containerId)try{
+      remainingMilliseconds(end);await ownedRace(()=>this.gate.require('verify-stopped'),{deadline:end});remainingMilliseconds(end);const r=await this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null}),{deadline:end,cleanup:true,check:()=>remainingMilliseconds(end)});
       confirmed=JSON.parse(r.stdout)[0].State.Running===false;
     }catch{ // A stopped VM makes Docker unavailable; exact profile stopped proof is required.
-      try{const r=await this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:end,cleanup:true});const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
+      try{const r=await this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:end,cleanup:true,check:()=>remainingMilliseconds(end)});const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
     }
     if(this.#commands.children.size)failures.push({action:'children',code:'OWNER_CHILDREN_REMAIN'});
     if(!confirmed)failures.push({action:'verify-stopped',code:'OWNER_STOP_UNCONFIRMED'});
-    const receipt={status:failures.length?'CLEANUP_INCOMPLETE_RETAINED':'STOPPED_RETAINED',failures,denied:this.denied,owner:this.owner,plan:{colimaHome:this.plan.colimaHome,artifactRoot:this.plan.artifactRoot},dataRemoved:false,secretsRetained:true,...(cleanupCode?{code:cleanupCode}:{})};
+    const receipt={status:failures.length?'CLEANUP_INCOMPLETE_RETAINED':'STOPPED_RETAINED',failures,denied:this.denied,owner:this.owner,retainedIdentity:this.retainedIdentity,plan:{colimaHome:this.plan.colimaHome,artifactRoot:this.plan.artifactRoot},dataRemoved:false,secretsRetained:true,...(cleanupCode?{code:cleanupCode}:{})};
     // Always retain failure identities; never remove a container/network/profile,
     // detach a foreign volume, or prune. A later same-owner continuation admits it.
-    if(this.#logDevice!==null)try{await this.record('cleanup-'+randomBytes(6).toString('hex'),receipt);}catch{receipt.receiptWriteFailed=true;}
+    if(this.#logDevice!==null&&!this.#evidenceSlots.has('cleanup'))try{
+      await this.#terminalEvidence('cleanup',{status:receipt.status,failures:failures.slice(0,64).map(f=>({action:ACTIONS.includes(f.action)?f.action:'LOCAL_RETIREMENT',code:/^[A-Z0-9_]{1,80}$/.test(f.code??'')?f.code:'OWNER_OPERATION_FAILED'})),retainedIdentity:this.retainedIdentity,dataRemoved:false,secretsRetained:true});
+    }catch{receipt.receiptWriteFailed=true;receipt.retainedIdentity=this.retainedIdentity;}
     return receipt;
   }
 }

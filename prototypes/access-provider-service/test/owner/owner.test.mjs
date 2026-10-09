@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire,syncBuiltinESMExports } from 'node:module';
 import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import nativeCrypto from 'node:crypto';
 import { Client } from 'pg';
 import { exportJWK,compactVerify } from 'jose';
 import { admitPostgres,assertAdmitted } from '../pg-harness.mjs';
@@ -540,7 +542,7 @@ test('actual owner cleanup cannot start a command when authorization resumes aft
     await entered.promise;await rejected;now=30;release.resolve();const receipt=await lateCleanup;
     assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.ok(owner.signal.aborted);
     assert.deepEqual(receipt.failures.filter(f=>['docker-stop','colima-stop'].includes(f.action)),[{action:'docker-stop',code:'OWNER_DEADLINE'},{action:'colima-stop',code:'OWNER_DEADLINE'}]);
-    assert.deepEqual(actions,['cleanup','docker-stop','verify-stopped']);assert.deepEqual(owner.events,[]);
+    assert.deepEqual(actions,['cleanup','docker-stop']);assert.deepEqual(owner.events,[]);
   }finally{release.resolve();await rejected;await lateCleanup?.catch(()=>{});t.mock.restoreAll();}
 });
 
@@ -876,4 +878,262 @@ for(const during of ['expiry','cancel'])test('actual ownership and cached-family
     assert.throws(()=>bindings.grantOwnership('pure-installation',family),e=>e.code===(during==='cancel'?'OWNER_CANCELLED':'OWNER_DEADLINE'));
     await assert.rejects(bindings.family('cached-family'),e=>e.code===(during==='cancel'?'OWNER_CANCELLED':'OWNER_DEADLINE'));assert.equal(digest(await fs.readFile(file)),baseline);
   }finally{await bindings.store.close();await owner.cleanup({deadline:now+100});t.mock.restoreAll();}
+});
+
+let effectFixtureNumber=0;
+async function effectFixture(t,{preflight=true,deny=null}={}){
+  const number=++effectFixtureNumber,base=path.join(testFiles,'effects-'+number),home=path.join(testFiles,'external-'+number,'c');
+  const p={...createPlan({worktree:currentWorktree,runId:U}),artifactRoot:base,colimaHome:home,dockerConfig:base+'/docker-config',results:base+'/results',logImage:base+'/logs.img',socket:home+'/b1-owner/docker.sock',vmImage:base+'/inert-vm',ociLayout:base+'/inert-oci',importArchive:base+'/inert-archive'};
+  const source=await fs.readFile(new URL('./guest.sh',import.meta.url),'utf8'),guestPath=fileURLToPath(new URL('./guest.sh',import.meta.url)),N='a'.repeat(64),C='b'.repeat(64),GiB=1024**3;
+  const paths={sourceParent:home+'/b1-owner',sourceLeaf:home+'/b1-owner/logs',sinkParent:p.results+'/colima',fileSink:p.results+'/colima/stdout.log',fileLink:home+'/b1-owner/logs/stdout.log',directorySink:p.results+'/cache',directoryLink:home+'/b1-owner/cache',identity:base+'/resource-identity.json'};
+  const routes=[{path:paths.fileLink,sink:paths.fileSink,kind:'file'},{path:paths.directoryLink,sink:paths.directorySink,kind:'directory'}],files=new Map(),dirs=new Set(),links=new Map(),effects=[],starts=[],kills=[],closed=[],records=[];
+  const defaultFiles=[process.env.HOME+'/.docker/config.json',process.env.HOME+'/.colima/default/colima.yaml',process.env.HOME+'/.ssh/config'];
+  const failures=new Map(),replies=new Map();let now=10,mounted=false,running=true,activeAction=null,paused=null,seen=0,held=false,entered=deferred(),release=deferred(),schema=null,initialIdentity=null;
+  const labels=new Map([[p.logImage,'log-image'],[p.results,'results'],[base,'artifact-root'],[home,'source-root'],[paths.sourceParent,'source-parent'],[paths.sourceLeaf,'source-leaf'],[paths.sinkParent,'sink-parent'],[paths.fileSink,'route-file'],[paths.fileLink,'route-link'],[paths.directorySink,'route-directory'],[paths.directoryLink,'directory-link'],[paths.identity,'identity'],[home+'/b1-owner/colima.yaml','vm-config'],[p.results+'/container-passwd','passwd'],[guestPath,'guest-source'],[p.results+'/ordinary.json','ordinary'],[p.results+'/cleanup.json','cleanup'],[p.results+'/suite-accounting.json','suite-accounting'],[p.socket,'socket']]);
+  const label=filename=>labels.get(filename)??(filename.startsWith(paths.identity+'.')?'identity-temp':defaultFiles.includes(filename)?'default-'+defaultFiles.indexOf(filename):'other');
+  const hold=async tag=>{if(paused&&tag===paused.tag&&++seen===paused.ordinal){held=true;entered.resolve();await release.promise;}if(failures.has(tag))throw new OwnerError(failures.get(tag));};
+  const normalized=filename=>filename instanceof URL?fileURLToPath(filename):String(filename);
+  const absent=()=>Object.assign(new Error('inert absent input'),{code:'ENOENT'});
+  const meta=filename=>{
+    const target=links.get(filename)??filename,dev=mounted&&target.startsWith(p.results)?2:1,isLink=links.has(filename),isDir=dirs.has(target)||target==='/Volumes/ExternalSSD';
+    if(!isLink&&!isDir&&!files.has(target))throw absent();
+    const bytes=files.get(target)?.bytes??Buffer.byteLength(files.get(target)?.data??'');
+    return {uid:p.uid,mode:isDir||filename.startsWith('/inert/')?0o700:0o600,dev,ino:1,size:bytes,isDirectory:()=>!isLink&&isDir,isFile:()=>!isLink&&!isDir,isSymbolicLink:()=>isLink,isSocket:()=>target===p.socket};
+  };
+  const put=(filename,data,bytes)=>files.set(filename,{data,bytes});
+  const vm='INERT_VM_BYTES',archive='INERT_IMPORT_BYTES',layers=Array.from({length:14},(_,i)=>({digest:'sha256:'+digest('inert-layer-'+i),size:i===13?156463634-13:1}));
+  const manifest=JSON.stringify({inertKind:'manifest',config:{digest:PIN.configDigest},layers}),config=JSON.stringify({inertKind:'config',os:'linux',architecture:'arm64'});
+  const pins=new Map([[vm,PIN.vmSha256],[manifest,PIN.imageDigest.slice(7)],[config,PIN.configDigest.slice(7)]]);
+  put(p.vmImage,vm,PIN.vmBytes);put(p.importArchive,archive);put(p.ociLayout+'/blobs/sha256/'+PIN.imageDigest.slice(7),manifest);put(p.ociLayout+'/blobs/sha256/'+PIN.configDigest.slice(7),config);
+  for(let i=0;i<layers.length;i++)put(p.ociLayout+'/blobs/sha256/'+layers[i].digest.slice(7),'inert-layer-'+i,layers[i].size);
+  const tools={};for(const name of ['colima','docker','pnpm']){const filename='/inert/'+name,data='inert-'+name;put(filename,data);tools[name]={canonicalPath:filename,bytes:Buffer.byteLength(data),sha256:digest(data)};}
+  const proofPath=base+'/inert-log-proof',proof=JSON.stringify({status:'EXHAUSTIVE_LOG_SINKS_REVIEWED',runId:U,vmImageSha256:PIN.vmSha256,routes});put(proofPath,proof);
+  const m={runId:U,tools,imageImport:{protocol:'REVIEWED_DOCKER_LOAD_ARCHIVE',imageDigest:PIN.imageDigest,sha256:digest(archive)},logRouting:{sourceReceipt:{path:proofPath,sha256:digest(proof)},routes,vmImageSha256:PIN.vmSha256,guestBootPolicy:'NO_PERSISTENT_LOG_SINKS_BEFORE_OWNED_SETUP'},sourceSha256:{'guest.sh':digest(source)},vmConfigFields:{cpu:'cpu',memory:'memory',rootDisk:'disk',dataDisk:'dataDisk'},vmStatusFields:{profile:'profile',runtime:'runtime',arch:'arch',vmType:'vmType',status:'status'}};
+  put(guestPath,source);put(home+'/b1-owner/colima.yaml','cpu: 2\nmemory: 3\ndisk: 12\ndataDisk: 16\nmounts: []\n');
+  const actualHash=nativeCrypto.createHash;
+  // Metadata/pinned byte streams are deliberately inert, not runtime evidence.
+  t.mock.method(nativeCrypto,'createHash',function(...args){const hash=actualHash(...args),chunks=[];return {update(chunk){hash.update(chunk);chunks.push(Buffer.from(chunk));return this;},digest(encoding){const pin=pins.get(Buffer.concat(chunks).toString());return pin??hash.digest(encoding);}};});
+  t.mock.method(nativeFs,'createReadStream',filename=>{
+    filename=normalized(filename);const value=files.get(filename);
+    return Readable.from((async function*(){await hold('hash:'+label(filename));if(!value)throw absent();yield Buffer.from(value.data);})());
+  });syncBuiltinESMExports();
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(fs,'lstat',async filename=>{filename=normalized(filename);await hold('lstat:'+label(filename));return meta(filename);});
+  t.mock.method(fs,'stat',async filename=>{filename=normalized(filename);await hold('stat:'+label(filename));const s=meta(filename);return {...s,isDirectory:()=>dirs.has(links.get(filename)??filename)||filename==='/Volumes/ExternalSSD',isFile:()=>!dirs.has(links.get(filename)??filename),isSymbolicLink:()=>false,isSocket:()=>filename===p.socket};});
+  t.mock.method(fs,'statfs',async filename=>{filename=normalized(filename);await hold('statfs:'+label(filename));return {bavail:200*GiB,bsize:1,blocks:filename===p.results?CAPS.results:200*GiB};});
+  t.mock.method(fs,'access',async()=>{});
+  t.mock.method(fs,'realpath',async filename=>{filename=normalized(filename);await hold('realpath:'+label(filename));return filename.startsWith('/opt/homebrew/bin/')?'/inert/'+path.basename(filename):links.get(filename)??filename;});
+  t.mock.method(fs,'readFile',async(filename,encoding)=>{filename=normalized(filename);await hold('read:'+label(filename));const value=files.get(filename);if(!value)throw absent();return encoding?value.data:Buffer.from(value.data);});
+  t.mock.method(fs,'mkdir',async(filename,options)=>{assert.equal(options.recursive,undefined);assert.equal(options.mode,0o700);effects.push('mkdir:'+label(filename));await hold('mkdir:'+label(filename));if(dirs.has(filename))throw Object.assign(new Error('inert exists'),{code:'EEXIST'});dirs.add(filename);});
+  t.mock.method(fs,'symlink',async(target,filename)=>{effects.push('symlink:'+label(filename));await hold('symlink:'+label(filename));links.set(filename,target);});
+  t.mock.method(fs,'rename',async(from,to)=>{effects.push('rename:'+label(to));await hold('rename:'+label(to));assert.ok(files.has(from));files.set(to,files.get(from));files.delete(from);});
+  t.mock.method(fs,'open',async(filename,flags,mode)=>{
+    const kind=label(filename);effects.push('open:'+kind);await hold('open:'+kind);
+    if(flags===FC.O_RDONLY){assert.ok(dirs.has(filename));return {sync:async()=>{effects.push('dir-sync:'+kind);await hold('dir-sync:'+kind);},close:async()=>{closed.push(kind);await hold('dir-close:'+kind);}};}
+    assert.equal(flags,FC.O_WRONLY|FC.O_CREAT|FC.O_NOFOLLOW|FC.O_EXCL);assert.equal(mode,0o600);if(files.has(filename))throw Object.assign(new Error('inert exists'),{code:'EEXIST'});put(filename,'');
+    return {writeFile:async data=>{effects.push('write:'+kind);await hold('write:'+kind);if(filename.endsWith('/database-secrets.json'))return;put(filename,String(data));if(filename===paths.identity&&!initialIdentity)initialIdentity=String(data);if(filename.startsWith(p.results+'/')&&filename.endsWith('.json'))records.push(filename);},sync:async()=>{effects.push('sync:'+kind);await hold('sync:'+kind);},close:async()=>{closed.push(kind);await hold('close:'+kind);}};
+  });
+  const guest={cpu:2,memoryBytes:3*GiB,swapBytes:0,hostMounts:[],rootFilesystemBytes:12*GiB,dockerFilesystemBytes:16*GiB,rootDevice:'root',dockerDevice:'docker',quotaBytes:CAPS.data,blockSize:4096,blockCount:524288,mountType:'ext4',backingFile:p.guestRoot+'/data.ext4',secretModes:true,enospcProofExists:true,filesystemUuid:'inert-fs',backingInode:1,loopDevice:'inert-loop',mountDevice:2,capacityParentFreeBytes:200*GiB};
+  const container=()=>({Id:C,Name:'/'+p.containerName,Config:{Labels:{'b1.owner':U},Image:PIN.image,Env:['PGDATA=/var/lib/postgresql/data/pgdata']},HostConfig:{NanoCpus:2e9,Memory:GiB,MemorySwap:GiB,ShmSize:CAPS.shm,PidsLimit:128,ReadonlyRootfs:true,LogConfig:{Type:'none'},Privileged:false,NetworkMode:N},Platform:'linux',State:{Running:running},Mounts:[{Destination:'/var/lib/postgresql/data',Type:'bind',Source:p.guestRoot+'/data',RW:true},{Destination:'/run/secrets/bootstrap',Source:p.guestRoot+'/secrets/bootstrap',RW:false}],NetworkSettings:{Ports:{'5432/tcp':[{HostIp:'127.0.0.1',HostPort:'54321'}]}}});
+  const response=action=>{
+    if(replies.has(action))return replies.get(action);
+    if(action==='preflight')return 'colima '+PIN.colima+' docker '+PIN.docker+' pnpm '+PIN.pnpm;
+    if(action==='colima-status')return JSON.stringify({profile:p.profile,runtime:'docker',arch:'aarch64',vmType:'vz',status:'Stopped'});
+    if(action==='docker-image-inspect')return JSON.stringify([{Os:'linux',Architecture:'arm64',RepoDigests:[PIN.image]}]);
+    if(action==='docker-network-create')return N;if(action==='docker-create')return C;
+    if(action==='docker-inspect')return JSON.stringify([container()]);
+    if(action==='docker-network-inspect')return JSON.stringify([{Id:N,Name:p.networkName,Labels:{'b1.owner':U},Internal:true,Containers:{[C]:{}}}]);
+    if(action==='verify-forwarder')return 'p1\nn127.0.0.1:54321\n';
+    if(action==='guest-quota-test')return JSON.stringify({enospcObserved:true,furtherAllocationFailed:true,uid:999,gid:999});
+    if(action.startsWith('guest-'))return JSON.stringify(guest);
+    return '';
+  };
+  const listener=inertListener();
+  const owner=new OwnerSupervisor({plan:p,manifest:m,createListener:listener.create,authorize:async({action})=>{activeAction=action;await hold('authorize:'+action);return action!==deny;},startCommand:(executable,args,options)=>{
+    const action=activeAction,child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();starts.push(action);
+    child.kill=signal=>{kills.push({action,signal});return true;};child.stdin.end=()=>{(async()=>{
+      await hold('command:'+action);if(action==='hdiutil-create')put(p.logImage,'',CAPS.results);if(action==='hdiutil-attach')mounted=true;
+      if(action==='docker-cp-passwd')put(p.results+'/container-passwd','postgres:x:999:999:inert:/inert:/bin/false');
+      if(action==='docker-stop')running=false;if(action==='docker-start')running=true;
+      let out=response(action);if(action==='verify-forwarder'&&path.basename(executable)==='ps')out=p.uid+' birth '+p.colimaHome;
+      for(const chunk of Array.isArray(out)?out:[out])child.stdout.emit('data',Buffer.from(chunk));child.emit('close',0);
+    })().catch(error=>child.emit('error',error));};return child;
+  }});
+  const query=async sql=>{
+    await hold('sql:'+sql.split(' ')[0]);
+    if(sql.includes('FROM pg_roles WHERE'))return {rows:[{rolname:'b1_app',rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,ddl:false,temp:false,connect:true},{rolname:'b1_bootstrap',rolsuper:true},{rolname:'b1_migrator',rolsuper:false,rolcreatedb:false,rolcreaterole:false,rolreplication:false,ddl:true,temp:false,connect:true}]};
+    if(sql.includes("current_setting('server_version_num')"))return {rows:[{version:PIN.serverVersion,max_connections:'12',fsync:'on',synchronous_commit:'on',full_page_writes:'on',deadlock_timeout:'20ms',data_directory:'/var/lib/postgresql/data/pgdata',system_identifier:'inert-system',schema}]};
+    if(sql.includes('FROM pg_tablespace'))return {rows:[]};
+    if(sql.includes('FROM pg_proc'))return {rows:['clock_begin','clock_finish','clock_try_lock','clock_unlock','clock_key','clock_owned','clock_assert_owned','seed_clock'].map(proname=>({proname,prosecdef:true,proconfig:['search_path=pg_catalog'],rolname:'b1_migrator',definition:'inert-function',app_execute:['clock_begin','clock_finish','clock_try_lock','clock_unlock'].includes(proname)}))};
+    if(sql.includes('AS schema_ddl'))return {rows:[{schema_ddl:false,clock_update:false,clock_insert:false}]};
+    if(sql.includes('system_identifier::text'))return {rows:[{system_identifier:'inert-system'}]};
+    if(sql.includes('to_regnamespace'))return {rows:[{schema}]};
+    return {rows:[]};
+  };
+  // SQL is inert here; the original helper/pg transport regressions stay intact.
+  t.mock.method(owner,'withClient',async(role,callback)=>{const admission=owner.captureAdmission();return callback({query:async(...args)=>{admission.check();const result=await query(...args);admission.check();return result;}});});
+  put(p.socket,'');
+  const fixture={owner,p,paths,effects,starts,kills,closed,records,files,dirs,links,listener,N,C,get now(){return now;},set now(value){now=value;},setupEnd:10+CAPS.setupMs,get initialIdentity(){return initialIdentity;},set migrated(value){schema=value?'provider_b1':null;},
+    arm(tag,ordinal=1){paused={tag,ordinal};seen=0;held=false;entered=deferred();release=deferred();return {entered,release};},
+    fail(tag,code){failures.set(tag,code);},reply(action,value){replies.set(action,value);},
+    disarm(){release.resolve();paused=null;},
+    async dispose(){release.resolve();paused=null;await owner.cleanup({deadline:now+2000});await flush();t.mock.restoreAll();syncBuiltinESMExports();}};
+  if(preflight)await owner.preflight();return fixture;
+}
+
+const logEffectPauses=['command:hdiutil-create','lstat:log-image','command:hdiutil-attach','stat:results','stat:artifact-root','statfs:results','lstat:source-root','mkdir:source-parent','mkdir:source-leaf','mkdir:sink-parent','open:route-file','write:route-file','sync:route-file','close:route-file','symlink:route-link','lstat:route-link','realpath:route-link','stat:route-link','mkdir:route-directory','symlink:directory-link','statfs:results-final'];
+for(const pause of logEffectPauses)for(const during of ['expiry','cancel'])test('actual log routing blocks follow-up effects after '+during+' at '+pause,async t=>{
+  const fx=await effectFixture(t),tag=pause==='statfs:results-final'?'statfs:results':pause,wait=fx.arm(tag,pause==='statfs:results-final'?2:1);fx.now=fx.setupEnd-10;const pending=fx.owner.provision();
+  try{
+    await wait.entered.promise;const count=fx.effects.length;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));await flush();
+    assert.equal(fx.effects.length,count);assert.equal(fx.starts.includes('colima-start'),false);assert.equal(fx.owner.phase,'allocating');
+    assert.equal(fx.owner.provision(),pending);await assert.rejects(fx.owner.provision());
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+test('actual healthy setup performs routed private effects and publishes only the verified inert owner',async t=>{
+  const fx=await effectFixture(t);
+  try{
+    assert.equal(fx.owner.preflight(),fx.owner.preflight());assert.equal(fx.starts.filter(a=>a==='preflight').length,3);
+    const pending=fx.owner.provision();assert.equal(fx.owner.provision(),pending);const owner=await pending;
+    assert.equal(owner.containerId,fx.C);assert.equal(owner.networkId,fx.N);assert.equal(owner.port,54322);assert.equal(fx.owner.phase,'provisioned');
+    assert.equal(fx.starts.filter(a=>a==='docker-create').length,1);assert.equal(fx.starts.filter(a=>a==='docker-network-create').length,1);
+    assert.equal(fx.links.get(fx.paths.fileLink),fx.paths.fileSink);assert.equal(fx.links.get(fx.paths.directoryLink),fx.paths.directorySink);assert.ok(fx.effects.includes('rename:identity'));
+    assert.equal(fx.owner.retainedIdentity.container.id,fx.C);assert.equal(fx.owner.retainedIdentity.network.id,fx.N);assert.equal(fx.owner.retainedIdentity.mount.device,2);assert.ok(Buffer.byteLength(JSON.stringify(fx.owner.retainedIdentity))<=16384);
+  }finally{await fx.dispose();}
+});
+for(const during of ['expiry','cancel'])test('actual preflight is single-flight and refuses final defaults publication after '+during,async t=>{
+  const fx=await effectFixture(t,{preflight:false}),wait=fx.arm('hash:default-2');const pending=fx.owner.preflight();
+  try{
+    assert.equal(fx.owner.preflight(),pending);await wait.entered.promise;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));assert.equal(fx.owner.phase,'new');assert.deepEqual(fx.effects,[]);assert.equal(fx.starts.length,3);
+    assert.equal(fx.owner.preflight(),pending);await assert.rejects(fx.owner.preflight());
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+const provisionEffectPauses=['read:vm-config','read:guest-source','command:guest-prepare','command:docker-image-load','command:docker-network-create','command:docker-create','open:identity','write:identity','sync:identity','command:docker-cp-passwd','read:passwd','command:guest-quota-test','open:identity-temp','write:identity-temp','sync:identity-temp','close:identity-temp','rename:identity','open:artifact-root','dir-sync:artifact-root'];
+for(const pause of provisionEffectPauses)for(const during of ['expiry','cancel'])test('actual provision retains identities and blocks late '+during+' follow-up at '+pause,async t=>{
+  const fx=await effectFixture(t),wait=fx.arm(pause);fx.now=fx.setupEnd-10;const pending=fx.owner.provision();
+  try{
+    await wait.entered.promise;const count=fx.effects.length,commands=fx.starts.length;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));await flush();assert.equal(fx.effects.length,count);assert.equal(fx.starts.length,commands);
+    if(['command:docker-network-create','command:docker-create'].includes(pause)){assert.equal(fx.owner.retainedIdentity.network.id,fx.N);if(pause==='command:docker-create')assert.equal(fx.owner.retainedIdentity.container.id,fx.C);}
+    if(pause.includes('identity-temp'))assert.equal(fx.files.get(fx.paths.identity).data,fx.initialIdentity);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+for(const pause of ['authorize:inspect-owned-fixture','lstat:route-link','realpath:route-link','stat:route-link','statfs:results','lstat:results','open:ordinary','write:ordinary','sync:ordinary','close:ordinary'])for(const during of ['expiry','cancel'])test('actual ordinary record uses original SQL admission after '+during+' at '+pause,async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();fx.now=fx.setupEnd-1;fx.owner.beginSql();fx.now=fx.setupEnd+10;const end=fx.owner.captureAdmission().deadline,wait=fx.arm(pause),pending=fx.owner.record('ordinary',{inert:true});
+  try{
+    await wait.entered.promise;const count=fx.effects.length;if(during==='expiry')fx.now=end;else fx.owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_DEADLINE':'OWNER_CANCELLED'));await flush();assert.equal(fx.effects.length,count);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+test('actual pending setup record cannot borrow a later SQL deadline while a fresh SQL record remains valid',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();const wait=fx.arm('lstat:route-link');fx.now=fx.setupEnd-10;const pending=fx.owner.record('ordinary',{inert:true});
+  try{
+    await wait.entered.promise;fx.now=fx.setupEnd-5;fx.owner.beginSql();fx.now=fx.setupEnd;wait.release.resolve();await assert.rejects(pending,e=>e.code==='OWNER_DEADLINE');
+    fx.disarm();const result=await fx.owner.record('ordinary',{inert:true});assert.equal(result,fx.p.results+'/ordinary.json');assert.equal(JSON.parse(fx.files.get(result).data).measurement.inert,true);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+test('actual cleanup preserves one restricted evidence file after authority denial and validates fixed suite accounting',async t=>{
+  const fx=await effectFixture(t,{deny:'cleanup'});await fx.owner.provision();
+  try{
+    const receipt=await fx.owner.cleanup({deadline:fx.now+100});assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.equal(receipt.receiptWriteFailed,undefined);assert.ok(fx.files.has(fx.p.results+'/cleanup.json'));
+    const accounting={cases:[{name:'fixture secret SELECT payload',status:'PASS'}],registered:1,passed:1,notRun:0,zeroTestsSuccess:false};
+    const filename=await fx.owner.record('suite-accounting',accounting),text=fx.files.get(filename).data;assert.doesNotMatch(text,/fixture secret|SELECT payload/);assert.equal(JSON.parse(text).measurement.reportedEvidence,true);
+    await assert.rejects(fx.owner.record('suite-accounting',accounting),e=>e.code==='OWNER_EVIDENCE_ALREADY_RECORDED');
+    await assert.rejects(fx.owner.record('arbitrary',{terminal:true}),e=>e.code==='OWNER_CANCELLED');await assert.rejects(fx.owner.record('cleanup-other',{}),e=>e.code==='OWNER_RECEIPT_NAME');
+    await assert.rejects(fx.owner.record('suite-accounting',{...accounting,passed:0}),e=>e.code==='OWNER_ACCOUNTING_SCHEMA');
+    assert.equal(fx.records.filter(p=>p.endsWith('/cleanup.json')).length,1);assert.equal(fx.records.filter(p=>p.endsWith('/suite-accounting.json')).length,1);
+  }finally{await fx.dispose();}
+});
+for(const pause of ['lstat:route-link','open:cleanup','write:cleanup','sync:cleanup','close:cleanup'])test('actual cleanup evidence cannot renew its latched end at '+pause,async t=>{
+  const fx=await effectFixture(t,{deny:'cleanup'});await fx.owner.provision();const wait=fx.arm(pause),end=fx.now+100,pending=fx.owner.cleanup({deadline:end});
+  try{
+    await wait.entered.promise;const count=fx.effects.length;fx.now=end;wait.release.resolve();const receipt=await pending;await flush();assert.equal(receipt.receiptWriteFailed,true);assert.equal(fx.effects.length,count);
+    const repeated=await fx.owner.cleanup({deadline:end+1000});assert.equal(repeated.code,'OWNER_DEADLINE');assert.equal(fx.effects.length,count);
+    await assert.rejects(fx.owner.record('suite-accounting',{cases:[{name:'inert',status:'PASS'}],registered:1,passed:1,notRun:0,zeroTestsSuccess:false}),e=>e.code==='OWNER_DEADLINE');
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+for(const pause of ['authorize:inspect-owned-fixture','command:docker-inspect','command:docker-network-inspect','lstat:socket','read:guest-source','sql:SELECT','hash:default-2'])for(const during of ['expiry','cancel'])test('actual owner measurement refuses late '+during+' receipt or follow-up at '+pause,async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();const wait=fx.arm(pause);fx.now=fx.setupEnd-10;const pending=fx.owner.verifyOwner(fx.owner.owner,'inspect-owned-fixture');
+  try{
+    await wait.entered.promise;const count=fx.effects.length,commands=fx.starts.length;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_DEADLINE':'OWNER_CANCELLED'));await flush();assert.equal(fx.effects.length,count);assert.equal(fx.starts.length,commands);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+for(const [kind,pauses] of [['database',['command:docker-stop','command:docker-start','command:guest-verify-sentinel','sql:SELECT']],['vm',['command:colima-stop','command:colima-start','command:guest-prepare','command:docker-start']]])for(const pause of pauses)for(const during of ['expiry','cancel'])test('actual '+kind+' restart blocks late '+during+' effects at '+pause,async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();fx.migrated=true;const wait=fx.arm(pause,pause==='sql:SELECT'?6:1);fx.now=fx.setupEnd-10;const pending=kind==='database'?fx.owner.restartDatabase(fx.owner.owner,'clean'):fx.owner.restartVm();
+  try{
+    await wait.entered.promise;const count=fx.effects.length,commands=fx.starts.length;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_DEADLINE':'OWNER_CANCELLED'));await flush();assert.equal(fx.effects.length,count);assert.equal(fx.starts.length,commands);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+test('actual provisioning command cannot borrow SQL lifetime after its original setup authorization wait',async t=>{
+  const fx=await effectFixture(t),wait=fx.arm('authorize:colima-start');fx.now=fx.setupEnd-10;const pending=fx.owner.provision();
+  try{
+    await wait.entered.promise;fx.now=fx.setupEnd-5;fx.owner.beginSql();fx.now=fx.setupEnd;wait.release.resolve();
+    await assert.rejects(pending,e=>e.code==='OWNER_SETUP_DEADLINE');assert.equal(fx.starts.includes('colima-start'),false);assert.equal(fx.owner.owner,null);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+test('actual log routing refuses symlink ancestors before creating any descendant or VM',async t=>{
+  const fx=await effectFixture(t);fx.links.set(fx.paths.sourceParent,'/inert-foreign');
+  try{await assert.rejects(fx.owner.provision(),e=>e.code==='OWNER_LOG_ROUTE_PARENT');assert.equal(fx.effects.includes('mkdir:source-leaf'),false);assert.equal(fx.starts.includes('colima-start'),false);}
+  finally{await fx.dispose();}
+});
+for(const action of ['docker-network-create','docker-create'])test('actual allocation retains uncertainty instead of a malformed '+action+' identity',async t=>{
+  const fx=await effectFixture(t);fx.reply(action,(action==='docker-create'?fx.C:fx.N)+'\npartial');
+  try{
+    await assert.rejects(fx.owner.provision(),e=>e.code===(action==='docker-create'?'OWNER_CONTAINER_ID':'OWNER_NETWORK_ID'));
+    const identity=fx.owner.retainedIdentity;assert.equal(action==='docker-create'?identity.container:identity.network,null);assert.equal(fx.owner.owner,null);
+    assert.ok(identity.uncertainty.some(v=>v.action===action&&v.code==='OWNER_ALLOCATION_ID_UNKNOWN'));assert.equal(fx.starts.filter(a=>a===action).length,1);
+  }finally{await fx.dispose();}
+});
+test('actual allocation never accepts a valid-looking ID from truncated command output',async t=>{
+  const fx=await effectFixture(t);fx.reply('docker-network-create',[fx.N,'x'.repeat(2*1024**2)]);
+  try{await assert.rejects(fx.owner.provision(),e=>e.code==='OWNER_OUTPUT_LIMIT');assert.equal(fx.owner.retainedIdentity.network,null);assert.equal(fx.owner.owner,null);assert.equal(fx.starts.filter(a=>a==='docker-network-create').length,1);}
+  finally{await fx.dispose();}
+});
+test('actual private identity writer preserves initiating failure and uncertain close without replacing the prior identity',async t=>{
+  const fx=await effectFixture(t);fx.fail('write:identity-temp','INERT_WRITE_FAILURE');fx.fail('close:identity-temp','INERT_CLOSE_FAILURE');
+  try{
+    await assert.rejects(fx.owner.provision(),e=>e.code==='INERT_WRITE_FAILURE'&&e.retirementFailures.includes('INERT_CLOSE_FAILURE'));
+    assert.equal(fx.files.get(fx.paths.identity).data,fx.initialIdentity);assert.equal(fx.effects.includes('rename:identity'),false);
+    assert.equal(fx.owner.retainedIdentity.container.id,fx.C);assert.ok(fx.owner.retainedIdentity.retirementFailures.some(v=>v.code==='INERT_CLOSE_FAILURE'));
+  }finally{await fx.dispose();}
+});
+test('actual cleanup reports evidence retention failure without a fallback or duplicate write',async t=>{
+  const fx=await effectFixture(t,{deny:'cleanup'});await fx.owner.provision();fx.fail('close:cleanup','INERT_CLOSE_FAILURE');
+  try{
+    const receipt=await fx.owner.cleanup({deadline:fx.now+100});assert.equal(receipt.receiptWriteFailed,true);assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');
+    assert.ok(fx.owner.retainedIdentity.evidenceFailures.some(v=>v.slot==='cleanup'&&v.code==='INERT_CLOSE_FAILURE'));const count=fx.effects.length;
+    await fx.owner.cleanup({deadline:fx.now+1000});assert.equal(fx.effects.length,count);assert.equal(fx.records.filter(p=>p.endsWith('/cleanup.json')).length,1);
+  }finally{await fx.dispose();}
+});
+test('actual terminal evidence revalidates route identity and exposes an unpersisted failure',async t=>{
+  const fx=await effectFixture(t,{deny:'cleanup'});await fx.owner.provision();fx.links.set(fx.paths.fileLink,'/inert-foreign');
+  try{
+    const count=fx.effects.length,receipt=await fx.owner.cleanup({deadline:fx.now+100});assert.equal(receipt.receiptWriteFailed,true);assert.equal(fx.effects.length,count);
+    assert.equal(fx.files.has(fx.p.results+'/cleanup.json'),false);assert.ok(fx.owner.retainedIdentity.evidenceFailures.some(v=>v.code==='OWNER_LOG_ROUTE_CHANGED'));
+  }finally{await fx.dispose();}
+});
+test('actual completed operation closes inherited admission for a late ordinary record while its phase remains live',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();const release=deferred(),entered=deferred(),original=fx.owner.withClient;let scheduled=false,late;
+  t.mock.method(fx.owner,'withClient',async function(...args){
+    if(!scheduled){scheduled=true;late=release.promise.then(()=>this.record('late',{inert:true}));late.catch(()=>{});entered.resolve();}
+    return original.apply(this,args);
+  });
+  try{
+    await fx.owner.verifyOwner(fx.owner.owner,'inspect-owned-fixture');await entered.promise;const count=fx.effects.length;release.resolve();await assert.rejects(late,e=>e.code==='OWNER_OPERATION_SCOPE_ENDED');assert.equal(fx.effects.length,count);
+    assert.equal(fx.owner.signal.aborted,false);assert.ok(fx.now<fx.setupEnd);
+  }finally{release.resolve();await late?.catch(()=>{});await fx.dispose();}
+});
+test('actual accounting adapter has no generic terminal options and refuses unvalidated reported counts',async t=>{
+  const fx=await effectFixture(t,{deny:'cleanup'});await fx.owner.provision();await fx.owner.cleanup({deadline:fx.now+100});
+  try{
+    const count=fx.effects.length;
+    await assert.rejects(fx.owner.record('ordinary',{inert:true},{terminal:true}),e=>e.code==='OWNER_RECEIPT_NAME');
+    await assert.rejects(fx.owner.record('suite-accounting',{cases:[],registered:0,passed:0,notRun:0,zeroTestsSuccess:false}),e=>e.code==='OWNER_ACCOUNTING_SCHEMA');
+    await assert.rejects(fx.owner.record('suite-accounting',{cases:[{name:'inert',status:'PASS'}],registered:1,passed:0,notRun:0,zeroTestsSuccess:false}),e=>e.code==='OWNER_ACCOUNTING_SCHEMA');
+    assert.equal(fx.effects.length,count);
+  }finally{await fx.dispose();}
 });
