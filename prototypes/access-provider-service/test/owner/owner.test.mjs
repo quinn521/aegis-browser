@@ -216,9 +216,9 @@ test('fractional cleanup budgets floor without extending their absolute deadline
 test('installed executable aliases resolve to pinned canonical targets while cache aliases remain invalid',async()=>{
   const dir=path.join(testFiles,'tools');await fs.mkdir(dir);const binary=path.join(dir,'colima'),alias=path.join(dir,'alias'),other=path.join(dir,'other');
   await fs.writeFile(binary,'pure executable fixture',{mode:0o755});await fs.writeFile(other,'changed executable',{mode:0o755});await fs.symlink(binary,alias);
-  const stat=await fs.stat(binary),pin={canonicalPath:binary,bytes:stat.size,sha256:digest(await fs.readFile(binary))};
-  const executable=await resolveExecutable(alias,pin),spec=command(plan,'colima',['--version'],{executable});assert.equal(spec.executable,binary);
-  await fs.unlink(alias);await fs.symlink(other,alias);assert.equal(spec.executable,binary);await assert.rejects(resolveExecutable(alias,pin),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
+  const stat=await fs.stat(binary),pin={canonicalPath:await fs.realpath(binary),bytes:stat.size,sha256:digest(await fs.readFile(binary))};
+  const executable=await resolveExecutable(alias,pin),spec=command(plan,'colima',['--version'],{executable});assert.equal(spec.executable,pin.canonicalPath);
+  await fs.unlink(alias);await fs.symlink(other,alias);assert.equal(spec.executable,pin.canonicalPath);await assert.rejects(resolveExecutable(alias,pin),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
   await assert.rejects(regular(alias),e=>e.code==='OWNER_REGULAR_FILE');await fs.chmod(binary,0o644);await assert.rejects(resolveExecutable(binary,pin),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
 });
 
@@ -447,4 +447,18 @@ test('actual pg-pool idle expiry replaces harness clients with pinned TLS despit
     assert.equal((await observePure(store,harness,201)).latest,201);assert.equal(driver.clients.length,4);assert.ok(driver.clients.slice(2).every(c=>!original.includes(c)));
     assert.equal(process.env.PGSSLMODE,'require');assert.equal(process.env.PGSSLNEGOTIATION,'direct');assertAdmitted(harness);
   }finally{try{await store?.close();await harness?.close();await bindings?.store.close();}finally{restore();t.mock.restoreAll();}}
+});
+
+test('executable fixture pins the real target through a symlinked temp parent and rejects lexical or stale pins',async()=>{
+  const base=await fs.mkdtemp(path.join(tmpdir(),'owner-linked-parent-'));
+  try{
+    const target=path.join(base,'real'),linked=path.join(base,'linked');await fs.mkdir(target);await fs.symlink(target,linked);
+    const binary=path.join(linked,'colima'),alias=path.join(linked,'entry');await fs.writeFile(binary,'pure parent-alias executable',{mode:0o755});await fs.symlink(binary,alias);
+    const canonicalPath=await fs.realpath(binary),data=await fs.readFile(binary),pin={canonicalPath,bytes:data.length,sha256:digest(data)};
+    assert.notEqual(binary,canonicalPath);assert.equal(await resolveExecutable(alias,pin),canonicalPath);
+    await assert.rejects(resolveExecutable(alias,{...pin,canonicalPath:binary}),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
+    await assert.rejects(resolveExecutable(alias,{...pin,sha256:'0'.repeat(64)}),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
+    await assert.rejects(resolveExecutable(alias,{...pin,bytes:pin.bytes+1}),e=>e.code==='OWNER_TOOL_SOURCE_PIN');
+    await assert.rejects(regular(alias),e=>e.code==='OWNER_REGULAR_FILE');
+  }finally{await fs.rm(base,{recursive:true,force:true});}
 });
