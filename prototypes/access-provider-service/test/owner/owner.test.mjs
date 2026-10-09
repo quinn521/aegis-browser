@@ -1137,3 +1137,68 @@ test('actual accounting adapter has no generic terminal options and refuses unva
     assert.equal(fx.effects.length,count);
   }finally{await fx.dispose();}
 });
+
+// repair10 exercises production ownership of successful and losing open results.
+for(const kind of ['file','directory'])for(const during of ['expiry','cancel','healthy','close-failure'])test('actual '+kind+' open retires exactly once after race success and outer '+during+' admission',async t=>{
+  const fx=await effectFixture(t);if(kind==='file')await fx.owner.provision();
+  const originalOpen=fs.open,signal=fx.owner.signal,remove=signal.removeEventListener;let acquired=false,triggered=false;
+  const target=kind==='file'?fx.p.results+'/ordinary.json':fx.p.artifactRoot,closeTag=kind==='file'?'ordinary':'artifact-root';
+  t.mock.method(fs,'open',async function(filename,flags,...args){const handle=await originalOpen.call(this,filename,flags,...args);if(filename===target&&(kind==='file'||flags===FC.O_RDONLY))acquired=true;return handle;});
+  t.mock.method(signal,'removeEventListener',function(...args){
+    const result=remove.apply(this,args);
+    if(acquired&&!triggered){triggered=true;if(during==='expiry')fx.now=fx.setupEnd;else if(during==='cancel'||during==='close-failure')fx.owner.cancel();}
+    return result;
+  });
+  if(during==='close-failure')fx.fail(kind==='file'?'close:ordinary':'dir-close:artifact-root','INERT_CLOSE_FAILURE');
+  const pending=kind==='file'?fx.owner.record('ordinary',{inert:true}):fx.owner.provision();
+  try{
+    if(during==='healthy')await pending;
+    else await assert.rejects(pending,e=>e.code===(during==='expiry'?(kind==='file'?'OWNER_DEADLINE':'OWNER_SETUP_DEADLINE'):'OWNER_CANCELLED')&&(during!=='close-failure'||e.retirementFailures.includes('INERT_CLOSE_FAILURE')));
+    await flush();assert.equal(triggered,true);assert.equal(fx.closed.filter(v=>v===closeTag).length,1);
+    if(kind==='file'&&during!=='healthy')assert.equal(fx.effects.includes('write:ordinary'),false);
+    if(during==='close-failure')assert.ok(fx.owner.retainedIdentity.retirementFailures.some(v=>v.code==='INERT_CLOSE_FAILURE'));
+  }finally{await pending.catch(()=>{});await fx.dispose();}
+});
+for(const during of ['expiry','cancel','close-failure'])test('actual losing open completion retires once with '+during+' and retains failure',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();const wait=fx.arm('open:ordinary'),pending=fx.owner.record('ordinary',{inert:true});pending.catch(()=>{});
+  try{
+    await wait.entered.promise;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();
+    if(during==='close-failure')fx.fail('close:ordinary','INERT_CLOSE_FAILURE');
+    wait.release.resolve();await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_DEADLINE':'OWNER_CANCELLED'));await flush();
+    assert.equal(fx.closed.filter(v=>v==='ordinary').length,1);assert.equal(fx.effects.includes('write:ordinary'),false);
+    if(during==='close-failure')assert.ok(fx.owner.retainedIdentity.retirementFailures.some(v=>v.code==='INERT_CLOSE_FAILURE'));
+  }finally{wait.release.resolve();await pending.catch(()=>{});await fx.dispose();}
+});
+for(const pause of ['authorize:cleanup','authorize:docker-stop','authorize:verify-stopped','command:docker-inspect','command:colima-status'])test('actual concurrent cleanup tightening ends pending '+pause+' without stale commands or stopped success',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();if(pause==='command:colima-status')fx.reply('docker-inspect','invalid-json');
+  const wait=fx.arm(pause),first=fx.owner.cleanup({deadline:fx.now+100});
+  try{
+    await wait.entered.promise;const commands=fx.starts.length;fx.now+=10;const second=fx.owner.cleanup({deadline:fx.now});
+    const receipts=await Promise.all([first,second]);
+    // The pending promise settles at tightened equality before the inert gate/child resolves.
+    for(const receipt of receipts){assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.equal(receipt.resourcesStopped,false);}
+    assert.equal(fx.starts.length,commands);wait.release.resolve();await flush();assert.equal(fx.starts.length,commands);
+    assert.equal(fx.owner.retainedIdentity.container.id,fx.C);assert.equal(fx.owner.retainedIdentity.network.id,fx.N);
+  }finally{wait.release.resolve();await first.catch(()=>{});await fx.dispose();}
+});
+test('actual cleanup admits a pending authorization within a healthy tightened original deadline',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();const wait=fx.arm('authorize:cleanup'),first=fx.owner.cleanup({deadline:fx.now+100});
+  try{
+    await wait.entered.promise;const second=await fx.owner.cleanup({deadline:fx.now+60});assert.equal(second.status,'STOPPED_RETAINED');
+    wait.release.resolve();const receipt=await first;assert.equal(receipt.status,'STOPPED_RETAINED');assert.equal(receipt.resourcesStopped,true);
+    assert.equal(fx.records.filter(p=>p.endsWith('/cleanup.json')).length,1);
+  }finally{wait.release.resolve();await first.catch(()=>{});await fx.dispose();}
+});
+for(const operation of ['write','sync','close'])test('actual finishRuntime rejects stopped resources when mandatory cleanup '+operation+' evidence fails',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();fx.fail(operation+':cleanup','INERT_'+operation.toUpperCase()+'_FAILURE');
+  try{
+    await assert.rejects(finishRuntime({owner:fx.owner},{deadline:fx.now+100}),e=>e.code==='OWNER_CLEANUP_INCOMPLETE'&&e.cleanup.status==='CLEANUP_INCOMPLETE_RETAINED'&&e.cleanup.resourcesStopped===true&&e.cleanup.receiptWriteFailed===true&&e.cleanup.failures.some(f=>f.action==='cleanup-evidence'&&f.code==='INERT_'+operation.toUpperCase()+'_FAILURE'));
+    const effects=fx.effects.length,again=await fx.owner.cleanup({deadline:fx.now+1000});assert.equal(again.status,'CLEANUP_INCOMPLETE_RETAINED');assert.equal(again.resourcesStopped,true);assert.equal(fx.effects.length,effects);
+    assert.equal(fx.owner.retainedIdentity.container.id,fx.C);assert.ok(fx.owner.retainedIdentity.evidenceFailures.some(v=>v.slot==='cleanup'&&v.code==='INERT_'+operation.toUpperCase()+'_FAILURE'));
+  }finally{await fx.dispose();}
+});
+test('actual finishRuntime retains healthy stopped evidence and succeeds without changing runner',async t=>{
+  const fx=await effectFixture(t);await fx.owner.provision();
+  try{const receipt=await finishRuntime({owner:fx.owner},{deadline:fx.now+100});assert.equal(receipt.status,'STOPPED_RETAINED');assert.equal(receipt.resourcesStopped,true);assert.equal(receipt.receiptWriteFailed,undefined);assert.deepEqual(receipt.failures,[]);assert.ok(fx.files.has(fx.p.results+'/cleanup.json'));}
+  finally{await fx.dispose();}
+});

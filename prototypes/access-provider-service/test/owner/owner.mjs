@@ -239,6 +239,7 @@ export class OwnerSupervisor {
   events=[];budget=new ConnectionBudget();owner=null;phase='new';proxy=null;
   #controller=new AbortController();#setupDeadline=null;#suiteTimer=null;#suiteDeadline=null;#secrets=null;#logDevice=null;#guestIdentity=null;#defaultState=null;#plan;#manifest;#commands;#bindingsFingerprint=null;#quotaProof=null;#executables={};
   #operations=new AsyncLocalStorage();#preflightPromise=null;#provisionPromise=null;#cleanupEnd=null;#evidenceSlots=new Set();#listenerFactory;
+  #cleanupController=new AbortController();#cleanupTimer=null;#cleanupEvidence=null;
   #identities={network:null,container:null,mount:null,uncertainty:[],retirementFailures:[],evidenceFailures:[]};
   constructor({plan,manifest,authorize,startCommand=spawn,createListener}){
     if(typeof startCommand!=='function'||createListener!==undefined&&typeof createListener!=='function')refuse('OWNER_COMMAND_START');
@@ -269,16 +270,30 @@ export class OwnerSupervisor {
   }
   #scope(){const scope=this.#operations.getStore();if(!scope)refuse('OWNER_OPERATION_SCOPE_REQUIRED');scope.check();return scope;}
   async #wait(operation,options={}){
-    const scope=this.#scope();
-    try{const value=await ownedRace(()=>{scope.check();return operation();},{deadline:scope.deadline,signal:scope.terminal?undefined:this.signal,...options});scope.check();return value;}
+    const scope=this.#scope();let value;
+    try{value=await ownedRace(()=>{scope.check();return operation();},{deadline:scope.terminal?Math.min(scope.deadline,this.#cleanupEnd):scope.deadline,signal:scope.terminal?this.#cleanupController.signal:this.signal,...options});}
     catch(error){scope.check();throw error;}
+    try{scope.check();}
+    catch(error){
+      // ownedRace succeeded; its losing-result disposer will not run here.
+      if(options.onLate)try{await options.onLate(value);}catch(retirement){error.retirementFailures=[...(error.retirementFailures??[]),safeCode(retirement)];}
+      throw error;
+    }
+    return value;
   }
   #fs(method,...args){const end=this.#scope().deadline;return this.#wait(()=>fs[method](...args),method==='open'?{onLate:h=>this.#retire(h,end)}:{});}
   #authorize(action){return this.#wait(()=>this.gate.require(action));}
   async #retire(handle,deadline){
     // Retirement starts even when its acknowledgement can no longer be awaited.
-    let closing;try{closing=Promise.resolve(handle.close());closing.catch(()=>{});await ownedRace(()=>closing,{deadline:Math.min(deadline,performance.now()+1000)});}
-    catch(error){this.#rememberFailure('retirementFailures',{code:safeCode(error)});throw error;}
+    const observed=new Set(),remember=error=>{const code=safeCode(error);if(!observed.has(code)){observed.add(code);this.#rememberFailure('retirementFailures',{code});}};
+    const terminal=this.#operations.getStore()?.terminal;
+    let closing;try{closing=Promise.resolve(handle.close());closing.catch(remember);await ownedRace(()=>closing,{deadline:Math.min(deadline,terminal?this.#cleanupEnd:Infinity,performance.now()+1000),signal:terminal?this.#cleanupController.signal:undefined});}
+    catch(error){remember(error);throw error;}
+  }
+  async #cleanupWait(operation,{deadline=this.#cleanupEnd}={}){
+    const check=()=>remainingMilliseconds(this.#cleanupEnd);check();
+    try{const value=await ownedRace(()=>{check();return operation();},{deadline:Math.min(deadline,this.#cleanupEnd),signal:this.#cleanupController.signal});check();return value;}
+    catch(error){if(this.#cleanupController.signal.aborted)refuse('OWNER_DEADLINE');check();throw error;}
   }
   #writePrivate(filename,value,{exclusive=true}={}){
     const scope=this.#scope();return privateFile(filename,value,{exclusive,beforeWrite:scope.check,wait:(f,o)=>this.#wait(f,o),retire:h=>this.#retire(h,scope.deadline)});
@@ -636,7 +651,9 @@ export class OwnerSupervisor {
   }
   cancel(code='OWNER_CANCELLED'){this.#controller.abort(new OwnerError(code));this.#commands.stop();}
   async cleanup({deadline=performance.now()+CAPS.cleanupMs}={}){
-    const requested=Math.min(deadline,performance.now()+CAPS.cleanupMs);this.#cleanupEnd=this.#cleanupEnd===null?requested:Math.min(this.#cleanupEnd,requested);const end=this.#cleanupEnd;
+    const requested=Math.min(deadline,performance.now()+CAPS.cleanupMs),previous=this.#cleanupEnd;this.#cleanupEnd=previous===null?requested:Math.min(previous,requested);const end=this.#cleanupEnd;
+    if(previous!==end){clearTimeout(this.#cleanupTimer);const ms=end-performance.now();if(!Number.isFinite(ms)||ms<=0)this.#cleanupController.abort(new OwnerError('OWNER_DEADLINE'));else{this.#cleanupTimer=setTimeout(()=>this.#cleanupController.abort(new OwnerError('OWNER_DEADLINE')),ms);this.#cleanupTimer.unref();}}
+    const check=()=>remainingMilliseconds(this.#cleanupEnd);
     clearTimeout(this.#suiteTimer);const failures=[];let cleanupCode,authorized=false;
     // Terminal local retirement cannot depend on an external phase capability.
     try{this.cancel();}catch(e){failures.push({action:'cancel',code:safeCode(e)});}
@@ -647,13 +664,13 @@ export class OwnerSupervisor {
         // Call close even with zero wait budget: it retires the listener and
         // transports synchronously before its bounded completion wait.
         const closing=Promise.resolve(this.proxy.close(Math.max(0,Math.floor(closeEnd-now))));closing.catch(()=>{});
-        await ownedRace(()=>closing,{deadline:closeEnd});
+        await this.#cleanupWait(()=>closing,{deadline:closeEnd});
       }catch(e){failures.push({action:'proxy-close',code:safeCode(e)});}
     }
-    try{remainingMilliseconds(end);await ownedRace(()=>this.gate.require('cleanup'),{deadline:end});remainingMilliseconds(end);authorized=true;}
+    try{await this.#cleanupWait(()=>this.gate.require('cleanup'));authorized=true;}
     catch(e){cleanupCode=safeCode(e);failures.push({action:'cleanup',code:cleanupCode});}
     const attempt=async(action,tool,args)=>{
-      try{await this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:end,cleanup:true,check:()=>remainingMilliseconds(end)});}
+      try{await this.#cleanupWait(()=>this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:this.#cleanupEnd,cleanup:true,check}));}
       catch(e){failures.push({action,code:safeCode(e)});}
     };
     const containerId=this.owner?.containerId??this.#identities.container?.id;
@@ -661,19 +678,21 @@ export class OwnerSupervisor {
     if(authorized&&this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
     let confirmed=false;
     if(authorized&&containerId)try{
-      remainingMilliseconds(end);await ownedRace(()=>this.gate.require('verify-stopped'),{deadline:end});remainingMilliseconds(end);const r=await this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null}),{deadline:end,cleanup:true,check:()=>remainingMilliseconds(end)});
+      await this.#cleanupWait(()=>this.gate.require('verify-stopped'));const r=await this.#cleanupWait(()=>this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null}),{deadline:this.#cleanupEnd,cleanup:true,check}));check();
       confirmed=JSON.parse(r.stdout)[0].State.Running===false;
     }catch{ // A stopped VM makes Docker unavailable; exact profile stopped proof is required.
-      try{const r=await this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:end,cleanup:true,check:()=>remainingMilliseconds(end)});const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
+      try{const r=await this.#cleanupWait(()=>this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:this.#cleanupEnd,cleanup:true,check}));check();const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
     }
     if(this.#commands.children.size)failures.push({action:'children',code:'OWNER_CHILDREN_REMAIN'});
     if(!confirmed)failures.push({action:'verify-stopped',code:'OWNER_STOP_UNCONFIRMED'});
-    const receipt={status:failures.length?'CLEANUP_INCOMPLETE_RETAINED':'STOPPED_RETAINED',failures,denied:this.denied,owner:this.owner,retainedIdentity:this.retainedIdentity,plan:{colimaHome:this.plan.colimaHome,artifactRoot:this.plan.artifactRoot},dataRemoved:false,secretsRetained:true,...(cleanupCode?{code:cleanupCode}:{})};
+    const receipt={status:failures.length?'CLEANUP_INCOMPLETE_RETAINED':'STOPPED_RETAINED',resourcesStopped:confirmed,failures,denied:this.denied,owner:this.owner,retainedIdentity:this.retainedIdentity,plan:{colimaHome:this.plan.colimaHome,artifactRoot:this.plan.artifactRoot},dataRemoved:false,secretsRetained:true,...(cleanupCode?{code:cleanupCode}:{})};
     // Always retain failure identities; never remove a container/network/profile,
     // detach a foreign volume, or prune. A later same-owner continuation admits it.
-    if(this.#logDevice!==null&&!this.#evidenceSlots.has('cleanup'))try{
-      await this.#terminalEvidence('cleanup',{status:receipt.status,failures:failures.slice(0,64).map(f=>({action:ACTIONS.includes(f.action)?f.action:'LOCAL_RETIREMENT',code:/^[A-Z0-9_]{1,80}$/.test(f.code??'')?f.code:'OWNER_OPERATION_FAILED'})),retainedIdentity:this.retainedIdentity,dataRemoved:false,secretsRetained:true});
-    }catch{receipt.receiptWriteFailed=true;receipt.retainedIdentity=this.retainedIdentity;}
+    if(this.#logDevice!==null)try{
+      this.#cleanupEvidence??=this.#terminalEvidence('cleanup',{status:receipt.status,resourcesStopped:confirmed,failures:failures.slice(0,64).map(f=>({action:ACTIONS.includes(f.action)?f.action:'LOCAL_RETIREMENT',code:/^[A-Z0-9_]{1,80}$/.test(f.code??'')?f.code:'OWNER_OPERATION_FAILED'})),retainedIdentity:this.retainedIdentity,dataRemoved:false,secretsRetained:true});
+      await this.#cleanupEvidence;
+    }catch(error){receipt.receiptWriteFailed=true;receipt.retainedIdentity=this.retainedIdentity;failures.push({action:'cleanup-evidence',code:safeCode(error)});receipt.status='CLEANUP_INCOMPLETE_RETAINED';}
+    try{check();}catch(error){failures.push({action:'cleanup-publication',code:safeCode(error)});receipt.status='CLEANUP_INCOMPLETE_RETAINED';}
     return receipt;
   }
 }
