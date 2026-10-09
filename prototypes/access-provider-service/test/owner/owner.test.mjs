@@ -1202,3 +1202,83 @@ test('actual finishRuntime retains healthy stopped evidence and succeeds without
   try{const receipt=await finishRuntime({owner:fx.owner},{deadline:fx.now+100});assert.equal(receipt.status,'STOPPED_RETAINED');assert.equal(receipt.resourcesStopped,true);assert.equal(receipt.receiptWriteFailed,undefined);assert.deepEqual(receipt.failures,[]);assert.ok(fx.files.has(fx.p.results+'/cleanup.json'));}
   finally{await fx.dispose();}
 });
+
+async function cleanupChildFixture(t){
+  let now=10,serial=0,activeAction,gateHold,childHold;const timers=new Map(),starts=[],kills=[],children=[],listeners=new Set(),gateCounts=new Map();
+  t.mock.method(performance,'now',()=>now);
+  t.mock.method(globalThis,'setTimeout',(callback,ms,...args)=>{const id={serial:++serial,unref(){return this;}};timers.set(id,{at:now+Math.max(0,ms),callback:()=>callback(...args),name:callback.name});return id;});
+  t.mock.method(globalThis,'clearTimeout',id=>timers.delete(id));
+  const add=AbortSignal.prototype.addEventListener,remove=AbortSignal.prototype.removeEventListener;
+  t.mock.method(AbortSignal.prototype,'addEventListener',function(type,listener,...args){if(type==='abort'&&listener.name==='retire')listeners.add(listener);return add.call(this,type,listener,...args);});
+  t.mock.method(AbortSignal.prototype,'removeEventListener',function(type,listener,...args){if(type==='abort'&&listener.name==='retire')listeners.delete(listener);return remove.call(this,type,listener,...args);});
+  const p={...createPlan({worktree:currentWorktree,runId:U}),artifactRoot:path.join(testFiles,'child-lifecycle'),dockerConfig:path.join(testFiles,'child-lifecycle','docker-config'),colimaHome:path.join(testFiles,'child-home'),socket:path.join(testFiles,'child-home','b1-owner','docker.sock')};
+  const output=action=>action==='docker-inspect'?JSON.stringify([{State:{Running:false}}]):action==='colima-status'?JSON.stringify({status:'Stopped'}):'';
+  const ack=(record,code=0)=>{record.child.stdout.emit('data',Buffer.from(output(record.action)));record.child.emit('close',code);};
+  const owner=new OwnerSupervisor({plan:p,manifest:{vmStatusFields:{status:'status'}},authorize:async({action})=>{
+    const ordinal=(gateCounts.get(action)??0)+1;gateCounts.set(action,ordinal);
+    if(gateHold?.action===action&&gateHold.ordinal===ordinal){const held=gateHold;held.entered.resolve();await held.release.promise;}
+    activeAction=action;return action!=='preflight';
+  },startCommand:(executable,args,options)=>{
+    assert.equal(options.shell,false);assert.ok(['docker','colima'].includes(path.basename(executable)));
+    const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();
+    const record={child,action:activeAction,args,ordinal:starts.filter(a=>a===activeAction).length+1};starts.push(record.action);children.push(record);
+    const hold=childHold?.action===record.action&&childHold.ordinal===record.ordinal?childHold:null;
+    child.kill=signal=>{kills.push({action:record.action,ordinal:record.ordinal,signal,at:now});if(hold?.closeOn===signal)ack(record);return true;};
+    child.stdin.end=()=>{if(hold){hold.record=record;hold.entered.resolve();}else queueMicrotask(()=>ack(record));};return child;
+  }});
+  // Establish the genuine private setup deadline without tools or host effects.
+  await assert.rejects(owner.preflight(),e=>e.code==='OWNER_NOT_AUTHORIZED');owner.phase='allocating';owner.owner=Object.freeze({runId:U,containerId:'b'.repeat(64),networkId:'a'.repeat(64)});
+  return {owner,starts,kills,children,timers,listeners,get now(){return now;},
+    holdGate(action){gateHold={action,ordinal:(gateCounts.get(action)??0)+1,entered:deferred(),release:deferred()};return gateHold;},
+    holdChild(action,{closeOn}={}){childHold={action,ordinal:starts.filter(a=>a===action).length+1,entered:deferred(),closeOn,record:null};return childHold;},
+    ack,async advance(end){let limit=1000;while(true){const next=[...timers].filter(([,v])=>v.at<=end).sort((a,b)=>a[1].at-b[1].at||a[0].serial-b[0].serial)[0];if(!next)break;assert.ok(limit-->0,'controlled timer loop');now=Math.max(now,next[1].at);timers.delete(next[0]);next[1].callback();await flush();}now=end;await flush();},
+    async dispose(){gateHold?.release.resolve();for(const record of children)ack(record);await flush();timers.clear();t.mock.restoreAll();}
+  };
+}
+test('actual cleanup child spawned after future tightening receives current deadline TERM KILL and retained unconfirmed ownership',async t=>{
+  const fx=await cleanupChildFixture(t),gate=fx.holdGate('docker-stop'),first=fx.owner.cleanup({deadline:fx.now+1000});
+  try{
+    await gate.entered.promise;const tightened=fx.now+60,second=await fx.owner.cleanup({deadline:tightened});assert.equal(second.status,'STOPPED_RETAINED');
+    const hold=fx.holdChild('docker-stop');gate.release.resolve();await hold.entered.promise;const ordinal=hold.record.ordinal;
+    assert.ok(fx.now<tightened);assert.deepEqual(fx.kills,[]);assert.ok([...fx.timers.values()].some(v=>v.name==='retire'&&v.at===tightened));
+    await fx.advance(tightened);const receipt=await first;assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.ok(receipt.failures.some(f=>f.code==='OWNER_CHILDREN_REMAIN'));
+    assert.deepEqual(fx.kills.filter(k=>k.ordinal===ordinal).map(k=>k.signal),['SIGTERM']);fx.owner.cancel();assert.equal(fx.kills.filter(k=>k.ordinal===ordinal).length,1);
+    await fx.advance(tightened+1000);assert.deepEqual(fx.kills.filter(k=>k.ordinal===ordinal).map(k=>k.signal),['SIGTERM','SIGKILL']);
+    await fx.advance(tightened+2000);assert.ok(fx.owner.retainedIdentity.retirementFailures.some(v=>v.action==='docker-stop'&&v.code==='OWNER_CHILD_STOP_UNCONFIRMED'));
+    const repeated=await fx.owner.cleanup({deadline:tightened+5000});assert.ok(repeated.failures.some(f=>f.code==='OWNER_CHILDREN_REMAIN'));assert.equal(repeated.status,'CLEANUP_INCOMPLETE_RETAINED');
+    fx.ack(hold.record);await flush();assert.equal(fx.listeners.size,0);assert.equal(fx.timers.size,0);
+  }finally{gate.release.resolve();await first.catch(()=>{});await fx.dispose();}
+});
+test('actual already spawned cleanup child retires once when a concurrent future deadline tightens',async t=>{
+  const fx=await cleanupChildFixture(t),hold=fx.holdChild('docker-stop'),first=fx.owner.cleanup({deadline:fx.now+1000});
+  try{
+    await hold.entered.promise;const tightened=fx.now+60,second=await fx.owner.cleanup({deadline:tightened});assert.equal(second.status,'CLEANUP_INCOMPLETE_RETAINED');
+    assert.equal(fx.kills.filter(k=>k.ordinal===hold.record.ordinal&&k.signal==='SIGTERM').length,1);
+    await fx.advance(tightened);await first;assert.equal(fx.kills.filter(k=>k.ordinal===hold.record.ordinal&&k.signal==='SIGTERM').length,1);
+    await fx.advance(tightened+1000);assert.equal(fx.kills.filter(k=>k.ordinal===hold.record.ordinal&&k.signal==='SIGKILL').length,1);
+    fx.ack(hold.record);await flush();await fx.advance(tightened+2000);assert.equal(fx.listeners.size,0);assert.equal(fx.timers.size,0);assert.equal(fx.owner.retainedIdentity.retirementFailures.length,0);
+  }finally{await fx.dispose();}
+});
+test('actual pending cleanup child admission refuses after the tightened deadline without spawn',async t=>{
+  const fx=await cleanupChildFixture(t),gate=fx.holdGate('docker-stop'),first=fx.owner.cleanup({deadline:fx.now+1000});
+  try{
+    await gate.entered.promise;const tightened=fx.now+60;await fx.owner.cleanup({deadline:tightened});const count=fx.starts.length;
+    await fx.advance(tightened);assert.equal((await first).status,'CLEANUP_INCOMPLETE_RETAINED');gate.release.resolve();await flush();assert.equal(fx.starts.length,count);assert.deepEqual(fx.kills,[]);assert.equal(fx.listeners.size,0);assert.equal(fx.timers.size,0);
+  }finally{gate.release.resolve();await first.catch(()=>{});await fx.dispose();}
+});
+test('actual healthy cleanup child completion clears cancellation listeners and command timers before expiry',async t=>{
+  const fx=await cleanupChildFixture(t),hold=fx.holdChild('docker-stop'),pending=fx.owner.cleanup({deadline:fx.now+60});
+  try{
+    await hold.entered.promise;assert.equal(fx.listeners.size,1);fx.ack(hold.record);const receipt=await pending;assert.equal(receipt.status,'STOPPED_RETAINED');assert.equal(receipt.resourcesStopped,true);assert.equal(fx.listeners.size,0);
+    assert.equal(fx.timers.size,1);await fx.advance(fx.now+2060);assert.deepEqual(fx.kills,[]);assert.equal(fx.timers.size,0);
+  }finally{await fx.dispose();}
+});
+for(const signal of ['SIGTERM','SIGKILL'])test('actual cleanup child '+signal+' close race acknowledges once without orphaned escalation',async t=>{
+  const fx=await cleanupChildFixture(t),hold=fx.holdChild('docker-stop',{closeOn:signal}),end=fx.now+60,pending=fx.owner.cleanup({deadline:end});
+  try{
+    await hold.entered.promise;await fx.advance(end);assert.equal((await pending).status,'CLEANUP_INCOMPLETE_RETAINED');if(signal==='SIGKILL')await fx.advance(end+1000);
+    fx.ack(hold.record);await flush();await fx.advance(end+2000);
+    assert.deepEqual(fx.kills.map(k=>k.signal),signal==='SIGTERM'?['SIGTERM']:['SIGTERM','SIGKILL']);assert.equal(fx.listeners.size,0);assert.equal(fx.timers.size,0);
+    assert.equal(fx.owner.events.filter(e=>e.action==='docker-stop'&&e.exitCode===0).length,1);assert.equal(fx.owner.retainedIdentity.retirementFailures.length,0);
+  }finally{await fx.dispose();}
+});

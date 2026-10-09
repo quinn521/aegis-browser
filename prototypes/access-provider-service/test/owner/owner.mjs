@@ -180,40 +180,49 @@ export class PhaseGate {
 }
 // Both the phase deadline and this command's cap begin before authorization.
 // The synchronous start callback is also the inert seam used by pure tests.
-export async function runAuthorizedCommand(owner,action,spec,{deadline,cleanup=false,check=()=>{}},start){
+export async function runAuthorizedCommand(owner,action,spec,{deadline,cleanup=false,check=()=>{},currentDeadline=()=>deadline,retirementSignal},start){
   integer(spec.timeoutMs,1,CAPS.setupMs);
   if(!Number.isFinite(deadline))refuse('OWNER_DEADLINE');
-  const end=Math.min(deadline,performance.now()+spec.timeoutMs);check();remainingMilliseconds(end,spec.timeoutMs);
+  const end=Math.min(deadline,currentDeadline(),performance.now()+spec.timeoutMs);check();remainingMilliseconds(end,spec.timeoutMs);
+  if(cleanup&&retirementSignal?.aborted)refuse('OWNER_DEADLINE');
   await owner.gate.require(action);check();if(owner.signal.aborted&&!cleanup)refuse('OWNER_CANCELLED');
-  const timeoutMs=remainingMilliseconds(end,spec.timeoutMs);
-  return start({deadline:end,timeoutMs});
+  if(cleanup&&retirementSignal?.aborted)refuse('OWNER_DEADLINE');
+  const admittedEnd=Math.min(end,currentDeadline()),timeoutMs=remainingMilliseconds(admittedEnd,spec.timeoutMs);
+  return start({deadline:admittedEnd,timeoutMs});
 }
 class Commands {
   children=new Set();sink=null;
-  constructor(owner,start=spawn,completed=()=>{}){this.owner=owner;this.start=start;this.completed=completed;}
-  async run(action,spec,{deadline,cleanup=false,check=()=>{}}){
-    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup,check},({deadline:end})=>new Promise((resolve,reject)=>{
+  constructor(owner,start=spawn,completed=()=>{},retirementFailed=()=>{}){this.owner=owner;this.start=start;this.completed=completed;this.retirementFailed=retirementFailed;}
+  async run(action,spec,{deadline,cleanup=false,check=()=>{},currentDeadline=()=>deadline,retirementSignal}){
+    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup,check,currentDeadline,retirementSignal},({deadline:end})=>new Promise((resolve,reject)=>{
       const child=this.start(spec.executable,spec.args,{env:spec.env,shell:false,stdio:['pipe','pipe','pipe']});
       const identity={child,action,spawnedAt:performance.now(),done:false};this.children.add(identity);
-      let bytes=0,out=[],err=[],failure=null,killTimer,forceTimer;const maximum=2*MiB;
-      const stop=code=>{failure??=new OwnerError(code);if(!identity.done){child.kill('SIGTERM');killTimer??=setTimeout(()=>{if(!identity.done)child.kill('SIGKILL');forceTimer=setTimeout(()=>{if(!identity.done)reject(new OwnerError('OWNER_CHILD_STOP_UNCONFIRMED'));},1000);},1000);}};
-      const abort=()=>stop('OWNER_CANCELLED'),timer=setTimeout(()=>stop('OWNER_COMMAND_DEADLINE'),Math.max(0,Math.floor(end-performance.now())));
+      let bytes=0,out=[],err=[],failure=null,killTimer,forceTimer,termSent=false,unconfirmed=false;const maximum=2*MiB;
+      const stop=code=>{
+        failure??=new OwnerError(code);if(identity.done||termSent)return;termSent=true;child.kill('SIGTERM');if(identity.done)return;
+        killTimer=setTimeout(()=>{if(identity.done)return;child.kill('SIGKILL');if(identity.done)return;
+          forceTimer=setTimeout(()=>{if(identity.done||unconfirmed)return;unconfirmed=true;const error=Object.assign(new OwnerError('OWNER_CHILD_STOP_UNCONFIRMED'),{initiatingCode:failure.code});this.retirementFailed(action,error);this.owner.addEvent({action,retirementFailure:error.code});reject(error);},1000);
+        },1000);
+      };
+      identity.retire=stop;
+      const abort=()=>stop('OWNER_CANCELLED'),retire=()=>stop('OWNER_COMMAND_DEADLINE'),timer=setTimeout(retire,Math.max(0,Math.floor(end-performance.now())));
       if(!cleanup)this.owner.signal.addEventListener('abort',abort,{once:true});
+      if(cleanup)retirementSignal?.addEventListener('abort',retire,{once:true});
       const capture=(target,chunk)=>{bytes+=chunk.length;if(bytes>maximum){stop('OWNER_OUTPUT_LIMIT');return;}if(!spec.secret)target.push(chunk);};
       child.stdout.on('data',c=>capture(out,c));child.stderr.on('data',c=>capture(err,c));
       child.stdin.on('error',()=>stop('OWNER_STDIN'));child.on('error',()=>stop('OWNER_SPAWN'));
       child.on('close',code=>{
-        identity.done=true;this.children.delete(identity);clearTimeout(timer);clearTimeout(killTimer);clearTimeout(forceTimer);this.owner.signal.removeEventListener('abort',abort);
+        if(identity.done)return;identity.done=true;this.children.delete(identity);clearTimeout(timer);clearTimeout(killTimer);clearTimeout(forceTimer);this.owner.signal.removeEventListener('abort',abort);retirementSignal?.removeEventListener('abort',retire);
         this.owner.addEvent({action,exitCode:code,outputBytes:bytes,secret:spec.secret});
         const result={stdout:Buffer.concat(out).toString('utf8'),stderr:Buffer.concat(err).toString('utf8')};
         // Only an acknowledged exact invocation may contribute observed IDs.
         if(code===0&&!spec.secret&&bytes<=maximum&&(!failure||['OWNER_CANCELLED','OWNER_COMMAND_DEADLINE'].includes(failure.code)))this.completed(action,result);
         if(failure||code!==0)reject(failure??new OwnerError('OWNER_COMMAND_FAILED'));else resolve(result);
       });
-      child.stdin.end(spec.stdin??undefined);if(this.owner.signal.aborted&&!cleanup)abort();
+      child.stdin.end(spec.stdin??undefined);if(this.owner.signal.aborted&&!cleanup)abort();if(cleanup&&retirementSignal?.aborted)retire();
     }));
   }
-  stop(){for(const id of this.children)if(!id.done)id.child.kill('SIGTERM');}
+  stop(){for(const id of this.children)if(!id.done)id.retire('OWNER_CANCELLED');}
 }
 async function fileHash(p){const h=createHash('sha256');for await(const chunk of createReadStream(p))h.update(chunk);return h.digest('hex');}
 async function privateFile(p,bytes,{exclusive=false,beforeWrite,wait,retire}={}){
@@ -245,7 +254,7 @@ export class OwnerSupervisor {
     if(typeof startCommand!=='function'||createListener!==undefined&&typeof createListener!=='function')refuse('OWNER_COMMAND_START');
     this.#listenerFactory=createListener;
     this.#plan=plan;this.#manifest=manifest;this.gate=new PhaseGate({runId:plan.runId,authorize});
-    this.#commands=new Commands(this,startCommand,(action,result)=>this.#completed(action,result));
+    this.#commands=new Commands(this,startCommand,(action,result)=>this.#completed(action,result),(action,error)=>this.#rememberFailure('retirementFailures',{action,code:safeCode(error)}));
   }
   get plan(){return this.#plan;}get signal(){return this.#controller.signal;}
   get denied(){return [...this.gate.denied];}
@@ -670,7 +679,7 @@ export class OwnerSupervisor {
     try{await this.#cleanupWait(()=>this.gate.require('cleanup'));authorized=true;}
     catch(e){cleanupCode=safeCode(e);failures.push({action:'cleanup',code:cleanupCode});}
     const attempt=async(action,tool,args)=>{
-      try{await this.#cleanupWait(()=>this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:this.#cleanupEnd,cleanup:true,check}));}
+      try{await this.#cleanupWait(()=>this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));}
       catch(e){failures.push({action,code:safeCode(e)});}
     };
     const containerId=this.owner?.containerId??this.#identities.container?.id;
@@ -678,10 +687,10 @@ export class OwnerSupervisor {
     if(authorized&&this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
     let confirmed=false;
     if(authorized&&containerId)try{
-      await this.#cleanupWait(()=>this.gate.require('verify-stopped'));const r=await this.#cleanupWait(()=>this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null}),{deadline:this.#cleanupEnd,cleanup:true,check}));check();
+      await this.#cleanupWait(()=>this.gate.require('verify-stopped'));const r=await this.#cleanupWait(()=>this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));check();
       confirmed=JSON.parse(r.stdout)[0].State.Running===false;
     }catch{ // A stopped VM makes Docker unavailable; exact profile stopped proof is required.
-      try{const r=await this.#cleanupWait(()=>this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:this.#cleanupEnd,cleanup:true,check}));check();const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
+      try{const r=await this.#cleanupWait(()=>this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));check();const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
     }
     if(this.#commands.children.size)failures.push({action:'children',code:'OWNER_CHILDREN_REMAIN'});
     if(!confirmed)failures.push({action:'verify-stopped',code:'OWNER_STOP_UNCONFIRMED'});
