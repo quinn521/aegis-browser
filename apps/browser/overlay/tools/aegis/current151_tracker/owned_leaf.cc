@@ -313,8 +313,9 @@ int main(int argc, char** argv) {
       child.KillOwned();
   }
   FreshOwnerBoundary(STDIN_FILENO, &gate, deadline, boot);
+  const int child_status = child.Status();
   const bool leaf_success = gate.go_sent && child.Reaped() &&
-      WIFEXITED(child.Status()) && WEXITSTATUS(child.Status()) == 0;
+      WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0;
   if (!leaf_success)
     gate.Fail();
   // Immutable provisional evidence. There is no authoritative accepted field:
