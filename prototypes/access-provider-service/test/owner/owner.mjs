@@ -331,7 +331,7 @@ export class OwnerSupervisor {
     const observed=await this.#resources();this.backendPort=observed.backendPort;
     await this.#forwarder(this.backendPort);await this.#roles();
     assertFixtureEnvironment();this.proxy=new WireProxy({backendPort:this.backendPort,authorize:a=>this.gate.require(a),onFailure:e=>{this.addEvent({wireFailure:safeCode(e)});}});
-    const front=await this.proxy.start();this.owner=Object.freeze({...this.owner,port:front});
+    const front=await this.proxy.start({deadline:this.#deadline(),signal:this.signal});this.owner=Object.freeze({...this.owner,port:front});
     await privateFile(this.plan.artifactRoot+'/resource-identity.json',JSON.stringify(this.owner));
     await this.verifyOwner(this.owner,'connect-owned-fixture');return this.owner;
   }
@@ -382,12 +382,21 @@ export class OwnerSupervisor {
     return Object.fromEntries(Object.entries(this.#secrets).map(([role,password])=>[role,{host:'127.0.0.1',port,database:'b1',user:role,password}]));
   }
   async withClient(role,callback,{backend=true}={}){
-    await this.gate.require('inspect-owned-fixture');if(this.signal.aborted)refuse('OWNER_CANCELLED');
-    const release=this.budget.reserve('helper',2),pool=createOwnedPool(this.connections({backend})[role]);pool.on('error',()=>{});let client;
-    try{client=await ownedRace(()=>pool.connect(),{signal:this.signal,deadline:performance.now()+1500,onLate:c=>c.release(true)});client.on('error',()=>{});let active=true;const deadline=performance.now()+5000;const raw=client;
-      const guarded={query:(...args)=>{if(!active||this.signal.aborted||performance.now()>=deadline)refuse('OWNER_CLIENT_SCOPE_ENDED');return raw.query(...args);}};
-      try{return await ownedRace(()=>callback(guarded),{signal:this.signal,deadline});}finally{active=false;}}
-    finally{client?.connection?.stream?.destroy();client?.release(true);await closeOwnedPool(pool,1000);release();}
+    const phaseEnd=this.#deadline();
+    await this.gate.require('inspect-owned-fixture');if(this.signal.aborted)refuse('OWNER_CANCELLED');remainingMilliseconds(phaseEnd);
+    const release=this.budget.reserve('helper',2);let pool,client;
+    try{
+      pool=createOwnedPool(this.connections({backend})[role]);pool.on('error',()=>{});
+      const connectEnd=Math.min(phaseEnd,performance.now()+1500);
+      client=await ownedRace(()=>{if(this.signal.aborted)refuse('OWNER_CANCELLED');remainingMilliseconds(connectEnd,1500);return pool.connect();},
+        {signal:this.signal,deadline:connectEnd,onLate:c=>{c.connection?.stream?.destroy();c.release(true);}});
+      client.on('error',()=>{});let active=true;const deadline=Math.min(phaseEnd,performance.now()+5000),raw=client;
+      const check=()=>{if(!active||this.signal.aborted||performance.now()>=deadline)refuse('OWNER_CLIENT_SCOPE_ENDED');};
+      const guarded={query:(...args)=>{check();return raw.query(...args);}};
+      try{return await ownedRace(()=>{check();return callback(guarded);},{signal:this.signal,deadline});}finally{active=false;}
+    }finally{
+      try{client?.connection?.stream?.destroy();client?.release(true);if(pool)await closeOwnedPool(pool,1000);}finally{release();}
+    }
   }
   async #roles(){
     await this.gate.require('provision-roles');
@@ -434,7 +443,11 @@ export class OwnerSupervisor {
     const rawRef=await this.record('admission-'+randomBytes(8).toString('hex'),{resources:measured,forwarder,roles,rolePhase:roles.catalog?'migrated-catalog':'provisioned-database'});
     return {...this.owner,storageFreeBytes:measured.remaining,dataQuotaBytes:measured.guest.quotaBytes,connectionLimit:Number(roles.settings.max_connections),cpuLimit:2,memoryLimitBytes:GiB,shmBytes:CAPS.shm,wallBudgetSeconds:1800,resultsQuotaBytes:CAPS.results,durabilityMountVerified:true,loopbackPublicationVerified:true,roleGrantsVerified:true,secretFileModesVerified:true,rolePhase:roles.catalog?'migrated-catalog':'provisioned-database',rawMeasurement:rawRef};
   }
-  beginSql(){if(this.#suiteTimer)refuse('OWNER_SUITE_ALREADY_STARTED');this.#suiteDeadline=performance.now()+CAPS.suiteMs;this.#suiteTimer=setTimeout(()=>this.cancel('OWNER_SUITE_DEADLINE'),CAPS.suiteMs);}
+  beginSql(){
+    if(this.#suiteTimer)refuse('OWNER_SUITE_ALREADY_STARTED');if(this.signal.aborted)refuse('OWNER_CANCELLED');
+    const now=performance.now();if(this.#setupDeadline===null||now>=this.#setupDeadline)refuse('OWNER_SETUP_DEADLINE');
+    this.#suiteDeadline=now+CAPS.suiteMs;this.#suiteTimer=setTimeout(()=>this.cancel('OWNER_SUITE_DEADLINE'),CAPS.suiteMs);
+  }
   setBindingsFingerprint(fingerprint){if(!/^[0-9a-f]{64}$/.test(fingerprint)||this.#bindingsFingerprint&&this.#bindingsFingerprint!==fingerprint)refuse('OWNER_SIGNING_IDENTITY_CHANGED');this.#bindingsFingerprint=fingerprint;}
   async #durableSnapshot(){return this.withClient('b1_bootstrap',async c=>{
     const {rows:[control]}=await c.query('SELECT system_identifier::text FROM pg_control_system()');const {rows:[schema]}=await c.query("SELECT to_regnamespace('provider_b1')::text AS schema");const hashes={};

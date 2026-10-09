@@ -161,10 +161,10 @@ export class WireLifetime {
   close(){if(this.#startupTimer!==null)this.#cancel(this.#startupTimer);if(this.#transactionTimer!==null)this.#cancel(this.#transactionTimer);this.#startupTimer=null;this.#transactionTimer=null;}
 }
 export class WireProxy {
-  #server=null;#connections=new Set();#fault=null;#salt=randomBytes(32);#events=[];#authorize;#onFailure;#backend;#closed=false;
-  constructor({backendPort,authorize,onFailure=()=>{}}){
-    if(!Number.isSafeInteger(backendPort)||backendPort<1||backendPort>65535||typeof authorize!=='function')fail('WIRE_OWNER_REQUIRED');
-    this.#backend=backendPort;this.#authorize=authorize;this.#onFailure=onFailure;
+  #server=null;#connections=new Set();#fault=null;#salt=randomBytes(32);#events=[];#authorize;#onFailure;#backend;#closed=false;#starting=false;#createListener;
+  constructor({backendPort,authorize,onFailure=()=>{},createListener=createServer}){
+    if(!Number.isSafeInteger(backendPort)||backendPort<1||backendPort>65535||typeof authorize!=='function'||typeof createListener!=='function')fail('WIRE_OWNER_REQUIRED');
+    this.#backend=backendPort;this.#authorize=authorize;this.#onFailure=onFailure;this.#createListener=createListener;
   }
   get metadata(){return this.#events.map(x=>({...x}));}
   connectionIdentity(frontendPort){return [...this.#connections].find(c=>c.front.remotePort===frontendPort)?.id??null;}
@@ -178,12 +178,26 @@ export class WireProxy {
     let total=0;for(const c of this.#connections){const n=c.frontDecode.bufferedBytes+c.backDecode.bufferedBytes+c.tracker.storedBytes+c.front.writableLength+c.back.writableLength;if(n>WIRE_LIMITS.buffered)fail('WIRE_BUFFER_LIMIT');total+=n;}
     if(total>WIRE_LIMITS.total)fail('WIRE_TOTAL_LIMIT');
   }
-  async start(){
-    if(this.#server||this.#closed)fail('WIRE_ALREADY_STARTED');await this.#authorize('start-owned-wire-proxy');
-    const server=createServer(front=>this.#accept(front));this.#server=server;
-    server.on('error',error=>{this.disarm(error);this.#onFailure(error);});
-    await new Promise((resolve,reject)=>{server.once('error',reject);server.listen({host:'127.0.0.1',port:0,exclusive:true},()=>{server.removeListener('error',reject);resolve();});});
-    return server.address().port;
+  async start({deadline,signal}={}){
+    if(this.#server||this.#closed||this.#starting)fail('WIRE_ALREADY_STARTED');
+    if(!signal||typeof signal.addEventListener!=='function')fail('WIRE_OWNER_REQUIRED');
+    const check=()=>{if(this.#closed)fail('WIRE_ALREADY_STARTED');if(signal.aborted)fail('WIRE_CANCELLED');if(!Number.isFinite(deadline)||performance.now()>=deadline)fail('WIRE_PHASE_DEADLINE');};
+    this.#starting=true;let server;
+    try{
+      check();await this.#authorize('start-owned-wire-proxy');check();
+      server=this.#createListener(front=>this.#accept(front));check();this.#server=server;
+      server.on('error',error=>{this.disarm(error);this.#onFailure(error);});
+      await new Promise((resolve,reject)=>{
+        let timer,done=false;
+        const finish=error=>{if(done)return;done=true;clearTimeout(timer);signal.removeEventListener('abort',abort);server.removeListener('error',failed);error?reject(error):resolve();};
+        const abort=()=>finish(new WireError('WIRE_CANCELLED')),failed=error=>finish(error);
+        server.once('error',failed);signal.addEventListener('abort',abort,{once:true});
+        timer=setTimeout(()=>finish(new WireError('WIRE_PHASE_DEADLINE')),Math.max(0,Math.floor(deadline-performance.now())));
+        try{check();server.listen({host:'127.0.0.1',port:0,exclusive:true},()=>{try{check();finish();}catch(error){finish(error);}});}catch(error){finish(error);}
+      });
+      check();return server.address().port;
+    }catch(error){if(server){this.#closed=true;try{server.close(()=>{});}catch{}}throw error;}
+    finally{this.#starting=false;}
   }
   #accept(front){
     if(this.#closed||this.#connections.size>=WIRE_LIMITS.connections){front.destroy();return;}

@@ -15,7 +15,7 @@ import { PostgresStore,createOwnedPool } from '../../store.mjs';
 import { ProviderError,canonical } from '../../proof.mjs';
 import { FrameDecoder,CommitTracker,WireProxy,WireError,WireLifetime,classifySql,errorSqlState,WIRE_LIMITS } from './wire-proxy.mjs';
 import { createPlan,command,colimaStartArgs,containerArgs,residualCapacity,ConnectionBudget,PhaseGate,OwnerSupervisor,OwnerError,ownedRace,CAPS,PIN,digest,remainingMilliseconds,resolveExecutable,regular,createContainerWithSecret,assertFixtureEnvironment,RUNTIME_SOURCE_FILES,verifyReviewedSources,capabilityAuthorizer,runAuthorizedCommand } from './owner.mjs';
-import { budgetHarness,runCli,createResourceLifecycle,finishRuntime,persistentBindings } from './runner.mjs';
+import { budgetHarness,runCli,createResourceLifecycle,finishRuntime,persistentBindings,integrationStages } from './runner.mjs';
 import { validateAckReceipt,validateDeadlockEvidence,isClockDisconnect,registerFixtureAndClose } from './fault-cases.mjs';
 // Migrated from the prior artifact-only 23 tests; the original packet stays immutable.
 // These are pure unit/regression tests; no real resource/SQL admission is claimed.
@@ -36,7 +36,7 @@ test('all imports and constructors are inert, default gate refuses runtime',asyn
   const owner=new OwnerSupervisor({plan,manifest:{},authorize:async()=>false});const proxy=new WireProxy({backendPort:54321,authorize:async()=>{throw new Error('denied');}});
   assert.equal(owner.phase,'new');assert.equal(owner.owner,null);assert.deepEqual(owner.events,[]);assert.deepEqual(proxy.metadata,[]);
   await assert.rejects(owner.preflight(),e=>e.code==='OWNER_NOT_AUTHORIZED');assert.equal(owner.denied.length,1);assert.equal(owner.phase,'new');
-  await assert.rejects(proxy.start(),/denied/);await proxy.close();
+  await assert.rejects(proxy.start({deadline:performance.now()+10000,signal:owner.signal}),/denied/);await proxy.close();
 });
 test('exact UUID-owned paths and structured commands cannot select a default daemon',()=>{
   assert.equal(plan.colimaHome,'/Volumes/ExternalSSD/b1pg-'+U+'/c');assert.ok(Buffer.byteLength(plan.socket)<104);
@@ -484,7 +484,7 @@ for(const validation of ['references','sources'])test('capability expiry during 
     await entered.promise;wall=end;release.resolve();
     await assert.rejects(pending,e=>e.code==='OWNER_NOT_AUTHORIZED');assert.equal(starts,1);assert.equal(held,true);
     const proxy=new WireProxy({backendPort:54321,authorize:a=>gate.require(a)});
-    await assert.rejects(proxy.start(),e=>e.code==='OWNER_NOT_AUTHORIZED');await proxy.close();
+    await assert.rejects(proxy.start({deadline:performance.now()+10000,signal:owner.signal}),e=>e.code==='OWNER_NOT_AUTHORIZED');await proxy.close();
     assert.equal(gate.denied.length,2);
   }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
 });
@@ -552,4 +552,130 @@ test('actual owner cleanup cap starts before initial cleanup authorization even 
     assert.equal(receipt.status,'CLEANUP_INCOMPLETE_RETAINED');assert.deepEqual(actions,['cleanup','verify-stopped']);
     assert.ok(receipt.failures.some(f=>f.action==='docker-stop'&&f.code==='OWNER_DEADLINE'));assert.deepEqual(owner.events,[]);
   }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+
+function inertListener({onCreate=()=>{},onListen=null}={}){
+  const state={created:0,listened:0,closed:0,options:null},server=new EventEmitter();
+  server.listen=(options,ready)=>{state.listened++;state.options=options;if(onListen)onListen(ready);else queueMicrotask(ready);return server;};
+  server.close=done=>{state.closed++;queueMicrotask(()=>done?.());return server;};server.address=()=>({port:54322});
+  return {state,create:()=>{state.created++;onCreate();return server;}};
+}
+for(const during of ['expiry','cancel','close'])test('actual proxy start refuses '+during+' during pending authorization without creating a listener',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),controller=new AbortController(),listener=inertListener();
+  const proxy=new WireProxy({backendPort:54321,createListener:listener.create,authorize:async action=>{assert.equal(action,'start-owned-wire-proxy');entered.resolve();await release.promise;}}),options={deadline:100,signal:controller.signal},pending=proxy.start(options);
+  try{
+    await entered.promise;await assert.rejects(proxy.start(options),e=>e.code==='WIRE_ALREADY_STARTED');
+    if(during==='expiry')now=100;else if(during==='cancel')controller.abort();else await proxy.close();release.resolve();
+    await assert.rejects(pending,e=>e.code===({expiry:'WIRE_PHASE_DEADLINE',cancel:'WIRE_CANCELLED',close:'WIRE_ALREADY_STARTED'}[during]));
+    assert.equal(listener.state.created,0);assert.equal(listener.state.listened,0);
+    if(during==='close')await assert.rejects(proxy.start(options),e=>e.code==='WIRE_ALREADY_STARTED');
+  }finally{release.resolve();await pending.catch(()=>{});await proxy.close();t.mock.restoreAll();}
+});
+test('actual proxy start admits valid remaining budget and retains the original listen deadline',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),controller=new AbortController(),listener=inertListener(),timers=[],schedule=globalThis.setTimeout;
+  t.mock.method(globalThis,'setTimeout',function(callback,ms,...args){timers.push(ms);return schedule(callback,ms,...args);});
+  const proxy=new WireProxy({backendPort:54321,createListener:listener.create,authorize:async()=>{entered.resolve();await release.promise;}}),pending=proxy.start({deadline:100,signal:controller.signal});
+  try{
+    await entered.promise;now=50;release.resolve();assert.equal(await pending,54322);
+    assert.equal(listener.state.created,1);assert.equal(listener.state.listened,1);assert.ok(timers.includes(50));
+    assert.deepEqual(listener.state.options,{host:'127.0.0.1',port:0,exclusive:true});
+    await assert.rejects(proxy.start({deadline:200,signal:controller.signal}),e=>e.code==='WIRE_ALREADY_STARTED');
+  }finally{release.resolve();await pending.catch(()=>{});await proxy.close();t.mock.restoreAll();}
+});
+test('actual proxy start rechecks the original deadline immediately before listen',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const listener=inertListener({onCreate:()=>{now=100;}}),proxy=new WireProxy({backendPort:54321,createListener:listener.create,authorize:async()=>{}});
+  try{
+    await assert.rejects(proxy.start({deadline:100,signal:new AbortController().signal}),e=>e.code==='WIRE_PHASE_DEADLINE');
+    assert.equal(listener.state.created,1);assert.equal(listener.state.listened,0);assert.equal(listener.state.closed,1);
+  }finally{await proxy.close();t.mock.restoreAll();}
+});
+for(const during of ['expiry','cancel'])test('actual pending listen rejects '+during+' and closes its inert server without a late startup success',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);let ready;const entered=deferred(),controller=new AbortController(),listener=inertListener({onListen:callback=>{ready=callback;entered.resolve();}}),proxy=new WireProxy({backendPort:54321,createListener:listener.create,authorize:async()=>{}}),pending=proxy.start({deadline:100,signal:controller.signal});
+  try{
+    await entered.promise;if(during==='cancel')controller.abort();else {now=100;ready();}
+    await assert.rejects(pending,e=>e.code===(during==='cancel'?'WIRE_CANCELLED':'WIRE_PHASE_DEADLINE'));
+    assert.equal(listener.state.closed,1);ready();await flush();
+    await assert.rejects(proxy.start({deadline:200,signal:new AbortController().signal}),e=>e.code==='WIRE_ALREADY_STARTED');
+  }finally{await pending.catch(()=>{});await proxy.close();t.mock.restoreAll();}
+});
+
+// Establish the real private setup deadline via preflight, deliberately stopping
+// at the missing-manifest refusal before tool/runtime work. No admission claim.
+async function deadlineOwner(t,authorize=async()=>true){
+  const owner=new OwnerSupervisor({plan:createPlan({worktree:currentWorktree,runId:U}),manifest:{},authorize});
+  await assert.rejects(owner.preflight(),e=>e.code==='OWNER_MANIFEST');let selections=0;
+  t.mock.method(owner,'connections',()=>{selections++;return {b1_bootstrap:{host:'127.0.0.1',port:54321,user:'b1_bootstrap',database:'b1',password:'pure-only'}};});
+  return {owner,selections:()=>selections};
+}
+function scriptedOwnerPg(t){
+  const driver=scriptedPinnedPg(t);
+  // Owner uses createOwnedPool's default pg negotiation, while harness pools
+  // explicitly materialize sslnegotiation. Preserve the harness's strict mock.
+  t.mock.method(Client.prototype,'connect',function(callback){
+    assert.equal(this.ssl,false);assert.equal(this.sslNegotiation,'postgres');assert.equal(this.connectionParameters.ssl,false);
+    this._txStatus='I';driver.clients.push(this);queueMicrotask(()=>callback(null));
+  });return driver;
+}
+for(const during of ['expiry','cancel','denial'])test('actual SQL helper refuses '+during+' during authorization before pool and budget admission',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),driver=scriptedOwnerPg(t),{owner,selections}=await deadlineOwner(t,async({action})=>{
+    if(action==='inspect-owned-fixture'){entered.resolve();await release.promise;return during!=='denial';}return true;
+  });
+  const end=10+CAPS.setupMs;now=end-50;let calls=0;const pending=owner.withClient('b1_bootstrap',()=>{calls++;});
+  try{
+    await entered.promise;if(during==='expiry')now=end;else if(during==='cancel')owner.cancel();release.resolve();
+    await assert.rejects(pending,e=>e.code===({expiry:'OWNER_DEADLINE',cancel:'OWNER_CANCELLED',denial:'OWNER_NOT_AUTHORIZED'}[during]));
+    assert.equal(selections(),0);assert.equal(driver.clients.length,0);assert.equal(calls,0);assert.equal(owner.budget.state.used,0);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+test('actual SQL helper reduces connection and query budgets against the same phase end and closes its scope',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const authorized=deferred(),releaseAuth=deferred(),connected=deferred(),releaseConnect=deferred(),driver=scriptedOwnerPg(t),connect=Client.prototype.connect,query=Client.prototype.query,timers=[],schedule=globalThis.setTimeout;let queries=0,leaked;
+  t.mock.method(Client.prototype,'connect',function(callback){connected.resolve();releaseConnect.promise.then(()=>connect.call(this,callback)).catch(error=>callback(error));});
+  t.mock.method(Client.prototype,'query',function(...args){queries++;return query.apply(this,args);});
+  t.mock.method(globalThis,'setTimeout',function(callback,ms,...args){timers.push(ms);return schedule(callback,ms,...args);});
+  const {owner}=await deadlineOwner(t,async({action})=>{if(action==='inspect-owned-fixture'){authorized.resolve();await releaseAuth.promise;}return true;}),end=10+CAPS.setupMs;
+  now=end-100;const pending=owner.withClient('b1_bootstrap',async client=>{leaked=client;assert.equal(owner.budget.state.used,2);await client.query('SELECT 1');return 'inert-query';});
+  try{
+    await authorized.promise;now=end-40;releaseAuth.resolve();await connected.promise;now=end-20;releaseConnect.resolve();
+    assert.equal(await pending,'inert-query');assert.ok(timers.includes(40));assert.ok(timers.includes(20));
+    assert.equal(queries,1);assert.equal(driver.clients.length,1);assert.equal(driver.ended.length,1);assert.equal(owner.budget.state.used,0);
+    assert.throws(()=>leaked.query('SELECT 2'),e=>e.code==='OWNER_CLIENT_SCOPE_ENDED');assert.equal(queries,1);
+  }finally{releaseAuth.resolve();releaseConnect.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+for(const bound of ['phase','connect-cap'])test('actual SQL helper discards a checkout completing after its '+bound+' deadline without invoking SQL',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),driver=scriptedOwnerPg(t),connect=Client.prototype.connect;
+  t.mock.method(Client.prototype,'connect',function(callback){entered.resolve();release.promise.then(()=>connect.call(this,callback)).catch(error=>callback(error));});
+  const {owner}=await deadlineOwner(t),end=10+CAPS.setupMs;now=bound==='phase'?end-50:10;const timeout=bound==='phase'?end:1510;let calls=0;
+  const pending=owner.withClient('b1_bootstrap',()=>{calls++;});
+  try{
+    await entered.promise;now=timeout;release.resolve();await assert.rejects(pending,e=>e.code==='OWNER_DEADLINE');await flush();
+    assert.equal(calls,0);assert.equal(driver.clients.length,1);assert.equal(driver.ended.length,1);assert.equal(owner.budget.state.used,0);
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+for(const bound of ['phase','callback-cap'])test('actual SQL helper blocks late query at its '+bound+' deadline and releases the client budget',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),driver=scriptedOwnerPg(t),query=Client.prototype.query;let leaked,queries=0;
+  t.mock.method(Client.prototype,'query',function(...args){queries++;return query.apply(this,args);});
+  const {owner}=await deadlineOwner(t),end=10+CAPS.setupMs;now=bound==='phase'?end-50:10;const timeout=bound==='phase'?end:5010;
+  const pending=owner.withClient('b1_bootstrap',async client=>{leaked=client;entered.resolve();await release.promise;return 'late';});
+  try{
+    await entered.promise;now=timeout;assert.throws(()=>leaked.query('SELECT late'),e=>e.code==='OWNER_CLIENT_SCOPE_ENDED');release.resolve();
+    await assert.rejects(pending,e=>e.code==='OWNER_DEADLINE');assert.equal(queries,0);assert.equal(driver.ended.length,1);assert.equal(owner.budget.state.used,0);
+    assert.throws(()=>leaked.query('SELECT after'),e=>e.code==='OWNER_CLIENT_SCOPE_ENDED');
+  }finally{release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+test('actual SQL helper releases its budget if connection selection fails before pool construction',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const driver=scriptedOwnerPg(t),{owner}=await deadlineOwner(t),failure=new Error('inert selection failed');
+  t.mock.method(owner,'connections',()=>{throw failure;});
+  try{await assert.rejects(owner.withClient('b1_bootstrap',()=>{}),e=>e===failure);assert.equal(driver.clients.length,0);assert.equal(owner.budget.state.used,0);}
+  finally{t.mock.restoreAll();}
+});
+
+for(const during of ['expiry','cancel','valid'])test('actual SQL transition checks original setup after pending start-sql-slice authorization: '+during,async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),{owner}=await deadlineOwner(t,async({action})=>{if(action==='start-sql-slice'){entered.resolve();await release.promise;}return true;}),end=10+CAPS.setupMs,stop=new Error('inert migration boundary');let migrations=0;
+  const stages=integrationStages({owner,harness:{initializeFresh:async()=>{migrations++;throw stop;}}});now=end-10;const pending=stages.initialize();
+  try{
+    await entered.promise;if(during==='expiry')now=end;else if(during==='cancel')owner.cancel();else now=end-1;release.resolve();
+    await assert.rejects(pending,e=>during==='valid'?e===stop:e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));
+    assert.equal(migrations,during==='valid'?1:0);
+    assert.throws(()=>owner.beginSql(),e=>e.code===(during==='valid'?'OWNER_SUITE_ALREADY_STARTED':during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));
+  }finally{release.resolve();await pending.catch(()=>{});await owner.cleanup({deadline:now+100});t.mock.restoreAll();}
 });
