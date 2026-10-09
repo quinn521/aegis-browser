@@ -15,19 +15,26 @@ import { CAPS,OwnerError,OwnerSupervisor,createPlan,capabilityAuthorizer,digest,
 import { clockSmoke,runDeadlock,runIssuanceAckLoss,runObservationAckLoss,runMarkerAckLoss } from './fault-cases.mjs';
 
 const bad=code=>{throw new OwnerError(code);};
-function savePrivate(filename,value){
+function savePrivate(filename,value,check){
+  check();
   const dir=path.dirname(filename);if((lstatSync(dir).mode&0o777)!==0o700||lstatSync(dir).isSymbolicLink())bad('OWNER_BINDINGS_DIRECTORY');
   const data=Buffer.from(JSON.stringify(value));if(data.length>1024*1024)bad('OWNER_BINDINGS_LIMIT');
-  const temp=filename+'.'+randomUUID()+'.tmp',fd=openSync(temp,FC.O_CREAT|FC.O_EXCL|FC.O_WRONLY|FC.O_NOFOLLOW,0o600);
-  try{let offset=0;while(offset<data.length)offset+=writeSync(fd,data,offset,data.length-offset);fsyncSync(fd);}finally{closeSync(fd);}
-  renameSync(temp,filename);const d=openSync(dir,FC.O_RDONLY);try{fsyncSync(d);}finally{closeSync(d);}
+  const temp=filename+'.'+randomUUID()+'.tmp';check();const fd=openSync(temp,FC.O_CREAT|FC.O_EXCL|FC.O_WRONLY|FC.O_NOFOLLOW,0o600);
+  try{let offset=0;while(offset<data.length){check();offset+=writeSync(fd,data,offset,data.length-offset);}check();fsyncSync(fd);}finally{closeSync(fd);}
+  check();renameSync(temp,filename);check();const d=openSync(dir,FC.O_RDONLY);try{check();fsyncSync(d);}finally{closeSync(d);}
 }
-async function serializedKey(key){return {private:await exportJWK(key.privateKey),public:key.jwk};}
-export async function restoreKey(saved){if(['kty','crv','x','y'].some(k=>saved.private?.[k]!==saved.public?.[k]))bad('OWNER_KEYPAIR_IDENTITY');const publicValue=normalizePublicJwk(saved.public);return {...publicValue,privateKey:await importJWK(saved.private,'ES256',{extractable:true}),publicKey:await importJWK(publicValue.jwk,'ES256')};}
+async function serializedKey(key,check){check();const privateKey=await exportJWK(key.privateKey);check();return {private:privateKey,public:key.jwk};}
+async function generatedKey(check){check();const key=await keyPair();check();const saved=await serializedKey(key,check);check();return saved;}
+export async function restoreKey(saved,check=()=>{}){
+  check();if(['kty','crv','x','y'].some(k=>saved.private?.[k]!==saved.public?.[k]))bad('OWNER_KEYPAIR_IDENTITY');const publicValue=normalizePublicJwk(saved.public);
+  const privateKey=await importJWK(saved.private,'ES256',{extractable:true});check();const publicKey=await importJWK(publicValue.jwk,'ES256');check();return {...publicValue,privateKey,publicKey};
+}
 export async function persistentBindings(owner){
-  await owner.gate.require('create-owned-root');const file=owner.plan.artifactRoot+'/fixture-bindings.json';let state;
-  try{const s=await fs.lstat(file);if(!s.isFile()||s.isSymbolicLink()||(s.mode&0o777)!==0o600||s.uid!==owner.plan.uid)bad('OWNER_BINDINGS_MODE');state=JSON.parse(await fs.readFile(file,'utf8'));}
-  catch(e){if(e.code!=='ENOENT')throw e;state={version:1,runId:owner.plan.runId,server:await serializedKey(await keyPair()),installation:await serializedKey(await keyPair()),adminSubject:randomUUID(),ownership:[],families:{}};savePrivate(file,state);}
+  const {check}=owner.captureAdmission('setup');
+  await owner.gate.require('create-owned-root');check();const file=owner.plan.artifactRoot+'/fixture-bindings.json';let state;
+  try{const s=await fs.lstat(file);check();if(!s.isFile()||s.isSymbolicLink()||(s.mode&0o777)!==0o600||s.uid!==owner.plan.uid)bad('OWNER_BINDINGS_MODE');const raw=await fs.readFile(file,'utf8');check();state=JSON.parse(raw);}
+  catch(e){if(e.code!=='ENOENT')throw e;check();state={version:1,runId:owner.plan.runId,server:await generatedKey(check),installation:await generatedKey(check),adminSubject:randomUUID(),ownership:[],families:{}};check();savePrivate(file,state,check);}
+  check();
   if(state.version!==1||state.runId!==owner.plan.runId||!Array.isArray(state.ownership)||!state.families)bad('OWNER_BINDINGS_IDENTITY');
   const owners=new Map(state.ownership),capabilities=new WeakMap(),adminCapability=Object.freeze({});capabilities.set(adminCapability,state.adminSubject);
   const ownership={async verify({installationId,request,recipientFingerprint,signal}){
@@ -37,8 +44,9 @@ export async function persistentBindings(owner){
   }};
   // Exactly one fixtureBindings call; replace generated private identities before
   // any handles/app/harness exist, and preserve the same config.trust object.
-  const bindings=await fixtureBindings({clock:mutableClock(Math.floor(Date.now()/1000),true),ownership});
-  const server=await restoreKey(state.server),installation=await restoreKey(state.installation);
+  let bindings;try{
+  bindings=await fixtureBindings({clock:mutableClock(Math.floor(Date.now()/1000),true),ownership});check();
+  const server=await restoreKey(state.server,check);check();const installation=await restoreKey(state.installation,check);check();
   bindings.serverKey=server;bindings.installationKey=installation;bindings.adminCapability=adminCapability;
   bindings.config.trust.publicKey=server.publicKey;
   bindings.config.signer={keyId:bindings.config.trust.keyId,algorithm:'ES256',async sign(claims,{signal}={}){
@@ -46,15 +54,18 @@ export async function persistentBindings(owner){
   }};
   bindings.config.administration={async verify(capability,{signal}={}){if(signal?.aborted)reject('DEADLINE_EXCEEDED');const subject=capabilities.get(capability);if(!subject)reject('UNAUTHORIZED');return {subject};}};
   bindings.grantOwnership=(installationId,key,subject=randomUUID())=>{
+    const {check}=owner.captureAdmission();
     const request='fixture-owner-'+randomUUID(),value={installationId,recipientFingerprint:key.fingerprint,subject};
-    const next=[...state.ownership,[request,value]];savePrivate(file,{...state,ownership:next});state.ownership=next;owners.set(request,value);return request;
+    const next=[...state.ownership,[request,value]];savePrivate(file,{...state,ownership:next},check);check();state.ownership=next;owners.set(request,value);return request;
   };
   bindings.family=async name=>{
+    const {check}=owner.captureAdmission();
     if(typeof name!=='string'||name.length>256)bad('OWNER_FAMILY_NAME');const id=digest(name);
-    if(!state.families[id]){const saved=await serializedKey(await keyPair());savePrivate(file,{...state,families:{...state.families,[id]:saved}});state.families[id]=saved;}
-    return restoreKey(state.families[id]);
+    if(!state.families[id]){const saved=await generatedKey(check);check();savePrivate(file,{...state,families:{...state.families,[id]:saved}},check);check();state.families[id]=saved;}
+    const family=await restoreKey(state.families[id],check);check();return family;
   };
-  owner.setBindingsFingerprint(digest(canonical(state.server.public)));return bindings;
+  check();owner.setBindingsFingerprint(digest(canonical(state.server.public)));return bindings;
+  }catch(error){await bindings?.store.close();throw error;}
 }
 // Hooks observe actual harness resources. They never replace a public method
 // or add admission branding to another object.

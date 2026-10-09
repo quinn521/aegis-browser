@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { promises as fs,constants as FC } from 'node:fs';
+import nativeFs,{ promises as fs,constants as FC } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { createRequire,syncBuiltinESMExports } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { Client } from 'pg';
 import { exportJWK,compactVerify } from 'jose';
@@ -15,7 +15,7 @@ import { PostgresStore,createOwnedPool } from '../../store.mjs';
 import { ProviderError,canonical } from '../../proof.mjs';
 import { FrameDecoder,CommitTracker,WireProxy,WireError,WireLifetime,classifySql,errorSqlState,WIRE_LIMITS } from './wire-proxy.mjs';
 import { createPlan,command,colimaStartArgs,containerArgs,residualCapacity,ConnectionBudget,PhaseGate,OwnerSupervisor,OwnerError,ownedRace,CAPS,PIN,digest,remainingMilliseconds,resolveExecutable,regular,createContainerWithSecret,assertFixtureEnvironment,RUNTIME_SOURCE_FILES,verifyReviewedSources,capabilityAuthorizer,runAuthorizedCommand } from './owner.mjs';
-import { budgetHarness,runCli,createResourceLifecycle,finishRuntime,persistentBindings,integrationStages } from './runner.mjs';
+import { budgetHarness,runCli,createResourceLifecycle,finishRuntime,persistentBindings,integrationStages,prepareRuntime } from './runner.mjs';
 import { validateAckReceipt,validateDeadlockEvidence,isClockDisconnect,registerFixtureAndClose } from './fault-cases.mjs';
 // Migrated from the prior artifact-only 23 tests; the original packet stays immutable.
 // These are pure unit/regression tests; no real resource/SQL admission is claimed.
@@ -170,9 +170,10 @@ test('container bootstrap authenticates local and host access with SCRAM',()=>{
   assert.doesNotMatch(JSON.stringify(args),/auth-local=peer|auth-host=trust/);
   // Argument construction only: no entrypoint/bootstrap or guest quota execution.
 });
-test('persisted fixture identity remains private, exportable, signable and stable on reload',async()=>{
+test('persisted fixture identity remains private, exportable, signable and stable on reload',async t=>{
   const dir=path.join(testFiles,'bindings');await fs.mkdir(dir,{mode:0o700});let fingerprint;
-  const owner={plan:{artifactRoot:dir,uid:process.getuid(),runId:U},gate:{require:async action=>assert.equal(action,'create-owned-root')},setBindingsFingerprint:value=>{fingerprint=value;}};
+  const base=new OwnerSupervisor({plan:{...createPlan({worktree:currentWorktree,runId:U}),artifactRoot:dir},manifest:{},authorize:async()=>true});await assert.rejects(base.preflight(),e=>e.code==='OWNER_MANIFEST');
+  const owner={plan:base.plan,signal:base.signal,captureAdmission:base.captureAdmission.bind(base),gate:{require:async action=>assert.equal(action,'create-owned-root')},setBindingsFingerprint:value=>{base.setBindingsFingerprint(value);fingerprint=value;}};
   const first=await persistentBindings(owner),jwk=await exportJWK(first.serverKey.privateKey);
   assert.equal(jwk.d.length>0,true);assert.equal(first.serverKey.privateKey.extractable,true);
   const claims={version:1,purpose:'pure fixture regression'},signed=await first.config.signer.sign(claims);
@@ -791,4 +792,88 @@ test('actual provision preserves valid root and private identity admission while
     await assert.rejects(owner.provision(),e=>e.code==='OWNER_NOT_AUTHORIZED');assert.equal(state.mkdir.length,5);assert.deepEqual(state.open,files);assert.deepEqual(state.write,files);assert.deepEqual(state.sync,files);assert.deepEqual(state.closed,files);
     assert.deepEqual(actions,['preflight','provision','create-owned-root','hdiutil-create']);assert.equal(owner.phase,'allocating');assert.deepEqual(owner.events,[]);
   }finally{t.mock.restoreAll();}
+});
+
+async function bindingOwner(t,authorize=async()=>true){
+  const dir=await fs.mkdtemp(path.join(testFiles,'phase-bindings-')),owner=new OwnerSupervisor({plan:{...createPlan({worktree:currentWorktree,runId:U}),artifactRoot:dir},manifest:{},authorize});
+  // Real private setup deadline, intentionally refused before tool/runtime work.
+  await assert.rejects(owner.preflight(),e=>e.code==='OWNER_MANIFEST');
+  return {owner,dir,file:path.join(dir,'fixture-bindings.json')};
+}
+function inertPrepare(t,owner){
+  const events=[],stop=new Error('inert bindings admission boundary'),fingerprint=owner.setBindingsFingerprint;
+  // Only preparation effects are inert; the actual composed persistence path,
+  // private original deadline, gate and filesystem/key code remain in use.
+  t.mock.method(owner,'preflight',async()=>{events.push('preflight');});t.mock.method(owner,'provision',async()=>{events.push('provision');});
+  t.mock.method(owner,'setBindingsFingerprint',function(value){fingerprint.call(this,value);events.push('bindings-admitted');throw stop;});
+  return {events,stop};
+}
+function pendingCrypto(t,method,matches=()=>true,ordinal=1){
+  const entered=deferred(),release=deferred(),subtle=globalThis.crypto.subtle,original=subtle[method];let seen=0,held=false;
+  t.mock.method(subtle,method,async function(...args){
+    if(matches(args)&&++seen===ordinal){held=true;entered.resolve();await release.promise;}
+    return original.apply(this,args);
+  });return {entered,release,held:()=>held};
+}
+const bindingPauses=['auth','stat-missing','stat-existing','read-existing','generate-server','generate-installation','export-server','export-installation','fixture-generation','restore-existing'];
+for(const pause of bindingPauses)for(const during of ['expiry','cancel'])test('actual prepareRuntime bindings reject '+during+' after pending '+pause+' without stale private-key persistence',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const entered=deferred(),release=deferred(),{owner,dir,file}=await bindingOwner(t,async({action})=>{if(pause==='auth'&&action==='create-owned-root'){entered.resolve();await release.promise;}return true;}),end=10+CAPS.setupMs;
+  const existing=['stat-existing','read-existing','fixture-generation','restore-existing'].includes(pause);let baseline=null;
+  if(existing){const bindings=await persistentBindings(owner);await bindings.store.close();baseline=digest(await fs.readFile(file));}
+  let wait={entered,release};
+  if(pause.startsWith('stat-')){
+    const original=fs.lstat;t.mock.method(fs,'lstat',async function(filename,...args){if(filename===file){entered.resolve();await release.promise;}return original.call(this,filename,...args);});
+  }else if(pause==='read-existing'){
+    const original=fs.readFile;t.mock.method(fs,'readFile',async function(filename,...args){if(filename===file){entered.resolve();await release.promise;}return original.call(this,filename,...args);});
+  }else if(pause.startsWith('generate-')||pause==='fixture-generation')wait=pendingCrypto(t,'generateKey',()=>true,pause==='generate-installation'?2:1);
+  else if(pause.startsWith('export-'))wait=pendingCrypto(t,'exportKey',args=>args[0]==='jwk'&&args[1].type==='private',pause==='export-installation'?2:1);
+  else if(pause==='restore-existing')wait=pendingCrypto(t,'importKey');
+  const {events}=inertPrepare(t,owner);now=end-10;const pending=prepareRuntime({owner});
+  try{
+    await wait.entered.promise;if(during==='expiry')now=end;else owner.cancel();wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));
+    assert.deepEqual(events,['preflight','provision']);assert.deepEqual(await fs.readdir(dir),existing?['fixture-bindings.json']:[]);
+    if(existing)assert.equal(digest(await fs.readFile(file)),baseline);assert.deepEqual(owner.events,[]);
+  }finally{wait.release.resolve();release.resolve();await pending.catch(()=>{});t.mock.restoreAll();}
+});
+for(const during of ['expiry','cancel'])test('actual prepareRuntime bindings recheck '+during+' after synchronous directory inspection before opening a private temp file',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const {owner,dir}=await bindingOwner(t),end=10+CAPS.setupMs,{events}=inertPrepare(t,owner),stat=nativeFs.lstatSync;let inspections=0;
+  t.mock.method(nativeFs,'lstatSync',function(filename,...args){const result=stat.call(this,filename,...args);if(filename===dir&&++inspections===2){if(during==='expiry')now=end;else owner.cancel();}return result;});syncBuiltinESMExports();
+  try{
+    await assert.rejects(prepareRuntime({owner}),e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));assert.equal(inspections,2);assert.deepEqual(events,['preflight','provision']);assert.deepEqual(await fs.readdir(dir),[]);
+  }finally{t.mock.restoreAll();syncBuiltinESMExports();}
+});
+test('actual prepareRuntime bindings preserve valid private persistence and reach the inert admission boundary',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const {owner,dir,file}=await bindingOwner(t),{events,stop}=inertPrepare(t,owner);
+  try{
+    await assert.rejects(prepareRuntime({owner}),e=>e===stop);assert.deepEqual(events,['preflight','provision','bindings-admitted']);
+    assert.deepEqual(await fs.readdir(dir),['fixture-bindings.json']);assert.equal((await fs.stat(file)).mode&0o777,0o600);
+    const value=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(value.runId,U);assert.equal(value.version,1);assert.ok(value.server.private.d);assert.ok(value.installation.private.d);
+    assert.deepEqual(owner.events,[]);
+  }finally{t.mock.restoreAll();}
+});
+test('actual bindings family and ownership persistence remain valid in SQL phase after original setup expires',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const {owner,file}=await bindingOwner(t),bindings=await persistentBindings(owner),end=10+CAPS.setupMs;
+  try{
+    now=end-1;owner.beginSql();now=end+100;const family=await bindings.family('valid-sql'),request=bindings.grantOwnership('pure-installation',family,'pure-owner');
+    assert.deepEqual(await bindings.config.ownership.verify({installationId:'pure-installation',request,recipientFingerprint:family.fingerprint}),{installationId:'pure-installation',profileKind:'normal',subject:'pure-owner'});
+    const state=JSON.parse(await fs.readFile(file,'utf8'));assert.ok(state.families[digest('valid-sql')]);assert.equal(state.ownership.length,1);
+    const baseline=digest(await fs.readFile(file));await assert.rejects(persistentBindings(owner),e=>e.code==='OWNER_SETUP_DEADLINE');assert.equal(digest(await fs.readFile(file)),baseline);
+  }finally{await bindings.store.close();await owner.cleanup({deadline:now+100});t.mock.restoreAll();}
+});
+for(const during of ['expiry','cancel','transition'])test('actual pending family cannot renew its captured active phase through '+during,async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const {owner,file}=await bindingOwner(t),bindings=await persistentBindings(owner),setupEnd=10+CAPS.setupMs;
+  if(during!=='transition')owner.beginSql();const end=owner.captureAdmission().deadline,baseline=digest(await fs.readFile(file)),wait=pendingCrypto(t,'generateKey');now=end-10;const pending=bindings.family('late-family');
+  try{
+    await wait.entered.promise;if(during==='cancel')owner.cancel();else if(during==='transition'){now=setupEnd-5;owner.beginSql();now=setupEnd;}else now=end;wait.release.resolve();
+    await assert.rejects(pending,e=>e.code===(during==='cancel'?'OWNER_CANCELLED':'OWNER_DEADLINE'));assert.equal(digest(await fs.readFile(file)),baseline);
+  }finally{wait.release.resolve();await pending.catch(()=>{});await bindings.store.close();await owner.cleanup({deadline:now+100});t.mock.restoreAll();}
+});
+for(const during of ['expiry','cancel'])test('actual ownership and cached-family operations reject '+during+' in their original SQL phase without persisting',async t=>{
+  let now=10;t.mock.method(performance,'now',()=>now);const {owner,file}=await bindingOwner(t),bindings=await persistentBindings(owner);owner.beginSql();const family=await bindings.family('cached-family'),baseline=digest(await fs.readFile(file)),end=owner.captureAdmission().deadline;
+  try{
+    if(during==='expiry')now=end;else owner.cancel();
+    assert.throws(()=>bindings.grantOwnership('pure-installation',family),e=>e.code===(during==='cancel'?'OWNER_CANCELLED':'OWNER_DEADLINE'));
+    await assert.rejects(bindings.family('cached-family'),e=>e.code===(during==='cancel'?'OWNER_CANCELLED':'OWNER_DEADLINE'));assert.equal(digest(await fs.readFile(file)),baseline);
+  }finally{await bindings.store.close();await owner.cleanup({deadline:now+100});t.mock.restoreAll();}
 });

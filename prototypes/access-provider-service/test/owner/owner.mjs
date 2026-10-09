@@ -234,6 +234,15 @@ export class OwnerSupervisor {
   get denied(){return [...this.gate.denied];}
   addEvent(event){if(this.events.length>=2048)this.events.shift();this.events.push(event);}
   #deadline(){const end=this.#suiteDeadline??this.#setupDeadline;if(end===null)refuse('OWNER_SETUP_DEADLINE');return end;}
+  // A local lifetime check only; callers retain their existing action authority.
+  // Capture once before awaiting, so a later phase transition cannot renew it.
+  captureAdmission(phase='active'){
+    if(!['setup','active'].includes(phase))refuse('OWNER_PHASE');
+    const deadline=phase==='setup'?this.#setupDeadline:this.#deadline(),check=()=>{
+      if(this.signal.aborted)refuse('OWNER_CANCELLED');
+      if(!Number.isFinite(deadline)||performance.now()>=deadline)refuse(phase==='setup'?'OWNER_SETUP_DEADLINE':'OWNER_DEADLINE');
+    };check();return Object.freeze({deadline,check});
+  }
   #remaining(){const n=Math.floor(this.#deadline()-performance.now());if(n<1)refuse('OWNER_SETUP_DEADLINE');return n;}
   async #run(action,tool,args,options={}){return this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null}),{deadline:this.#deadline()});}
   async #hostFree(){const p=this.#plan;const s=await fs.stat('/Volumes/ExternalSSD');if(!s.isDirectory()||await fs.realpath('/Volumes/ExternalSSD')!=='/Volumes/ExternalSSD'||await fs.realpath(p.worktree)!==p.worktree)refuse('OWNER_VOLUME');await fs.access(p.worktree,FC.W_OK);const v=await fs.statfs('/Volumes/ExternalSSD');return integer(v.bavail*v.bsize);}
