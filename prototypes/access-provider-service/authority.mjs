@@ -127,12 +127,20 @@ export class B1Authority {
       realm: trust.realm, serviceEnvironment: trust.serviceEnvironment };
     const revisions = new RevisionLedger();
     try {
+      const verify = async (kind, credential, context) => {
+        const token = credential.jws, expected = canonical(credential.claims);
+        const admitted = await verifyArtifact(kind, token, options, context);
+        // Decode only the identical primitive token whose signature passed.
+        // Every signed claim must match the persisted authority representation.
+        if (canonical(strictJson(base64url.decode(token.split('.')[1]))) !== expected) reject('UNAUTHORIZED');
+        return admitted;
+      };
       const rootRecord = root?.credential ?? record;
-      const installation = await verifyArtifact('installation-credential', rootRecord.jws, options, {
+      const installation = await verify('installation-credential', rootRecord, {
         clock: interval, revisions, installationKeyId: rootRecord.claims.installationKeyId,
       });
       if (record.kind === 'installation-credential') return installation;
-      return await verifyArtifact('profile-credential', record.jws, options, {
+      return await verify('profile-credential', record, {
         clock: interval, revisions, parents: { installation }, profileKind: 'normal',
         profileBinding: record.claims.profileBinding, recipientKeyId: record.claims.recipientKeyId,
       });
@@ -307,8 +315,11 @@ export class B1Authority {
               installationKeyId: key.keyId, entitlementAccountId: poolId, revision: 1 };
           }
           parseUntrusted(claims.kind, canonical(claims));
-          const jws = await bounded(this.#config.signer.sign(claims, { signal: local.signal }), local);
-          credential = storedCredential(claims, jws, profileId, parentId);
+          // Keep the expected payload private across the injected signer await.
+          // A signer may mutate its argument, but cannot redefine our authority.
+          const expectedClaims = canonical(claims);
+          const jws = await bounded(this.#config.signer.sign(JSON.parse(expectedClaims), { signal: local.signal }), local);
+          credential = storedCredential(JSON.parse(expectedClaims), jws, profileId, parentId);
           interval = await this.#time(tx);
           checkAuthorization(authorization, interval);
           await bounded(this.#contract(credential, root, interval), local);

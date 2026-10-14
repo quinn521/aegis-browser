@@ -209,6 +209,36 @@ test('signer failure or expiry during signing rolls back rows and nonce consumpt
   f.config.signer.sign=async claims=>{const jws=await original(claims);f.clock.now=p.challenge.json.expiresAt;return jws;};
   rejected(await issue(f,p),'EXPIRED');assert.equal(f.store.state.installations.length,0);assert.equal(f.store.state.operations.length,0);
 });
+for(const kind of ['installation','profile'])for(const mode of ['replacement','in-place'])test('signed '+kind+' payload '+mode+' cannot exceed the expected lifetime',async t=>{
+  const f=await owned(t);let root=null,recipient=null,args=registerArgs(f),operation='register';
+  if(kind==='profile'){root=await register(f);recipient=await keyPair();args=profileArgs(f,root,recipient);operation='profile-issue';}
+  const p=await prepared(f,operation,args,'signer-payload-'+kind+'-'+mode,root,recipient),original=f.config.signer.sign;
+  f.config.signer.sign=async claims=>{
+    const changed=mode==='in-place'?claims:structuredClone(claims);
+    changed.expiresAt+=kind==='installation'?3600:50;
+    return original(changed);
+  };
+  rejected(await issue(f,p),'UNAUTHORIZED');
+  assert.equal(f.store.state.credentials.length,root?1:0);assert.equal(f.store.state.installations.length,root?1:0);
+  assert.equal(f.store.state.profiles.length,0);assert.equal(f.store.state.operations.length,root?1:0);
+  assert.equal(f.store.state.challenges.find(row=>row.id===p.challenge.json.challengeId).consumed_operation_id,null);
+  // Failed signing must not consume the challenge or leave partial rows.
+  f.config.signer.sign=original;const retried=await issue(f,p);assert.equal(retried.status,201,JSON.stringify(retried.json));
+  const maximum=kind==='installation'?f.config.limits.installationSeconds:f.config.limits.profileSeconds;
+  assert.equal(retried.json.claims.expiresAt-retried.json.claims.notBefore,maximum);
+});
+test('signed payload must retain the complete expected credential identity',async t=>{
+  const f=await owned(t),p=await prepared(f,'register',registerArgs(f),'signer-identity'),original=f.config.signer.sign;
+  f.config.signer.sign=async claims=>original({...claims,credentialId:randomUUID()});
+  rejected(await issue(f,p),'UNAUTHORIZED');assert.equal(f.store.state.credentials.length,0);assert.equal(f.store.state.operations.length,0);
+});
+test('signed stored token must match its persisted claims at subsequent admission',async t=>{
+  const f=await owned(t),root=await register(f),row=f.store.state.credentials[0];
+  row.jws=await f.config.signer.sign({...row.claims,expiresAt:row.claims.expiresAt+3600});
+  const supplied={json:{...root.json,credential:row.jws}},key=await keyPair();
+  rejected(await challenge(f,'profile-issue',profileArgs(f,supplied,key),'stored-signer-payload',supplied),'UNAUTHORIZED');
+  assert.equal(f.store.state.profiles.length,0);assert.equal(f.store.state.credentials.length,1);
+});
 test('bounded request aborts a stalled signer and does not later commit',async t=>{
   const f=await owned(t,{limits:{requestMilliseconds:80}}),p=await prepared(f,'register',registerArgs(f),'stall');
   let release;f.config.signer.sign=()=>new Promise(resolve=>{release=resolve;});
