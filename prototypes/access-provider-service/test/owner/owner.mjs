@@ -427,12 +427,20 @@ export class OwnerSupervisor {
   }
   async #logVolume(){return this.#operation('setup',async()=>{
     const p=this.plan;
-    await this.#run('hdiutil-create','hdiutil',['create','-size','128m','-layout','NONE','-fs','HFS+','-volname','B1-'+p.runId,'-type','UDRW',p.logImage]);
+    // Keep the virtual disk below the backing-file cap: UDRW also stores UDIF
+    // metadata outside the virtual disk. Both actual sizes remain bounded below.
+    const diskMiB=CAPS.results/MiB-8;
+    await this.#run('hdiutil-create','hdiutil',['create','-size',diskMiB+'m','-layout','NONE','-fs','HFS+','-volname','B1-'+p.runId,'-type','UDRW',p.logImage]);
     if((await this.#wait(()=>regular(p.logImage))).size>CAPS.results)refuse('OWNER_LOG_IMAGE_LIMIT');
     await this.#run('hdiutil-attach','hdiutil',['attach','-nobrowse','-noautoopen','-mountpoint',p.results,p.logImage]);
-    const stat=await this.#fs('stat',p.results),parent=await this.#fs('stat',p.artifactRoot),v=await this.#fs('statfs',p.results);
+    const stat=await this.#fs('lstat',p.results),parent=await this.#fs('stat',p.artifactRoot),v=await this.#fs('statfs',p.results);
+    if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==p.uid)refuse('OWNER_LOG_ROUTE_PARENT');
     if(stat.dev===parent.dev||v.blocks*v.bsize>CAPS.results)refuse('OWNER_LOG_FILESYSTEM_CAP');this.#logDevice=stat.dev;
     this.#identities.mount={runId:p.runId,action:'hdiutil-attach',device:integer(stat.dev),path:p.results};
+    // The mount hides the private mountpoint behind a fresh filesystem root.
+    await this.#fs('chmod',p.results,0o700);
+    const root=await this.#fs('lstat',p.results);
+    if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==p.uid||root.dev!==this.#logDevice||(root.mode&0o777)!==0o700)refuse('OWNER_LOG_ROUTE_PARENT');
     const routes=this.#manifest.logRouting.routes;
     for(const r of routes){
       if(typeof r.path!=='string'||!r.path.startsWith(p.colimaHome+'/')||path.resolve(r.path)!==r.path||typeof r.sink!=='string'||!r.sink.startsWith(p.results+'/')||path.resolve(r.sink)!==r.sink||!['file','directory'].includes(r.kind))refuse('OWNER_LOG_ROUTE_PATH');

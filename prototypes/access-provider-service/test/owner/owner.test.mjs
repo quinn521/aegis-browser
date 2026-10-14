@@ -881,14 +881,14 @@ for(const during of ['expiry','cancel'])test('actual ownership and cached-family
 });
 
 let effectFixtureNumber=0;
-async function effectFixture(t,{preflight=true,deny=null}={}){
+async function effectFixture(t,{preflight=true,deny=null,imageExtraBytes=512*1024,applyRootMode=true}={}){
   const number=++effectFixtureNumber,base=path.join(testFiles,'effects-'+number),home=path.join(testFiles,'external-'+number,'c');
   const p={...createPlan({worktree:currentWorktree,runId:U}),artifactRoot:base,colimaHome:home,dockerConfig:base+'/docker-config',results:base+'/results',logImage:base+'/logs.img',socket:home+'/b1-owner/docker.sock',vmImage:base+'/inert-vm',ociLayout:base+'/inert-oci',importArchive:base+'/inert-archive'};
   const source=await fs.readFile(new URL('./guest.sh',import.meta.url),'utf8'),guestPath=fileURLToPath(new URL('./guest.sh',import.meta.url)),N='a'.repeat(64),C='b'.repeat(64),GiB=1024**3;
   const paths={sourceParent:home+'/b1-owner',sourceLeaf:home+'/b1-owner/logs',sinkParent:p.results+'/colima',fileSink:p.results+'/colima/stdout.log',fileLink:home+'/b1-owner/logs/stdout.log',directorySink:p.results+'/cache',directoryLink:home+'/b1-owner/cache',identity:base+'/resource-identity.json'};
-  const routes=[{path:paths.fileLink,sink:paths.fileSink,kind:'file'},{path:paths.directoryLink,sink:paths.directorySink,kind:'directory'}],files=new Map(),dirs=new Set(),links=new Map(),effects=[],starts=[],kills=[],closed=[],records=[];
+  const routes=[{path:paths.fileLink,sink:paths.fileSink,kind:'file'},{path:paths.directoryLink,sink:paths.directorySink,kind:'directory'}],files=new Map(),dirs=new Set(),links=new Map(),modes=new Map(),effects=[],starts=[],kills=[],closed=[],records=[];
   const defaultFiles=[process.env.HOME+'/.docker/config.json',process.env.HOME+'/.colima/default/colima.yaml',process.env.HOME+'/.ssh/config'];
-  const failures=new Map(),replies=new Map();let now=10,mounted=false,running=true,activeAction=null,paused=null,seen=0,held=false,entered=deferred(),release=deferred(),schema=null,initialIdentity=null;
+  const failures=new Map(),replies=new Map();let now=10,mounted=false,volumeBytes=0,running=true,activeAction=null,paused=null,seen=0,held=false,entered=deferred(),release=deferred(),schema=null,initialIdentity=null;
   const labels=new Map([[p.logImage,'log-image'],[p.results,'results'],[base,'artifact-root'],[home,'source-root'],[paths.sourceParent,'source-parent'],[paths.sourceLeaf,'source-leaf'],[paths.sinkParent,'sink-parent'],[paths.fileSink,'route-file'],[paths.fileLink,'route-link'],[paths.directorySink,'route-directory'],[paths.directoryLink,'directory-link'],[paths.identity,'identity'],[home+'/b1-owner/colima.yaml','vm-config'],[p.results+'/container-passwd','passwd'],[guestPath,'guest-source'],[p.results+'/ordinary.json','ordinary'],[p.results+'/cleanup.json','cleanup'],[p.results+'/suite-accounting.json','suite-accounting'],[p.socket,'socket']]);
   const label=filename=>labels.get(filename)??(filename.startsWith(paths.identity+'.')?'identity-temp':defaultFiles.includes(filename)?'default-'+defaultFiles.indexOf(filename):'other');
   const hold=async tag=>{if(paused&&tag===paused.tag&&++seen===paused.ordinal){held=true;entered.resolve();await release.promise;}if(failures.has(tag))throw new OwnerError(failures.get(tag));};
@@ -898,7 +898,7 @@ async function effectFixture(t,{preflight=true,deny=null}={}){
     const target=links.get(filename)??filename,dev=mounted&&target.startsWith(p.results)?2:1,isLink=links.has(filename),isDir=dirs.has(target)||target==='/Volumes/ExternalSSD';
     if(!isLink&&!isDir&&!files.has(target))throw absent();
     const bytes=files.get(target)?.bytes??Buffer.byteLength(files.get(target)?.data??'');
-    return {uid:p.uid,mode:isDir||filename.startsWith('/inert/')?0o700:0o600,dev,ino:1,size:bytes,isDirectory:()=>!isLink&&isDir,isFile:()=>!isLink&&!isDir,isSymbolicLink:()=>isLink,isSocket:()=>target===p.socket};
+    return {uid:p.uid,mode:modes.get(target)??(isDir||filename.startsWith('/inert/')?0o700:0o600),dev,ino:1,size:bytes,isDirectory:()=>!isLink&&isDir,isFile:()=>!isLink&&!isDir,isSymbolicLink:()=>isLink,isSocket:()=>target===p.socket};
   };
   const put=(filename,data,bytes)=>files.set(filename,{data,bytes});
   const vm='INERT_VM_BYTES',archive='INERT_IMPORT_BYTES',layers=Array.from({length:14},(_,i)=>({digest:'sha256:'+digest('inert-layer-'+i),size:i===13?156463634-13:1}));
@@ -920,11 +920,12 @@ async function effectFixture(t,{preflight=true,deny=null}={}){
   t.mock.method(performance,'now',()=>now);
   t.mock.method(fs,'lstat',async filename=>{filename=normalized(filename);await hold('lstat:'+label(filename));return meta(filename);});
   t.mock.method(fs,'stat',async filename=>{filename=normalized(filename);await hold('stat:'+label(filename));const s=meta(filename);return {...s,isDirectory:()=>dirs.has(links.get(filename)??filename)||filename==='/Volumes/ExternalSSD',isFile:()=>!dirs.has(links.get(filename)??filename),isSymbolicLink:()=>false,isSocket:()=>filename===p.socket};});
-  t.mock.method(fs,'statfs',async filename=>{filename=normalized(filename);await hold('statfs:'+label(filename));return {bavail:200*GiB,bsize:1,blocks:filename===p.results?CAPS.results:200*GiB};});
+  t.mock.method(fs,'statfs',async filename=>{filename=normalized(filename);await hold('statfs:'+label(filename));return {bavail:200*GiB,bsize:1,blocks:filename===p.results?volumeBytes:200*GiB};});
   t.mock.method(fs,'access',async()=>{});
   t.mock.method(fs,'realpath',async filename=>{filename=normalized(filename);await hold('realpath:'+label(filename));return filename.startsWith('/opt/homebrew/bin/')?'/inert/'+path.basename(filename):links.get(filename)??filename;});
   t.mock.method(fs,'readFile',async(filename,encoding)=>{filename=normalized(filename);await hold('read:'+label(filename));const value=files.get(filename);if(!value)throw absent();return encoding?value.data:Buffer.from(value.data);});
   t.mock.method(fs,'mkdir',async(filename,options)=>{assert.equal(options.recursive,undefined);assert.equal(options.mode,0o700);effects.push('mkdir:'+label(filename));await hold('mkdir:'+label(filename));if(dirs.has(filename))throw Object.assign(new Error('inert exists'),{code:'EEXIST'});dirs.add(filename);});
+  t.mock.method(fs,'chmod',async(filename,mode)=>{assert.equal(filename,p.results);assert.equal(mode,0o700);effects.push('chmod:'+label(filename));await hold('chmod:'+label(filename));if(applyRootMode)modes.set(filename,mode);});
   t.mock.method(fs,'symlink',async(target,filename)=>{effects.push('symlink:'+label(filename));await hold('symlink:'+label(filename));links.set(filename,target);});
   t.mock.method(fs,'rename',async(from,to)=>{effects.push('rename:'+label(to));await hold('rename:'+label(to));assert.ok(files.has(from));files.set(to,files.get(from));files.delete(from);});
   t.mock.method(fs,'open',async(filename,flags,mode)=>{
@@ -952,7 +953,9 @@ async function effectFixture(t,{preflight=true,deny=null}={}){
   const owner=new OwnerSupervisor({plan:p,manifest:m,createListener:listener.create,authorize:async({action})=>{activeAction=action;await hold('authorize:'+action);return action!==deny;},startCommand:(executable,args,options)=>{
     const action=activeAction,child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();starts.push(action);
     child.kill=signal=>{kills.push({action,signal});return true;};child.stdin.end=()=>{(async()=>{
-      await hold('command:'+action);if(action==='hdiutil-create')put(p.logImage,'',CAPS.results);if(action==='hdiutil-attach')mounted=true;
+      await hold('command:'+action);
+      if(action==='hdiutil-create'){const size=args[args.indexOf('-size')+1];assert.match(size,/^\d+m$/);volumeBytes=Number.parseInt(size,10)*1024**2;put(p.logImage,'',volumeBytes+imageExtraBytes);}
+      if(action==='hdiutil-attach'){mounted=true;modes.set(p.results,0o755);}
       if(action==='docker-cp-passwd')put(p.results+'/container-passwd','postgres:x:999:999:inert:/inert:/bin/false');
       if(action==='docker-stop')running=false;if(action==='docker-start')running=true;
       let out=response(action);if(action==='verify-forwarder'&&path.basename(executable)==='ps')out=p.uid+' birth '+p.colimaHome;
@@ -973,7 +976,7 @@ async function effectFixture(t,{preflight=true,deny=null}={}){
   // SQL is inert here; the original helper/pg transport regressions stay intact.
   t.mock.method(owner,'withClient',async(role,callback)=>{const admission=owner.captureAdmission();return callback({query:async(...args)=>{admission.check();const result=await query(...args);admission.check();return result;}});});
   put(p.socket,'');
-  const fixture={owner,p,paths,effects,starts,kills,closed,records,files,dirs,links,listener,N,C,get now(){return now;},set now(value){now=value;},setupEnd:10+CAPS.setupMs,get initialIdentity(){return initialIdentity;},set migrated(value){schema=value?'provider_b1':null;},
+  const fixture={owner,p,paths,effects,starts,kills,closed,records,files,dirs,links,modes,listener,N,C,get now(){return now;},set now(value){now=value;},setupEnd:10+CAPS.setupMs,get initialIdentity(){return initialIdentity;},set migrated(value){schema=value?'provider_b1':null;},
     arm(tag,ordinal=1){paused={tag,ordinal};seen=0;held=false;entered=deferred();release=deferred();return {entered,release};},
     fail(tag,code){failures.set(tag,code);},reply(action,value){replies.set(action,value);},
     disarm(){release.resolve();paused=null;},
@@ -981,9 +984,9 @@ async function effectFixture(t,{preflight=true,deny=null}={}){
   if(preflight)await owner.preflight();return fixture;
 }
 
-const logEffectPauses=['command:hdiutil-create','lstat:log-image','command:hdiutil-attach','stat:results','stat:artifact-root','statfs:results','lstat:source-root','mkdir:source-parent','mkdir:source-leaf','mkdir:sink-parent','open:route-file','write:route-file','sync:route-file','close:route-file','symlink:route-link','lstat:route-link','realpath:route-link','stat:route-link','mkdir:route-directory','symlink:directory-link','statfs:results-final'];
+const logEffectPauses=['command:hdiutil-create','lstat:log-image','command:hdiutil-attach','lstat:results','stat:artifact-root','statfs:results','chmod:results','lstat:results-private','lstat:source-root','mkdir:source-parent','mkdir:source-leaf','mkdir:sink-parent','open:route-file','write:route-file','sync:route-file','close:route-file','symlink:route-link','lstat:route-link','realpath:route-link','stat:route-link','mkdir:route-directory','symlink:directory-link','statfs:results-final'];
 for(const pause of logEffectPauses)for(const during of ['expiry','cancel'])test('actual log routing blocks follow-up effects after '+during+' at '+pause,async t=>{
-  const fx=await effectFixture(t),tag=pause==='statfs:results-final'?'statfs:results':pause,wait=fx.arm(tag,pause==='statfs:results-final'?2:1);fx.now=fx.setupEnd-10;const pending=fx.owner.provision();
+  const fx=await effectFixture(t),tag=pause==='statfs:results-final'?'statfs:results':pause==='lstat:results-private'?'lstat:results':pause,wait=fx.arm(tag,['statfs:results-final','lstat:results-private'].includes(pause)?2:1);fx.now=fx.setupEnd-10;const pending=fx.owner.provision();
   try{
     await wait.entered.promise;const count=fx.effects.length;if(during==='expiry')fx.now=fx.setupEnd;else fx.owner.cancel();wait.release.resolve();
     await assert.rejects(pending,e=>e.code===(during==='expiry'?'OWNER_SETUP_DEADLINE':'OWNER_CANCELLED'));await flush();
@@ -998,8 +1001,26 @@ test('actual healthy setup performs routed private effects and publishes only th
     const pending=fx.owner.provision();assert.equal(fx.owner.provision(),pending);const owner=await pending;
     assert.equal(owner.containerId,fx.C);assert.equal(owner.networkId,fx.N);assert.equal(owner.port,54322);assert.equal(fx.owner.phase,'provisioned');
     assert.equal(fx.starts.filter(a=>a==='docker-create').length,1);assert.equal(fx.starts.filter(a=>a==='docker-network-create').length,1);
+    assert.ok(fx.files.get(fx.p.logImage).bytes<=CAPS.results);assert.ok(fx.files.get(fx.p.logImage).bytes>120*1024**2);
+    assert.equal(fx.modes.get(fx.p.results),0o700);assert.ok(fx.effects.indexOf('chmod:results')<fx.effects.indexOf('open:route-file'));
     assert.equal(fx.links.get(fx.paths.fileLink),fx.paths.fileSink);assert.equal(fx.links.get(fx.paths.directoryLink),fx.paths.directorySink);assert.ok(fx.effects.includes('rename:identity'));
     assert.equal(fx.owner.retainedIdentity.container.id,fx.C);assert.equal(fx.owner.retainedIdentity.network.id,fx.N);assert.equal(fx.owner.retainedIdentity.mount.device,2);assert.ok(Buffer.byteLength(JSON.stringify(fx.owner.retainedIdentity))<=16384);
+  }finally{await fx.dispose();}
+});
+test('UDRW backing metadata exceeding the cap refuses attachment and VM startup',async t=>{
+  const fx=await effectFixture(t,{imageExtraBytes:9*1024**2});
+  try{
+    await assert.rejects(fx.owner.provision(),e=>e.code==='OWNER_LOG_IMAGE_LIMIT');
+    assert.equal(fx.starts.includes('hdiutil-attach'),false);assert.equal(fx.starts.includes('colima-start'),false);
+  }finally{await fx.dispose();}
+});
+for(const failure of ['rejected','ineffective'])test('mounted root chmod '+failure+' prevents log writes and VM startup',async t=>{
+  const fx=await effectFixture(t,{applyRootMode:failure!=='ineffective'});
+  if(failure==='rejected')fx.fail('chmod:results','INERT_CHMOD_REJECTED');
+  try{
+    await assert.rejects(fx.owner.provision(),e=>e.code===(failure==='rejected'?'INERT_CHMOD_REJECTED':'OWNER_LOG_ROUTE_PARENT'));
+    assert.equal(fx.effects.includes('open:route-file'),false);assert.equal(fx.starts.includes('colima-start'),false);
+    assert.equal(fx.owner.retainedIdentity.mount.device,2);
   }finally{await fx.dispose();}
 });
 for(const during of ['expiry','cancel'])test('actual preflight is single-flight and refuses final defaults publication after '+during,async t=>{
