@@ -39,7 +39,8 @@ concurrency:
 jobs:
   cpp-unit-tests:
     name: c++-unit-tests
-    runs-on: macos-15
+    runs-on: >-
+      ${{ vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY != '' && github.repository == vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "macOS", "ARM64", "aegis-test"]') || 'macos-15' }}
     timeout-minutes: 15
     steps:
       - name: Check out tested source
