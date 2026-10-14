@@ -50,9 +50,13 @@ jobs:
           dest: ${{ runner.temp }}/setup-pnpm
           run_install: false
       - name: Install Python
+        if: ${{ runner.environment != 'self-hosted' }}
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: 3.11.9
+      - name: Verify preinstalled Python on self-hosted runner
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: python3 -c 'import sys; assert sys.version_info[:3] == (3, 11, 9), sys.version; print(sys.version)'
       - name: Install fixed ripgrep
         timeout-minutes: 5
         run: bash scripts/ci/install-ripgrep.sh

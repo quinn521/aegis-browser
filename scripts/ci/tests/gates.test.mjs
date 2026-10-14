@@ -438,6 +438,12 @@ test('workflow validator enforces Mac-only automatic gates and safe manual workf
       [index, (w) => { w.jobs[job]['runs-on'] = w.jobs[job]['runs-on'].replace("github.repository == vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY", 'true'); }],
       [index, (w) => { w.jobs[job]['runs-on'] = w.jobs[job]['runs-on'].replace('aegis-test', 'aegis-upstream'); }],
     ]),
+    ...[[0, 'quality'], [5, 'cpp-unit-tests']].flatMap(([index, job]) => [
+      [index, (w) => { delete w.jobs[job].steps.find((step) => step.uses?.startsWith('actions/setup-python@')).if; }],
+      [index, (w) => { w.jobs[job].steps.find((step) => step.name === 'Verify preinstalled Python on self-hosted runner').run = 'python3 --version'; }],
+      [index, (w) => { w.jobs[job].steps.find((step) => step.name === 'Verify preinstalled Python on self-hosted runner')['continue-on-error'] = true; }],
+      [index, (w) => { w.jobs[job].steps = w.jobs[job].steps.filter((step) => step.name !== 'Verify preinstalled Python on self-hosted runner'); }],
+    ]),
     [0, (w) => { w.jobs.quality.if = '${{ false }}'; }],
     [0, (w) => { w.jobs.quality.steps.find((step) => step.uses?.startsWith('pnpm/action-setup@')).with.dest = '~/setup-pnpm'; }],
     [5, (w) => { w.jobs.extra = structuredClone(w.jobs['cpp-unit-tests']); }],

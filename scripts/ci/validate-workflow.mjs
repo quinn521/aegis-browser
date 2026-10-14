@@ -198,6 +198,17 @@ try {
   if (cppWorkflow.permissions?.contents !== 'read' || Object.values(cppWorkflow.permissions ?? {}).includes('write')) {
     fail('C++ workflow permissions must be read-only');
   }
+  const selfHostedPythonCheck = "python3 -c 'import sys; assert sys.version_info[:3] == (3, 11, 9), sys.version; print(sys.version)'";
+  for (const [id, job] of [['quality', quality], ['cpp-unit-tests', cppWorkflow.jobs['cpp-unit-tests']]]) {
+    const pythonSetup = array(job.steps).find((step) => String(step.uses ?? '').startsWith('actions/setup-python@'));
+    const pythonCheck = array(job.steps).find((step) => step.name === 'Verify preinstalled Python on self-hosted runner');
+    if (pythonSetup?.if !== "${{ runner.environment != 'self-hosted' }}" || String(pythonSetup?.with?.['python-version']) !== '3.11.9') {
+      fail(`${id} must install pinned Python only on hosted runners`);
+    }
+    if (pythonCheck?.if !== "${{ runner.environment == 'self-hosted' }}" || pythonCheck?.run !== selfHostedPythonCheck || 'continue-on-error' in pythonCheck) {
+      fail(`${id} must verify pinned preinstalled Python on self-hosted runners`);
+    }
+  }
   const allJobs = {...jobs, ...otherWorkflow.jobs, ...androidWorkflow.jobs, 'ios-report/ios-coverage': iosCoverage};
   for (const [id, job] of Object.entries(allJobs)) {
     if ('continue-on-error' in job) fail(`${id} may not suppress failures`);
