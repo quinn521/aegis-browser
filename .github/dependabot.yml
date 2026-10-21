@@ -4,8 +4,8 @@ updates:
   - package-ecosystem: npm
     directory: /
     exclude-paths:
-      - /prototypes/**
-      - /apps/ios/Tests/Fixtures/**
+      - prototypes/**
+      - apps/ios/Tests/Fixtures/**
     schedule:
       interval: weekly
       day: monday
