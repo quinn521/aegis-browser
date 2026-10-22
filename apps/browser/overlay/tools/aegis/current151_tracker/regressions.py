@@ -652,5 +652,25 @@ class ResultRegressionTests(Fixture):
         self.assertFalse(marker.exists())
 
 
+class QualificationCompletionRegressionTests(Fixture):
+    def test_positive_probe_exit73_is_not_owner_or_tracker_success(self):
+        attempt = self.attempt()
+        value = self.terminal(attempt, owner_exit=73)
+        with self.assertRaises(driver.Refusal):
+            driver.validate_terminal(value["terminal"], attempt.deadline,
+                                     value["command"], value["completion"])
+
+    def test_qualification_stopped_terminal_never_accepts_even_reaped(self):
+        attempt = self.attempt()
+        value = self.terminal(attempt, stopped=True, reaped=True)
+        with self.assertRaises(driver.Refusal):
+            driver.finalize(attempt, self.root, lambda: True, lambda: "PASS", **value)
+        self.assertTrue(attempt.stopped)
+
+    def test_qualified_fixture_does_not_unseal_build_dispatch(self):
+        with self.assertRaises(driver.Refusal):
+            driver.build_dispatch(qualified=True, process_probe_exit=73)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

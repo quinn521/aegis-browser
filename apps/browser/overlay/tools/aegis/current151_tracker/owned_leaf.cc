@@ -75,8 +75,6 @@ bool ParseNumber(std::string_view value, uint64_t* output) {
 }
 
 bool ReadProfile(const char* path, bool positive_control, std::string* profile) {
-  if (positive_control && aegis_access::bounded::ProcessCanaryBlocker())
-    return false;
   const int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
   if (fd < 0)
     return false;
@@ -181,10 +179,6 @@ int main(int argc, char** argv) {
   const bool noncreating_support = support && argc == 9 &&
       (std::strcmp(argv[8], "--aegis-qualification-clock-probe") == 0 ||
        std::strcmp(argv[8], "--aegis-qualification-owner-boundaries") == 0);
-  if (support && !noncreating_support && aegis_access::bounded::ProcessCanaryBlocker()) {
-    fprintf(stderr, "%s\n", aegis_access::bounded::ProcessCanaryBlocker());
-    return 126;
-  }
   // Bind the receipt to this exact owner invocation before setup/birth.
   std::string command = "[";
   for (int i = 0; i < argc; ++i) {
@@ -294,24 +288,31 @@ int main(int argc, char** argv) {
     if (poll(&input, 1, 20) < 0)
       gate.Fail();
   }
-  if (gate.failure)
-    child.KillOwned();
+  // EOF first lets the qualification creator drain its known probe. The
+  // original deadline is never extended for new work. Cleanup has a fixed10s
+  // allowance, with the last3s reserved for actual root wait after a signal.
   close(control[1]);
   const uint64_t cleanup_start = MonotonicNowNs();
   const uint64_t cleanup_end = cleanup_start + 10ULL * 1000000000;
+  const bool cooperative = support && !noncreating_support;
+  const uint64_t kill_at = cleanup_start +
+      (cooperative ? 7ULL * 1000000000 : 0);
+  bool kill_attempted = false;
   while (child.Poll()) {
     const uint64_t cleanup_now = MonotonicNowNs();
     if (!cleanup_start || !cleanup_now || cleanup_now >= cleanup_end) {
       gate.Fail();
       break;
     }
+    if (cleanup_now >= kill_at && !kill_attempted) {
+      gate.Fail();
+      kill_attempted = true;
+      child.KillOwned();  // only the actual unreaped direct child
+    }
     usleep(1000);
   }
-  if (!child.Reaped()) {
-    gate.Fail();
-    if (!child.Retired())
-      child.KillOwned();
-  }
+  if (!child.Reaped())
+    gate.Fail();  // UNVERIFIED; never signal at the deadline without wait time.
   FreshOwnerBoundary(STDIN_FILENO, &gate, deadline, boot);
   const int child_status = child.Status();
   const bool leaf_success = gate.go_sent && child.Reaped() &&

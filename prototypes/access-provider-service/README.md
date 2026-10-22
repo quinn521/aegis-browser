@@ -292,7 +292,7 @@ I owns the unique fresh review of R2; genuine PG is still NOT_RUN.
 
 真实 PG suite 仍通过 owner 运行准入和 serial fixture 注册。资源真实性、bootstrap、guest 权限与 ENOSPC、40P01、wire COMMIT ACK 丢失及重启持久化均需要独立的真实运行证据；纯测试通过不代表这些门已通过。失败清理会保留失败和不确定资源状态，绝不清除 durable marker fence。
 
-运行 manifest 的 `tools.colima`、`tools.docker` 和 `tools.pnpm` 需要批准后的 `canonicalPath`、`bytes` 与 `sha256`。preflight 解析安装入口的 symlink，核对其 canonical target，并通过同一 target 执行；VM、OCI 和其他 cache 输入仍要求普通文件，拒绝 symlink。
+运行 manifest 的工具和私有 Lima 前缀使用下方完整字节/身份绑定。preflight 只作文件与哈希核验；拥有配置和日志路由之后才执行版本探测。VM、OCI 和其他 cache 输入仍要求普通文件，拒绝 symlink。
 
 运行 capability 必须提供 `reviewedSources: {path, sha256}`，指向格式为 `B1_REVIEWED_RUNTIME_SOURCES_V1` 的外部审查清单。清单的 `worktree` 是 canonical checkout 路径，`files` 必须恰好包含 `RUNTIME_SOURCE_FILES` 中的 service 21 项与 local contract 6 项，每项具有 `path`、`type: "file"`、`bytes`、`sha256`；`resolvedContract.entryPath` 绑定 Node 实际解析的 contract 模块在 worktree 下的 canonical 相对路径。Node 解析到的安装副本也逐文件核对已审查的 contract 字节，不能只核对旁边的本地 package。缺失、遗漏、重复、意外项、文件漂移或 dependency retarget 均拒绝准入。
 
@@ -301,3 +301,89 @@ I owns the unique fresh review of R2; genuine PG is still NOT_RUN.
 fixture 的 wire 协议要求不进行 TLS 协商。preflight、wire startup 和建池前要求 `PGSSLMODE` 未设置或为 `disable`，`PGSSLNEGOTIATION` 未设置或为 `postgres`；`require`、`direct` 等不兼容环境会拒绝。该检查保留进程环境和生产 store/TLS 配置。deadlock 的注册与 201 断言由 guaranteed application cleanup 包住；关闭失败或超时会同时保留注册失败及不确定清理状态。
 
 harness 创建的 owned fixture pool 会固定 `ssl: false`、`sslnegotiation: "postgres"`。固定版本 pg-pool 在实际 checkout 时才构造 Client，首次、排队或空闲过期后的替换 Client 都继承这些选项；store 返回后的 PG 环境漂移不会改变 fixture 协议。创建前的不兼容环境仍拒绝。此固定仅用于 harness 及其 owned worker，不修改生产 store/TLS 或进程环境。纯回归使用真实 harness、PostgresStore、pg-pool/Client 构造与 idle-expiry，连接和 SQL 传输用 doubles，没有 socket 或 PG 运行。
+
+#### Manifest-bound tools and child environment
+
+The runtime manifest now binds exactly `node`, `pnpm`, `colima`, `docker`,
+`hdiutil`, `lsof`, and `ps`. Every `tools.<name>` record has
+`canonicalPath, trustedRoot, uid, mode, bytes, sha256, version, provenance`;
+`provenance` is an external `{path, bytes, sha256}` file reference. Tool files
+and their trusted directory chain must be canonical, regular/executable where
+applicable, owned by the admitted UID or root, and not writable by group/others.
+The running Node path and version are checked against its binding.
+
+`toolchain` has exactly `format: "B1_BOUND_TOOLCHAIN_V1", runId, lima,
+ownedLogManifest`. `ownedLogManifest` is another external file reference;
+references must be outside the owner roots that are initially required absent.
+`lima` has `prefix, version, pairId, manifest`. Its external prefix manifest
+uses `B1_BOUND_LIMA_PREFIX_V1`, binds the exact prefix/version/source hash,
+upstream base commit `1285a6d70f23afe8129c3868df178cf9ffe23aaf`, and every
+file and directory as `path, type, uid, mode, bytes, sha256` (directories use
+zero bytes/null hash). Missing/extra members, symlinks, mixed bin/share files,
+or a missing executable `bin/lima` launcher refuse admission. `pairId` is
+SHA-256 of JSON in this key order:
+`{host: limactlSha256, guest: guestagentSha256, sourceSha256, version}`.
+These are input bindings, not review or execution authorization.
+
+The future Lima build uses an honest private `v2.1.3-aegis.…` label derived
+from the recorded upstream base. The accepted `v0.0.0-stage1…` prefix remains
+immutable; a new build, local signature/entitlement checks and complete paired
+inventory are still required. No compatibility pass follows from a version
+string or this manifest.
+
+Preflight only inspects filesystem/hash inputs. It runs no executable probe.
+After private config/cache directories and four explicit task-local aliases
+exist, and the capped log filesystem/routes are measured, provisioning probes
+the pinned Colima/Docker/pnpm versions before its first VM command. Direct
+commands use canonical targets; child PATH is the qualified Lima `bin`,
+the owner's `tools/bin`, then system directories. There is no Homebrew PATH
+fallback or global alias mutation. Tool/prefix/reference identities, child
+environment, aliases, mount/routes, source capability and original deadlines
+are checked again before dispatch, restart and normal cleanup. Failure retains
+the exact resources and reports incomplete cleanup.
+
+HOME remains the actual parent value; CODEX_HOME is not repurposed or forwarded
+to PG tools. No ambient Docker context/host, SSH agent, proxy or Node injection
+variables are spread. Explicit COLIMA/LIMA/Docker/XDG/Corepack/pnpm/pip/temp
+paths select task storage. The guard observes only metadata of existing user
+Docker/SSH/default-Colima configuration and never reads its credential content;
+it is not a proof of arbitrary activity or zero writes to user/system storage.
+A changed HOME/CODEX_HOME or tool identity invalidates the captured binding.
+
+The tools repair alone does **not** admit PG. Stock Colima's generated named
+network and Unix socket forwards still conflict with the accepted Lima owned
+policy, and its image-digest assumptions require a separately reviewed
+interface. The pinned stock guest image has persistent first-boot log sinks.
+A real offline image policy, qualified archive/backend and independent host/
+guest log closure remain prerequisites. No force-image switch, general socket
+exception, invisible wrapper, alternate orchestrator or candidate-minted
+EXHAUSTIVE/CLEAR receipt is introduced. Original R source-safety review and I's
+specific runtime capability must precede the already human-authorized dedicated
+PG VM; final R review follows real runtime and cleanup evidence.
+
+The added regression source uses controlled files/transports. This source-only
+repair window has run no JS tests, compiler, VM or PG. The final integrated H,
+including the separate native repair, needs affected/full owner/service/contract
+tests, root fullquality, native/PG evidence and exact-head CI. The prior 515
+ordinary passes retain their original H and scope.
+
+The fixed macOS `/bin/ps` is root-owned set-id on this host. Only that exact
+canonical path/root ownership/04755 mode may carry set-id bits; its complete
+bytes are still externally pinned. Other tools and every private-prefix member
+reject set-id modes. This does not add a general privilege or mode exception.
+
+### 工具与完整质量适配器的补审修复边界
+
+工具链只接受所绑定的未压缩 `lima-guestagent.Linux-aarch64`；同目录的优先选中 `.gz` 替代物会被拒绝。启动、重启及清理在最终工具重验后、同步 spawn 前重新检查 capability 到期时间。
+
+私有完整质量 adapter 的新执行 grant 需绑定 `prepare`、`run` 和共用的 `runtime` 三个源码文件。helper 的单一 wait owner 使用真实 `os.waitpid` 原始终态，在 CPython wait lock 内同步 Popen 状态；`Popen.poll()` 或 `wait()` 给出的整数不能证明原始等待已完成。ECHILD 或已被其他 waiter 消费的状态会隔离保留父进程，禁止再向该不确定 PID/进程组发信号或继续工作。正常捕获也从首次真实 direct-child 退出起计算原有两秒管道期限；失败后的有界 drain 保留实际 EOF 与 unavailable 的区别，关闭描述符不等于 EOF。实际信号拒绝或未知等待仍保留现场，不换接口。
+
+grant 还必须提供外部绑定的 `preparedInputs` 四个引用：`pnpmStore`、`corepack`、`wheelhouse`、`installedDependencies`。前三者使用 `PR209_INPUT_TREE_V1`，绑定 canonical root、完整 root mode 和每个文件、目录的路径、类型、mode、字节数及 SHA-256；目录使用 0700。缓存内容同时与原始外部缓存 catalog 的路径、字节和 SHA-256 对应。拒绝多余成员、缺失成员、缓存 symlink、类型或 mode 漂移。
+
+`installedDependencies` 使用 `PR209_INSTALLED_INPUTS_V2`，列出实际顶层 `node_modules` 的 `roots` 及 symlink 所需的 `targetTrees` 外部 inventory 引用；无安装依赖时两个列表均显式为空。每个 inventory 使用 `PR209_INPUT_TREE_V2`，除完整类型、mode、字节与摘要外，绑定根和成员的 device/inode/uid。每条 symlink 还绑定 canonical `resolved` 与逐个 lstat 的完整 `trace`（包括中间别名、原始链接文本、身份及 mode）。目标须属于这些外部 inventory 中的真实文件或目录；目标目录内容全部重验，拒绝额外、缺失、未绑定目标与未引用的目标 inventory，并限制解析链及循环。哈希后再次核对链接和身份。`ready.json` 只描述进度，不能授权输入；质量驱动后续安装输出仍需单独的生成来源和最终安装字节证据。
+
+执行前重验这些输入和 tracked source，并用独立有界 Git 命令核对实际 HEAD、tree、base 和 clean 状态；相同 tree 的 amended HEAD 也拒绝。每个 Git 查询与质量驱动均沿用准备阶段原始 monotonic 窗口，资源扫描、文件校验和输出建立后，在 Popen 前再次检查 stop。新测试源码覆盖正常路径和故障注入；源码封存不代表已执行测试或取得原 R 的复审通过。
+
+新质量执行 grant 的 `clock` 必须由 I 预先固定 `firstUTC` 和本机 `monotonic` 原点；准备和执行读取同一 grant，拒绝准备元数据改写原点。准备前的输入核对也计入该窗口。
+
+R2 回归源码增加真实 CPython ECHILD 归零与父进程保留、正常/信号 raw status、继承管道写端期限、start/pending/final 记录持久化失败，以及完整依赖目标/中间别名篡改用例。每个嵌套 Python（含 retention driver）显式使用 `-B -I`，测试父进程也要求 `-B`；`PYTHONDONTWRITEBYTECODE` 在 `-I` 下不提供该保证。已知测试子进程的主动故障在 ready 后触发；真实拒绝或状态丢失仍会保留父进程，不能当作已完成的有界测试。当前只解析 Python AST，测试、构建与新补审均未执行。

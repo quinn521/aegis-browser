@@ -114,17 +114,15 @@ export class ConnectionBudget {
   }
   close(){this.#closed=true;}
 }
-export function command(plan,tool,args,{stdin=null,secret=false,timeoutMs=30000,executable:canonical=null}={}) {
+export function command(plan,tool,args,{stdin=null,secret=false,timeoutMs=30000,executable:canonical=null,toolchain=null}={}) {
   if(!Array.isArray(args)||args.some(x=>typeof x!=='string'||x.includes('\0')))refuse('OWNER_ARGV');integer(timeoutMs,1,CAPS.setupMs);
-  const env={PATH:'/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin',HOME:process.env.HOME,
-    LANG:'C',LC_ALL:'C',COLIMA_HOME:plan.colimaHome,DOCKER_CONFIG:plan.dockerConfig,
-    LIMA_HOME:plan.colimaHome+'/_lima',TMPDIR:plan.results};
-  const executable={colima:'/opt/homebrew/bin/colima',docker:'/opt/homebrew/bin/docker',hdiutil:'/usr/bin/hdiutil',lsof:'/usr/sbin/lsof',ps:'/bin/ps',pnpm:'/opt/homebrew/bin/pnpm'}[tool];
+  const env=toolEnvironment(plan,toolchain);
+  const executable={colima:'colima',docker:'docker',hdiutil:'/usr/bin/hdiutil',lsof:'/usr/sbin/lsof',ps:'/bin/ps',pnpm:'pnpm'}[tool];
   if(!executable)refuse('OWNER_TOOL');
   if(tool==='docker'&&(args.some(a=>a==='--context'||a.startsWith('--host')||a==='-H'||a==='prune')||!['inspect','image','network','create','cp','start','stop','kill','--version'].includes(args[0])))refuse('OWNER_DOCKER_COMMAND');
   if(tool==='docker'&&args[0]==='image'&&!['inspect','load'].includes(args[1])||tool==='docker'&&args[0]==='network'&&!['inspect','create'].includes(args[1]))refuse('OWNER_DOCKER_COMMAND');
   if(canonical!==null&&(typeof canonical!=='string'||path.resolve(canonical)!==canonical))refuse('OWNER_EXECUTABLE_PATH');
-  return {executable:canonical??executable,args:tool==='colima'?['--profile',plan.profile,...args]:tool==='docker'?['-H','unix://'+plan.socket,...args]:args,env,stdin,secret,timeoutMs};
+  return {tool,qualified:canonical!==null&&toolchain!==null,executable:canonical??executable,args:tool==='colima'?['--profile',plan.profile,...args]:tool==='docker'?['-H','unix://'+plan.socket,...args]:args,env,stdin,secret,timeoutMs};
 }
 export function colimaStartArgs(plan){return ['start','--activate=false','--ssh-config=false','--mount','none','--template=false','--ssh-agent=false','--binfmt=false','--vz-rosetta=false','--runtime','docker','--arch','aarch64','--vm-type','vz','--cpus','2','--memory','3','--root-disk','12','--disk','16','--disk-image',plan.vmImage];}
 export async function createContainerWithSecret({writeSecret,create}) {
@@ -172,6 +170,7 @@ export async function settleClosures(closures,deadline) {
 export class PhaseGate {
   denied=[];
   constructor({runId,authorize}){uuid(runId);if(typeof authorize!=='function')refuse('OWNER_AUTHORITY_REQUIRED');this.runId=runId;this.authorize=authorize;}
+  assertFresh(){const end=this.authorize.expiresAt;if(end!==undefined&&(!Number.isFinite(end)||Date.now()>=end))refuse('OWNER_CAPABILITY_EXPIRED');}
   async require(action,context={}){
     if(!ACTIONS.includes(action)){this.denied.push({action,reason:'UNKNOWN_ACTION'});refuse('OWNER_ACTION');}
     try{if(await this.authorize({runId:this.runId,action,...context})!==true)refuse('OWNER_NOT_AUTHORIZED');}
@@ -194,7 +193,13 @@ class Commands {
   children=new Set();sink=null;
   constructor(owner,start=spawn,completed=()=>{},retirementFailed=()=>{}){this.owner=owner;this.start=start;this.completed=completed;this.retirementFailed=retirementFailed;}
   async run(action,spec,{deadline,cleanup=false,check=()=>{},currentDeadline=()=>deadline,retirementSignal}){
-    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup,check,currentDeadline,retirementSignal},({deadline:end})=>new Promise((resolve,reject)=>{
+    return runAuthorizedCommand(this.owner,action,spec,{deadline,cleanup,check,currentDeadline,retirementSignal},async({deadline:end})=>{
+      const fresh=()=>{check();remainingMilliseconds(Math.min(end,currentDeadline()));if((cleanup?retirementSignal:this.owner.signal)?.aborted)refuse(cleanup?'OWNER_DEADLINE':'OWNER_CANCELLED');};
+      await ownedRace(()=>this.owner.revalidateCommand(spec,fresh),{deadline:end,signal:cleanup?retirementSignal:this.owner.signal});fresh();
+      await this.owner.gate.require(action);fresh();
+      await ownedRace(()=>this.owner.revalidateCommand(spec,fresh),{deadline:end,signal:cleanup?retirementSignal:this.owner.signal});fresh();
+      return new Promise((resolve,reject)=>{
+      fresh();this.owner.gate.assertFresh();
       const child=this.start(spec.executable,spec.args,{env:spec.env,shell:false,stdio:['pipe','pipe','pipe']});
       const identity={child,action,spawnedAt:performance.now(),done:false};this.children.add(identity);
       let bytes=0,out=[],err=[],failure=null,killTimer,forceTimer,termSent=false,unconfirmed=false;const maximum=2*MiB;
@@ -220,7 +225,7 @@ class Commands {
         if(failure||code!==0)reject(failure??new OwnerError('OWNER_COMMAND_FAILED'));else resolve(result);
       });
       child.stdin.end(spec.stdin??undefined);if(this.owner.signal.aborted&&!cleanup)abort();if(cleanup&&retirementSignal?.aborted)retire();
-    }));
+    });});
   }
   stop(){for(const id of this.children)if(!id.done)id.retire('OWNER_CANCELLED');}
 }
@@ -236,7 +241,133 @@ async function privateFile(p,bytes,{exclusive=false,beforeWrite,wait,retire}={})
   if(failure)throw failure;
 }
 export async function regular(p){const s=await fs.lstat(p);if(!s.isFile()||s.isSymbolicLink())refuse('OWNER_REGULAR_FILE');return s;}
-// Installed aliases may be Homebrew symlinks; immutable caches may not.
+
+export const TOOL_NAMES=Object.freeze(['node','pnpm','colima','docker','hdiutil','lsof','ps']);
+const SYSTEM_PATH='/usr/bin:/bin:/usr/sbin:/sbin';
+const exactKeys=(value,keys)=>!!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join()===keys.slice().sort().join();
+const canonicalPath=p=>typeof p==='string'&&p.startsWith('/')&&path.resolve(p)===p&&!p.includes('\0');
+const within=(root,p)=>p===root||p.startsWith(root+'/');
+export function toolDirectories(p){
+  return [...new Set([p.colimaHome,p.dockerConfig,p.colimaHome+'/_lima',...['config','config/xdg','cache','cache/colima','cache/lima','cache/xdg','cache/data','cache/state','cache/pnpm','cache/pnpm-store','cache/corepack','cache/pip','tools','tools/bin'].map(n=>p.artifactRoot+'/'+n)])].sort((a,b)=>a.length-b.length||a.localeCompare(b));
+}
+// Construction is inert. An unqualified spec has only the system search path;
+// Commands revalidates the complete admitted toolchain before every real spawn.
+export function toolEnvironment(p,toolchain=null){
+  if(!canonicalPath(process.env.HOME))refuse('OWNER_TOOL_ENVIRONMENT');
+  const r=p.artifactRoot,env={PATH:SYSTEM_PATH,HOME:process.env.HOME,LANG:'C',LC_ALL:'C',
+    COLIMA_HOME:p.colimaHome,LIMA_HOME:p.colimaHome+'/_lima',DOCKER_CONFIG:p.dockerConfig,
+    COLIMA_CACHE_HOME:r+'/cache/colima',LIMA_OWNED_CACHE_DIR:r+'/cache/lima',
+    XDG_CONFIG_HOME:r+'/config/xdg',XDG_CACHE_HOME:r+'/cache/xdg',XDG_DATA_HOME:r+'/cache/data',XDG_STATE_HOME:r+'/cache/state',
+    PNPM_HOME:r+'/cache/pnpm',COREPACK_HOME:r+'/cache/corepack',COREPACK_ENABLE_NETWORK:'0',COREPACK_ENV_FILE:'0',
+    npm_config_userconfig:r+'/config/npmrc',npm_config_globalconfig:'/dev/null',npm_config_store_dir:r+'/cache/pnpm-store',npm_config_offline:'true',
+    PNPM_DISABLE_SELF_UPDATE_CHECK:'1',PIP_CONFIG_FILE:'/dev/null',PIP_CACHE_DIR:r+'/cache/pip',PIP_NO_INDEX:'1',PIP_DISABLE_PIP_VERSION_CHECK:'1',
+    PYTHONDONTWRITEBYTECODE:'1',PYTHONNOUSERSITE:'1',TMPDIR:p.results+'/tmp',LIMA_INSTANCE:'colima-'+p.profile};
+  if(toolchain!==null){
+    if(toolchain.format!=='B1_BOUND_TOOLCHAIN_V1'||toolchain.runId!==p.runId||!canonicalPath(toolchain.lima?.prefix)||!canonicalPath(toolchain.ownedLogManifest?.path))refuse('OWNER_TOOLCHAIN_SCHEMA');
+    env.PATH=toolchain.lima.prefix+'/bin:'+r+'/tools/bin:'+SYSTEM_PATH;
+    env.LIMA_OWNED_LOG_MANIFEST=toolchain.ownedLogManifest.path;
+  }
+  return Object.freeze(env);
+}
+async function checkedToolHash(filename,check){
+  const stream=createReadStream(filename),h=createHash('sha256');
+  try{for await(const chunk of stream){check();h.update(chunk);}check();return h.digest('hex');}
+  finally{stream.destroy();}
+}
+// These are byte/identity bindings, never a source-review or runtime capability.
+export async function verifyToolchain(p,m,{ready=false,requireLog=false,logDevice=null,check=()=>{}}={}){
+  const observed=[],readyObserved=[];
+  const wait=async work=>{check();const value=await work();check();return value;};
+  const observe=(target,s,list=observed)=>list.push([target,s.dev,s.ino,s.uid,s.mode,s.isDirectory()?null:s.size]);
+  const trusted=async(filename,{directory=false,uid=p.uid,privateMode=false,systemPs=false,list=observed,code='OWNER_TOOL_SOURCE_PIN'}={})=>{
+    if(!canonicalPath(filename))refuse(code);
+    const s=await wait(()=>fs.lstat(filename));
+    if(s.isSymbolicLink()||(directory?!s.isDirectory():!s.isFile()))refuse(code);
+    if(await wait(()=>fs.realpath(filename))!==filename||![uid,0].includes(s.uid)||(s.mode&0o022)!==0||((s.mode&0o6000)!==0&&!(systemPs&&filename==='/bin/ps'&&s.uid===0&&(s.mode&0o7777)===0o4755))||privateMode&&(s.uid!==p.uid||(s.mode&0o777)!==0o700))refuse(code);
+    observe(filename,s,list);return s;
+  };
+  const reference=async(ref,code='OWNER_TOOL_PROVENANCE')=>{
+    if(!exactKeys(ref,['path','bytes','sha256'])||!canonicalPath(ref.path)||!Number.isSafeInteger(ref.bytes)||ref.bytes<1||ref.bytes>2*MiB||! /^[0-9a-f]{64}$/.test(ref.sha256??'')||within(p.artifactRoot,ref.path)||within(path.dirname(p.colimaHome),ref.path))refuse(code);
+    let s;try{s=await trusted(ref.path,{code});}catch(e){if(e instanceof OwnerError)throw e;refuse(code);}
+    if(s.size!==ref.bytes)refuse(code);
+    const raw=await wait(()=>fs.readFile(ref.path));if(raw.length!==ref.bytes||digest(raw)!==ref.sha256)refuse(code);
+    const after=await wait(()=>fs.lstat(ref.path));if(after.ino!==s.ino||after.dev!==s.dev||after.mode!==s.mode||after.size!==s.size)refuse(code);
+    return raw;
+  };
+  try{
+    const tc=m?.toolchain;
+    if(m?.runId!==p.runId||!exactKeys(m.tools,TOOL_NAMES)||!exactKeys(tc,['format','runId','lima','ownedLogManifest'])||tc.format!=='B1_BOUND_TOOLCHAIN_V1'||tc.runId!==p.runId)refuse('OWNER_TOOLCHAIN_SCHEMA');
+    const executables={};
+    for(const name of TOOL_NAMES){
+      const pin=m.tools[name];
+      if(!exactKeys(pin,['canonicalPath','trustedRoot','uid','mode','bytes','sha256','version','provenance'])||!canonicalPath(pin.canonicalPath)||!canonicalPath(pin.trustedRoot)||pin.trustedRoot==='/'||!within(pin.trustedRoot,pin.canonicalPath)||!Number.isSafeInteger(pin.uid)||![p.uid,0].includes(pin.uid)||!Number.isSafeInteger(pin.mode)||!Number.isSafeInteger(pin.bytes)||pin.bytes<1||pin.bytes>256*MiB||! /^[0-9a-f]{64}$/.test(pin.sha256??''))refuse('OWNER_TOOL_SOURCE_PIN');
+      if(pin.version!==(PIN[name]??'host-system'))refuse('OWNER_TOOL_VERSION');
+      await trusted(pin.trustedRoot,{directory:true,uid:pin.uid});
+      const parts=path.relative(pin.trustedRoot,path.dirname(pin.canonicalPath)).split(path.sep).filter(Boolean);let parent=pin.trustedRoot;
+      for(const part of parts){parent=path.join(parent,part);await trusted(parent,{directory:true,uid:pin.uid});}
+      const s=await trusted(pin.canonicalPath,{uid:pin.uid,systemPs:name==='ps'&&pin.trustedRoot==='/bin'});
+      if(s.uid!==pin.uid||s.mode!==pin.mode||s.size!==pin.bytes||(s.mode&0o111)===0||await checkedToolHash(pin.canonicalPath,check)!==pin.sha256)refuse('OWNER_TOOL_SOURCE_PIN');
+      await reference(pin.provenance);executables[name]=pin.canonicalPath;
+    }
+    if(process.versions.node!==PIN.node||await wait(()=>fs.realpath(process.execPath))!==executables.node)refuse('OWNER_NODE_PIN');
+    const lima=tc.lima;
+    if(!exactKeys(lima,['prefix','version','pairId','manifest'])||!canonicalPath(lima.prefix)||lima.prefix==='/'||within('/opt/homebrew',lima.prefix)||!/^v2\.1\.3-aegis\.[0-9A-Za-z.+-]+$/.test(lima.version??'')||! /^[0-9a-f]{64}$/.test(lima.pairId??''))refuse('OWNER_LIMA_PAIR');
+    const raw=await reference(lima.manifest,'OWNER_LIMA_PAIR');let bundle;try{bundle=JSON.parse(raw);}catch{refuse('OWNER_LIMA_PAIR');}
+    if(!exactKeys(bundle,['format','prefix','version','sourceSha256','baseCommit','pairId','entries'])||bundle.format!=='B1_BOUND_LIMA_PREFIX_V1'||bundle.prefix!==lima.prefix||bundle.version!==lima.version||bundle.pairId!==lima.pairId||bundle.baseCommit!=='1285a6d70f23afe8129c3868df178cf9ffe23aaf'||! /^[0-9a-f]{64}$/.test(bundle.sourceSha256??'')||!Array.isArray(bundle.entries)||bundle.entries.length<6||bundle.entries.length>512)refuse('OWNER_LIMA_PAIR');
+    await trusted(lima.prefix,{directory:true,code:'OWNER_LIMA_PAIR'});
+    const entries=new Map();let total=0;
+    for(const e of bundle.entries){
+      if(!exactKeys(e,['path','type','uid','mode','bytes','sha256'])||typeof e.path!=='string'||e.path===''||path.isAbsolute(e.path)||path.normalize(e.path)!==e.path||e.path.split(path.sep).some(n=>n==='..'||n==='.')||entries.has(e.path)||!['file','directory'].includes(e.type)||!Number.isSafeInteger(e.uid)||!Number.isSafeInteger(e.mode)||!Number.isSafeInteger(e.bytes)||e.bytes<0||e.type==='directory'&&(e.bytes!==0||e.sha256!==null)||e.type==='file'&&! /^[0-9a-f]{64}$/.test(e.sha256??''))refuse('OWNER_LIMA_PAIR');
+      if((e.path==='bin'||e.path.startsWith('bin/'))&&!['bin','bin/limactl','bin/lima'].includes(e.path))refuse('OWNER_LIMA_PAIR');
+      entries.set(e.path,e);total+=e.bytes;
+    }
+    if(total>256*MiB)refuse('OWNER_LIMA_PAIR');
+    const actual=[];
+    async function walk(parent){
+      for(const name of (await wait(()=>fs.readdir(parent))).sort()){
+        const filename=path.join(parent,name),relative=path.relative(lima.prefix,filename),e=entries.get(relative);
+        if(!e)refuse('OWNER_LIMA_PAIR');
+        const s=await trusted(filename,{directory:e.type==='directory',code:'OWNER_LIMA_PAIR'});
+        if(s.uid!==e.uid||s.mode!==e.mode||e.type==='file'&&(s.size!==e.bytes||await checkedToolHash(filename,check)!==e.sha256))refuse('OWNER_LIMA_PAIR');
+        actual.push(relative);if(e.type==='directory')await walk(filename);
+      }
+    }
+    await walk(lima.prefix);if(actual.length!==entries.size)refuse('OWNER_LIMA_PAIR');
+    const host=entries.get('bin/limactl'),launcher=entries.get('bin/lima'),guest=entries.get('share/lima/lima-guestagent.Linux-aarch64');
+    // Pinned GuestAgentBinary selects .gz before the raw artifact. This layout binds only raw.
+    if(entries.has('share/lima/lima-guestagent.Linux-aarch64.gz'))refuse('OWNER_LIMA_PAIR');
+    if([host,launcher,guest].some(e=>!e||e.type!=='file'||(e.mode&0o111)===0)||digest(JSON.stringify({host:host.sha256,guest:guest.sha256,sourceSha256:bundle.sourceSha256,version:bundle.version}))!==lima.pairId)refuse('OWNER_LIMA_PAIR');
+    await reference(tc.ownedLogManifest);
+    const environment=toolEnvironment(p,tc),fingerprint=digest(JSON.stringify({tools:m.tools,toolchain:tc,observed,environment,parentCodexHome:process.env.CODEX_HOME??null}));
+    if(ready){
+      try{
+        for(const dir of toolDirectories(p))await trusted(dir,{directory:true,privateMode:true,list:readyObserved,code:'OWNER_TOOL_ENVIRONMENT'});
+        const npmrc=environment.npm_config_userconfig,s=await trusted(npmrc,{list:readyObserved,code:'OWNER_TOOL_ENVIRONMENT'});
+        if(s.uid!==p.uid||(s.mode&0o777)!==0o600||s.size!==0)refuse('OWNER_TOOL_ENVIRONMENT');
+      }catch(e){if(e instanceof OwnerError)throw e;refuse('OWNER_TOOL_ENVIRONMENT');}
+      const aliases=['node','pnpm','colima','docker'],root=p.artifactRoot+'/tools/bin';
+      if(JSON.stringify((await wait(()=>fs.readdir(root))).sort())!==JSON.stringify(aliases.slice().sort()))refuse('OWNER_TOOL_ALIAS');
+      for(const name of aliases){
+        const filename=root+'/'+name,s=await wait(()=>fs.lstat(filename));
+        if(!s.isSymbolicLink()||s.uid!==p.uid||await wait(()=>fs.realpath(filename))!==executables[name])refuse('OWNER_TOOL_ALIAS');
+        observe(filename,s,readyObserved);
+      }
+    }
+    if(requireLog){
+      if(logDevice===null||!ready)refuse('OWNER_LOG_NOT_MOUNTED');
+      const root=await wait(()=>fs.lstat(p.results)),v=await wait(()=>fs.statfs(p.results));
+      if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==p.uid||root.dev!==logDevice||(root.mode&0o777)!==0o700||v.blocks*v.bsize>CAPS.results)refuse('OWNER_LOG_ROUTE_CHANGED');
+      await trusted(environment.TMPDIR,{directory:true,privateMode:true,list:readyObserved,code:'OWNER_TOOL_ENVIRONMENT'});
+      for(const route of m.logRouting?.routes??[]){
+        const s=await wait(()=>fs.lstat(route.path));
+        if(!s.isSymbolicLink()||await wait(()=>fs.realpath(route.path))!==route.sink||(await wait(()=>fs.stat(route.path))).dev!==logDevice)refuse('OWNER_LOG_ROUTE_CHANGED');
+      }
+    }
+    return {executables:Object.freeze(executables),environment,fingerprint,readyFingerprint:ready?digest(JSON.stringify(readyObserved.filter(x=>x[0]!==environment.TMPDIR))):null};
+  }catch(e){if(e instanceof OwnerError)throw e;refuse('OWNER_TOOLCHAIN_INPUT');}
+}
+
+// Legacy alias validator remains a pure utility; actual owner dispatch uses verifyToolchain.
 export async function resolveExecutable(alias,pin) {
   const executable=await fs.realpath(alias),s=await regular(executable);
   if(!pin||pin.canonicalPath!==executable||pin.bytes!==s.size||pin.sha256!==await fileHash(executable)||(s.mode&0o111)===0)refuse('OWNER_TOOL_SOURCE_PIN');
@@ -246,7 +377,7 @@ async function jsonFile(p){const s=await regular(p);if(s.size>2*MiB)refuse('OWNE
 const safeCode=e=>e instanceof OwnerError?e.code:'OWNER_OPERATION_FAILED';
 export class OwnerSupervisor {
   events=[];budget=new ConnectionBudget();owner=null;phase='new';proxy=null;
-  #controller=new AbortController();#setupDeadline=null;#suiteTimer=null;#suiteDeadline=null;#secrets=null;#logDevice=null;#guestIdentity=null;#defaultState=null;#plan;#manifest;#commands;#bindingsFingerprint=null;#quotaProof=null;#executables={};
+  #controller=new AbortController();#setupDeadline=null;#suiteTimer=null;#suiteDeadline=null;#secrets=null;#logDevice=null;#guestIdentity=null;#defaultState=null;#plan;#manifest;#commands;#bindingsFingerprint=null;#quotaProof=null;#executables={};#toolFingerprint=null;#readyToolFingerprint=null;
   #operations=new AsyncLocalStorage();#preflightPromise=null;#provisionPromise=null;#cleanupEnd=null;#evidenceSlots=new Set();#listenerFactory;
   #cleanupController=new AbortController();#cleanupTimer=null;#cleanupEvidence=null;
   #identities={network:null,container:null,mount:null,uncertainty:[],retirementFailures:[],evidenceFailures:[]};
@@ -365,15 +496,25 @@ export class OwnerSupervisor {
   }
   #remaining(){const n=Math.floor(this.#deadline()-performance.now());if(n<1)refuse('OWNER_SETUP_DEADLINE');return n;}
   async #run(action,tool,args,options={}){return this.#operation('active',async check=>{
-    try{return await this.#wait(()=>this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null}),{deadline:this.#deadline(),check}));}
+    try{return await this.#wait(()=>this.#commands.run(action,command(this.#plan,tool,args,{...options,executable:this.#executables[tool]??null,toolchain:this.#manifest.toolchain??null}),{deadline:this.#deadline(),check}));}
     catch(error){if(['docker-network-create','docker-create','hdiutil-create','hdiutil-attach','colima-start'].includes(action))this.#rememberFailure('uncertainty',{action,code:safeCode(error)});throw error;}
   });}
+  async #checkTools(ready,{check=this.#scope().check,requireLog=false}={}){
+    const binding=await verifyToolchain(this.plan,this.#manifest,{ready,requireLog,logDevice:this.#logDevice,check});check();
+    if(this.#toolFingerprint!==null&&this.#toolFingerprint!==binding.fingerprint||ready&&this.#readyToolFingerprint!==null&&this.#readyToolFingerprint!==binding.readyFingerprint)refuse('OWNER_TOOL_CHAIN_CHANGED');
+    this.#toolFingerprint=binding.fingerprint;if(ready)this.#readyToolFingerprint=binding.readyFingerprint;this.#executables=binding.executables;return binding;
+  }
+  async revalidateCommand(spec,check){
+    const binding=await this.#checkTools(true,{check,requireLog:spec.tool!=='hdiutil'});check();
+    if(!spec.qualified||spec.executable!==binding.executables[spec.tool]||JSON.stringify(spec.env)!==JSON.stringify(binding.environment))refuse('OWNER_TOOL_CHAIN_CHANGED');
+  }
   async #hostFree(){return this.#operation('active',async()=>{const p=this.#plan;const s=await this.#fs('stat','/Volumes/ExternalSSD');if(!s.isDirectory()||await this.#fs('realpath','/Volumes/ExternalSSD')!=='/Volumes/ExternalSSD'||await this.#fs('realpath',p.worktree)!==p.worktree)refuse('OWNER_VOLUME');await this.#fs('access',p.worktree,FC.W_OK);const v=await this.#fs('statfs','/Volumes/ExternalSSD');return integer(v.bavail*v.bsize);
     });
   }
   async #defaults(){return this.#operation('active',async()=>{
     const home=process.env.HOME;const paths=[home+'/.docker/config.json',home+'/.colima/default/colima.yaml',home+'/.ssh/config'];const state={};
-    for(const p of paths){try{state[p]={sha256:await this.#hash(p),realpath:await this.#fs('realpath',p)};}catch(e){if(e.code!=='ENOENT')throw e;state[p]={absent:true};}}
+    // Metadata only: never read a user's Docker/SSH credential contents.
+    for(const p of paths){try{const s=await this.#fs('lstat',p);state[p]={dev:s.dev,ino:s.ino,uid:s.uid,mode:s.mode,size:s.size,mtimeMs:s.mtimeMs,ctimeMs:s.ctimeMs,realpath:await this.#fs('realpath',p)};}catch(e){if(e.code!=='ENOENT')throw e;state[p]={absent:true};}}
     return state;
 
     });
@@ -387,10 +528,7 @@ export class OwnerSupervisor {
     if(process.versions.node!==PIN.node)refuse('OWNER_NODE_PIN');
     const free=await this.#hostFree();residualCapacity(free,100*GiB);
     const m=this.#manifest;if(!m||m.runId!==this.plan.runId)refuse('OWNER_MANIFEST');
-    for(const [name,version] of [['colima',PIN.colima],['docker',PIN.docker],['pnpm',PIN.pnpm]]){
-      const alias=command(this.plan,name,['--version']).executable;const executable=await this.#wait(()=>resolveExecutable(alias,m.tools?.[name]));this.#executables[name]=executable;
-      const r=await this.#run('preflight',name,['--version']);if(!r.stdout.includes(version))refuse('OWNER_TOOL_VERSION');
-    }
+    await this.#checkTools(false); // filesystem/hash only; no executable probe before owned output routing
     const vm=await this.#wait(()=>regular(this.plan.vmImage));if(vm.size!==PIN.vmBytes||await this.#hash(this.plan.vmImage)!==PIN.vmSha256)refuse('OWNER_VM_PIN');
     const layout=this.plan.ociLayout;if(!layout)refuse('OWNER_OCI_CACHE');
     const manifest=await this.#wait(()=>jsonFile(layout+'/blobs/sha256/'+PIN.imageDigest.slice(7)));
@@ -418,7 +556,9 @@ export class OwnerSupervisor {
       try{await this.#fs('lstat',dir);check();refuse('OWNER_EXISTING_ROOT');}catch(e){if(e.code!=='ENOENT')throw e;}
       check();await this.#fs('mkdir',dir,{mode:0o700});check();
     }
-    for(const dir of [p.colimaHome,p.dockerConfig,p.results]){check();await this.#fs('mkdir',dir,{mode:0o700});check();}
+    for(const dir of [...toolDirectories(p),p.results]){check();await this.#fs('mkdir',dir,{mode:0o700});check();}
+    await this.#writePrivate(p.artifactRoot+'/config/npmrc','');
+    for(const name of ['node','pnpm','colima','docker'])await this.#fs('symlink',this.#executables[name],p.artifactRoot+'/tools/bin/'+name);
     this.#secrets=Object.fromEntries(['b1_bootstrap','b1_migrator','b1_app'].map(role=>[role,randomBytes(32).toString('hex')]));
     await this.#writePrivate(p.artifactRoot+'/database-secrets.json',JSON.stringify(this.#secrets));
     await this.#writePrivate(p.artifactRoot+'/identity.json',JSON.stringify({runId:p.runId,uid:p.uid,colimaHome:p.colimaHome,profile:p.profile,socket:p.socket,containerName:p.containerName,networkName:p.networkName}));check();
@@ -441,6 +581,7 @@ export class OwnerSupervisor {
     await this.#fs('chmod',p.results,0o700);
     const root=await this.#fs('lstat',p.results);
     if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==p.uid||root.dev!==this.#logDevice||(root.mode&0o777)!==0o700)refuse('OWNER_LOG_ROUTE_PARENT');
+    await this.#fs('mkdir',p.results+'/tmp',{mode:0o700});
     const routes=this.#manifest.logRouting.routes;
     for(const r of routes){
       if(typeof r.path!=='string'||!r.path.startsWith(p.colimaHome+'/')||path.resolve(r.path)!==r.path||typeof r.sink!=='string'||!r.sink.startsWith(p.results+'/')||path.resolve(r.sink)!==r.sink||!['file','directory'].includes(r.kind))refuse('OWNER_LOG_ROUTE_PATH');
@@ -479,7 +620,9 @@ export class OwnerSupervisor {
     this.#provisionPromise=this.#operation('setup',async()=>{
     await this.#authorize('provision');if(this.phase!=='preflight')refuse('OWNER_PHASE');await this.#initRoots();this.#scope();this.phase='allocating';await this.#logVolume();
     // Routing exists and is measured before the first VM command.
-    await this.#assertLogRoutes();await this.#run('colima-start','colima',colimaStartArgs(this.plan),{timeoutMs:600000});
+    await this.#assertLogRoutes();
+    for(const [name,version] of [['colima',PIN.colima],['docker',PIN.docker],['pnpm',PIN.pnpm]]){const r=await this.#run('preflight',name,['--version']);if(!r.stdout.includes(version))refuse('OWNER_TOOL_VERSION');}
+    await this.#run('colima-start','colima',colimaStartArgs(this.plan),{timeoutMs:600000});
     const vm=await this.#dockerJsonColima();await this.#validateVm(vm);await this.#guest('preflight');await this.#guest('prepare');
     await this.#run('docker-image-load','docker',['image','load','--input',this.plan.importArchive],{timeoutMs:300000});
     const [image]=await this.#dockerJson('docker-image-inspect',['image','inspect',PIN.image]);
@@ -687,7 +830,7 @@ export class OwnerSupervisor {
     try{await this.#cleanupWait(()=>this.gate.require('cleanup'));authorized=true;}
     catch(e){cleanupCode=safeCode(e);failures.push({action:'cleanup',code:cleanupCode});}
     const attempt=async(action,tool,args)=>{
-      try{await this.#cleanupWait(()=>this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,timeoutMs:10000}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));}
+      try{await this.#cleanupWait(()=>this.#commands.run(action,command(this.plan,tool,args,{executable:this.#executables[tool]??null,toolchain:this.#manifest.toolchain??null,timeoutMs:10000}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));}
       catch(e){failures.push({action,code:safeCode(e)});}
     };
     const containerId=this.owner?.containerId??this.#identities.container?.id;
@@ -695,10 +838,10 @@ export class OwnerSupervisor {
     if(authorized&&this.phase!=='new'&&this.phase!=='preflight')await attempt('colima-stop','colima',['stop']);
     let confirmed=false;
     if(authorized&&containerId)try{
-      await this.#cleanupWait(()=>this.gate.require('verify-stopped'));const r=await this.#cleanupWait(()=>this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));check();
+      await this.#cleanupWait(()=>this.gate.require('verify-stopped'));const r=await this.#cleanupWait(()=>this.#commands.run('docker-inspect',command(this.plan,'docker',['inspect',containerId],{executable:this.#executables.docker??null,toolchain:this.#manifest.toolchain??null}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));check();
       confirmed=JSON.parse(r.stdout)[0].State.Running===false;
     }catch{ // A stopped VM makes Docker unavailable; exact profile stopped proof is required.
-      try{const r=await this.#cleanupWait(()=>this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));check();const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
+      try{const r=await this.#cleanupWait(()=>this.#commands.run('colima-status',command(this.plan,'colima',['status','--json'],{executable:this.#executables.colima??null,toolchain:this.#manifest.toolchain??null}),{deadline:this.#cleanupEnd,cleanup:true,check,currentDeadline:()=>this.#cleanupEnd,retirementSignal:this.#cleanupController.signal}));check();const v=JSON.parse(r.stdout);confirmed=v[this.#manifest.vmStatusFields?.status]==='Stopped';}catch{}
     }
     if(this.#commands.children.size)failures.push({action:'children',code:'OWNER_CHILDREN_REMAIN'});
     if(!confirmed)failures.push({action:'verify-stopped',code:'OWNER_STOP_UNCONFIRMED'});
@@ -731,8 +874,10 @@ export async function capabilityAuthorizer(capabilityPath,plan){
   await verifyReviewedSources(plan,reviewed);assertFixtureEnvironment();
   const end=Date.parse(cap.expiresAt);if(!Number.isFinite(end)||end<=Date.now())refuse('OWNER_CAPABILITY_EXPIRED');
   const sourceSha256=Object.fromEntries(reviewed.files.filter(f=>f.path.startsWith('prototypes/access-provider-service/test/owner/')).map(f=>[path.basename(f.path),f.sha256])),actions=new Set(cap.actions);
-  return {manifest:{...cap.manifest,sourceSha256},authorize:async({runId,action})=>{
+  const authorize=async({runId,action})=>{
     if(runId!==cap.runId||Date.now()>=end||!actions.has(action))return false;
     await checkReferences();await verifyReviewedSources(plan,reviewed);return Date.now()<end;
-  }};
+  };
+  Object.defineProperty(authorize,'expiresAt',{value:end,writable:false,configurable:false});
+  return {manifest:{...cap.manifest,sourceSha256},authorize};
 }

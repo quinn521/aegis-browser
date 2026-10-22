@@ -4,6 +4,7 @@
 
 #include <mach-o/dyld.h>
 #include <limits.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 extern char** environ;
 
@@ -23,49 +25,61 @@ constexpr int kHarmlessProbeExit = 73;
 // Called only with a positive PID just returned by our own creation operation.
 // No other thread reaps; SIGCHLD auto-reaping is disabled below. A zombie pins
 // identity until this function's waitpid; ECHILD/uncertain errors revoke signals.
-bool RetireCreatedProbe(pid_t pid, uint64_t original_deadline, int expected_exit) {
-  const uint64_t end = std::min<uint64_t>(original_deadline,
-      aegis_access::bounded::MonotonicNowNs() + 5000000000ULL);
-  bool killed = false;
-  uint64_t cleanup_end = end;
+bool RetireCreatedProbe(pid_t pid,
+                        aegis_access::bounded::QualificationSession* session,
+                        int expected_exit) {
+  if (pid <= 0)
+    return false;
+  const uint64_t start = aegis_access::bounded::MonotonicNowNs();
+  const uint64_t observe_end = std::min<uint64_t>(
+      session->work_end, start + 5000000000ULL);
+  const uint64_t reap_end = std::min<uint64_t>(
+      session->hard_end - 500000000ULL, observe_end + 2000000000ULL);
+  bool stopped = false, signal_sent = false;
   for (;;) {
     int status = 0;
     const pid_t result = waitpid(pid, &status, WNOHANG);
-    if (result == pid)
-      return !killed && WIFEXITED(status) && WEXITSTATUS(status) == expected_exit;
-    if (result < 0) {
-      if (errno != EINTR)
-        return false;
-      const uint64_t now = aegis_access::bounded::MonotonicNowNs();
-      if (!now || now >= cleanup_end)
-        return false;
-      continue;
+    if (result == pid) {
+      fprintf(stderr, "probe_pid=%d actual_wait=true status=%d stopped=%s\n",
+              static_cast<int>(pid), status, stopped ? "true" : "false");
+      return !stopped && session->Check() &&
+             WIFEXITED(status) && WEXITSTATUS(status) == expected_exit;
+    }
+    if (result < 0 && errno != EINTR) {
+      // In particular ECHILD irrevocably removes signal authority.
+      fprintf(stderr, "probe_pid=%d actual_wait=false errno=%d authority=revoked\n",
+              static_cast<int>(pid), errno);
+      return false;
     }
     const uint64_t now = aegis_access::bounded::MonotonicNowNs();
-    if (!now)
+    if (!now || now >= reap_end) {
+      fprintf(stderr, "probe_pid=%d actual_wait=false retirement=UNVERIFIED\n",
+              static_cast<int>(pid));
       return false;
-    if (now >= end && !killed) {
-      // result==0 retains our unreaped-child authority at this point.
-      if (kill(pid, SIGKILL) != 0)
-        return false;
-      killed = true;
-      cleanup_end = now + 2000000000ULL;
-    } else if (killed && now >= cleanup_end) {
-      return false;
+    }
+    if (!session->Check() || now >= observe_end) {
+      stopped = true;
+      session->stopped = true;
+      if (!signal_sent && result == 0) {
+        // This exact positive child was created here and has not been reaped.
+        // Keep waiting after a failed signal; never substitute an imported PID.
+        signal_sent = true;
+        if (kill(pid, SIGKILL) != 0)
+          fprintf(stderr, "probe_pid=%d kill_errno=%d\n",
+                  static_cast<int>(pid), errno);
+      }
     }
     usleep(1000);
   }
 }
 }  // namespace
 
-// SOURCE_ONLY_NOT_COMPILED_NOT_RUN: retained paired process controls. A future
-// admitted executor must protect birth/pre-exec/dyld/running probe against
-// cancellation, expiry, qualifier watchdog/_exit/SIGKILL and owner loss. Each
-// case requires exact retirement, <=5s observation, <=2s probe retirement and
-// <=10s owner cleanup, including ECHILD/foreign/reused-PID no-signal controls.
-[[maybe_unused]] int RunProcessCanaries(bool positive_control, uint64_t original_deadline) {
-  if (aegis_access::bounded::ProcessCanaryBlocker())
-    return 126;
+// Known-process qualification, not arbitrary escaped-descendant containment.
+// The one creator waits each actual probe before reporting success.
+int RunProcessCanaries(bool positive_control,
+                       aegis_access::bounded::QualificationSession* session) {
+  if (!session->Check())
+    return 125;
   char executable[PATH_MAX], self[PATH_MAX];
   uint32_t executable_size = sizeof(executable);
   if (_NSGetExecutablePath(executable, &executable_size) != 0 ||
@@ -76,19 +90,21 @@ bool RetireCreatedProbe(pid_t pid, uint64_t original_deadline, int expected_exit
   sigemptyset(&child_action.sa_mask);
   if (sigaction(SIGCHLD, &child_action, nullptr) != 0)
     return 1;
-  bool passed = true;
-  // If a canary unexpectedly succeeds, reap only the child we created and fail.
   if (!positive_control) {
+    if (!session->Check())
+      return 125;
     const pid_t forked = fork();
     if (forked == 0)
       _exit(kHarmlessProbeExit);
     const int fork_error = errno;
     if (forked > 0) {
-      RetireCreatedProbe(forked, original_deadline, kHarmlessProbeExit);
+      RetireCreatedProbe(forked, session, kHarmlessProbeExit);
       return 1;
     }
-    if (forked < 0 && fork_error != EPERM && fork_error != EACCES)
+    if (fork_error != EPERM && fork_error != EACCES)
       return 1;
+    if (!session->Check())
+      return 125;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     const pid_t vforked = vfork();
@@ -97,24 +113,71 @@ bool RetireCreatedProbe(pid_t pid, uint64_t original_deadline, int expected_exit
       _exit(kHarmlessProbeExit);
     const int vfork_error = errno;
     if (vforked > 0) {
-      RetireCreatedProbe(vforked, original_deadline, kHarmlessProbeExit);
+      RetireCreatedProbe(vforked, session, kHarmlessProbeExit);
       return 1;
     }
-    if (vforked < 0 && vfork_error != EPERM && vfork_error != EACCES)
+    if (vfork_error != EPERM && vfork_error != EACCES)
       return 1;
   }
-  pid_t spawned = -1;
+  int probe[2];
+  if (pipe(probe) != 0)
+    return 1;
+  constexpr int kProbeFd = 198;
+  if (probe[0] == kProbeFd || probe[1] == kProbeFd ||
+      fcntl(probe[0], F_SETFD, FD_CLOEXEC) != 0 ||
+      fcntl(probe[1], F_SETFD, FD_CLOEXEC) != 0) {
+    close(probe[0]);
+    close(probe[1]);
+    return 1;
+  }
+  unsigned char random[16];
+  arc4random_buf(random, sizeof(random));
+  std::string nonce;
+  constexpr char kHex[] = "0123456789abcdef";
+  for (unsigned char byte : random) {
+    nonce += kHex[byte >> 4];
+    nonce += kHex[byte & 15];
+  }
+  std::string fd_arg = "--aegis-probe-fd=" + std::to_string(kProbeFd);
+  std::string deadline_arg = "--aegis-deadline-ns=" +
+                            std::to_string(session->original_deadline);
+  std::string boot_arg = "--aegis-boot=" + session->boot;
+  std::string nonce_arg = "--aegis-probe-nonce=" + nonce;
   char mode[] = "--aegis-spawn-probe";
-  char* args[] = {self, mode, nullptr};
-  const int spawn_result = posix_spawn(&spawned, self, nullptr, nullptr, args, environ);
+  char* args[] = {self, mode, fd_arg.data(), deadline_arg.data(),
+                  boot_arg.data(), nonce_arg.data(), nullptr};
+  posix_spawn_file_actions_t actions;
+  if (posix_spawn_file_actions_init(&actions) != 0) {
+    close(probe[0]);
+    close(probe[1]);
+    return 1;
+  }
+  const bool actions_ok =
+      posix_spawn_file_actions_adddup2(&actions, probe[0], kProbeFd) == 0 &&
+      posix_spawn_file_actions_addclose(&actions, probe[0]) == 0 &&
+      posix_spawn_file_actions_addclose(&actions, probe[1]) == 0;
+  pid_t spawned = -1;
+  int spawn_result = ECANCELED;
+  if (actions_ok && session->Check())
+    spawn_result = posix_spawn(&spawned, self, &actions, nullptr, args, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  close(probe[0]);
+  if (spawn_result == 0 && spawned > 0 &&
+      write(probe[1], nonce.data(), nonce.size()) != static_cast<ssize_t>(nonce.size()))
+    session->stopped = true;
+  close(probe[1]);  // private nonce must be followed by actual EOF
+  bool passed = false;
   if (spawn_result == 0) {
     const bool reaped = spawned > 0 &&
-        RetireCreatedProbe(spawned, original_deadline, kHarmlessProbeExit);
-    passed = passed && positive_control && reaped;
+        RetireCreatedProbe(spawned, session, kHarmlessProbeExit);
+    passed = positive_control && reaped;
   } else {
-    passed = passed && !positive_control && (spawn_result == EPERM || spawn_result == EACCES);
+    passed = !positive_control && session->Check() &&
+             (spawn_result == EPERM || spawn_result == EACCES);
   }
-  printf("%s=%s\n", positive_control ? "self_spawn_positive_control" : "fork_vfork_self_spawn_denied",
+  passed = passed && session->Check();
+  printf("%s=%s\n",
+         positive_control ? "self_spawn_positive_control" : "fork_vfork_self_spawn_denied",
          passed ? "true" : "false");
   return passed ? 0 : 1;
 }
@@ -122,7 +185,30 @@ bool RetireCreatedProbe(pid_t pid, uint64_t original_deadline, int expected_exit
 namespace {
 // Pure source fixtures call the PRODUCTION transition helper; no processes or
 // I/O are created here. Future native execution remains separately required.
+bool QualificationBoundaryFixtures() {
+  using aegis_access::bounded::QualificationWorkDeadline;
+  // A three-second probe-drain reserve is inside the original timer/lease.
+  if (QualificationWorkDeadline(20000000000ULL, 1000000000ULL,
+                                 9000000000ULL) != 7000000000ULL ||
+      QualificationWorkDeadline(5000000000ULL, 1000000000ULL,
+                                 9000000000ULL) != 2000000000ULL ||
+      QualificationWorkDeadline(4000000000ULL, 1000000000ULL,
+                                 3000000000ULL) != 0 ||
+      QualificationWorkDeadline(0, 1, 10000000000ULL) != 0)
+    return false;
+  char binary[] = "support";
+  char positive[] = "--aegis-qualification-positive-control";
+  char probe[] = "--aegis-spawn-probe";
+  char* allowed[] = {binary, positive, nullptr};
+  char* direct[] = {binary, probe, nullptr};
+  return aegis_access::bounded::ValidQualificationArguments(2, allowed) &&
+         !aegis_access::bounded::ValidQualificationArguments(2, direct) &&
+         !aegis_access::bounded::EnterSpawnProbe(2, direct);
+}
+
 bool OwnerBoundaryFixtures() {
+  if (!QualificationBoundaryFixtures())
+    return false;
   using aegis_access::bounded::ControllerObservation;
   using aegis_access::bounded::OwnerGate;
   using aegis_access::bounded::ValidateOwnerBoundary;
@@ -189,27 +275,22 @@ bool OwnerBoundaryFixtures() {
 }  // namespace
 
 int main(int argc, char** argv) {
-  // Direct entry cannot bypass the missing loss-safe executor. Exit73 is a
-  // future probe contract, not proof of pre-exec/startup supervision.
-  if (argc == 2 && std::strcmp(argv[1], "--aegis-spawn-probe") == 0) {
-    fprintf(stderr, "%s\n", aegis_access::bounded::ProcessCanaryBlocker());
-    return 126;
-  }
-  uint64_t original_deadline = 0;
-  if (!aegis_access::bounded::EnterQualification(&argc, argv, &original_deadline))
+  if (argc > 1 && std::strcmp(argv[1], "--aegis-spawn-probe") == 0)
+    return aegis_access::bounded::EnterSpawnProbe(argc, argv) ? kHarmlessProbeExit : 126;
+  aegis_access::bounded::QualificationSession session;
+  if (!aegis_access::bounded::EnterQualification(&argc, argv, &session))
     return 126;
   if (argc == 2 && std::strcmp(argv[1], "--aegis-qualification-clock-probe") == 0) {
     printf("{\"clock\":\"%s\",\"now_ns\":%llu,\"deadline_ns\":%llu,\"boot\":\"%s\"}\n",
            aegis_access::bounded::kDeadlineClockName,
            static_cast<unsigned long long>(aegis_access::bounded::MonotonicNowNs()),
-           static_cast<unsigned long long>(original_deadline),
-           aegis_access::bounded::BootIdentity().c_str());
-    return 0;
+           static_cast<unsigned long long>(session.original_deadline),
+           session.boot.c_str());
+    return session.Check() ? 0 : 125;
   }
   if (argc == 2 && std::strcmp(argv[1], "--aegis-qualification-owner-boundaries") == 0)
-    return OwnerBoundaryFixtures() ? 0 : 1;
-  // Both denial and positive modes refuse; unexpected creation by a denial
-  // canary needs the same loss protection. Neither control is waived/passed.
-  fprintf(stderr, "%s\n", aegis_access::bounded::ProcessCanaryBlocker());
-  return 126;
+    return OwnerBoundaryFixtures() && session.Check() ? 0 : 1;
+  const bool positive = argc == 2 &&
+      std::strcmp(argv[1], "--aegis-qualification-positive-control") == 0;
+  return RunProcessCanaries(positive, &session);
 }

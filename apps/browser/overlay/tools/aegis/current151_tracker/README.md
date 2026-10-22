@@ -1,149 +1,165 @@
 # Bounded tracker validation support
 
-This opt-in test support preserves the existing two tracker GTest names and the
+This opt-in support preserves the original two tracker GTest names and the
 normal target entry when `aegis_current151_tracker_bounded = false` (the default).
-It does not change production publication, network, lease or commit behavior.
+The current151 file/target names are historical. Every executable qualification
+must bind its actual Chromium revision, applied source tree and toolchain.
+This experiment does not establish SQLite, UI, full browser or service acceptance.
 
-The selected experiment tests durable publication facts and confirmation in the
-fixed Chromium 151 candidate. It covers **two of the original 152 cases**. SQLite,
-UI blocking, browser multiprocess behavior and the other 150 cases require their
-own evidence. Packaging these files on a newer repository baseline does not
-transfer native evidence between Chromium versions.
+## Source checks and private dispatch
 
-## Lightweight checks
-
-Use the repository-pinned Python interpreter:
+With a separately admitted test window, use the repository-pinned Python:
 
 ```sh
 python3 -I -S -B apps/browser/overlay/tools/aegis/current151_tracker/regressions.py
 ```
 
-The suite exercises the actual deadline, sticky stop, command boundary, input
-budget, result identity, sequencing and accounting code. It includes a real
-Python startup-hook positive control and isolation check. These checks invoke no
-GN, Ninja, compiler or native tracker binary.
+That suite checks real admission/result code and includes an inert Python
+startup-hook test. It invokes no GN, Ninja, compiler or native tracker binary.
+Tests authored in the source implementation window have not been run merely
+because their syntax has been inspected.
 
-## Execution boundary
+`driver.py` intentionally has no public native dispatch entry. Its build entry
+continues to refuse B1. Private grant/producer/build/native/browser adapters are
+coordinator support, supplied and reviewed outside this product directory.
+They require an exact candidate, hash-bound inputs, fresh outputs, original boot
+and monotonic deadline, actual direct-owner wait and both output-pipe EOFs.
+A JSON receipt or a successful parser fixture cannot create OwnerCompletion.
 
-The implementation is a source candidate pending independent review and native
-qualification. `driver.py` supplies admission/result adapters; it intentionally
-has no public native dispatch entry. The private grant loader, actual build
-dependency/producer reconciliation and controller-to-owner dispatch integration
-are still required. Its build entry always refuses execution with blocker B1.
+The private producer adapter supports only its explicitly bound literal producer
+manifest and conservative response/depfile/Darwin filelist grammars. Actual
+generated GN/Ninja formats require a qualified normalizer and exact provenance;
+unknown grammar, historical objects and unresolved SDK aliases still refuse.
+A direct-leaf owner does not authorize or bootstrap the compiler/build chain.
 
-`current151_owned_leaf` is the sole creator and reaper of one direct child. It
-accepts only an original monotonic deadline/boot identity, an admitted Seatbelt
-profile, an absent terminal receipt, a working directory and a literal leaf
-argv. It never imports a PID or signals a group. The controller keeps stdin open,
-sends exactly one `G` after the second guard check, and cancels by closing it.
-The child installs the profile, deadline timer and resource limits before exec;
-the bounded entry consumes GO and retains an EOF/deadline watchdog through suite
-and static destruction. A successful exit is provisional until retirement,
-fresh XML, accounting, final input guards and the original deadline pass.
+## Owner and tracker protocol
 
-Python admission/checks explicitly use `clock_gettime_ns(CLOCK_MONOTONIC)` and
-native checks use `clock_gettime(CLOCK_MONOTONIC)`. The original deadline and boot
-identity are never reconstructed. Every guard is followed by a sticky-stop and
-deadline check. Finalization preserves an earlier accounting error even if
-cleanup also fails; census runs after retirement and again after validation and
-the last guard's evidence writes, before the live-deadline acceptance transition.
-Listing admission requires zero owner and leaf exit codes, verified retirement,
-no cancellation and exact names. Printed names alone cannot advance the sequence.
+`current151_owned_leaf` creates and exclusively reaps one direct child.
+It accepts the original deadline/boot, an exact Seatbelt base profile, an absent
+terminal receipt, a canonical working directory and literal leaf argv.
+The controller keeps stdin open and sends exactly one `G` after revalidation.
+EOF, repeated GO, other bytes, clock expiry and boot drift latch cancellation.
 
-Before admitting this mechanism, real Darwin qualification must establish timer
-inheritance, fork/vfork/spawn denial, controller/owner loss behavior, retirement
-and bounded cleanup. The supplied qualification sources cover process-creation
-denial, its positive control and clock reconciliation; further loss/retirement
-qualification remains open. No successful parser
-test or configuration boolean can replace those native observations.
+Before exec the child arms a fatal timer and resource limits and installs
+Seatbelt. The tracker path retains its detached EOF/deadline watchdog through
+suite and static destruction. Tracker arguments remain only listing or one
+exact case. No public flag or environment value declares qualification success.
 
-The support target has its own narrow argument mode; tracker entry still permits
-only listing or either exact individual case. The no-argument support command denotes denial qualification; it is currently
-blocked together with the matching positive control. Noncreating clock and
-owner-boundary fixtures have separate strict argument modes:
+The owner observes only its birth-derived direct child. ECHILD or any uncertain
+wait result permanently revokes signal authority. It never imports a leaf PID,
+signals a process group, or scans unrelated host processes. Qualification
+cancellation closes the channel first, allowing the qualifier to drain its known
+probe. The one fixed ten-second owner cleanup budget reserves its final three
+seconds for actual direct-child wait after a signal. Missing retirement remains
+UNVERIFIED; a signal issued at a deadline is not a wait receipt.
+
+## Cooperative process qualification
+
+The support binary accepts no arguments for denial, or one of:
 
 ```text
-current151_tracker_support_regressions --aegis-qualification-positive-control
-current151_tracker_support_regressions --aegis-qualification-clock-probe
-current151_tracker_support_regressions --aegis-qualification-owner-boundaries
+--aegis-qualification-positive-control
+--aegis-qualification-clock-probe
+--aegis-qualification-owner-boundaries
 ```
 
-Both process controls are **REQUIRED/BLOCKED** with
-`LOSS_SAFE_PROBE_EXECUTOR_MISSING`. The owner refuses both before profile setup
-or child creation. The support entry independently refuses them and direct
-`--aegis-spawn-probe` entry; no boolean, environment or receipt can override this.
-The paired canary source remains in `RunProcessCanaries()`, behind the same
-unconditional blocker. It has not passed, been waived, or been replaced by a
-scan of an empty process set.
+All modes require the inherited original boot/deadline and one-use GO channel.
+Qualification uses a cooperative session instead of the tracker's fatal
+watchdog thread. Its inherited fatal timer remains armed. A three-second drain
+reserve is subtracted from the earlier of the original lease and observed timer
+boundary. Polling cancellation stops new probes and lets their sole creator
+signal and actually wait only those positive PIDs it created.
 
-The missing component is an admitted Darwin probe executor that atomically
-protects birth, pre-exec and dyld startup with the original deadline and loss
-termination, and retains exact birth-derived identity/exclusive reaping even
-when qualifier or owner disappears. The current package establishes no such
-executor. A main-body exit73, inherited channel, heartbeat or another ordinary
-watchdog does not establish that property. An imported probe PID does not grant
-the owner signal or reap authority.
+The paired controls use the same canonical binary, environment, exec permissions
+and identical base-profile bytes. The owner appends the intended difference:
+process-fork denial versus allowance, with network denial in both.
+Denial requires fork/vfork/posix_spawn EPERM or EACCES. Unexpected creation is
+actually waited by its creator and fails the case. Positive self-spawn requires
+exit73 and actual reap; each wait/revocation is recorded on stderr.
 
-Future matching controls must execute the same canonical support binary, exact
-argv/environment/input identities and exec permissions under separately
-admitted profiles differing only in process-fork permission. Denial requires
-EPERM/EACCES and a matching successful positive spawn whose exact child exits73
-and is reaped. Qualification must cover birth-before-spawn-return, pre-exec,
-dyld and running phases crossed with cancellation, original expiry, qualifier
-watchdog `_exit`, qualifier SIGKILL and owner loss. Observation is at most five
-seconds, probe retirement two seconds, within fixed ten-second owner cleanup.
-ECHILD/uncertain retirement stays UNVERIFIED; foreign/reused PIDs must receive no
-signals. Finding4 remains BLOCKED until that executor and native evidence exist.
+The self-probe has a separate private strict entry: inherited FIFO, one-use
+random nonce followed by EOF, unchanged boot and original deadline. It arms its
+own at-most-two-second timer capped by that original deadline. Bare
+`--aegis-spawn-probe` refuses. Directly manufacturing probe arguments or seeing
+exit73 alone never establishes coordinator admission or native qualification.
 
-For the cross-language clock regression, the controller records explicit
-CLOCK_MONOTONIC samples before/after the admitted clock-probe command and passes
-the original deadline. `validate_clock_probe` checks the native observation's
-domain, sample bracket, unchanged deadline and boot identity. Python tests cover
-this reconciliation with fixture observations; all actual native qualification,
-positive-control and clock-probe sources are **SOURCE_ONLY_NOT_COMPILED_NOT_RUN**.
-No profile, compiler, helper or spawn probe is executed by the lightweight suite.
+This is the accepted known-process model. It does not promise arbitrary escaped
+descendant containment or atomic retirement across forced creator loss.
+If a qualifier is forcibly lost before a trusted probe wait, the result stays
+UNVERIFIED with retained raw. Normal admitted cancellation/expiry/drain,
+ECHILD/no-foreign-signal behavior and actual timing still require Darwin runs.
 
-**B1 remains open:** an owned executor for the actual GN → scripts / Ninja → shell
-/ wrappers / compiler descendants and their input lineage has not been supplied.
-The direct leaf owner cannot bootstrap itself or authorize that build chain.
-Build and native dispatch remain sealed until the coordinator admits a concrete
-executor, reviewed inputs, fresh output roots and the single heavy slot.
+The clock fixture reports CLOCK_MONOTONIC samples, original deadline and boot.
+The controller brackets the actual invocation with that same clock and
+`validate_clock_probe` reconciles the observation. Owner-boundary fixtures
+exercise production gate transitions, terminal IO failures and drain-reserve
+calculations. Source fixtures do not substitute for actual native evidence.
 
-Known input grammar limits remain refusals: Darwin link filelists and complete
-generated GN/Ninja/depfile producer ingestion need additional adapters. Unknown
-inputs and historical objects must never be silently admitted.
+## Provisional terminal and final acceptance
 
-## Repair02 terminal and input contract
+The terminal schema remains version1, kind `provisional`, exact full command,
+original deadline/boot, reaped/stopped/GO observations and raw wait status.
+It has no accepted field. There is one write, fsync, close and final boundary;
+the first error remains primary even if cleanup or accounting later fails.
 
-The owner validates its nonblocking controller pipe and, after all setup I/O,
-checks pending cancellation, original deadline and boot immediately before
-creation. At most one queued GO is retained for forwarding; EOF, errors,
-non-GO bytes and repeated GO latch failure. The same fresh boundary runs before
-forwarding and after terminal write, fsync and close. Terminal I/O failures latch
-the first failure. Cancellation during terminal I/O returns125 without rewriting
-the receipt. Cleanup has one fixed ten-second budget; EINTR returns to that
-budgeted loop and uncertain retirement permanently revokes signal authority.
+The consumer requires its actual successful direct-owner wait, owner-recorded
+leaf reap/exit0, fresh listing then exact unit and regression XML, final input
+guards and evidence census. Repeated/out-of-order cases, preexisting output,
+duplicate/unknown terminal fields or XML, failures/skips, source drift and
+expired clocks refuse. The original deadline is never reconstructed or renewed.
 
-The terminal schema is version1, kind `provisional`, exact full owner command,
-original `deadline_ns`/`boot`, `reaped`/`stopped`/`go` observations and raw wait
-`status`. It never contains `accepted`. This is an intentional incompatibility
-with the prior receipt schema: old receipts are refused. `validate_terminal()`
-rejects duplicate/unknown fields, incomplete observations, mismatched bindings
-and receipts over32KiB. Listing, case result and finalization additionally
-require completion from waiting for this invocation's directly owned owner,
-actual owner exit0, owner-recorded verified leaf reap/exit0, and fresh final
-consumer guards. The controller never imports/reaps the leaf. These completion
-objects are trusted adapter inputs; there is still no admitted dispatch adapter,
-so fixture values do not establish actual process completion.
+Input admission still walks original path components before reducing `..`,
+rejecting symlinks and non-directory components. Generated input lineage and
+filesystem mutation guards are additional requirements.
 
-Input admission walks the original path components with `lstat` before reducing
-`..`, refusing symlinks and non-directory intermediate components. Relative and
-absolute `alias/../input.o` and response-file paths cannot admit a lexical current
-neighbor while concealing historical bytes. Ordinary real-directory parent paths
-remain eligible. Generated producers and filesystem mutation guards remain
-separate requirements.
+## Evidence state
 
-The native owner-boundary fixtures use production gate transitions for terminal
-write/fsync/close cancellation, EOF, expiry and I/O errors; pre-create fixtures
-require zero creation calls after cancellation/expiry, with a queued-GO success
-control. All native fixtures remain **SOURCE_ONLY_NOT_COMPILED_NOT_RUN**.
+The cooperative source and private adapters require source-safety review,
+meaningful support tests, controlled compiler/build qualification, actual
+Darwin process controls and final native/browser tests. No build, runtime PASS,
+service/REALITY/PG acceptance, hosted CI or independent review is established by
+this README. Tracked integration creates a new candidate SHA and requires
+affected tests, review and CI to bind that candidate.
+
+
+## R1 private controller contract
+
+The private grant schema is version2. Every command declares its qualified
+kind and exact outputs. Ninja/GN/inert tool roles additionally require a
+separately supplied canonical path/hash registry; a JSON role cannot qualify
+its own tool. Ninja has exactly one explicit -j1/-j2 (or two-argument form),
+and GN has exactly one --threads=1/2, never above the grant's limit. Missing,
+unlimited, duplicate, unqualified option and wrapper forms refuse.
+The existing C++ provisional terminal remains version1.
+
+An invocation claims all its absent outputs immediately before Popen, after
+the full guards. Its actual Run binds that claim to command/grant/start clock.
+Before returning it observes declared artifacts' hashes and file identities.
+Producer reconciliation requires that exact claim/output set and current
+artifact identity; an admitted-but-later-injected output or a successful noop
+cannot inherit generated provenance.
+
+One bounded pipe/wait loop handles normal and exceptional IO. A read/select
+error does not skip draining. A raw-write error retains its bounded backlog
+while both pipes continue to be serviced. Only zero-byte reads establish EOF.
+Cap overflow, unwritten backlog and forced-close-without-EOF are explicit failed
+observations, never successful completion. Permanent IO failures remain
+UNVERIFIED, with pending/discarded counts and the first error retained.
+The evidence walk propagates enumeration errors. Final accounting is followed
+by the original boot/deadline/sticky-stop check without further evidence writes.
+
+Each listed case pins its canonical executable/hash/cwd/environment for its
+actual run, including native17. Qualification similarly pins the exact owner
+and support executables and context; the two profile files retain identical
+base hashes and only the intended owner-appended permission differs.
+
+The continuous browser fixture uses the existing identity-specific
+PublishPolicyCandidateWithAck seam with actual Mojo completion and nonzero
+required clients before ON/OFF requests. OFF clears the actual custom transport
+selection first. A local generation tuple or FlushClientsForTesting alone is
+not an ACK.
+
+R1 corrects the ten prior source-safety findings in source and adds regression
+sources. Tests, compiler/native/browser runs and independent re-review have not
+been performed in the source-only window. Unsafe real-child tests remain held
+until the original review owner/I explicitly admits the corrected candidate.

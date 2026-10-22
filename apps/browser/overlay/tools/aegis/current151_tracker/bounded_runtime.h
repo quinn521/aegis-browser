@@ -15,13 +15,24 @@ std::string BootIdentity();
 // watchdog intentionally survives TestSuite and static destruction.
 bool Enter(int* argc, char** argv);
 bool ValidTrackerArguments(int argc, char** argv);
-// Qualification is a separate, narrow argument mode. It shares the inherited
-// channel, original deadline and watchdog, without accepting tracker arguments.
-bool EnterQualification(int* argc, char** argv, uint64_t* original_deadline);
+// Qualification keeps cooperative cancellation until its known probes are
+// actually waited. Its inherited fatal timer remains armed and is never renewed.
+struct QualificationSession {
+  int control_fd = -1;
+  uint64_t original_deadline = 0;
+  uint64_t hard_end = 0;
+  uint64_t work_end = 0;
+  std::string boot;
+  bool stopped = false;
+  bool Check();
+};
+uint64_t QualificationWorkDeadline(uint64_t original_deadline, uint64_t now,
+                                   uint64_t alarm_remaining);
+bool EnterQualification(int* argc, char** argv, QualificationSession* session);
 bool ValidQualificationArguments(int argc, char** argv);
-// No boolean/environment/receipt override. Both process controls remain blocked
-// until an admitted executor protects birth, pre-exec and supervisor loss.
-const char* ProcessCanaryBlocker();
+// Separate private self-probe admission: exact inherited pipe + one-use nonce,
+// boot and original deadline. Direct bare --aegis-spawn-probe always refuses.
+bool EnterSpawnProbe(int argc, char** argv);
 
 enum class ControllerObservation { kQuiet, kGo, kCancel, kEof, kError };
 struct OwnerGate {
