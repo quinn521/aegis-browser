@@ -12,20 +12,23 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const core = resolve(root, 'packages/core');
 const preload = join(core, 'vitest-coverage-exit.mjs');
 
-function runFork(body, {enabled = true, coverage = true, traceExit = false, vitestCoverage = false} = {}) {
+function runFork(body, {enabled = true, coverage = true, traceExit = false, vitestCoverage = false,
+  rawDirectory = 'existing'} = {}) {
   mkdirSync(join(core, '.artifacts'), {recursive: true});
   const directory = mkdtempSync(join(core, '.artifacts', 'v8-exit-'));
-  const raw = join(directory, 'raw');
-  mkdirSync(raw);
+  const raw = rawDirectory === 'existing' ? join(directory, 'raw') : join(directory, 'nested', 'raw');
+  if (rawDirectory === 'existing') mkdirSync(raw);
+  if (rawDirectory === 'blocked') writeFileSync(join(directory, 'nested'), 'not a directory');
   const receipt = join(directory, 'exit.json');
-  if (vitestCoverage) writeFileSync(join(directory, 'owned-production.mjs'),
+  const production = vitestCoverage || rawDirectory === 'missing';
+  if (production) writeFileSync(join(directory, 'owned-production.mjs'),
     'export function exercisedProduction() { return 42; }');
   writeFileSync(join(directory, 'fixture.test.mjs'), [
     "import {test, expect} from 'vitest';",
-    "import {writeFileSync} from 'node:fs';",
-    vitestCoverage ? "import {exercisedProduction} from './owned-production.mjs';" : '',
+    "import {existsSync, writeFileSync} from 'node:fs';",
+    production ? "import {exercisedProduction} from './owned-production.mjs';" : '',
     'process.on("exit", code => writeFileSync(' + JSON.stringify(receipt) + ', JSON.stringify({code})));',
-    'function executedBeforeStop() { return ' + (vitestCoverage ? 'exercisedProduction()' : '42') + '; }',
+    'function executedBeforeStop() { return ' + (production ? 'exercisedProduction()' : '42') + '; }',
     "test('owned fork fixture', async () => { " + body + ' });',
   ].join('\n'));
   const config = join(directory, 'vitest.config.mjs');
@@ -60,7 +63,9 @@ function runFork(body, {enabled = true, coverage = true, traceExit = false, vite
   writeFileSync(join(directory, 'stdout.log'), result.stdout ?? '');
   writeFileSync(join(directory, 'stderr.log'), result.stderr ?? '');
   assert.equal(result.error, undefined, result.stderr);
-  const reports = readdirSync(raw).map(name => {
+  // The blocked-path fixture deliberately cannot contain reports; its test must
+  // assert the real handoff error instead. Every normal raw file stays strict.
+  const reports = (rawDirectory === 'blocked' ? [] : readdirSync(raw)).map(name => {
     const bytes = readFileSync(join(raw, name));
     assert.ok(bytes.length > 0, 'Empty raw report: ' + name);
     const report = JSON.parse(bytes.toString());
@@ -84,6 +89,38 @@ test('the actual Vitest fork finishes teardown with complete executed-source cov
   assert.ok(source, 'Executed worker source must remain covered');
   assert.ok(source.functions.some(fn => fn.functionName === 'executedBeforeStop' &&
     fn.ranges.some(range => range.count > 0)));
+});
+
+for (const vitestCoverage of [false, true]) {
+test('a fresh nested coverage directory preserves production coverage; Vitest V8=' + vitestCoverage, () => {
+  const {result, reports, directory} = runFork(`
+    expect(existsSync(process.env.NODE_V8_COVERAGE)).toBe(false);
+    expect(executedBeforeStop()).toBe(42);
+  `, {rawDirectory: 'missing', traceExit: true, vitestCoverage});
+  assert.equal(result.status, 0, result.stderr);
+  const termination = JSON.parse(readFileSync(join(directory, 'worker-exit.json')));
+  assert.equal(termination.code, 0);
+  const own = reports.find(({name}) => name.startsWith('coverage-' + termination.pid + '-') && name.endsWith('-0.json'));
+  assert.ok(own, 'The fresh directory must contain this exact worker report');
+  if (vitestCoverage) {
+    const summary = JSON.parse(readFileSync(join(directory, 'core-coverage/coverage-summary.json')));
+    const production = Object.entries(summary).find(([name]) => name.endsWith('/owned-production.mjs'))?.[1];
+    assert.ok(production, 'Vitest must retain the executed production coverage');
+    assert.equal(production.lines.pct, 100);
+    assert.equal(production.functions.covered, 1);
+  } else {
+    const source = own.report.result.find(entry => entry.url.endsWith('/owned-production.mjs'));
+    assert.ok(source, 'The exact worker report must contain the production module');
+    assert.ok(source.functions.some(fn => fn.functionName === 'exercisedProduction' &&
+      fn.ranges.some(range => range.count > 0)));
+  }
+});
+}
+
+test('a non-directory coverage ancestor remains an explicit failed Vitest run', () => {
+  const {result} = runFork('expect(executedBeforeStop()).toBe(42);', {rawDirectory: 'blocked'});
+  assert.notEqual(result.status, 0, 'A non-directory coverage path was silently accepted');
+  assert.match(result.stderr, /V8 worker coverage handoff failed: ENOTDIR/);
 });
 
 for (const vitestCoverage of [false, true]) {

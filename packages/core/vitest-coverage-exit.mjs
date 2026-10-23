@@ -1,4 +1,4 @@
-import {readFileSync, readdirSync, realpathSync} from 'node:fs';
+import {mkdirSync, readFileSync, readdirSync, realpathSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {stopCoverage, takeCoverage} from 'node:v8';
 
@@ -23,6 +23,7 @@ if (workerEntry) {
   const directory = resolve(process.env.NODE_V8_COVERAGE);
   const ownReport = name => name.startsWith(`coverage-${process.pid}-`) && name.endsWith('-0.json');
   const handoffCoverage = () => {
+    mkdirSync(directory, {recursive: true});
     const before = new Set(readdirSync(directory).filter(ownReport));
     try {
       takeCoverage();
