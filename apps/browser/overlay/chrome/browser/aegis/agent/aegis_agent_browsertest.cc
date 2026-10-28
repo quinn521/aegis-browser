@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdint>
+#include <limits>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <variant>
@@ -41,6 +44,7 @@
 #include "build/build_config.h"
 #if BUILDFLAG(IS_POSIX)
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #endif
 #include "chrome/app/chrome_command_ids.h"
@@ -6303,17 +6307,71 @@ bool Mac03Print(std::string_view prefix, const base::DictValue& value) {
                  prefix.data(), json.c_str()) >= 0 && fflush(stdout) == 0;
 }
 
+// The admission transfer uses an explicitly named POSIX clock, never the
+// renderer clock or the browser's relative event timestamps. Both endpoints
+// read CLOCK_MONOTONIC; the runtime samples it before calculating remaining debt.
+class Mac03Deadline {
+ public:
+  Mac03Deadline() : run_end_(base::TimeTicks::Now() + base::Seconds(600)) {}
+  bool ImportAdmission(const base::DictValue& context) {
+    const auto* clock = context.FindString("stageDeadlineClock");
+    const auto* value = context.FindString("stageDeadlineNS");
+    int64_t ns = 0;
+    if (!clock || *clock != "CLOCK_MONOTONIC" || !value || value->empty() ||
+        !std::all_of(value->begin(), value->end(), [](char c) {
+          return c >= '0' && c <= '9';
+        }) || !base::StringToInt64(*value, &ns) || ns <= 0) {
+      return false;
+    }
+    admission_end_ns_ = ns;
+    return RunRemaining().is_positive();
+  }
+  void StartPhase() {
+    phase_end_ = base::TimeTicks::Now() +
+        std::min(base::Seconds(30), RunRemaining());
+  }
+  base::TimeDelta Remaining() const {
+    return std::max(base::TimeDelta(),
+        std::min(phase_end_ - base::TimeTicks::Now(), RunRemaining()));
+  }
+ private:
+  base::TimeDelta RunRemaining() const {
+    base::TimeDelta remaining = run_end_ - base::TimeTicks::Now();
+    if (admission_end_ns_) {
+#if BUILDFLAG(IS_POSIX)
+      struct timespec value = {};
+      if (clock_gettime(CLOCK_MONOTONIC, &value) != 0 || value.tv_sec < 0 ||
+          value.tv_sec >= std::numeric_limits<int64_t>::max() / 1000000000 ||
+          value.tv_nsec < 0 || value.tv_nsec >= 1000000000) {
+        return base::TimeDelta();
+      }
+      const int64_t now_ns = static_cast<int64_t>(value.tv_sec) * 1000000000 +
+          value.tv_nsec;
+      if (now_ns >= *admission_end_ns_) return base::TimeDelta();
+      remaining = std::min(remaining,
+          base::Nanoseconds(*admission_end_ns_ - now_ns));
+#else
+      return base::TimeDelta();
+#endif
+    }
+    return std::max(base::TimeDelta(), remaining);
+  }
+  const base::TimeTicks run_end_;
+  base::TimeTicks phase_end_;
+  std::optional<int64_t> admission_end_ns_;
+};
+
 class Mac03Observer : public content::WebContentsObserver,
                       public content::DedicatedWorkerService::Observer {
  public:
   Mac03Observer(content::WebContents* page, std::string run_id,
-                std::string challenge)
+                std::string challenge, Mac03Deadline& deadline)
       : content::WebContentsObserver(page),
         frame_(page->GetPrimaryMainFrame()->GetGlobalId()),
         service_(page->GetPrimaryMainFrame()->GetStoragePartition()
                      ->GetDedicatedWorkerService()),
         run_id_(std::move(run_id)), challenge_(std::move(challenge)),
-        first_(base::TimeTicks::Now()) {}
+        first_(base::TimeTicks::Now()), deadline_(deadline) {}
   ~Mac03Observer() override {
     if (attached_) service_->RemoveObserver(this);
   }
@@ -6337,7 +6395,13 @@ class Mac03Observer : public content::WebContentsObserver,
   void Fail(std::string_view reason) {
     if (error_.empty()) error_ = std::string(reason);
   }
+  bool CheckDeadline() {
+    if (!deadline_.Remaining().is_positive()) Fail("MAC03 phase deadline");
+    return Healthy();
+  }
   bool Drain(base::DictValue& startup) {
+    if (!CheckDeadline()) return false;
+    base::test::ScopedRunLoopTimeout drain_timeout(FROM_HERE, deadline_.Remaining());
     service_->AddObserver(this);
     attached_ = true;
     // These OnWorkerCreated calls describe preexisting workers, not new births.
@@ -6357,9 +6421,11 @@ class Mac03Observer : public content::WebContentsObserver,
     startup.Set("retiredPreexistingTokens", std::move(retired));
     startup.Set("finalEnumeration", base::ListValue());
     startup_ = false;
-    return Healthy();
+    return CheckDeadline();
   }
   bool Begin(std::string_view phase) {
+    deadline_.StartPhase();
+    if (!CheckDeadline()) return false;
     if (!phase_.empty() || !live_.empty()) Fail("overlapping phase");
     phase_ = phase;
     phase_count_ = 0;
@@ -6369,6 +6435,7 @@ class Mac03Observer : public content::WebContentsObserver,
     return Healthy();
   }
   bool Result(base::DictValue result) {
+    if (!CheckDeadline()) return false;
     if (result.size() != 3 || !result.FindString("runId") ||
         *result.FindString("runId") != run_id_ ||
         !result.FindString("challenge") ||
@@ -6383,6 +6450,9 @@ class Mac03Observer : public content::WebContentsObserver,
     return Healthy();
   }
   bool End() {
+    if (!CheckDeadline()) return false;
+    // EvalJs and retirement consume the same absolute phase interval.
+    base::test::ScopedRunLoopTimeout retirement_timeout(FROM_HERE, deadline_.Remaining());
     if (!base::test::RunUntil([&] { return !Healthy() || live_.empty(); }))
       Fail("worker retirement timeout");
     Snapshot("after");
@@ -6391,7 +6461,7 @@ class Mac03Observer : public content::WebContentsObserver,
     if (phase_count_ != (worker ? 8 : 5) || created_ != (worker ? 1 : 0))
       Fail("phase lifecycle count");
     phase_.clear();
-    return Healthy();
+    return CheckDeadline();
   }
   bool FinalEmpty() {
     Mac03Snapshot snapshot(service_);
@@ -6492,6 +6562,7 @@ class Mac03Observer : public content::WebContentsObserver,
   const std::string run_id_;
   const std::string challenge_;
   const base::TimeTicks first_;
+  Mac03Deadline& deadline_;
   bool attached_ = false;
   bool enumerating_startup_ = false;
   bool startup_ = true;
@@ -6700,10 +6771,12 @@ constexpr char kMac03Bootstrap[] = R"MAC03JS(
     }
     return JSON.stringify({runId,challenge,payload});
   };
-  globalThis.__aegisMac03 = async phase => {
+  globalThis.__aegisMac03 = async (phase, remainingMillis) => {
+    check(Number.isSafeInteger(remainingMillis) && remainingMillis > 0 &&
+          remainingMillis <= 30000, 'browser phase budget');
     let timer;
     try { return await Promise.race([execute(phase), new Promise((_,reject) => {
-      timer = setTimeout(() => { client.cancel('MAC03 phase timeout'); reject(Error('phase timeout')); }, 30000);
+      timer = setTimeout(() => { client.cancel('MAC03 phase timeout'); reject(Error('phase timeout')); }, remainingMillis);
     })]); }
     finally { clearTimeout(timer); }
   };
@@ -6772,10 +6845,20 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
     ASSERT_TRUE(user_data_dir.IsParent(profile));
     ASSERT_TRUE(Mac03PhysicalPath(profile, true));
   }
-  Mac03Observer observer(page, run_id, challenge);
-  auto ready_result = content::EvalJs(page, R"JS(
+  Mac03Deadline deadline;
+  if (publish) {
+    ASSERT_TRUE(deadline.ImportAdmission(context));
+  }
+  deadline.StartPhase();
+  Mac03Observer observer(page, run_id, challenge, deadline);
+  auto evaluate = [&](const std::string& script) {
+    base::test::ScopedRunLoopTimeout phase_timeout(FROM_HERE, deadline.Remaining());
+    return content::EvalJs(page, script);
+  };
+  ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
+  auto ready_result = evaluate(content::JsReplace(R"JS(
     (async () => {
-      const deadline = performance.now() + 30000;
+      const deadline = performance.now() + $1;
       while (performance.now() < deadline) {
         const elements = document.querySelectorAll('#reading-language-packs > p[role="status"]');
         const options = document.querySelectorAll('#reading-language-packs select option');
@@ -6789,7 +6872,8 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
       }
       throw Error('production startup did not become ready');
     })()
-  )JS");
+  )JS", deadline.Remaining().InMilliseconds()));
+  ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
   ASSERT_THAT(ready_result, content::EvalJsResult::IsOkAndHolds(
       testing::Truly([](const base::Value& value) { return value.is_string(); })));
   auto startup = base::JSONReader::ReadDict(ready_result.ExtractString(), base::JSON_PARSE_RFC);
@@ -6797,8 +6881,10 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
   ASSERT_TRUE(observer.Drain(*startup)) << observer.error();
   ASSERT_TRUE(Mac03Print("AEGIS_MAC03_STARTUP_V2 ", base::DictValue()
       .Set("runId", run_id).Set("challenge", challenge).Set("startup", startup->Clone())));
-  auto bootstrap_result = content::EvalJs(page, content::JsReplace(
-      kMac03Bootstrap, run_id, challenge));
+  deadline.StartPhase();
+  ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
+  auto bootstrap_result = evaluate(content::JsReplace(kMac03Bootstrap, run_id, challenge));
+  ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
   ASSERT_THAT(bootstrap_result, content::EvalJsResult::IsOkAndHolds(
       testing::Truly([](const base::Value& value) { return value.is_string(); })));
   auto initial = base::JSONReader::ReadDict(bootstrap_result.ExtractString(), base::JSON_PARSE_RFC);
@@ -6825,7 +6911,8 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
                             "R03","P04","S03","S04","S05","P05","S06","P06","S07","S08"}) {
     phases.Append(phase);
     ASSERT_TRUE(observer.Begin(phase)) << observer.error();
-    auto actual = content::EvalJs(page, content::JsReplace("globalThis.__aegisMac03($1)", phase));
+    auto actual = evaluate(content::JsReplace("globalThis.__aegisMac03($1, $2)",
+        phase, deadline.Remaining().InMilliseconds()));
     ASSERT_THAT(actual, content::EvalJsResult::IsOkAndHolds(
       testing::Truly([](const base::Value& value) { return value.is_string(); })));
     ASSERT_LE(actual.ExtractString().size(), 16384u);
