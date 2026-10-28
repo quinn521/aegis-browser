@@ -100,6 +100,8 @@ export async function checkPublicLocalAiClient({root, analyze}) {
           [[true, false], [false, true], [true, true]]);
       assert.equal(workers.length, 5, 'every actual client task owns a new Worker');
       assert.ok(opened > 0, 'status must traverse actual Worker installed-store reads');
+    } catch (error) {
+      throw error;
     } finally {
       client.cancel();
       assert.equal(timers.size, 0, 'production finish/cancel must clear every task timer');
