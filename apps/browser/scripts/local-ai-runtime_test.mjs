@@ -4,6 +4,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {createHash, webcrypto} from 'node:crypto';
 import vm from 'node:vm';
+import {checkPublicLocalAiClient} from './local-ai-client-fixture.mjs';
 
 const root = new URL('../overlay/chrome/browser/resources/aegis_agent/local_ai/', import.meta.url);
 const read = name => readFileSync(new URL(name, root), 'utf8');
@@ -55,26 +56,12 @@ if (hasResearchAssets) {
         /research_model_not_distributed/);
   }
   assert.equal(fetches, 3, '缺少许可的公开版本只能读取清单，不能加载模型');
-  // Execute the native test's JS assertions against the real public manifest and
-  // analyze() implementation. The bridge is a fixture, not native Worker evidence.
-  const browserTests = readFileSync(new URL('../overlay/chrome/browser/aegis/agent/aegis_agent_browsertest.cc', import.meta.url), 'utf8');
-  const nativeTest = browserTests.split('IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {')[1]?.split('\n}\n')[0];
-  const nativeJS = nativeTest?.match(/R"JS\(([\s\S]*?)\)JS"/)[1];
-  assert.ok(nativeJS, '公开配置必须保留真实 WebUI Worker 浏览器回归');
-  const calls = [];
-  class PublicClient {
-    async run(request, progress) {
-      calls.push(request.op);
-      if (request.op === 'status') return {ready: false};
-      assert.equal(request.op, 'research');
-      return context.analyze(request, progress);
-    }
-  }
-  const result = await vm.runInNewContext(nativeJS.replace(
-      "const {LocalAiClient} = await import('./local_ai_client.js');", ''), {LocalAiClient: PublicClient});
-  assert.equal(result, 'passed');
-  assert.deepEqual(calls, ['status', 'research', 'research', 'research', 'status']);
-  assert.equal(fetches, 6, '原生断言应覆盖两种单模型及组合请求，且不加载权重');
+  // Follow the real client/Worker/research path rather than selecting a C++ raw
+  // literal by position. Owned platform doubles do not prove native execution.
+  const checkNegativeControls = await checkPublicLocalAiClient({root, analyze: context.analyze});
+  assert.equal(fetches, 6, '真实 client/Worker 路径覆盖两种单模型及组合拒绝，且不加载权重');
+  await checkNegativeControls();
+  console.log('真实 LocalAiClient/Worker 合同及四个负控制通过：status、单模型/组合拒绝、独占 Worker 和终止清理。');
   console.log('公开源码分词及缺失模型拒绝回归通过；未运行真实实验权重对照。');
 }
 const worker = read('worker.js');
