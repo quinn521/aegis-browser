@@ -137,6 +137,41 @@ class StoresTest < ReleaseFixture
     assert_equal true, lane.calls.first[:distribute_only]
   end
 
+  def test_testflight_distribution_resolves_platform_without_ipa_or_prompt
+    require 'pilot'
+    require 'pilot/options'
+    group = OpenStruct.new(name: 'Team', is_internal_group: true)
+    group.define_singleton_method(:fetch_builds) { [OpenStruct.new(id: 'build1')] }
+    client, lane = apple('testflight-internal', groups: 'Team', group_rows: [group])
+    client.stub(:ready_build, OpenStruct.new(id: 'build1')) do
+      client.stub(:status, {}) { client.distribute }
+    end
+    # Exercise the locked Pilot API: distribute_only has no IPA to infer from.
+    options = lane.calls.first.reject { |key, _| key == :api_key }
+    config = FastlaneCore::Configuration.create(Pilot::Options.available_options, options)
+    manager = Pilot::Manager.new
+    manager.start(config, should_login: false)
+    FastlaneCore::UI.ui_object.stub(:input, ->(*) { flunk 'Distribution attempted an interactive prompt' }) do
+      assert_equal 'ios', manager.fetch_app_platform
+    end
+    # ready_build has already selected the exact processed build. Do not enter
+    # Pilot's additional unbounded wait with select_latest: true.
+    assert_equal true, config[:skip_waiting_for_build_processing]
+  end
+
+  def test_missing_export_compliance_fails_before_pilot_can_change_the_declaration
+    client, lane = apple('testflight-internal', groups: 'Team')
+    build = OpenStruct.new(processing_state: 'VALID', expired: false, uses_non_exempt_encryption: nil)
+    client.stub(:build, build) do
+      assert_raises(AegisRelease::Error) { client.distribute }
+      assert_empty lane.calls
+      [false, true].each do |declaration|
+        build.uses_non_exempt_encryption = declaration
+        assert_same build, client.ready_build
+      end
+    end
+  end
+
   def test_store_submission_is_a_separate_explicit_stage
     flow = AegisRelease::Pipeline.new(request(profile: 'alpha', destination: 'testflight'), FakeLane.new)
     assert_raises(AegisRelease::Error) { flow.submit }

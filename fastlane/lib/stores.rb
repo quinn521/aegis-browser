@@ -61,6 +61,7 @@ module AegisRelease
     def ready_build
       item = build
       AegisRelease.require!(item && item.processing_state == 'VALID' && !item.expired, 'Exact build must finish processing and remain unexpired; run status later')
+      AegisRelease.require!(!item.uses_non_exempt_encryption.nil?, 'Complete export compliance for this exact build in ASC before distribution or review')
       item
     end
 
@@ -109,7 +110,9 @@ module AegisRelease
       selected = groups # pilot silently ignores unknown group names, so validate first.
       external = @request.destination == 'testflight-external'
       @fastlane.upload_to_testflight(api_key: @api_key, app_identifier: APP_ID,
-                                    distribute_only: true, app_version: @request.version, build_number: @request.build,
+                                    app_platform: 'ios', distribute_only: true,
+                                    skip_waiting_for_build_processing: true,
+                                    app_version: @request.version, build_number: @request.build,
                                     groups: selected.map(&:name), distribute_external: external,
                                     submit_beta_review: external, notify_external_testers: false)
       assigned = selected.all? { |group| group.fetch_builds.any? { |b| b.id == item.id } }

@@ -66,6 +66,8 @@ TF distribution requires exact existing group names of the correct internal/exte
 
 Play uses an upload-key signed AAB by default; `--format apk` keeps the existing sideload path. Upload creates only a draft and preserves existing completed releases. Distribution/submission commits the selected track and requests review; Google may additionally require Console action. The edits API does not prove approval or tester availability. It refuses unrelated drafts/active rollouts and explicitly uses ERROR_IF_IN_REVIEW, so it cannot cancel another review. It never silently retries with different review semantics. Production `submit` requires `--play-release-policy managed` after verifying managed publishing in Console, or `automatic` if publication after approval is intended. This option records the operator's policy; the API does not verify or change managed publishing. The first Play app upload/setup may require Console setup.
 
+Distribution and review require the exact build's export compliance declaration. If it is missing, the app owner must complete it in ASC; the script does not assume an exemption. TestFlight distribution explicitly selects iOS without prompting and does not enter a second Pilot processing wait.
+
 ## Local configuration
 
 Use process environment or ignored Fastlane `.env` files. Never put secrets in lane arguments, receipts or committed files. Install the locked bundle with Ruby 3.3.6/Bundler 2.5.22; when using a local vendor bundle, set `BUNDLE_PATH=vendor/bundle` consistently.

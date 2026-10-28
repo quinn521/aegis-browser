@@ -68,6 +68,8 @@ TF 內外测要求精確的已有群組名、符合的群組類型，以及處�
 
 Play 預設產生使用上傳金鑰簽章的 AAB；`--format apk` 保留現有側載路徑。upload 只建立 draft 並保留原 completed 版本；distribute/submit 提交选定軌道並請求審核，Google 可能仍要求 Console 操作。edits API 不能證明審核通過或測試者可用。腳本拒絕隱式改动其他 draft/正在進行的 rollout，也不會自動重試成另一種送審語義。正式 submit 必須显式指定 `--play-release-policy managed`（先在 Console 核對受管理發布）或 `automatic`（接受審核後自動發布）；這個參數紀錄操作者選擇，不代表 API 已驗證或修改该設定。首次 Play 應用及包可能需要先在 Console 完成初始化。
 
+分發和送審會先檢查該 build 的出口合規聲明。缺少聲明時停止，由應用所有者在 ASC 完成填寫；腳本不預設填寫「無非豁免加密」。TestFlight 分發明確指定 iOS，無需互動輸入，也不重複進入 Pilot 的處理等待。
+
 ## 本地配置
 
 使用程序環境或被忽略的 Fastlane `.env`，不要把憑證作為 lane 參數或寫入清單。使用 Ruby 3.3.6、Bundler 2.5.22 和鎖定依赖；使用 vendor bundle 時統一設定 `BUNDLE_PATH=vendor/bundle`。以下參數名與英文文件一致：
