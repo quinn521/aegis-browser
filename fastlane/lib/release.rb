@@ -241,6 +241,8 @@ module AegisRelease
       if request.platform == 'ios'
         required('AEGIS_APPLE_TEAM_ID')
         ios_profiles # Validate before creating output or touching signing state.
+        run('python3', File.join(request.root, 'scripts/release/safari_manifest.py'),
+            File.join(request.root, 'apps/ios/SharedWebExtension'))
       else
         chromium_root
         if request.platform == 'android' && request.format == 'aab'

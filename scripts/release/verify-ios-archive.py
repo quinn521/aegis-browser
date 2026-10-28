@@ -6,6 +6,7 @@ from pathlib import Path
 import plistlib
 import re
 import subprocess
+from safari_manifest import verify as verify_safari_manifest
 
 
 def verify(archive: Path, version: str, build: str) -> dict:
@@ -31,6 +32,8 @@ def verify(archive: Path, version: str, build: str) -> dict:
         if list(identity.values()) != [expected[bundle.name], version, build]:
             raise ValueError(f"Archive identity mismatch: {bundle.name}")
         entries.append(identity)
+    safari = apps[0] / "PlugIns/SafariWebExtension.appex"
+    verify_safari_manifest(lambda name: (safari / name).read_bytes())
     return {"status": "unsigned_archive_verified", "applications": entries,
             "signing": "disabled", "IPA": False, "TestFlight": False, "releaseReady": False}
 

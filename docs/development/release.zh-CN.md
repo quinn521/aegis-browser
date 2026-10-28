@@ -60,6 +60,8 @@ iOS 扩展为 `com.gcsa.aegis.safari`、`com.gcsa.aegis.share`。保留现有 Ap
 
 本地手动脚本接受操作者选择的干净已提交分支，包括 fork 测试分支。GitHub Actions 管理自己的上游质量准入；上传上游 GitHub Draft 也保留该准入。用 `--repository owner/fork` 显式选择 fork 草稿演练，不改变上游正式发行策略。Draft 必须对应已存在且指向包源码 SHA 的 `candidate/<platform>/...` tag；脚本不会移动 tag、公开草稿或覆盖已有资产，重试前回读远端摘要。
 
+本地打包入口会在 archive 前检查 Safari manifest 图标；archive/IPA 验证还会核对实际打入的 PNG 资源和尺寸。缺少图标（App Store 错误 90849）会在本地上传前失败。
+
 iOS 可在本次源码副本中覆盖数字 version/build。Chromium 的版本及 versionCode 必须事先写入并提交原生输入，不能只改包名；当前 `0.8.0 (1)` 是 iOS 测试身份。`CHROMIUM_ROOT` 需要独占、已同步并应用补丁的工作区，脚本不重置或拉取共享源码。
 
 TF 内外测要求精确的已有组名、匹配的组类型，以及处理完成且未过期的 build。外测会请求 Beta App Review，默认不通知外部测试者。上传成功仅记录 `uploaded_processing_unverified`。ASC 正式送审要求预先准备对应版本、商店资料、隐私/审核资料和合规回答；脚本不猜测这些答案。它显式设置手动发布，提交精确 build，并回读审核状态，不自动发布通过审核的 App Store 版本。

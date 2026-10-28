@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import plistlib
+import shutil
 import tempfile
 import unittest
 
@@ -21,6 +22,10 @@ class ArchiveVerificationTests(unittest.TestCase):
             bundle.mkdir(parents=True, exist_ok=True)
             (bundle / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": app_id,
                 "CFBundleShortVersionString": "0.8.0", "CFBundleVersion": "1"}))
+        resources = Path(__file__).resolve().parents[2] / "apps/ios/SharedWebExtension"
+        for source in resources.iterdir():
+            if source.name == "manifest.json" or source.suffix == ".png":
+                shutil.copyfile(source, self.app / "PlugIns/SafariWebExtension.appex" / source.name)
 
     def test_complete_archive_is_diagnostic_only(self):
         result = archive_check.verify(self.archive, "0.8.0", "1")
@@ -44,6 +49,11 @@ class ArchiveVerificationTests(unittest.TestCase):
         (path / "Info.plist").unlink()
         path.rmdir()
         with self.assertRaisesRegex(ValueError, "app extensions"):
+            archive_check.verify(self.archive, "0.8.0", "1")
+
+    def test_safari_manifest_missing_icons_fails_before_store_upload(self):
+        (self.app / "PlugIns/SafariWebExtension.appex/manifest.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "90849"):
             archive_check.verify(self.archive, "0.8.0", "1")
 
 

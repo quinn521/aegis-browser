@@ -2,6 +2,7 @@
 import plistlib
 import sys
 import zipfile
+from safari_manifest import verify as verify_safari_manifest
 
 APP_ID = "com.gcsa.aegis"
 
@@ -27,6 +28,15 @@ def verify(path, version, build, release_profile=None):
             profile = member.removesuffix("Info.plist") + "embedded.mobileprovision"
             if profile not in names:
                 raise ValueError("Missing embedded provisioning profile: " + identifier)
+        safari_root = root + "PlugIns/SafariWebExtension.appex/"
+
+        def resource(name):
+            member = safari_root + name
+            if archive.getinfo(member).file_size > 8 * 1024 * 1024:
+                raise ValueError("Safari resource is unexpectedly large")
+            return archive.read(member)
+
+        verify_safari_manifest(resource)
     return True
 
 
