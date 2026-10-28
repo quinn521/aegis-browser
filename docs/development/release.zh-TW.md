@@ -77,6 +77,8 @@ Chromium 專用 runner 標籤為 `[self-hosted, macOS, ARM64, aegis-release]`、
 
 ## 驗證邊界
 
+合入前可推送 `codex/fastlane-release-*` 分支執行 `Release Branch Validation`。流程可在 fork 或上游分支執行無憑據回歸，並編譯 iOS `0.8.0 (1)` 的未簽名 archive，核對主 App 與兩個擴充功能的識別資訊。它不存取發布 Environment 或簽名 Secrets；結果不代表 IPA、TestFlight 或三端發布驗收。正式簽名打包、上傳及後續 Android → DMG 驗收仍須分別完成。
+
 目前 macOS DMG 為臨時簽署、未公證；Android 沿用 Chromium 建置簽署，尚未取得正式散布資格。草稿明確記錄。Developer ID/公證、Android 正式簽署連續性、Play/AAB、實機驗收及公開發佈仍須獨立完成；本入口不變更正式發佈驗證器。
 
 ```bash

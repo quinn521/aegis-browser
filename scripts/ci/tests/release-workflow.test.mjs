@@ -62,3 +62,21 @@ test('application IDs match the requested release identity', () => {
   assert.match(read('apps/browser/overlay/chrome/app/theme/gcsa_aegis/BRANDING'), /^MAC_BUNDLE_ID=com\.gcsa\.aegis$/mu);
   assert.match(read('apps/browser/scripts/verify-android-agent-target.mjs'), /PACKAGE = 'com\.gcsa\.aegis'/u);
 });
+
+test('candidate branch validation uses no secrets or upload permissions', () => {
+  const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));
+  assert.deepEqual(candidate.on.push.branches, ['codex/fastlane-release-*']);
+  assert.equal(candidate.permissions.contents, 'read');
+  assert.equal(candidate.jobs['ios-archive'].needs, 'contracts');
+  assert.doesNotMatch(JSON.stringify(candidate), /secrets\.|self-hosted|contents.*write|aegis-testflight/u);
+  for (const job of Object.values(candidate.jobs)) {
+    assert.equal(job.environment, undefined);
+    for (const step of job.steps) {
+      if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/u);
+      if (step.uses?.startsWith('actions/checkout@')) assert.equal(step.with.ref, '${{ github.sha }}');
+    }
+  }
+  const archive = candidate.jobs['ios-archive'].steps.find((step) => step.run?.includes('xcodebuild'));
+  assert.match(archive.run, /CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO/u);
+  assert.match(archive.run, /MARKETING_VERSION=0\.8\.0 CURRENT_PROJECT_VERSION=1/u);
+});

@@ -81,6 +81,8 @@ The preflight uses only a read token and precedes protected packaging. Package j
 
 ## Qualification and validation
 
+Before merge, pushing a `codex/fastlane-release-*` branch runs `Release Branch Validation` on a fork or upstream branch. It runs credential-free regressions and compiles an unsigned iOS `0.8.0 (1)` archive, checking the app and both extension identities. It has no release environment or signing secrets. These diagnostics do not qualify an IPA, TestFlight upload, or the complete three-platform flow; signed packaging/upload and the subsequent Android then DMG acceptance remain separate.
+
 The macOS driver currently produces an **ad-hoc signed, unnotarized** DMG. Android retains the existing Chromium build signature and is **not distribution-qualified**. The draft records these facts. Developer ID signing/notarization, production Android signing continuity, Play/AAB delivery, device acceptance and public release remain separate work. This entrypoint does not change the formal release validator or mark these gates passed.
 
 ```bash
