@@ -84,3 +84,69 @@ test('real id survives unrelated attributes, quoting and attribute order', t => 
     t.diagnostic(name);
   }
 });
+
+
+test('extra unquoted Lit events and invalid unquoted callbacks are rejected', t => {
+  const parallel = '@change="${this.onAegisParallelModeChange_}"';
+  const retry = '@click="${this.onAegisRetryClick_}"';
+  for (const [name, original, replacement] of [
+    ['R83 extra unquoted click on parallel-mode select', parallel, parallel + ' @click=${this.onAegisRetryClick_}'],
+    ['extra unquoted event type', parallel, parallel + ' @pointerdown=${this.onAegisRetryClick_}'],
+    ['extra quoted event type', parallel, parallel + ' @pointerdown="${this.onAegisRetryClick_}"'],
+    ['duplicate unquoted event', retry, retry + ' @click=${this.onAegisRetryClick_}'],
+    ['unquoted wrong receiver', retry, '@click=${other.onAegisRetryClick_}'],
+    ['unquoted eager call', retry, '@click=${this.onAegisRetryClick_()}'],
+    ['unquoted arrow', retry, '@click=${() => this.onAegisRetryClick_()}'],
+    ['case-sensitive event name', retry, '@CLICK=${this.onAegisRetryClick_}'],
+    ['different unquoted event name', parallel, '@input=${this.onAegisParallelModeChange_}'],
+  ]) {
+    const changed = source.replace(original, replacement);
+    assert.notEqual(changed, source, name);
+    assert.throws(() => downloadBindings(ts, changed), undefined, name);
+    t.diagnostic(name);
+  }
+});
+
+test('valid event quoting forms retain exact real controls and dispatch', t => {
+  const retry = '@click="${this.onAegisRetryClick_}"';
+  const parallel = '@change="${this.onAegisParallelModeChange_}"';
+  const cases = [
+    ['unquoted click', source.replace(retry, '@click=${this.onAegisRetryClick_}')],
+    ['unquoted change', source.replace(parallel, '@change=${this.onAegisParallelModeChange_}')],
+    ['single-quoted event', source.replace(retry, "@click='${this.onAegisRetryClick_}'")],
+    ['unquoted with HTML whitespace', source.replace(retry, '@click \n = \t ${this.onAegisRetryClick_}')],
+    ['all ten unquoted', source.replace(/@(click|change)="(\$\{this\.[A-Za-z0-9_]+\})"/g, '@$1=$2')],
+    ['event text in ordinary attribute', source.replace(parallel, parallel + ` title=" @click='${'${this.aegisStrings_.parallel}'}'"`)],
+    ['event text in HTML text', source.replace('</settings-section>', `text @click="${'${this.aegisStrings_.parallel}'}"</settings-section>`) ],
+    ['event text in comment', source.replace('</settings-section>', `<!-- @click="${'${this.aegisStrings_.parallel}'}" --></settings-section>`) ],
+  ];
+  const expected = downloadBindings(ts, source).map(({type, method, tag, id}) => ({type, method, tag, id}));
+  const dom = new JSDOM();
+  try {
+    for (const [name, changed] of cases) {
+      assert.notEqual(changed, source, name);
+      const bindings = downloadBindings(ts, changed);
+      assert.deepEqual(bindings.map(({type, method, tag, id}) => ({type, method, tag, id})), expected, name);
+      for (const {type, method, markup} of bindings) {
+        const template = dom.window.document.createElement('template');
+        template.innerHTML = markup;
+        const control = template.content.firstElementChild;
+        assert(control, name);
+        if (control.localName === 'select') {
+          if (!control.querySelector('option[value="custom"]')) control.append(new dom.window.Option('custom', 'custom'));
+          control.value = 'custom';
+        } else control.value = '128';
+        control.id = control.id.replace('${kind}', 'Download');
+        const calls = [];
+        const owner = {[method]: function(event) {
+          calls.push({owner: this, event, target: event.currentTarget, value: event.currentTarget.value});
+        }};
+        control.addEventListener(type, event => owner[method].call(owner, event));
+        const event = new dom.window.Event(type);
+        control.dispatchEvent(event);
+        assertDownloadDispatch(owner, control, event, calls);
+      }
+      t.diagnostic(name);
+    }
+  } finally { dom.window.close(); }
+});

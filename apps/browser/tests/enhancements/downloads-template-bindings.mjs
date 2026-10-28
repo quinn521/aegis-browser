@@ -20,19 +20,31 @@ export function downloadBindings(ts, source) {
         const ref = span.expression;
         expressions.push([marker, '${' + ref.getText(tree) + '}']);
         html += marker + span.literal.text;
-        const event = /@(click|change)\s*=\s*["']$/.exec(previous);
-        if (event) {
-          assert.ok(ts.isPropertyAccessExpression(ref) && ref.expression.kind === ts.SyntaxKind.ThisKeyword,
-            'event binding must be a stable method reference on this');
-          events.push({ref, type: event[1], marker});
-        }
+        // Lit permits quoted and unquoted values, and any event name. Count
+        // extra event types too; the exact mapping below decides what is allowed.
+        const event = /(?:^|[\t\n\f\r ])@([^\t\n\f\r "'<>/=]+)[\t\n\f\r ]*=[\t\n\f\r ]*["']?$/.exec(previous);
+        if (event) events.push({ref, type: event[1], marker});
         previous = span.literal.text;
       }
       if (events.length) {
-        const controls = [...JSDOM.fragment(html).querySelectorAll('*')];
+        const fragment = JSDOM.fragment(html);
+        const controls = [...fragment.querySelectorAll('*')];
         for (const {ref, type, marker} of events) {
           const matches = controls.filter(control => control.getAttribute('@' + type) === marker);
+          if (!matches.length) {
+            // A lexical lookalike inside a normal attribute, text or comment
+            // is not an event. A dropped duplicate event has no such location
+            // and still fails the complete-attribute assertion below.
+            if (controls.some(control => [...control.attributes].some(attribute =>
+              !attribute.name.startsWith('@') && attribute.value.includes(marker)))) continue;
+            const text = fragment.ownerDocument.createTreeWalker(fragment, 4 | 128);
+            let node, inText = false;
+            while ((node = text.nextNode())) if (node.nodeValue.includes(marker)) inText = true;
+            if (inText) continue;
+          }
           assert.equal(matches.length, 1, 'event binding is a complete attribute on one real control');
+          assert.ok(ts.isPropertyAccessExpression(ref) && ref.expression.kind === ts.SyntaxKind.ThisKeyword,
+            'event binding must be a stable method reference on this');
           const control = matches[0];
           let id = control.getAttribute('id') ?? '';
           for (const [token, expression] of expressions) id = id.replaceAll(token, expression);
