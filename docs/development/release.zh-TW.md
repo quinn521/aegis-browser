@@ -122,6 +122,8 @@ fork 演練需明確設定 `AEGIS_RELEASE_ENABLED=true`、`AEGIS_RELEASE_REHEARS
 
 Actions rerun 可以重新打包，或透過遠端摘要驗證續傳 GitHub 草稿；不會在 attempt 1 之後重播 Apple/Play 寫入操作，避免 runner 在商店接受請求後遺失回執而重複上傳。先核對儲存的階段紀錄及商店狀態，再本機處理或使用新 build/run。原生版本約束仍然適用。
 
+fork 的 iOS 打包/Draft 演練可額外設定 `AEGIS_IOS_LOCAL_REHEARSAL=true`。通過同一無簽署憑據的 preflight 後，只選擇 `[self-hosted, macOS, ARM64, aegis-ios-release-rehearsal]`，拒絕上游、其他分支和商店目的地。為單個 job 註冊任務獨佔的一次性 Runner，不給共用品質 Runner 添加發布標籤。受保護的 `aegis-release-ios` 環境提供現有團隊/profile 映射和任務自有快取 `AEGIS_LOCAL_IOS_BUNDLE_PATH`。提前安裝固定版本的 Ruby/Node/Bundler 和簽署材料，並在本地解鎖鑰匙圈。該路徑不匯出私鑰，也不接收 ASC/Play/Match 憑據。預設仍使用 hosted Match 路由；不能僅填寫其他儲存庫位址就讀取其 Secrets。
+
 ## Candidate tag → Draft Release：第三階段驗收
 
 `release-candidate-tag.yml` 解析平台專屬候選 tag，再呼叫相同 release 工作流程，固定 github-draft + upload。它不回應正式 v* tag，不上傳商店，不公開 Release。上游仍要求 tag 指向目前 main 且品質檢查成功；fork 走獨立演練准入。

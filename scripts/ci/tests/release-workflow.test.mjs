@@ -105,6 +105,19 @@ test('store review is a separate protected step after a completed upload record'
   assert.equal(workflow.on.workflow_dispatch.inputs.operation.default, 'package');
 });
 
+test('fork local signing is opt-in and remains downstream of the uncredentialed preflight', () => {
+  assert.equal(workflow.jobs.package.needs, 'preflight');
+  assert.equal(workflow.jobs.package.environment, 'aegis-release-${{ inputs.platform }}');
+  assert.equal(workflow.env.AEGIS_IOS_LOCAL_REHEARSAL, '${{ vars.AEGIS_IOS_LOCAL_REHEARSAL }}');
+  const route = workflow.jobs.preflight.steps.find(s=>s.id === 'route');
+  assert.match(route.run, /ruby scripts\/release\/runner\.rb/u);
+  const local = workflow.jobs.package.steps.find(s=>s.run === 'ruby scripts/release/local-ios-rehearsal.rb');
+  assert.match(local.if, /runner.environment == 'self-hosted'/u);
+  assert.doesNotMatch(JSON.stringify(local), /secrets\./u);
+  const match = workflow.jobs.package.steps.find(s=>s.run === 'bundle exec fastlane ios ci_signing');
+  assert.match(match.if, /runner.environment == 'github-hosted'/u);
+});
+
 test('candidate tags reuse the reviewed workflow and cannot trigger public releases', () => {
   const tag = YAML.parse(readFileSync(new URL('.github/workflows/release-candidate-tag.yml', root), 'utf8'));
   assert.deepEqual(tag.on.push.tags, ['candidate/ios/*', 'candidate/android/*', 'candidate/macos/*']);

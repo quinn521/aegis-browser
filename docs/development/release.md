@@ -120,6 +120,8 @@ For an isolated **fork rehearsal**, explicitly set `AEGIS_RELEASE_ENABLED=true`,
 
 Actions reruns may rebuild packages or resume a GitHub Draft by verifying remote hashes. They cannot replay Apple/Play write stages after attempt 1, because a runner can disappear after the store accepts a write but before its receipt is saved. Inspect retained stage records and live store state, then reconcile locally or start a fresh build/run. Do not blindly re-upload the same version/build. Native source/version rules still apply.
 
+Fork iOS package/Draft rehearsals may additionally set `AEGIS_IOS_LOCAL_REHEARSAL=true`. This selects only `[self-hosted, macOS, ARM64, aegis-ios-release-rehearsal]` after the same uncredentialed preflight, and rejects upstream, other branches and store destinations. Register a task-owned ephemeral runner for one job; do not add release labels to shared quality runners. Its protected `aegis-release-ios` environment supplies the existing team/profile mapping and `AEGIS_LOCAL_IOS_BUNDLE_PATH` for an owned bundle cache. Preinstall the pinned Ruby/Node/Bundler versions and signing assets, and unlock the keychain locally. This path exports no private key and receives no ASC/Play/Match credentials. The hosted Match route remains the default. Neither route can consume another repository's Secrets merely by naming it as a Match backend.
+
 ## Candidate tag to Draft Release (third acceptance stage)
 
 `.github/workflows/release-candidate-tag.yml` parses a platform-specific candidate tag and calls the same workflow with destination `github-draft` and operation `upload`. It never responds to formal `v*` tags, uploads to stores, or publishes a Release.
