@@ -6252,18 +6252,25 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(),
       GURL(chrome::kChromeUIUntrustedAegisAgentURL)));
   auto* page = browser()->tab_strip_model()->GetActiveWebContents();
-  // 在真实 WebUI CSP 下检查 IDB、嵌套 Worker、WASM 与两份真实实验权重。
+  // Public assets omit research weights. Exercise the real WebUI Worker and
+  // storage path, explicit unavailable errors, and recovery after rejection.
   EXPECT_EQ(content::EvalJs(page, R"JS(
     (async () => {
       const {LocalAiClient} = await import('./local_ai_client.js');
       const client = new LocalAiClient();
       const missing = await client.run({op: 'status', direction: 'en-zh'}, () => {});
       if (missing.ready !== false) return 'unexpected package';
-      const result = await client.run({op: 'research', minim: true, phishlang: true,
-        goal: 'read_post', paragraphs: ['Save your notes before closing the browser.']}, () => {});
-      if (result.minim.length !== 1 || !Number.isFinite(result.minim[0].necessity) ||
-          !Number.isFinite(result.phishlang.score) || result.phishlang.windows < 1) return 'invalid scores';
-      return 'passed';
+      for (const [minim, phishlang] of [[true, false], [false, true], [true, true]]) {
+        try {
+          await client.run({op: 'research', minim, phishlang, goal: 'read_post',
+            paragraphs: ['Save your notes before closing the browser.']}, () => {});
+          return 'unexpected research result';
+        } catch (error) {
+          if (error.message !== 'research_model_not_distributed') return error.message;
+        }
+      }
+      const after = await client.run({op: 'status', direction: 'en-zh'}, () => {});
+      return after.ready === false ? 'passed' : 'unexpected package after rejection';
     })()
   )JS"), "passed");
 }
