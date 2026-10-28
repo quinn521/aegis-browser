@@ -1,3 +1,12 @@
+From ae6f0dd695500988061d3f735f92cbe598df4127 Mon Sep 17 00:00:00 2001
+From: Aegis patch fixture <aegis-patch-fixture@example.invalid>
+Date: Wed, 28 Oct 2026 12:35:23 +0000
+Subject: [PATCH] test(mac03): record independent native evidence
+
+---
+ .../aegis/agent/aegis_agent_browsertest.cc    | 718 +++++++++++++++++-
+ 1 file changed, 698 insertions(+), 20 deletions(-)
+
 diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b6b7f80a3fdc4f67efafa85300a92a4d7a2eb5bc 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
@@ -59,7 +68,7 @@ index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b6b7f80a3fdc4f67efafa85300a92a4d
  #include "testing/gtest/include/gtest/gtest.h"
  #include "ui/actions/actions.h"
  #include "ui/message_center/public/cpp/notification.h"
-@@ -6248,32 +6270,688 @@
+@@ -6248,33 +6270,689 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingPackDownloadScopeAndIntegri
    EXPECT_EQ(requests.load(), 1);
  }
  
@@ -685,7 +694,6 @@ index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b6b7f80a3fdc4f67efafa85300a92a4d
 +      throw Error('production startup did not become ready');
      })()
 -  )JS"), "passed");
--}
 +  )JS", static_cast<int>(deadline.Remaining().InMilliseconds())));
 +  ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
 +  ASSERT_THAT(ready_result, content::EvalJsResult::IsOkAndHolds(
@@ -764,8 +772,9 @@ index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b6b7f80a3fdc4f67efafa85300a92a4d
 +  ASSERT_EQ(serialized, reread);
 +  ASSERT_TRUE(observer.FinalEmpty()) << observer.error();
 +  // External consumer performs post-child file+directory sync and stable reads.
-+}
-+
+ }
  
++
  IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingWorkspaceRejectsPrivateProfile) {
    BrowserWindowInterface* incognito = CreateIncognitoBrowser(browser()->GetProfile());
+   AegisReadingWorkspace workspace(incognito->GetProfile(), incognito);
