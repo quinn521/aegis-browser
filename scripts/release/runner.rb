@@ -31,12 +31,39 @@ module AegisRelease
         local_ios!(env)
         LOCAL_IOS_LABELS
       when 'macos', 'android'
-        AegisRelease.require!(env['CHROMIUM_RUNNERS_READY'] == 'true', 'Native Chromium release runners are not ready')
+        ready = env["#{env['RELEASE_PLATFORM'].upcase}_RUNNERS_READY"]
+        ready = env['CHROMIUM_RUNNERS_READY'] if ready.to_s.empty?
+        AegisRelease.require!(ready == 'true', "#{env['RELEASE_PLATFORM']} Chromium release runners are not ready")
         ['self-hosted', env['RELEASE_PLATFORM'] == 'macos' ? 'macOS' : 'Linux',
          env['RELEASE_PLATFORM'] == 'macos' ? 'ARM64' : 'X64', 'aegis-release']
       else
         raise AegisRelease::Error, 'Unknown release platform'
       end
+    end
+
+    def self.owned_directory(env, key)
+      path = env[key].to_s
+      AegisRelease.require!(!path.empty? && !path.match?(/[\x00-\x1f]/), "Provide #{key}")
+      AegisRelease.real_path!(path)
+      directory = File.realpath(path)
+      stat = File.stat(directory)
+      AegisRelease.require!(stat.directory? && stat.uid == Process.uid && (stat.mode & 0o022).zero?,
+        "#{key} must be an owned directory without group/world write access")
+      directory
+    end
+
+    def self.validate_local_macos(env, os:, cpu:)
+      AegisRelease.require!(env['RELEASE_PLATFORM'] == 'macos' && env['GITHUB_ACTIONS'] == 'true' &&
+        env['RUNNER_ENVIRONMENT'] == 'self-hosted' && os.include?('darwin') && %w[arm64 aarch64].include?(cpu),
+        'macOS release requires an Apple Silicon self-hosted runner')
+      select(env)
+      sensitive = %w[AEGIS_ASC_KEY_ID AEGIS_ASC_ISSUER_ID AEGIS_ASC_KEY_PATH AEGIS_ASC_KEY_BASE64
+        AEGIS_PLAY_JSON_KEY AEGIS_PLAY_JSON_KEY_DATA MATCH_PASSWORD MATCH_GIT_BASIC_AUTHORIZATION
+        AEGIS_ANDROID_STORE_PASSWORD AEGIS_ANDROID_KEY_PASSWORD]
+      AegisRelease.require!(sensitive.none? { |name| !env[name].to_s.empty? },
+        'Ad-hoc DMG packaging must not receive store or signing credentials')
+      %w[AEGIS_LOCAL_MACOS_BUNDLE_PATH CHROMIUM_ROOT DEPOT_TOOLS_DIR CIPD_CACHE_DIR VPYTHON_VIRTUALENV_ROOT TMPDIR]
+        .to_h { |key| [key, owned_directory(env, key)] }
     end
 
     def self.validate_local_ios(env, os:, cpu:)

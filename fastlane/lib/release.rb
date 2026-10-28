@@ -362,6 +362,10 @@ module AegisRelease
         native = env.fetch('DIST_DIR')
         files = Dir.glob(File.join(native, pattern)).reject { |p| File.basename(p) == "GCSA-aegis.#{request.format}" }
         AegisRelease.require!(files.size == 1, 'Expected one native installable artifact')
+        dmg_verification = if request.platform == 'macos'
+          JSON.parse(AegisRelease.command('python3', File.join(request.root, 'scripts/release/verify-macos-dmg.py'),
+                                         files.first, request.version))
+        end
         files += Dir.glob(File.join(native, '*.build-identity.json'))
         paths = files.map do |file|
           AegisRelease.file!(file)
@@ -371,9 +375,13 @@ module AegisRelease
           else
             FileUtils.cp(file, target)
           end
+          if request.platform == 'macos' && file.end_with?('.dmg')
+            AegisRelease.require!(AegisRelease.digest(target) == dmg_verification.fetch('sha256'),
+                                  'Verified DMG changed before the release manifest was written')
+          end
           target
         end
-        [paths, { 'signing' => signing, 'chromium' => JSON.parse(verification),
+        [paths, { 'signing' => signing, 'chromium' => JSON.parse(verification), 'dmgVerification' => dmg_verification,
                   'nativeSnapshot' => 'build-identity describes the pre-signing native snapshot; release manifest hashes the final package',
                   'certificateSha256' => request.format == 'aab' ? required('AEGIS_ANDROID_CERT_SHA256').delete(':').downcase : nil,
                   'deviceAcceptance' => 'not_verified' }]

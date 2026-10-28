@@ -157,6 +157,8 @@ jobs:
         id: route
         env:
           CHROMIUM_RUNNERS_READY: ${{ vars.AEGIS_CHROMIUM_RELEASE_RUNNERS_READY }}
+          MACOS_RUNNERS_READY: ${{ vars.AEGIS_MACOS_RELEASE_RUNNERS_READY }}
+          ANDROID_RUNNERS_READY: ${{ vars.AEGIS_ANDROID_RELEASE_RUNNERS_READY }}
         run: |
           bash scripts/release/action.sh plan
           ruby scripts/release/runner.rb >> "$GITHUB_OUTPUT"
@@ -176,11 +178,11 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        if: ${{ inputs.platform != 'ios' || runner.environment == 'github-hosted' }}
+        if: ${{ inputs.platform == 'android' || runner.environment == 'github-hosted' }}
         with:
           node-version: 22.23.1
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
-        if: ${{ inputs.platform != 'ios' || runner.environment == 'github-hosted' }}
+        if: ${{ inputs.platform == 'android' || runner.environment == 'github-hosted' }}
         with:
           ruby-version: 3.3.6
           bundler: 2.5.22
@@ -189,8 +191,23 @@ jobs:
         env:
           AEGIS_LOCAL_IOS_BUNDLE_PATH: ${{ vars.AEGIS_LOCAL_IOS_BUNDLE_PATH }}
         run: ruby scripts/release/local-ios-rehearsal.rb
+      - name: Verify preinstalled macOS runtime and private native caches
+        if: ${{ inputs.platform == 'macos' && runner.environment == 'self-hosted' }}
+        env:
+          MACOS_RUNNERS_READY: ${{ vars.AEGIS_MACOS_RELEASE_RUNNERS_READY }}
+          CHROMIUM_RUNNERS_READY: ${{ vars.AEGIS_CHROMIUM_RELEASE_RUNNERS_READY }}
+          AEGIS_LOCAL_MACOS_BUNDLE_PATH: ${{ vars.AEGIS_LOCAL_MACOS_BUNDLE_PATH }}
+          CHROMIUM_ROOT: ${{ vars.AEGIS_CHROMIUM_ROOT }}
+          DEPOT_TOOLS_DIR: ${{ vars.AEGIS_DEPOT_TOOLS_DIR }}
+          CIPD_CACHE_DIR: ${{ vars.AEGIS_CIPD_CACHE_DIR }}
+          VPYTHON_VIRTUALENV_ROOT: ${{ vars.AEGIS_VPYTHON_VIRTUALENV_ROOT }}
+          TMPDIR: ${{ vars.AEGIS_NATIVE_TMPDIR }}
+        run: ruby scripts/release/local-macos-release.rb
       - name: Install locked Fastlane dependencies
         run: bundle install --jobs 4 --retry 2
+      - name: Exercise real macOS image verification and failure cleanup
+        if: ${{ inputs.platform == 'macos' }}
+        run: python3 -B -m unittest discover -s scripts/release -p test_verify_macos_dmg.py -v
       - name: Read existing iOS signing material
         if: ${{ inputs.platform == 'ios' && runner.environment == 'github-hosted' }}
         env:
@@ -213,8 +230,8 @@ jobs:
           AEGIS_ANDROID_KEYSTORE: ${{ vars.AEGIS_ANDROID_KEYSTORE }}
           AEGIS_ANDROID_KEY_ALIAS: ${{ vars.AEGIS_ANDROID_KEY_ALIAS }}
           AEGIS_ANDROID_CERT_SHA256: ${{ vars.AEGIS_ANDROID_CERT_SHA256 }}
-          AEGIS_ANDROID_STORE_PASSWORD: ${{ secrets.AEGIS_ANDROID_STORE_PASSWORD }}
-          AEGIS_ANDROID_KEY_PASSWORD: ${{ secrets.AEGIS_ANDROID_KEY_PASSWORD }}
+          AEGIS_ANDROID_STORE_PASSWORD: ${{ inputs.platform == 'android' && secrets.AEGIS_ANDROID_STORE_PASSWORD || '' }}
+          AEGIS_ANDROID_KEY_PASSWORD: ${{ inputs.platform == 'android' && secrets.AEGIS_ANDROID_KEY_PASSWORD || '' }}
         run: bash scripts/release/action.sh package
       - name: Save installable packages and identity evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

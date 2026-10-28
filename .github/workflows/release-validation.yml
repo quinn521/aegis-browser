@@ -100,6 +100,7 @@ jobs:
     if: >-
       ${{ github.repository != 'gcsagroup/aegis-browser' &&
           vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
+          vars.AEGIS_IOS_BRANCH_REHEARSAL == 'true' &&
           github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
     permissions:
       contents: write
@@ -112,6 +113,26 @@ jobs:
       operation: package
       version: '0.8.0'
       build: '1'
+      format: auto
+      store_options: '{}'
+    secrets: inherit
+
+  macos-release-rehearsal:
+    needs: [contracts, ios-archive]
+    if: >-
+      ${{ github.repository != 'gcsagroup/aegis-browser' &&
+          vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
+          vars.AEGIS_MACOS_BRANCH_REHEARSAL == 'true' &&
+          github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      platform: macos
+      profile: alpha
+      destination: artifacts
+      operation: package
       format: auto
       store_options: '{}'
     secrets: inherit

@@ -106,7 +106,7 @@ Play 預設產生使用上傳金鑰簽章的 AAB；`--format apk` 保留現有�
 | Environment | 設定 |
 | --- | --- |
 | `aegis-release-ios` | 變數 `AEGIS_APPLE_TEAM_ID`、`AEGIS_IOS_PROFILES`、`AEGIS_MATCH_GIT_URL`，選填 `AEGIS_DEVELOPER_DIR`；secrets `MATCH_PASSWORD`、`MATCH_GIT_BASIC_AUTHORIZATION` |
-| `aegis-release-macos` | 變數 `AEGIS_CHROMIUM_ROOT`、`AEGIS_DEPOT_TOOLS_DIR`，選填 `AEGIS_DEVELOPER_DIR` |
+| `aegis-release-macos` | 變數 `AEGIS_CHROMIUM_ROOT`、`AEGIS_DEPOT_TOOLS_DIR`、`AEGIS_LOCAL_MACOS_BUNDLE_PATH`、`AEGIS_CIPD_CACHE_DIR`、`AEGIS_VPYTHON_VIRTUALENV_ROOT`、`AEGIS_NATIVE_TMPDIR`，選填 `AEGIS_DEVELOPER_DIR`；ad-hoc 打包不接收商店/簽署 Secrets |
 | `aegis-release-android` | Chromium/depot_tools、bundletool、上傳 keystore 路徑/別名/憑證 SHA-256 變數；secrets `AEGIS_ANDROID_STORE_PASSWORD`、`AEGIS_ANDROID_KEY_PASSWORD`；runner 安裝 SDK/JDK |
 | `aegis-testflight` | ASC key ID、issuer 和 Base64 私鑰 secrets；僅上傳 |
 | `aegis-play` | Secret `AEGIS_PLAY_JSON_KEY_DATA`；僅上傳草稿 |
@@ -116,7 +116,11 @@ Play 預設產生使用上傳金鑰簽章的 AAB；`--format apk` 保留現有�
 
 iOS 使用 `match(readonly: true)` 將已有簽章材料安裝到暫時 CI keychain；應先準備簽章倉庫、三個 profiles 和 ASC 應用。CI 不建立新憑證或應用識別碼。Play JSON 僅寫入本次私有暫存目錄，子程序退出後刪除，並從子程序環境移除 JSON 內容。
 
-Chromium 專用 runner 標籤為 `[self-hosted, macOS, ARM64, aegis-release]` / `[self-hosted, Linux, X64, aegis-release]`。需要獨佔工作區、足夠磁碟、Git、Python 3.11+、Node 22.23.1、Ruby 3.3.6、Bundler 2.5.22、SDK/JDK 等工具。實際驗證後才設定 `AEGIS_CHROMIUM_RELEASE_RUNNERS_READY=true`；YAML 不代表服務端設定已就緒。
+Chromium 專用 runner 標籤為 `[self-hosted, macOS, ARM64, aegis-release]` / `[self-hosted, Linux, X64, aegis-release]`。需要獨佔工作區、足夠磁碟、Git、Python 3.11+、Node 22.23.1、Ruby 3.3.6、Bundler 2.5.22、SDK/JDK 等工具。分別驗證後設定 `AEGIS_MACOS_RELEASE_RUNNERS_READY=true` 或 `AEGIS_ANDROID_RELEASE_RUNNERS_READY=true`。相容舊的 `AEGIS_CHROMIUM_RELEASE_RUNNERS_READY`，但明確的平台 `false` 優先；啟用 Mac 不會啟用 Android。YAML 不代表服務端設定已就緒。
+
+macOS self-hosted 路徑檢查預裝執行環境、同 SHA 乾淨原始碼及各工作區/快取的所有權和寫入權限，重用固定 Bundler 快取。先通過真實小型 DMG 的掛載/簽署/損壞回歸，再呼叫相同本地打包入口。最終 DMG 必須通過唯讀掛載、App ID/產品版本、arm64 和深度簽章驗證，並將已驗證摘要綁定至 release manifest。這不建立瀏覽器執行或公證證據。
+
+fork 分支打包還需按平台設定 `AEGIS_IOS_BRANCH_REHEARSAL=true` 或 `AEGIS_MACOS_BRANCH_REHEARSAL=true`；不影響候選 tag 入口。Android 暫緩時保持其 ready 為 `false`，macOS 可獨立完成本地 → Actions → candidate tag/Draft 驗收。
 
 fork 演練需明確設定 `AEGIS_RELEASE_ENABLED=true`、`AEGIS_RELEASE_REHEARSAL=true`、`AEGIS_RELEASE_TEST_REPOSITORY_ID=<fork 數字 ID>`，並準備該 fork 自己的受保護簽章環境。API 核對 parent 為上游、同 SHA 最新分支驗證 attempt 的 contracts/ios-archive 成功，只允許 codex/fastlane-release-* 分支或 candidate tag。目的地限包 only、TF 上傳/內測、Play 內測、該 fork 自己的 Draft；拒絕正式版及外測。分支驗證可在兩個無憑證檢查完成後呼叫真正的打包工作流程，無需先合併到預設分支。未啟用時 package rehearsal 為 skipped，不能算打包通過；fork_rehearsal_only 也不等於上游准入。
 
@@ -140,7 +144,7 @@ Draft 建立後使用 REST 回應中的 release ID，並在上傳資產前儲存
 
 ## 驗證邊界
 
-合入前可推送 `codex/fastlane-release-*` 分支執行 `Release Branch Validation`。前兩個 job 可在 fork 或上游分支執行無憑據回歸，並編譯 iOS `0.8.0 (1)` 的未簽名 archive，核對主 App 與兩個擴充功能的識別資訊。它們不存取發布 Environment 或簽名 Secrets；個別啟用的 fork rehearsal 可在其後執行簽名打包。前兩項診斷不代表 IPA、TestFlight 或三端發布驗收。正式簽名打包、上傳及後續 Android → DMG 驗收仍須分別完成。
+合入前可推送 `codex/fastlane-release-*` 分支執行 `Release Branch Validation`。前兩個 job 可在 fork 或上游分支執行無憑據回歸，並編譯 iOS `0.8.0 (1)` 的未簽名 archive，核對主 App 與兩個擴充功能的識別資訊。它們不存取發布 Environment 或簽名 Secrets；按平台啟用的 fork rehearsal 可在其後執行真實打包。前兩項診斷不代表 IPA、TestFlight 或三端發布驗收；各平台本地真包、Actions 和候選 Draft 分別驗收。
 
 本機真實打包及上傳、Actions、候選 tag 草稿、商店狀態和真機驗收分別紀錄。模擬通過不能替代真實建置；Chromium 主機、Play 初始化與上傳金鑰、Developer ID/公證仍需對應環境。
 

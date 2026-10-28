@@ -58,6 +58,42 @@ class ActionsTest < ReleaseFixture
       AegisRelease::ReleaseRunner.select('RELEASE_PLATFORM' => 'android', 'CHROMIUM_RUNNERS_READY' => 'true')
   end
 
+  def test_macos_readiness_cannot_enable_the_deferred_android_runner
+    assert_equal %w[self-hosted macOS ARM64 aegis-release],
+      AegisRelease::ReleaseRunner.select('RELEASE_PLATFORM' => 'macos', 'MACOS_RUNNERS_READY' => 'true')
+    assert_raises(AegisRelease::Error) do
+      AegisRelease::ReleaseRunner.select('RELEASE_PLATFORM' => 'android', 'MACOS_RUNNERS_READY' => 'true')
+    end
+    %w[macos android].each do |platform|
+      assert_raises(AegisRelease::Error) do
+        AegisRelease::ReleaseRunner.select('RELEASE_PLATFORM' => platform, 'CHROMIUM_RUNNERS_READY' => 'true',
+          "#{platform.upcase}_RUNNERS_READY" => 'false')
+      end
+    end
+  end
+
+  def test_macos_runtime_rejects_store_credentials_wrong_host_and_shared_writable_paths
+    env = { 'GITHUB_ACTIONS' => 'true', 'RELEASE_PLATFORM' => 'macos', 'MACOS_RUNNERS_READY' => 'true',
+            'RUNNER_ENVIRONMENT' => 'self-hosted' }
+    keys = %w[AEGIS_LOCAL_MACOS_BUNDLE_PATH CHROMIUM_ROOT DEPOT_TOOLS_DIR CIPD_CACHE_DIR VPYTHON_VIRTUALENV_ROOT TMPDIR]
+    keys.each { |key| env[key] = @root }
+    validate = ->(value, os = 'darwin', cpu = 'arm64') {
+      AegisRelease::ReleaseRunner.validate_local_macos(value, os: os, cpu: cpu)
+    }
+    assert_equal keys.to_h { |key| [key, @root] }, validate.call(env)
+    %w[AEGIS_ASC_KEY_PATH AEGIS_PLAY_JSON_KEY_DATA MATCH_PASSWORD AEGIS_ANDROID_STORE_PASSWORD].each do |key|
+      error = assert_raises(AegisRelease::Error) { validate.call(env.merge(key => 'private-fixture')) }
+      refute_includes error.message, 'private-fixture'
+    end
+    assert_raises(AegisRelease::Error) { validate.call(env, 'linux') }
+    assert_raises(AegisRelease::Error) { validate.call(env, 'darwin', 'x86_64') }
+    assert_raises(AegisRelease::Error) { validate.call(env.merge('TMPDIR' => "#{@root}\ninjected=true")) }
+    File.chmod(0o777, @root)
+    assert_raises(AegisRelease::Error) { validate.call(env) }
+  ensure
+    File.chmod(0o700, @root)
+  end
+
   def environment
     { 'RELEASE_PLATFORM' => 'ios', 'RELEASE_PROFILE' => 'alpha', 'RELEASE_DESTINATION' => 'testflight-internal',
       'RELEASE_OPERATION' => 'distribute', 'RELEASE_VERSION' => '0.8.0', 'RELEASE_BUILD' => '1',

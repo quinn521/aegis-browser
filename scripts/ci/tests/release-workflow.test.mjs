@@ -131,3 +131,28 @@ test('candidate tags reuse the reviewed workflow and cannot trigger public relea
   assert.equal(tag.jobs.release.with.operation, 'upload');
   assert.deepEqual(Object.keys(tag.jobs), ['plan', 'release']);
 });
+
+test('macOS has independent readiness and a protected native runtime without Android secrets', () => {
+  const route = workflow.jobs.preflight.steps.find(s=>s.id === 'route');
+  assert.equal(route.env.MACOS_RUNNERS_READY, '${{ vars.AEGIS_MACOS_RELEASE_RUNNERS_READY }}');
+  assert.equal(route.env.ANDROID_RUNNERS_READY, '${{ vars.AEGIS_ANDROID_RELEASE_RUNNERS_READY }}');
+  const local = workflow.jobs.package.steps.find(s=>s.run === 'ruby scripts/release/local-macos-release.rb');
+  assert.match(local.if, /inputs.platform == 'macos'.*runner.environment == 'self-hosted'/u);
+  assert.doesNotMatch(JSON.stringify(local), /secrets\./u);
+  for (const step of workflow.jobs.package.steps.filter(s=>s.uses?.match(/setup-(node|ruby)@/u))) {
+    assert.equal(step.if, "${{ inputs.platform == 'android' || runner.environment == 'github-hosted' }}");
+  }
+  const build = workflow.jobs.package.steps.find(s=>s.run === 'bash scripts/release/action.sh package');
+  for (const name of ['AEGIS_ANDROID_STORE_PASSWORD', 'AEGIS_ANDROID_KEY_PASSWORD']) {
+    assert.match(build.env[name], /inputs.platform == 'android' && secrets\./u);
+  }
+  const regression = workflow.jobs.package.steps.find(s=>s.run?.includes('-p test_verify_macos_dmg.py'));
+  assert.equal(regression.if, "${{ inputs.platform == 'macos' }}");
+  const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));
+  const mac = candidate.jobs['macos-release-rehearsal'];
+  assert.deepEqual(mac.needs, ['contracts', 'ios-archive']);
+  assert.equal(mac.with.platform, 'macos');
+  assert.equal(mac.with.operation, 'package');
+  assert.match(mac.if, /AEGIS_MACOS_BRANCH_REHEARSAL == 'true'/u);
+  assert.match(candidate.jobs['release-rehearsal'].if, /AEGIS_IOS_BRANCH_REHEARSAL == 'true'/u);
+});
