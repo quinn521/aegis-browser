@@ -2,62 +2,90 @@
 
 # Local Fastlane and upstream release workflow
 
-The root `./release` command packages iOS IPA, Android arm64 APK and macOS arm64 DMG. It follows HomeGuard iOS's separation of preparation, packaging and upload while using Aegis's own projects, build drivers and signing identities. `plan` needs only Ruby and Git; executing lanes requires Ruby 3.3+, Bundler and the checked-in Gemfile.lock. CI uses Ruby 3.3.6 and Bundler 2.5.22. Install dependencies with `bundle install`.
+The root `./release` command packages iOS IPA, Android arm64 APK/AAB and macOS arm64 DMG. It follows HomeGuard iOS's separation of preparation, packaging and upload while using Aegis's own projects, build drivers and signing identities. `plan` needs only Ruby and Git; executing lanes requires Ruby 3.3+, Bundler and the checked-in Gemfile.lock. CI uses Ruby 3.3.6 and Bundler 2.5.22. Install dependencies with `bundle install`.
 
 | Platform | Application ID | Host | Upload destination |
 | --- | --- | --- | --- |
-| iOS | `com.gcsa.aegis` | macOS with Xcode | TestFlight or GitHub candidate draft |
-| Android | `com.gcsa.aegis` | Linux x86-64; prepared Chromium workspace | GitHub candidate draft |
+| iOS | `com.gcsa.aegis` | macOS with Xcode | TestFlight, ASC/App Review, or GitHub candidate draft |
+| Android | `com.gcsa.aegis` | Linux x86-64; prepared Chromium workspace | Play or GitHub candidate draft |
 | macOS | `com.gcsa.aegis` | Apple Silicon; prepared Chromium workspace | GitHub candidate draft |
 
 iOS extensions use `com.gcsa.aegis.safari` and `com.gcsa.aegis.share`. The existing App Group `group.com.gcsa.aegis.ios.share-inbox` and keychain service names are retained. Provision the new app and extension IDs with the existing App Group capability. These IDs differ from historical development builds; existing app data and in-place updates are **not** claimed to migrate. The Android QA driver's independent ID and Windows product ID are unchanged.
 
-## Local stages
+## Manual stages (first acceptance stage)
+
+Run `./release` in a terminal for the menu, or use the same explicit CLI in scripts. `--profile alpha|beta|release` is independent of destination. All profiles build optimized release binaries; they do not enable Debug test hooks. iOS embeds `AegisReleaseProfile` in the app and extensions. Native profiles identify the package/manifest without inventing different application behavior. Changing a manifest profile cannot promote an Alpha package into a Release package.
+
+| Stage | Effect |
+| --- | --- |
+| `plan` | Print source, profile, identity and destination; no build or upload |
+| `package` | Build and verify locally, without store credentials |
+| `upload` | Reuse the verified package; Apple transport only, Play draft only |
+| `release` | Convenience for package + upload; no distribution or review submission |
+| `distribute` | Reuse the exact processed build for selected TF groups or a Play testing track |
+| `submit` | Explicit production review stage, requiring profile `release` |
+| `status` | Read current store state and local stage records; no upload |
+
+| Platform | Destinations |
+| --- | --- |
+| iOS | `artifacts`, `testflight` (upload only), `testflight-internal`, `testflight-external`, `asc` (upload only), `app-store`, `github-draft` |
+| Android | `artifacts`, `play-internal`, `play-closed` (default `alpha`, override with `--track`), `play-open` (`beta`), `play-production`, `github-draft` |
+| macOS | `artifacts`, `github-draft` |
 
 ```bash
-./release ios plan --destination testflight --version 3.2 --build 70
-./release ios package --version 3.2 --build 70 --run-id ios-70
-./release ios upload --destination testflight --version 3.2 --build 70 \
-  --run-id ios-70 --manifest-sha256 <digest-printed-by-package>
+./release ios plan --profile alpha --destination testflight-internal --version 0.8.0 --build 1
+./release ios package --profile alpha --version 0.8.0 --build 1 --run-id ios-alpha-1
+./release ios upload --profile alpha --destination testflight-internal --version 0.8.0 --build 1 \
+  --run-id ios-alpha-1 --manifest-sha256 <retained-package-digest>
+./release ios status --profile alpha --destination testflight-internal --version 0.8.0 --build 1 --run-id ios-alpha-1
+./release ios distribute --profile alpha --destination testflight-internal --groups 'Existing Internal Group' \
+  --version 0.8.0 --build 1 --run-id ios-alpha-1 --manifest-sha256 <retained-package-digest>
 
-./release macos plan --destination github-draft --tag candidate/macos/2.2.0.144
-./release macos release --destination github-draft \
-  --tag candidate/macos/2.2.0.144 --run-id mac-candidate-144
-./release android release --destination github-draft \
-  --tag candidate/android/2.2.0.144 --run-id android-candidate-144
+# Build a new Release-profile package before using production destinations.
+./release ios submit --profile release --destination app-store --version 0.8.0 --build 2 \
+  --run-id ios-release-2 --manifest-sha256 <retained-release-package-digest>
+
+# Android's native version and versionCode must already be committed in source.
+./release android package --profile beta --format aab --run-id android-beta
+./release android upload --profile beta --destination play-closed --run-id android-beta \
+  --manifest-sha256 <retained-package-digest>
+./release android distribute --profile beta --destination play-closed --run-id android-beta \
+  --manifest-sha256 <retained-package-digest>
+./release macos package --profile release --run-id mac-release
 ```
 
-`package` defaults to local artifacts. `release` runs package then upload; `upload` reuses an existing package and requires its independently retained manifest SHA-256. Direct lanes are also available, e.g. `bundle exec fastlane ios package version:3.2 build:70 run_id:ios-70`. Fastlane uses `mac`, while the CLI uses `macos`.
+`upload`, `distribute` and `submit` require the independently retained manifest SHA-256 and the same clean source/profile/version/build/format. Output lives in `.artifacts/release/<platform>/<run-id>/`. A new package never overwrites an existing attempt. Interrupted store writes retain `*-started.json`; only a completed and verified stage gets `*-result.json`. A process lock prevents concurrent writes for the same package. A completed stage is idempotent for identical parameters; an unknown result blocks automatic retry. `status` does not remove markers or silently authorize another upload. Reconcile ambiguous results with ASC/Play before recovery; do not delete an intent to bypass this check.
 
-Output is `.artifacts/release/<platform>/<run-id>/`. A fresh package refuses an existing attempt directory. A failed build retains its diagnostics; use a new run ID after fixing the cause. Packaging requires a clean committed checkout and binds SHA, tree, version, build, artifact sizes and SHA-256 digests. Upload checks this binding again. Never use a manifest hash taken from an untrusted download as the expected value.
+Local manual lanes accept the operator's clean committed branch, including a fork test branch. GitHub Actions owns its upstream quality admission. Upstream GitHub Draft uploads also retain that admission. `--repository owner/fork` explicitly selects a fork for draft rehearsals; it never changes the upstream formal-release policy. A Draft requires an existing `candidate/<platform>/...` tag resolving to the exact package SHA. It never moves tags, publishes drafts or overwrites existing assets; retries read back remote hashes first.
 
-iOS accepts explicit numeric version/build overrides without modifying the checked-in project. Signing adjustments happen only in an attempt-owned copy of tracked iOS inputs. Chromium version/build values come from committed native source and cannot be changed by renaming a package. `CHROMIUM_ROOT` must point to a dedicated, already synchronized and patched workspace; the lane does not reset or fetch a shared checkout. Existing build-source checks, package guards and a release lock remain in effect.
+iOS overrides numeric version/build only in an attempt-owned tracked-source copy. Native builds require the committed product version/versionCode; `0.8.0 (1)` is currently the iOS test identity, not a filename override for Chromium. `CHROMIUM_ROOT` must be a dedicated, synchronized, patched workspace. No shared checkout reset or fetch is performed.
+
+TF distribution requires exact existing group names of the correct internal/external type and a processed unexpired build. External distribution requests Beta App Review, with tester notification disabled. Upload success alone is `uploaded_processing_unverified`. ASC production submission requires a prepared matching App Store version, listing, privacy/review information and compliance; the script does not guess these answers. It explicitly sets manual publication, submits the exact build and reads back the review state. Neither workflow publishes an approved App Store version.
+
+Play uses an upload-key signed AAB by default; `--format apk` keeps the existing sideload path. Upload creates only a draft and preserves existing completed releases. Distribution/submission commits the selected track and requests review; Google may additionally require Console action. The edits API does not prove approval or tester availability. It refuses unrelated drafts/active rollouts and never silently retries with different review semantics. Production `submit` requires `--play-release-policy managed` after verifying managed publishing in Console, or `automatic` if publication after approval is intended. This option records the operator's policy; the API does not verify or change managed publishing. The first Play app upload/setup may require Console setup.
 
 ## Local configuration
 
-Configure secrets in the process environment or a secret manager. Fastlane also supports its standard local `.env` files; keep them ignored and never commit credentials. Never pass secrets as lane arguments.
+Use process environment or ignored Fastlane `.env` files. Never put secrets in lane arguments, receipts or committed files. Install the locked bundle with Ruby 3.3.6/Bundler 2.5.22; when using a local vendor bundle, set `BUNDLE_PATH=vendor/bundle` consistently.
 
-| Name | Purpose |
+| Variables | Purpose |
 | --- | --- |
-| `AEGIS_APPLE_TEAM_ID` | Apple Developer team for IPA signing |
-| `AEGIS_IOS_PROFILES` | JSON map of the three iOS bundle IDs to installed **App Store** profile names |
-| `DEVELOPER_DIR` | Optional selected Xcode; the project requires an appropriate Xcode 26 installation |
-| `CHROMIUM_ROOT`, `DEPOT_TOOLS_DIR` | Dedicated prepared Chromium workspace and depot_tools |
-| `AEGIS_AAPT2`, `AEGIS_APKSIGNER` | Android SDK tool paths, or `aapt2`/`apksigner` on PATH |
-| `GH_TOKEN` | Read access to upstream source and Actions; additionally Contents write for GitHub Draft |
-| `AEGIS_ASC_KEY_ID`, `AEGIS_ASC_ISSUER_ID`, `AEGIS_ASC_KEY_BASE64` | App Store Connect API key, issuer and Base64-encoded `.p8`, used only for TestFlight upload |
-
-Example profile mapping (use actual installed profile names):
+| `AEGIS_APPLE_TEAM_ID`, `AEGIS_IOS_PROFILES` | Signing team and JSON mapping of three bundle IDs to installed App Store profile names |
+| `AEGIS_ASC_KEY_ID`, `AEGIS_ASC_ISSUER_ID` | ASC API identity |
+| `AEGIS_ASC_KEY_PATH` or `AEGIS_ASC_KEY_BASE64` | Private `.p8` file (mode 600), or Base64 secret; upload/distribute/submit/status only |
+| `CHROMIUM_ROOT`, `DEPOT_TOOLS_DIR`, `DEVELOPER_DIR` | Prepared native workspace and toolchain |
+| `AEGIS_AAPT2`, `AEGIS_APKSIGNER` | APK verification tools, defaulting to PATH |
+| `AEGIS_BUNDLETOOL_JAR`, JDK 17+ on PATH | AAB identity verification; provide the official bundletool JAR |
+| `AEGIS_ANDROID_KEYSTORE`, `AEGIS_ANDROID_KEY_ALIAS`, `AEGIS_ANDROID_CERT_SHA256` | Private Play upload keystore, alias, expected certificate fingerprint |
+| `AEGIS_ANDROID_STORE_PASSWORD`, `AEGIS_ANDROID_KEY_PASSWORD` | Passwords passed to Java via environment, never command-line values |
+| `AEGIS_PLAY_JSON_KEY` | Private Play service-account JSON file (mode 600), granted only the needed app/track permissions |
+| `GH_TOKEN` | Upstream read admission; Contents write only for the selected GitHub Draft repository |
 
 ```json
-{"com.gcsa.aegis":"match AppStore com.gcsa.aegis","com.gcsa.aegis.safari":"match AppStore com.gcsa.aegis.safari","com.gcsa.aegis.share":"match AppStore com.gcsa.aegis.share"}
+{"com.gcsa.aegis":"Aegis AppStore","com.gcsa.aegis.safari":"Aegis Safari AppStore","com.gcsa.aegis.share":"Aegis Share AppStore"}
 ```
 
-Both uploads require the package commit to equal current upstream `main` and its latest `quality.yml` push run/attempt to contain successful `quality` and `quality-gate` jobs. A main advance requires rebinding the candidate; local checks do not replace this admission.
-
-GitHub Draft additionally requires an **existing upstream tag** `candidate/<platform>/...` resolving to that exact commit. The script never creates/moves tags, publishes a draft, alters a public release, or overwrites assets. Repeating an interrupted upload verifies existing remote asset digests before filling missing assets. Candidate tags are separate from the existing formal `vX.Y.Z.N` release pipeline and its three-platform qualification requirements.
-
-TestFlight uses Fastlane's API-key upload with external distribution and submission disabled. Its receipt states `uploaded_processing_unverified`: App Store Connect processing, tester availability and device acceptance require separate readback. If the process stops during upload, inspect App Store Connect before retrying the same build number.
+Use actual installed profile names. Package-only needs signing material, but no ASC/Play publishing credentials. Android verifies every signed payload entry with the expected upload certificate, then verifies the final AAB identity. Its native build-identity file describes the pre-signing snapshot; the release manifest separately binds the final signed bytes. APK retains the Chromium signature and is not Play-qualified. DMG remains ad-hoc signed and unnotarized.
 
 ## GitHub Actions configuration
 
@@ -83,14 +111,14 @@ The preflight uses only a read token and precedes protected packaging. Package j
 
 Before merge, pushing a `codex/fastlane-release-*` branch runs `Release Branch Validation` on a fork or upstream branch. It runs credential-free regressions and compiles an unsigned iOS `0.8.0 (1)` archive, checking the app and both extension identities. It has no release environment or signing secrets. These diagnostics do not qualify an IPA, TestFlight upload, or the complete three-platform flow; signed packaging/upload and the subsequent Android then DMG acceptance remain separate.
 
-The macOS driver currently produces an **ad-hoc signed, unnotarized** DMG. Android retains the existing Chromium build signature and is **not distribution-qualified**. The draft records these facts. Developer ID signing/notarization, production Android signing continuity, Play/AAB delivery, device acceptance and public release remain separate work. This entrypoint does not change the formal release validator or mark these gates passed.
+Real local packaging/upload, Actions execution, candidate-tag Draft, store state and device acceptance are distinct evidence. A green simulation or unsigned archive cannot close the remaining real-build or upload checks. Developer ID/notarization, Chromium build hosts and Play account/upload-key setup must be available for their corresponding real tests.
 
 ```bash
-bundle exec ruby fastlane/tests/release_test.rb
+bundle exec ruby fastlane/tests/stores_test.rb
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/release -p 'test_*.py'
 pnpm run ci:test
 shellcheck release scripts/release/action.sh
 actionlint .github/workflows/release.yml
 ```
 
-The tests use disposable repositories, ZIP fixtures and simulated GitHub responses; they do not sign, archive, upload or establish device evidence. References: [Fastlane build_app](https://docs.fastlane.tools/actions/build_app/), [TestFlight upload](https://docs.fastlane.tools/actions/upload_to_testflight/), [GitHub environment secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+Regression tests use disposable repositories, simulated Apple/Play/GitHub responses and real JDK signing of a synthetic bundle. They verify profile/identity freezing, corruption, wrong groups, duplicate/unknown uploads, track transitions, manual publication, locks and signature failures. They do not upload a production app or establish device evidence. Ensure JAVA_HOME selects a complete JDK on macOS. References: [Fastlane build_app](https://docs.fastlane.tools/actions/build_app/), [TestFlight upload](https://docs.fastlane.tools/actions/upload_to_testflight/), [GitHub environment secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).

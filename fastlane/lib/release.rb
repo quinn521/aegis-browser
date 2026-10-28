@@ -13,6 +13,11 @@ module AegisRelease
   REPOSITORY = "gcsagroup/aegis-browser"
   APP_ID = "com.gcsa.aegis"
   IOS_TARGETS = { "Aegis" => APP_ID, "SafariWebExtension" => "#{APP_ID}.safari", "ShareExtension" => "#{APP_ID}.share" }.freeze
+  DESTINATIONS = {
+    'ios' => %w[artifacts testflight testflight-internal testflight-external asc app-store github-draft],
+    'android' => %w[artifacts play-internal play-closed play-open play-production github-draft],
+    'macos' => %w[artifacts github-draft]
+  }.freeze
   class Error < StandardError; end
 
   def self.require!(condition, message)
@@ -60,18 +65,36 @@ module AegisRelease
   end
 
   class Request
-    attr_reader :platform, :destination, :version, :build, :run_id, :tag, :root, :expected_digest
+    attr_reader :platform, :destination, :version, :build, :run_id, :tag, :root, :expected_digest,
+                :profile, :groups, :track, :format, :repository, :play_release_policy
 
     def initialize(platform, options = {}, root: ROOT)
       @root = root
       @platform = platform
       AegisRelease.require!(%w[ios android macos].include?(platform), "Platform must be ios, android or macos")
-      unknown = options.keys.map(&:to_sym) - %i[destination version build run_id tag manifest_sha256]
+      unknown = options.keys.map(&:to_sym) - %i[destination version build run_id tag manifest_sha256 profile groups track format repository play_release_policy]
       AegisRelease.require!(unknown.empty?, "Unknown release options: #{unknown.join(', ')}")
       options = options.transform_keys(&:to_sym)
       @destination = options.fetch(:destination, "artifacts").to_s
-      allowed = platform == "ios" ? %w[artifacts testflight github-draft] : %w[artifacts github-draft]
-      AegisRelease.require!(allowed.include?(destination), "Unsupported destination for #{platform}: #{destination}")
+      AegisRelease.require!(DESTINATIONS.fetch(platform).include?(destination), "Unsupported destination for #{platform}: #{destination}")
+      @profile = options.fetch(:profile, 'release').to_s.downcase
+      AegisRelease.require!(%w[alpha beta release].include?(profile), 'Profile must be alpha, beta or release')
+      AegisRelease.require!(!%w[asc app-store play-production].include?(destination) || profile == 'release', 'Store production destinations require --profile release')
+      @groups = options.fetch(:groups, '').to_s.split(',').map(&:strip)
+      AegisRelease.require!(groups.uniq == groups && groups.all? { |g| !g.empty? && g.size <= 100 && !g.match?(/[\x00-\x1f]/) }, 'Invalid or duplicate TestFlight groups')
+      AegisRelease.require!(groups.empty? || %w[testflight-internal testflight-external].include?(destination), '--groups requires a TestFlight distribution destination')
+      @track = options[:track]&.to_s || { 'play-internal' => 'internal', 'play-closed' => 'alpha', 'play-open' => 'beta', 'play-production' => 'production' }[destination]
+      AegisRelease.require!(!options[:track] || destination == 'play-closed', '--track overrides only the closed testing track')
+      AegisRelease.require!(!track || /\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}\z/.match?(track), 'Invalid Play track')
+      AegisRelease.require!(destination != 'play-closed' || !%w[internal beta production].include?(track), 'Closed testing cannot select an internal/open/production track')
+      @format = options.fetch(:format, platform == 'android' ? 'aab' : { 'ios' => 'ipa', 'macos' => 'dmg' }[platform]).to_s
+      AegisRelease.require!((platform == 'android' ? %w[apk aab] : [platform == 'ios' ? 'ipa' : 'dmg']).include?(format), 'Invalid package format')
+      AegisRelease.require!(!destination.start_with?('play-') || format == 'aab', 'Play requires an upload-key signed AAB')
+      @repository = options.fetch(:repository, REPOSITORY).to_s
+      AegisRelease.require!(/\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.match?(repository), 'Invalid GitHub repository')
+      AegisRelease.require!(!options[:repository] || destination == 'github-draft', '--repository is only for GitHub Draft')
+      @play_release_policy = options[:play_release_policy]&.to_s
+      AegisRelease.require!(!play_release_policy || (destination == 'play-production' && %w[managed automatic].include?(play_release_policy)), 'Production Play policy must be managed or automatic')
       native_version, native_build = native_identity
       @version = options.fetch(:version, native_version).to_s
       @build = options.fetch(:build, native_build).to_s
@@ -81,7 +104,7 @@ module AegisRelease
       if platform != "ios"
         AegisRelease.require!([version, build] == [native_version, native_build], "Chromium version/build must match committed native inputs; update source first")
       end
-      @run_id = options.fetch(:run_id, "#{version}-#{build}-#{AegisRelease.source(root, clean: false)['sha'][0, 12]}").to_s
+      @run_id = options.fetch(:run_id, "#{profile}-#{version}-#{build}-#{AegisRelease.source(root, clean: false)['sha'][0, 12]}").to_s
       AegisRelease.require!(/\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}\z/.match?(run_id) && !run_id.include?(".."), "Unsafe run ID")
       @tag = options[:tag]&.to_s
       if destination == "github-draft"
@@ -118,14 +141,16 @@ module AegisRelease
     end
 
     def identity
-      { "platform" => platform, "applicationId" => APP_ID, "version" => version, "build" => build }
+      { "platform" => platform, "applicationId" => APP_ID, "version" => version, "build" => build, "profile" => profile, "format" => format }
     end
 
     def plan
       identity.merge("destination" => destination, "tag" => tag, "runId" => run_id,
                      "source" => AegisRelease.source(root, clean: false), "output" => directory,
                      "host" => platform == "android" ? "Linux x86_64" : "macOS",
-                     "stages" => %w[package upload], "releaseReady" => false)
+                     "groups" => groups, "track" => track, "repository" => repository,
+                     "stages" => %w[package upload distribute submit status],
+                     "uploadSubmitsReview" => false, "releaseReady" => false)
     end
   end
 
@@ -166,7 +191,7 @@ module AegisRelease
         path = File.join(request.directory, name)
         AegisRelease.require!(AegisRelease.digest(path) == asset['sha256'] && File.size(path) == asset['size'], "Artifact changed: #{name}")
       end
-      suffix = { 'ios' => '.ipa', 'macos' => '.dmg', 'android' => '.apk' }.fetch(request.platform)
+      suffix = ".#{request.format}"
       AegisRelease.require!(names.count { |n| n.end_with?(suffix) } == 1, "Expected exactly one #{suffix} artifact")
       value
     end
@@ -203,6 +228,9 @@ module AegisRelease
         ios_profiles # Validate before creating output or touching signing state.
       else
         chromium_root
+        if request.platform == 'android' && request.format == 'aab'
+          %w[AEGIS_BUNDLETOOL_JAR AEGIS_ANDROID_KEYSTORE AEGIS_ANDROID_KEY_ALIAS AEGIS_ANDROID_STORE_PASSWORD AEGIS_ANDROID_KEY_PASSWORD AEGIS_ANDROID_CERT_SHA256].each { |name| required(name) }
+        end
       end
       FileUtils.mkdir_p(File.dirname(request.directory))
       Dir.mkdir(request.directory, 0o700)
@@ -243,7 +271,10 @@ module AegisRelease
         @fastlane.update_code_signing_settings(path: project, use_automatic_signing: false, team_id: team,
                                               targets: [target], build_configurations: ['Release'], profile_name: profiles.fetch(app_id))
       end
-      name = "Aegis-#{request.version}-#{request.build}-ios.ipa"
+      %w[AegisApp SafariWebExtension ShareExtension].each do |target|
+        run('/usr/libexec/PlistBuddy', '-c', "Add :AegisReleaseProfile string #{request.profile}", File.join(work, 'apps/ios', target, 'Info.plist'))
+      end
+      name = "Aegis-#{request.profile}-#{request.version}-#{request.build}-ios.ipa"
       @fastlane.build_app(project: project, scheme: 'Aegis-Release', configuration: 'Release', clean: true,
                          destination: 'generic/platform=iOS', output_directory: request.directory, output_name: name,
                          archive_path: File.join(work, 'Aegis.xcarchive'), derived_data_path: File.join(work, 'DerivedData'),
@@ -252,7 +283,7 @@ module AegisRelease
                          export_options: { method: 'app-store-connect', teamID: team, signingStyle: 'manual',
                                            provisioningProfiles: profiles, manageAppVersionAndBuildNumber: false })
       ipa = File.join(request.directory, name)
-      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build)
+      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build, request.profile)
       paths = [ipa] + Dir.glob(File.join(request.directory, '*.dSYM.zip'))
       [paths, { 'signing' => 'app-store-export', 'testflight' => 'not_uploaded', 'deviceAcceptance' => 'not_verified' }]
     end
@@ -279,26 +310,22 @@ module AegisRelease
                 'AEGIS_PACKAGE_VERSION' => request.version, 'DIST_DIR' => File.join(request.directory, 'native'),
                 'PACKAGE_FORMATS' => 'dmg' }
         if request.platform == 'android'
-          # A successful no-op must not relabel a pre-existing APK as a new build.
-          apk = File.join(out, 'apks/ChromePublic.apk')
-          AegisRelease.real_path!(apk)
-          if File.exist?(apk)
+          env['AEGIS_ANDROID_FORMAT'] = request.format
+          artifact = File.join(out, "apks/ChromePublic.#{request.format}")
+          AegisRelease.real_path!(artifact)
+          if File.exist?(artifact)
             history = File.join(out, '.aegis-fastlane-history')
             AegisRelease.real_path!(history)
             FileUtils.mkdir_p(history)
-            saved = File.join(history, "#{request.run_id}.apk")
-            AegisRelease.require!(!File.exist?(saved), "APK history already exists")
-            File.rename(apk, saved)
+            saved = File.join(history, "#{request.run_id}.#{request.format}")
+            AegisRelease.require!(!File.exist?(saved), 'Android package history already exists')
+            File.rename(artifact, saved)
           end
           run('bash', File.join(scripts, 'build-android.sh'), env: env)
-          badging = AegisRelease.command(ENV.fetch('AEGIS_AAPT2', 'aapt2'), 'dump', 'badging', AegisRelease.file!(apk))
-          AegisRelease.require!(badging.match?(/^package: name='#{Regexp.escape(APP_ID)}' versionCode='#{request.build}' /), "APK applicationId/versionCode mismatch")
-          version_name = File.read(File.join(request.root, 'apps/browser/args/aegis-android.gn'))[/android_override_version_name = "([^"]+)"/, 1]
-          AegisRelease.require!(version_name && badging.lines.first.include?("versionName='#{version_name}'"), 'APK versionName differs from committed GN inputs')
-          run(ENV.fetch('AEGIS_APKSIGNER', 'apksigner'), 'verify', apk)
+          verify_android_identity(artifact)
           run('bash', File.join(scripts, 'package-android.sh'), env: env)
-          pattern = '*.apk'
-          signing = 'existing-chromium-signature-not-distribution-qualified'
+          pattern = "*.#{request.format}"
+          signing = request.format == 'aab' ? 'android-upload-key' : 'existing-chromium-signature-not-distribution-qualified'
         else
           AegisRelease.require!(RbConfig::CONFIG['host_cpu'] =~ /arm64|aarch64/, 'macOS release GN currently requires Apple Silicon')
           run('bash', File.join(scripts, 'build-release.sh'), env: env)
@@ -314,63 +341,118 @@ module AegisRelease
         after = AegisRelease.command('python3', File.join(scripts, 'verify-build-source.py'), '--source', source)
         AegisRelease.require!(verification == after, 'Chromium source changed during packaging')
         native = env.fetch('DIST_DIR')
-        files = Dir.glob(File.join(native, pattern)).reject { |p| File.basename(p) == 'GCSA-aegis.apk' }
+        files = Dir.glob(File.join(native, pattern)).reject { |p| File.basename(p) == "GCSA-aegis.#{request.format}" }
         AegisRelease.require!(files.size == 1, 'Expected one native installable artifact')
         files += Dir.glob(File.join(native, '*.build-identity.json'))
         paths = files.map do |file|
           AegisRelease.file!(file)
           target = File.join(request.directory, File.basename(file))
-          FileUtils.cp(file, target)
+          if request.platform == 'android' && file.end_with?('.aab')
+            sign_android_bundle(file, target)
+          else
+            FileUtils.cp(file, target)
+          end
           target
         end
-        [paths, { 'signing' => signing, 'chromium' => JSON.parse(verification), 'deviceAcceptance' => 'not_verified' }]
+        [paths, { 'signing' => signing, 'chromium' => JSON.parse(verification),
+                  'nativeSnapshot' => 'build-identity describes the pre-signing native snapshot; release manifest hashes the final package',
+                  'certificateSha256' => request.format == 'aab' ? required('AEGIS_ANDROID_CERT_SHA256').delete(':').downcase : nil,
+                  'deviceAcceptance' => 'not_verified' }]
       ensure
         Dir.rmdir(lock)
       end
     end
 
     def upload(expected_digest = request.expected_digest)
-      AegisRelease.require!(request.destination != 'artifacts', 'Select testflight or github-draft for upload')
       receipt = Receipt.verify(request, expected_digest)
-      # Both external destinations accept only a commit with green upstream main CI.
       preflight_upload
-      if request.destination == 'testflight'
-        upload_testflight(receipt)
-      else
+      if request.destination == 'github-draft'
         result = Draft.new(request, receipt, expected_digest).upload
         path = File.join(request.directory, "github-upload-#{Time.now.utc.strftime('%Y%m%dT%H%M%S')}.json")
         AegisRelease.write_new(path, result)
-        puts "Verified GitHub draft: #{result.fetch('url')}"
+      else
+        client = store
+        client.authenticate
+        asset = receipt.fetch('assets').find { |a| a['name'].end_with?(".#{request.format}") }
+        path = File.join(request.directory, asset.fetch('name'))
+        if request.platform == 'ios'
+          run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), path, request.version, request.build, request.profile)
+        else
+          AegisRelease.require!(receipt.fetch('details')['signing'] == 'android-upload-key', 'Play requires a verified upload-key signed AAB')
+        end
+        operation = request.platform == 'ios' ? 'apple-upload' : 'play-upload'
+        result = Journal.new(request, expected_digest).perform(operation, 'track' => request.track) { client.upload(path) }
       end
+      puts JSON.pretty_generate(result)
+      result
     end
 
     def preflight_upload
-      AegisRelease.require!(request.destination != 'artifacts', 'Select testflight or github-draft for upload')
-      if request.destination == 'testflight'
-        %w[AEGIS_ASC_KEY_ID AEGIS_ASC_ISSUER_ID AEGIS_ASC_KEY_BASE64].each { |name| required(name) }
+      AegisRelease.require!(request.destination != 'artifacts', 'Choose an upload destination')
+      AegisRelease.source(request.root)
+      # Local manual Fastlane accepts the operator's clean branch. Actions owns CI
+      # admission. Upstream GitHub drafts retain exact-main quality admission.
+      if ENV['GITHUB_ACTIONS'] == 'true' || (request.destination == 'github-draft' && request.repository == REPOSITORY)
+        sha = AegisRelease.source(request.root).fetch('sha')
+        run('node', File.join(request.root, 'scripts/ci/release-preflight.mjs'), '--sha', sha,
+            env: { 'RELEASE_PLATFORM' => request.platform, 'RELEASE_DESTINATION' => request.destination, 'RELEASE_TAG' => request.tag })
       end
-      sha = AegisRelease.source(request.root).fetch('sha')
-      run('node', File.join(request.root, 'scripts/ci/release-preflight.mjs'), '--sha', sha,
-          env: { 'RELEASE_PLATFORM' => request.platform, 'RELEASE_DESTINATION' => request.destination, 'RELEASE_TAG' => request.tag })
     end
 
-    def upload_testflight(receipt)
-      AegisRelease.require!(request.platform == 'ios', 'TestFlight accepts only iOS')
-      marker = File.join(request.directory, 'testflight-upload.json')
-      AegisRelease.require!(!File.exist?(marker), 'This attempt already has a TestFlight upload receipt; inspect App Store Connect before retrying')
-      attempt = File.join(request.directory, 'testflight-attempt.json')
-      AegisRelease.require!(!File.exist?(attempt), 'An earlier TestFlight attempt may have reached Apple; reconcile App Store Connect before another upload')
-      ipa = File.join(request.directory, receipt.fetch('assets').find { |a| a['name'].end_with?('.ipa') }.fetch('name'))
-      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build)
-      api_key = @fastlane.app_store_connect_api_key(key_id: required('AEGIS_ASC_KEY_ID'), issuer_id: required('AEGIS_ASC_ISSUER_ID'),
-                                                   key_content: required('AEGIS_ASC_KEY_BASE64'), is_key_content_base64: true)
-      AegisRelease.write_new(attempt, request.identity.merge('status' => 'upload_started_outcome_unknown', 'source' => receipt['source']))
-      @fastlane.upload_to_testflight(api_key: api_key, app_identifier: APP_ID, ipa: ipa,
-                                    skip_submission: true, skip_waiting_for_build_processing: true,
-                                    distribute_external: false)
-      AegisRelease.write_new(marker, request.identity.merge('status' => 'uploaded_processing_unverified',
-                                                           'source' => receipt['source'], 'deviceAcceptance' => 'not_verified'))
-      puts 'TestFlight upload submitted; processing and tester availability remain unverified'
+    def store
+      AegisRelease.require!(request.platform != 'macos' && !%w[artifacts github-draft].include?(request.destination), 'Choose an Apple or Play store destination')
+      request.platform == 'ios' ? AppleStore.new(request, @fastlane) : PlayStore.new(request, @fastlane)
+    end
+
+    def status
+      client = store
+      client.authenticate
+      result = request.identity.merge('destination' => request.destination, 'remote' => client.status)
+      if File.directory?(request.directory)
+        result['localStages'] = Dir.glob(File.join(request.directory, '*-{started,result}.json')).map do |path|
+          { 'file' => File.basename(path), 'record' => JSON.parse(File.read(AegisRelease.file!(path))) }
+        end
+      end
+      puts JSON.pretty_generate(result)
+      result
+    end
+
+    def distribute
+      AegisRelease.require!(%w[testflight-internal testflight-external play-internal play-closed play-open].include?(request.destination), 'distribute requires a testing destination')
+      store_stage('distribute') { |client| client.distribute }
+    end
+
+    def submit
+      AegisRelease.require!(request.profile == 'release' && %w[app-store play-production].include?(request.destination), 'submit requires a release profile and production destination')
+      if request.platform == 'android'
+        AegisRelease.require!(request.play_release_policy, 'Select --play-release-policy managed after checking Play managed publishing, or automatic to allow publishing after approval')
+      end
+      store_stage('submit') { |client| request.platform == 'ios' ? client.submit : client.distribute }
+    end
+
+    def store_stage(stage)
+      Receipt.verify(request, request.expected_digest)
+      operation = request.platform == 'ios' ? 'apple-upload' : 'play-upload'
+      uploaded = JSON.parse(File.read(AegisRelease.file!(File.join(request.directory, "#{operation}-result.json"))))
+      intent = uploaded.fetch('intent')
+      AegisRelease.require!(intent['manifestSha256'] == request.expected_digest &&
+                            request.identity.all? { |k, v| intent[k] == v } &&
+                            intent.fetch('parameters')['track'] == request.track,
+                            'Distribution/review requires the completed upload record for this package and track')
+      preflight_upload
+      client = store
+      client.authenticate
+      # Validate before creating the mutation intent; a missing group or unfinished
+      # build is a safe preflight failure that can be fixed without a new upload.
+      if request.platform == 'ios'
+        client.ready_build
+        client.groups if stage == 'distribute'
+      end
+      parameters = { 'destination' => request.destination, 'groups' => request.groups,
+                     'track' => request.track, 'playReleasePolicy' => request.play_release_policy }
+      result = Journal.new(request, request.expected_digest).perform("#{request.platform}-#{stage}", parameters) { yield client }
+      puts JSON.pretty_generate(result)
+      result
     end
   end
 
@@ -384,11 +466,11 @@ module AegisRelease
     end
 
     def api(path)
-      JSON.parse(gh('api', "repos/#{REPOSITORY}/#{path}"))
+      JSON.parse(gh('api', "repos/#{@request.repository}/#{path}"))
     end
 
     def releases
-      JSON.parse(gh('api', "repos/#{REPOSITORY}/releases?per_page=100", '--paginate', '--slurp')).flatten(1)
+      JSON.parse(gh('api', "repos/#{@request.repository}/releases?per_page=100", '--paginate', '--slurp')).flatten(1)
     end
 
     def selected
@@ -437,7 +519,7 @@ module AegisRelease
           File.write(notes, text, mode: 'wx')
         end
         Receipt.verify(@request, @expected_digest)
-        gh('release', 'create', @request.tag, '--repo', REPOSITORY, '--draft', '--prerelease', '--verify-tag',
+        gh('release', 'create', @request.tag, '--repo', @request.repository, '--draft', '--prerelease', '--verify-tag',
            '--target', sha, '--title', "Aegis #{@request.platform} #{@request.version} (#{@request.build}) candidate", '--notes-file', notes)
         release = selected
         AegisRelease.require!(release, 'Draft creation outcome unknown; inspect remote state before retrying')
@@ -448,7 +530,7 @@ module AegisRelease
         AegisRelease.require!(asset['size'] < 2 * 1024**3, 'GitHub asset must be smaller than 2 GiB')
         Receipt.verify(@request, @expected_digest)
         selected # Refuse a draft published concurrently before sending the next asset.
-        gh('release', 'upload', @request.tag, File.join(@request.directory, asset['name']), '--repo', REPOSITORY)
+        gh('release', 'upload', @request.tag, File.join(@request.directory, asset['name']), '--repo', @request.repository)
       end
       release = selected
       AegisRelease.require!(release, 'Draft disappeared during upload')
@@ -460,3 +542,6 @@ module AegisRelease
     end
   end
 end
+
+require_relative "stores"
+require_relative "android"

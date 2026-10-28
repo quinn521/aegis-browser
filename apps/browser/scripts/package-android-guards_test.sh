@@ -152,4 +152,18 @@ ln -s "$MOUNT_SRC" "$TEST_ROOT/mounted-link"
 expect_failure "CHROMIUM_SRC 绕过了符号链接保护" "Chromium source must be a real directory" \
   env CHROMIUM_SRC="$TEST_ROOT/mounted-link" bash "$SCRIPT_DIR/package-android.sh"
 
-printf 'PASS: Android package path and publish guards\n'
+# The bundle path must snapshot the AAB, not accidentally reuse an old APK.
+printf 'representative-aab\n' > "$PACKAGE_OUT/apks/ChromePublic.aab"
+mkdir -p "$TEST_ROOT/aab-case"
+env PATH="$FAKE_BIN:$PATH" CHROMIUM_ROOT="$PACKAGE_ROOT" \
+  AEGIS_ANDROID_FORMAT=aab DIST_DIR="$TEST_ROOT/aab-case/dist" \
+  FAKE_NODE_REACHED="$TEST_ROOT/aab-case/node-reached" FAKE_NODE_MODE=success \
+  bash "$SCRIPT_DIR/package-android.sh" >/dev/null
+[[ "$(cat "$TEST_ROOT/aab-case/dist/GCSA-aegis.aab")" == "representative-aab" ]] || \
+  fail "AAB package selected APK bytes"
+[[ ! -e "$TEST_ROOT/aab-case/dist/GCSA-aegis.apk" ]] || fail "AAB package emitted APK alias"
+expect_failure "unsupported bundle format" "AEGIS_ANDROID_FORMAT must be apk or aab" \
+  env CHROMIUM_ROOT="$PACKAGE_ROOT" AEGIS_ANDROID_FORMAT=zip \
+  DIST_DIR="$TEST_ROOT/invalid-format" bash "$SCRIPT_DIR/package-android.sh"
+
+printf 'PASS: Android APK/AAB package path and publish guards\n'

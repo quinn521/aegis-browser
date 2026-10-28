@@ -489,6 +489,8 @@ function collectSourceSnapshot(outDir) {
   const gnPath = gnToolPath(chromiumSrc);
   const identityTarget = process.env.AEGIS_IDENTITY_TARGET || 'desktop';
   assert(['desktop', 'android'].includes(identityTarget), 'unsupported identity target');
+  const androidFormat = process.env.AEGIS_ANDROID_FORMAT || 'apk';
+  assert(['apk', 'aab'].includes(androidFormat), 'unsupported Android format');
   const releaseArgsPath = join(browserRoot, 'args',
       identityTarget === 'android' ? 'aegis-android.gn' : 'aegis-release.gn');
   const releaseArgs = readFileSync(releaseArgsPath, 'utf8');
@@ -526,7 +528,7 @@ function collectSourceSnapshot(outDir) {
     buildDrivers: buildDriverEvidence(),
   };
   const build = {
-    target: identityTarget === 'android' ? 'chrome_public_apk' : 'chrome',
+    target: identityTarget === 'android' ? (androidFormat === 'aab' ? 'chrome_public_bundle' : 'chrome_public_apk') : 'chrome',
     outDir: relative(chromiumSrc, resolvedOutDir).split(sep).join('/'),
     expectedGnArgsSha256: sha256Buffer(expectedGnArgs),
     host: {

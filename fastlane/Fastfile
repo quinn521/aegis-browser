@@ -12,9 +12,21 @@ end
     lane :package do |options|
       pipeline(product, options).package
     end
-    desc 'Upload a verified package to TestFlight or GitHub Draft Release'
+    desc 'Upload a verified package without distributing or submitting for review'
     lane :upload do |options|
       pipeline(product, options).upload
+    end
+    desc 'Distribute the exact uploaded build to TestFlight groups or a Play test track'
+    lane :distribute do |options|
+      pipeline(product, options).distribute
+    end
+    desc 'Submit the exact release build for store review'
+    lane :submit do |options|
+      pipeline(product, options).submit
+    end
+    desc 'Read store state and local stage records without uploading'
+    lane :status do |options|
+      pipeline(product, options).status
     end
     desc 'Package then upload the same verified artifact'
     lane :release do |options|

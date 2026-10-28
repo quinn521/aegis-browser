@@ -46,7 +46,7 @@ jobs:
           FASTLANE_HIDE_GITHUB_ISSUES: '1'
           FASTLANE_OPT_OUT_USAGE: '1'
         run: |
-          bundle exec ruby fastlane/tests/release_test.rb
+          bundle exec ruby fastlane/tests/stores_test.rb
           python3 -m unittest discover -s scripts/release -p 'test_*.py'
           pnpm run ci:test
           bundle exec fastlane lanes

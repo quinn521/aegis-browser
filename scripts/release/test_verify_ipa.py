@@ -18,7 +18,8 @@ class VerifyIPATests(unittest.TestCase):
                                           ("PlugIns/ShareExtension.appex/", "com.gcsa.aegis.share", "70")]:
                 root = "Payload/Aegis.app/" + suffix
                 archive.writestr(root + "Info.plist", plistlib.dumps({"CFBundleIdentifier": app_id,
-                                 "CFBundleShortVersionString": "3.2", "CFBundleVersion": build}))
+                                 "CFBundleShortVersionString": "3.2", "CFBundleVersion": build,
+                                 "AegisReleaseProfile": "alpha"}))
                 if profile:
                     archive.writestr(root + "embedded.mobileprovision", "fixture")
 
@@ -27,6 +28,9 @@ class VerifyIPATests(unittest.TestCase):
             path = Path(temp) / "test.ipa"
             self.fixture(path)
             self.assertTrue(ipa.verify(path, "3.2", "70"))
+            self.assertTrue(ipa.verify(path, "3.2", "70", "alpha"))
+            with self.assertRaises(ValueError):
+                ipa.verify(path, "3.2", "70", "release")
 
     def test_stale_identity_extension_build_or_unsigned_package(self):
         for kwargs in ({"identifier": "com.gcsa.aegis.ios.app"}, {"extension_build": "69"}, {"profile": False}):

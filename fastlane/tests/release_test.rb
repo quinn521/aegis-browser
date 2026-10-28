@@ -3,7 +3,7 @@ require 'minitest/autorun'
 require 'tmpdir'
 require_relative '../lib/release'
 
-class ReleaseTest < Minitest::Test
+class ReleaseFixture < Minitest::Test
   def setup
     @root = File.realpath(Dir.mktmpdir('aegis-release-test-'))
     write('.gitignore', ".artifacts/\n")
@@ -39,13 +39,16 @@ class ReleaseTest < Minitest::Test
   def package(platform = 'ios', **options)
     req = request(platform, **options)
     FileUtils.mkdir_p(req.directory)
-    extension = { 'ios' => 'ipa', 'android' => 'apk', 'macos' => 'dmg' }.fetch(platform)
+    extension = req.format
     path = File.join(req.directory, "Aegis.#{extension}")
     File.write(path, 'fixture, not a real package')
     sha = AegisRelease::Receipt.create(req, [path], AegisRelease.source(@root), 'signing' => 'fixture')
     [req, sha, path]
   end
 
+end
+
+class ReleaseTest < ReleaseFixture
   def test_plan_is_read_only_and_reports_dirty_source
     write('uncommitted.txt', 'pending')
     value = request.plan
@@ -283,14 +286,18 @@ class ReleaseTest < Minitest::Test
     req, sha = package('ios', destination: 'testflight')
     apple = FakeApple.new
     flow = FixturePipeline.new(req, apple)
-    receipt = AegisRelease::Receipt.verify(req, sha)
-    capture_io { with_apple_environment { flow.upload_testflight(receipt) } }
-    result = JSON.parse(File.read(File.join(req.directory, 'testflight-upload.json')))
+    store = AegisRelease::AppleStore.new(req, apple)
+    store.instance_variable_set(:@app, Struct.new(:id).new('fixture'))
+    store.define_singleton_method(:authenticate) { true }
+    store.define_singleton_method(:build) { nil }
+    flow.define_singleton_method(:store) { store }
+    capture_io { flow.upload(sha) }
+    result = JSON.parse(File.read(File.join(req.directory, 'apple-upload-result.json')))['result']
     assert_equal 'uploaded_processing_unverified', result['status']
     assert_equal false, apple.uploads.first[:distribute_external]
     assert_equal true, apple.uploads.first[:skip_submission]
     assert_equal true, apple.uploads.first[:skip_waiting_for_build_processing]
-    assert_raises(AegisRelease::Error) { with_apple_environment { flow.upload_testflight(receipt) } }
+    capture_io { flow.upload(sha) }
     assert_equal 1, apple.uploads.length
   end
 
@@ -299,12 +306,16 @@ class ReleaseTest < Minitest::Test
     apple = FakeApple.new
     apple.fail_upload = true
     flow = FixturePipeline.new(req, apple)
-    receipt = AegisRelease::Receipt.verify(req, sha)
-    assert_raises(AegisRelease::Error) { with_apple_environment { flow.upload_testflight(receipt) } }
-    assert File.file?(File.join(req.directory, 'testflight-attempt.json'))
-    refute File.exist?(File.join(req.directory, 'testflight-upload.json'))
+    store = AegisRelease::AppleStore.new(req, apple)
+    store.instance_variable_set(:@app, Struct.new(:id).new('fixture'))
+    store.define_singleton_method(:authenticate) { true }
+    store.define_singleton_method(:build) { nil }
+    flow.define_singleton_method(:store) { store }
+    assert_raises(AegisRelease::Error) { flow.upload(sha) }
+    assert File.file?(File.join(req.directory, 'apple-upload-started.json'))
+    refute File.exist?(File.join(req.directory, 'apple-upload-result.json'))
     apple.fail_upload = false
-    assert_raises(AegisRelease::Error) { with_apple_environment { flow.upload_testflight(receipt) } }
+    assert_raises(AegisRelease::Error) { flow.upload(sha) }
     assert_equal 1, apple.uploads.length
   end
 end

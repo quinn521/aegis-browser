@@ -6,7 +6,7 @@ import zipfile
 APP_ID = "com.gcsa.aegis"
 
 
-def verify(path, version, build):
+def verify(path, version, build, release_profile=None):
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         roots = [n for n in names if n.startswith("Payload/") and n.endswith(".app/Info.plist") and n.count("/") == 2]
@@ -22,6 +22,8 @@ def verify(path, version, build):
             info = plistlib.loads(archive.read(member))
             if (info.get("CFBundleIdentifier"), info.get("CFBundleShortVersionString"), info.get("CFBundleVersion")) != (identifier, version, build):
                 raise ValueError("IPA bundle/version/build mismatch: " + identifier)
+            if release_profile is not None and info.get("AegisReleaseProfile") != release_profile:
+                raise ValueError("IPA release profile mismatch: " + identifier)
             profile = member.removesuffix("Info.plist") + "embedded.mobileprovision"
             if profile not in names:
                 raise ValueError("Missing embedded provisioning profile: " + identifier)

@@ -6,8 +6,14 @@ require_relative "../../fastlane/lib/release"
 begin
   options = {}
   parser = OptionParser.new do |p|
-    p.banner = "Usage: ./release <ios|android|macos> <plan|package|upload|release> [options]"
-    p.on("--destination NAME", "artifacts (default), testflight, github-draft") { |v| options[:destination] = v }
+    p.banner = "Usage: ./release <ios|android|macos> <plan|package|upload|release|distribute|submit|status> [options]"
+    p.on("--profile NAME", "alpha, beta, release (default); independent of destination") { |v| options[:profile] = v }
+    p.on("--destination NAME", "artifacts, testflight[-internal|-external], asc, app-store, play-{internal,closed,open,production}, github-draft") { |v| options[:destination] = v }
+    p.on("--groups NAMES", "Comma-separated existing TestFlight group names") { |v| options[:groups] = v }
+    p.on("--track NAME", "Existing Play closed track (default alpha)") { |v| options[:track] = v }
+    p.on("--format NAME", "ipa, aab (Android default), apk, dmg") { |v| options[:format] = v }
+    p.on("--repository OWNER_REPO", "GitHub Draft repository (default upstream); explicit fork for rehearsal") { |v| options[:repository] = v }
+    p.on("--play-release-policy POLICY", "managed (verify in Console) or automatic, required for Play production submit") { |v| options[:play_release_policy] = v }
     p.on("--version VERSION", "iOS marketing version; desktop must match committed version") { |v| options[:version] = v }
     p.on("--build NUMBER", "iOS build; Android must match committed versionCode") { |v| options[:build] = v }
     p.on("--run-id ID", "Unique local attempt directory; reuse only for upload") { |v| options[:run_id] = v }
@@ -16,16 +22,54 @@ begin
     p.on("-h", "--help") { puts p; exit 0 }
   end
   parser.parse!
+  if ARGV.empty? && $stdin.tty?
+    choose = lambda do |label, values|
+      puts "#{label}: #{values.each_with_index.map { |v, i| "#{i + 1}=#{v}" }.join('  ')}"
+      index = Integer($stdin.gets.to_s.strip, exception: false)
+      raise ArgumentError, 'Invalid selection' unless index && (1..values.size).cover?(index)
+      values[index - 1]
+    end
+    platform = choose.call('Platform', %w[ios android macos])
+    options[:profile] = choose.call('Profile', %w[alpha beta release])
+    options[:destination] = choose.call('Destination', AegisRelease::DESTINATIONS.fetch(platform))
+    stage = choose.call('Stage', %w[plan package release upload distribute submit status])
+    %i[version build run_id].each do |field|
+      print "#{field} (Enter = default): "
+      value = $stdin.gets.to_s.strip
+      options[field] = value unless value.empty?
+    end
+    if options[:destination] == 'github-draft'
+      print 'Existing candidate tag: '
+      options[:tag] = $stdin.gets.to_s.strip
+    end
+    if stage == 'distribute' && platform == 'ios'
+      print 'Existing TestFlight group names (comma separated): '
+      options[:groups] = $stdin.gets.to_s.strip
+    end
+    if stage == 'submit' && platform == 'android'
+      options[:play_release_policy] = choose.call('Play publishing policy', %w[managed automatic])
+    end
+    if %w[upload distribute submit].include?(stage)
+      print 'Manifest SHA-256 retained from package: '
+      options[:manifest_sha256] = $stdin.gets.to_s.strip
+    end
+    puts JSON.pretty_generate(AegisRelease::Request.new(platform, options).plan.merge('selectedStage' => stage))
+    if stage != 'plan' && stage != 'status'
+      print "Execute #{stage}? Type #{stage} to continue: "
+      raise ArgumentError, 'Cancelled' unless $stdin.gets.to_s.strip == stage
+    end
+    ARGV.replace([platform, stage])
+  end
   raise ArgumentError, parser.to_s unless (1..2).cover?(ARGV.length)
   platform, stage = ARGV
   stage ||= "plan"
-  raise ArgumentError, "Unknown stage: #{stage}" unless %w[plan package upload release].include?(stage)
+  raise ArgumentError, "Unknown stage: #{stage}" unless %w[plan package upload release distribute submit status].include?(stage)
   request = AegisRelease::Request.new(platform, options)
   if stage == "plan"
     puts JSON.pretty_generate(request.plan)
   else
     AegisRelease.require!(Gem::Version.new(RUBY_VERSION) >= Gem::Version.new('3.3'), 'Use Ruby 3.3 or newer on PATH, then run bundle install')
-    raise ArgumentError, "upload requires --manifest-sha256" if stage == "upload" && !options[:manifest_sha256]
+    raise ArgumentError, "#{stage} requires --manifest-sha256" if %w[upload distribute submit].include?(stage) && !options[:manifest_sha256]
     raise ArgumentError, "release/upload requires an upload destination" if %w[release upload].include?(stage) && request.destination == "artifacts"
     Dir.chdir(AegisRelease::ROOT)
     ENV["FASTLANE_SKIP_UPDATE_CHECK"] = "1"
