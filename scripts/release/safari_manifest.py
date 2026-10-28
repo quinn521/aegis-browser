@@ -19,9 +19,15 @@ def verify(read):
         if path.is_absolute() or ".." in path.parts or "\\" in relative or path.suffix.lower() != ".png":
             raise ValueError("Safari icon must be a relative PNG resource")
         image = read(relative)
-        if len(image) < 24 or image[:16] != b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR":
+        if len(image) < 24 or image[:8] != b"\x89PNG\r\n\x1a\n":
             raise ValueError("Safari icon is not a PNG: " + relative)
-        if struct.unpack(">II", image[16:24]) != (int(size), int(size)):
+        offset = 8
+        # Xcode's CopyPNGFile prepends a CgBI chunk to bundled iOS PNGs.
+        if image[12:16] == b"CgBI":
+            offset += 12 + struct.unpack(">I", image[8:12])[0]
+        if image[offset:offset + 8] != b"\x00\x00\x00\rIHDR" or len(image) < offset + 16:
+            raise ValueError("Safari icon has no valid PNG header: " + relative)
+        if struct.unpack(">II", image[offset + 8:offset + 16]) != (int(size), int(size)):
             raise ValueError("Safari icon dimensions differ from manifest: " + relative)
     return True
 

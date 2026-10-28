@@ -14,7 +14,7 @@ spec.loader.exec_module(ipa)
 
 
 class VerifyIPATests(unittest.TestCase):
-    def fixture(self, path, *, identifier="com.gcsa.aegis", extension_build="70", profile=True, manifest=None):
+    def fixture(self, path, *, identifier="com.gcsa.aegis", extension_build="70", profile=True, manifest=None, icon_data=None):
         with zipfile.ZipFile(path, "w") as archive:
             for suffix, app_id, build in [("", identifier, "70"),
                                           ("PlugIns/SafariWebExtension.appex/", "com.gcsa.aegis.safari", extension_build),
@@ -35,7 +35,7 @@ class VerifyIPATests(unittest.TestCase):
 
             image = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 48, 48, 8, 6, 0, 0, 0))
             image += chunk(b"IDAT", zlib.compress((b"\x00" + b"\x00\x40\x80\xff" * 48) * 48))
-            archive.writestr(safari + "icon.png", image + chunk(b"IEND", b""))
+            archive.writestr(safari + "icon.png", icon_data if icon_data is not None else image + chunk(b"IEND", b""))
 
     def test_identity_and_extensions(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -63,6 +63,14 @@ class VerifyIPATests(unittest.TestCase):
                 self.fixture(path, manifest=manifest)
                 with self.assertRaises((ValueError, KeyError)):
                     ipa.verify(path, "3.2", "70")
+
+    def test_real_xcode_optimized_icon_remains_valid_after_export(self):
+        # Captured from an Xcode 26.6 IPA; its CgBI chunk precedes IHDR.
+        icon = (Path(__file__).parent / "fixtures/safari-icon-xcode.png").read_bytes()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "test.ipa"
+            self.fixture(path, icon_data=icon)
+            self.assertTrue(ipa.verify(path, "3.2", "70", "alpha"))
 
 
 if __name__ == "__main__":
