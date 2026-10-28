@@ -6872,7 +6872,7 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
       }
       throw Error('production startup did not become ready');
     })()
-  )JS", deadline.Remaining().InMilliseconds()));
+  )JS", static_cast<int>(deadline.Remaining().InMilliseconds())));
   ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
   ASSERT_THAT(ready_result, content::EvalJsResult::IsOkAndHolds(
       testing::Truly([](const base::Value& value) { return value.is_string(); })));
@@ -6912,7 +6912,7 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest, ReadingLocalAiWorkerInWebUI) {
     phases.Append(phase);
     ASSERT_TRUE(observer.Begin(phase)) << observer.error();
     auto actual = evaluate(content::JsReplace("globalThis.__aegisMac03($1, $2)",
-        phase, deadline.Remaining().InMilliseconds()));
+        phase, static_cast<int>(deadline.Remaining().InMilliseconds())));
     ASSERT_THAT(actual, content::EvalJsResult::IsOkAndHolds(
       testing::Truly([](const base::Value& value) { return value.is_string(); })));
     ASSERT_LE(actual.ExtractString().size(), 16384u);

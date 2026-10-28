@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
-index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b7d1e3d9af8070a9164c0dc37f24816aaeaefd72 100644
+index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b6b7f80a3fdc4f67efafa85300a92a4d7a2eb5bc 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 +++ b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 @@ -4,6 +4,13 @@
@@ -686,7 +686,7 @@ index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b7d1e3d9af8070a9164c0dc37f24816a
      })()
 -  )JS"), "passed");
 -}
-+  )JS", deadline.Remaining().InMilliseconds()));
++  )JS", static_cast<int>(deadline.Remaining().InMilliseconds())));
 +  ASSERT_TRUE(observer.CheckDeadline()) << observer.error();
 +  ASSERT_THAT(ready_result, content::EvalJsResult::IsOkAndHolds(
 +      testing::Truly([](const base::Value& value) { return value.is_string(); })));
@@ -726,7 +726,7 @@ index 6412a5cf70a637b2076c4e4f95c55fad441a1563..b7d1e3d9af8070a9164c0dc37f24816a
 +    phases.Append(phase);
 +    ASSERT_TRUE(observer.Begin(phase)) << observer.error();
 +    auto actual = evaluate(content::JsReplace("globalThis.__aegisMac03($1, $2)",
-+        phase, deadline.Remaining().InMilliseconds()));
++        phase, static_cast<int>(deadline.Remaining().InMilliseconds())));
 +    ASSERT_THAT(actual, content::EvalJsResult::IsOkAndHolds(
 +      testing::Truly([](const base::Value& value) { return value.is_string(); })));
 +    ASSERT_LE(actual.ExtractString().size(), 16384u);
