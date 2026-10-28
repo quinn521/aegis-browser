@@ -319,7 +319,9 @@ module AegisRelease
       begin
         scripts = File.join(request.root, 'apps/browser/scripts')
         source = File.join(root, 'src')
-        verification = AegisRelease.command('python3', File.join(scripts, 'verify-build-source.py'), '--source', source)
+        verification_args = ['python3', File.join(scripts, 'verify-build-source.py'), '--source', source,
+                             '--platform', request.platform == 'android' ? 'android' : 'desktop']
+        verification = AegisRelease.command(*verification_args)
         out = File.join(source, 'out', request.platform == 'macos' ? 'AegisRelease' : 'AegisAndroid')
         env = { 'CHROMIUM_ROOT' => root, 'CHROMIUM_SRC' => nil, 'OUT_DIR' => out,
                 'AEGIS_ALLOW_DIRTY_IDENTITY' => nil, 'ALLOW_COMPONENT_PACKAGE' => nil,
@@ -355,7 +357,7 @@ module AegisRelease
           pattern = '*.dmg'
           signing = 'ad-hoc-not-notarized'
         end
-        after = AegisRelease.command('python3', File.join(scripts, 'verify-build-source.py'), '--source', source)
+        after = AegisRelease.command(*verification_args)
         AegisRelease.require!(verification == after, 'Chromium source changed during packaging')
         native = env.fetch('DIST_DIR')
         files = Dir.glob(File.join(native, pattern)).reject { |p| File.basename(p) == "GCSA-aegis.#{request.format}" }

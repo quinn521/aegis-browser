@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 SRC="${CHROMIUM_SRC:-$CHROMIUM_ROOT/src}"
 OUT="${OUT_DIR:-$SRC/out/AegisAndroid}"
-VERSION="$(read_pinned_value "$VERSION_FILE" 2>/dev/null || echo "0.0.0")"
+VERSION="$(python3 "$ROOT_DIR/scripts/chromium_inputs.py" --platform android --field version)"
 APP_VERSION="${AEGIS_PACKAGE_VERSION:-0.1.0}"
 DIST_ROOT="${DIST_DIR:-$ROOT_DIR/dist}"
 

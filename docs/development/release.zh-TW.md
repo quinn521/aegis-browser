@@ -64,6 +64,8 @@ iOS 延伸功能使用 `com.gcsa.aegis.safari`、`com.gcsa.aegis.share`。保留
 
 iOS 可在本次原始碼副本中覆盖數字 version/build。Chromium 的版本及 versionCode 必須事先寫入並提交原生输入，不能只改包名；目前 `0.8.0 (1)` 是 iOS 測試身份。`CHROMIUM_ROOT` 需要獨佔、已同步並應用修補的工作區，腳本不重置或拉取共用原始碼。
 
+Android 的原始碼校驗、套件名稱和原生建置身分讀取 `apps/browser/ci-pins/android.json` 及其修補目錄。桌面仍使用 `CHROMIUM_VERSION`、`CHROMIUM_COMMIT` 和 `patches/`。桌面工作區不能取代 Android 的獨立基線。Android 驗收要求 x86-64 Linux 和至少 200 GB 可用空間；ARM64 VM 中的 x86-64 模擬容器不符合該門禁。
+
 TF 內外测要求精確的已有群組名、符合的群組類型，以及處理完成且未過期的 build。外测會請求 Beta App Review，預設不通知外部測試者。上傳成功僅紀錄 `uploaded_processing_unverified`。ASC 正式送審要求預先準備對應版本、商店資料、隱私/審核資料和合規回答；腳本不猜測這些答案。它显式設定手動發布，提交精確 build，並回讀審核狀態，不自動發布通過審核的 App Store 版本。
 
 Play 預設產生使用上傳金鑰簽章的 AAB；`--format apk` 保留現有側載路徑。upload 只建立 draft 並保留原 completed 版本；distribute/submit 提交选定軌道並請求審核，Google 可能仍要求 Console 操作。edits API 不能證明審核通過或測試者可用。腳本拒絕隱式改动其他 draft/正在進行的 rollout，也不會自動重試成另一種送審語義。正式 submit 必須显式指定 `--play-release-policy managed`（先在 Console 核對受管理發布）或 `automatic`（接受審核後自動發布）；這個參數紀錄操作者選擇，不代表 API 已驗證或修改该設定。首次 Play 應用及包可能需要先在 Console 完成初始化。

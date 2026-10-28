@@ -5,16 +5,18 @@ from pathlib import Path
 import sys
 
 from ci.candidate import BROWSER, git, verify_tree
+from chromium_inputs import load_inputs
 
 
-def verify_source(source, browser=BROWSER):
+def verify_source(source, browser=BROWSER, platform='desktop'):
     source = Path(source).resolve(strict=True)
     browser = Path(browser).resolve(strict=True)
     for repository in (source, source / 'v8'):
         if Path(git(repository, 'rev-parse', '--show-toplevel')).resolve() != repository:
             raise ValueError('构建依赖缺少独立 Git 来源，不能借用父仓库身份：' + str(repository))
-    base = (browser / 'CHROMIUM_COMMIT').read_text().strip()
-    patches = browser / 'patches'
+    inputs = load_inputs(browser, platform)
+    base = inputs['commit']
+    patches = browser / inputs['patchDirectory']
     chromium_tree = verify_tree(source, base, patches)
     v8_base = git(source, 'rev-parse', base + ':v8')
     v8_tree = verify_tree(source / 'v8', v8_base, patches / 'v8')
@@ -31,7 +33,7 @@ def verify_source(source, browser=BROWSER):
         checked += 1
     if not checked:
         raise ValueError('overlay 为空，不能建立构建来源')
-    return {'sourceHead': git(source, 'rev-parse', 'HEAD'),
+    return {'inputs': inputs, 'sourceHead': git(source, 'rev-parse', 'HEAD'),
             'chromiumTree': chromium_tree, 'v8Tree': v8_tree,
             'overlayFilesChecked': checked, 'sourceVerified': True,
             'built': False, 'runtimeTested': False}
@@ -40,9 +42,10 @@ def verify_source(source, browser=BROWSER):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, required=True)
+    parser.add_argument('--platform', choices=['desktop', 'android'], default='desktop')
     args = parser.parse_args()
     try:
-        print(json.dumps(verify_source(args.source), ensure_ascii=False, indent=2))
+        print(json.dumps(verify_source(args.source, platform=args.platform), ensure_ascii=False, indent=2))
     except Exception as error:
         print('构建前源码核对未通过：' + str(error), file=sys.stderr)
         sys.exit(1)

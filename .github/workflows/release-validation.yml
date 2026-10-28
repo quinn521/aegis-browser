@@ -30,6 +30,10 @@ jobs:
         with:
           ruby-version: '3.3.6'
           bundler: '2.5.22'
+      - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a
+        with:
+          distribution: temurin
+          java-version: '17'
       - name: Install locked Fastlane and CI test dependencies
         env:
           BUNDLE_FROZEN: 'true'
@@ -48,6 +52,9 @@ jobs:
         run: |
           bundle exec ruby fastlane/tests/tag_test.rb
           python3 -m unittest discover -s scripts/release -p 'test_*.py'
+          python3 -B apps/browser/scripts/verify-build-source_test.py
+          node apps/browser/scripts/write-build-identity.mjs --self-test
+          bash apps/browser/scripts/package-android-guards_test.sh
           pnpm run ci:test
           bundle exec fastlane lanes
           ./release ios plan --version 0.8.0 --build 1

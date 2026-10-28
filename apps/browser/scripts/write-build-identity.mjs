@@ -449,15 +449,25 @@ function mappedTreeEvidence(sourceRoot, targetRoot) {
   };
 }
 
-function buildDriverEvidence() {
-  return [
+function chromiumInputs(target) {
+  return JSON.parse(run('python3', [join(browserRoot, 'scripts/chromium_inputs.py'),
+    '--platform', target], repoRoot));
+}
+
+function buildDriverEvidence(target) {
+  const paths = [
     'config/source-identity-excludes',
     'scripts/apply-patches.sh',
     'scripts/build-release.sh',
     'scripts/common.sh',
     'scripts/status.sh',
     'scripts/write-build-identity.mjs',
-  ].map((name) => ({name, ...fileEvidence(join(browserRoot, name))}));
+    'scripts/chromium_inputs.py',
+  ];
+  if (target === 'android') {
+    paths.push('ci-pins/android.json', 'scripts/build-android.sh', 'scripts/package-android.sh');
+  }
+  return paths.map((name) => ({name, ...fileEvidence(join(browserRoot, name))}));
 }
 
 function gnToolPath(chromiumSrc) {
@@ -481,14 +491,15 @@ function collectSourceSnapshot(outDir) {
     pathIsInside(chromiumSrc, resolvedOutDir),
     `out-dir must be inside Chromium source: ${resolvedOutDir}`,
   );
-  const chromiumBase = readFileSync(join(browserRoot, 'CHROMIUM_COMMIT'), 'utf8').trim();
-  assert(/^[0-9a-f]{40}$/u.test(chromiumBase), 'CHROMIUM_COMMIT is invalid');
+  const identityTarget = process.env.AEGIS_IDENTITY_TARGET || 'desktop';
+  assert(['desktop', 'android'].includes(identityTarget), 'unsupported identity target');
+  const inputs = chromiumInputs(identityTarget);
+  const chromiumBase = inputs.commit;
+  const patchRoot = join(browserRoot, inputs.patchDirectory);
   const v8Source = realpathSync(join(chromiumSrc, 'v8'));
   const v8Base = run('git', ['rev-parse', `${chromiumBase}:v8`], chromiumSrc);
   assert(/^[0-9a-f]{40}$/u.test(v8Base), 'pinned Chromium commit has no V8 gitlink');
   const gnPath = gnToolPath(chromiumSrc);
-  const identityTarget = process.env.AEGIS_IDENTITY_TARGET || 'desktop';
-  assert(['desktop', 'android'].includes(identityTarget), 'unsupported identity target');
   const androidFormat = process.env.AEGIS_ANDROID_FORMAT || 'apk';
   assert(['apk', 'aab'].includes(androidFormat), 'unsupported Android format');
   const releaseArgsPath = join(browserRoot, 'args',
@@ -512,20 +523,20 @@ function collectSourceSnapshot(outDir) {
       patches: patchEvidence(
         v8Source,
         v8Base,
-        join(browserRoot, 'patches', 'v8'),
+        join(patchRoot, 'v8'),
         'V8',
       ),
     },
     chromiumBase,
-    chromiumVersion: readFileSync(join(browserRoot, 'CHROMIUM_VERSION'), 'utf8').trim(),
-    patches: patchEvidence(chromiumSrc, chromiumBase),
+    chromiumVersion: inputs.version,
+    patches: patchEvidence(chromiumSrc, chromiumBase, patchRoot),
     overlay: {
       repository: overlayRepository,
       applied: overlayApplied,
       exactCheckoutMatch: true,
     },
     releaseArgsTemplate: fileEvidence(releaseArgsPath),
-    buildDrivers: buildDriverEvidence(),
+    buildDrivers: buildDriverEvidence(identityTarget),
   };
   const build = {
     target: identityTarget === 'android' ? (androidFormat === 'aab' ? 'chrome_public_bundle' : 'chrome_public_apk') : 'chrome',
@@ -1187,6 +1198,15 @@ function runSelfTest() {
     }
   };
   try {
+    record('Android 构建身份读取独立 Chromium pin 和补丁目录', () => {
+      const expected = JSON.parse(readFileSync(join(browserRoot, 'ci-pins/android.json'), 'utf8'));
+      const actual = chromiumInputs('android');
+      assert(actual.commit === expected.commit && actual.version === expected.version &&
+        actual.patchDirectory === expected.patchDirectory, 'Android inputs differ from committed pin');
+      const desktop = chromiumInputs('desktop');
+      assert(desktop.commit === readFileSync(join(browserRoot, 'CHROMIUM_COMMIT'), 'utf8').trim() &&
+        desktop.patchDirectory === 'patches', 'desktop inputs changed');
+    });
     record('链接器入口名保留，真实二进制变化可被检测', () => {
       const directory = join(root, 'linker');
       mkdirSync(join(directory, 'bin'), {recursive: true});

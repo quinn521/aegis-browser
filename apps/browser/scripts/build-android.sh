@@ -28,7 +28,7 @@ EOF
   exit 2
 }
 
-VERSION_PIN="$(read_pinned_value "$VERSION_FILE")"
+VERSION_PIN="$(python3 "$ROOT_DIR/scripts/chromium_inputs.py" --platform android --field version)"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   fail_host
@@ -59,7 +59,7 @@ fi
 
 # 旧实现会先覆盖 overlay，再直接复用旧 build.ninja，可能把 151 缓存
 # 和 153 产品输入混在一起。构建只接受已完成迁移且可重放的干净源码。
-python3 "$ROOT_DIR/scripts/verify-build-source.py" --source "$SRC"
+python3 "$ROOT_DIR/scripts/verify-build-source.py" --source "$SRC" --platform android
 if [[ "$OUT" != "$SRC/out/AegisAndroid" || -L "$SRC/out" || -L "$OUT" ]]; then
   echo "Android 只使用固定的实际输出目录：$SRC/out/AegisAndroid" >&2
   exit 1

@@ -1,5 +1,6 @@
 """真实小型 Git 仓库验证源码门禁，不启动 Chromium 编译。"""
 import importlib.util
+import json
 from pathlib import Path
 import shutil
 import subprocess  # nosec B404 - 使用参数数组且不启用 shell。
@@ -31,6 +32,7 @@ class SourceTests(unittest.TestCase):
         (self.src / 'value').write_text('original\n')
         self.commit(self.src, 'base')
         (self.browser / 'CHROMIUM_COMMIT').write_text(self.git(self.src, 'rev-parse', 'HEAD'))
+        (self.browser / 'CHROMIUM_VERSION').write_text('155.0.8059.40')
         for src, directory in [(self.src, self.browser / 'patches'), (v8, self.browser / 'patches/v8')]:
             (src / 'value').write_text('current\n')
             self.commit(src, 'patch')
@@ -92,6 +94,47 @@ class SourceTests(unittest.TestCase):
         (self.browser / 'overlay/missing').write_text('missing\n')
         with self.assertRaisesRegex(ValueError, 'overlay'):
             check.verify_source(self.src, self.browser)
+
+    def test_android_accepts_only_its_independent_base_and_patch_tree(self):
+        desktop_base = (self.browser / 'CHROMIUM_COMMIT').read_text()
+        self.git(self.src, 'checkout', '--detach', desktop_base)
+        (self.src / 'android-only').write_text('independent official base\n')
+        self.git(self.src, 'add', 'android-only')
+        self.commit(self.src, 'Android base')
+        android_base = self.git(self.src, 'rev-parse', 'HEAD')
+        patches = self.browser / 'patches-android'
+        shutil.copytree(self.browser / 'patches/v8', patches / 'v8')
+        (self.src / 'value').write_text('current\n')
+        self.commit(self.src, 'Android patch')
+        (patches / 'one.patch').write_text(self.git(self.src, 'format-patch', '-1', '--stdout') + '\n')
+        (patches / 'series').write_text('one.patch\n')
+        (self.browser / 'ci-pins').mkdir()
+        (self.browser / 'ci-pins/android.json').write_text(json.dumps({
+            'version': '155.0.8059.39', 'commit': android_base, 'patchDirectory': 'patches-android'}))
+        result = check.verify_source(self.src, self.browser, platform='android')
+        self.assertEqual(result['inputs']['commit'], android_base)
+        self.assertEqual(result['inputs']['version'], '155.0.8059.39')
+        self.assertTrue(result['sourceVerified'])
+        self.assertFalse(result['built'])
+        with self.assertRaisesRegex(ValueError, '源码与本次候选补丁不一致'):
+            check.verify_source(self.src, self.browser)
+
+    def test_android_never_falls_back_to_desktop_pin_or_escaping_patches(self):
+        with self.assertRaisesRegex(ValueError, 'ci-pins/android.json'):
+            check.verify_source(self.src, self.browser, platform='android')
+        (self.browser / 'ci-pins').mkdir()
+        pin = {'version': '155.0.8059.39', 'commit': 'a' * 40, 'patchDirectory': '../outside'}
+        pin_path = self.browser / 'ci-pins/android.json'
+        pin_path.write_text(json.dumps(pin))
+        with self.assertRaisesRegex(ValueError, 'patch directory'):
+            check.verify_source(self.src, self.browser, platform='android')
+        outside = Path(self.temp.name) / 'outside'
+        outside.mkdir()
+        (self.browser / 'escape').symlink_to(outside, target_is_directory=True)
+        pin['patchDirectory'] = 'escape'
+        pin_path.write_text(json.dumps(pin))
+        with self.assertRaisesRegex(ValueError, 'escapes'):
+            check.verify_source(self.src, self.browser, platform='android')
 
 
 if __name__ == '__main__':
