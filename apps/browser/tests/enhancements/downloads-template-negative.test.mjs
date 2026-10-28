@@ -40,3 +40,47 @@ test('dispatch rejects control receiver, missing event and incorrect control', (
     assert.throws(() => assertDownloadDispatch(owner, control, event, [...calls, ...calls]));
   } finally { dom.window.close(); }
 });
+
+
+test('real id cannot be replaced by lookalike attributes or quoted text', t => {
+  const original = 'id="aegisReduceOnMetered"';
+  for (const [name, replacement] of [
+    ['data-id only', 'data-id="aegisReduceOnMetered"'],
+    ['aria-id only', 'aria-id="aegisReduceOnMetered"'],
+    ['prefixed id only', 'other-id="aegisReduceOnMetered"'],
+    ['missing id', ''],
+    ['empty id', 'id=""'],
+    ['boolean id', 'id'],
+    ['double-quoted fake id in another value', `title='id="aegisReduceOnMetered"'`],
+    ['single-quoted fake id in another value', `title="id='aegisReduceOnMetered'"`],
+    ['fake tag and id inside quoted value', `title='<cr-toggle id="aegisReduceOnMetered">'`],
+    ['data-id plus quoted fake id', `data-id="aegisReduceOnMetered" title=' id="aegisReduceOnMetered"'`],
+    ['wrong real id plus matching data-id', 'data-id="aegisReduceOnMetered" id="aegisWrong"'],
+  ]) {
+    const changed = source.replace(original, replacement);
+    assert.notEqual(changed, source, name);
+    assert.throws(() => downloadBindings(ts, changed), undefined, name);
+    t.diagnostic(name);
+  }
+});
+
+test('real id survives unrelated attributes, quoting and attribute order', t => {
+  const original = 'id="aegisReduceOnMetered"';
+  for (const [name, replacement] of [
+    ['data-id before real id', 'data-id="unrelated" id="aegisReduceOnMetered"'],
+    ['data-id after real id', 'id="aegisReduceOnMetered" data-id="unrelated"'],
+    ['aria-id before real id', 'aria-id="unrelated" id="aegisReduceOnMetered"'],
+    ['single quotes', "id='aegisReduceOnMetered'"],
+    ['unquoted value', 'id=aegisReduceOnMetered'],
+    ['whitespace around equals', 'id \n = \t "aegisReduceOnMetered"'],
+    ['quoted fake id before real id', `title='id="unrelated"' id="aegisReduceOnMetered"`],
+    ['quoted tag before real id', `title='<cr-input id="unrelated">' id="aegisReduceOnMetered"`],
+  ]) {
+    const changed = source.replace(original, replacement);
+    assert.notEqual(changed, source, name);
+    const bindings = downloadBindings(ts, changed);
+    assert.equal(bindings.length, 10, name);
+    assert.equal(bindings[4].id, 'aegisReduceOnMetered', name);
+    t.diagnostic(name);
+  }
+});

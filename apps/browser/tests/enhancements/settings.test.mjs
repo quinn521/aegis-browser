@@ -272,11 +272,17 @@ test('下载模板的全部事件回调保留组件上下文和实际事件控�
   const callbacks = downloadBindings(ts, read('settings/downloads_page/downloads_page.html.ts'));
   const dom = new JSDOM();
   try {
-    for (const {type, method, tag, id} of callbacks) {
-      const control = dom.window.document.createElement(tag);
-      if (tag === 'select') control.append(new dom.window.Option('自定义', 'custom'));
-      else control.value = tag === 'cr-input' ? '128' : 'retry';
-      control.id = id.replace('${kind}', 'Download');
+    for (const {type, method, markup} of callbacks) {
+      const template = dom.window.document.createElement('template');
+      template.innerHTML = markup;
+      const control = template.content.firstElementChild;
+      assert(control, 'dispatch uses the parsed template control');
+      const tag = control.localName;
+      if (tag === 'select') {
+        if (!control.querySelector('option[value="custom"]')) control.append(new dom.window.Option('自定义', 'custom'));
+        control.value = 'custom';
+      } else control.value = tag === 'cr-input' ? '128' : 'retry';
+      control.id = control.id.replace('${kind}', 'Download');
       if (tag === 'cr-toggle') control.checked = true;
       dom.window.document.body.append(control);
       const calls = [];

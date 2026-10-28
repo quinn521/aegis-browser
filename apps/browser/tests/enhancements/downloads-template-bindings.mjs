@@ -1,25 +1,45 @@
 import assert from 'node:assert/strict';
+import {JSDOM} from 'jsdom';
 
 // Unit contract for Lit's host receiver. Native15 owns the separate real Lit proof.
 export function downloadBindings(ts, source) {
   const tree = ts.createSourceFile('downloads.html.ts', source, ts.ScriptTarget.Latest, true);
   assert.equal(tree.parseDiagnostics.length, 0, 'template must parse');
   const bindings = [];
+  // Keep interpolations inert while the existing HTML parser identifies complete
+  // attributes. Neither data-id nor id= text inside another value is a real ID.
+  let markerPrefix = '__aegis_template_expression_';
+  while (source.includes(markerPrefix)) markerPrefix += '_';
   function visit(node) {
     if (ts.isTemplateExpression(node)) {
       let previous = node.head.text;
-      for (const span of node.templateSpans) {
+      let html = previous;
+      const expressions = [], events = [];
+      for (const [index, span] of node.templateSpans.entries()) {
+        const marker = `${markerPrefix}${node.pos}_${index}__`;
+        const ref = span.expression;
+        expressions.push([marker, '${' + ref.getText(tree) + '}']);
+        html += marker + span.literal.text;
         const event = /@(click|change)\s*=\s*["']$/.exec(previous);
         if (event) {
-          const ref = span.expression;
           assert.ok(ts.isPropertyAccessExpression(ref) && ref.expression.kind === ts.SyntaxKind.ThisKeyword,
             'event binding must be a stable method reference on this');
-          const prefix = source.slice(source.lastIndexOf('<', ref.getStart(tree)), ref.getStart(tree));
-          const tag = /^<([a-z][\w-]*)\b/.exec(prefix)?.[1];
-          const id = /\bid="([^"]+)"/.exec(prefix)?.[1] ?? '';
-          bindings.push({type: event[1], method: ref.name.text, position: ref.getStart(tree), tag, id});
+          events.push({ref, type: event[1], marker});
         }
         previous = span.literal.text;
+      }
+      if (events.length) {
+        const controls = [...JSDOM.fragment(html).querySelectorAll('*')];
+        for (const {ref, type, marker} of events) {
+          const matches = controls.filter(control => control.getAttribute('@' + type) === marker);
+          assert.equal(matches.length, 1, 'event binding is a complete attribute on one real control');
+          const control = matches[0];
+          let id = control.getAttribute('id') ?? '';
+          for (const [token, expression] of expressions) id = id.replaceAll(token, expression);
+          if (control.hasAttribute('id')) control.setAttribute('id', id);
+          bindings.push({type, method: ref.name.text, position: ref.getStart(tree),
+            tag: control.localName, id, markup: control.outerHTML});
+        }
       }
     }
     ts.forEachChild(node, visit);
