@@ -12,6 +12,8 @@ This directory contains the public product architecture, roadmap, research bound
 
 [2026-09-10 main consolidation and verification](audit/main-consolidation-2026-09-10.md)
 
+- [Local Fastlane and upstream release](development/release.md)
+
 ## Start here
 
 - [Access service V1.0 design overview (Simplified Chinese)](plans/access-service-v1.0/overview.zh-CN.md)

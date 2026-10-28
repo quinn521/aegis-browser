@@ -1,0 +1,462 @@
+# frozen_string_literal: true
+require "digest"
+require "fileutils"
+require "json"
+require "open3"
+require "pathname"
+require "rbconfig"
+require "time"
+require "uri"
+
+module AegisRelease
+  ROOT = File.expand_path("../..", __dir__)
+  REPOSITORY = "gcsagroup/aegis-browser"
+  APP_ID = "com.gcsa.aegis"
+  IOS_TARGETS = { "Aegis" => APP_ID, "SafariWebExtension" => "#{APP_ID}.safari", "ShareExtension" => "#{APP_ID}.share" }.freeze
+  class Error < StandardError; end
+
+  def self.require!(condition, message)
+    raise Error, message unless condition
+  end
+
+  # Capture failures without echoing credential-bearing command output or arguments.
+  def self.command(*argv, cwd: ROOT, env: {})
+    stdout, _stderr, status = Open3.capture3({ 'PYTHONDONTWRITEBYTECODE' => '1' }.merge(env), *argv, chdir: cwd)
+    require!(status.success?, "#{File.basename(argv.first)} failed (exit #{status.exitstatus}); no success receipt written")
+    stdout.strip
+  end
+
+  def self.source(root = ROOT, clean: true)
+    status = command("git", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none", cwd: root)
+    require!(!clean || status.empty?, "Release requires a clean committed source; commit changes first")
+    { "sha" => command("git", "rev-parse", "HEAD", cwd: root),
+      "tree" => command("git", "rev-parse", "HEAD^{tree}", cwd: root), "dirty" => !status.empty? }
+  end
+
+  def self.real_path!(path)
+    expanded = File.expand_path(path)
+    cursor = Pathname.new(expanded)
+    loop do
+      require!(!cursor.symlink?, "Symlink is not allowed in release paths: #{cursor}")
+      break if cursor.root?
+      cursor = cursor.parent
+    end
+    expanded
+  end
+
+  def self.file!(path)
+    real_path!(path)
+    require!(File.file?(path) && File.size(path).positive?, "Missing or empty release file: #{path}")
+    path
+  end
+
+  def self.digest(path)
+    Digest::SHA256.file(file!(path)).hexdigest
+  end
+
+  def self.write_new(path, object)
+    real_path!(path)
+    File.open(path, File::WRONLY | File::CREAT | File::EXCL, 0o600) { |f| f.write(JSON.pretty_generate(object) + "\n") }
+  end
+
+  class Request
+    attr_reader :platform, :destination, :version, :build, :run_id, :tag, :root, :expected_digest
+
+    def initialize(platform, options = {}, root: ROOT)
+      @root = root
+      @platform = platform
+      AegisRelease.require!(%w[ios android macos].include?(platform), "Platform must be ios, android or macos")
+      unknown = options.keys.map(&:to_sym) - %i[destination version build run_id tag manifest_sha256]
+      AegisRelease.require!(unknown.empty?, "Unknown release options: #{unknown.join(', ')}")
+      options = options.transform_keys(&:to_sym)
+      @destination = options.fetch(:destination, "artifacts").to_s
+      allowed = platform == "ios" ? %w[artifacts testflight github-draft] : %w[artifacts github-draft]
+      AegisRelease.require!(allowed.include?(destination), "Unsupported destination for #{platform}: #{destination}")
+      native_version, native_build = native_identity
+      @version = options.fetch(:version, native_version).to_s
+      @build = options.fetch(:build, native_build).to_s
+      pattern = platform == "ios" ? /\A\d+\.\d+(?:\.\d+)?\z/ : /\A\d+\.\d+\.\d+\.\d+\z/
+      AegisRelease.require!(pattern.match?(version) && version.size < 40, "Invalid product version")
+      AegisRelease.require!(/\A[1-9]\d{0,9}\z/.match?(build), "Build must be a positive integer")
+      if platform != "ios"
+        AegisRelease.require!([version, build] == [native_version, native_build], "Chromium version/build must match committed native inputs; update source first")
+      end
+      @run_id = options.fetch(:run_id, "#{version}-#{build}-#{AegisRelease.source(root, clean: false)['sha'][0, 12]}").to_s
+      AegisRelease.require!(/\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}\z/.match?(run_id) && !run_id.include?(".."), "Unsafe run ID")
+      @tag = options[:tag]&.to_s
+      if destination == "github-draft"
+        AegisRelease.require!(tag && /\Acandidate\/#{platform}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\z/.match?(tag) && !tag.include?(".."), "GitHub Draft requires --tag candidate/#{platform}/<version-build>")
+      else
+        AegisRelease.require!(tag.nil?, "--tag is only supported for github-draft")
+      end
+      @expected_digest = options[:manifest_sha256]&.to_s
+      AegisRelease.require!(!expected_digest || /\A[0-9a-f]{64}\z/.match?(expected_digest), "Invalid manifest SHA-256")
+    end
+
+    def native_identity
+      if platform == "ios"
+        text = File.read(File.join(root, "apps/ios/project.yml"))
+        [text[/MARKETING_VERSION: ([0-9.]+)/, 1], text[/CURRENT_PROJECT_VERSION: (\d+)/, 1]]
+      else
+        text = File.read(File.join(root, "apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h"))
+        version = text[/kProductVersion\[\] = "([0-9.]+)"/, 1]
+        build = if platform == "android"
+                  File.read(File.join(root, "apps/browser/args/aegis-android.gn"))[/android_override_version_code = "(\d+)"/, 1]
+                else
+                  version&.split(".")&.last
+                end
+        [version, build]
+      end
+    end
+
+    def directory
+      File.join(root, ".artifacts/release", platform, run_id)
+    end
+
+    def manifest_path
+      File.join(directory, "#{platform}-manifest.json")
+    end
+
+    def identity
+      { "platform" => platform, "applicationId" => APP_ID, "version" => version, "build" => build }
+    end
+
+    def plan
+      identity.merge("destination" => destination, "tag" => tag, "runId" => run_id,
+                     "source" => AegisRelease.source(root, clean: false), "output" => directory,
+                     "host" => platform == "android" ? "Linux x86_64" : "macOS",
+                     "stages" => %w[package upload], "releaseReady" => false)
+    end
+  end
+
+  class Receipt
+    def self.create(request, paths, source, details = {})
+      AegisRelease.require!(AegisRelease.source(request.root) == source, "Source changed during packaging")
+      assets = paths.map do |path|
+        AegisRelease.file!(path)
+        AegisRelease.require!(File.dirname(File.expand_path(path)) == request.directory, "Artifact must be directly inside the release directory")
+        { "name" => File.basename(path), "size" => File.size(path), "sha256" => AegisRelease.digest(path) }
+      end
+      AegisRelease.require!(assets.any? && assets.map { |a| a['name'] }.uniq.length == assets.length, "Missing or duplicate artifacts")
+      value = request.identity.merge("schemaVersion" => 1, "repository" => REPOSITORY, "source" => source,
+                                     "assets" => assets, "details" => details, "releaseReady" => false,
+                                     "createdAt" => Time.now.utc.iso8601)
+      AegisRelease.write_new(request.manifest_path, value)
+      sha = AegisRelease.digest(request.manifest_path)
+      File.write(request.manifest_path + ".sha256", "#{sha}  #{File.basename(request.manifest_path)}\n", mode: "wx")
+      sha
+    end
+
+    def self.verify(request, expected_digest)
+      AegisRelease.require!(expected_digest && AegisRelease.digest(request.manifest_path) == expected_digest, "Release manifest digest mismatch or missing --manifest-sha256")
+      checksum = request.manifest_path + '.sha256'
+      AegisRelease.file!(checksum)
+      AegisRelease.require!(File.read(checksum) == "#{expected_digest}  #{File.basename(request.manifest_path)}\n", 'Manifest checksum sidecar mismatch')
+      value = JSON.parse(File.read(request.manifest_path))
+      AegisRelease.require!(value['schemaVersion'] == 1 && value['repository'] == REPOSITORY && value['releaseReady'] == false, "Unsupported release manifest")
+      AegisRelease.require!(request.identity.all? { |k, v| value[k] == v }, "Release identity differs from requested platform/version/build")
+      AegisRelease.require!(value['source'] == AegisRelease.source(request.root), "Package source differs from current clean checkout")
+      assets = value['assets']
+      AegisRelease.require!(assets.is_a?(Array) && !assets.empty?, "Missing artifacts")
+      names = assets.map { |a| a.fetch('name') }
+      AegisRelease.require!(names.uniq == names, "Duplicate artifact names")
+      assets.each do |asset|
+        name = asset['name']
+        AegisRelease.require!(name.is_a?(String) && /\A[A-Za-z0-9][A-Za-z0-9_.-]*\z/.match?(name) && !name.include?(".."), "Unsafe artifact name")
+        path = File.join(request.directory, name)
+        AegisRelease.require!(AegisRelease.digest(path) == asset['sha256'] && File.size(path) == asset['size'], "Artifact changed: #{name}")
+      end
+      suffix = { 'ios' => '.ipa', 'macos' => '.dmg', 'android' => '.apk' }.fetch(request.platform)
+      AegisRelease.require!(names.count { |n| n.end_with?(suffix) } == 1, "Expected exactly one #{suffix} artifact")
+      value
+    end
+  end
+
+  class Pipeline
+    attr_reader :request
+
+    def initialize(request, fastlane)
+      @request = request
+      @fastlane = fastlane
+    end
+
+    def required(name)
+      value = ENV[name]
+      AegisRelease.require!(value && !value.empty?, "Missing #{name}")
+      value
+    end
+
+    def run(*argv, env: {})
+      # Build output is streamed, but commands and environment values are never printed here.
+      ok = system({ 'PYTHONDONTWRITEBYTECODE' => '1' }.merge(env), *argv, chdir: request.root)
+      AegisRelease.require!(ok, "#{File.basename(argv.first)} failed; retain the attempt directory for diagnosis")
+    end
+
+    def package
+      host = RbConfig::CONFIG['host_os']
+      AegisRelease.require!(request.platform == "android" ? host.include?("linux") && RbConfig::CONFIG['host_cpu'] == 'x86_64' : host.include?("darwin"), "Wrong build host for #{request.platform}")
+      source = AegisRelease.source(request.root)
+      AegisRelease.real_path!(request.directory)
+      AegisRelease.require!(!File.exist?(request.directory), "Attempt already exists; use a new --run-id or upload the verified package")
+      if request.platform == 'ios'
+        required('AEGIS_APPLE_TEAM_ID')
+        ios_profiles # Validate before creating output or touching signing state.
+      else
+        chromium_root
+      end
+      FileUtils.mkdir_p(File.dirname(request.directory))
+      Dir.mkdir(request.directory, 0o700)
+      paths, details = request.platform == 'ios' ? package_ios : package_chromium
+      sha = Receipt.create(request, paths, source, details)
+      puts "Manifest SHA-256: #{sha}"
+      if ENV['GITHUB_OUTPUT']
+        File.open(ENV.fetch('GITHUB_OUTPUT'), 'a') { |f| f.puts("manifest_sha256=#{sha}") }
+      end
+      sha
+    end
+
+    def ios_profiles
+      profiles = JSON.parse(required('AEGIS_IOS_PROFILES'))
+      AegisRelease.require!(profiles.is_a?(Hash) && profiles.keys.sort == IOS_TARGETS.values.sort && profiles.values.all? { |v| v.is_a?(String) && !v.empty? }, "AEGIS_IOS_PROFILES must name App Store profiles for the app, Safari and Share extensions")
+      profiles
+    end
+
+    def package_ios
+      profiles = ios_profiles
+      work = File.join(request.directory, 'work')
+      # Copy only committed inputs; ignored local files must not enter the archive.
+      tracked = AegisRelease.command('git', 'ls-files', '-z', 'apps/ios',
+                                     'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json', cwd: request.root).split("\0")
+      tracked.each do |relative|
+        original = File.join(request.root, relative)
+        AegisRelease.real_path!(original)
+        AegisRelease.require!(File.file?(original), 'Missing tracked iOS input')
+        target = File.join(work, relative)
+        FileUtils.mkdir_p(File.dirname(target))
+        FileUtils.cp(original, target)
+      end
+      project = File.join(work, 'apps/ios/Aegis.xcodeproj')
+      team = required('AEGIS_APPLE_TEAM_ID')
+      @fastlane.update_code_signing_settings(path: project, use_automatic_signing: false,
+                                            team_id: team, code_sign_identity: 'Apple Distribution', build_configurations: ['Release'])
+      IOS_TARGETS.each do |target, app_id|
+        @fastlane.update_code_signing_settings(path: project, use_automatic_signing: false, team_id: team,
+                                              targets: [target], build_configurations: ['Release'], profile_name: profiles.fetch(app_id))
+      end
+      name = "Aegis-#{request.version}-#{request.build}-ios.ipa"
+      @fastlane.build_app(project: project, scheme: 'Aegis-Release', configuration: 'Release', clean: true,
+                         destination: 'generic/platform=iOS', output_directory: request.directory, output_name: name,
+                         archive_path: File.join(work, 'Aegis.xcarchive'), derived_data_path: File.join(work, 'DerivedData'),
+                         buildlog_path: File.join(work, 'logs'), export_method: 'app-store',
+                         skip_profile_detection: true, xcargs: "MARKETING_VERSION=#{request.version} CURRENT_PROJECT_VERSION=#{request.build}",
+                         export_options: { method: 'app-store-connect', teamID: team, signingStyle: 'manual',
+                                           provisioningProfiles: profiles, manageAppVersionAndBuildNumber: false })
+      ipa = File.join(request.directory, name)
+      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build)
+      paths = [ipa] + Dir.glob(File.join(request.directory, '*.dSYM.zip'))
+      [paths, { 'signing' => 'app-store-export', 'testflight' => 'not_uploaded', 'deviceAcceptance' => 'not_verified' }]
+    end
+
+    def chromium_root
+      root = AegisRelease.real_path!(File.expand_path(required('CHROMIUM_ROOT')))
+      AegisRelease.require!(File.directory?(File.join(root, 'src')), "CHROMIUM_ROOT must be a prepared dedicated Chromium workspace")
+      root
+    end
+
+    def package_chromium
+      root = chromium_root
+      lock = File.join(root, '.aegis-fastlane-release.lock')
+      AegisRelease.real_path!(lock)
+      Dir.mkdir(lock) # Never break an existing worker's lock.
+      begin
+        scripts = File.join(request.root, 'apps/browser/scripts')
+        source = File.join(root, 'src')
+        verification = AegisRelease.command('python3', File.join(scripts, 'verify-build-source.py'), '--source', source)
+        out = File.join(source, 'out', request.platform == 'macos' ? 'AegisRelease' : 'AegisAndroid')
+        env = { 'CHROMIUM_ROOT' => root, 'CHROMIUM_SRC' => nil, 'OUT_DIR' => out,
+                'AEGIS_ALLOW_DIRTY_IDENTITY' => nil, 'ALLOW_COMPONENT_PACKAGE' => nil,
+                'AEGIS_REPLACE_PACKAGE_IDENTITY' => nil, 'AEGIS_BUILD_MANIFEST' => nil,
+                'AEGIS_PACKAGE_VERSION' => request.version, 'DIST_DIR' => File.join(request.directory, 'native'),
+                'PACKAGE_FORMATS' => 'dmg' }
+        if request.platform == 'android'
+          # A successful no-op must not relabel a pre-existing APK as a new build.
+          apk = File.join(out, 'apks/ChromePublic.apk')
+          AegisRelease.real_path!(apk)
+          if File.exist?(apk)
+            history = File.join(out, '.aegis-fastlane-history')
+            AegisRelease.real_path!(history)
+            FileUtils.mkdir_p(history)
+            saved = File.join(history, "#{request.run_id}.apk")
+            AegisRelease.require!(!File.exist?(saved), "APK history already exists")
+            File.rename(apk, saved)
+          end
+          run('bash', File.join(scripts, 'build-android.sh'), env: env)
+          badging = AegisRelease.command(ENV.fetch('AEGIS_AAPT2', 'aapt2'), 'dump', 'badging', AegisRelease.file!(apk))
+          AegisRelease.require!(badging.match?(/^package: name='#{Regexp.escape(APP_ID)}' versionCode='#{request.build}' /), "APK applicationId/versionCode mismatch")
+          version_name = File.read(File.join(request.root, 'apps/browser/args/aegis-android.gn'))[/android_override_version_name = "([^"]+)"/, 1]
+          AegisRelease.require!(version_name && badging.lines.first.include?("versionName='#{version_name}'"), 'APK versionName differs from committed GN inputs')
+          run(ENV.fetch('AEGIS_APKSIGNER', 'apksigner'), 'verify', apk)
+          run('bash', File.join(scripts, 'package-android.sh'), env: env)
+          pattern = '*.apk'
+          signing = 'existing-chromium-signature-not-distribution-qualified'
+        else
+          AegisRelease.require!(RbConfig::CONFIG['host_cpu'] =~ /arm64|aarch64/, 'macOS release GN currently requires Apple Silicon')
+          run('bash', File.join(scripts, 'build-release.sh'), env: env)
+          manifest = File.join(out, '.aegis/build-manifest.json')
+          env['AEGIS_BUILD_MANIFEST_SHA256'] = AegisRelease.digest(manifest)
+          app = File.join(out, 'GCSA Aegis.app/Contents/Info.plist')
+          actual_id = AegisRelease.command('/usr/libexec/PlistBuddy', '-c', 'Print :CFBundleIdentifier', app)
+          AegisRelease.require!(actual_id == APP_ID, 'macOS CFBundleIdentifier mismatch')
+          run('bash', File.join(scripts, 'package.sh'), env: env)
+          pattern = '*.dmg'
+          signing = 'ad-hoc-not-notarized'
+        end
+        after = AegisRelease.command('python3', File.join(scripts, 'verify-build-source.py'), '--source', source)
+        AegisRelease.require!(verification == after, 'Chromium source changed during packaging')
+        native = env.fetch('DIST_DIR')
+        files = Dir.glob(File.join(native, pattern)).reject { |p| File.basename(p) == 'GCSA-aegis.apk' }
+        AegisRelease.require!(files.size == 1, 'Expected one native installable artifact')
+        files += Dir.glob(File.join(native, '*.build-identity.json'))
+        paths = files.map do |file|
+          AegisRelease.file!(file)
+          target = File.join(request.directory, File.basename(file))
+          FileUtils.cp(file, target)
+          target
+        end
+        [paths, { 'signing' => signing, 'chromium' => JSON.parse(verification), 'deviceAcceptance' => 'not_verified' }]
+      ensure
+        Dir.rmdir(lock)
+      end
+    end
+
+    def upload(expected_digest = request.expected_digest)
+      AegisRelease.require!(request.destination != 'artifacts', 'Select testflight or github-draft for upload')
+      receipt = Receipt.verify(request, expected_digest)
+      # Both external destinations accept only a commit with green upstream main CI.
+      preflight_upload
+      if request.destination == 'testflight'
+        upload_testflight(receipt)
+      else
+        result = Draft.new(request, receipt, expected_digest).upload
+        path = File.join(request.directory, "github-upload-#{Time.now.utc.strftime('%Y%m%dT%H%M%S')}.json")
+        AegisRelease.write_new(path, result)
+        puts "Verified GitHub draft: #{result.fetch('url')}"
+      end
+    end
+
+    def preflight_upload
+      AegisRelease.require!(request.destination != 'artifacts', 'Select testflight or github-draft for upload')
+      if request.destination == 'testflight'
+        %w[AEGIS_ASC_KEY_ID AEGIS_ASC_ISSUER_ID AEGIS_ASC_KEY_BASE64].each { |name| required(name) }
+      end
+      sha = AegisRelease.source(request.root).fetch('sha')
+      run('node', File.join(request.root, 'scripts/ci/release-preflight.mjs'), '--sha', sha,
+          env: { 'RELEASE_PLATFORM' => request.platform, 'RELEASE_DESTINATION' => request.destination, 'RELEASE_TAG' => request.tag })
+    end
+
+    def upload_testflight(receipt)
+      AegisRelease.require!(request.platform == 'ios', 'TestFlight accepts only iOS')
+      marker = File.join(request.directory, 'testflight-upload.json')
+      AegisRelease.require!(!File.exist?(marker), 'This attempt already has a TestFlight upload receipt; inspect App Store Connect before retrying')
+      attempt = File.join(request.directory, 'testflight-attempt.json')
+      AegisRelease.require!(!File.exist?(attempt), 'An earlier TestFlight attempt may have reached Apple; reconcile App Store Connect before another upload')
+      ipa = File.join(request.directory, receipt.fetch('assets').find { |a| a['name'].end_with?('.ipa') }.fetch('name'))
+      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build)
+      api_key = @fastlane.app_store_connect_api_key(key_id: required('AEGIS_ASC_KEY_ID'), issuer_id: required('AEGIS_ASC_ISSUER_ID'),
+                                                   key_content: required('AEGIS_ASC_KEY_BASE64'), is_key_content_base64: true)
+      AegisRelease.write_new(attempt, request.identity.merge('status' => 'upload_started_outcome_unknown', 'source' => receipt['source']))
+      @fastlane.upload_to_testflight(api_key: api_key, app_identifier: APP_ID, ipa: ipa,
+                                    skip_submission: true, skip_waiting_for_build_processing: true,
+                                    distribute_external: false)
+      AegisRelease.write_new(marker, request.identity.merge('status' => 'uploaded_processing_unverified',
+                                                           'source' => receipt['source'], 'deviceAcceptance' => 'not_verified'))
+      puts 'TestFlight upload submitted; processing and tester availability remain unverified'
+    end
+  end
+
+  class Draft
+    def initialize(request, receipt, expected_digest)
+      @request, @receipt, @expected_digest = request, receipt, expected_digest
+    end
+
+    def gh(*args)
+      AegisRelease.command('gh', *args)
+    end
+
+    def api(path)
+      JSON.parse(gh('api', "repos/#{REPOSITORY}/#{path}"))
+    end
+
+    def releases
+      JSON.parse(gh('api', "repos/#{REPOSITORY}/releases?per_page=100", '--paginate', '--slurp')).flatten(1)
+    end
+
+    def selected
+      matches = releases.select { |r| r['tag_name'] == @request.tag }
+      AegisRelease.require!(matches.size <= 1, 'Multiple releases for candidate tag')
+      result = matches.first
+      if result
+        AegisRelease.require!(result['draft'] == true && result['prerelease'] == true, 'Existing release must remain a candidate draft')
+        AegisRelease.require!(result['target_commitish'] == @receipt['source']['sha'], 'Existing draft targets a different source')
+      end
+      result
+    end
+
+    def expected_assets
+      @receipt.fetch('assets') + [@request.manifest_path, @request.manifest_path + '.sha256'].map do |path|
+        { 'name' => File.basename(path), 'sha256' => AegisRelease.digest(path), 'size' => File.size(path) }
+      end
+    end
+
+    def check_assets(release, complete: false)
+      remote = api("releases/#{Integer(release.fetch('id'))}/assets?per_page=100")
+      expected = expected_assets.to_h { |a| [a.fetch('name'), a] }
+      names = remote.map { |a| a.fetch('name') }
+      AegisRelease.require!(names.uniq == names && (names - expected.keys).empty?, 'Unexpected or duplicate draft assets')
+      remote.each do |asset|
+        local = expected.fetch(asset.fetch('name'))
+        AegisRelease.require!(asset['state'] == 'uploaded' && asset['size'] == local['size'] && asset['digest'] == "sha256:#{local['sha256']}", "Existing draft asset differs: #{asset['name']}; never overwrite")
+      end
+      AegisRelease.require!(!complete || names.sort == expected.keys.sort, 'Draft is missing assets')
+      names
+    end
+
+    def upload
+      Receipt.verify(@request, @expected_digest)
+      sha = @receipt.fetch('source').fetch('sha')
+      tag = URI.encode_www_form_component(@request.tag)
+      AegisRelease.require!(api("commits/#{tag}")['sha'] == sha, 'Existing upstream candidate tag must resolve to the exact package commit')
+      release = selected
+      unless release
+        notes = File.join(@request.directory, 'draft-notes.txt')
+        text = "Candidate package: #{@request.platform} #{@request.version} (#{@request.build})\n\nSource: #{sha}\nSigning: #{@receipt.fetch('details').fetch('signing')}\nDevice acceptance: not verified. Distribution qualification: not complete.\n"
+        AegisRelease.real_path!(notes)
+        if File.exist?(notes)
+          AegisRelease.require!(File.read(notes) == text, 'Existing draft notes differ; retain the previous attempt')
+        else
+          File.write(notes, text, mode: 'wx')
+        end
+        Receipt.verify(@request, @expected_digest)
+        gh('release', 'create', @request.tag, '--repo', REPOSITORY, '--draft', '--prerelease', '--verify-tag',
+           '--target', sha, '--title', "Aegis #{@request.platform} #{@request.version} (#{@request.build}) candidate", '--notes-file', notes)
+        release = selected
+        AegisRelease.require!(release, 'Draft creation outcome unknown; inspect remote state before retrying')
+      end
+      present = check_assets(release)
+      expected_assets.each do |asset|
+        next if present.include?(asset['name'])
+        AegisRelease.require!(asset['size'] < 2 * 1024**3, 'GitHub asset must be smaller than 2 GiB')
+        Receipt.verify(@request, @expected_digest)
+        selected # Refuse a draft published concurrently before sending the next asset.
+        gh('release', 'upload', @request.tag, File.join(@request.directory, asset['name']), '--repo', REPOSITORY)
+      end
+      release = selected
+      AegisRelease.require!(release, 'Draft disappeared during upload')
+      AegisRelease.require!(api("commits/#{tag}")['sha'] == sha, 'Candidate tag changed during upload')
+      Receipt.verify(@request, @expected_digest)
+      check_assets(release, complete: true)
+      { 'status' => 'draft_assets_verified', 'url' => release.fetch('html_url'), 'source' => @receipt['source'],
+        'tag' => @request.tag, 'draft' => true, 'releaseReady' => false }
+    end
+  end
+end

@@ -60,7 +60,7 @@ def GetConfigurationForBuild(defines):
         },
         'admx_prefix': 'chromium',
         'linux_policy_path': '/etc/chromium/policies/',
-        'bundle_id': 'app.gcsa.aegis',
+        'bundle_id': 'com.gcsa.aegis',
     }
   elif '_google_chrome' in defines or '_is_chrome_for_testing_branded' in defines:
     if '_google_chrome' in defines:

@@ -12,6 +12,8 @@
 
 [2026-09-10 main 合并与验证](audit/main-consolidation-2026-09-10.md)
 
+- [本地 Fastlane 与上游发布](development/release.zh-CN.md)
+
 ## 从这里开始
 
 - [桌面鼠标手势使用指南](../apps/browser/docs/mouse-gestures.zh-CN.md)

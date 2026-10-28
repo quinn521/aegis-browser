@@ -1,0 +1,310 @@
+# frozen_string_literal: true
+require 'minitest/autorun'
+require 'tmpdir'
+require_relative '../lib/release'
+
+class ReleaseTest < Minitest::Test
+  def setup
+    @root = File.realpath(Dir.mktmpdir('aegis-release-test-'))
+    write('.gitignore', ".artifacts/\n")
+    write('apps/ios/project.yml', "MARKETING_VERSION: 3.2\nCURRENT_PROJECT_VERSION: 69\n")
+    write('apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h', 'kProductVersion[] = "2.2.0.144";')
+    write('apps/browser/args/aegis-android.gn', 'android_override_version_code = "2002000144"')
+    git('init', '-q')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    git('add', '.')
+    git('commit', '-qm', 'fixture')
+  end
+
+  def teardown
+    FileUtils.remove_entry(@root)
+  end
+
+  def write(relative, value)
+    path = File.join(@root, relative)
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, value)
+    path
+  end
+
+  def git(*args)
+    AegisRelease.command('git', *args, cwd: @root)
+  end
+
+  def request(platform = 'ios', **options)
+    AegisRelease::Request.new(platform, options, root: @root)
+  end
+
+  def package(platform = 'ios', **options)
+    req = request(platform, **options)
+    FileUtils.mkdir_p(req.directory)
+    extension = { 'ios' => 'ipa', 'android' => 'apk', 'macos' => 'dmg' }.fetch(platform)
+    path = File.join(req.directory, "Aegis.#{extension}")
+    File.write(path, 'fixture, not a real package')
+    sha = AegisRelease::Receipt.create(req, [path], AegisRelease.source(@root), 'signing' => 'fixture')
+    [req, sha, path]
+  end
+
+  def test_plan_is_read_only_and_reports_dirty_source
+    write('uncommitted.txt', 'pending')
+    value = request.plan
+    assert value['source']['dirty']
+    assert_equal 'com.gcsa.aegis', value['applicationId']
+    assert_equal '3.2', value['version']
+    refute File.exist?(File.join(@root, '.artifacts'))
+    assert_raises(AegisRelease::Error) { AegisRelease.source(@root) }
+  end
+
+  def test_destination_matrix
+    assert_equal 'testflight', request(destination: 'testflight').destination
+    %w[android macos].each do |platform|
+      assert_raises(AegisRelease::Error) { request(platform, destination: 'testflight') }
+    end
+    %w[ios android macos].each do |platform|
+      assert_equal 'github-draft', request(platform, destination: 'github-draft', tag: "candidate/#{platform}/test").destination
+    end
+  end
+
+  def test_candidate_namespace_and_input_injection_are_rejected
+    ['v2.2.0.144', 'candidate/ios/../main', 'candidate/android/x', 'candidate/ios/x;touch x'].each do |tag|
+      assert_raises(AegisRelease::Error) { request(destination: 'github-draft', tag: tag) }
+    end
+    ['../escape', '/tmp/out', 'a/../b', 'x$(touch bad)', 'x\ny'].each do |run_id|
+      assert_raises(AegisRelease::Error) { request(run_id: run_id) }
+    end
+    assert_raises(AegisRelease::Error) { request(version: '3.2;echo') }
+    assert_raises(AegisRelease::Error) { request(build: '0') }
+    assert_raises(AegisRelease::Error) { request(force: 'true') }
+  end
+
+  def test_chromium_version_cannot_be_changed_by_filename
+    assert_equal '2.2.0.144', request('macos').version
+    assert_equal '2002000144', request('android').build
+    assert_raises(AegisRelease::Error) { request('macos', version: '2.2.0.145') }
+    assert_raises(AegisRelease::Error) { request('android', build: '2002000145') }
+  end
+
+  def test_receipt_verifies_real_bytes_and_same_source
+    req, sha, artifact = package
+    receipt = AegisRelease::Receipt.verify(req, sha)
+    assert_equal false, receipt['releaseReady']
+    File.write(artifact, 'corrupt')
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+  end
+
+  def test_receipt_rejects_missing_digest_and_edited_metadata
+    req, sha = package
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, nil) }
+    File.write(req.manifest_path, File.read(req.manifest_path).sub('3.2', '3.3'))
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+  end
+
+  def test_checksum_sidecar_cannot_disagree_with_the_manifest
+    req, sha = package
+    File.write(req.manifest_path + '.sha256', 'wrong checksum')
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+  end
+
+  def test_new_commit_invalidates_previous_artifact
+    req, sha = package
+    write('new.txt', 'next source')
+    git('add', 'new.txt')
+    git('commit', '-qm', 'next')
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+  end
+
+  def test_symlinked_artifact_is_not_accepted_even_with_matching_bytes
+    req, sha, artifact = package
+    external = write('external.bin', File.read(artifact))
+    git('add', 'external.bin')
+    git('commit', '-qm', 'external')
+    File.unlink(artifact)
+    File.symlink(external, artifact)
+    assert_raises(AegisRelease::Error) { AegisRelease.digest(artifact) }
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+  end
+
+  def test_symlinked_output_ancestor_is_refused
+    File.symlink(Dir.tmpdir, File.join(@root, '.artifacts'))
+    assert_raises(AegisRelease::Error) { AegisRelease.real_path!(request.directory) }
+  end
+
+  def test_manifest_rejects_path_traversal_and_duplicate_assets
+    req, = package
+    original = JSON.parse(File.read(req.manifest_path))
+    [original.merge('assets' => [original['assets'][0].merge('name' => '../outside.ipa')]),
+     original.merge('assets' => original['assets'] * 2)].each do |value|
+      File.write(req.manifest_path, JSON.generate(value))
+      sha = AegisRelease.digest(req.manifest_path)
+      File.write(req.manifest_path + '.sha256', "#{sha}  #{File.basename(req.manifest_path)}\n")
+      assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+    end
+  end
+
+  def test_missing_installable_asset_is_not_a_package
+    req, = package
+    value = JSON.parse(File.read(req.manifest_path))
+    value['assets'] = []
+    File.write(req.manifest_path, JSON.generate(value))
+    sha = AegisRelease.digest(req.manifest_path)
+    File.write(req.manifest_path + '.sha256', "#{sha}  #{File.basename(req.manifest_path)}\n")
+    assert_raises(AegisRelease::Error) { AegisRelease::Receipt.verify(req, sha) }
+  end
+
+  def test_package_error_cannot_emit_a_success_receipt
+    req = request
+    flow = AegisRelease::Pipeline.new(req, Object.new)
+    assert_raises(AegisRelease::Error) { flow.package }
+    refute File.exist?(req.manifest_path)
+  end
+
+  class FakeDraft < AegisRelease::Draft
+    attr_reader :mutations
+    attr_accessor :remote, :tag_sha, :assets, :corrupt_upload, :on_read
+    def initialize(*args)
+      super
+      @tag_sha = @receipt['source']['sha']
+      @mutations, @assets = [], []
+    end
+    def api(path)
+      return { 'sha' => tag_sha } if path.start_with?('commits/')
+      assets
+    end
+    def releases
+      on_read&.call
+      remote ? [remote] : []
+    end
+    def gh(*args)
+      @mutations << args
+      if args[1] == 'create'
+        @remote = { 'id' => 1, 'tag_name' => @request.tag, 'draft' => true, 'prerelease' => true,
+                    'target_commitish' => tag_sha, 'html_url' => 'https://github.com/gcsagroup/aegis-browser/releases/untagged/fixture' }
+      elsif args[1] == 'upload'
+        path = args[3]
+        @assets << { 'name' => File.basename(path), 'size' => File.size(path), 'state' => 'uploaded',
+                     'digest' => corrupt_upload ? 'sha256:wrong' : "sha256:#{AegisRelease.digest(path)}" }
+      end
+      ''
+    end
+  end
+
+  def draft
+    req, sha = package('macos', destination: 'github-draft', tag: 'candidate/macos/2.2.0.144')
+    receipt = AegisRelease::Receipt.verify(req, sha)
+    FakeDraft.new(req, receipt, sha)
+  end
+
+  def test_draft_creation_upload_readback_and_idempotent_retry
+    publisher = draft
+    assert_equal 'draft_assets_verified', publisher.upload['status']
+    assert_equal 4, publisher.mutations.size # create + DMG + manifest + checksum
+    assert publisher.mutations.first.include?('--draft')
+    assert publisher.mutations.first.include?('--verify-tag')
+    refute publisher.mutations.flatten.include?('--clobber')
+    count = publisher.mutations.size
+    publisher.upload
+    assert_equal count, publisher.mutations.size
+  end
+
+  def test_wrong_tag_prevents_all_remote_writes
+    publisher = draft
+    publisher.tag_sha = '0' * 40
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert_empty publisher.mutations
+  end
+
+  def test_published_release_cannot_be_reused_or_changed
+    publisher = draft
+    publisher.upload
+    publisher.remote['draft'] = false
+    count = publisher.mutations.size
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert_equal count, publisher.mutations.size
+  end
+
+  def test_corrupt_remote_digest_does_not_claim_upload_success
+    publisher = draft
+    publisher.corrupt_upload = true
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert publisher.remote['draft']
+  end
+
+  def test_manifest_change_during_network_reads_is_rejected
+    publisher = draft
+    req = publisher.instance_variable_get(:@request)
+    publisher.on_read = -> { File.write(req.manifest_path, '{}') }
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    refute publisher.mutations.any? { |args| args[1] == 'upload' }
+  end
+
+  def test_draft_notes_cannot_follow_a_symlink
+    publisher = draft
+    req = publisher.instance_variable_get(:@request)
+    target = File.join(req.directory, 'preserve.txt')
+    File.write(target, 'preserve')
+    File.symlink(target, File.join(req.directory, 'draft-notes.txt'))
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert_equal 'preserve', File.read(target)
+    assert_empty publisher.mutations
+  end
+
+  class FakeApple
+    attr_reader :uploads
+    attr_accessor :fail_upload
+    def initialize
+      @uploads = []
+    end
+    def app_store_connect_api_key(**_options)
+      { token: 'fixture-token' }
+    end
+    def upload_to_testflight(**options)
+      @uploads << options
+      raise AegisRelease::Error, 'simulated upload connection loss' if fail_upload
+    end
+  end
+
+  class FixturePipeline < AegisRelease::Pipeline
+    def run(*_args, **_options)
+      true # The separately executed Python suite tests actual IPA parsing.
+    end
+  end
+
+  def with_apple_environment
+    keys = %w[AEGIS_ASC_KEY_ID AEGIS_ASC_ISSUER_ID AEGIS_ASC_KEY_BASE64]
+    previous = keys.to_h { |key| [key, ENV[key]] }
+    keys.each { |key| ENV[key] = 'fixture' }
+    yield
+  ensure
+    previous.each { |key, value| value ? ENV[key] = value : ENV.delete(key) }
+  end
+
+  def test_testflight_success_does_not_claim_processing_or_external_distribution
+    req, sha = package('ios', destination: 'testflight')
+    apple = FakeApple.new
+    flow = FixturePipeline.new(req, apple)
+    receipt = AegisRelease::Receipt.verify(req, sha)
+    capture_io { with_apple_environment { flow.upload_testflight(receipt) } }
+    result = JSON.parse(File.read(File.join(req.directory, 'testflight-upload.json')))
+    assert_equal 'uploaded_processing_unverified', result['status']
+    assert_equal false, apple.uploads.first[:distribute_external]
+    assert_equal true, apple.uploads.first[:skip_submission]
+    assert_equal true, apple.uploads.first[:skip_waiting_for_build_processing]
+    assert_raises(AegisRelease::Error) { with_apple_environment { flow.upload_testflight(receipt) } }
+    assert_equal 1, apple.uploads.length
+  end
+
+  def test_uncertain_testflight_outcome_preserves_attempt_and_blocks_blind_retry
+    req, sha = package('ios', destination: 'testflight')
+    apple = FakeApple.new
+    apple.fail_upload = true
+    flow = FixturePipeline.new(req, apple)
+    receipt = AegisRelease::Receipt.verify(req, sha)
+    assert_raises(AegisRelease::Error) { with_apple_environment { flow.upload_testflight(receipt) } }
+    assert File.file?(File.join(req.directory, 'testflight-attempt.json'))
+    refute File.exist?(File.join(req.directory, 'testflight-upload.json'))
+    apple.fail_upload = false
+    assert_raises(AegisRelease::Error) { with_apple_environment { flow.upload_testflight(receipt) } }
+    assert_equal 1, apple.uploads.length
+  end
+end

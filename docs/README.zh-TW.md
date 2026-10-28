@@ -12,6 +12,8 @@
 
 [2026-09-10 main 合併與驗證](audit/main-consolidation-2026-09-10.md)
 
+- [本機 Fastlane 與上游發佈](development/release.zh-TW.md)
+
 ## 從這裡開始
 
 - [存取服務 V1.0 設計總覽（簡體中文）](plans/access-service-v1.0/overview.zh-CN.md)

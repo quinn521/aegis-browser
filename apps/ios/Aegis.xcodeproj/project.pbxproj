@@ -1245,7 +1245,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.ios.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis;
 				PRODUCT_NAME = Aegis;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -1395,7 +1395,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.ios.app.safari;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.safari;
 				PRODUCT_NAME = SafariWebExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1438,7 +1438,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.ios.app.share;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.share;
 				PRODUCT_NAME = ShareExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1457,7 +1457,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.ios.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis;
 				PRODUCT_NAME = Aegis;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -1512,7 +1512,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.ios.app.safari;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.safari;
 				PRODUCT_NAME = SafariWebExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -1531,7 +1531,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.ios.app.share;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gcsa.aegis.share;
 				PRODUCT_NAME = ShareExtension;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

@@ -7,7 +7,7 @@ This document covers the Android browser target only. iOS and a WebView wrapper 
 ## Current evidence boundary
 
 - Android uses formal Stable `155.0.8059.39`; desktop uses `155.0.8059.40`. Android keeps its independent `ci-pins/android.json` and `patches-android/` inputs.
-- The reserved application ID is `app.gcsa.aegis`; reservation does not establish a valid package or Play identity.
+- The reserved application ID is `com.gcsa.aegis`; reservation does not establish a valid package or Play identity.
 - The 2026-10-09 source candidate is Ver 2.2 (144), versionCode `2002000144`, with 276 Chromium patches and 3 V8 patches. Full Chromium replay passed; its tree differs from the verified desktop source only in official `chrome/VERSION`. This preserves the shared Agent fixes and desktop-only gesture guards; it does not enable desktop gestures on Android. APK build, signing, package identity and physical-device acceptance remain pending.
 - There is no current identity-bound APK or AAB. A historical file such as `$HOME/Desktop/GCSA-aegis.apk` cannot be mapped to the current source and is not an RC.
 - v2 source resolves the public page behind the full-page Agent tab and binds current-page tasks to that document. Page capture, redaction, navigation invalidation, and results still require physical-device acceptance.
@@ -45,7 +45,7 @@ Expected candidate paths, which **do not currently exist as accepted outputs**, 
 
 - `$CHROMIUM_ROOT/src/out/AegisAndroid/apks/ChromePublic.apk`
 - `apps/browser/dist/GCSA-aegis.apk`
-- application ID: `app.gcsa.aegis`
+- application ID: `com.gcsa.aegis`
 - launcher name: `GCSA-aegis`
 
 An AAB path and Play signing identity must be defined and verified before store work.
