@@ -5,7 +5,12 @@ require_relative '../../fastlane/lib/release'
 module AegisRelease
   def self.with_play_key(environment)
     data = environment.fetch('AEGIS_PLAY_JSON_KEY_DATA')
-    parsed = JSON.parse(data)
+    begin
+      parsed = JSON.parse(data)
+    rescue JSON::ParserError
+      # Parser messages can include fragments of a malformed private key.
+      raise Error, 'Play credential JSON is invalid', cause: nil
+    end
     require!(parsed.is_a?(Hash) && %w[service_account external_account].include?(parsed['type']), 'Expected Play service-account or workload identity JSON')
     Dir.mktmpdir('aegis-play-', environment['RUNNER_TEMP']) do |directory|
       path = File.join(directory, 'credential.json')

@@ -73,4 +73,12 @@ class ActionsTest < ReleaseFixture
     refute File.exist?(observed)
     refute File.directory?(File.dirname(observed))
   end
+
+  def test_invalid_play_credential_never_echoes_secret_fragments
+    error = assert_raises(AegisRelease::Error) do
+      AegisRelease.with_play_key('AEGIS_PLAY_JSON_KEY_DATA' => '{"private_key":SECRET-FRAGMENT') { flunk }
+    end
+    refute_includes error.full_message, 'SECRET-FRAGMENT'
+    assert_nil error.cause
+  end
 end
