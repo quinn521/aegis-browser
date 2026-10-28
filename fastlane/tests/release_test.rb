@@ -164,25 +164,29 @@ class ReleaseTest < ReleaseFixture
 
   class FakeDraft < AegisRelease::Draft
     attr_reader :mutations
-    attr_accessor :remote, :tag_sha, :assets, :corrupt_upload, :on_read
+    attr_accessor :remote, :tag_sha, :assets, :corrupt_upload, :on_read, :hide_from_list, :fail_after_create
     def initialize(*args)
-      super
+      super(*args, environment: {})
       @tag_sha = @receipt['source']['sha']
       @mutations, @assets = [], []
     end
     def api(path)
+      on_read&.call
       return { 'sha' => tag_sha } if path.start_with?('commits/')
+      return remote if /\Areleases\/\d+\z/.match?(path)
       assets
     end
     def releases
       on_read&.call
-      remote ? [remote] : []
+      remote && !hide_from_list ? [remote] : []
     end
     def gh(*args)
       @mutations << args
-      if args[1] == 'create'
+      if args[1] == 'create' || (args[0] == 'api' && args.include?('POST'))
         @remote = { 'id' => 1, 'tag_name' => @request.tag, 'draft' => true, 'prerelease' => true,
                     'target_commitish' => tag_sha, 'html_url' => 'https://github.com/gcsagroup/aegis-browser/releases/untagged/fixture' }
+        raise IOError, 'creation response lost' if fail_after_create
+        return JSON.generate(@remote)
       elsif args[1] == 'upload'
         path = args[3]
         @assets << { 'name' => File.basename(path), 'size' => File.size(path), 'state' => 'uploaded',
@@ -202,12 +206,49 @@ class ReleaseTest < ReleaseFixture
     publisher = draft
     assert_equal 'draft_assets_verified', publisher.upload['status']
     assert_equal 4, publisher.mutations.size # create + DMG + manifest + checksum
-    assert publisher.mutations.first.include?('--draft')
-    assert publisher.mutations.first.include?('--verify-tag')
+    creation = publisher.mutations.first
+    assert_equal 'api', creation.first
+    payload = JSON.parse(File.read(creation[creation.index('--input') + 1]))
+    assert_equal true, payload['draft']
+    assert_equal true, payload['prerelease']
+    assert_equal publisher.tag_sha, payload['target_commitish']
     refute publisher.mutations.flatten.include?('--clobber')
     count = publisher.mutations.size
+    publisher.hide_from_list = true
     publisher.upload
     assert_equal count, publisher.mutations.size
+  end
+
+  def test_creation_response_identifies_a_draft_not_yet_visible_in_the_inventory
+    publisher = draft
+    publisher.hide_from_list = true
+    assert_equal 'draft_assets_verified', publisher.upload['status']
+    assert_equal 4, publisher.mutations.size
+  end
+
+  def test_lost_creation_response_cannot_create_a_second_draft
+    publisher = draft
+    publisher.hide_from_list = true
+    publisher.fail_after_create = true
+    assert_raises(IOError) { publisher.upload }
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert_equal 1, publisher.mutations.size
+    assert_empty publisher.assets
+  end
+
+  def test_actions_rerun_cannot_create_a_draft_without_a_known_remote_or_receipt
+    publisher = draft
+    publisher.instance_variable_set(:@environment, { 'GITHUB_ACTIONS' => 'true', 'GITHUB_RUN_ATTEMPT' => '2' })
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert_empty publisher.mutations
+  end
+
+  def test_tag_changed_during_inventory_read_cannot_create_a_release
+    publisher = draft
+    reads = 0
+    publisher.on_read = -> { reads += 1; publisher.tag_sha = '0' * 40 if reads >= 2 }
+    assert_raises(AegisRelease::Error) { publisher.upload }
+    assert_empty publisher.mutations
   end
 
   def test_wrong_tag_prevents_all_remote_writes

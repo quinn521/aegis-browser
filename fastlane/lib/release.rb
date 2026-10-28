@@ -477,8 +477,8 @@ module AegisRelease
   end
 
   class Draft
-    def initialize(request, receipt, expected_digest)
-      @request, @receipt, @expected_digest = request, receipt, expected_digest
+    def initialize(request, receipt, expected_digest, environment: ENV)
+      @request, @receipt, @expected_digest, @environment = request, receipt, expected_digest, environment
     end
 
     def gh(*args)
@@ -486,7 +486,7 @@ module AegisRelease
     end
 
     def api(path)
-      JSON.parse(gh('api', "repos/#{@request.repository}/#{path}"))
+      JSON.parse(gh('api', "repos/#{@request.repository}/#{path}", '--header', 'Cache-Control: no-cache'))
     end
 
     def releases
@@ -496,12 +496,21 @@ module AegisRelease
     def selected
       matches = releases.select { |r| r['tag_name'] == @request.tag }
       AegisRelease.require!(matches.size <= 1, 'Multiple releases for candidate tag')
-      result = matches.first
-      if result
-        AegisRelease.require!(result['draft'] == true && result['prerelease'] == true, 'Existing release must remain a candidate draft')
-        AegisRelease.require!(result['target_commitish'] == @receipt['source']['sha'], 'Existing draft targets a different source')
-      end
-      result
+      matches.first && validate_release(matches.first)
+    end
+
+    def validate_release(value)
+      AegisRelease.require!(value.is_a?(Hash) && value['id'].is_a?(Integer) && value['id'].positive? &&
+                            value['tag_name'] == @request.tag, 'Release response differs from the candidate tag')
+      AegisRelease.require!(value['draft'] == true && value['prerelease'] == true, 'Existing release must remain a candidate draft')
+      AegisRelease.require!(value['target_commitish'] == @receipt['source']['sha'], 'Existing draft targets a different source')
+      value
+    end
+
+    def refresh(release)
+      current = validate_release(api("releases/#{release.fetch('id')}"))
+      AegisRelease.require!(current['id'] == release['id'], 'Release ID changed')
+      current
     end
 
     def expected_assets
@@ -528,8 +537,17 @@ module AegisRelease
       sha = @receipt.fetch('source').fetch('sha')
       tag = URI.encode_www_form_component(@request.tag)
       AegisRelease.require!(api("commits/#{tag}")['sha'] == sha, 'Existing upstream candidate tag must resolve to the exact package commit')
-      release = selected
+      parameters = { 'repository' => @request.repository, 'tag' => @request.tag }
+      journal = Journal.new(@request, @expected_digest)
+      created = File.join(@request.directory, 'github-draft-create-result.json')
+      release = if File.exist?(created)
+                  journal.perform('github-draft-create', parameters) { raise Error, 'Missing completed draft creation record' }
+                else
+                  selected
+                end
       unless release
+        AegisRelease.require!(@environment['GITHUB_ACTIONS'] != 'true' || @environment['GITHUB_RUN_ATTEMPT'] == '1',
+          'Actions rerun cannot create another draft; reconcile the earlier release or retained creation record')
         notes = File.join(@request.directory, 'draft-notes.txt')
         text = "Candidate package: #{@request.platform} #{@request.profile} #{@request.version} (#{@request.build})\n\nSource: #{sha}\nSigning: #{@receipt.fetch('details').fetch('signing')}\nDevice acceptance: not verified. Distribution qualification: not complete.\n"
         AegisRelease.real_path!(notes)
@@ -539,21 +557,30 @@ module AegisRelease
           File.write(notes, text, mode: 'wx')
         end
         Receipt.verify(@request, @expected_digest)
-        gh('release', 'create', @request.tag, '--repo', @request.repository, '--draft', '--prerelease', '--verify-tag',
-           '--target', sha, '--title', "Aegis #{@request.platform} #{@request.profile} #{@request.version} (#{@request.build}) candidate", '--notes-file', notes)
-        release = selected
-        AegisRelease.require!(release, 'Draft creation outcome unknown; inspect remote state before retrying')
+        payload = { 'tag_name' => @request.tag, 'target_commitish' => sha, 'draft' => true, 'prerelease' => true,
+                    'name' => "Aegis #{@request.platform} #{@request.profile} #{@request.version} (#{@request.build}) candidate", 'body' => text }
+        input = File.join(@request.directory, 'draft-request.json')
+        AegisRelease.real_path!(input)
+        if File.exist?(input)
+          AegisRelease.require!(JSON.parse(File.read(AegisRelease.file!(input))) == payload, 'Existing draft request differs')
+        else
+          AegisRelease.write_new(input, payload)
+        end
+        release = journal.perform('github-draft-create', parameters) do
+          AegisRelease.require!(api("commits/#{tag}")['sha'] == sha, 'Candidate tag changed before draft creation')
+          validate_release(JSON.parse(gh('api', "repos/#{@request.repository}/releases", '--method', 'POST', '--input', input)))
+        end
       end
+      release = refresh(validate_release(release))
       present = check_assets(release)
       expected_assets.each do |asset|
         next if present.include?(asset['name'])
         AegisRelease.require!(asset['size'] < 2 * 1024**3, 'GitHub asset must be smaller than 2 GiB')
         Receipt.verify(@request, @expected_digest)
-        selected # Refuse a draft published concurrently before sending the next asset.
+        refresh(release) # Check the known ID before sending the next asset.
         gh('release', 'upload', @request.tag, File.join(@request.directory, asset['name']), '--repo', @request.repository)
       end
-      release = selected
-      AegisRelease.require!(release, 'Draft disappeared during upload')
+      release = refresh(release)
       AegisRelease.require!(api("commits/#{tag}")['sha'] == sha, 'Candidate tag changed during upload')
       Receipt.verify(@request, @expected_digest)
       check_assets(release, complete: true)

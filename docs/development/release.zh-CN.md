@@ -136,6 +136,8 @@ ruby scripts/release/tag.rb candidate/macos/2.2.0.144-release.144
 
 这些命令只做本地模拟，不创建 tag 或上传。tag 编码平台、profile、产品版本与 build/versionCode；本地和 Actions 对应平台实测通过后才创建/推送。脚本回读 tag SHA 与每个远端资产摘要，保留 draft/prerelease，不覆盖已有资产。
 
+Draft 创建后使用 REST 响应中的 release ID，并在上传资产前保存创建意图和结果；后续按 ID 回读，不依赖新草稿立即出现在列表中。创建结果未知时禁止再次 POST；Actions 重跑可恢复已有草稿，但在既无可见草稿又无创建记录时不能新建替代草稿。CI 在失败时也保留创建记录，恢复时不覆盖既有 Tag 或资产。
+
 ## 验证范围
 
 合入前可推送 `codex/fastlane-release-*` 分支运行 `Release Branch Validation`。前两个 job 在 fork 或上游分支运行无凭据回归测试，并编译 iOS `0.8.0 (1)` 的未签名 archive，核对主应用和两个扩展的 Bundle ID、version、build。它们不访问发布 Environment 或签名 Secrets；独立启用的 fork rehearsal 可在其后执行签名打包。前两项诊断不属于 IPA、TestFlight 或三端完整发布验收。正式签名打包、上传及 Android → DMG 的顺序验收仍需单独执行。

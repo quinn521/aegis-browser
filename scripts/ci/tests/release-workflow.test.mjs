@@ -53,6 +53,9 @@ test('uploads require package success and the trusted manifest digest output', (
   const artifact = workflow.jobs.package.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(artifact.with['if-no-files-found'], 'error');
   assert.doesNotMatch(artifact.with.path, /\*\*|work|\.p12|\.p8|mobileprovision/u);
+  const draftRecord = workflow.jobs['github-draft'].steps.find(s=>s.uses?.startsWith('actions/upload-artifact@'));
+  assert.equal(draftRecord.if, '${{ always() }}');
+  assert.match(draftRecord.with.path, /github-draft-create-\*\.json/u);
 });
 
 test('application IDs match the requested release identity', () => {

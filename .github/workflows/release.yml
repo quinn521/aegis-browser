@@ -310,10 +310,13 @@ jobs:
           RELEASE_MANIFEST_SHA256: ${{ needs.package.outputs.manifest_sha256 }}
         run: bash scripts/release/action.sh upload
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
         with:
           name: github-draft-receipt-${{ env.RELEASE_RUN_ID }}
-          path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/github-upload-*.json
-          if-no-files-found: error
+          path: |
+            .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/github-upload-*.json
+            .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/github-draft-create-*.json
+          if-no-files-found: warn
     env:
       RELEASE_RUN_ID: ${{ needs.package.outputs.run_id }}
   play:
