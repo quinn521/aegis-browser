@@ -1,0 +1,52 @@
+name: Candidate Tag Draft Release
+
+# Formal v* tags retain their existing qualification process.
+on:
+  push:
+    tags:
+      - 'candidate/ios/*'
+      - 'candidate/android/*'
+      - 'candidate/macos/*'
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      platform: ${{ steps.tag.outputs.platform }}
+      profile: ${{ steps.tag.outputs.profile }}
+      version: ${{ steps.tag.outputs.version }}
+      build: ${{ steps.tag.outputs.build }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
+        with:
+          ruby-version: '3.3.6'
+      - name: Validate candidate identity without signing credentials
+        id: tag
+        run: ruby scripts/release/tag.rb
+
+  release:
+    needs: plan
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      platform: ${{ needs.plan.outputs.platform }}
+      profile: ${{ needs.plan.outputs.profile }}
+      version: ${{ needs.plan.outputs.version }}
+      build: ${{ needs.plan.outputs.build }}
+      tag: ${{ needs.plan.outputs.tag }}
+      destination: github-draft
+      operation: upload
+      format: auto
+      store_options: '{}'
+    secrets: inherit

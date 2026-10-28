@@ -90,6 +90,24 @@ class StoresTest < ReleaseFixture
     assert_equal 1, lane.calls.size
   end
 
+  def test_processing_wait_is_bounded_and_never_selects_a_newer_build
+    require 'fastlane_core/build_watcher'
+    client, lane = apple('testflight-internal', version: '0.8.0', build: '1')
+    observed = nil
+    watcher = lambda do |**options|
+      observed = options
+      raise FastlaneCore::BuildWatcherError, 'processing timed out'
+    end
+    FastlaneCore::BuildWatcher.stub(:wait_for_build_processing_to_be_complete, watcher) do
+      assert_raises(FastlaneCore::BuildWatcherError) { client.wait_for_processing }
+    end
+    assert_equal ['app-fixture', 'IOS', '0.8.0', '1'], observed.values_at(:app_id, :platform, :app_version, :build_version)
+    assert_equal 1800, observed[:timeout_duration]
+    assert_equal false, observed[:select_latest]
+    assert_equal true, observed[:wait_for_build_beta_detail_processing]
+    assert_empty lane.calls
+  end
+
   def test_missing_or_wrong_type_testflight_groups_cannot_mutate
     internal = OpenStruct.new(name: 'Team', is_internal_group: true)
     client, lane = apple('testflight-external', groups: 'Team', group_rows: [internal])

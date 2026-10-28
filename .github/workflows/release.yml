@@ -1,5 +1,5 @@
+# All entrypoints call the same local Fastlane stages. Store review is explicit.
 name: Aegis Release
-
 on:
   workflow_dispatch:
     inputs:
@@ -7,31 +7,103 @@ on:
         description: Package platform
         required: true
         type: choice
-        options: [ios, android, macos]
-      destination:
-        description: Package only, TestFlight (iOS), or GitHub candidate draft
-        required: true
-        default: artifacts
+        options:
+          - ios
+          - android
+          - macos
+      profile:
+        description: Build profile, independent of destination
         type: choice
-        options: [artifacts, testflight, github-draft]
+        default: alpha
+        options:
+          - alpha
+          - beta
+          - release
+      destination:
+        description: Destination; package never uploads
+        type: choice
+        default: artifacts
+        options:
+          - artifacts
+          - testflight
+          - testflight-internal
+          - testflight-external
+          - asc
+          - app-store
+          - play-internal
+          - play-closed
+          - play-open
+          - play-production
+          - github-draft
+      operation:
+        description: Last stage to execute; submit is an explicit review request
+        type: choice
+        default: package
+        options:
+          - package
+          - upload
+          - distribute
+          - submit
       version:
-        description: Optional iOS version; Chromium uses the committed product version
+        description: iOS version override; native must match source
         type: string
       build:
-        description: Optional iOS build; Android uses the committed versionCode
+        description: iOS build override; Android must match source
         type: string
+      format:
+        description: auto = IPA, AAB, DMG; APK is sideload only
+        type: choice
+        default: auto
+        options:
+          - auto
+          - apk
+          - aab
       tag:
-        description: Existing candidate/<platform>/... tag at this main SHA (GitHub Draft only)
+        description: Existing candidate/<platform>/... tag for GitHub Draft
         type: string
-
+      store_options:
+        description: "JSON string fields: groups, track, play_release_policy; no credentials"
+        type: string
+        default: "{}"
+  workflow_call:
+    inputs:
+      platform:
+        type: string
+        required: true
+      profile:
+        type: string
+        required: false
+        default: alpha
+      destination:
+        type: string
+        required: false
+        default: artifacts
+      operation:
+        type: string
+        required: false
+        default: package
+      version:
+        type: string
+        required: false
+      build:
+        type: string
+        required: false
+      format:
+        type: string
+        required: false
+        default: auto
+      tag:
+        type: string
+        required: false
+      store_options:
+        type: string
+        required: false
+        default: "{}"
 permissions:
   contents: read
-
-# Serializing releases also protects the dedicated Chromium output and signing state.
 concurrency:
   group: aegis-release-${{ github.repository }}
   cancel-in-progress: false
-
 env:
   RELEASE_PLATFORM: ${{ inputs.platform }}
   RELEASE_DESTINATION: ${{ inputs.destination }}
@@ -40,18 +112,23 @@ env:
   RELEASE_TAG: ${{ inputs.tag }}
   RELEASE_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
   AEGIS_RELEASE_ENABLED: ${{ vars.AEGIS_RELEASE_ENABLED }}
-  FASTLANE_SKIP_UPDATE_CHECK: '1'
-  FASTLANE_HIDE_GITHUB_ISSUES: '1'
-  FASTLANE_OPT_OUT_USAGE: '1'
-  BUNDLE_FROZEN: 'true'
+  FASTLANE_SKIP_UPDATE_CHECK: "1"
+  FASTLANE_HIDE_GITHUB_ISSUES: "1"
+  FASTLANE_OPT_OUT_USAGE: "1"
+  BUNDLE_FROZEN: "true"
   BUNDLE_PATH: vendor/bundle
-
+  RELEASE_PROFILE: ${{ inputs.profile }}
+  RELEASE_OPERATION: ${{ inputs.operation }}
+  RELEASE_FORMAT: ${{ inputs.format }}
+  RELEASE_STORE_OPTIONS: ${{ inputs.store_options }}
+  AEGIS_RELEASE_REHEARSAL: ${{ vars.AEGIS_RELEASE_REHEARSAL }}
+  AEGIS_RELEASE_TEST_REPOSITORY_ID: ${{ vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
 jobs:
   preflight:
-    if: >-
-      ${{ github.repository == 'gcsagroup/aegis-browser' &&
-          github.repository_id == '1348409663' && github.ref == 'refs/heads/main' &&
-          vars.AEGIS_RELEASE_ENABLED == 'true' }}
+    if: ${{ vars.AEGIS_RELEASE_ENABLED == 'true' && ((github.repository == 'gcsagroup/aegis-browser' && github.repository_id
+      == '1348409663' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/candidate/'))) ||
+      (github.repository != 'gcsagroup/aegis-browser' && vars.AEGIS_RELEASE_REHEARSAL == 'true' && github.repository_id
+      == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID)) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -69,8 +146,8 @@ jobs:
           node-version: 22.23.1
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
         with:
-          ruby-version: '3.3.6'
-          bundler: '2.5.22'
+          ruby-version: 3.3.6
+          bundler: 2.5.22
       - name: Verify exact upstream source and latest quality attempt
         env:
           GH_TOKEN: ${{ github.token }}
@@ -93,7 +170,6 @@ jobs:
               ;;
             *) exit 2 ;;
           esac
-
   package:
     needs: preflight
     runs-on: ${{ fromJSON(needs.preflight.outputs.runner) }}
@@ -103,6 +179,7 @@ jobs:
       contents: read
     outputs:
       manifest_sha256: ${{ steps.package.outputs.manifest_sha256 }}
+      run_id: ${{ steps.package.outputs.run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -113,8 +190,8 @@ jobs:
           node-version: 22.23.1
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
         with:
-          ruby-version: '3.3.6'
-          bundler: '2.5.22'
+          ruby-version: 3.3.6
+          bundler: 2.5.22
       - name: Install locked Fastlane dependencies
         run: bundle install --jobs 4 --retry 2
       - name: Read existing iOS signing material
@@ -135,6 +212,12 @@ jobs:
           DEPOT_TOOLS_DIR: ${{ vars.AEGIS_DEPOT_TOOLS_DIR }}
           AEGIS_AAPT2: ${{ vars.AEGIS_AAPT2 }}
           AEGIS_APKSIGNER: ${{ vars.AEGIS_APKSIGNER }}
+          AEGIS_BUNDLETOOL_JAR: ${{ vars.AEGIS_BUNDLETOOL_JAR }}
+          AEGIS_ANDROID_KEYSTORE: ${{ vars.AEGIS_ANDROID_KEYSTORE }}
+          AEGIS_ANDROID_KEY_ALIAS: ${{ vars.AEGIS_ANDROID_KEY_ALIAS }}
+          AEGIS_ANDROID_CERT_SHA256: ${{ vars.AEGIS_ANDROID_CERT_SHA256 }}
+          AEGIS_ANDROID_STORE_PASSWORD: ${{ secrets.AEGIS_ANDROID_STORE_PASSWORD }}
+          AEGIS_ANDROID_KEY_PASSWORD: ${{ secrets.AEGIS_ANDROID_KEY_PASSWORD }}
         run: bash scripts/release/action.sh package
       - name: Save installable packages and identity evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -143,6 +226,7 @@ jobs:
           path: |
             .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.ipa
             .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.apk
+            .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.aab
             .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.dmg
             .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.dSYM.zip
             .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.build-identity.json
@@ -150,10 +234,12 @@ jobs:
             .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/*.sha256
           if-no-files-found: error
           retention-days: 14
-
   testflight:
-    needs: [preflight, package]
-    if: ${{ inputs.platform == 'ios' && inputs.destination == 'testflight' }}
+    needs:
+      - preflight
+      - package
+    if: ${{ inputs.platform == 'ios' && inputs.destination != 'artifacts' && inputs.destination != 'github-draft' &&
+      inputs.operation != 'package' }}
     runs-on: macos-26
     environment: aegis-testflight
     timeout-minutes: 60
@@ -170,14 +256,14 @@ jobs:
           node-version: 22.23.1
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
         with:
-          ruby-version: '3.3.6'
-          bundler: '2.5.22'
+          ruby-version: 3.3.6
+          bundler: 2.5.22
       - run: bundle install --jobs 4 --retry 2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: release-${{ inputs.platform }}-${{ env.RELEASE_RUN_ID }}
           path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}
-      - name: Upload the verified IPA without distributing to external testers
+      - name: Upload the verified IPA without distributing or submitting
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_MANIFEST_SHA256: ${{ needs.package.outputs.manifest_sha256 }}
@@ -188,13 +274,16 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ always() }}
         with:
-          name: testflight-receipt-${{ env.RELEASE_RUN_ID }}
-          path: .artifacts/release/ios/${{ env.RELEASE_RUN_ID }}/testflight-*.json
+          name: store-upload-record-ios-${{ env.RELEASE_RUN_ID }}
+          path: .artifacts/release/ios/${{ env.RELEASE_RUN_ID }}/apple-upload-*.json
           if-no-files-found: warn
-
+    env:
+      RELEASE_RUN_ID: ${{ needs.package.outputs.run_id }}
   github-draft:
-    needs: [preflight, package]
-    if: ${{ inputs.destination == 'github-draft' }}
+    needs:
+      - preflight
+      - package
+    if: ${{ inputs.destination == 'github-draft' && inputs.operation == 'upload' }}
     runs-on: ubuntu-24.04
     environment: aegis-github-draft
     timeout-minutes: 60
@@ -211,8 +300,8 @@ jobs:
           node-version: 22.23.1
       - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
         with:
-          ruby-version: '3.3.6'
-          bundler: '2.5.22'
+          ruby-version: 3.3.6
+          bundler: 2.5.22
       - run: bundle install --jobs 4 --retry 2
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -228,3 +317,106 @@ jobs:
           name: github-draft-receipt-${{ env.RELEASE_RUN_ID }}
           path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/github-upload-*.json
           if-no-files-found: error
+    env:
+      RELEASE_RUN_ID: ${{ needs.package.outputs.run_id }}
+  play:
+    needs:
+      - preflight
+      - package
+    if: ${{ inputs.platform == 'android' && startsWith(inputs.destination, 'play-') && inputs.operation != 'package' }}
+    runs-on: ubuntu-24.04
+    environment: aegis-play
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
+        with:
+          ruby-version: 3.3.6
+          bundler: 2.5.22
+      - run: bundle install --jobs 4 --retry 2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-${{ inputs.platform }}-${{ env.RELEASE_RUN_ID }}
+          path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}
+      - name: Upload the signed AAB as a Play draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.package.outputs.manifest_sha256 }}
+          AEGIS_PLAY_JSON_KEY_DATA: ${{ secrets.AEGIS_PLAY_JSON_KEY_DATA }}
+        run: ruby scripts/release/with-play-key.rb upload
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
+        with:
+          name: store-upload-record-android-${{ env.RELEASE_RUN_ID }}
+          path: .artifacts/release/android/${{ env.RELEASE_RUN_ID }}/play-upload-*.json
+          if-no-files-found: warn
+    env:
+      RELEASE_RUN_ID: ${{ needs.package.outputs.run_id }}
+  store-finish:
+    needs:
+      - preflight
+      - package
+      - testflight
+      - play
+    if: ${{ always() && needs.preflight.result == 'success' && needs.package.result == 'success' && (inputs.operation ==
+      'distribute' || inputs.operation == 'submit') && (needs.testflight.result == 'success' || needs.play.result ==
+      'success') }}
+    runs-on: ${{ inputs.platform == 'ios' && 'macos-26' || 'ubuntu-24.04' }}
+    environment: aegis-${{ inputs.platform }}-${{ inputs.operation }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+      - uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
+        with:
+          ruby-version: 3.3.6
+          bundler: 2.5.22
+      - run: bundle install --jobs 4 --retry 2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-${{ inputs.platform }}-${{ env.RELEASE_RUN_ID }}
+          path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: store-upload-record-${{ inputs.platform }}-${{ env.RELEASE_RUN_ID }}
+          path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}
+      - name: Execute the explicitly selected distribution or review stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MANIFEST_SHA256: ${{ needs.package.outputs.manifest_sha256 }}
+          AEGIS_ASC_KEY_ID: ${{ secrets.AEGIS_ASC_KEY_ID }}
+          AEGIS_ASC_ISSUER_ID: ${{ secrets.AEGIS_ASC_ISSUER_ID }}
+          AEGIS_ASC_KEY_BASE64: ${{ secrets.AEGIS_ASC_KEY_BASE64 }}
+          AEGIS_PLAY_JSON_KEY_DATA: ${{ secrets.AEGIS_PLAY_JSON_KEY_DATA }}
+        run: |
+          if [[ "$RELEASE_PLATFORM" == android ]]; then
+            ruby scripts/release/with-play-key.rb finish
+          else
+            bash scripts/release/action.sh finish
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
+        with:
+          name: store-stage-record-${{ inputs.platform }}-${{ env.RELEASE_RUN_ID }}
+          path: .artifacts/release/${{ inputs.platform }}/${{ env.RELEASE_RUN_ID }}/${{ inputs.platform }}-${{ inputs.operation
+            }}-*.json
+          if-no-files-found: warn
+    env:
+      RELEASE_RUN_ID: ${{ needs.package.outputs.run_id }}

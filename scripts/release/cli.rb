@@ -65,6 +65,7 @@ begin
   stage ||= "plan"
   raise ArgumentError, "Unknown stage: #{stage}" unless %w[plan package upload release distribute submit status].include?(stage)
   request = AegisRelease::Request.new(platform, options)
+  request.validate_stage!(stage)
   if stage == "plan"
     puts JSON.pretty_generate(request.plan)
   else

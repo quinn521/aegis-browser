@@ -152,6 +152,21 @@ module AegisRelease
                      "stages" => %w[package upload distribute submit status],
                      "uploadSubmitsReview" => false, "releaseReady" => false)
     end
+
+    def validate_stage!(stage)
+      AegisRelease.require!(%w[plan package upload release distribute submit status].include?(stage), 'Unknown release stage')
+      if %w[upload release].include?(stage)
+        AegisRelease.require!(destination != 'artifacts', 'Upload requires an external destination')
+      elsif stage == 'distribute'
+        AegisRelease.require!(%w[testflight-internal testflight-external play-internal play-closed play-open].include?(destination), 'Distribution requires a testing destination')
+        AegisRelease.require!(platform != 'ios' || !groups.empty?, 'TestFlight distribution requires explicit groups')
+      elsif stage == 'submit'
+        AegisRelease.require!(profile == 'release' && %w[app-store play-production].include?(destination), 'Review submission requires a release profile and production destination')
+        AegisRelease.require!(platform != 'android' || play_release_policy, 'Play production submission requires an explicit publishing policy')
+      elsif stage == 'status'
+        AegisRelease.require!(platform != 'macos' && !%w[artifacts github-draft].include?(destination), 'Status requires an Apple or Play destination')
+      end
+    end
   end
 
   class Receipt
@@ -238,7 +253,7 @@ module AegisRelease
       sha = Receipt.create(request, paths, source, details)
       puts "Manifest SHA-256: #{sha}"
       if ENV['GITHUB_OUTPUT']
-        File.open(ENV.fetch('GITHUB_OUTPUT'), 'a') { |f| f.puts("manifest_sha256=#{sha}") }
+        File.open(ENV.fetch('GITHUB_OUTPUT'), 'a') { |f| f.puts("manifest_sha256=#{sha}\nrun_id=#{request.run_id}") }
       end
       sha
     end
@@ -445,6 +460,7 @@ module AegisRelease
       # Validate before creating the mutation intent; a missing group or unfinished
       # build is a safe preflight failure that can be fixed without a new upload.
       if request.platform == 'ios'
+        client.wait_for_processing if ENV['GITHUB_ACTIONS'] == 'true'
         client.ready_build
         client.groups if stage == 'distribute'
       end
@@ -511,7 +527,7 @@ module AegisRelease
       release = selected
       unless release
         notes = File.join(@request.directory, 'draft-notes.txt')
-        text = "Candidate package: #{@request.platform} #{@request.version} (#{@request.build})\n\nSource: #{sha}\nSigning: #{@receipt.fetch('details').fetch('signing')}\nDevice acceptance: not verified. Distribution qualification: not complete.\n"
+        text = "Candidate package: #{@request.platform} #{@request.profile} #{@request.version} (#{@request.build})\n\nSource: #{sha}\nSigning: #{@receipt.fetch('details').fetch('signing')}\nDevice acceptance: not verified. Distribution qualification: not complete.\n"
         AegisRelease.real_path!(notes)
         if File.exist?(notes)
           AegisRelease.require!(File.read(notes) == text, 'Existing draft notes differ; retain the previous attempt')
@@ -520,7 +536,7 @@ module AegisRelease
         end
         Receipt.verify(@request, @expected_digest)
         gh('release', 'create', @request.tag, '--repo', @request.repository, '--draft', '--prerelease', '--verify-tag',
-           '--target', sha, '--title', "Aegis #{@request.platform} #{@request.version} (#{@request.build}) candidate", '--notes-file', notes)
+           '--target', sha, '--title', "Aegis #{@request.platform} #{@request.profile} #{@request.version} (#{@request.build}) candidate", '--notes-file', notes)
         release = selected
         AegisRelease.require!(release, 'Draft creation outcome unknown; inspect remote state before retrying')
       end

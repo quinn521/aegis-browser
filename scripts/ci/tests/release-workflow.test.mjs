@@ -7,8 +7,8 @@ const root = new URL('../../../', import.meta.url);
 const text = readFileSync(new URL('.github/workflows/release.yml', root), 'utf8');
 const workflow = YAML.parse(text);
 
-test('release is manual, upstream-only, exact-source and opt-in', () => {
-  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
+test('release is manual or reusable, exact-source and explicitly opt-in', () => {
+  assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch', 'workflow_call']);
   assert.match(workflow.jobs.preflight.if, /github\.repository == 'gcsagroup\/aegis-browser'/u);
   assert.match(workflow.jobs.preflight.if, /github\.repository_id == '1348409663'/u);
   assert.match(workflow.jobs.preflight.if, /github\.ref == 'refs\/heads\/main'/u);
@@ -35,15 +35,20 @@ test('credential and write permissions stay behind protected upload/build jobs',
   assert.equal(workflow.jobs.testflight.permissions.contents, 'read');
   assert.equal(workflow.jobs['github-draft'].environment, 'aegis-github-draft');
   assert.equal(workflow.jobs['github-draft'].permissions.contents, 'write');
+  assert.equal(workflow.jobs.play.environment, 'aegis-play');
+  assert.equal(workflow.jobs.play.permissions.contents, 'read');
+  assert.equal(workflow.jobs['store-finish'].permissions.contents, 'read');
+  assert.equal(workflow.jobs['store-finish'].environment, 'aegis-${{ inputs.platform }}-${{ inputs.operation }}');
 });
 
 test('uploads require package success and the trusted manifest digest output', () => {
-  for (const name of ['testflight', 'github-draft']) {
+  for (const name of ['testflight', 'play', 'github-draft']) {
     const job = workflow.jobs[name];
     assert.deepEqual(job.needs, ['preflight', 'package']);
-    const upload = job.steps.find((step) => step.run === 'bash scripts/release/action.sh upload');
+    const upload = job.steps.find((step) => ['bash scripts/release/action.sh upload', 'ruby scripts/release/with-play-key.rb upload'].includes(step.run));
     assert.equal(upload.env.RELEASE_MANIFEST_SHA256, '${{ needs.package.outputs.manifest_sha256 }}');
     assert.equal(job.steps.find((s) => s.uses?.startsWith('actions/download-artifact@')).with['run-id'], undefined);
+    assert.equal(job.env.RELEASE_RUN_ID, '${{ needs.package.outputs.run_id }}');
   }
   const artifact = workflow.jobs.package.steps.find((s) => s.uses?.startsWith('actions/upload-artifact@'));
   assert.equal(artifact.with['if-no-files-found'], 'error');
@@ -63,13 +68,14 @@ test('application IDs match the requested release identity', () => {
   assert.match(read('apps/browser/scripts/verify-android-agent-target.mjs'), /PACKAGE = 'com\.gcsa\.aegis'/u);
 });
 
-test('candidate branch validation uses no secrets or upload permissions', () => {
+test('candidate branch checks stay uncredentialed before an explicitly opted-in fork rehearsal', () => {
   const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));
   assert.deepEqual(candidate.on.push.branches, ['codex/fastlane-release-*']);
   assert.equal(candidate.permissions.contents, 'read');
   assert.equal(candidate.jobs['ios-archive'].needs, 'contracts');
-  assert.doesNotMatch(JSON.stringify(candidate), /secrets\.|self-hosted|contents.*write|aegis-testflight/u);
-  for (const job of Object.values(candidate.jobs)) {
+  for (const name of ['contracts', 'ios-archive']) {
+    const job = candidate.jobs[name];
+    assert.doesNotMatch(JSON.stringify(job), /secrets\.|self-hosted|contents.*write|aegis-testflight/u);
     assert.equal(job.environment, undefined);
     for (const step of job.steps) {
       if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/u);
@@ -79,4 +85,33 @@ test('candidate branch validation uses no secrets or upload permissions', () => 
   const archive = candidate.jobs['ios-archive'].steps.find((step) => step.run?.includes('xcodebuild'));
   assert.match(archive.run, /CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO/u);
   assert.match(archive.run, /MARKETING_VERSION=0\.8\.0 CURRENT_PROJECT_VERSION=1/u);
+  const rehearsal = candidate.jobs['release-rehearsal'];
+  assert.deepEqual(rehearsal.needs, ['contracts', 'ios-archive']);
+  assert.match(rehearsal.if, /AEGIS_RELEASE_REHEARSAL == 'true'/u);
+  assert.match(rehearsal.if, /AEGIS_RELEASE_TEST_REPOSITORY_ID/u);
+  assert.equal(rehearsal.with.operation, 'package');
+  assert.equal(rehearsal.with.destination, 'artifacts');
+  assert.equal(rehearsal.uses, './.github/workflows/release.yml');
+});
+
+test('store review is a separate protected step after a completed upload record', () => {
+  const finish = workflow.jobs['store-finish'];
+  assert.deepEqual(finish.needs, ['preflight', 'package', 'testflight', 'play']);
+  assert.match(finish.if, /inputs.operation == 'distribute' \|\| inputs.operation == 'submit'/u);
+  assert.match(finish.if, /needs.testflight.result == 'success' \|\| needs.play.result == 'success'/u);
+  const records = finish.steps.filter(s=>s.uses?.startsWith('actions/download-artifact@'));
+  assert.equal(records.length, 2);
+  assert.ok(records.some(s=>s.with.name.includes('store-upload-record')));
+  assert.equal(workflow.on.workflow_dispatch.inputs.operation.default, 'package');
+});
+
+test('candidate tags reuse the reviewed workflow and cannot trigger public releases', () => {
+  const tag = YAML.parse(readFileSync(new URL('.github/workflows/release-candidate-tag.yml', root), 'utf8'));
+  assert.deepEqual(tag.on.push.tags, ['candidate/ios/*', 'candidate/android/*', 'candidate/macos/*']);
+  assert.equal(tag.permissions.contents, 'read');
+  assert.doesNotMatch(JSON.stringify(tag.jobs.plan), /secrets/u);
+  assert.equal(tag.jobs.release.uses, './.github/workflows/release.yml');
+  assert.equal(tag.jobs.release.with.destination, 'github-draft');
+  assert.equal(tag.jobs.release.with.operation, 'upload');
+  assert.deepEqual(Object.keys(tag.jobs), ['plan', 'release']);
 });

@@ -67,3 +67,47 @@ test('candidate tag is checked before starting expensive release builds', async 
   await assert.rejects(releasePreflight(sha, options({environment: env,
     api: async (repo, path, opts) => path.startsWith('/commits/') ? {sha: 'b'.repeat(40)} : base.api(repo, path, opts)})), /candidate tag must/u);
 });
+
+test('automatic candidate tags still require the exact current upstream main and quality', async () => {
+  const tag = 'candidate/ios/0.8.0-alpha.1';
+  const env = {...environment, GITHUB_EVENT_NAME: 'push', GITHUB_REF: `refs/tags/${tag}`,
+    RELEASE_DESTINATION: 'github-draft', RELEASE_PLATFORM: 'ios', RELEASE_TAG: tag};
+  const base = options();
+  const api = async (repo, path, opts) => path.startsWith('/commits/') ? {sha} : base.api(repo, path, opts);
+  assert.equal((await releasePreflight(sha, options({environment: env, api}))).admission, 'upstream_quality_verified');
+  await assert.rejects(releasePreflight(sha, options({environment: {...env, RELEASE_DESTINATION: 'app-store'}, api})), /enabled manual run/u);
+  await assert.rejects(releasePreflight(sha, options({environment: env, api, quality: async()=>false})), /has not succeeded/u);
+});
+
+const forkEnvironment = {...environment, GITHUB_REPOSITORY: 'fixture/aegis-browser', GITHUB_REPOSITORY_ID: '777',
+  AEGIS_RELEASE_TEST_REPOSITORY_ID: '777', AEGIS_RELEASE_REHEARSAL: 'true',
+  GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/codex/fastlane-release-test', RELEASE_DESTINATION: 'artifacts'};
+
+function forkApi({conclusion = 'success', parent = RELEASE_REPOSITORY, runSha = sha} = {}) {
+  return async (repo, path) => {
+    assert.equal(repo, 'fixture/aegis-browser');
+    if (path === '') return {id: 777, fork: true, parent: {full_name: parent}};
+    if (path.startsWith('/actions/workflows/')) return {workflow_runs: [{id: 5, run_attempt: 2, head_sha: runSha, head_branch: 'codex/fastlane-release-test'}]};
+    if (path.includes('/attempts/2/jobs')) return {jobs: ['contracts', 'ios-archive'].map(name=>({name, status:'completed', conclusion}))};
+    if (path.startsWith('/commits/')) return {sha};
+    assert.fail(`Unexpected API request ${path}`);
+  };
+}
+
+test('explicit fork rehearsal admits only tested source and records that it is not upstream qualification', async () => {
+  const result = await releasePreflight(sha, options({environment:forkEnvironment, api:forkApi(), quality:()=>assert.fail('upstream quality is separate')}));
+  assert.equal(result.admission, 'fork_rehearsal_only');
+  assert.equal(result.releaseReady, false);
+  for (const mismatch of [{conclusion:'failure'}, {parent:'elsewhere/repo'}, {runSha:'b'.repeat(40)}]) {
+    await assert.rejects(releasePreflight(sha, options({environment:forkEnvironment, api:forkApi(mismatch)})));
+  }
+});
+
+test('fork rehearsal rejects production, external testing, mismatched repository and untrusted refs before API access', async () => {
+  const changes = [{RELEASE_DESTINATION:'app-store'}, {RELEASE_DESTINATION:'play-production'},
+    {RELEASE_DESTINATION:'testflight-external'}, {AEGIS_RELEASE_TEST_REPOSITORY_ID:'888'},
+    {GITHUB_EVENT_NAME:'pull_request'}, {GITHUB_REF:'refs/heads/main'}];
+  for (const change of changes) {
+    await assert.rejects(releasePreflight(sha, options({environment:{...forkEnvironment,...change}, api:()=>assert.fail('no API access')})), /Fork rehearsal requires/u);
+  }
+});

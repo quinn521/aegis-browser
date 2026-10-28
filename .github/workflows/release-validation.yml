@@ -46,7 +46,7 @@ jobs:
           FASTLANE_HIDE_GITHUB_ISSUES: '1'
           FASTLANE_OPT_OUT_USAGE: '1'
         run: |
-          bundle exec ruby fastlane/tests/stores_test.rb
+          bundle exec ruby fastlane/tests/tag_test.rb
           python3 -m unittest discover -s scripts/release -p 'test_*.py'
           pnpm run ci:test
           bundle exec fastlane lanes
@@ -85,3 +85,26 @@ jobs:
           path: .artifacts/release-validation/*
           if-no-files-found: warn
           retention-days: 14
+
+  # Opt-in fork rehearsal uses the same protected packaging workflow. The two
+  # uncredentialed prerequisite jobs above must finish before credentials load.
+  release-rehearsal:
+    needs: [contracts, ios-archive]
+    if: >-
+      ${{ github.repository != 'gcsagroup/aegis-browser' &&
+          vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
+          github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      platform: ios
+      profile: alpha
+      destination: artifacts
+      operation: package
+      version: '0.8.0'
+      build: '1'
+      format: auto
+      store_options: '{}'
+    secrets: inherit

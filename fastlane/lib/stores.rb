@@ -64,6 +64,14 @@ module AegisRelease
       item
     end
 
+    def wait_for_processing
+      require 'fastlane_core/build_watcher'
+      FastlaneCore::BuildWatcher.wait_for_build_processing_to_be_complete(
+        app_id: @app.id, platform: 'IOS', app_version: @request.version, build_version: @request.build,
+        poll_interval: 15, timeout_duration: 1800, select_latest: false,
+        return_spaceship_testflight_build: false, wait_for_build_beta_detail_processing: true)
+    end
+
     def groups
       AegisRelease.require!(!@request.groups.empty?, 'Distribution requires --groups with existing TestFlight group names')
       all = @app.get_beta_groups
