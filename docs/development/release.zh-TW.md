@@ -14,7 +14,7 @@ iOS 延伸功能使用 `com.gcsa.aegis.safari`、`com.gcsa.aegis.share`。保留
 
 ## 手動腳本：第一階段驗收
 
-在終端執行 `./release` 可使用選單，也可使用命令列。`--profile alpha|beta|release` 與目的地獨立選擇。三種 profile 都使用最佳化的 Release 建置，不啟用 Debug 測試掛鉤；iOS 把 `AegisReleaseProfile` 寫入主應用和擴充，Android/macOS 將 profile 綁定到產物清單，不虛構功能差異。Alpha 原包不能靠修改清單變成 Release 包。
+在終端執行 `./release` 可使用選單，也可使用命令列。`--profile alpha|beta|release` 選擇套件類型。Alpha 的商店分發只允許 TestFlight 內測群組或 Play 內部測試；在打包或讀取發布憑據前拒絕 TestFlight 外測、Play 封閉/公開測試及正式管道。iOS Alpha 匯出一律設定 `testFlightInternalTestingOnly=true`，只打包和 GitHub Draft 也一樣，Apple 因而限制其外測及 App Store 送審；Beta/Release 設為 false。Beta 可內外測但禁止正式送審；Release 可用於所有列出的目的地，上傳、分發和送審仍是分別明確執行的階段。預設目的地仍為 `artifacts`（不上傳）；`testflight` 只上傳，分發必須明確指定已有內測群組名稱。外測需重新打 Beta 或 Release 套件並使用新 build。參見 [Apple 分發選項](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases)。三種 profile 都使用最佳化的 Release 建置，不啟用 Debug 測試掛鉤；iOS 把 `AegisReleaseProfile` 寫入主應用和擴充，Android/macOS 將 profile 綁定到產物清單，不虛構功能差異。Alpha 原包不能靠修改清單變成 Release 包。
 
 | 階段 | 行為 |
 | --- | --- |

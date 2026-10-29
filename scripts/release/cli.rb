@@ -7,7 +7,7 @@ begin
   options = {}
   parser = OptionParser.new do |p|
     p.banner = "Usage: ./release <ios|android|macos> <plan|package|upload|release|distribute|submit|status> [options]"
-    p.on("--profile NAME", "alpha, beta, release (default); independent of destination") { |v| options[:profile] = v }
+    p.on("--profile NAME", "alpha (internal testing only), beta, release (default)") { |v| options[:profile] = v }
     p.on("--destination NAME", "artifacts, testflight[-internal|-external], asc, app-store, play-{internal,closed,open,production}, github-draft") { |v| options[:destination] = v }
     p.on("--groups NAMES", "Comma-separated existing TestFlight group names") { |v| options[:groups] = v }
     p.on("--track NAME", "Existing Play closed track (default alpha)") { |v| options[:track] = v }
@@ -31,7 +31,7 @@ begin
     end
     platform = choose.call('Platform', %w[ios android macos])
     options[:profile] = choose.call('Profile', %w[alpha beta release])
-    options[:destination] = choose.call('Destination', AegisRelease::DESTINATIONS.fetch(platform))
+    options[:destination] = choose.call('Destination', AegisRelease.destinations(platform, options[:profile]))
     stage = choose.call('Stage', %w[plan package release upload distribute submit status])
     %i[version build run_id].each do |field|
       print "#{field} (Enter = default): "

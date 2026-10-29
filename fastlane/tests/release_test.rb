@@ -314,6 +314,30 @@ class ReleaseTest < ReleaseFixture
     end
   end
 
+  def test_ios_alpha_export_is_internal_only_even_for_package_and_draft
+    [%w[alpha artifacts], %w[alpha github-draft], %w[beta artifacts], %w[release artifacts]].each do |profile, destination|
+      options = { profile: profile, destination: destination }
+      options[:tag] = 'candidate/ios/test' if destination == 'github-draft'
+      req = request(**options)
+      builder = Object.new
+      builder.define_singleton_method(:update_code_signing_settings) { |**_options| }
+      checks = self
+      builder.define_singleton_method(:build_app) do |**options|
+        checks.assert_equal(profile == 'alpha', options.fetch(:export_options).fetch(:testFlightInternalTestingOnly))
+        File.write(File.join(options.fetch(:output_directory), options.fetch(:output_name)), 'fixture IPA')
+      end
+      keys = %w[AEGIS_APPLE_TEAM_ID AEGIS_IOS_PROFILES]
+      previous = keys.to_h { |key| [key, ENV[key]] }
+      ENV['AEGIS_APPLE_TEAM_ID'] = 'fixture'
+      ENV['AEGIS_IOS_PROFILES'] = AegisRelease::IOS_TARGETS.values.to_h { |id| [id, 'fixture'] }.to_json
+      FileUtils.mkdir_p(req.directory)
+      _paths, details = FixturePipeline.new(req, builder).package_ios
+      assert_equal profile == 'alpha', details.fetch('testFlightInternalTestingOnly')
+    ensure
+      previous&.each { |key, value| value ? ENV[key] = value : ENV.delete(key) }
+    end
+  end
+
   def test_ios_snapshot_includes_committed_shared_resources_and_excludes_local_files
     shared = 'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared'
     write("#{shared}/viewer.html", '<html>committed viewer</html>')

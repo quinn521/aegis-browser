@@ -18,7 +18,16 @@ module AegisRelease
     'android' => %w[artifacts play-internal play-closed play-open play-production github-draft],
     'macos' => %w[artifacts github-draft]
   }.freeze
+  ALPHA_DESTINATIONS = {
+    'ios' => %w[artifacts testflight testflight-internal github-draft],
+    'android' => %w[artifacts play-internal github-draft],
+    'macos' => %w[artifacts github-draft]
+  }.freeze
   class Error < StandardError; end
+
+  def self.destinations(platform, profile)
+    (profile == 'alpha' ? ALPHA_DESTINATIONS : DESTINATIONS).fetch(platform)
+  end
 
   def self.require!(condition, message)
     raise Error, message unless condition
@@ -79,6 +88,7 @@ module AegisRelease
       AegisRelease.require!(DESTINATIONS.fetch(platform).include?(destination), "Unsupported destination for #{platform}: #{destination}")
       @profile = options.fetch(:profile, 'release').to_s.downcase
       AegisRelease.require!(%w[alpha beta release].include?(profile), 'Profile must be alpha, beta or release')
+      AegisRelease.require!(AegisRelease.destinations(platform, profile).include?(destination), 'Alpha packages support internal testing only; use a new beta or release package for external distribution')
       AegisRelease.require!(!%w[asc app-store play-production].include?(destination) || profile == 'release', 'Store production destinations require --profile release')
       @groups = options.fetch(:groups, '').to_s.split(',').map(&:strip)
       AegisRelease.require!(groups.uniq == groups && groups.all? { |g| !g.empty? && g.size <= 100 && !g.match?(/[\x00-\x1f]/) }, 'Invalid or duplicate TestFlight groups')
@@ -303,11 +313,13 @@ module AegisRelease
                          buildlog_path: File.join(work, 'logs'), export_method: 'app-store',
                          skip_profile_detection: true, xcargs: "MARKETING_VERSION=#{request.version} CURRENT_PROJECT_VERSION=#{request.build}",
                          export_options: { method: 'app-store-connect', teamID: team, signingStyle: 'manual',
-                                           provisioningProfiles: profiles, manageAppVersionAndBuildNumber: false })
+                                           provisioningProfiles: profiles, manageAppVersionAndBuildNumber: false,
+                                           testFlightInternalTestingOnly: request.profile == 'alpha' })
       ipa = File.join(request.directory, name)
       run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build, request.profile)
       paths = [ipa] + Dir.glob(File.join(request.directory, '*.dSYM.zip'))
-      [paths, { 'signing' => 'app-store-export', 'testflight' => 'not_uploaded', 'deviceAcceptance' => 'not_verified' }]
+      [paths, { 'signing' => 'app-store-export', 'testflight' => 'not_uploaded', 'deviceAcceptance' => 'not_verified',
+                'testFlightInternalTestingOnly' => request.profile == 'alpha' }]
     end
 
     def chromium_root

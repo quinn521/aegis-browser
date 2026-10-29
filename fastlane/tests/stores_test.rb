@@ -6,17 +6,51 @@ require 'supply'
 require 'spaceship'
 
 class StoresTest < ReleaseFixture
-  def test_profiles_and_store_routes_are_independent
-    %w[alpha beta release].each do |profile|
+  def test_alpha_is_internal_only_while_beta_and_release_allow_external_testing
+    %w[beta release].each do |profile|
       assert_equal profile, request(profile: profile, destination: 'testflight-external').identity['profile']
       assert_equal profile, request('android', profile: profile, destination: 'play-open').profile
     end
+    %w[testflight-external asc app-store].each do |destination|
+      assert_raises(AegisRelease::Error) { request(profile: 'Alpha', destination: destination) }
+    end
+    %w[play-closed play-open play-production].each do |destination|
+      assert_raises(AegisRelease::Error) { request('android', profile: 'alpha', destination: destination) }
+    end
+    assert_equal 'testflight-internal', request(profile: 'alpha', destination: 'testflight-internal', groups: 'Team').destination
+    assert_equal 'testflight', request(profile: 'alpha', destination: 'testflight').destination
+    assert_equal 'internal', request('android', profile: 'alpha', destination: 'play-internal').track
+    %w[ios android macos].each do |platform|
+      assert_equal 'artifacts', request(platform, profile: 'alpha').destination
+      assert_equal 'github-draft', request(platform, profile: 'alpha', destination: 'github-draft', tag: "candidate/#{platform}/test").destination
+    end
     assert_equal 'beta', request(profile: 'Beta').profile
-    assert_raises(AegisRelease::Error) { request(profile: 'beta', destination: 'app-store') }
+    %w[asc app-store].each do |destination|
+      assert_raises(AegisRelease::Error) { request(profile: 'beta', destination: destination) }
+    end
+    assert_raises(AegisRelease::Error) { request('android', profile: 'beta', destination: 'play-production') }
     assert_raises(AegisRelease::Error) { request('android', profile: 'alpha', destination: 'play-production') }
     assert_raises(AegisRelease::Error) { request('android', destination: 'play-internal', format: 'apk') }
     assert_raises(AegisRelease::Error) { request('android', destination: 'play-closed', track: 'production') }
     assert_equal 'private-qa', request('android', destination: 'play-closed', track: 'private-qa').track
+  end
+
+  def test_release_supports_all_destinations_and_beta_cannot_submit_via_fastlane
+    AegisRelease::DESTINATIONS.each do |platform, destinations|
+      destinations.each do |destination|
+        options = { profile: 'release', destination: destination }
+        options[:tag] = "candidate/#{platform}/test" if destination == 'github-draft'
+        assert_equal destination, request(platform, **options).destination
+      end
+    end
+    %w[alpha beta].each do |profile|
+      [['ios', 'testflight-internal'], ['android', 'play-internal']].each do |platform, destination|
+        req = request(platform, profile: profile, destination: destination)
+        assert_raises(AegisRelease::Error) { req.validate_stage!('submit') }
+        assert_raises(AegisRelease::Error) { AegisRelease::Pipeline.new(req, FakeLane.new).submit }
+      end
+    end
+    refute File.exist?(File.join(@root, '.artifacts'))
   end
 
   def test_profile_cannot_be_relabelled_after_packaging

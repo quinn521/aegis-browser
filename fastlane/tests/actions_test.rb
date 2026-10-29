@@ -119,6 +119,39 @@ class ActionsTest < ReleaseFixture
     assert_includes value.argv('upload'), 'alpha'
   end
 
+  def test_alpha_external_routes_fail_before_actions_can_package_or_access_stores
+    %w[package upload distribute].each do |stage|
+      %w[testflight-external asc].each do |destination|
+        assert_raises(AegisRelease::Error) do
+          action(environment.merge('RELEASE_OPERATION' => stage, 'RELEASE_DESTINATION' => destination,
+                                   'RELEASE_STORE_OPTIONS' => '{}'))
+        end
+      end
+      %w[play-closed play-open].each do |destination|
+        assert_raises(AegisRelease::Error) do
+          action(environment.merge('RELEASE_PLATFORM' => 'android', 'RELEASE_OPERATION' => stage,
+                                   'RELEASE_DESTINATION' => destination, 'RELEASE_VERSION' => '',
+                                   'RELEASE_BUILD' => '', 'RELEASE_STORE_OPTIONS' => '{}'))
+        end
+      end
+    end
+    refute File.exist?(File.join(@root, '.artifacts'))
+  end
+
+  def test_beta_allows_both_testflight_group_types_but_cannot_submit
+    %w[testflight-internal testflight-external].each do |destination|
+      env = environment.merge('RELEASE_PROFILE' => 'beta', 'RELEASE_DESTINATION' => destination)
+      assert_equal 'beta', action(env).request.profile
+      assert_raises(AegisRelease::Error) { action(env.merge('RELEASE_OPERATION' => 'submit')) }
+    end
+    %w[asc app-store].each do |destination|
+      assert_raises(AegisRelease::Error) do
+        action(environment.merge('RELEASE_PROFILE' => 'beta', 'RELEASE_DESTINATION' => destination,
+                                 'RELEASE_OPERATION' => 'submit', 'RELEASE_STORE_OPTIONS' => '{}'))
+      end
+    end
+  end
+
   def test_actions_do_not_interpolate_group_values_into_shell_code
     group = 'QA;$(touch should-not-exist)'
     value = action(environment.merge('RELEASE_STORE_OPTIONS' => JSON.generate('groups' => group)))

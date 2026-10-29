@@ -12,7 +12,7 @@ on:
           - android
           - macos
       profile:
-        description: Build profile, independent of destination
+        description: Alpha internal only; Beta internal/external, no submission; Release all routes
         type: choice
         default: alpha
         options:
