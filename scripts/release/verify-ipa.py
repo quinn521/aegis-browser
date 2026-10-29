@@ -21,6 +21,8 @@ def verify(path, version, build, release_profile=None):
             if archive.getinfo(member).file_size > 1024 * 1024:
                 raise ValueError("Unexpectedly large Info.plist")
             info = plistlib.loads(archive.read(member))
+            if info.get("CFBundleInfoDictionaryVersion") != "6.0":
+                raise ValueError("Unsupported plist structure version: " + identifier)
             if (info.get("CFBundleIdentifier"), info.get("CFBundleShortVersionString"), info.get("CFBundleVersion")) != (identifier, version, build):
                 raise ValueError("IPA bundle/version/build mismatch: " + identifier)
             if release_profile is not None and info.get("AegisReleaseProfile") != release_profile:

@@ -14,13 +14,14 @@ spec.loader.exec_module(ipa)
 
 
 class VerifyIPATests(unittest.TestCase):
-    def fixture(self, path, *, identifier="com.gcsa.aegis", extension_build="70", profile=True, manifest=None, icon_data=None):
+    def fixture(self, path, *, identifier="com.gcsa.aegis", extension_build="70", profile=True, manifest=None, icon_data=None, dictionary_versions=None):
         with zipfile.ZipFile(path, "w") as archive:
             for suffix, app_id, build in [("", identifier, "70"),
                                           ("PlugIns/SafariWebExtension.appex/", "com.gcsa.aegis.safari", extension_build),
                                           ("PlugIns/ShareExtension.appex/", "com.gcsa.aegis.share", "70")]:
                 root = "Payload/Aegis.app/" + suffix
                 archive.writestr(root + "Info.plist", plistlib.dumps({"CFBundleIdentifier": app_id,
+                                 "CFBundleInfoDictionaryVersion": (dictionary_versions or {}).get(app_id, "6.0"),
                                  "CFBundleShortVersionString": "3.2", "CFBundleVersion": build,
                                  "AegisReleaseProfile": "alpha"}))
                 if profile:
@@ -53,6 +54,21 @@ class VerifyIPATests(unittest.TestCase):
                 self.fixture(path, **kwargs)
                 with self.assertRaises(ValueError):
                     ipa.verify(path, "3.2", "70")
+
+    def test_plist_structure_version_is_checked_for_app_and_each_extension(self):
+        for identifier in ["com.gcsa.aegis", "com.gcsa.aegis.safari", "com.gcsa.aegis.share"]:
+            with self.subTest(identifier=identifier), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "test.ipa"
+                self.fixture(path, dictionary_versions={identifier: "7.0"})
+                with self.assertRaisesRegex(ValueError, "plist structure version"):
+                    ipa.verify(path, "3.2", "70", "alpha")
+
+    def test_committed_app_and_extension_plists_use_the_supported_structure_version(self):
+        root = Path(__file__).resolve().parents[2] / "apps/ios"
+        for target in ["AegisApp", "SafariWebExtension", "ShareExtension"]:
+            with self.subTest(target=target):
+                info = plistlib.loads((root / target / "Info.plist").read_bytes())
+                self.assertEqual(info["CFBundleInfoDictionaryVersion"], "6.0")
 
     def test_store_rejected_safari_manifests_and_missing_or_wrong_icons_are_caught_locally(self):
         for manifest in [{}, {"icons": []}, {"icons": {"48": 48}}, {"icons": {"bad": "icon.png"}},

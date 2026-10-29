@@ -275,6 +275,7 @@ module AegisRelease
       work = File.join(request.directory, 'work')
       # Copy only committed inputs; ignored local files must not enter the archive.
       tracked = AegisRelease.command('git', 'ls-files', '-z', 'apps/ios',
+                                     'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared',
                                      'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json', cwd: request.root).split("\0")
       tracked.each do |relative|
         original = File.join(request.root, relative)
