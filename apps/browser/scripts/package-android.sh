@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 把 ChromePublic.apk 拷成可侧载的 GCSA-aegis.apk（包名 app.gcsa.aegis）。
+# 把 ChromePublic.apk 拷成可侧载的 GCSA-aegis.apk（包名 com.gcsa.aegis）。
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 SRC="${CHROMIUM_SRC:-$CHROMIUM_ROOT/src}"
 OUT="${OUT_DIR:-$SRC/out/AegisAndroid}"
-VERSION="$(read_pinned_value "$VERSION_FILE" 2>/dev/null || echo "0.0.0")"
+VERSION="$(python3 "$ROOT_DIR/scripts/chromium_inputs.py" --platform android --field version)"
 APP_VERSION="${AEGIS_PACKAGE_VERSION:-0.1.0}"
 DIST_ROOT="${DIST_DIR:-$ROOT_DIR/dist}"
 
@@ -36,8 +36,10 @@ case "$OUT" in
     ;;
 esac
 
+FORMAT="${AEGIS_ANDROID_FORMAT:-apk}"
+case "$FORMAT" in apk|aab) ;; *) echo 'AEGIS_ANDROID_FORMAT must be apk or aab' >&2; exit 2 ;; esac
 APK_DIR="$OUT/apks"
-APK_SRC="$APK_DIR/ChromePublic.apk"
+APK_SRC="$APK_DIR/ChromePublic.$FORMAT"
 if [[ ! -d "$APK_DIR" || -L "$APK_DIR" ]] || \
    [[ "$(cd "$APK_DIR" 2>/dev/null && pwd -P)" != "$APK_DIR" ]]; then
   echo "Android APK directory must be a real child of OUT: $APK_DIR" >&2
@@ -85,8 +87,8 @@ for protected_path in "$SRC" "$OUT" "$APK_DIR" "$APK_SRC"; do
   fi
 done
 
-APK_NAME="GCSA-aegis-${APP_VERSION}-chromium-${VERSION}-android-arm64.apk"
-ALIAS_NAME="GCSA-aegis.apk"
+APK_NAME="GCSA-aegis-${APP_VERSION}-chromium-${VERSION}-android-arm64.$FORMAT"
+ALIAS_NAME="GCSA-aegis.$FORMAT"
 IDENTITY_NAME="GCSA-aegis-${APP_VERSION}-chromium-${VERSION}-android-arm64.build-identity.json"
 APK_DST="$DIST_ROOT/$APK_NAME"
 APK_ALIAS="$DIST_ROOT/$ALIAS_NAME"
@@ -199,5 +201,9 @@ for ((index = 0; index < ${#FINAL_OUTPUTS[@]}; index += 1)); do
 done
 
 ls -lh "$APK_DST" "$APK_ALIAS" "$IDENTITY" "$IDENTITY.sha256"
-echo "侧载：adb install -r $APK_ALIAS"
-echo "包名：app.gcsa.aegis（Play 预留，见 apps/browser/docs/play-store.md）"
+if [[ "$FORMAT" == apk ]]; then
+  echo "侧载：adb install -r $APK_ALIAS"
+else
+  echo 'AAB snapshot is not Play-qualified until the release entrypoint signs and verifies it.'
+fi
+echo "包名：com.gcsa.aegis（Play 预留，见 apps/browser/docs/play-store.md）"

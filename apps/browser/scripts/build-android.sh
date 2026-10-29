@@ -6,6 +6,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 SRC="$CHROMIUM_ROOT/src"
 OUT="${OUT_DIR:-$SRC/out/AegisAndroid}"
 ARGS_FILE="$ROOT_DIR/args/aegis-android.gn"
+case "${AEGIS_ANDROID_FORMAT:-apk}" in
+  apk) build_target=chrome_public_apk; package_file=ChromePublic.apk ;;
+  aab) build_target=chrome_public_bundle; package_file=ChromePublic.aab ;;
+  *) echo 'AEGIS_ANDROID_FORMAT must be apk or aab' >&2; exit 2 ;;
+esac
 
 need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-80}"
 
@@ -23,7 +28,7 @@ EOF
   exit 2
 }
 
-VERSION_PIN="$(read_pinned_value "$VERSION_FILE")"
+VERSION_PIN="$(python3 "$ROOT_DIR/scripts/chromium_inputs.py" --platform android --field version)"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   fail_host
@@ -71,7 +76,7 @@ if [[ ! -f "$OUT/build.ninja" ]]; then
   gn gen "$OUT" --args="$(cat "$ARGS_FILE")"
 fi
 
-echo "Building chrome_public_apk at $OUT…"
-autoninja -C "$OUT" chrome_public_apk
-echo "APK: $OUT/apks/ChromePublic.apk"
-ls -lh "$OUT/apks/ChromePublic.apk"
+echo "Building $build_target at $OUT…"
+autoninja -C "$OUT" "$build_target"
+echo "Package: $OUT/apks/$package_file"
+ls -lh "$OUT/apks/$package_file"

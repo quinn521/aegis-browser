@@ -43,3 +43,15 @@ packages/core/dist-worker
 /apps/browser/overlay/chrome/browser/resources/aegis_agent/local_ai/minim-mlp.json
 /apps/browser/overlay/chrome/browser/resources/aegis_agent/local_ai/phishlang.onnx
 /apps/browser/overlay/chrome/browser/resources/aegis_agent/local_ai/phishlang-vocab.txt
+# Fastlane dependencies, signing material and generated diagnostics.
+/.bundle/
+/vendor/bundle/
+/vendor/cache/
+/fastlane/report.xml
+/fastlane/README.md
+/fastlane/Preview.html
+*.p8
+*.p12
+*.mobileprovision
+*.keystore
+/scripts/release/__pycache__/

@@ -18,6 +18,7 @@
 [2026-09-10 main 合併與驗證](audit/main-consolidation-2026-09-10.md)
 
 - [iOS Ver 5.0 網頁保護](ios-webkit-protection.zh-TW.md) · [驗收紀錄](audit/ios-webkit-protection-2026-10-12.zh-CN.md)
+- [本機 Fastlane 與上游發佈](development/release.zh-TW.md)
 
 ## 從這裡開始
 

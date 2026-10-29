@@ -18,6 +18,7 @@ This directory contains the public product architecture, roadmap, research bound
 [2026-09-10 main consolidation and verification](audit/main-consolidation-2026-09-10.md)
 
 - [iOS Ver 5.0 Web protection](ios-webkit-protection.en.md) · [Acceptance record](audit/ios-webkit-protection-2026-10-12.zh-CN.md)
+- [Local Fastlane and upstream release](development/release.md)
 
 ## Start here
 

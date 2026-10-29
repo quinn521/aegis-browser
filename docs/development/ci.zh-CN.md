@@ -48,7 +48,7 @@ PR 标题由独立的 `PR Title Policy` 元数据 workflow 自动守护。已经
 
 三份 README、`.codacy.yml`、workflow 与其他源码采用共享版本，不再维护个人 main/develop 的 Codacy 徽章，不再在导出或回流时替换 README。徽章标注上游分析身份，不代表 develop 通过。2026-09-21 的 README 特例和 develop → 个人 main → 导出上游流程停止使用；历史 SHA/报告保留原身份。
 
-个人 `main` 保留为后续发布 Action 入口。为了保持 SHA 镜像，未来 workflow 源码须先进入上游，再同步到个人 main；执行可通过仓库变量 `AEGIS_PROMOTION_FORK_REPOSITORY` 与 `github.repository` 的精确匹配限定个人仓库，签名与发布凭据仅配置在个人仓库受保护 environment。发布默认手动触发，校验 main 与 upstream/main、选定 SHA、适用测试及制品来源；镜像 push 本身不授权发布。当前流程变更不添加发布、打包、签名或上传动作。
+上游发布入口采用 [本地 Fastlane 与上游发布](release.zh-CN.md)：`.github/workflows/release.yml` 仅在 `gcsagroup/aegis-browser` 的 `main` 手动触发，并需显式启用变量、受保护 environment 和精确源码 CI。签名、TestFlight 与 GitHub Draft 权限按 job 分离。源码仍通过 develop 与独立晋升分支进入上游；个人 `main` 继续只镜像上游，镜像 push 不触发或授权发布，个人 Fork 不执行该发布 workflow。
 
 `quality.yml` 继续验证 develop/main PR 与 push，检查身份按仓库、事件、SHA 分开记录。个人 main 的 push CI 不作为镜像同步的前置条件，避免循环等待；它也不能替代上游 S 的验证。服务端默认分支、保护和 Codacy 范围须独立回读，不能由 YAML 或徽章证明。
 

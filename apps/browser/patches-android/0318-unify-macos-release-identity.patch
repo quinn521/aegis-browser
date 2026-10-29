@@ -1,0 +1,38 @@
+From fcb855d09e738fb4eb5476e9c9116cd183850c72 Mon Sep 17 00:00:00 2001
+From: Aegis Contributors <aegis@example.invalid>
+Date: Wed, 28 Oct 2026 21:09:15 +0800
+Subject: [PATCH] fix(release): use com.gcsa.aegis for macOS identity
+
+---
+ chrome/app/theme/gcsa_aegis/BRANDING                            | 2 +-
+ .../policy/tools/template_writers/writer_configuration.py       | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/app/theme/gcsa_aegis/BRANDING b/chrome/app/theme/gcsa_aegis/BRANDING
+index dfebe2211b3594ef813399d73355509976c0140e..5d89098876a3dbf2510b552d7dedd5c0e4647b11 100644
+--- a/chrome/app/theme/gcsa_aegis/BRANDING
++++ b/chrome/app/theme/gcsa_aegis/BRANDING
+@@ -5,6 +5,6 @@ PRODUCT_SHORTNAME=GCSA Aegis
+ PRODUCT_INSTALLER_FULLNAME=GCSA Aegis Installer
+ PRODUCT_INSTALLER_SHORTNAME=GCSA Aegis Installer
+ COPYRIGHT=Copyright @LASTCHANGE_YEAR@ GCSA. All rights reserved.
+-MAC_BUNDLE_ID=app.gcsa.aegis
++MAC_BUNDLE_ID=com.gcsa.aegis
+ MAC_CREATOR_CODE=Cr24
+ MAC_TEAM_ID=
+diff --git a/components/policy/tools/template_writers/writer_configuration.py b/components/policy/tools/template_writers/writer_configuration.py
+index 48541df6adb829fd4d0b239e625a724f69b075a4..bc00ef0a3aed6412abb63e99fcfd90d06110f0b6 100644
+--- a/components/policy/tools/template_writers/writer_configuration.py
++++ b/components/policy/tools/template_writers/writer_configuration.py
+@@ -60,7 +60,7 @@ def GetConfigurationForBuild(defines):
+         },
+         'admx_prefix': 'chromium',
+         'linux_policy_path': '/etc/chromium/policies/',
+-        'bundle_id': 'app.gcsa.aegis',
++        'bundle_id': 'com.gcsa.aegis',
+     }
+   elif '_google_chrome' in defines or '_is_chrome_for_testing_branded' in defines:
+     if '_google_chrome' in defines:
+-- 
+2.50.1 (Apple Git-155)
+

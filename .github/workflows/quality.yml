@@ -51,6 +51,24 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: 3.11.9
+      - name: Install locked release Ruby dependencies
+        uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f
+        with:
+          ruby-version: 3.3.6
+          bundler: 2.5.22
+          bundler-cache: true
+      - name: Install JDK for synthetic package-signature regressions
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Load the locked Fastlane lane definitions
+        env:
+          BUNDLE_FROZEN: 'true'
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+          FASTLANE_HIDE_GITHUB_ISSUES: '1'
+          FASTLANE_OPT_OUT_USAGE: '1'
+        run: bundle exec fastlane lanes
       - name: Install fixed ripgrep
         timeout-minutes: 5
         run: bash scripts/ci/install-ripgrep.sh

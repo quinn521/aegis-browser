@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from ci.candidate import BROWSER, git, verify_tree
+from chromium_inputs import load_inputs
 
 
 def verify_source(source, browser=BROWSER, platform='desktop'):
@@ -13,17 +14,9 @@ def verify_source(source, browser=BROWSER, platform='desktop'):
     for repository in (source, source / 'v8'):
         if Path(git(repository, 'rev-parse', '--show-toplevel')).resolve() != repository:
             raise ValueError('构建依赖缺少独立 Git 来源，不能借用父仓库身份：' + str(repository))
-    if platform == 'android':
-        pin = json.loads((browser / 'ci-pins/android.json').read_text())
-        base = pin['commit']
-        patches = (browser / pin['patchDirectory']).resolve(strict=True)
-        if not patches.is_relative_to(browser):
-            raise ValueError('Android 补丁目录必须位于 apps/browser 内')
-    elif platform == 'desktop':
-        base = (browser / 'CHROMIUM_COMMIT').read_text().strip()
-        patches = browser / 'patches'
-    else:
-        raise ValueError('不支持的源码平台：' + platform)
+    inputs = load_inputs(browser, platform)
+    base = inputs['commit']
+    patches = browser / inputs['patchDirectory']
     chromium_tree = verify_tree(source, base, patches)
     v8_base = git(source, 'rev-parse', base + ':v8')
     v8_tree = verify_tree(source / 'v8', v8_base, patches / 'v8')
@@ -42,9 +35,8 @@ def verify_source(source, browser=BROWSER, platform='desktop'):
         checked += 1
     if platform == 'desktop' and not checked:
         raise ValueError('overlay 为空，不能建立构建来源')
-    return {'platform': platform, 'chromiumBase': base,
-            'patchDirectory': patches.relative_to(browser).as_posix(),
-            'sourceHead': git(source, 'rev-parse', 'HEAD'),
+    return {'platform': platform, 'chromiumBase': base, 'patchDirectory': inputs['patchDirectory'],
+            'inputs': inputs, 'sourceHead': git(source, 'rev-parse', 'HEAD'),
             'chromiumTree': chromium_tree, 'v8Tree': v8_tree,
             'overlayFilesChecked': checked, 'sourceVerified': True,
             'built': False, 'runtimeTested': False}
