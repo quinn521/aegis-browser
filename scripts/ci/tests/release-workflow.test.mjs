@@ -14,6 +14,7 @@ test('release is manual or reusable, exact-source and explicitly opt-in', () => 
   assert.match(workflow.jobs.preflight.if, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(workflow.jobs.preflight.if, /AEGIS_RELEASE_ENABLED == 'true'/u);
   assert.equal(workflow.concurrency['cancel-in-progress'], false);
+  assert.equal(workflow.concurrency.group, 'aegis-release-${{ github.repository }}-${{ inputs.platform }}');
   for (const job of Object.values(workflow.jobs)) {
     for (const step of job.steps) {
       if (step.uses?.startsWith('actions/checkout@')) {
@@ -95,6 +96,21 @@ test('candidate branch checks stay uncredentialed before an explicitly opted-in 
   assert.equal(rehearsal.with.operation, 'package');
   assert.equal(rehearsal.with.destination, 'artifacts');
   assert.equal(rehearsal.uses, './.github/workflows/release.yml');
+});
+
+test('iOS rehearsal selects its own version and cannot enqueue a macOS package', () => {
+  const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));
+  assert.deepEqual(candidate.on.workflow_dispatch.inputs.platform.options, ['all', 'ios', 'macos']);
+  assert.equal(candidate.jobs['release-rehearsal'].with.version, "${{ inputs.ios_version || '0.8.0' }}");
+  assert.equal(candidate.jobs['release-rehearsal'].with.build, "${{ inputs.ios_build || '1' }}");
+  assert.equal(candidate.jobs['release-rehearsal'].with.destination, 'artifacts');
+  assert.equal(candidate.jobs['release-rehearsal'].with.operation, 'package');
+  assert.match(candidate.jobs['release-rehearsal'].if, /github.event_name == 'workflow_dispatch' && inputs.platform != 'macos'/u);
+  assert.match(candidate.jobs['macos-release-rehearsal'].if, /github.event_name == 'workflow_dispatch' && inputs.platform != 'ios'/u);
+  for (const name of ['release-rehearsal', 'macos-release-rehearsal']) {
+    assert.match(candidate.jobs[name].if, /!startsWith\(github.ref, 'refs\/heads\/codex\/fastlane-release-ios-'\)/u);
+    assert.match(candidate.jobs[name].if, /vars.AEGIS_RELEASE_TEST_REPOSITORY_ID/u);
+  }
 });
 
 test('store review is a separate protected step after a completed upload record', () => {

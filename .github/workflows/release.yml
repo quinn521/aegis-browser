@@ -102,7 +102,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: aegis-release-${{ github.repository }}
+  group: aegis-release-${{ github.repository }}-${{ inputs.platform }}
   cancel-in-progress: false
 env:
   RELEASE_PLATFORM: ${{ inputs.platform }}

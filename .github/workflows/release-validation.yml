@@ -6,6 +6,23 @@ on:
   push:
     branches: ['codex/fastlane-release-*']
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to package after credential-free validation
+        type: choice
+        default: all
+        options:
+          - all
+          - ios
+          - macos
+      ios_version:
+        description: iOS rehearsal marketing version
+        type: string
+        default: '0.8.0'
+      ios_build:
+        description: iOS rehearsal build number; package only
+        type: string
+        default: '1'
 
 permissions:
   contents: read
@@ -102,6 +119,10 @@ jobs:
       ${{ github.repository != 'gcsagroup/aegis-browser' &&
           vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
           vars.AEGIS_IOS_BRANCH_REHEARSAL == 'true' &&
+          ((github.event_name == 'workflow_dispatch' && inputs.platform != 'macos') ||
+           (github.event_name == 'push' &&
+            !startsWith(github.ref, 'refs/heads/codex/fastlane-release-ios-') &&
+            !startsWith(github.ref, 'refs/heads/codex/fastlane-release-macos-'))) &&
           github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
     permissions:
       contents: write
@@ -112,8 +133,8 @@ jobs:
       profile: alpha
       destination: artifacts
       operation: package
-      version: '0.8.0'
-      build: '1'
+      version: ${{ inputs.ios_version || '0.8.0' }}
+      build: ${{ inputs.ios_build || '1' }}
       format: auto
       store_options: '{}'
     secrets: inherit
@@ -124,6 +145,9 @@ jobs:
       ${{ github.repository != 'gcsagroup/aegis-browser' &&
           vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
           vars.AEGIS_MACOS_BRANCH_REHEARSAL == 'true' &&
+          ((github.event_name == 'workflow_dispatch' && inputs.platform != 'ios') ||
+           (github.event_name == 'push' &&
+            !startsWith(github.ref, 'refs/heads/codex/fastlane-release-ios-'))) &&
           github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
     permissions:
       contents: write

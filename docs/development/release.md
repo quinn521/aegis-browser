@@ -147,6 +147,8 @@ Draft creation uses the REST response's release ID and saves its intent/result b
 
 Before merge, pushing a `codex/fastlane-release-*` branch runs `Release Branch Validation` on a fork or upstream branch. Its first two jobs run credential-free regressions and compile an unsigned iOS `0.8.0 (1)` archive, checking the app and both extension identities. Those jobs have no release environment or signing secrets. The separately enabled platform rehearsals can then run real packaging. These diagnostics do not qualify an IPA, TestFlight upload, or the complete three-platform flow. Each platform separately requires local package, Actions and candidate Draft acceptance.
 
+For isolated iOS validation, use a `codex/fastlane-release-ios-*` branch. Its push runs the credential-free checks without queuing platform packages. After local acceptance, dispatch `release-validation.yml` at the same branch with `platform=ios`, `ios_version` and `ios_build`; this packages only iOS with no store upload. Release concurrency is scoped to repository and platform, so an independent macOS campaign does not hold the iOS queue. The existing fork opt-in, exact-source admission and protected signing environment still apply.
+
 Real local packaging/upload, Actions execution, candidate-tag Draft, store state and device acceptance are distinct evidence. A green simulation or unsigned archive cannot close the remaining real-build or upload checks. Developer ID/notarization, Chromium build hosts and Play account/upload-key setup must be available for their corresponding real tests.
 
 ```bash

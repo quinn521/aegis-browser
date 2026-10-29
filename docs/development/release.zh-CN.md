@@ -148,6 +148,8 @@ Draft 创建后使用 REST 响应中的 release ID，并在上传资产前保存
 
 合入前可推送 `codex/fastlane-release-*` 分支运行 `Release Branch Validation`。前两个 job 在 fork 或上游分支运行无凭据回归测试，并编译 iOS `0.8.0 (1)` 的未签名 archive，核对主应用和两个扩展的 Bundle ID、version、build。它们不访问发布 Environment 或签名 Secrets；按平台启用的 fork rehearsal 可在其后执行真实打包。前两项诊断不属于 IPA、TestFlight 或三端完整发布验收；每个平台的本地真包、Actions 和候选 Draft 分别验收。
 
+独立 iOS 验证使用 `codex/fastlane-release-ios-*` 分支。推送只运行无凭据检查，不排队平台实包；本地验收后，对同一分支手动触发 `release-validation.yml`，设置 `platform=ios`、`ios_version` 和 `ios_build`，只打 iOS 包且不上传商店。发布并发按仓库和平台区分，独立的 macOS 流程不会占住 iOS 队列。原有 fork 显式启用、精确源码准入及受保护签名环境门禁继续生效。
+
 本地真包及上传、Actions、候选 tag 草稿、商店状态和真机验收分别记录。模拟通过不能替代真实构建；Chromium 宿主、Play 初始化与上传密钥、Developer ID/公证仍需对应环境。
 
 ```bash
