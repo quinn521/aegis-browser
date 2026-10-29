@@ -3,6 +3,14 @@
 # 此证书用于本机构建；不表示已完成 Developer ID 发行签名或公证。
 set -euo pipefail
 
+case "${AEGIS_MACOS_SIGNING_MODE:-native}" in
+  native) ;;
+  temporary-ad-hoc)
+    exec python3 "$(dirname "$0")/sign-temporary-app.py" "${1:-}"
+    ;;
+  *) echo "Unknown macOS signing mode" >&2; exit 1 ;;
+esac
+
 CS="${CODESIGN:-/usr/bin/codesign}"
 SIGNING_IDENTITY="7C33B517942161311A087CE893D2F1CE9B204B44"
 SIGNING_REQUIREMENT="=anchor apple generic and certificate leaf = H\"$SIGNING_IDENTITY\" and certificate leaf[subject.OU] = \"R3JK7R29AC\""

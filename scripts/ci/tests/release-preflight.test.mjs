@@ -111,3 +111,17 @@ test('fork rehearsal rejects production, external testing, mismatched repository
     await assert.rejects(releasePreflight(sha, options({environment:{...forkEnvironment,...change}, api:()=>assert.fail('no API access')})), /Fork rehearsal requires/u);
   }
 });
+
+test('temporary macOS tag retains exact-source fork admission and cannot enable other platform namespaces', async () => {
+  const tag = 'candidate/macos/temporary-ad-hoc/6.1.0.266-beta.266';
+  const env = {...forkEnvironment, GITHUB_REF: `refs/tags/${tag}`, RELEASE_TAG: tag,
+    RELEASE_PLATFORM: 'macos', RELEASE_DESTINATION: 'github-draft'};
+  assert.equal((await releasePreflight(sha, options({environment: env, api: forkApi()}))).admission, 'fork_rehearsal_only');
+  await assert.rejects(releasePreflight(sha, options({environment: env,
+    api: async (repo, path) => path.startsWith('/commits/') ? {sha: 'b'.repeat(40)} : forkApi()(repo, path)})), /tag changed/u);
+  for (const platform of ['ios', 'android']) {
+    const invalid = tag.replace('/macos/', `/${platform}/`);
+    await assert.rejects(releasePreflight(sha, options({environment: {...env,
+      GITHUB_REF: `refs/tags/${invalid}`, RELEASE_TAG: invalid}, api: () => assert.fail('no API access')})), /Fork rehearsal requires/u);
+  }
+});

@@ -24,4 +24,20 @@ class CandidateTagTest < ReleaseFixture
     assert_raises(AegisRelease::Error) { parse("candidate/ios/0.8.0-alpha.1\nmalicious") }
     refute File.directory?(File.join(@root, '.artifacts'))
   end
+
+  def test_temporary_macos_tags_cannot_be_confused_with_native_or_other_platforms
+    temporary = parse('candidate/macos/temporary-ad-hoc/2.2.0.144-beta.144')
+    assert_equal 'temporary-ad-hoc', temporary.signing_mode
+    assert_equal 'temporary-ad-hoc', temporary.identity['signingMode']
+    assert_equal 'native', parse('candidate/macos/2.2.0.144-beta.144').signing_mode
+    %w[ios android].each do |platform|
+      assert_raises(AegisRelease::Error) { parse("candidate/#{platform}/temporary-ad-hoc/2.2.0.144-beta.144") }
+    end
+    assert_raises(AegisRelease::Error) do
+      request('macos', signing_mode: 'temporary-ad-hoc', destination: 'github-draft', tag: 'candidate/macos/2.2.0.144-beta.144')
+    end
+    assert_raises(AegisRelease::Error) do
+      request('macos', destination: 'github-draft', tag: 'candidate/macos/temporary-ad-hoc/2.2.0.144-beta.144')
+    end
+  end
 end

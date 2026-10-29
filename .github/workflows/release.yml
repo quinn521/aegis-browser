@@ -19,6 +19,13 @@ on:
           - alpha
           - beta
           - release
+      signing_mode:
+        description: macOS signature; temporary-ad-hoc is a temporary unnotarized test package
+        type: choice
+        default: native
+        options:
+          - native
+          - temporary-ad-hoc
       destination:
         description: Destination; package never uploads
         type: choice
@@ -67,6 +74,10 @@ on:
         default: "{}"
   workflow_call:
     inputs:
+      signing_mode:
+        type: string
+        required: false
+        default: native
       platform:
         type: string
         required: true
@@ -105,6 +116,7 @@ concurrency:
   group: aegis-release-${{ github.repository }}
   cancel-in-progress: false
 env:
+  RELEASE_SIGNING_MODE: ${{ inputs.signing_mode }}
   RELEASE_PLATFORM: ${{ inputs.platform }}
   RELEASE_DESTINATION: ${{ inputs.destination }}
   RELEASE_VERSION: ${{ inputs.version }}
@@ -208,8 +220,8 @@ jobs:
       - name: Exercise real macOS image verification and failure cleanup
         if: ${{ inputs.platform == 'macos' }}
         env:
-          AEGIS_NATIVE_SIGNING_REGRESSION: "true"
-        run: python3 -B -m unittest discover -s scripts/release -p 'test_verify_macos*.py' -v
+          AEGIS_NATIVE_SIGNING_REGRESSION: ${{ inputs.signing_mode != 'temporary-ad-hoc' && 'true' || 'false' }}
+        run: python3 -B -m unittest discover -s scripts/release -p 'test*macos*.py' -v
       - name: Read existing iOS signing material
         if: ${{ inputs.platform == 'ios' && runner.environment == 'github-hosted' }}
         env:

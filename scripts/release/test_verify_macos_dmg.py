@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from macos_signing import load_policy
 
 spec = importlib.util.spec_from_file_location("dmg_check", Path(__file__).with_name("verify-macos-dmg.py"))
 dmg_check = importlib.util.module_from_spec(spec)
@@ -127,7 +128,7 @@ class NativeDmgTests(unittest.TestCase):
             source.write_text("int main(void) { return 0; }\n")
             subprocess.run(["/usr/bin/xcrun", "clang", "-arch", "arm64", str(source), "-o", str(binary)],
                            check=True, capture_output=True)
-            policy = {"signing": "ad-hoc-not-notarized"}
+            policy = load_policy(mode='temporary-ad-hoc')
             subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-",
                             "--timestamp=none", str(app)], check=True, capture_output=True)
             image = root / "fixture.dmg"
@@ -138,6 +139,8 @@ class NativeDmgTests(unittest.TestCase):
             self.assertEqual(result["signing"], policy["signing"])
             self.assertFalse(result["releaseReady"])
             self.assertFalse(result["runtimeAcceptance"])
+            self.assertIn('gatekeeperAssessment', result['application'])
+            self.assertFalse(result['application']['formalDistributionQualified'])
             with self.assertRaisesRegex(ValueError, "identity"):
                 dmg_check.verify(image, "2.2.0.145", policy)
             image.write_bytes(b"corrupt image")

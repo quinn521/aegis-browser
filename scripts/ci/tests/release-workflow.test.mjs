@@ -123,7 +123,7 @@ test('fork local signing is opt-in and remains downstream of the uncredentialed 
 
 test('candidate tags reuse the reviewed workflow and cannot trigger public releases', () => {
   const tag = YAML.parse(readFileSync(new URL('.github/workflows/release-candidate-tag.yml', root), 'utf8'));
-  assert.deepEqual(tag.on.push.tags, ['candidate/ios/*', 'candidate/android/*', 'candidate/macos/*']);
+  assert.deepEqual(tag.on.push.tags, ['candidate/ios/*', 'candidate/android/*', 'candidate/macos/*', 'candidate/macos/temporary-ad-hoc/*']);
   assert.equal(tag.permissions.contents, 'read');
   assert.doesNotMatch(JSON.stringify(tag.jobs.plan), /secrets/u);
   assert.equal(tag.jobs.release.uses, './.github/workflows/release.yml');
@@ -146,9 +146,14 @@ test('macOS has independent readiness and a protected native runtime without And
   for (const name of ['AEGIS_ANDROID_STORE_PASSWORD', 'AEGIS_ANDROID_KEY_PASSWORD']) {
     assert.match(build.env[name], /inputs.platform == 'android' && secrets\./u);
   }
-  const regression = workflow.jobs.package.steps.find(s=>s.run?.includes("-p 'test_verify_macos*.py'"));
+  const regression = workflow.jobs.package.steps.find(s=>s.run?.includes("-p 'test*macos*.py'"));
   assert.equal(regression.if, "${{ inputs.platform == 'macos' }}");
-  assert.equal(regression.env.AEGIS_NATIVE_SIGNING_REGRESSION, 'true');
+  assert.equal(regression.env.AEGIS_NATIVE_SIGNING_REGRESSION, "${{ inputs.signing_mode != 'temporary-ad-hoc' && 'true' || 'false' }}");
+  assert.equal(workflow.on.workflow_dispatch.inputs.signing_mode.default, 'native');
+  assert.equal(workflow.on.workflow_call.inputs.signing_mode.default, 'native');
+  assert.equal(workflow.env.RELEASE_SIGNING_MODE, '${{ inputs.signing_mode }}');
+  const tag = YAML.parse(readFileSync(new URL('.github/workflows/release-candidate-tag.yml', root), 'utf8'));
+  assert.equal(tag.jobs.release.with.signing_mode, '${{ needs.plan.outputs.signing_mode }}');
   assert.match(readFileSync(new URL('scripts/release/local-macos-release.rb', root), 'utf8'), /verify-macos-toolchain\.py/u);
   assert.match(readFileSync(new URL('scripts/release/local-macos-release.rb', root), 'utf8'), /verify-macos-signing\.py/u);
   const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));

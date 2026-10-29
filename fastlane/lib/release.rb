@@ -66,15 +66,18 @@ module AegisRelease
 
   class Request
     attr_reader :platform, :destination, :version, :build, :run_id, :tag, :root, :expected_digest,
-                :profile, :groups, :track, :format, :repository, :play_release_policy
+                :profile, :groups, :track, :format, :repository, :play_release_policy, :signing_mode
 
     def initialize(platform, options = {}, root: ROOT)
       @root = root
       @platform = platform
       AegisRelease.require!(%w[ios android macos].include?(platform), "Platform must be ios, android or macos")
-      unknown = options.keys.map(&:to_sym) - %i[destination version build run_id tag manifest_sha256 profile groups track format repository play_release_policy]
+      unknown = options.keys.map(&:to_sym) - %i[destination version build run_id tag manifest_sha256 profile groups track format repository play_release_policy signing_mode]
       AegisRelease.require!(unknown.empty?, "Unknown release options: #{unknown.join(', ')}")
       options = options.transform_keys(&:to_sym)
+      @signing_mode = options.fetch(:signing_mode, 'native').to_s
+      AegisRelease.require!(%w[native temporary-ad-hoc].include?(signing_mode), 'Unknown signing mode')
+      AegisRelease.require!(platform == 'macos' || signing_mode == 'native', 'Temporary ad-hoc signing is macOS only')
       @destination = options.fetch(:destination, "artifacts").to_s
       AegisRelease.require!(DESTINATIONS.fetch(platform).include?(destination), "Unsupported destination for #{platform}: #{destination}")
       @profile = options.fetch(:profile, 'release').to_s.downcase
@@ -104,11 +107,13 @@ module AegisRelease
       if platform != "ios"
         AegisRelease.require!([version, build] == [native_version, native_build], "Chromium version/build must match committed native inputs; update source first")
       end
-      @run_id = options.fetch(:run_id, "#{profile}-#{version}-#{build}-#{AegisRelease.source(root, clean: false)['sha'][0, 12]}").to_s
+      mode_suffix = signing_mode == 'temporary-ad-hoc' ? '-temporary-ad-hoc' : ''
+      @run_id = options.fetch(:run_id, "#{profile}-#{version}-#{build}-#{AegisRelease.source(root, clean: false)['sha'][0, 12]}#{mode_suffix}").to_s
       AegisRelease.require!(/\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,95}\z/.match?(run_id) && !run_id.include?(".."), "Unsafe run ID")
       @tag = options[:tag]&.to_s
       if destination == "github-draft"
-        AegisRelease.require!(tag && /\Acandidate\/#{platform}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\z/.match?(tag) && !tag.include?(".."), "GitHub Draft requires --tag candidate/#{platform}/<version-build>")
+        tag_prefix = "candidate/#{platform}/#{signing_mode == 'temporary-ad-hoc' ? 'temporary-ad-hoc/' : ''}"
+        AegisRelease.require!(tag && tag.start_with?(tag_prefix) && /\A[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\z/.match?(tag.delete_prefix(tag_prefix)) && !tag.include?(".."), "GitHub Draft requires --tag #{tag_prefix}<version-build>")
       else
         AegisRelease.require!(tag.nil?, "--tag is only supported for github-draft")
       end
@@ -141,7 +146,9 @@ module AegisRelease
     end
 
     def identity
-      { "platform" => platform, "applicationId" => APP_ID, "version" => version, "build" => build, "profile" => profile, "format" => format }
+      value = { "platform" => platform, "applicationId" => APP_ID, "version" => version, "build" => build, "profile" => profile, "format" => format }
+      value['signingMode'] = signing_mode if platform == 'macos'
+      value
     end
 
     def plan
@@ -247,7 +254,7 @@ module AegisRelease
         chromium_root
         if request.platform == 'macos'
           run('python3', File.join(request.root, 'scripts/release/verify-macos-toolchain.py'))
-          run('python3', File.join(request.root, 'scripts/release/verify-macos-signing.py'))
+          run('python3', File.join(request.root, 'scripts/release/verify-macos-signing.py'), '--signing-mode', request.signing_mode)
         end
         if request.platform == 'android' && request.format == 'aab'
           %w[AEGIS_BUNDLETOOL_JAR AEGIS_ANDROID_KEYSTORE AEGIS_ANDROID_KEY_ALIAS AEGIS_ANDROID_STORE_PASSWORD AEGIS_ANDROID_KEY_PASSWORD AEGIS_ANDROID_CERT_SHA256].each { |name| required(name) }
@@ -351,6 +358,7 @@ module AegisRelease
           signing = request.format == 'aab' ? 'android-upload-key' : 'existing-chromium-signature-not-distribution-qualified'
         else
           AegisRelease.require!(RbConfig::CONFIG['host_cpu'] =~ /arm64|aarch64/, 'macOS release GN currently requires Apple Silicon')
+          env['AEGIS_MACOS_SIGNING_MODE'] = request.signing_mode
           run('bash', File.join(scripts, 'build-release.sh'), env: env)
           manifest = File.join(out, '.aegis/build-manifest.json')
           env['AEGIS_BUILD_MANIFEST_SHA256'] = AegisRelease.digest(manifest)
@@ -367,7 +375,7 @@ module AegisRelease
         AegisRelease.require!(files.size == 1, 'Expected one native installable artifact')
         dmg_verification = if request.platform == 'macos'
           JSON.parse(AegisRelease.command('python3', File.join(request.root, 'scripts/release/verify-macos-dmg.py'),
-                                         files.first, request.version))
+                                          files.first, request.version, '--signing-mode', request.signing_mode))
         end
         signing = dmg_verification.fetch('signing') if dmg_verification
         files += Dir.glob(File.join(native, '*.build-identity.json'))

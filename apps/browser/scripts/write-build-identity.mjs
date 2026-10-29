@@ -466,6 +466,8 @@ function buildDriverEvidence(target) {
   ];
   if (target === 'android') {
     paths.push('ci-pins/android.json', 'scripts/build-android.sh', 'scripts/package-android.sh');
+  } else {
+    paths.push('scripts/sign-chromium-app.sh', 'scripts/sign-temporary-app.py');
   }
   return paths.map((name) => ({name, ...fileEvidence(join(browserRoot, name))}));
 }
@@ -539,6 +541,9 @@ function collectSourceSnapshot(outDir) {
     buildDrivers: buildDriverEvidence(identityTarget),
   };
   const build = {
+    ...(identityTarget === 'desktop' ? {
+      signingMode: process.env.AEGIS_MACOS_SIGNING_MODE || 'native',
+    } : {}),
     target: identityTarget === 'android' ? (androidFormat === 'aab' ? 'chrome_public_bundle' : 'chrome_public_apk') : 'chrome',
     outDir: relative(chromiumSrc, resolvedOutDir).split(sep).join('/'),
     expectedGnArgsSha256: sha256Buffer(expectedGnArgs),

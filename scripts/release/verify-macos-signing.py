@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check real private-key access before beginning a long native release build."""
+import argparse
 import json
 from pathlib import Path
 import subprocess
@@ -8,8 +9,8 @@ import tempfile
 from macos_signing import command, load_policy, verify_signature
 
 
-def verify():
-    policy = load_policy()
+def verify(mode="native"):
+    policy = load_policy(mode=mode)
     with tempfile.TemporaryDirectory(prefix="aegis-signing-preflight-") as temporary:
         source = Path(temporary) / "probe.c"
         binary = source.with_suffix("")
@@ -27,7 +28,10 @@ def verify():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--signing-mode', choices=['native', 'temporary-ad-hoc'], default='native')
+    args = parser.parse_args()
     try:
-        print(json.dumps(verify(), indent=2))
+        print(json.dumps(verify(args.signing_mode), indent=2))
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         raise SystemExit(str(error)) from None

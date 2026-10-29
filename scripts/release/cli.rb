@@ -12,6 +12,7 @@ begin
     p.on("--groups NAMES", "Comma-separated existing TestFlight group names") { |v| options[:groups] = v }
     p.on("--track NAME", "Existing Play closed track (default alpha)") { |v| options[:track] = v }
     p.on("--format NAME", "ipa, aab (Android default), apk, dmg") { |v| options[:format] = v }
+    p.on("--signing-mode MODE", "macOS: native (default) or temporary-ad-hoc; neither implies notarization") { |v| options[:signing_mode] = v }
     p.on("--repository OWNER_REPO", "GitHub Draft repository (default upstream); explicit fork for rehearsal") { |v| options[:repository] = v }
     p.on("--play-release-policy POLICY", "managed (verify in Console) or automatic, required for Play production submit") { |v| options[:play_release_policy] = v }
     p.on("--version VERSION", "iOS marketing version; desktop must match committed version") { |v| options[:version] = v }

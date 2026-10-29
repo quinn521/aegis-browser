@@ -26,6 +26,11 @@ STAMP="$(date -u +%Y%m%d)"
 DIST_ROOT="${DIST_DIR:-$ROOT_DIR/dist}"
 PRODUCT_APP_NAME="GCSA-aegis.app"
 BUNDLE_NAME="GCSA-aegis-${APP_VERSION}-mac-${CPU}"
+case "${AEGIS_MACOS_SIGNING_MODE:-native}" in
+  native) ;;
+  temporary-ad-hoc) BUNDLE_NAME="${BUNDLE_NAME}-temporary-ad-hoc" ;;
+  *) echo "Unknown macOS signing mode" >&2; exit 1 ;;
+esac
 STAGE="$DIST_ROOT/$BUNDLE_NAME"
 FORMATS="${PACKAGE_FORMATS:-app,zip,dmg}"
 IDENTITY_ARTIFACTS=()
@@ -288,64 +293,39 @@ else
   bash "$ROOT_DIR/scripts/sign-chromium-app.sh" "$APP_PATH" "$STAGE"
 fi
 
+if [[ "${AEGIS_MACOS_SIGNING_MODE:-native}" == temporary-ad-hoc ]]; then
+  signing_description="Temporary ad-hoc signature. Not notarized. Formal distribution is not qualified."
+else
+  signing_description="Source-configured certificate signature. Not notarized. Formal distribution is not qualified."
+fi
 cat > "$STAGE/README.txt" <<EOF
 GCSA-aegis (Chromium fork)
-=========================
+Version: $APP_VERSION
+Chromium: $VERSION
+Arch: $CPU
+Built: $STAMP (UTC)
+$signing_description
 
-Version:     $APP_VERSION
-Chromium:    $VERSION
-Arch:        $CPU
-Built:       $STAMP (UTC)
-Component:   $component
-
-English
--------
 Run: open $PRODUCT_APP_NAME
+macOS may refuse this unnotarized test package. This package does not change
+Gatekeeper settings or remove quarantine attributes.
 
-If macOS says the app is damaged:
-  xattr -cr "$PRODUCT_APP_NAME"
-  then right-click → Open
+临时测试包未公证，不代表正式分发资格。运行：open $PRODUCT_APP_NAME
+macOS 可能拒绝此包；安装包不会修改 Gatekeeper 或移除隔离属性。
 
-Ad-hoc signed only (not notarized).
-
-简体中文
---------
-运行：open $PRODUCT_APP_NAME
-
-如果 macOS 提示应用已损坏：
-  xattr -cr "$PRODUCT_APP_NAME"
-  然后右键点击 → 打开
-
-仅使用临时签名（未公证）。
-
-繁體中文
---------
-執行：open $PRODUCT_APP_NAME
-
-如果 macOS 顯示應用程式已損毀：
-  xattr -cr "$PRODUCT_APP_NAME"
-  然後按右鍵 → 打開
-
-僅使用臨時簽署（未公證）。
+臨時測試包未公證，不代表正式分發資格。執行：open $PRODUCT_APP_NAME
+macOS 可能拒絕此包；安裝包不會修改 Gatekeeper 或移除隔離屬性。
 EOF
-
-if [[ "$component" -eq 0 ]]; then
-  cat > "$STAGE/Open GCSA-aegis.command" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-cd "\$(dirname "\$0")"
-xattr -cr "./$PRODUCT_APP_NAME" 2>/dev/null || true
-open "./$PRODUCT_APP_NAME"
-EOF
-else
-  cat > "$STAGE/Open GCSA-aegis.command" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-cd "\$(dirname "\$0")"
-xattr -cr . 2>/dev/null || true
-open "./$AEGIS_MAC_APP_BUNDLE_NAME"
-EOF
+launch_app="$PRODUCT_APP_NAME"
+if [[ "$component" -ne 0 ]]; then
+  launch_app="$AEGIS_MAC_APP_BUNDLE_NAME"
 fi
+cat > "$STAGE/Open GCSA-aegis.command" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "\$(dirname "\$0")"
+open "./$launch_app"
+EOF
 chmod +x "$STAGE/Open GCSA-aegis.command"
 
 mkdir -p "$DIST_ROOT"

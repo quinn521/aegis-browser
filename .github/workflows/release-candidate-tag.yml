@@ -7,6 +7,7 @@ on:
       - 'candidate/ios/*'
       - 'candidate/android/*'
       - 'candidate/macos/*'
+      - 'candidate/macos/temporary-ad-hoc/*'
 
 permissions:
   contents: read
@@ -21,6 +22,7 @@ jobs:
       version: ${{ steps.tag.outputs.version }}
       build: ${{ steps.tag.outputs.build }}
       tag: ${{ steps.tag.outputs.tag }}
+      signing_mode: ${{ steps.tag.outputs.signing_mode }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -42,6 +44,7 @@ jobs:
     with:
       platform: ${{ needs.plan.outputs.platform }}
       profile: ${{ needs.plan.outputs.profile }}
+      signing_mode: ${{ needs.plan.outputs.signing_mode }}
       version: ${{ needs.plan.outputs.version }}
       build: ${{ needs.plan.outputs.build }}
       tag: ${{ needs.plan.outputs.tag }}

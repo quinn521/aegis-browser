@@ -131,6 +131,7 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       platform: macos
+      signing_mode: ${{ vars.AEGIS_MACOS_REHEARSAL_SIGNING_MODE || 'native' }}
       profile: alpha
       destination: artifacts
       operation: package

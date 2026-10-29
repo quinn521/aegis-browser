@@ -4,6 +4,7 @@ import {requireGreenQuality} from './promotion-quality.mjs';
 
 export const RELEASE_REPOSITORY = 'gcsagroup/aegis-browser';
 export const RELEASE_REPOSITORY_ID = '1348409663';
+const candidateTag = /^candidate\/(?:(?:ios|android)\/|macos\/(?:temporary-ad-hoc\/)?)[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u;
 
 export async function releasePreflight(sha, {
   environment = process.env,
@@ -14,7 +15,7 @@ export async function releasePreflight(sha, {
   const candidatePush = environment.GITHUB_EVENT_NAME === 'push' &&
     environment.GITHUB_REF === `refs/tags/${environment.RELEASE_TAG}` &&
     environment.RELEASE_DESTINATION === 'github-draft' &&
-    /^candidate\/(?:ios|android|macos)\/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u.test(environment.RELEASE_TAG ?? '');
+    candidateTag.test(environment.RELEASE_TAG ?? '');
   const rehearsal = environment.GITHUB_ACTIONS === 'true' &&
     environment.AEGIS_RELEASE_REHEARSAL === 'true' && environment.GITHUB_REPOSITORY !== RELEASE_REPOSITORY;
   const token = environment.GH_TOKEN || environment.GITHUB_TOKEN;
@@ -71,7 +72,7 @@ export async function releasePreflight(sha, {
     const tag = environment.RELEASE_TAG ?? '';
     if (!['ios', 'android', 'macos'].includes(platform) ||
         !tag.startsWith(`candidate/${platform}/`) ||
-        !/^candidate\/(?:ios|android|macos)\/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/u.test(tag) || tag.includes('..')) {
+        !candidateTag.test(tag) || tag.includes('..')) {
       throw new Error('A platform-specific candidate tag is required');
     }
     const candidate = await api(RELEASE_REPOSITORY, `/commits/${encodeURIComponent(tag)}`, {token});

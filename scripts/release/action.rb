@@ -3,7 +3,7 @@ require_relative '../../fastlane/lib/release'
 
 module AegisRelease
   class ActionRequest
-    FIELDS = %w[profile destination version build run_id tag format].freeze
+    FIELDS = %w[profile destination version build run_id tag format signing_mode].freeze
     STORE_FIELDS = %w[groups track play_release_policy].freeze
     attr_reader :request, :options, :operation
 

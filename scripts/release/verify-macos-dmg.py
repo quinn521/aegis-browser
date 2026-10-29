@@ -54,10 +54,17 @@ def verify_app(volume: Path, version: str, policy=None) -> dict:
     if command("/usr/bin/lipo", "-archs", str(binary)).decode().strip() != "arm64":
         raise ValueError("DMG application must contain the release arm64 executable")
     signature = verify_signature(app, policy, execute=command)
+    assessment = {}
+    if policy.get('temporary'):
+        result = subprocess.run(['/usr/sbin/spctl', '--assess', '--type', 'execute', '--verbose=4', str(app)],
+                                capture_output=True, timeout=120)
+        assessment = {'gatekeeperAssessment': {'exitCode': result.returncode,
+                      'accepted': result.returncode == 0, 'output': result.stderr.decode(errors='replace')},
+                      'notarized': False, 'formalDistributionQualified': False}
     applications = volume / "Applications"
     if not applications.is_symlink() or os.readlink(applications) != "/Applications":
         raise ValueError("DMG Applications link is missing or unexpected")
-    return {**expected, **signature, "architecture": "arm64", "codeSignatureVerified": True}
+    return {**expected, **signature, **assessment, "architecture": "arm64", "codeSignatureVerified": True}
 
 
 def sha256(path):
@@ -105,5 +112,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dmg", type=Path)
     parser.add_argument("version")
+    parser.add_argument('--signing-mode', choices=['native', 'temporary-ad-hoc'], default='native')
     args = parser.parse_args()
-    print(json.dumps(verify(args.dmg, args.version), indent=2))
+    print(json.dumps(verify(args.dmg, args.version, load_policy(mode=args.signing_mode)), indent=2))

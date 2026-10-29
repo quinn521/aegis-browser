@@ -93,6 +93,26 @@ Use process environment or ignored Fastlane `.env` files. Never put secrets in l
 
 Use actual installed profile names. Package-only needs signing material, but no ASC/Play publishing credentials. Android verifies every signed payload entry with the expected upload certificate, then verifies the final AAB identity. Its native build-identity file describes the pre-signing snapshot; the release manifest separately binds the final signed bytes. APK retains the Chromium signature and is not Play-qualified. DMG signing follows `apps/browser/scripts/sign-chromium-app.sh`. The release entrypoint signs a small Mach-O before the long build, then checks the final DMG against the same certificate, Apple anchor and team. The configured keychain must be unlocked; no private key is exported. This is not Developer ID/notarization qualification.
 
+For an explicitly authorized temporary macOS test package, select
+`./release macos package --profile alpha --signing-mode temporary-ad-hoc --run-id mac-adhoc-alpha`.
+The default `native` mode retains the configured Apple certificate, exact leaf and team checks;
+it never falls back to ad-hoc. Temporary mode signs nested Mach-O files and bundles from
+the inside out, checks every signature and the complete app, and leaves quarantine and
+Gatekeeper settings intact. It appends `temporary-ad-hoc` to package filenames, records
+`signingMode` in the release manifest and build snapshot, and reports Gatekeeper assessment
+separately from signature integrity. It proves neither notarization nor formal distribution
+qualification. Alpha/Beta/Release remain independent package profiles.
+
+Actions accepts the same `signing_mode` selection. Fork branch rehearsals may explicitly
+set `AEGIS_MACOS_REHEARSAL_SIGNING_MODE=temporary-ad-hoc`; its default is `native`.
+Temporary candidate tags use the separate namespace
+`candidate/macos/temporary-ad-hoc/<version>-<profile>.<build>` and propagate the mode
+into the package and Draft jobs. Native tags cannot upload a temporary-mode manifest.
+When an approved formal distribution identity becomes available, retain the temporary
+package and create a separate signing/package attempt, rebuild its DMG and manifest,
+and repeat signature, mounted-image and remote-byte verification. Developer ID identity
+verification and notarization remain separate release gates.
+
 ## GitHub Actions (second acceptance stage)
 
 `.github/workflows/release.yml` supports manual dispatch and reuse by the candidate-tag workflow. Choose platform, profile, destination and the last operation (`package`, `upload`, `distribute`, `submit`). The default is package-only. `store_options` is JSON with only string `groups`, `track`, `play_release_policy` fields, for example `{"groups":"Existing Internal Group"}`; it never accepts credentials. Upstream requires repository ID `1348409663`, exact current `main`, the latest successful exact-source quality attempt, and `AEGIS_RELEASE_ENABLED=true`.

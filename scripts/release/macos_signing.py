@@ -8,7 +8,11 @@ def command(*args):
     return subprocess.check_output(args, stderr=subprocess.PIPE, timeout=120)
 
 
-def load_policy(browser=None):
+def load_policy(browser=None, mode="native"):
+    if mode == "temporary-ad-hoc":
+        return {"signing": "ad-hoc-not-notarized", "temporary": True}
+    if mode != "native":
+        raise ValueError("Unknown macOS signing mode")
     browser = Path(browser) if browser else Path(__file__).resolve().parents[2] / "apps/browser"
     text = (browser / "scripts/sign-chromium-app.sh").read_text()
     text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
