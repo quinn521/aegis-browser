@@ -328,3 +328,4 @@
 0328-fix-reading-capture-and-download-details-265.patch
 0329-fix-download-platform-build-and-version-266.patch
 0330-unify-macos-release-identity.patch
+0331-fix-gesture-practice-nullability.patch

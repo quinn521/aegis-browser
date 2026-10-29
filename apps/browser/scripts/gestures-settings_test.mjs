@@ -1,19 +1,41 @@
 // 在真实 DOM 中操作手势表单和指针事件，验证保存边界、取消与并发草稿。
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
+import {tmpdir} from 'node:os';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 import {JSDOM} from 'jsdom';
 const base = resolve(dirname(fileURLToPath(import.meta.url)), '../overlay/chrome/browser/resources/aegis/');
 const ts = createRequire(new URL('../../../packages/core/package.json', import.meta.url))('typescript');
+// Transpilation alone does not check nullable DOM references captured by functions.
+const typing = mkdtempSync(resolve(tmpdir(), 'aegis-gesture-types-'));
+try {
+  const declarations = resolve(typing, 'webui.d.ts');
+  writeFileSync(declarations, `declare module 'chrome://resources/js/cr.js' {
+    export function sendWithPromise<T>(...args: unknown[]): Promise<T>;
+  }
+  declare namespace chrome { function send(message: string, args?: unknown[]): void; }\n`);
+  const program = ts.createProgram([resolve(base, 'gestures.ts'), declarations], {
+    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    lib: ['lib.es2022.d.ts', 'lib.dom.d.ts', 'lib.dom.iterable.d.ts'],
+    strict: true, skipLibCheck: true, noEmit: true, types: [],
+  });
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  assert.equal(diagnostics.length, 0, ts.formatDiagnostics(diagnostics, {
+    getCurrentDirectory: () => base, getCanonicalFileName: name => name, getNewLine: () => '\n',
+  }));
+} finally {
+  rmSync(typing, {recursive: true, force: true});
+}
 const source = readFileSync(resolve(base, 'gestures.ts'), 'utf8').split("if (document.getElementById('practice'))")[0];
 const code = ts.transpileModule(source, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText;
 const defaults = {enabled: true, showTrail: true, threshold: 24, bindings: {L: 'back'}, disabledSites: []};
 const actions = [{id: 'back', label: '后退', pdfOnly: false}, {id: 'forward', label: '前进', pdfOnly: false}, {id: 'close_tab', label: '关闭标签页', pdfOnly: false}];
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function harness(failedRead = false, useShadow = false) {
+async function harness(failedRead = false, useShadow = false, beforeInitialize = () => {}) {
   const dom = new JSDOM(readFileSync(resolve(base, 'gestures.html'), 'utf8'));
   const {window} = dom, {document} = window;
   let saved = structuredClone(defaults), pending = null, hold = false;
@@ -42,6 +64,7 @@ async function harness(failedRead = false, useShadow = false) {
     document.body.append(host); view = host.attachShadow({mode: 'open'}); view.append(...nodes);
     host.addEventListener('aegis-form-dirty', event => dirty.push(event.detail));
   }
+  beforeInitialize(view);
   const cleanup = exports.initializeGestures(view); await flush();
   return {window, document: view, calls, regions, dirty, cleanup, get saved() {return saved;},
     get pending() {return pending;}, hold: () => {hold = true;}, goodRead: () => {failedRead = false;},
@@ -70,7 +93,11 @@ const pointer = (type, x, y) => h.el('practice').dispatchEvent(new h.window.Mous
 pointer('pointerdown', 120, 150); pointer('pointermove', 40, 150); pointer('pointerup', 40, 150);
 assert.match(h.el('practicePattern').textContent, /←/); assert.equal(h.el('practiceAction').value, 'back');
 assert.equal(h.calls.length, 1); assert(h.regions.every(call => call[0] === 'aegisGesturePracticeRegion'));
+assert.notEqual(h.el('practiceLine').getAttribute('points'), '');
+h.el('manualPattern').value = 'UD';
 h.window.dispatchEvent(new h.window.Event('blur')); assert.equal(h.el('savePractice').disabled, true);
+assert.equal(h.el('practiceLine').getAttribute('points'), '', '取消练习必须清除 SVG 轨迹');
+assert.equal(h.el('manualPattern').value, '', '取消练习必须清除手动方向草稿');
 pointer('pointerdown', 120, 150); pointer('pointerup', 124, 150); assert.equal(h.el('savePractice').disabled, true);
 // 保存等待期间其他组的新输入不被回包覆盖；失败后保留重试入口。
 h.hold(); click(h.document.querySelector('[data-direction="R"]')); selected.value = 'forward'; event(selected, 'change'); click(h.el('savePractice')); await flush();
@@ -114,4 +141,5 @@ assert.equal(Object.hasOwn(queued.saved.bindings, 'UD'), false);
 click(queued.el('undoBinding')); await flush(); queued.pending.resolve(); await flush();
 assert.deepEqual(structuredClone(queued.saved.bindings), {L: 'forward', UD: 'close_tab'});
 queued.cleanup();
+await assert.rejects(harness(false, false, view => view.querySelector('#practiceLine').remove()), /缺少手势练习轨迹/);
 console.log('手势真实 DOM 回归通过：绘制、取消、分组草稿、串行基线、失败重试、撤销、脏状态和初读失败。');

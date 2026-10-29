@@ -1,0 +1,28 @@
+From 7c79becefbda2666ac99298a146bafad948bc34f Mon Sep 17 00:00:00 2001
+From: Aegis Release Validation <aegis-ci@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 15:31:12 +0800
+Subject: [PATCH] fix(gestures): preserve a non-null practice line in callbacks
+
+---
+ chrome/browser/resources/aegis/gestures.ts | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/resources/aegis/gestures.ts b/chrome/browser/resources/aegis/gestures.ts
+index 309b4d9469..ed9fe8fefc 100644
+--- a/chrome/browser/resources/aegis/gestures.ts
++++ b/chrome/browser/resources/aegis/gestures.ts
+@@ -13,8 +13,9 @@ const enabled = element<HTMLInputElement>('enabled'), trail = element<HTMLInputE
+ const threshold = element<HTMLInputElement>('threshold'), sites = element<HTMLTextAreaElement>('disabledSites');
+ const bindings = element('bindings'), practice = element('practice');
+ const patternLabel = element('practicePattern'), resultLabel = element('practiceResult');
+-const line = root.querySelector<SVGPolylineElement>('#practiceLine');
+-if (!line) throw Error('缺少手势练习轨迹');
++const practiceLine = root.querySelector<SVGPolylineElement>('#practiceLine');
++if (!practiceLine) throw Error('缺少手势练习轨迹');
++const line: SVGPolylineElement = practiceLine;
+ let saved: Settings|null = null, defaults: Settings|null = null, actions: Action[] = [];
+ function savedSettings(): Settings {
+   if (!saved) throw Error('手势设置尚未加载');
+-- 
+2.50.1 (Apple Git-155)
+
