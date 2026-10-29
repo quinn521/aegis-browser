@@ -1,11 +1,30 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
+import {runInNewContext} from 'node:vm';
 import YAML from 'yaml';
 
 const root = new URL('../../../', import.meta.url);
 const text = readFileSync(new URL('.github/workflows/release.yml', root), 'utf8');
 const workflow = YAML.parse(text);
+
+test('platform-named fork branches cannot start another platform rehearsal when shared switches are enabled', () => {
+  const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));
+  const enabled = {AEGIS_RELEASE_ENABLED: 'true', AEGIS_RELEASE_REHEARSAL: 'true',
+    AEGIS_IOS_BRANCH_REHEARSAL: 'true', AEGIS_MACOS_BRANCH_REHEARSAL: 'true', AEGIS_RELEASE_TEST_REPOSITORY_ID: '777'};
+  const evaluate = (job, ref, vars = enabled) => runInNewContext(
+    candidate.jobs[job].if.trim().slice(3, -2), {vars,
+      github: {repository: 'fixture/aegis-browser', repository_id: '777', ref},
+      startsWith: (value, prefix) => value.startsWith(prefix)});
+  for (const [suffix, ios, macos] of [['macos-adhoc-test', false, true], ['ios-alpha-test', true, false],
+    ['android-test', false, false], ['combined-test', true, true]]) {
+    const ref = `refs/heads/codex/fastlane-release-${suffix}`;
+    assert.equal(evaluate('release-rehearsal', ref), ios);
+    assert.equal(evaluate('macos-release-rehearsal', ref), macos);
+  }
+  assert.equal(evaluate('macos-release-rehearsal', 'refs/heads/codex/fastlane-release-macos-test',
+    {...enabled, AEGIS_MACOS_BRANCH_REHEARSAL: 'false'}), false);
+});
 
 test('release is manual or reusable, exact-source and explicitly opt-in', () => {
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch', 'workflow_call']);

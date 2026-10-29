@@ -105,6 +105,10 @@ qualification. Alpha/Beta/Release remain independent package profiles.
 
 Actions accepts the same `signing_mode` selection. Fork branch rehearsals may explicitly
 set `AEGIS_MACOS_REHEARSAL_SIGNING_MODE=temporary-ad-hoc`; its default is `native`.
+Branches named `codex/fastlane-release-macos-*`, `...-ios-*` or `...-android-*`
+cannot start another platform's packaging rehearsal even when its shared fork
+switch is enabled. The uncredentialed contract/archive admission remains common;
+generic branch names retain the explicitly enabled combined rehearsal behavior.
 Temporary candidate tags use the separate namespace
 `candidate/macos/temporary-ad-hoc/<version>-<profile>.<build>` and propagate the mode
 into the package and Draft jobs. Native tags cannot upload a temporary-mode manifest.
