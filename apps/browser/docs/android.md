@@ -26,6 +26,29 @@ Chromium Android clients cannot be built directly on macOS or Windows. This proj
 
 Historical ARM64 Linux and QEMU experiments are not the current reproducible build gate.
 
+### Explicit ARM64 VM experiment
+
+An operator can retry a dedicated Linux ARM64 checkout with
+`AEGIS_ANDROID_EXPERIMENTAL_ARM64=true`. This permits the actual `aarch64`/`arm64`
+host through both the local Fastlane and native build entrypoints; it does not
+change the Android target ABI (`arm64`) or qualify a release runner. The optional
+`scripts/release/android-vm/Dockerfile` pins an ARM64 Ruby runtime, Node 22.23.1
+and JDK 17. Chromium's pinned Linux compiler is still x86-64, so the existing VM
+must execute it successfully through binfmt/QEMU; selecting an ARM64 label alone
+does not establish toolchain compatibility.
+
+Use an independent source/output/cache directory, verify the exact Android pin,
+and retain disk checks. Validate the resulting APK/AAB, package identity and
+Aegis upload certificate before a store upload. A synthetic signed JAR or a
+passing host probe is not a Chromium package or a Play candidate. Store uploads
+continue to use Aegis credentials and the existing separate upload/distribution
+stages.
+
+Actions can select the fixed `Linux/ARM64/aegis-release` label set with
+`AEGIS_ANDROID_RUNNER_ARCH=ARM64` and the same experimental opt-in. Keep
+`AEGIS_ANDROID_RELEASE_RUNNERS_READY=false` until real-package verification has
+passed on that runner; the default route remains Linux/X64.
+
 ## Future build entry point
 
 The following commands fetch or synchronize network content. Run them only in an approved Linux environment and only after the exact source identity is fixed.

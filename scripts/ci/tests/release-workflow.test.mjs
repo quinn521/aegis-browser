@@ -160,6 +160,11 @@ test('macOS has independent readiness and a protected native runtime without And
   assert.match(candidate.jobs['release-rehearsal'].if, /AEGIS_IOS_BRANCH_REHEARSAL == 'true'/u);
 });
 
+test('Android ARM64 host opt-in reaches both admission and package jobs without choosing arbitrary labels', () => {
+  assert.equal(workflow.env.AEGIS_ANDROID_RUNNER_ARCH, '${{ vars.AEGIS_ANDROID_RUNNER_ARCH }}');
+  assert.equal(workflow.env.AEGIS_ANDROID_EXPERIMENTAL_ARM64, '${{ vars.AEGIS_ANDROID_EXPERIMENTAL_ARM64 }}');
+});
+
 test('normal PR quality installs locked release runtimes and keeps real signing in the protected job', () => {
   const quality = YAML.parse(readFileSync(new URL('.github/workflows/quality.yml', root), 'utf8')).jobs.quality;
   const ruby = quality.steps.find(s=>s.uses?.startsWith('ruby/setup-ruby@'));

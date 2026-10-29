@@ -26,6 +26,22 @@ Chromium Android client 不能直接在 macOS 或 Windows 上构建。本项目�
 
 历史 ARM64 Linux 和 QEMU 实验不属于当前可复现构建门禁。
 
+### 显式开启 ARM64 VM 实验
+
+在独立 Linux ARM64 checkout 设置 `AEGIS_ANDROID_EXPERIMENTAL_ARM64=true`，
+可让 Fastlane 和原生构建入口接受真实的 `aarch64` / `arm64` 宿主。
+目标 ABI 仍为 Android `arm64`。可选的 `scripts/release/android-vm/Dockerfile`
+固定 ARM64 Ruby、Node 22.23.1 和 JDK 17；Chromium 固定的 Linux 编译器仍为
+x86-64，必须验证 VM 已有 binfmt/QEMU 能实际执行它，不能只改 Runner 标签。
+
+源码、输出和缓存使用独立目录，保留磁盘检查，核对 Android pin、最终包身份和
+Aegis 独立上传证书。模拟签名 JAR 或宿主探针不代表 Chromium 包或 Play 候选；
+商店上传继续使用 Aegis 凭据及独立的上传、分发阶段。
+
+Actions 可用 `AEGIS_ANDROID_RUNNER_ARCH=ARM64` 及同一实验开关选择固定的
+`Linux/ARM64/aegis-release` 标签。真实包验收通过前保留
+`AEGIS_ANDROID_RELEASE_RUNNERS_READY=false`；默认仍为 Linux/X64。
+
 ## 未来构建入口
 
 以下命令会拉取或同步网络内容。只能在获准的 Linux 环境中执行，并先固定精确源码身份。

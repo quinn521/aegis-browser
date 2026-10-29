@@ -58,6 +58,31 @@ class ActionsTest < ReleaseFixture
       AegisRelease::ReleaseRunner.select('RELEASE_PLATFORM' => 'android', 'CHROMIUM_RUNNERS_READY' => 'true')
   end
 
+  def test_android_arm64_route_requires_explicit_opt_in_and_ready_runner
+    env = { 'RELEASE_PLATFORM' => 'android', 'ANDROID_RUNNERS_READY' => 'true',
+            'AEGIS_ANDROID_RUNNER_ARCH' => 'ARM64', 'AEGIS_ANDROID_EXPERIMENTAL_ARM64' => 'true' }
+    assert_equal %w[self-hosted Linux ARM64 aegis-release], AegisRelease::ReleaseRunner.select(env)
+    [{ 'AEGIS_ANDROID_EXPERIMENTAL_ARM64' => '' }, { 'AEGIS_ANDROID_EXPERIMENTAL_ARM64' => '1' },
+     { 'ANDROID_RUNNERS_READY' => 'false' }, { 'AEGIS_ANDROID_RUNNER_ARCH' => 'arbitrary-label' }].each do |change|
+      assert_raises(AegisRelease::Error) { AegisRelease::ReleaseRunner.select(env.merge(change)) }
+    end
+  end
+
+  def test_android_package_host_policy_rejects_non_linux_and_unapproved_arm64
+    assert AegisRelease.android_host?(os: 'linux-gnu', cpu: 'x86_64', env: {})
+    %w[aarch64 arm64].each do |cpu|
+      refute AegisRelease.android_host?(os: 'linux-gnu', cpu: cpu, env: {})
+      assert AegisRelease.android_host?(os: 'linux-gnu', cpu: cpu,
+        env: { 'AEGIS_ANDROID_EXPERIMENTAL_ARM64' => 'true' })
+    end
+    %w[darwin mswin].each do |os|
+      refute AegisRelease.android_host?(os: os, cpu: 'arm64',
+        env: { 'AEGIS_ANDROID_EXPERIMENTAL_ARM64' => 'true' })
+    end
+    refute AegisRelease.android_host?(os: 'linux-gnu', cpu: 'riscv64',
+      env: { 'AEGIS_ANDROID_EXPERIMENTAL_ARM64' => 'true' })
+  end
+
   def test_macos_readiness_cannot_enable_the_deferred_android_runner
     assert_equal %w[self-hosted macOS ARM64 aegis-release],
       AegisRelease::ReleaseRunner.select('RELEASE_PLATFORM' => 'macos', 'MACOS_RUNNERS_READY' => 'true')

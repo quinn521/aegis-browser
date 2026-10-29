@@ -34,8 +34,13 @@ module AegisRelease
         ready = env["#{env['RELEASE_PLATFORM'].upcase}_RUNNERS_READY"]
         ready = env['CHROMIUM_RUNNERS_READY'] if ready.to_s.empty?
         AegisRelease.require!(ready == 'true', "#{env['RELEASE_PLATFORM']} Chromium release runners are not ready")
-        ['self-hosted', env['RELEASE_PLATFORM'] == 'macos' ? 'macOS' : 'Linux',
-         env['RELEASE_PLATFORM'] == 'macos' ? 'ARM64' : 'X64', 'aegis-release']
+        return %w[self-hosted macOS ARM64 aegis-release] if env['RELEASE_PLATFORM'] == 'macos'
+        architecture = env['AEGIS_ANDROID_RUNNER_ARCH'].to_s
+        architecture = 'X64' if architecture.empty?
+        AegisRelease.require!(%w[X64 ARM64].include?(architecture), 'Android runner architecture must be X64 or ARM64')
+        AegisRelease.require!(architecture != 'ARM64' || env['AEGIS_ANDROID_EXPERIMENTAL_ARM64'] == 'true',
+          'Android ARM64 runner requires explicit experimental host opt-in')
+        ['self-hosted', 'Linux', architecture, 'aegis-release']
       else
         raise AegisRelease::Error, 'Unknown release platform'
       end

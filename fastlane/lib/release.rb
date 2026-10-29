@@ -24,6 +24,11 @@ module AegisRelease
     raise Error, message unless condition
   end
 
+  def self.android_host?(os:, cpu:, env: ENV)
+    os.include?('linux') && (cpu == 'x86_64' ||
+      (%w[aarch64 arm64].include?(cpu) && env['AEGIS_ANDROID_EXPERIMENTAL_ARM64'] == 'true'))
+  end
+
   # Capture failures without echoing credential-bearing command output or arguments.
   def self.command(*argv, cwd: ROOT, env: {})
     stdout, _stderr, status = Open3.capture3({ 'PYTHONDONTWRITEBYTECODE' => '1' }.merge(env), *argv, chdir: cwd)
@@ -234,7 +239,11 @@ module AegisRelease
 
     def package
       host = RbConfig::CONFIG['host_os']
-      AegisRelease.require!(request.platform == "android" ? host.include?("linux") && RbConfig::CONFIG['host_cpu'] == 'x86_64' : host.include?("darwin"), "Wrong build host for #{request.platform}")
+      AegisRelease.require!(request.platform == "android" ?
+        AegisRelease.android_host?(os: host, cpu: RbConfig::CONFIG['host_cpu']) : host.include?("darwin"),
+        request.platform == 'android' ?
+          'Android packages require Linux x86-64, or Linux ARM64 with AEGIS_ANDROID_EXPERIMENTAL_ARM64=true' :
+          "Wrong build host for #{request.platform}")
       source = AegisRelease.source(request.root)
       AegisRelease.real_path!(request.directory)
       AegisRelease.require!(!File.exist?(request.directory), "Attempt already exists; use a new --run-id or upload the verified package")

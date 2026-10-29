@@ -34,10 +34,17 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   fail_host
 fi
 
-if [[ "$(uname -m)" != "x86_64" ]]; then
-  echo "Android 构建宿主必须为 x86-64 Linux；不自动改用旧版 QEMU 构建路径。" >&2
-  exit 2
-fi
+case "$(uname -m)" in
+  x86_64) ;;
+  aarch64|arm64)
+    if [[ "${AEGIS_ANDROID_EXPERIMENTAL_ARM64:-false}" != true ]]; then
+      echo "Linux ARM64 试验需显式设置 AEGIS_ANDROID_EXPERIMENTAL_ARM64=true。" >&2
+      exit 2
+    fi
+    echo "Experimental Linux ARM64 host; pinned x86-64 tools require working emulation."
+    ;;
+  *) echo "不支持的 Android Linux 构建宿主架构。" >&2; exit 2 ;;
+esac
 
 free_gb="$(df -Pk "$CHROMIUM_ROOT" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')"
 if [[ -n "$free_gb" && "$free_gb" -lt "$need_gb" ]]; then
