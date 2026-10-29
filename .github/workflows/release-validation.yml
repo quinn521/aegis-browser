@@ -102,6 +102,7 @@ jobs:
       ${{ github.repository != 'gcsagroup/aegis-browser' &&
           vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
           vars.AEGIS_IOS_BRANCH_REHEARSAL == 'true' &&
+          !startsWith(github.ref, 'refs/heads/codex/fastlane-release-android-') &&
           github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
     permissions:
       contents: write
@@ -124,6 +125,7 @@ jobs:
       ${{ github.repository != 'gcsagroup/aegis-browser' &&
           vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
           vars.AEGIS_MACOS_BRANCH_REHEARSAL == 'true' &&
+          !startsWith(github.ref, 'refs/heads/codex/fastlane-release-android-') &&
           github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
     permissions:
       contents: write
@@ -135,5 +137,26 @@ jobs:
       destination: artifacts
       operation: package
       format: auto
+      store_options: '{}'
+    secrets: inherit
+
+  android-release-rehearsal:
+    needs: [contracts, ios-archive]
+    if: >-
+      ${{ github.repository != 'gcsagroup/aegis-browser' &&
+          vars.AEGIS_RELEASE_ENABLED == 'true' && vars.AEGIS_RELEASE_REHEARSAL == 'true' &&
+          vars.AEGIS_ANDROID_BRANCH_REHEARSAL == 'true' &&
+          startsWith(github.ref, 'refs/heads/codex/fastlane-release-android-') &&
+          github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID }}
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/release.yml
+    with:
+      platform: android
+      profile: alpha
+      destination: artifacts
+      operation: package
+      format: aab
       store_options: '{}'
     secrets: inherit
