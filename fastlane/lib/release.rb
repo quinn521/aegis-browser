@@ -245,6 +245,9 @@ module AegisRelease
             File.join(request.root, 'apps/ios/SharedWebExtension'))
       else
         chromium_root
+        if request.platform == 'macos'
+          run('python3', File.join(request.root, 'scripts/release/verify-macos-toolchain.py'))
+        end
         if request.platform == 'android' && request.format == 'aab'
           %w[AEGIS_BUNDLETOOL_JAR AEGIS_ANDROID_KEYSTORE AEGIS_ANDROID_KEY_ALIAS AEGIS_ANDROID_STORE_PASSWORD AEGIS_ANDROID_KEY_PASSWORD AEGIS_ANDROID_CERT_SHA256].each { |name| required(name) }
         end

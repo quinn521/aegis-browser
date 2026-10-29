@@ -122,6 +122,8 @@ macOS self-hosted 路徑檢查預裝執行環境、同 SHA 乾淨原始碼及各
 
 fork 分支打包還需按平台設定 `AEGIS_IOS_BRANCH_REHEARSAL=true` 或 `AEGIS_MACOS_BRANCH_REHEARSAL=true`；不影響候選 tag 入口。Android 暫緩時保持其 ready 為 `false`，macOS 可獨立完成本地 → Actions → candidate tag/Draft 驗收。
 
+Xcode 26 的 Metal 編譯器可能需另外安裝：`xcodebuild -downloadComponent MetalToolchain`。本地打包與 macOS Actions 都先執行 `python3 scripts/release/verify-macos-toolchain.py`，實際把最小 shader 編譯成 AIR；`xcrun --find metal` 可能只找到佔位入口。缺少元件或編譯失敗會在建立打包目錄和啟動 Chromium 編譯前停止。
+
 fork 演練需明確設定 `AEGIS_RELEASE_ENABLED=true`、`AEGIS_RELEASE_REHEARSAL=true`、`AEGIS_RELEASE_TEST_REPOSITORY_ID=<fork 數字 ID>`，並準備該 fork 自己的受保護簽章環境。API 核對 parent 為上游、同 SHA 最新分支驗證 attempt 的 contracts/ios-archive 成功，只允許 codex/fastlane-release-* 分支或 candidate tag。目的地限包 only、TF 上傳/內測、Play 內測、該 fork 自己的 Draft；拒絕正式版及外測。分支驗證可在兩個無憑證檢查完成後呼叫真正的打包工作流程，無需先合併到預設分支。未啟用時 package rehearsal 為 skipped，不能算打包通過；fork_rehearsal_only 也不等於上游准入。
 
 Actions rerun 可以重新打包，或透過遠端摘要驗證續傳 GitHub 草稿；不會在 attempt 1 之後重播 Apple/Play 寫入操作，避免 runner 在商店接受請求後遺失回執而重複上傳。先核對儲存的階段紀錄及商店狀態，再本機處理或使用新 build/run。原生版本約束仍然適用。

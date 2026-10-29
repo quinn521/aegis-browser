@@ -146,8 +146,9 @@ test('macOS has independent readiness and a protected native runtime without And
   for (const name of ['AEGIS_ANDROID_STORE_PASSWORD', 'AEGIS_ANDROID_KEY_PASSWORD']) {
     assert.match(build.env[name], /inputs.platform == 'android' && secrets\./u);
   }
-  const regression = workflow.jobs.package.steps.find(s=>s.run?.includes('-p test_verify_macos_dmg.py'));
+  const regression = workflow.jobs.package.steps.find(s=>s.run?.includes("-p 'test_verify_macos*.py'"));
   assert.equal(regression.if, "${{ inputs.platform == 'macos' }}");
+  assert.match(readFileSync(new URL('scripts/release/local-macos-release.rb', root), 'utf8'), /verify-macos-toolchain\.py/u);
   const candidate = YAML.parse(readFileSync(new URL('.github/workflows/release-validation.yml', root), 'utf8'));
   const mac = candidate.jobs['macos-release-rehearsal'];
   assert.deepEqual(mac.needs, ['contracts', 'ios-archive']);
