@@ -54,6 +54,7 @@ jobs:
           python3 -m unittest discover -s scripts/release -p 'test_*.py'
           python3 -B apps/browser/scripts/verify-build-source_test.py
           node apps/browser/scripts/write-build-identity.mjs --self-test
+          node apps/browser/scripts/gestures-settings_test.mjs
           bash apps/browser/scripts/package-android-guards_test.sh
           pnpm run ci:test
           bundle exec fastlane lanes
