@@ -85,6 +85,8 @@ module AegisRelease
       @profile = options.fetch(:profile, 'release').to_s.downcase
       AegisRelease.require!(%w[alpha beta release].include?(profile), 'Profile must be alpha, beta or release')
       AegisRelease.require!(!%w[asc app-store play-production].include?(destination) || profile == 'release', 'Store production destinations require --profile release')
+      AegisRelease.require!(platform != 'android' || profile != 'alpha' ||
+        %w[artifacts github-draft play-internal].include?(destination), 'Android Alpha is internal testing only')
       @groups = options.fetch(:groups, '').to_s.split(',').map(&:strip)
       AegisRelease.require!(groups.uniq == groups && groups.all? { |g| !g.empty? && g.size <= 100 && !g.match?(/[\x00-\x1f]/) }, 'Invalid or duplicate TestFlight groups')
       AegisRelease.require!(groups.empty? || %w[testflight-internal testflight-external].include?(destination), '--groups requires a TestFlight distribution destination')
@@ -244,6 +246,7 @@ module AegisRelease
         request.platform == 'android' ?
           'Android packages require Linux x86-64, or Linux ARM64 with AEGIS_ANDROID_EXPERIMENTAL_ARM64=true' :
           "Wrong build host for #{request.platform}")
+      android_actions_operator!
       source = AegisRelease.source(request.root)
       AegisRelease.real_path!(request.directory)
       AegisRelease.require!(!File.exist?(request.directory), "Attempt already exists; use a new --run-id or upload the verified package")
@@ -427,7 +430,13 @@ module AegisRelease
       result
     end
 
+    def android_actions_operator!
+      return unless request.platform == 'android' && ENV['GITHUB_ACTIONS'] == 'true'
+      run('node', File.join(request.root, 'scripts/ci/android-operator.mjs'))
+    end
+
     def preflight_upload
+      android_actions_operator!
       AegisRelease.require!(request.destination != 'artifacts', 'Choose an upload destination')
       AegisRelease.source(request.root)
       # Local manual Fastlane accepts the operator's clean branch. Actions owns CI
@@ -445,6 +454,7 @@ module AegisRelease
     end
 
     def status
+      android_actions_operator!
       client = store
       client.authenticate
       result = request.identity.merge('destination' => request.destination, 'remote' => client.status)

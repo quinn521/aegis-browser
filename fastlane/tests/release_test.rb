@@ -49,6 +49,36 @@ class ReleaseFixture < Minitest::Test
 end
 
 class ReleaseTest < ReleaseFixture
+  def test_android_actions_backend_checks_admin_independently_of_form
+    previous = ENV['GITHUB_ACTIONS']
+    ENV['GITHUB_ACTIONS'] = 'true'
+    calls = []
+    flow = AegisRelease::Pipeline.new(request('android'), Object.new)
+    flow.stub(:run, ->(*args) { calls << args }) { flow.android_actions_operator! }
+    assert_equal [['node', File.join(@root, 'scripts/ci/android-operator.mjs')]], calls
+    ios = AegisRelease::Pipeline.new(request('ios'), Object.new)
+    ios.stub(:run, ->(*) { flunk 'Android permission check changed another platform' }) { ios.android_actions_operator! }
+    ENV['GITHUB_ACTIONS'] = 'false'
+    flow.stub(:run, ->(*) { flunk 'Local CLI gained an Actions-only interface' }) { flow.android_actions_operator! }
+  ensure
+    ENV['GITHUB_ACTIONS'] = previous
+  end
+
+  def test_android_alpha_is_internal_only_independent_of_entrypoint
+    %w[artifacts github-draft play-internal].each do |destination|
+      opts = { profile: 'alpha', destination: destination }
+      opts[:tag] = 'candidate/android/2.2.0.144-alpha.2002000144' if destination == 'github-draft'
+      assert_equal 'alpha', request('android', **opts).profile
+    end
+    %w[play-closed play-open play-production].each do |destination|
+      assert_raises(AegisRelease::Error) { request('android', profile: 'alpha', destination: destination) }
+    end
+    %w[play-internal play-closed play-open].each do |destination|
+      assert_equal 'beta', request('android', profile: 'beta', destination: destination).profile
+    end
+    assert_raises(AegisRelease::Error) { request('android', profile: 'beta', destination: 'play-production') }
+  end
+
   def test_plan_is_read_only_and_reports_dirty_source
     write('uncommitted.txt', 'pending')
     value = request.plan

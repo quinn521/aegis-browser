@@ -9,7 +9,11 @@ class StoresTest < ReleaseFixture
   def test_profiles_and_store_routes_are_independent
     %w[alpha beta release].each do |profile|
       assert_equal profile, request(profile: profile, destination: 'testflight-external').identity['profile']
-      assert_equal profile, request('android', profile: profile, destination: 'play-open').profile
+      if profile == 'alpha'
+        assert_raises(AegisRelease::Error) { request('android', profile: profile, destination: 'play-open') }
+      else
+        assert_equal profile, request('android', profile: profile, destination: 'play-open').profile
+      end
     end
     assert_equal 'beta', request(profile: 'Beta').profile
     assert_raises(AegisRelease::Error) { request(profile: 'beta', destination: 'app-store') }

@@ -9,7 +9,6 @@ on:
         type: choice
         options:
           - ios
-          - android
           - macos
       profile:
         description: Build profile, independent of destination
@@ -151,6 +150,11 @@ jobs:
         with:
           ruby-version: 3.3.6
           bundler: 2.5.22
+      - name: Verify Android operator and rerunner are current repository Admins
+        if: ${{ inputs.platform == 'android' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/android-operator.mjs
       - name: Verify exact upstream source and latest quality attempt
         env:
           GH_TOKEN: ${{ github.token }}
