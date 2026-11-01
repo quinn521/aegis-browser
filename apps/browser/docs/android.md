@@ -37,6 +37,15 @@ and JDK 17. Chromium's pinned Linux compiler is still x86-64, so the existing VM
 must execute it successfully through binfmt/QEMU; selecting an ARM64 label alone
 does not establish toolchain compatibility.
 
+The Android GN configuration selects `host_cpu="x64"` for Chromium's pinned
+Linux host tools and Rust standard library, including in this ARM64 experiment.
+The physical host guard still requires the explicit ARM64 opt-in and a working
+x64 runtime; `target_cpu="arm64"` remains the Android application ABI. Do not
+substitute a different Rust standard library or compiler version. Regenerate the
+GN graph after an intentional committed argument change and retain prior build
+evidence and objects; the build entrypoint still rejects an unexplained argument
+mismatch.
+
 Use an independent source/output/cache directory, verify the exact Android pin,
 and retain disk checks. Validate the resulting APK/AAB, package identity and
 Aegis upload certificate before a store upload. A synthetic signed JAR or a

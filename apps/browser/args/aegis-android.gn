@@ -6,6 +6,9 @@
 
 target_os = "android"
 target_cpu = "arm64"
+# 固定 Linux 工具链只附带 x64 宿主 Rust 标准库。ARM64 实验仍须显式启用，
+# 并用已有 QEMU 运行这些 x64 宿主工具；Android 目标 ABI 保持 arm64。
+host_cpu = "x64"
 
 is_debug = false
 is_component_build = false
