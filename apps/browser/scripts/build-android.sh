@@ -50,6 +50,15 @@ case "$(uname -m)" in
       exit 2
     fi
     export QEMU_RESERVED_VA=1099511627776
+    # The locked x64 Go compiler intermittently corrupts runtime state in this
+    # ARM64 emulation path. Explicit P1 passed the failed project's emit control;
+    # P2 did not. Keep this compatibility mitigation within Android children,
+    # preserving the compiler, Ninja process parallelism and shared VM settings.
+    if [[ "${GOMAXPROCS:-1}" != 1 ]]; then
+      echo "ARM64 Android emulation requires GOMAXPROCS=1." >&2
+      exit 2
+    fi
+    export GOMAXPROCS=1
     echo "Experimental Linux ARM64 host; pinned x86-64 tools require working emulation."
     ;;
   *) echo "不支持的 Android Linux 构建宿主架构。" >&2; exit 2 ;;
