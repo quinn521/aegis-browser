@@ -17,7 +17,7 @@ export async function requireAndroidAdministrator({environment: e = process.env,
   const run = await api(repository, `/actions/runs/${e.GITHUB_RUN_ID}`, {token});
   requireValue(String(run.id) === e.GITHUB_RUN_ID && String(run.run_attempt) === e.GITHUB_RUN_ATTEMPT && run.head_sha === e.GITHUB_SHA &&
     run.repository?.id === metadata.id && run.repository?.full_name === repository && run.head_repository?.full_name === repository, 'Run/source/attempt changed');
-  const delivery = run.path === '.github/workflows/android-delivery.yml';
+  const delivery = ['.github/workflows/android-delivery.yml', '.github/workflows/android-delivery-full.yml'].includes(run.path);
   const candidate = run.path === '.github/workflows/release-candidate-tag.yml';
   const legacy = ['.github/workflows/release.yml', '.github/workflows/release-validation.yml'].includes(run.path);
   requireValue((delivery || legacy) && run.event === 'workflow_dispatch' || (candidate || legacy) && run.event === 'push', 'Unexpected Android workflow/event');

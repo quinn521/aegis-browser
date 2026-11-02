@@ -1,23 +1,20 @@
-# Android 交付
+# Android 交付入口
 
 [English](android-delivery.md)
 
-Actions 表单沿用现有 `./release android` Fastlane 打包、独立 Upload 密钥签名验签、Play 草稿和 GitHub Draft 后端。本地 CLI 不扩展。此分支供 Android 交接，不包含合并、公开发布或正式送审授权。
+Simple 与 Full 是两个薄入口，共用 `android-delivery-backend.yml` 和原有 `./release android` 后台。本分支不授权合并、公开发布或正式送审。
 
-表单只有四项：
+Simple 只有 operation、version、build、product 四项。中英文操作为 Package、Package and upload、Status、Wait，默认 Status。打包必须匹配提交中的真实版本和 Android versionCode；查询忽略 Product，只在 internal 轨道查询明确的 versionCode，可查询旧版本，不由当前工作流源码推断远端包来源。
 
-| 字段 | 填法 |
-|---|---|
-| 操作 | 常用为仅打包、上传 Play 草稿、查询状态，其余选择完整模式。 |
-| 目标产物 | 自动：打包默认 Alpha，后续继承凭据。Alpha 仅内测；Beta 可内外测但不能正式送审；Release 通用但每阶段仍需明确选择。 |
-| 版本或来源 | 打包可留空使用源码中版本/versionCode，也可填 `6.1.0.266(2006000266)`；后续粘贴完整交付凭据。 |
-| 完整模式配置 | 非完整模式保持 `{}`。只接受无凭据的 JSON 设置。 |
+Simple Status/Wait 只发 GET，不创建或撤销 Play edit。官方[轨道摘要接口](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list)最多返回 20 个非废弃 release，不含 versionName、AAB 摘要或源码身份。NOT_OBSERVED 不能证明 versionCode 从未使用。Wait 最多十分钟，拒审报错，需开发者操作与已发布分别标示。查询不证明测试者可用性或真机验收。
 
-打包产物为独立 Upload 密钥签名的 AAB，仍要求专用 Linux 构建机、已验证的固定源码，构建入口默认至少 40 GiB 空闲（`AEGIS_ANDROID_MIN_FREE_GB`）。当前本地 Android 控制器继续保留运行储备：外置盘 15 GiB、内置盘 8 GiB。APK 是本地侧载产物，不能经此表单上传 Play。工具链对象探针和测试夹具均不是真实 AAB。
+**“打包并上传”目前明确阻断在签名和上传之前。** 权威的全历史未使用 versionCode 核验尚未建立，不能用轨道查不到版本代替。新打包也拒绝通过 Actions rerun 重放。
 
-等待**整次运行成功**，再从摘要复制 `aegis-android-v1:...` 整行凭据。下一次选“上传 Play 草稿”，目标产物保持自动，将凭据粘贴到“版本或来源”。上传默认在内测轨道建立 **draft**，不自动分发、不正式送审。查询状态使用同样凭据并核对确切 versionCode。后续操作使用最新成功凭据，同时保留最初打包凭据。
+Package 使用独立 Upload 密钥签署真实 AAB。默认入口要求 40 GiB 可用空间；本地控制器继续保留外置 15 GiB、内置 8 GiB 运行储备。必须使用就绪的 Android 专用 Linux runner、固定来源与锁定工具。APK、签名夹具或工具链探针均不能代替真实 AAB。
 
-完整模式仅接受字符串字段 `operation`、`destination`、`track`、`tag`、`play_release_policy`；操作为 package、upload、status、distribute、submit。例如版本或来源仍填成功凭据：
+Full 保留 Product、Version or source 完整交付凭据及阶段 JSON。整次运行成功后，复制 `aegis-android-v1:...` 凭据；后续 Upload/Status/Distribute/Submit 使用最新成功凭据，保留原生产运行、attempt、manifest 摘要和源码身份。不能仅凭版本号认定二进制来源。Full 的原凭据 Status 仍是旧 edit/abort 对账路径，不标作 GET-only。
+
+Full JSON 仅接受字符串字段 `operation`、`destination`、`track`、`tag`、`play_release_policy`，并需明确选择 Full。例如：
 
 ```json
 {"operation":"upload","destination":"play-closed","track":"qa"}
@@ -27,16 +24,14 @@ Actions 表单沿用现有 `./release android` Fastlane 打包、独立 Upload �
 {"operation":"distribute","destination":"play-internal"}
 ```
 
-分发必须提供同一清单、同一轨道的已完成上传记录。Play 测试轨道分发可能申请测试审核；测试者可见、审核通过、设备验收应分别记录。Beta 只允许内测、封闭或开放测试；正式提交必须为 Release、明确生产目的地和发布策略，并另有用户授权，本轮不执行。
+默认 Upload 只创建 Play internal 草稿，不分发或生产送审。Alpha 仅 internal；Beta 可以内外测试但禁止 production；Release 也必须明确选择阶段。分发要求同一 manifest 和轨道的成功上传记录，可能请求测试轨道审核；生产提交另需明确授权，本次没有该授权。
 
-Tag → Draft 保留现有 `release-candidate-tag.yml`，不增加第二个 Android Tag 触发器。Tag 格式为 `candidate/android/<version>-<profile>.<versionCode>`，必须绑定已准入源码。完整模式也可对成功 AAB 凭据选 upload、`github-draft` 和明确的现有 Android candidate tag。后端保持私有 prerelease Draft，并下载核验远端字节摘要，不公开发布。
+Tag → 私有 Draft 继续使用既有 `release-candidate-tag.yml`，不增加 Android tag 触发器。Full 可为已验收 AAB 明确提供现有 Android candidate tag 来创建 Draft，并下载验哈希；不会公开发布。
 
-后端独立核验原操作者和重跑者的当前仓库 Admin 权限、确切仓库/源码和最新质量门禁。后续阶段还核验原打包生产运行、最新 package/state attempt、生产作业、原清单摘要、全部下载字节、AAB 包型、签名证据和应用身份。凭据只固定来源，不能替代授权；源码变化必须在新 clean SHA/tree 上重新打包。权限元数据不可读时停止。
+后台在加载凭据前核验原操作者和 rerunner 当前有效的仓库 Admin 权限、仓库/运行/attempt/源码及最新质量门禁。已有产物还核验原 producer 和最新成功状态、manifest 摘要、所有下载字节、AAB 格式、证书和应用身份。凭据只固定身份，不代替授权。源码改变必须使用新的干净候选重新验收。
 
-商店写操作不能通过 Actions 重跑重复执行。上传结果未知时，先保留 intent/result 并回读 Play 状态，不能盲目重传。失败运行的附件仅用于诊断，不能作为成功交付来源。
+两个入口逐项显式转发 secret，不使用 inherit。签名仅在 `aegis-release-android`，GET 查询在 `aegis-play` 且只接受明确提供的 Aegis 授权服务账号。Full 变更在导入和复验后才读取 Play 凭据，分发/提交继续使用 `aegis-android-distribute` / `aegis-android-submit`。只有 Draft 后台任务请求 contents write；查询、打包、store 后台任务保持仓库只读。不会把 HomeGuard 等其他应用的服务账号当作 Aegis 权限证明。
 
-fork 分支 push 仅运行无签名、无商店凭据的 contracts，不启动打包/Play/Draft，也不消耗其他平台 runner。该 CI 不替代真实 AAB、Play 或 Tag 验收。特权 fork 演练仍要求既有显式 fork 身份、同源 release-validation 和 Android runner readiness 门禁；上游要求当前 main 和同源质量通过。新增工作流不启用任何 readiness 或仓库环境。
+变更操作不允许 Actions rerun 重放。上传结果未知时先保留 intent/result，再读服务端对账，不能盲目重试。失败运行的产物仅用于诊断，不能成为成功交付来源。
 
-沿用既有 `aegis-release-android`、`aegis-play`、`aegis-github-draft` 环境。签名密码仅打包时读取，Play 凭据在导入与重新校验后读取。其他应用的服务账号不直接证明 Aegis 权限。仅工作流界面选项双语，本地 CLI 保持原样。
-
-旧通用工作流不再提供 Android 手工下拉选项，但保留供 Tag/既有流程调用的 reusable 后端。完整模式分发和提交分别沿用 `aegis-android-distribute` / `aegis-android-submit` 阶段环境，不能借精简表单绕过原阶段保护。
+分支 push 只运行无凭据 contracts，不启动打包/Play/Draft，也不启用 runner readiness 或环境。fork 特权演练和上游 main 的同源质量门禁保持原约束；绿色契约 CI 不等于真实包、商店或设备验收。

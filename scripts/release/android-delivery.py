@@ -47,16 +47,7 @@ def source():
 
 def plan():
     value = json.loads(os.environ['ANDROID_DELIVERY_PLAN'])
-    # The planner is the only producer; re-normalize before trusting a JSON plan in a later job.
-    fields = {'operation', 'profile', 'version', 'build', 'format', 'destination', 'track', 'tag', 'play_release_policy'}
-    pins = {'package_run', 'package_attempt', 'state_run', 'state_attempt', 'manifest_sha256'}
-    require(isinstance(value, dict) and not value.keys()-(fields | pins) and fields <= value.keys(), 'Invalid delivery plan')
-    op = value['operation']
-    full = {k: value[k] for k in ['operation', 'destination', 'track', 'tag', 'play_release_policy'] if value[k]}
-    target = f'{value["version"]}({value["build"]})' if op == 'package' else codec.encode(value)
-    fresh = codec.normalize(dict(operation='full', product=value['profile'], target=target, advanced=json.dumps(full)), codec.native_identity(ROOT))
-    require(value == fresh, 'Delivery plan identity changed')
-    return value
+    return codec.revalidate(value, codec.native_identity(ROOT))
 
 
 def directory(p):
@@ -110,7 +101,7 @@ def verify_package(folder, p, expected, exact_source):
 def verify_run(row, run_id, attempt, sha, repository):
     require(row.get('id') == int(run_id) and row.get('run_attempt') == int(attempt) and row.get('head_sha') == sha and
             row.get('repository', {}).get('full_name') == repository and row.get('head_repository', {}).get('full_name') == repository and
-            row.get('path') == '.github/workflows/android-delivery.yml' and row.get('event') == 'workflow_dispatch' and
+            row.get('path') in {'.github/workflows/android-delivery.yml', '.github/workflows/android-delivery-full.yml'} and row.get('event') == 'workflow_dispatch' and
             row.get('status') == 'completed' and row.get('conclusion') == 'success', 'Producer/source/current attempt is not a successful Android delivery')
 
 
@@ -138,7 +129,9 @@ def verify_producers(p, s):
         jobs = api(f'actions/runs/{p[key]}/attempts/{p[att]}/jobs?per_page=100')
         require(isinstance(jobs.get('total_count'), int) and jobs['total_count'] <= 100, 'Incomplete producer jobs inventory')
         expected = 'package' if key == 'package_run' or p['state_run'] == p['package_run'] else 'store'
-        rows = [job for job in jobs.get('jobs', []) if job.get('name') == expected]
+        # A reusable workflow's job names include the known caller job prefix.
+        # Keep exact names for the older direct entry and this one-level backend.
+        rows = [job for job in jobs.get('jobs', []) if job.get('name') in {expected, 'delivery / '+expected}]
         require(len(rows) == 1 and rows[0].get('status') == 'completed' and rows[0].get('conclusion') == 'success', 'Required producer job has not succeeded')
 
 
@@ -197,10 +190,15 @@ def main():
     command = sys.argv[1]
     require(source()['sha'] == os.environ['GITHUB_SHA'], 'Checkout differs from runtime source')
     run('node', ROOT/'scripts/ci/android-operator.mjs')
-    if command == 'import':
+    if command == 'validate-query':
+        require(p['operation'] in {'status-query', 'status-wait'}, 'Read-only query route required')
+    elif command == 'check-new-upload':
+        codec.require_new_upload(p, os.environ['GITHUB_RUN_ATTEMPT'])
+    elif command == 'import':
         import_state(p)
     elif command == 'package':
         require(p['operation'] == 'package', 'Package route required')
+        require(os.environ['GITHUB_RUN_ATTEMPT'] == '1', 'Package cannot be replayed by rerunning Actions; start a new admitted run')
         run(*arguments(p, 'package'))
         export_state(p, True)
     elif command == 'stage':

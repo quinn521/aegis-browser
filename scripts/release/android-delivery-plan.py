@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-field Actions form; local release CLI remains unchanged."""
+"""Thin Simple/Full forms share one validated Android backend."""
 import json
 import os
 from pathlib import Path
@@ -7,6 +7,8 @@ import re
 
 OPERATIONS = {'package': '仅打包 / Package', 'upload': '上传 Play 草稿 / Upload',
               'status': '查询状态 / Status', 'full': '完整模式 / Full'}
+SIMPLE_OPERATIONS = {'package': '仅打包 / Package', 'package-upload': '打包并上传 / Package and upload',
+                     'status': '查询状态 / Status', 'wait': '等待状态 / Wait'}
 PRODUCTS = {'auto': '自动 / Auto', 'alpha': 'Alpha · 仅内测 / Internal only',
             'beta': 'Beta · 内外测 / Internal and external', 'release': 'Release · 通用 / Universal'}
 VERSION = r'[0-9]{1,8}(?:\.[0-9]{1,8}){3}'
@@ -33,7 +35,7 @@ def decode(value):
     require(len(parts) == 9 and parts[0] == 'aegis-android-v1', 'Copy the complete successful Android delivery receipt')
     pins = dict(zip(RECEIPT_FIELDS, parts[1:]))
     require(pins['profile'] in {'alpha', 'beta', 'release'} and re.fullmatch(VERSION, pins['version']) and
-            re.fullmatch(r'[1-9][0-9]{0,9}', pins['build']) and
+            re.fullmatch(r'[1-9][0-9]{0,9}', pins['build']) and int(pins['build']) <= 2_100_000_000 and
             all(re.fullmatch(NUMBER, pins[k]) for k in ['package_run', 'package_attempt', 'state_run', 'state_attempt']) and
             re.fullmatch(DIGEST, pins['manifest_sha256']), 'Invalid delivery receipt identity')
     return pins
@@ -53,7 +55,7 @@ def unique(pairs):
     return result
 
 
-def normalize(inputs, native):
+def normalize_full(inputs, native):
     require(isinstance(inputs, dict) and not inputs.keys()-{'operation', 'product', 'target', 'advanced'} and
             all(isinstance(v, str) and not any(ord(c) < 32 or ord(c) == 127 for c in v) for k, v in inputs.items() if k != 'advanced'), 'Invalid delivery inputs')
     raw = inputs.get('advanced') or '{}'
@@ -105,6 +107,52 @@ def normalize(inputs, native):
     return result
 
 
+def normalize(inputs, native, mode='simple'):
+    require(mode in {'simple', 'full'}, 'Unknown delivery mode')
+    if mode == 'full':
+        return normalize_full(inputs, native)
+    require(isinstance(inputs, dict) and not inputs.keys()-{'operation', 'version', 'build', 'product'} and
+            all(isinstance(v, str) and not any(ord(c) < 32 or ord(c) == 127 for c in v) for v in inputs.values()), 'Invalid Simple inputs')
+    operation = canonical(inputs.get('operation') or 'status', SIMPLE_OPERATIONS)
+    version, build = inputs.get('version', ''), inputs.get('build', '')
+    require(re.fullmatch(VERSION, version) and re.fullmatch(r'[1-9][0-9]{0,9}', build) and int(build) <= 2_100_000_000,
+            'Explicit Android version and versionCode are required')
+    profile = canonical(inputs.get('product') or 'alpha', PRODUCTS)
+    require(profile != 'auto', 'Simple requires an explicit product')
+    query = operation in {'status', 'wait'}
+    if not query:
+        require((version, build) == tuple(native), 'Package identity must match committed Android source')
+    return dict(operation={'status': 'status-query', 'wait': 'status-wait'}.get(operation, operation),
+                profile='alpha' if query else profile, version=version, build=build, format='aab',
+                destination='play-internal' if query or operation == 'package-upload' else 'artifacts',
+                track='', tag='', play_release_policy='')
+
+
+def revalidate(value, native):
+    fields = {'operation', 'profile', 'version', 'build', 'format', 'destination', 'track', 'tag', 'play_release_policy'}
+    pins = {'package_run', 'package_attempt', 'state_run', 'state_attempt', 'manifest_sha256'}
+    require(isinstance(value, dict) and fields <= value.keys() and not value.keys()-(fields | pins), 'Invalid delivery plan')
+    op = value['operation']
+    if op in {'status-query', 'status-wait', 'package-upload'}:
+        inputs = dict(operation={'status-query':'status', 'status-wait':'wait'}.get(op, op),
+                      product=value['profile'], version=value['version'], build=value['build'])
+        fresh = normalize(inputs, native)
+    else:
+        full = {k: value[k] for k in ['operation', 'destination', 'track', 'tag', 'play_release_policy'] if value[k]}
+        target = f'{value["version"]}({value["build"]})' if op == 'package' else encode(value)
+        fresh = normalize_full(dict(operation='full', product=value['profile'], target=target, advanced=json.dumps(full)), native)
+    require(value == fresh, 'Delivery plan identity changed')
+    return value
+
+
+def require_new_upload(p, attempt):
+    require(p['operation'] == 'package-upload' and attempt == '1', 'New package/upload cannot be replayed by rerunning Actions')
+    # The track summaries omit obsolete releases, APKs, versionName and digests.
+    # Neither NOT_OBSERVED nor a generated-APKs 404 proves never-used identity.
+    # Keep this route closed until an authoritative all-history check exists.
+    raise ValueError('Cannot establish an unused Play versionCode from track summaries; Package and upload is blocked before signing or upload')
+
+
 def native_identity(root):
     version = re.search(r'kProductVersion\[\] = "([0-9.]+)"', (root/'apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h').read_text()).group(1)
     build = re.search(r'android_override_version_code = "([0-9]+)"', (root/'apps/browser/args/aegis-android.gn').read_text()).group(1)
@@ -115,6 +163,7 @@ if __name__ == '__main__':
     root = Path(__file__).resolve().parents[2]
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
     require(os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch', 'Delivery is a manual entrypoint; tags use the existing candidate workflow')
-    values = normalize(event.get('inputs') or {}, native_identity(root))
+    inputs = json.loads(os.environ.get('ANDROID_DELIVERY_INPUTS') or json.dumps(event.get('inputs') or {}), object_pairs_hook=unique)
+    values = normalize(inputs, native_identity(root), os.environ.get('ANDROID_DELIVERY_MODE', 'simple'))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write('plan='+json.dumps(values, separators=(',', ':'))+'\n')

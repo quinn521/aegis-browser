@@ -26,7 +26,7 @@ PINS = dict(profile='alpha', version=NATIVE[0], build=NATIVE[1], package_run='11
 
 class FormTest(unittest.TestCase):
     def normalize(self, **inputs):
-        return plan.normalize(inputs, NATIVE)
+        return plan.normalize_full(inputs, NATIVE)
 
     def full(self, profile='alpha', **options):
         return self.normalize(operation='full', product=profile, target=plan.encode(dict(PINS, profile=profile)), advanced=json.dumps(options))
@@ -82,6 +82,45 @@ class FormTest(unittest.TestCase):
         for change in [dict(package_attempt='0'), dict(state_run='../x'), dict(manifest_sha256='x'*64), dict(version='1.0.0'), dict(profile='dev')]:
             with self.assertRaises(ValueError):
                 plan.encode(dict(PINS, **change))
+
+
+class SimpleFormTest(unittest.TestCase):
+    def simple(self, **inputs):
+        return plan.normalize(dict(version=NATIVE[0], build=NATIVE[1], **inputs), NATIVE)
+
+    def test_default_is_read_only_and_queries_ignore_product_without_source_inference(self):
+        p = self.simple()
+        self.assertEqual(p['operation'], 'status-query')
+        self.assertNotIn('package_run', p)
+        self.assertEqual(p, self.simple(product='beta'))
+        remote = plan.normalize(dict(version='5.9.0.1', build='100', operation='wait'), NATIVE)
+        self.assertEqual(remote['operation'], 'status-wait')
+        self.assertEqual(remote, plan.revalidate(remote, NATIVE))
+
+    def test_package_requires_exact_source_and_each_mode_has_a_closed_schema(self):
+        p = self.simple(operation='package')
+        self.assertEqual(p['destination'], 'artifacts')
+        self.assertEqual(p, plan.revalidate(p, NATIVE))
+        for inputs in [{}, dict(version=NATIVE[0], build='0'), dict(version=NATIVE[0], build='2100000001'),
+                       dict(version='5.9.0.1', build='100', operation='package'),
+                       dict(version=NATIVE[0], build=NATIVE[1], target='receipt'),
+                       dict(version=NATIVE[0], build=NATIVE[1], operation='upload')]:
+            with self.subTest(inputs=inputs), self.assertRaises(ValueError):
+                plan.normalize(inputs, NATIVE)
+
+    def test_new_upload_cannot_use_track_absence_as_unused_or_be_replayed(self):
+        p = self.simple(operation='package-upload')
+        self.assertEqual(p, plan.revalidate(p, NATIVE))
+        with self.assertRaisesRegex(ValueError, 'unused Play versionCode'):
+            plan.require_new_upload(p, '1')
+        with self.assertRaisesRegex(ValueError, 'replayed'):
+            plan.require_new_upload(p, '2')
+
+    def test_query_plan_cannot_smuggle_receipt_mutation_or_another_track(self):
+        for changes in [dict(destination='play-production'), dict(track='production'), dict(package_run='42'),
+                        dict(operation='upload'), dict(manifest_sha256='f'*64), dict(format='apk')]:
+            with self.subTest(changes=changes), self.assertRaises((ValueError, KeyError)):
+                plan.revalidate(dict(self.simple(), **changes), NATIVE)
 
 
 class TransportTest(unittest.TestCase):
@@ -183,6 +222,20 @@ class TransportTest(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 transport.verify_run(dict(row, **change), '11', '2', self.source['sha'], 'fixture/repo')
 
+    def test_nested_backend_producer_job_names_remain_exact_and_unambiguous(self):
+        row = dict(id=11, run_attempt=2, head_sha=self.source['sha'], repository=dict(full_name='fixture/repo'),
+                   head_repository=dict(full_name='fixture/repo'), path='.github/workflows/android-delivery-full.yml',
+                   event='workflow_dispatch', status='completed', conclusion='success')
+        for names, valid in [(['delivery / package'], True), (['package'], True),
+                             (['other / package'], False), (['delivery / package', 'package'], False)]:
+            api = lambda path: dict(row) if '/jobs?' not in path else dict(total_count=len(names), jobs=[dict(name=n, status='completed', conclusion='success') for n in names])
+            with self.subTest(names=names), patch.dict(transport.os.environ, GITHUB_REPOSITORY='fixture/repo'), patch.object(transport, 'api', side_effect=api):
+                if valid:
+                    transport.verify_producers(PINS, self.source)
+                else:
+                    with self.assertRaises(ValueError):
+                        transport.verify_producers(PINS, self.source)
+
     def test_export_preserves_original_digest_and_both_attempt_pins(self):
         env = dict(GITHUB_RUN_ID='11', GITHUB_RUN_ATTEMPT='2', GITHUB_REPOSITORY='fixture/repo', GITHUB_STEP_SUMMARY=str(self.root/'summary'))
         with patch.dict(transport.os.environ, env), patch.object(transport, 'ROOT', self.root), patch.object(transport, 'directory', return_value=self.folder), patch.object(transport, 'source', return_value=self.source):
@@ -196,7 +249,7 @@ class TransportTest(unittest.TestCase):
         self.assertIn(plan.encode(dict(PINS, manifest_sha256=self.digest)), (self.root/'summary').read_text())
 
     def test_plan_revalidation_uses_committed_native_and_tamper_fails(self):
-        p = plan.normalize(dict(operation='upload', target=plan.encode(PINS)), NATIVE)
+        p = plan.normalize(dict(operation='upload', target=plan.encode(PINS)), NATIVE, mode='full')
         with patch.dict(transport.os.environ, ANDROID_DELIVERY_PLAN=json.dumps(p)):
             self.assertEqual(transport.plan(), p)
         for change in [dict(format='apk'), dict(operation='release'), dict(profile='dev'), dict(extra='x')]:
