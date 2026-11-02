@@ -12,7 +12,7 @@ Simple 与 Full 是两个薄入口，共用 `android-delivery-backend.yml` 和�
 | GitHub Actions Simple / Full | 共用后台，下载产物附 run/attempt、来源和摘要 | 默认分支注册入口、同源质量门禁、合格 Android runner；契约 CI 不等于打包 |
 | `candidate/android/<version>-<profile>.<versionCode>` Tag | 既有 candidate 工作流打包并创建私有 Draft | Tag/SHA 读回、合格 runner、Draft 资产下载验哈希 |
 
-当前产品身份对应的 Tag 示例为 `candidate/android/6.1.0.266-alpha.2006000266`，必须等待最终干净来源完成准入再使用。本次修改不创建或推送 Tag。Android Tag 作业只显式传递两项 Upload 密钥密码，不接收 Play 或 Apple secret；共享后台仅补齐既有凭据接口声明，iOS/macOS 作业不变。
+当前产品身份对应的 Tag 示例为 `candidate/android/6.1.0.266-alpha.2006000266`，必须等待最终干净来源完成准入再使用。本次修改不创建或推送 Tag。 Android Draft 上传后新增独立只读核验，真实下载所有 AAB、身份、manifest 和 checksum 资产，逐个校对大小与 SHA-256，并在下载前后复核 Tag、来源、资产 ID 和私有 Draft 状态。失败保留既有 Draft 和上传记录，只能重试只读下载核验。Android Tag 作业只显式传递两项 Upload 密钥密码，不接收 Play 或 Apple secret；共享后台仅补齐既有凭据接口声明，iOS/macOS 作业不变。
 
 GitHub 的手动入口须先存在于[默认分支](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。候选分支 push 契约通过，不代表默认分支已接入 Run workflow，也不代表有权执行真实打包。
 

@@ -188,11 +188,15 @@ jobs:
       - run: python3 scripts/release/android-delivery.py import
       - run: node scripts/ci/android-operator.mjs
       - run: python3 scripts/release/android-delivery.py stage
+      - name: Download and hash the exact admitted Android Draft
+        run: python3 scripts/release/android-draft-verify.py --delivery
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ always() }}
         with:
           name: android-draft-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/release/android/*/github-*.json
+          path: |
+            .artifacts/release/android/*/github-*.json
+            .artifacts/release/android/*/android-draft-download-*.json
           if-no-files-found: warn
           retention-days: 30
   query:

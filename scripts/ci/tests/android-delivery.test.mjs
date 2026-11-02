@@ -132,4 +132,9 @@ test('Android tags keep one trigger and explicitly forward only Upload-key secre
   assert.deepEqual(Object.keys(android.secrets).sort(), ['AEGIS_ANDROID_KEY_PASSWORD', 'AEGIS_ANDROID_STORE_PASSWORD']);
   for (const key of Object.keys(android.secrets)) assert.ok(release.on.workflow_call.secrets[key]);
   assert.doesNotMatch(JSON.stringify(android), /secrets\.(?:AEGIS_PLAY|AEGIS_ASC)|inherit/u);
+  const verify = release.jobs['github-draft'].steps.find(step => step.run === 'python3 scripts/release/android-draft-verify.py');
+  assert.equal(verify.if, "${{ inputs.platform == 'android' }}");
+  const steps = release.jobs['github-draft'].steps;
+  assert.ok(steps.indexOf(verify) > steps.findIndex(step => step.run === 'bash scripts/release/action.sh upload'));
+  assert.match(JSON.stringify(backend.jobs.draft), /android-draft-verify\.py --delivery/u);
 });
