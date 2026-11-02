@@ -49,8 +49,17 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Verify current Android operator before unsigned native admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/android-operator.mjs
       - name: Verify actual locked compiler and host ABI without packaging
         run: |
           test -n "$AEGIS_ANDROID_NATIVE_SOURCE"
           test -n "$AEGIS_ANDROID_GN_BINARY"
-          python3 -B -m unittest discover -s scripts/release -p test_android_host.py -v
+          python3 -B scripts/release/android-native-admission.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-native-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/android-native-admission/result.json
+          if-no-files-found: error

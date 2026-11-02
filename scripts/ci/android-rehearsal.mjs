@@ -42,6 +42,7 @@ export async function requireAndroidRehearsal(sha, {environment:e=process.env, a
   const selected=await latest();
   const matches=run=>Number.isSafeInteger(run?.id) && run.id>0 && Number.isSafeInteger(run.run_attempt) && run.run_attempt>0 &&
     run.path===WORKFLOW && run.event==='push' && run.head_branch===ANDROID_REHEARSAL_BRANCH && run.head_sha===sha &&
+    run.status==='completed' && run.conclusion==='success' &&
     run.repository?.id===metadata.id && run.repository?.full_name===repository &&
     run.head_repository?.id===metadata.id && run.head_repository?.full_name===repository;
   requireValue(matches(selected),'Android validation source differs');
@@ -60,5 +61,8 @@ export async function requireAndroidRehearsal(sha, {environment:e=process.env, a
   await assertRefs();
   const last=await latest();
   requireValue(matches(last) && last.id===run.id && last.run_attempt===run.run_attempt,'Android latest validation changed during admission');
+  // GETs are not atomic. Finish with the source refs, and re-run admission
+  // immediately before loading signing material in the package job.
+  await assertRefs();
   return {repository,sha,admission:'fork_android_rehearsal_only',sourceValidationRun:run.id,sourceValidationAttempt:run.run_attempt,releaseReady:false};
 }

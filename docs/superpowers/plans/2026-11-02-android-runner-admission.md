@@ -41,3 +41,12 @@
 - A branch or tag advancing during GETs must invalidate admission.
 - Rejection must prevent checkout and always-upload steps, not merely return a failed hook status.
 - Native probe success is never a product or store acceptance claim.
+
+## Execution ledger
+
+- Source gate red: valid Android fork source rejected by iOS-bound branch/validation path; original failure retained in session. Dedicated Android admission now has an independent validation workflow and opt-in/source pin.
+- Local initial tests: focused Node39/39, hook3/3, actionlint passed. Initial candidate 7f5499b fork contracts run41415524313/1 passed162/162; delivery skipped.
+- Independent read-only review found three defects: nonterminal workflow accepted; source ref could move during final listing; unittest skips could qualify native admission. Each reproduced RED, then repaired with terminal-success checks, a final ref read, and an actual Linux ARM64/no-skips/eight-tests guard.
+- Ruling: GitHub GETs do not provide an atomic source/run snapshot. Recheck before and after metadata and again immediately before signing; pin one runner job/attempt and source. A post-check external change remains observable only at the next check, so immutable source identity is retained in every product receipt.
+- Unsigned native admission also exercises the original/current Admin check using its own read-only Actions token. Its fixed validation workflow/ref is the only new accepted operator context.
+- Runner archive direct download timed out after12MiB; partial retained. Existing SOCKS route tested HTTP206 and used without proxy configuration changes; full official archive140231317bytes verified SHA256670adb2f268fe21dcbb58b3db0e0aa9d5b3bddfe2c651481336e561ff86de945.

@@ -117,6 +117,14 @@ test('Android candidate tag Admin admission stays on Android', async () => {
   await assert.rejects(requireAndroidAdministrator(f));
 });
 
+test('unsigned Android validation still verifies the current Admin on its fixed branch', async () => {
+  const f=fixture();
+  Object.assign(f.run,{path:'.github/workflows/android-release-validation.yml',event:'push',head_branch:'codex/android-release-acceptance'});
+  Object.assign(f.environment,{GITHUB_EVENT_NAME:'push',GITHUB_REF:'refs/heads/codex/android-release-acceptance'});
+  assert.equal((await requireAndroidAdministrator(f)).authorized,true);
+  f.environment.GITHUB_REF='refs/heads/main';await assert.rejects(requireAndroidAdministrator(f));
+});
+
 test('Android tags keep one trigger and explicitly forward only Upload-key secrets to Draft', () => {
   const tag = YAML.parse(readFileSync(new URL('../../../.github/workflows/release-candidate-tag.yml', import.meta.url), 'utf8'));
   const release = YAML.parse(readFileSync(new URL('../../../.github/workflows/release.yml', import.meta.url), 'utf8'));

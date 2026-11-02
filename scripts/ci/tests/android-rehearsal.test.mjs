@@ -12,7 +12,7 @@ function fixture() {
     AEGIS_RELEASE_ENABLED:'true', AEGIS_RELEASE_REHEARSAL:'true', AEGIS_RELEASE_TEST_REPOSITORY_ID:'777',
     AEGIS_ANDROID_REHEARSAL_ENABLED:'true', AEGIS_ANDROID_REHEARSAL_SOURCE_SHA:sha,
     RELEASE_PLATFORM:'android', RELEASE_DESTINATION:'artifacts'};
-  const run = {id:5, run_attempt:1, head_sha:sha, head_branch:branch, event:'push', path,
+  const run = {id:5, run_attempt:1, head_sha:sha, head_branch:branch, event:'push', path,status:'completed',conclusion:'success',
     repository:{id:777,full_name:repo}, head_repository:{id:777,full_name:repo}};
   const jobs = ['contracts','native-admission'].map((name,i)=>({id:10+i,name,run_id:5,head_sha:sha,run_attempt:1,status:'completed',conclusion:'success'}));
   const f = {environment,run,jobs,ref:sha,finalRun:run,requests:[]};
@@ -68,6 +68,22 @@ test('a newer validation run appearing during GETs invalidates the earlier run',
     return api(...args);
   };
   await assert.rejects(call(f),/latest/u);
+});
+
+test('running or cancelled workflow is not admitted even when both prerequisite jobs succeeded',async()=>{
+  for (const change of [{status:'in_progress',conclusion:null},{status:'completed',conclusion:'cancelled'},{status:'completed',conclusion:'failure'}]) {
+    const f=fixture();Object.assign(f.run,change);await assert.rejects(call(f));
+  }
+});
+
+test('branch moving during the final workflow listing is caught by the final ref read',async()=>{
+  const f=fixture(),api=f.api;let listings=0;
+  f.api=async(...args)=>{
+    const result=await api(...args);
+    if(args[1].startsWith('/actions/workflows/') && ++listings===2) f.ref='b'.repeat(40);
+    return result;
+  };
+  await assert.rejects(call(f),/branch changed/u);
 });
 
 test('Android candidate tag must resolve to the same independently validated source',async()=>{

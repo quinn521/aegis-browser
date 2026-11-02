@@ -20,7 +20,8 @@ export async function requireAndroidAdministrator({environment: e = process.env,
   const delivery = ['.github/workflows/android-delivery.yml', '.github/workflows/android-delivery-full.yml'].includes(run.path);
   const candidate = run.path === '.github/workflows/release-candidate-tag.yml';
   const legacy = ['.github/workflows/release.yml', '.github/workflows/release-validation.yml'].includes(run.path);
-  requireValue((delivery || legacy) && run.event === 'workflow_dispatch' || (candidate || legacy) && run.event === 'push', 'Unexpected Android workflow/event');
+  const validation = run.path === '.github/workflows/android-release-validation.yml' && run.head_branch === 'codex/android-release-acceptance';
+  requireValue((delivery || legacy) && run.event === 'workflow_dispatch' || (candidate || legacy || validation) && run.event === 'push', 'Unexpected Android workflow/event');
   requireValue(e.GITHUB_EVENT_NAME === run.event && e.GITHUB_REF === (run.event === 'push' && candidate ? 'refs/tags/' :
     e.GITHUB_REF?.startsWith('refs/tags/candidate/android/') ? 'refs/tags/' : 'refs/heads/')+run.head_branch &&
     (!candidate || e.GITHUB_REF.startsWith('refs/tags/candidate/android/')), 'Run ref/event changed');
