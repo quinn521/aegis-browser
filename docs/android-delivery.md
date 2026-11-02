@@ -13,7 +13,7 @@ The form has four fields:
 | Version or source | Package may leave this blank to use the committed Android version/versionCode, or enter `6.1.0.266(2006000266)`. Later stages require the entire successful delivery receipt. |
 | Full options JSON | Leave `{}` unless Operation is Full. Never enter credentials here. |
 
-Package produces an AAB signed by the independent Upload key. It requires the dedicated Linux runner, prepared pinned source and at least 80 GiB available before the build. An APK is a separate local sideload product and cannot be uploaded through this form. A package fixture or toolchain object probe is not a product AAB.
+Package produces an AAB signed by the independent Upload key. It requires the dedicated Linux runner, prepared pinned source and at least 40 GiB available before the build by default (`AEGIS_ANDROID_MIN_FREE_GB`). The current local Android controller retains runtime reserves of 15 GiB external and 8 GiB internal. An APK is a separate local sideload product and cannot be uploaded through this form. A package fixture or toolchain object probe is not a product AAB.
 
 After the **whole run succeeds**, copy its `aegis-android-v1:...` receipt from the summary. Select Upload, keep Product on Auto, and paste the receipt into Version or source. Upload creates a Play **draft on the internal track**; it does not distribute or request production review. Status uses the same receipt and checks the exact versionCode. Use the latest successful receipt for the next stage and retain the original package receipt.
 

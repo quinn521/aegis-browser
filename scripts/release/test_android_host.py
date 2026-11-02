@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class AndroidHostGuardTests(unittest.TestCase):
-    def run_guard(self, architecture, experimental=None):
+    def run_guard(self, architecture, experimental=None, *, free_gib=None, minimum="999999"):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             tools = root / "bin"
@@ -19,8 +19,16 @@ class AndroidHostGuardTests(unittest.TestCase):
             uname = tools / "uname"
             uname.write_text('#!/bin/sh\nif [ "$1" = -s ]; then echo Linux; else echo ' + architecture + '; fi\n')
             uname.chmod(0o700)
+            if free_gib is not None:
+                df = tools / "df"
+                df.write_text('#!/bin/sh\nprintf "Filesystem 1024-blocks Used Available Capacity Mounted on\\nfixture 104857600 0 '
+                              + str(free_gib * 1024 * 1024) + ' 0%% /fixture\\n"\n')
+                df.chmod(0o700)
             env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
-                       CHROMIUM_ROOT=str(root), AEGIS_ANDROID_MIN_FREE_GB="999999")
+                       CHROMIUM_ROOT=str(root))
+            env.pop("AEGIS_ANDROID_MIN_FREE_GB", None)
+            if minimum is not None:
+                env["AEGIS_ANDROID_MIN_FREE_GB"] = minimum
             env.pop("AEGIS_ANDROID_EXPERIMENTAL_ARM64", None)
             if experimental is not None:
                 env["AEGIS_ANDROID_EXPERIMENTAL_ARM64"] = experimental
@@ -49,6 +57,17 @@ class AndroidHostGuardTests(unittest.TestCase):
         result = self.run_guard("riscv64", "true")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("不支持", result.stderr)
+
+    def test_default_capacity_boundary_and_explicit_override(self):
+        for free_gib, minimum, blocked in ((39, None, True), (40, None, False),
+                                          (72, None, False), (40, "80", True)):
+            with self.subTest(free_gib=free_gib, minimum=minimum):
+                result = self.run_guard("aarch64", "true", free_gib=free_gib, minimum=minimum)
+                self.assertEqual(result.returncode, 2 if blocked else 1)
+                if blocked:
+                    self.assertIn("先腾空间", result.stdout)
+                else:
+                    self.assertIn("Chromium src missing", result.stdout)
 
 
 @unittest.skipUnless(platform.system() == "Linux" and platform.machine() in ("arm64", "aarch64")

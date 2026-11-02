@@ -12,7 +12,7 @@ case "${AEGIS_ANDROID_FORMAT:-apk}" in
   *) echo 'AEGIS_ANDROID_FORMAT must be apk or aab' >&2; exit 2 ;;
 esac
 
-need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-80}"
+need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-40}"
 
 fail_host() {
   cat <<EOF
