@@ -1,0 +1,1250 @@
+{
+  "LICENSE": {
+    "sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b",
+    "size": 1536
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Base64.d.ts": {
+    "sha256": "c7000ccbe5ac845c2102073249de4b955e2fbcfc6f56555ed8b9485aa6119b11",
+    "size": 580
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/CharacterIdMap.d.ts": {
+    "sha256": "6f94a11e35ad7ca37ad8b39fa26e399f170aa15f6aa10d59b7da435fe4996240",
+    "size": 131
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Color.d.ts": {
+    "sha256": "56a5d14af6b5972362e01aac51842ed02243f21574b1beadd6d2d044178dfcff",
+    "size": 14499
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ColorConverter.d.ts": {
+    "sha256": "8ce8dcef63badccffde4dddc8020e5a2004a4764bfad12416f90101aa3b34383",
+    "size": 2131
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ColorUtils-tsconfig.ref.json": {
+    "sha256": "e1ef1881b85fc742177d5a1093eebcb1ebc9c843e2f675ec5d6f88bc1213154d",
+    "size": 974
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ColorUtils.d.ts": {
+    "sha256": "5097279529e102141d2d46394d15725100919863c47519246f13bf9819d329a7",
+    "size": 2241
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Console.d.ts": {
+    "sha256": "af16b6ef82ea4b48434ee378ad79a4f46c4288bbc8d5272b8b14a244d51fa110",
+    "size": 1689
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Debouncer.d.ts": {
+    "sha256": "b38dca9bf0c6de439d6cf689f20d1f982abe859737dceb9ab8e05ccc41e4366d",
+    "size": 398
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/EventTarget.d.ts": {
+    "sha256": "6520a3d032cde94626ace6166565b1323334acd2f43bbad33214fda278093c36",
+    "size": 1330
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Gzip.d.ts": {
+    "sha256": "964ad0ae434594c9df5f31e918925bb58f9077ecd9c98001855b2efc226ab5ed",
+    "size": 1461
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/JavaScriptMetaData.d.ts": {
+    "sha256": "de8ac6a997aac2d848de7018d344c07467505b36b3ac343d45507d9ff6e891b7",
+    "size": 665
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Lazy.d.ts": {
+    "sha256": "a98e7af84817c75d77c71c0121d431005fb476f1002d25637ef1dc12c51fd08d",
+    "size": 234
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/MapWithDefault.d.ts": {
+    "sha256": "3be6372f67a8ed3d77aedf71ee1ec0c4b326d04aac01d4f8f80570a031a8cb88",
+    "size": 356
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Mutex.d.ts": {
+    "sha256": "902ed13a69378ed6c9c90e73adff8523ed972cb2fbdf357ba96296b779d55fdf",
+    "size": 441
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Object.d.ts": {
+    "sha256": "71c44b25c7f19c3f7cd4724a104779098b78aef7acbe54197bf47e0f6528657c",
+    "size": 1445
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ParsedURL.d.ts": {
+    "sha256": "ecbeb0a762db03d8ec8aec4f8e44869f54a7cc2bb8351d4798e914b5d2842bbf",
+    "size": 5017
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Progress.d.ts": {
+    "sha256": "051764aef737a066cf690a72a572237a79d36871f0ffdb5924f79c676262a3e9",
+    "size": 1328
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ResolverBase.d.ts": {
+    "sha256": "f03dd4548d70cd1899a43eea06ad735eabab666b18b14f2388423e1651a57190",
+    "size": 1134
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ResourceType.d.ts": {
+    "sha256": "c0e9396c103a40a9c8f9649f5d97b8f32b407d7bc5d298fda4f4c0c1acafb1ee",
+    "size": 2517
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/ReturnToPanel.d.ts": {
+    "sha256": "978143b482c5536dcbf295a7596cfff3609a65b0d2e221285c2179349c4c4c29",
+    "size": 383
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Revealer.d.ts": {
+    "sha256": "f41c41d75d4651aafb1cfae724c7765ba3b2f0e13e849b80b55e9466e2798101",
+    "size": 2619
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Runnable.d.ts": {
+    "sha256": "643078c10fd74e67e95399f329d60f636bcccfe1f1ef99de8162a342f8160095",
+    "size": 694
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/SegmentedRange.d.ts": {
+    "sha256": "cee7e02bc49133ea59ff13ecb75933fb8f9d7d7c647c8818b5a8e32de6fc77cf",
+    "size": 432
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/SettingRegistration.d.ts": {
+    "sha256": "f5bcd8a4169b140c3170c1ef78c14a5e3ca2d6f484f129e4d47f9e2cded798ac",
+    "size": 4790
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Settings.d.ts": {
+    "sha256": "8845ef8e8ff7e8e143fd1a71a910dc3de2dc40bc5c91d051088960916d5a0432",
+    "size": 10370
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/SimpleHistoryManager.d.ts": {
+    "sha256": "06defd796401aa6b32d6a7419c75ac036686658fd3cce33e0ecbac7115271d3c",
+    "size": 522
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Srcset.d.ts": {
+    "sha256": "d613e64c7edfa4c47c65a722504ff5bbd66d05396682ba03463095969894aba3",
+    "size": 408
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/StringOutputStream.d.ts": {
+    "sha256": "05d5c5bef9599fee1cbd55370f22687adaae3fe962b1c37619aae7df8c051bcb",
+    "size": 294
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/TextDictionary.d.ts": {
+    "sha256": "031edea395bd2f3e418ebacb23f12769deae573827719049967d5bb0d9dedf44",
+    "size": 357
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Throttler.d.ts": {
+    "sha256": "592dcccb2e20c86781ab05422ab2c286e10b2bd29bd6cdfc18c8a9d084c1acb3",
+    "size": 429
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/Trie.d.ts": {
+    "sha256": "cc23d4d0dfecfdda728051d5a2b2df777348c7cd256ea90ace89304382d659bd",
+    "size": 890
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/VersionController.d.ts": {
+    "sha256": "aced8fe1740baead4036ddbbfb7be075b2fcc2995c456f55226ed67ff08de5f6",
+    "size": 3343
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/bundle-tsconfig.ref.json": {
+    "sha256": "b8d5dfa666e177d8f78b3c63de029d0de48c308cf1b0e0a9d71c13f4dacd57eb",
+    "size": 1146
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/common-tsconfig.ref.json": {
+    "sha256": "b289e40f2d2bcb9939d7c7a87210d82bd7c38b518efbaa46597beb81ef01913e",
+    "size": 4252
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/common/common.d.ts": {
+    "sha256": "5fd2cc8ddd826ac8bc5210b63945fae9bd1c82c72f09d2e86bcd068dd9a55c1b",
+    "size": 1955
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/AidaClient.d.ts": {
+    "sha256": "24e36cb0a1dde7e0ba09555ec377b4ab83f062fb6070ebf69811cadeb89cab34",
+    "size": 3360
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/AidaClientTypes.d.ts": {
+    "sha256": "79e4df0b3f26fc348ca0bd996664d8c5ff76b68008168ff3b9e194f3ba56f1e6",
+    "size": 9363
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/AidaGcaTranslation.d.ts": {
+    "sha256": "4cc7ea1e049299c09bfdd734a574fdf1e90dcf07807f800404763e54ce6c70f1",
+    "size": 1094
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/DispatchHttpRequestClient.d.ts": {
+    "sha256": "8362bde149344b2ae4cc23ea26dfddcbcb196f0f34b2811e130d733025d7c555",
+    "size": 651
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/GcaClient.d.ts": {
+    "sha256": "b06baca839b3c287f17449e7aa7e3a85f77f38574bcfc7a16ce2a492cdf78946",
+    "size": 787
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/GcaTypes.d.ts": {
+    "sha256": "e09e84f7365590588b48ce110a4bb9e45165dd5a6a61e68ee72699e3286a8e35",
+    "size": 9525
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/GdpClient.d.ts": {
+    "sha256": "f70afd88d3d14788879474c72005e6d614af165ef18dd11132025f306100896d",
+    "size": 2872
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/InspectorFrontendHost.d.ts": {
+    "sha256": "686f76fa2427de62bb92af1d894357d1f66ed24e38eea5d0001f8348f1de6d57",
+    "size": 1289
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/InspectorFrontendHostAPI.d.ts": {
+    "sha256": "7e9e65c32e9f9601720c011670405bdf19acf07ce19821e928055582cfb22224",
+    "size": 16529
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/InspectorFrontendHostStub.d.ts": {
+    "sha256": "897a5526b7d4e71a1cb65e525f154590206e8c1759894b4320a14a5ec65f37ab",
+    "size": 9794
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/Platform.d.ts": {
+    "sha256": "13d3a7fa07249870b20c73576dac526558618936777c1ba1f61388651ee60731",
+    "size": 528
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/ResourceLoader.d.ts": {
+    "sha256": "1b71a1324d5e9b09077b27cdd0bab9652dc0f8fcb65205e5bff2fd1b48c36f82",
+    "size": 1144
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/UserMetrics.d.ts": {
+    "sha256": "76eb1088dfda751a1acc50377b3a74622a0bc5823fbff75669b85d49e73eb38d",
+    "size": 7324
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/UserMetricsEnums.d.ts": {
+    "sha256": "3b911e905263a60824ebca8d216ad26f6125e8cbf1f3f6424bc81e1a20067e98",
+    "size": 29130
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/bundle-tsconfig.ref.json": {
+    "sha256": "60af63976a9eb904cd49ba277da0ff17312380788b644687fc22deb4e8708237",
+    "size": 1014
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/host-tsconfig.ref.json": {
+    "sha256": "df2d0dc8ce476eec9f1b3b03b3eba0e74c78d63bb9b4eefcd25c4d8a528a615c",
+    "size": 2621
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/host/host.d.ts": {
+    "sha256": "82dc29a6bcb74ca0c6bd2daa4b07ea3809a16c7b0661cf4b0c48aa6d757e5a0a",
+    "size": 861
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/i18n/bundle-tsconfig.ref.json": {
+    "sha256": "45af74460c779363781324050ac4b09680063af9d70c5bd74959f3777d91a9e5",
+    "size": 1014
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/i18n/i18n-tsconfig.ref.json": {
+    "sha256": "b8d98b49762158d95e3d67f29284b2d1637bd03f8d349704c3c92bf78a69487e",
+    "size": 1696
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/ArrayUtilities.d.ts": {
+    "sha256": "f5434cd705c1e72ba84b0be4b86fde7dd88ef266d7c5d15106bda5967714f92c",
+    "size": 4676
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/Brand.d.ts": {
+    "sha256": "11a2d1e5b1111431dee853906b3ff6054712042e54966fcdc6b81f692480c303",
+    "size": 775
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/Constructor.d.ts": {
+    "sha256": "9622bae9631af715930691c3e5b2ceda33a15dffba7be4f981ecb1da93ed6a1d",
+    "size": 265
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/DateUtilities.d.ts": {
+    "sha256": "e095651a10d731d17f76125a19d15a9de398373ba378c4d25cbefac7eaeab06e",
+    "size": 118
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/DevToolsPath.d.ts": {
+    "sha256": "6aece26fdeec0c1f0f3d0a2869a84361ddf0572349dd27ef052c5f6d9897150d",
+    "size": 1587
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/HostRuntime.d.ts": {
+    "sha256": "eb1a4d8a374d0053d9bfe62d5d7051c784b0bf50edf37b6eb9e1d0db04faeff8",
+    "size": 187
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/KeyboardUtilities.d.ts": {
+    "sha256": "67ab90a458a5cd2e3890cac5c7e41d5f1eec5252dd6a524368dac2849d0de8b8",
+    "size": 623
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/MapUtilities.d.ts": {
+    "sha256": "51bc25497c2b9f5517b1fbb883b31672e8b85cdffdf59c11ed7b136cfff357c9",
+    "size": 651
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/MimeType.d.ts": {
+    "sha256": "d271a2aac9b87b4dcc3b01936a365d70d196302f6e980c73924e695e6b9104c4",
+    "size": 898
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/NumberUtilities.d.ts": {
+    "sha256": "a651bfe66ba249df9aa0bb5bb2f47b35bf5af995785bb463252aab526503f95f",
+    "size": 685
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/Size.d.ts": {
+    "sha256": "896518e60808cff56dc3e05ededd75ef0a6e670ba9bbb9c2bab6278d13329e0d",
+    "size": 398
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/StringUtilities.d.ts": {
+    "sha256": "826b52b0813123c5770b20f4bb84180b81c4ffc0ebed08de41bc646b727b2316",
+    "size": 6724
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/Timing.d.ts": {
+    "sha256": "bc96b1b4585fd7612b15d0ec7fe61c4f0b19a1d39ab38da19a6b025fd494f391",
+    "size": 361
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/TypedArrayUtilities.d.ts": {
+    "sha256": "860142b862a07264689b11149ea56bed062f85f70f97e5b669de40a1e6555967",
+    "size": 1402
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/TypescriptUtilities.d.ts": {
+    "sha256": "11194460c8a2dcc985facb6850e25124f57a75eeb4403c6dd6174ea63c271655",
+    "size": 2685
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/UIString.d.ts": {
+    "sha256": "06f9f245beb04a2a4f45f4bf854207ac68cc475491e7b9a476d5d5d1dde72283",
+    "size": 165
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/UserVisibleError.d.ts": {
+    "sha256": "b6099613ad4bddc54775e6adca810064c0250440d9295a31e0b83f62d5857e95",
+    "size": 535
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/api/HostRuntime.d.ts": {
+    "sha256": "36b5d5fb7fce0a754f6d3e30a91c58fd61563174d0fbee772d702e5eb5b3c895",
+    "size": 1755
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/api/api-tsconfig.ref.json": {
+    "sha256": "3a37bb130c064a3746c7fee8b5d4526731d2970c37000fff7e20ef453a4286e1",
+    "size": 1011
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/api/api.d.ts": {
+    "sha256": "0f460751044a6e057c0520ace78139d3272e9cec52e90f5bd12b3554a73f3ee3",
+    "size": 73
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/api/bundle-tsconfig.ref.json": {
+    "sha256": "a25764dc99e3a389d4c20dce36cc5f6621c990ce0041468a6cb8faa50ba4b9af",
+    "size": 1052
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/browser/browser-tsconfig.ref.json": {
+    "sha256": "c800ac6b3800a7ad634cd67234cf9be2bb03e9022bda74a16f670d4c36245c19",
+    "size": 1078
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/browser/bundle-tsconfig.ref.json": {
+    "sha256": "6e0cbbfa45945b0c5b4ddca17dc32288b91f83a90b891f5d5c1c750f2a596678",
+    "size": 1068
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/bundle-tsconfig.ref.json": {
+    "sha256": "8f61af5f26756b7c28f53d1b50f52f367a745cd60503e8c077e5d62eaf906393",
+    "size": 1030
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/node/bundle-tsconfig.ref.json": {
+    "sha256": "5460d4d4bd0e3e90ffb4805dcd6648625a30c6a1605c74e7c36e7d1b86922593",
+    "size": 1056
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/node/node-tsconfig.ref.json": {
+    "sha256": "2424d26a10c0315b455281385df69c5356d249a27cc7855a9bb0bf02a0ff9f9e",
+    "size": 1072
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/platform-tsconfig.ref.json": {
+    "sha256": "8269295f9441d7eb34b6fe6f767d810adf2ac6e6994723d41a0c8d2a0065ecf3",
+    "size": 2886
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/platform/platform.d.ts": {
+    "sha256": "534bd04171bcbc97345b94e0ea10e5ea1b9e6dd6e29e76018db95ac4ec9ede8d",
+    "size": 1195
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/CDPConnection.d.ts": {
+    "sha256": "45ffe620b2e1bc879429d45c3b8e00893e5d3a1fe6b9de9c874e0a1893ecb727",
+    "size": 2931
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/ConnectionTransport.d.ts": {
+    "sha256": "48670c3838553913cda6eb9bf9a33c3ab47c396146e6fb4369408c466acb487e",
+    "size": 464
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/DevToolsCDPConnection.d.ts": {
+    "sha256": "f6706a77cfa3e5c97c1e80bd928b0917824a9c4155e9bdcf4df78e81016a9988",
+    "size": 748
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/InspectorBackend.d.ts": {
+    "sha256": "809519517f8f7685b80ae369bf3c0158bd4e9dd0145577038d9bb67c28d2f727",
+    "size": 11214
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/bundle-tsconfig.ref.json": {
+    "sha256": "0c5cb76d37d62f7dedafc6df562a38d1efa1e07494a52470985fa5a2e53ed829",
+    "size": 1058
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/protocol_client-tsconfig.ref.json": {
+    "sha256": "61cd0add3c6cfffa26b68bc01882bdef1ad5a7adaeb161f11c4098e58a4ad13b",
+    "size": 1497
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/protocol_client/protocol_client.d.ts": {
+    "sha256": "ff2351bc883819cec9617e21840c1094fe1379f0952f0e90e1d7b714dbf72993",
+    "size": 335
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/root/DevToolsContext.d.ts": {
+    "sha256": "62216df483acb0ef145254674c83a2c23d72a8c5c4def889fcf9381b5da4dfd9",
+    "size": 1346
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/root/ExperimentNames.d.ts": {
+    "sha256": "b3a90ab228a7265d360d00bd465a407f845611caad74ea553a427100ac6fccd1",
+    "size": 262
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/root/Runtime.d.ts": {
+    "sha256": "e27681b5104d0e5d2205ee8f341552302a368403c2107d30c48e5369b39cd0f1",
+    "size": 11635
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/root/bundle-tsconfig.ref.json": {
+    "sha256": "99120de555a4957c8377ae67e8a6c7a20b71b818d14b462c55ec4767537d466f",
+    "size": 1014
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/root/root-tsconfig.ref.json": {
+    "sha256": "4eebfef7fad99a24cc20f477f15c5160fec85bd76d7afa50930f8a9ece05bf75",
+    "size": 1245
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/root/root.d.ts": {
+    "sha256": "c94433ecee8e3863bbb615434adf3bd5dc344f807a110083877190cbb8c48615",
+    "size": 210
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/AccessibilityModel.d.ts": {
+    "sha256": "71e3bfdf94d7db35e8bbdda838fc2aa74575e34bf134c87cc73a3ff0c4375445",
+    "size": 3679
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/AnimationModel.d.ts": {
+    "sha256": "7e64df57151a2416da19d0fe0438e76132f38f98552bb7a52f55b1daf22a40fa",
+    "size": 6513
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/AutofillModel.d.ts": {
+    "sha256": "60a1b6290b69a76d301b33d3e9654164384c918a175a5fdacdca8ef2fbf2e45e",
+    "size": 900
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CPUProfilerModel.d.ts": {
+    "sha256": "f54ab71dda4df8b28bfb6f8afa71fc8e6d6d30b812028fd015b75903d42e1916",
+    "size": 2173
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CPUThrottlingManager.d.ts": {
+    "sha256": "3c352d302831da0c224aa9e369f22cd7185687843524e7f4c801dd4a55d503a5",
+    "size": 2171
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSContainerQuery.d.ts": {
+    "sha256": "f64c1be841d809880bba1c1e12953b5b0043acbed1bc7d1f513b93eee3eba669",
+    "size": 1682
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSFontFace.d.ts": {
+    "sha256": "3e095b81913c808f691f45fa8b66b3bfa45425137e1da9f3aba9720eb54fe117",
+    "size": 410
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSLayer.d.ts": {
+    "sha256": "058362dd1745dffaf108cb781c95e507901663eb6d555ddba38333b143d18a5f",
+    "size": 446
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSLocation.d.ts": {
+    "sha256": "abdbee6678db37ec40306994d50ae6e7b8094ea399d8d4bbcd9ac611552c413d",
+    "size": 581
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSMatchedStyles.d.ts": {
+    "sha256": "0d4ebaab23a55f2edfe5478ff1796102d1e145a7a1ca5ca2b409a13346a779e6",
+    "size": 6991
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSMedia.d.ts": {
+    "sha256": "ee1acb889cf063f140b13a422a5c0dbffb6da71d02e0c9ea89753d3b29a00fc5",
+    "size": 1379
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSMetadata.d.ts": {
+    "sha256": "dce798e3ed3690823e6b958cd09761ff094eb861d3fddf91911edfb7b95ea424",
+    "size": 3575
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSModel.d.ts": {
+    "sha256": "4aa2b5156e7ce045fd017d44462beddbf60b7de24a700fe8f8fa9bd83ccc6fb5",
+    "size": 9951
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSNavigation.d.ts": {
+    "sha256": "c92a2e4697fcecc061d9dc5ace1e47f12421c6012a22e267a2d0a8aa5e738052",
+    "size": 490
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSProperty.d.ts": {
+    "sha256": "b01bd911205e36e7f3c0181989aa8398aedf71c28f3f7848b60e5f7e7f628502",
+    "size": 2793
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSPropertyParser.d.ts": {
+    "sha256": "b1fe70b0c59eb0cfd487c7d7e2b36d025b3086e257ea104feef61d46050ae647",
+    "size": 7265
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSPropertyParserMatchers.d.ts": {
+    "sha256": "6f730aa333ee51dc07104a53da7651407913d878487d2e227686271bb69dc5af",
+    "size": 22384
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSQuery.d.ts": {
+    "sha256": "fdb8c8c3046604093aeff9a4d0eb246bbaabc6f62c35d75a2e202564006e6d3c",
+    "size": 1007
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSRule.d.ts": {
+    "sha256": "6c11ad987c5697b911029eba11bcb3db15d3e871daf4e31059ae57e03d5c457b",
+    "size": 5021
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSScope.d.ts": {
+    "sha256": "9b587568cd1f39ce75890a26e87da31f9fec7eff8ddda0bfa294ce9d6ddfed93",
+    "size": 447
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSStartingStyle.d.ts": {
+    "sha256": "332a3ef769260d00a91e120a22ba9ae2b7029eed7cd17a1aa59d46ad82b622a5",
+    "size": 494
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSStyleDeclaration.d.ts": {
+    "sha256": "e79f4bfd46b17e0f2b1b69f4e8a63f1cc4888e01e2f4f107ad88f9813c5d85df",
+    "size": 1671
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSStyleSheetHeader.d.ts": {
+    "sha256": "5fffac98a8b53b2229dd62c7e162d8e77857342b95c202e0b640a11f1c1cf8ce",
+    "size": 2490
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CSSSupports.d.ts": {
+    "sha256": "575d4e4716fa5574b4743a27bfda792b4ea23091e0572ef68c803da71b749b5a",
+    "size": 478
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CategorizedBreakpoint.d.ts": {
+    "sha256": "a066b59ece8a01e4e48c69288bd50960b383117b0f27a6816e0f357cf3df0676",
+    "size": 1265
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ChildTargetManager.d.ts": {
+    "sha256": "2e7a0e49a9beb1bfd65552cf62afadadcc15e0202bce54229216dd18537183ed",
+    "size": 1960
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CompilerSourceMappingContentProvider.d.ts": {
+    "sha256": "a540855e9edbef1345a19af6aec8f4cdebb14f78debd481e579a771e5c9bee69",
+    "size": 886
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/Connections.d.ts": {
+    "sha256": "a8c1189de99a423847fd8bed46fbcd73bd74f365463e2153f474fee0da56d7a5",
+    "size": 1787
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ConsoleModel.d.ts": {
+    "sha256": "b2a0cca48d83fc4950ee86b3b7c9ca8658fa3999700ffb279d308a27ca468c6b",
+    "size": 5864
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ConsoleModelTypes.d.ts": {
+    "sha256": "ace12221147a6f078f31e0ca948b90ac93ac2f499000d99fb7c16765eef0f020",
+    "size": 159
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/Cookie.d.ts": {
+    "sha256": "c75718710e4f5010bb0c378e14d6a1421a054f1cfacbd383c60d140933c1d53a",
+    "size": 2498
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CookieModel.d.ts": {
+    "sha256": "9332ee943b002761f768c7b7cda77f3d31051f4c6ecc82f62e4cb25785a9ee21",
+    "size": 1172
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CookieParser.d.ts": {
+    "sha256": "9e8b30f73b726505b4d78c05e9d6a8a5ffe97470da9e8763ae50b15768055a71",
+    "size": 538
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/CrashReportContextModel.d.ts": {
+    "sha256": "21f848e038e0db612c174a9a014eb854d091143d203f959b83e5d7712234a7e9",
+    "size": 355
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/DOMDebuggerModel.d.ts": {
+    "sha256": "19bd63a8eb64e3f4577304127b732c597fc1a3b8b6174f58c63be06a323a5e54",
+    "size": 5522
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/DOMModel.d.ts": {
+    "sha256": "a1b7ce0d7b1a0045bcc6c21222f2548303a02ec04b34ae89467bd7ede5beea76",
+    "size": 20937
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/DOMStorageModel.d.ts": {
+    "sha256": "3d6dd61d28da3a8a21264d90f6c25f0a481b98ea6bb042c81fd0209c56a841db",
+    "size": 3481
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/DebuggerModel.d.ts": {
+    "sha256": "95804abaefe707a8499e8b415ca4178e5a2906710bcdac1cd0ce63e148bc9c8c",
+    "size": 14365
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/EmulationModel.d.ts": {
+    "sha256": "7319e70c9fb98baae4090fa66db4c33dfdedb021b233d5d3acb7c38cd564b92f",
+    "size": 4340
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/EnhancedTracesParser.d.ts": {
+    "sha256": "3f30ab092a2dbce8c53ad26b574571c62ca61c0364611c063780527688be7f02",
+    "size": 4128
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/EventBreakpointsModel.d.ts": {
+    "sha256": "2627ebe1d0b903bcfeda8f1c8f1f26a270e9f832bc641bd8641a0ae25bc96d83",
+    "size": 3333
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/FrameAssociated.d.ts": {
+    "sha256": "0b63e00281a5f59b8dcbbf35223035b02e5b07fd63ee4c92fc0eb75a51a73640",
+    "size": 255
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/FrameManager.d.ts": {
+    "sha256": "84809d899b1b44e92af4ebd181d4e58c3b88e5439bed8970bf75c54cad7a7e3e",
+    "size": 2754
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/HeapProfilerModel.d.ts": {
+    "sha256": "eb1610e18eb888d36afcaf1daacf14a7b43125ff6be5ab5e1adac076daacb002",
+    "size": 3280
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/IOModel.d.ts": {
+    "sha256": "ca563f25ab0336388d305d173badd4555f97a8afcbd269d7fdcf95f79a7c9bad",
+    "size": 638
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/IsolateManager.d.ts": {
+    "sha256": "9244559b329a098663e3248709c723ffb8f6e18c87e8911f712f20b0c15e3154",
+    "size": 1768
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/IssuesModel.d.ts": {
+    "sha256": "4d9d7b0618aa6206246bd881dbe593c15f819d7ceb46350c02fd660cc260ac58",
+    "size": 1203
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/LayerTreeBase.d.ts": {
+    "sha256": "0a553a6c5ec06103bde2d49bdb945ea0d1868ea6649147126897a7242a4a9e4a",
+    "size": 2585
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/LogModel.d.ts": {
+    "sha256": "14dc73ff90872f1df123e3da3db3bf7fc5d280069c2d4cc5de4c39614408b18f",
+    "size": 701
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/NetworkManager.d.ts": {
+    "sha256": "ac2e6395e039cc27e8d3e182c1e7113695e10dbce4089533c1579837833b75a7",
+    "size": 23932
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/NetworkRequest.d.ts": {
+    "sha256": "0a18b89a7b9673f9ff7ce57971a05795dbb358cf4476b62997937bbf309e78aa",
+    "size": 21383
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/NetworkRequestAccess.d.ts": {
+    "sha256": "39a4760f6c2e23137c776cb6ad3d1532e521f0ac2588d5467fbd6543a678f2f2",
+    "size": 5129
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/OverlayColorGenerator.d.ts": {
+    "sha256": "075dc7697d742536f3a4cbc4637699dc70f5c6466bd19f329c86c2c9d98a2634",
+    "size": 400
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/OverlayModel.d.ts": {
+    "sha256": "de5df10f6901680e3fe2ba05ffb3a2c33273348c70de16b58eaa4b1b57626dc9",
+    "size": 8861
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/OverlayPersistentHighlighter.d.ts": {
+    "sha256": "5941da7b68cf9e23956bb7ca51882acd3d30519f0964db9f9e3f0ea065142cf7",
+    "size": 4791
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/PageLoad.d.ts": {
+    "sha256": "bb614023b1c822d5a5a9e71d7221b72768c9a0de2a1a0c9733c7a896dfdc8c99",
+    "size": 510
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/PageResourceLoader.d.ts": {
+    "sha256": "8a56d92dd2a3798a018775e1830638fa746627c9421902fe6dbeef90e87cde66",
+    "size": 4879
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/PaintProfiler.d.ts": {
+    "sha256": "a75ab852ce528412d9a88a8801aa928ea51b2f7dc9376e8d46812ffcae84ac33",
+    "size": 1863
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/PerformanceMetricsModel.d.ts": {
+    "sha256": "5f09468ef270e7dd1f6fe7e92b9a7703483e4db74f2ed3cce7c702f40b7d86f0",
+    "size": 372
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/PreloadingModel.d.ts": {
+    "sha256": "131ea7cc89b437aa7382d971cd5e0fc996b71969b47e2354be654c96dd5fb2db",
+    "size": 6611
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/RehydratingConnection.d.ts": {
+    "sha256": "fd4a75d09e7af6f2757533d403da2f2cf48d285d965e875a54e5d1de389561b4",
+    "size": 3801
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/RehydratingObject.d.ts": {
+    "sha256": "4c05ad07b4ba4d324cbcb0920061ecae5c35b760803ddbd67ea8407b5cc5e18c",
+    "size": 2026
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/RemoteObject.d.ts": {
+    "sha256": "0a6a71bf9e74b02f469731e91b43973434bec72475b6a74333ceaf45e240ea67",
+    "size": 11426
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/Resource.d.ts": {
+    "sha256": "0b26fcf5f89d178b9c1dcbb6561852b2bcd398ff59c3d2fadd6aecc368095618",
+    "size": 1976
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ResourceTreeModel.d.ts": {
+    "sha256": "3477aabd6754340e4d6002f2eb931cf09590a41acc3e9d0482a7694c25bbc077",
+    "size": 13825
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/RuntimeModel.d.ts": {
+    "sha256": "2fe5ffa673124ee200172a79baceab57d9207b46e7327cd92d75cd9f37f47249",
+    "size": 8027
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SDKModel.d.ts": {
+    "sha256": "a9c611dd6fd976fbd37c48905571072963a64592b3bf0c19e77fb8b1b17976bf",
+    "size": 1240
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SDKSettings.d.ts": {
+    "sha256": "7e638d053e4cbce77432fc1ad89a11424d444d9ebdefbb5050b32db57e7c2b73",
+    "size": 5450
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ScopeTreeCache.d.ts": {
+    "sha256": "2886129b3b5ad9df5db85b9ada3639f4183e77724c771c7904fffbe340810eff",
+    "size": 838
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ScreenCaptureModel.d.ts": {
+    "sha256": "ac144755f65c01b97d56b0764f04462a99baec6530605ac07c2e090470c7cd93",
+    "size": 4555
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/Script.d.ts": {
+    "sha256": "c2cbe94886d8b34c79f710aa900a75a3f78df5f78dbc978b171718b75075acd2",
+    "size": 5777
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SecurityOrigin.d.ts": {
+    "sha256": "04b500775c3c3c75a179c4e47ee8a774b0ef18cbff6fd6a773ad92a872d2304f",
+    "size": 5734
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SecurityOriginManager.d.ts": {
+    "sha256": "39f008c0fb038a20a8a71bbcdd0d5556936bb9e0e9fd82b1bc54b7217780cc7b",
+    "size": 923
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ServerSentEventsProtocol.d.ts": {
+    "sha256": "2fd307334f9b28d89f3af2996e9761f1772232c0176584303cae8393e1f52341",
+    "size": 829
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ServerTiming.d.ts": {
+    "sha256": "645a2039f02e534d277a60a7b0af0a24e41492f5007f4a9faa2d268d718b35c3",
+    "size": 1085
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ServiceWorkerCacheModel.d.ts": {
+    "sha256": "5eceeb99998e6cfbbd4d0e5801f164a20b560e20569405469c9db1e23ad61096",
+    "size": 3345
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/ServiceWorkerManager.d.ts": {
+    "sha256": "b481d475adf6a222d3983d4c3ff75dc9545d4f46948954535f9ae1e7b5b2e6fd",
+    "size": 5805
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMap.d.ts": {
+    "sha256": "d94092fcbfc74db89608b7e4de3b8dbcfc9b3a3c07dca1de5b65210828de30ba",
+    "size": 9254
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMapCache.d.ts": {
+    "sha256": "ec9d531a11587c8f1a9ca91f69247a482381caf2d3a1a6edfc54aaee9701364f",
+    "size": 637
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMapFunctionRanges.d.ts": {
+    "sha256": "a980d1ef8d75397a014c3d2bd13b1c7a500cccacfb5ce7d440701743e37aac91",
+    "size": 1217
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMapManager.d.ts": {
+    "sha256": "045f8ba090e6f21345c1ffcb758c87b76449b09d5b9aa2e73e816a84780494a7",
+    "size": 2316
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMapRangeMappings.d.ts": {
+    "sha256": "cea439abc5a3e0cb7ce6abaae471d69b7177a623c2e37c3fa96b3e2e6353e2ac",
+    "size": 945
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMapScopeChainEntry.d.ts": {
+    "sha256": "231c87b17ed368a133b95e265b5ee92b62abe2bd864d7e5071bbd5fc8de1b058",
+    "size": 1216
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/SourceMapScopesInfo.d.ts": {
+    "sha256": "c2cead9d8e049438c32352f3b07e27c7c50fe038e1521bc5bf654e14b19684cb",
+    "size": 5666
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/StorageBucketsModel.d.ts": {
+    "sha256": "2c56490314b0989325bacd4a995cdfdfd6e2570af671714d191819558697a004",
+    "size": 2278
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/StorageKeyManager.d.ts": {
+    "sha256": "a7063ab38c6fe4a9283d219ad5ae50c7bb62f0a111cf18101ed84d1e93803acd",
+    "size": 1354
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/Target.d.ts": {
+    "sha256": "4c9802d7a1278f9dc77c298158097f1c9930c1ea916d4da3f635145f437e27ec",
+    "size": 3003
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/TargetManager.d.ts": {
+    "sha256": "8d52c461d936f46a554dd6ed558403a8013c07ae6b3ada026fc6c3408f5d4da1",
+    "size": 4510
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/TraceObject.d.ts": {
+    "sha256": "cbf21523085647c22782b92f58f60293b5b9216b4c19a19a6866a9ad41c59412",
+    "size": 2101
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/WebAuthnModel.d.ts": {
+    "sha256": "0e2faed49972c741250b43fad62e9e44eccecc6079cac89ccb01965ba4398a22",
+    "size": 1747
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/bundle-tsconfig.ref.json": {
+    "sha256": "3df5ae5c95ddd0bea5dcf85e8da54f79ddbc26f224ea2619ec4eda463847c5bd",
+    "size": 1083
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/sdk-tsconfig.ref.json": {
+    "sha256": "7eb218d6b8adf9dbed4c893422545ff9730590c9ad38fad3c71f08e8af6a286a",
+    "size": 11413
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/sdk/sdk.d.ts": {
+    "sha256": "8f261f58d157f32f6035676dbcdff21f8c03609edaf013cb1a19f66853a0fe24",
+    "size": 6819
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/CodeMirrorUtils.d.ts": {
+    "sha256": "72565bbf530736c6428c6b982fbc010406ff8a5ff204f036ed5b658e51932dbf",
+    "size": 175
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/ContentData.d.ts": {
+    "sha256": "4990aac99222566a7870e97bdc85ad667709a5f999c8454ebcfb6eab6fd977f4",
+    "size": 4120
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/ContentProvider.d.ts": {
+    "sha256": "97672d7d5e285eb279fb14ae6ecbdd79c63025eee43ff37103e9ad286bab7796",
+    "size": 1922
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/StaticContentProvider.d.ts": {
+    "sha256": "3227759b0c816c9166e70234b574079887c49c429d5677f0eda10437d76aa375",
+    "size": 921
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/StreamingContentData.d.ts": {
+    "sha256": "0dc8375022ae609da8cca798531bbeb2753fcabe1c29715ef8ca23a85bddb860",
+    "size": 2164
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/Text.d.ts": {
+    "sha256": "1757212e0e3fd6263dc5be4988baa5cbc0d4059daffa6b6e92ff9937fd531dfb",
+    "size": 660
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/TextCursor.d.ts": {
+    "sha256": "2fe593dcb9eb1046f7739254c359af5b0e352d78eaeca7ae6f0e29c4d3f1cd27",
+    "size": 236
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/TextRange.d.ts": {
+    "sha256": "d62f2ff058a7e7a5e2eaa3aa39d71d06502d764a5adc859ed67102d072cefc4d",
+    "size": 3369
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/TextUtils.d.ts": {
+    "sha256": "8e16d6c523bfd0897d148a7f822d55825079be6e29d2be9bfb92e2cb9ea5cce0",
+    "size": 4131
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/WasmDisassembly.d.ts": {
+    "sha256": "c1c205e4dfb677a96628a50f78bb43b6316a3884f2ee6483388f891ac5a807dd",
+    "size": 1011
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/bundle-tsconfig.ref.json": {
+    "sha256": "7e820fbe158fa9a8a07030f164839665cbfa94eee98f8acde3a96100621f27b0",
+    "size": 1038
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/text_utils-tsconfig.ref.json": {
+    "sha256": "a40c021b5ab41409983fa50ae214f82ff84a55879a5257c5d6391dd1203e8cc7",
+    "size": 2199
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/core/text_utils/text_utils.d.ts": {
+    "sha256": "90c832b05b1077f91f94ea20ca8d50de507df279e3668ec2d86a72858061da48",
+    "size": 689
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/entrypoints/formatter_actions/bundle-tsconfig.ref.json": {
+    "sha256": "6ba4cebaad1174b181995761351096f2cad4190e67ed323331c2fb450134da4f",
+    "size": 1017
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/entrypoints/formatter_actions/formatter_actions.d.ts": {
+    "sha256": "a58db97950a364a29d40f6a92e85f095a14e656a82dd162bab11b6f9b870574d",
+    "size": 1230
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/generated/InspectorBackendCommands.d.ts": {
+    "sha256": "67f09139946a9126b495a9550640e93212233513d06c0ab10b8599fad18c28c5",
+    "size": 595
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/generated/SupportedCSSProperties.d.ts": {
+    "sha256": "075b3c5134c9fea8222abb4961cbcda13ec6b784f53ef36aa3d5825062e9b5aa",
+    "size": 564
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/generated/generated-tsconfig.ref.json": {
+    "sha256": "5ec2b25e17657bac14272f74ef9cf99c698966ac099e5af79b6d3c6eaa06a91b",
+    "size": 1431
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/generated/protocol.d.ts": {
+    "sha256": "fb2df8266afb402ebe03fd60bafc3978a351784531eaae93ae6fa8220aefe5e4",
+    "size": 673730
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/cpu_profile/CPUProfileDataModel.d.ts": {
+    "sha256": "13eeba0221620cbb9731dbfa3bc1aec1e6264a04df8510d7dd4dd8170e825736",
+    "size": 4170
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/cpu_profile/ProfileTreeModel.d.ts": {
+    "sha256": "fca79c9c388a551d891eebff7488f35b0d376bbd8cd1d10f51ce383b23b12bec",
+    "size": 941
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/cpu_profile/bundle-tsconfig.ref.json": {
+    "sha256": "6b6f69146331b864189dbac2f1d92b7d3f47daa36b5be144c993426ef006cd67",
+    "size": 1046
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/cpu_profile/cpu_profile-tsconfig.ref.json": {
+    "sha256": "b68d3caaf0bc005119a71084d4c1720415a2279cf3b460dd3351b1afec8ebb52",
+    "size": 1259
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/cpu_profile/cpu_profile.d.ts": {
+    "sha256": "cd1f9803cfbf50e7147457805002a1a82ccfdb6a14e08e79a7498cd6519afcb9",
+    "size": 175
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/crux-manager/CrUXManager.d.ts": {
+    "sha256": "0503abe4db246d13227e13efa510b3ae023f4dd1a05c3b90a5a7e4abc81a7cff",
+    "size": 3959
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/crux-manager/bundle-tsconfig.ref.json": {
+    "sha256": "db9d05737081b561b3ef967173b289a49e8c8fedb1c42734b5b8fb9720bfda5c",
+    "size": 1050
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/crux-manager/crux-manager-tsconfig.ref.json": {
+    "sha256": "24caff457a713a08946ed63d4c24ad5cab22db880a11fa760701993fe2c1bdc4",
+    "size": 1337
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/crux-manager/crux-manager.d.ts": {
+    "sha256": "53ff8b360fa3608501335bdb9158c1a14fd65b766a1e79f7867100d45a3216a9",
+    "size": 34
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/emulation/bundle-tsconfig.ref.json": {
+    "sha256": "b411af40bdd9be947c1630aeadbc3bb85ac71b10ca5aa3538ac6308fd568cb75",
+    "size": 1038
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/emulation/emulation-tsconfig.ref.json": {
+    "sha256": "0cd68fda6d57397ab253a8ddb744bdae3ebb25743539cbbb663ccfe4a6332e4e",
+    "size": 1742
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/formatter/FormatterWorkerPool.d.ts": {
+    "sha256": "2442c593da9cda6bebc0389a6eab4895ca5b57e6d4c56d7e33604f57ff7f8a9e",
+    "size": 1914
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/formatter/ScriptFormatter.d.ts": {
+    "sha256": "63cf1853f1f3778092b7c7e4f14eead057dd374a8e0a233ecb79e4c8a1f9a942",
+    "size": 728
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/formatter/bundle-tsconfig.ref.json": {
+    "sha256": "2406927ac8d6769faae6507a865aa1ae96d90bcba4ebeb06e6b2f7c00e0add66",
+    "size": 1038
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/formatter/formatter-tsconfig.ref.json": {
+    "sha256": "e90178609602350d2d0cc96fb4cf0e65efdfa40ea8e58ff430b0bc26f40da0a2",
+    "size": 1419
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/formatter/formatter.d.ts": {
+    "sha256": "3ad0a19ef1ea12869e702241bfa368e7e769c181264f31d034c13c73fbb2ff6f",
+    "size": 171
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/Extensions.d.ts": {
+    "sha256": "06bfa28ad8208a71396d2037788369e0db67da72660dd1a9b406dcbee65a58ab",
+    "size": 472
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/Network.d.ts": {
+    "sha256": "2e25cce10cb7c4a3c22f8f02b0ca90c7cefe0d1d8065dcb2b4d0a91129e885a3",
+    "size": 1442
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/SamplesIntegrator.d.ts": {
+    "sha256": "bb2c390582aa7ce491a17111174ee6f53c15d5c0b376548442eb7759a8fd35ac",
+    "size": 3477
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/SyntheticEvents.d.ts": {
+    "sha256": "9771f4fc9c2f0255b1d5465552c44d79c4864cb820db3e3870673aeeb05fccc5",
+    "size": 1042
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/Timing.d.ts": {
+    "sha256": "21ba9efc2b69dc35a3ecde52babccc3712c904b886b2f36eba8b9dbd4fa7bcaf",
+    "size": 4298
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/Trace.d.ts": {
+    "sha256": "d3a94bac1ca2a1f22404fe3dfcc0cafbeb05594c662da6d7e2ef327bf0eba3c2",
+    "size": 8499
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/TreeHelpers.d.ts": {
+    "sha256": "8a25703736f438b737101300f0f69e5153d4ffa59b279fe663e2e05b50343142",
+    "size": 4160
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/bundle-tsconfig.json": {
+    "sha256": "e98d7966f90e04e404983ba85829d32d016f0d0081858b6ff1c9f6dbf9a4c3f2",
+    "size": 1849
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/helpers/helpers-tsconfig.ref.json": {
+    "sha256": "db901c10cb1aa46dd29e90a153d1cd80d4659ce715341a42aa149a488a6f9011",
+    "size": 2074
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/bundle-tsconfig.ref.json": {
+    "sha256": "e80091f6e3d2abe8f3fb09419f0bc0d53c5309c9228fb3302ec2639e571cad1e",
+    "size": 1317
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/core/LanternError.d.ts": {
+    "sha256": "13553cadb0a19e32c22453b8ccfa18dc409038e4dcff71277a2dfad5cb00eb9a",
+    "size": 70
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/core/NetworkAnalyzer.d.ts": {
+    "sha256": "89bf23c90f21dbd3c223a3e7ba9493794cd6ee535ceadd5f65f2f1123a4395e3",
+    "size": 5851
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/core/bundle-tsconfig.ref.json": {
+    "sha256": "d3ced0420ca688a58ff20af75803764127d59382cc896a021f26fdb76a7e17ce",
+    "size": 1094
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/core/core-tsconfig.ref.json": {
+    "sha256": "bae2ae9f07fbffedf22ee7fb59e340579b0f633b941f15b274fbd648c698a922",
+    "size": 1242
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/core/core.d.ts": {
+    "sha256": "65b15869a5304210a74f02483c6942be2866dc7f850c57677a810606840694c8",
+    "size": 73
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/BaseNode.d.ts": {
+    "sha256": "cc0c68b8a887e984fac0512911ae9407a5279487f3f61991e2d7c2f2ab803d78",
+    "size": 4208
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/CPUNode.d.ts": {
+    "sha256": "ed4bc679cad21020f4bcfe7e1c839d3d6178d8a3c92a04a7c9cc0fe4bc907d72",
+    "size": 895
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/NetworkNode.d.ts": {
+    "sha256": "2c6467fcaccdcf87619c929451e4b34a4499fbff06439b7525c3976dc05a54b1",
+    "size": 909
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/PageDependencyGraph.d.ts": {
+    "sha256": "864e84405178ffe2ad731d90d7adc50395e0700edcf4cb51aad7defd79be9956",
+    "size": 2369
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/bundle-tsconfig.ref.json": {
+    "sha256": "15a23f168d2d8d8c86ef2be731d932577fac7be0860ef52748be261821a50667",
+    "size": 1098
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/graph-tsconfig.ref.json": {
+    "sha256": "674cded626f3e7d7d5e695819a67aa7369ba473fc066643bff94bd38fe2bc5e0",
+    "size": 1555
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/graph/graph.d.ts": {
+    "sha256": "4d60206c2c7056fb0ce532bccd53cc7ca91cea6749436370276c5bed37cfe1a6",
+    "size": 137
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/lantern.d.ts": {
+    "sha256": "60b6a8ba8d225dcb41bdbcec2555eafcee525f3006b816d7f5718ba9b3d252ce",
+    "size": 286
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/FirstContentfulPaint.d.ts": {
+    "sha256": "3f87f61d9ce8865da63f6ca69c9b88d4782515e5516ee1647a92842a58528448",
+    "size": 2214
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/Interactive.d.ts": {
+    "sha256": "4839bfb4b24fc8be37adbcc4576dda22cda99598aaea392b3eed5691dba16edf",
+    "size": 843
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/LargestContentfulPaint.d.ts": {
+    "sha256": "2242dd864f183bd84060cf5928e76c122d71ad7446cb7fff209faa7152f07fec",
+    "size": 1158
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/MaxPotentialFID.d.ts": {
+    "sha256": "704ee6aa84b3de1d28f7c7b0d46fd30828e069951b12cb026d4166b02327bf7e",
+    "size": 859
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/Metric.d.ts": {
+    "sha256": "9c742e3bc73bca24ac8f620555280b4353f89a0d68ada4505023920ea616a2ca",
+    "size": 2004
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/SpeedIndex.d.ts": {
+    "sha256": "72349451fef9d8697a47ace642b9c5cab4981be0423dd2c346add976d746c782",
+    "size": 1580
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/TBTUtils.d.ts": {
+    "sha256": "8de9ccda27bb5caa761c01476668d218b1bd68639c5953c69cdbb65981d2a4de",
+    "size": 1410
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/TotalBlockingTime.d.ts": {
+    "sha256": "05cc029411c09d9aa4390615723abd20626acf507da207255635c0a1ab3c03c9",
+    "size": 908
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/bundle-tsconfig.ref.json": {
+    "sha256": "ee3d0c78e0118ce20f7630ce5cdfb879728dee69c51660e7d00b433df512603b",
+    "size": 1106
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/metrics-tsconfig.ref.json": {
+    "sha256": "f2ba1b31d878c37f27239fa781411dbe1e09547136f470c75b6bd3307cac1fed",
+    "size": 2228
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/metrics/metrics.d.ts": {
+    "sha256": "d1c01d55315a58e91cb375c36977e0ac103db3e5c374bf48c4c80d966acf781e",
+    "size": 305
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/ConnectionPool.d.ts": {
+    "sha256": "0e5f60dde13c788ce31ec8befcf57c4563cbac76bfbb708dcee1eaebdb40808b",
+    "size": 1384
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/Constants.d.ts": {
+    "sha256": "8f30909f9124b0435490e15c83194237540d1faea088503f6a10bb1e722243da",
+    "size": 927
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/DNSCache.d.ts": {
+    "sha256": "4d40fb6cbc8ae8ac730344bcff2e5cbfc5d1bcd2c58b15a298dffa223314e342",
+    "size": 732
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/SimulationTimingMap.d.ts": {
+    "sha256": "0a983893a12abc7bd5f0683dbe40643bb05b9f9cf50c6c66eefabc396928a4dd",
+    "size": 2758
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/Simulator.d.ts": {
+    "sha256": "b1bb9e16346c1db6280c6899c55cab7866cd4f74f3d83e51f5ecd9e9cff4cb7e",
+    "size": 4066
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/TCPConnection.d.ts": {
+    "sha256": "bc46d7d85f7e669b267ac01c0aa1f5e5604411014296ec30e3b82d7d41d2244c",
+    "size": 1773
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/bundle-tsconfig.ref.json": {
+    "sha256": "a10ceae8da51c5e4646e8bda6b8bd83e6b76ed897dc57c8b55b43a500fbc3ebe",
+    "size": 1118
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/simulation-tsconfig.ref.json": {
+    "sha256": "f12ec6813a59998b92d855789260c2f425ec490c331caf04356af2476e729c6b",
+    "size": 1910
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/simulation/simulation.d.ts": {
+    "sha256": "af49c00792161e91cde047a3a9e77ee7df65373d76a9856c2c8c6eed3c910138",
+    "size": 210
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/types/Lantern.d.ts": {
+    "sha256": "b8e1fb9b6817924ee1e6e00d1a22c608ffb982dc48a044b46d46e9e098d04625",
+    "size": 6829
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/types/bundle-tsconfig.ref.json": {
+    "sha256": "357acdba32c68afaac695d811573ccd6c54918e947d8921974fefd6ed4e73c4d",
+    "size": 1098
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/types/types-tsconfig.ref.json": {
+    "sha256": "19c132a45dba27e05fa5d382bca65c1b0362e91fa89c00ab63196d489bdeac88",
+    "size": 1126
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/lantern/types/types.d.ts": {
+    "sha256": "8a0be51d107c4bd8f499990532fe2ef067321d3fdcc86169259655a91e9ffb5b",
+    "size": 30
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/Configuration.d.ts": {
+    "sha256": "b8c0f67a550cc3e26ea1ede2dd26b7caf3bc40af23b4699c175c51865ec313b8",
+    "size": 4406
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/Extensions.d.ts": {
+    "sha256": "6394f325fdab43b56a04a1e13648ce16693c8836e4a936f86462d722f37b5b53",
+    "size": 3242
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/File.d.ts": {
+    "sha256": "a51195aa8061cb517a01337c68a7145f63e69ccb3cced68b9cfe94a3ae1778f5",
+    "size": 7704
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/Overlays.d.ts": {
+    "sha256": "a76c43b6cfbd2229a011de2f0c7db94e1a2c4fa95c804895a9b4654121bd77b7",
+    "size": 3896
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/Timing.d.ts": {
+    "sha256": "16829294bd632ac3c558387c1a507182ee7f64f2d533ab4427535567b70ea32d",
+    "size": 690
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/TraceEvents.d.ts": {
+    "sha256": "bd8fc8dadd56070e4b4373fa444a900441109fb56aac2999e91163255097dbdc",
+    "size": 90232
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/bundle-tsconfig.ref.json": {
+    "sha256": "84e3a2c1613ffe020e7c011d1f357b40e00ebb5809e8008a9db5c66e96d7871a",
+    "size": 1058
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/types-tsconfig.ref.json": {
+    "sha256": "6151307d07282c78838ffe8a38fb44742814d21660889c95cabb8f54a9fad0ef",
+    "size": 1935
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/trace/types/types.d.ts": {
+    "sha256": "82d37852017725200620ac99779f06bdb46c1397f80aa22fa6ab6730255d3311",
+    "size": 261
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/workspace/bundle-tsconfig.ref.json": {
+    "sha256": "89d568d5ae5a4fb079e93d8c086326d209878d933a6b68802ed6f9044602d2bd",
+    "size": 1038
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/models/workspace/workspace-tsconfig.ref.json": {
+    "sha256": "6f21b4dae446262867592afa7953857e522d7dc11e9651cac1a86a1a997b8717",
+    "size": 1934
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/codemirror.next/bundle-tsconfig.ref.json": {
+    "sha256": "f74b38f73cacb01c577a4f877244e1d837c997fe8d7832d907719249d5042b2d",
+    "size": 211
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/i18n/bundle-tsconfig.ref.json": {
+    "sha256": "2d2e7e3e13d01547293f1c91c3597ad004861720b7f9ec203cc09966af94e1f8",
+    "size": 1028
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/i18n/i18n-tsconfig.ref.json": {
+    "sha256": "9e32d29c0cad0fd55882aba9b470cd34c5f6989f673db188428bb3407e9c3606",
+    "size": 1176
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/intl-messageformat/bundle-tsconfig.ref.json": {
+    "sha256": "9eb2ddd02878a85bc3d24807dc1a8d4ba474108846108e07627c03cdab182afa",
+    "size": 1084
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/intl-messageformat/intl-messageformat-tsconfig.ref.json": {
+    "sha256": "196ece8482ad1ab6519c1fa390600ce85bf4a09ebf7e2ef23faebb814ca3abeb",
+    "size": 541
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/bundle-tsconfig.ref.json": {
+    "sha256": "4f065826d34d0305924a2c5d2e12558d697e70c06fa2b2eb25452432b9b57232",
+    "size": 1104
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/package/src/builder/builder.d.ts": {
+    "sha256": "332f8b10dfcf195a2b6ae0dd6bbc142cb525e8bc63b818db313b0ee9bb5f81a6",
+    "size": 2781
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/package/src/builder/safe_builder.d.ts": {
+    "sha256": "f69a11e77763d0dfe2cb9f79ca4007093894f3879081529d330cc7a98a4ab412",
+    "size": 1465
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/package/src/decode/decode.d.ts": {
+    "sha256": "c835ffca3371f40877574ec6398259be79f92b5a9ae400e19116600452a58560",
+    "size": 1506
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/package/src/encode/encode.d.ts": {
+    "sha256": "fc71ed6adfcddf17ffb2e7a2c4f6c5c6d75279baaf649bdb275df378b1f5142d",
+    "size": 400
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/package/src/mod.d.ts": {
+    "sha256": "1e7dd2ba87610dab4bac25ffd36790e8152eb1270403741bdfbf03c7caf6d6a5",
+    "size": 390
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/package/src/scopes.d.ts": {
+    "sha256": "92f01d075d89e817fc25bc8547969fed0c398c0bdaa8abeedf882bc8ec49c5fd",
+    "size": 5847
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/source-map-scopes-codec-tsconfig.ref.json": {
+    "sha256": "7d5cd63f1da4f5fbdfe4e2734a23c2bd02dc323989bde597aa35515b393f666b",
+    "size": 2290
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/front_end/third_party/source-map-scopes-codec/source-map-scopes-codec.d.ts": {
+    "sha256": "f5eb6bbbd660783762a5b145b3b0fea899f3af4649ac1b30170fc8a8d4788c46",
+    "size": 38
+  },
+  "out/AegisAndroid/gen/third_party/devtools-frontend/src/package.json": {
+    "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "size": 2
+  },
+  "out/AegisAndroid/package.json": {
+    "sha256": "dff52d6b799f4b6dc7ab2d4af7fe7663d2e8249458ae4aeff2caf420e1d7ae6e",
+    "size": 452
+  },
+  "package.json": {
+    "sha256": "dff52d6b799f4b6dc7ab2d4af7fe7663d2e8249458ae4aeff2caf420e1d7ae6e",
+    "size": 452
+  },
+  "third_party/devtools-frontend/src/LICENSE": {
+    "sha256": "ff11d445fb41a1087c7630e120ab15f1a2cb67c1b707173cb494141805fca35e",
+    "size": 1537
+  },
+  "third_party/devtools-frontend/src/front_end/generated/protocol-mapping.d.ts": {
+    "sha256": "13faa8abd429cd3c855e4626ab7e49685dfd35d40a383cc06edb9f9b0907b7a9",
+    "size": 206770
+  },
+  "third_party/devtools-frontend/src/front_end/generated/protocol-proxy-api.d.ts": {
+    "sha256": "309f03bbbf3fe76b97e4e61d602e20f9b7557539a86568119284ad0d4f909789",
+    "size": 207391
+  },
+  "third_party/devtools-frontend/src/front_end/global_typings/global_defs.d.ts": {
+    "sha256": "c5c9b06e15970142d266c97c536c07b1bc954ce4e2326d55f6f42321f23b32b8",
+    "size": 3594
+  },
+  "third_party/devtools-frontend/src/front_end/legacy/legacy-defs.d.ts": {
+    "sha256": "289c458d3017f6edad33d2e4593ed288c17b9d68cced733703338018253f0f4a",
+    "size": 3553
+  },
+  "third_party/devtools-frontend/src/front_end/models/trace/helpers/helpers.ts": {
+    "sha256": "1b2d93dcc8d3651a04d0301b0603726464fee602811e79af46761fade6d915f9",
+    "size": 475
+  },
+  "third_party/devtools-frontend/src/front_end/third_party/codemirror.next/codemirror.next.d.ts": {
+    "sha256": "7a28a6a96e848e94bf3e96240518b3663fa24d56aa1542a287609d757c6b24eb",
+    "size": 327164
+  },
+  "third_party/devtools-frontend/src/front_end/third_party/codemirror.next/package.json": {
+    "sha256": "24a41d744cd1e926113a7f01ebef868bd3a5e7c1f2d1c4c6b74cc86b57ee3e1d",
+    "size": 1395
+  },
+  "third_party/devtools-frontend/src/node_modules/@types/filesystem/index.d.ts": {
+    "sha256": "4f29c38739500cd35a2ce41d15a35e34445ca755ebb991915b5f170985a49d21",
+    "size": 22468
+  },
+  "third_party/devtools-frontend/src/node_modules/@types/filesystem/package.json": {
+    "sha256": "570645fa5552117be9fed53b7e6f5afc82ea413eedeee38d96fc7cbb6e7226c6",
+    "size": 711
+  },
+  "third_party/devtools-frontend/src/node_modules/@types/filewriter/index.d.ts": {
+    "sha256": "d9932f317f16ea21c183b67b73a72f17883c52933980292e7ebba2215495bb5c",
+    "size": 6251
+  },
+  "third_party/devtools-frontend/src/node_modules/@types/filewriter/package.json": {
+    "sha256": "a785209b27ce91fdb5837d2940614e54304f913a4d1829d600bedef75edf69d7",
+    "size": 475
+  },
+  "third_party/devtools-frontend/src/package.json": {
+    "sha256": "f44fb093753009b8484cd0129199fa226076658e3a4f0dc1915e23d30d56d8c8",
+    "size": 3471
+  }
+}

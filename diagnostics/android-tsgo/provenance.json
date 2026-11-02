@@ -1,0 +1,20 @@
+{
+  "devtoolsHead": "cd7bfad9bba968ac23ba67e538f9e1d499991d25",
+  "trackedSourceFilesMatchedHead": 13,
+  "cipdTypeDefinitionsNotGitTracked": [],
+  "generatedFilesRestrictedToOriginalTsconfigsAndDeclarations": true,
+  "strongCredentialMarkerMatches": 0,
+  "unusedReferenceSourceFilesExcluded": true,
+  "compilerExcludedFromFixture": true,
+  "files": 312,
+  "bytes": 2357908,
+  "archiveBytes": 508733,
+  "archiveSha256": "8b62182773c2737bb0fcfafbc7dff86275385a540c74f345449ceafb71b64b84",
+  "originalAndroidProductSourceSha": "2926c80be30f445e81d73b9a47ce2492c0f1343c",
+  "localQemuReproduction": {
+    "runs": 64,
+    "passed": 35,
+    "runtimeFaults": 29
+  },
+  "productBuilt": false
+}

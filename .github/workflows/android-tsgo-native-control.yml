@@ -1,0 +1,38 @@
+name: Android Go runtime native control
+on:
+  push:
+    branches: ['codex/android-tsgo-native-control']
+permissions:
+  contents: read
+concurrency:
+  group: android-tsgo-native-control-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-control:
+    if: ${{ github.repository_id == '1363949860' && github.ref == 'refs/heads/codex/android-tsgo-native-control' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Test diagnostic input boundaries
+        run: python3 -B -m unittest discover -q -s diagnostics/android-tsgo -p 'test_*.py'
+      - name: Create fresh diagnostic path on this disposable hosted VM
+        run: |
+          control_root=/Volumes/ExternalSSD/repositories/aegis-release-build/android-vm-arm64-20261029
+          test ! -e "$control_root"
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" "$control_root"
+      - name: Run exact compiler and compact input on native Linux x64
+        env:
+          ANDROID_TSGO_HOSTED: ${{ runner.environment }}
+        run: python3 -B diagnostics/android-tsgo/native_control.py
+      - name: Preserve unsigned native counterfactual
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-tsgo-native-control-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /Volumes/ExternalSSD/repositories/aegis-release-build/android-vm-arm64-20261029/control-results
+          if-no-files-found: warn
+          retention-days: 14
