@@ -20,8 +20,11 @@ export async function releasePreflight(sha, {
     environment.AEGIS_RELEASE_REHEARSAL === 'true' && environment.GITHUB_REPOSITORY !== RELEASE_REPOSITORY;
   const token = environment.GH_TOKEN || environment.GITHUB_TOKEN;
   if (!token) throw new Error('GH_TOKEN is required to verify upstream release admission');
+  if (environment.GITHUB_ACTIONS === 'true' && environment.RELEASE_PLATFORM === 'android' &&
+      environment.GITHUB_REPOSITORY !== RELEASE_REPOSITORY) {
+    return requireAndroidRehearsal(sha, {environment, api});
+  }
   if (rehearsal) {
-    if (environment.RELEASE_PLATFORM === 'android') return requireAndroidRehearsal(sha, {environment, api});
     const repository = environment.GITHUB_REPOSITORY;
     if (environment.AEGIS_RELEASE_ENABLED !== 'true' || environment.GITHUB_SHA !== sha ||
         environment.AEGIS_RELEASE_TEST_REPOSITORY_ID !== environment.GITHUB_REPOSITORY_ID ||

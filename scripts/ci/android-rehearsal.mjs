@@ -14,7 +14,7 @@ export async function requireAndroidRehearsal(sha, {environment:e=process.env, a
   requireValue(e.GITHUB_ACTIONS==='true' && token && e.RELEASE_PLATFORM==='android' &&
     /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository || '') && !repository.includes('..') && repository!==UPSTREAM &&
     /^[1-9][0-9]{0,15}$/u.test(e.GITHUB_REPOSITORY_ID || '') && e.GITHUB_REPOSITORY_ID!=='1348409663' &&
-    e.AEGIS_RELEASE_ENABLED==='true' && e.AEGIS_RELEASE_REHEARSAL==='true' &&
+    e.AEGIS_ANDROID_RELEASE_ENABLED==='true' &&
     e.AEGIS_RELEASE_TEST_REPOSITORY_ID===e.GITHUB_REPOSITORY_ID && e.AEGIS_ANDROID_REHEARSAL_ENABLED==='true' &&
     /^[a-f0-9]{40}$/u.test(sha) && e.GITHUB_SHA===sha && e.AEGIS_ANDROID_REHEARSAL_SOURCE_SHA===sha &&
     ['artifacts','play-internal','github-draft'].includes(e.RELEASE_DESTINATION) &&

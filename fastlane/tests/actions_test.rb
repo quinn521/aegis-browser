@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 require_relative 'stores_test'
+require_relative 'android_action_admission_test'
 require_relative '../../scripts/release/action'
 require_relative '../../scripts/release/with-play-key'
 require_relative '../../scripts/release/runner'

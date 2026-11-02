@@ -9,7 +9,8 @@ const path = '.github/workflows/android-release-validation.yml';
 function fixture() {
   const environment = {GH_TOKEN:'fixture', GITHUB_ACTIONS:'true', GITHUB_REPOSITORY:repo, GITHUB_REPOSITORY_ID:'777',
     GITHUB_EVENT_NAME:'workflow_dispatch', GITHUB_REF:`refs/heads/${branch}`, GITHUB_SHA:sha,
-    AEGIS_RELEASE_ENABLED:'true', AEGIS_RELEASE_REHEARSAL:'true', AEGIS_RELEASE_TEST_REPOSITORY_ID:'777',
+    AEGIS_RELEASE_ENABLED:'false', AEGIS_RELEASE_REHEARSAL:'false', AEGIS_RELEASE_TEST_REPOSITORY_ID:'777',
+    AEGIS_ANDROID_RELEASE_ENABLED:'true',
     AEGIS_ANDROID_REHEARSAL_ENABLED:'true', AEGIS_ANDROID_REHEARSAL_SOURCE_SHA:sha,
     RELEASE_PLATFORM:'android', RELEASE_DESTINATION:'artifacts'};
   const run = {id:5, run_attempt:1, head_sha:sha, head_branch:branch, event:'push', path,status:'completed',conclusion:'success',
@@ -40,8 +41,17 @@ test('Android fork admission requires its exact contracts and unsigned native jo
 test('Android rehearsal rejects missing opt-in, wrong pin, production, arbitrary branch or external event before API',async()=>{
   for (const change of [{AEGIS_ANDROID_REHEARSAL_ENABLED:'false'},{AEGIS_ANDROID_REHEARSAL_SOURCE_SHA:'b'.repeat(40)},
     {RELEASE_DESTINATION:'play-production'},{GITHUB_REF:'refs/heads/main'},{GITHUB_EVENT_NAME:'pull_request'},
-    {AEGIS_RELEASE_ENABLED:'false'},{AEGIS_RELEASE_TEST_REPOSITORY_ID:'888'}]) {
+    {AEGIS_ANDROID_RELEASE_ENABLED:'false'},{AEGIS_RELEASE_TEST_REPOSITORY_ID:'888'},
+    {AEGIS_ANDROID_RELEASE_ENABLED:'',AEGIS_RELEASE_ENABLED:'true',AEGIS_RELEASE_REHEARSAL:'true'}]) {
     const f=fixture();Object.assign(f.environment,change);f.api=()=>assert.fail('invalid configuration must fail before network');
+    await assert.rejects(call(f));
+  }
+});
+
+test('Android-only release opt-in cannot admit upstream or another platform with shared flags disabled',async()=>{
+  for (const change of [{GITHUB_REPOSITORY:'gcsagroup/aegis-browser',GITHUB_REPOSITORY_ID:'1348409663',GITHUB_REF:'refs/heads/main'},
+    {RELEASE_PLATFORM:'ios'},{RELEASE_PLATFORM:'macos'}]) {
+    const f=fixture();Object.assign(f.environment,change);f.api=()=>assert.fail('Android opt-in cannot enable other release paths');
     await assert.rejects(call(f));
   }
 });

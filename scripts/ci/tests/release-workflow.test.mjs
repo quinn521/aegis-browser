@@ -7,6 +7,29 @@ const root = new URL('../../../', import.meta.url);
 const text = readFileSync(new URL('.github/workflows/release.yml', root), 'utf8');
 const workflow = YAML.parse(text);
 
+test('protected Android fork preflight uses its dedicated opt-in while shared release flags stay disabled', () => {
+  const enabled = (changes = {}, input = {}) => {
+    const github = {repository:'fixture/aegis-browser',repository_id:'777',sha:'a'.repeat(40),
+      ref:'refs/heads/codex/android-release-acceptance',...changes.github};
+    const vars = {AEGIS_RELEASE_ENABLED:'false',AEGIS_RELEASE_REHEARSAL:'false',
+      AEGIS_ANDROID_RELEASE_ENABLED:'true',AEGIS_ANDROID_REHEARSAL_ENABLED:'true',
+      AEGIS_RELEASE_TEST_REPOSITORY_ID:'777',AEGIS_ANDROID_REHEARSAL_SOURCE_SHA:'a'.repeat(40),...changes.vars};
+    const inputs = {platform:'android',...input};
+    return Function('github','vars','inputs','startsWith',`return (${workflow.jobs.preflight.if.slice(3,-2)});`)
+      (github,vars,inputs,(value,prefix)=>value.startsWith(prefix));
+  };
+  assert.equal(enabled(),true);
+  assert.equal(enabled({github:{ref:'refs/tags/candidate/android/6.1.0.266-alpha.2006000266'}}),true);
+  for (const changes of [{vars:{AEGIS_ANDROID_RELEASE_ENABLED:'false'}},
+    {vars:{AEGIS_ANDROID_REHEARSAL_ENABLED:'false'}},{vars:{AEGIS_ANDROID_REHEARSAL_SOURCE_SHA:'b'.repeat(40)}},
+    {github:{repository_id:'888'}},{github:{ref:'refs/heads/main'}},
+    {github:{repository:'gcsagroup/aegis-browser',repository_id:'1348409663'}}]) {
+    assert.equal(enabled(changes),false);
+  }
+  for (const platform of ['ios','macos']) assert.equal(enabled({}, {platform}),false);
+  assert.equal(enabled({vars:{AEGIS_RELEASE_ENABLED:'true',AEGIS_RELEASE_REHEARSAL:'true'}},{platform:'ios'}),true);
+});
+
 test('release is manual or reusable, exact-source and explicitly opt-in', () => {
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch', 'workflow_call']);
   assert.match(workflow.jobs.preflight.if, /github\.repository == 'gcsagroup\/aegis-browser'/u);

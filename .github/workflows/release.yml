@@ -143,13 +143,18 @@ env:
   AEGIS_ANDROID_RUNNER_ARCH: ${{ vars.AEGIS_ANDROID_RUNNER_ARCH }}
   AEGIS_ANDROID_EXPERIMENTAL_ARM64: ${{ vars.AEGIS_ANDROID_EXPERIMENTAL_ARM64 }}
   AEGIS_ANDROID_REHEARSAL_ENABLED: ${{ vars.AEGIS_ANDROID_REHEARSAL_ENABLED }}
+  AEGIS_ANDROID_RELEASE_ENABLED: ${{ vars.AEGIS_ANDROID_RELEASE_ENABLED }}
   AEGIS_ANDROID_REHEARSAL_SOURCE_SHA: ${{ vars.AEGIS_ANDROID_REHEARSAL_SOURCE_SHA }}
 jobs:
   preflight:
     if: ${{ vars.AEGIS_RELEASE_ENABLED == 'true' && ((github.repository == 'gcsagroup/aegis-browser' && github.repository_id
       == '1348409663' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/candidate/'))) ||
       (github.repository != 'gcsagroup/aegis-browser' && vars.AEGIS_RELEASE_REHEARSAL == 'true' && github.repository_id
-      == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID)) }}
+      == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID)) ||
+      (inputs.platform == 'android' && github.repository != 'gcsagroup/aegis-browser' && github.repository_id != '1348409663' &&
+      github.repository_id == vars.AEGIS_RELEASE_TEST_REPOSITORY_ID && vars.AEGIS_ANDROID_RELEASE_ENABLED == 'true' &&
+      vars.AEGIS_ANDROID_REHEARSAL_ENABLED == 'true' && github.sha == vars.AEGIS_ANDROID_REHEARSAL_SOURCE_SHA &&
+      (github.ref == 'refs/heads/codex/android-release-acceptance' || startsWith(github.ref, 'refs/tags/candidate/android/'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
