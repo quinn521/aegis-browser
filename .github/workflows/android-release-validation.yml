@@ -59,6 +59,7 @@ jobs:
           test -n "$AEGIS_ANDROID_GN_BINARY"
           python3 -B scripts/release/android-native-admission.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
         with:
           name: android-native-admission-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/android-native-admission/result.json
