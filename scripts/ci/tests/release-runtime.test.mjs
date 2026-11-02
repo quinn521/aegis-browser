@@ -3,7 +3,7 @@ import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 
 const cwd = fileURLToPath(new URL('../../../', import.meta.url));
-const options = {cwd, encoding: 'utf8', timeout: 180000,
+const options = {cwd, encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'inherit', 'inherit'],
   env: {...process.env, BUNDLE_FROZEN: 'true', AEGIS_NATIVE_SIGNING_REGRESSION: 'false', PYTHONDONTWRITEBYTECODE: '1'}};
 
 test('local release request, artifact and draft-upload behavior', () => {
