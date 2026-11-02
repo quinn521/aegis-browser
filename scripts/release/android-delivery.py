@@ -183,6 +183,25 @@ def export_state(p, success):
         value = codec.encode(pins)
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
             summary.write('### Android 交付凭据 / Delivery receipt\n\n等待整次运行成功，再复制到下次“版本或来源”。\nCopy after the entire run succeeds.\n\n```text\n'+value+'\n```\n\nPlay Upload creates a draft only. Tester availability and device acceptance require separate evidence.\n')
+            if p.get('operation') == 'package':
+                manifest = json.loads((folder/'android-manifest.json').read_text())
+                aab = next(asset for asset in manifest['assets'] if asset['name'].endswith('.aab'))
+                artifact = f'android-delivery-{pins["state_run"]}-{pins["state_attempt"]}'
+                summary.write('\n### 手动 Console 交接 / Manual Console handoff\n\n'
+                    f'下载当前成功运行的 `{artifact}`，解开 `package.zip`。核对下列身份与摘要后，再在 Play Console 上传该 AAB。\n'
+                    f'Download `{artifact}` from this successful run, extract `package.zip`, and independently verify these pins before Console upload.\n\n'
+                    f'- Application: `com.gcsa.aegis`\n- Product: `{p["profile"]}`\n'
+                    f'- Version / versionCode: `{p["version"]}` / `{p["build"]}`\n'
+                    f'- Source SHA: `{manifest["source"]["sha"]}`\n- Source tree: `{manifest["source"]["tree"]}`\n'
+                    f'- Producer run / attempt: `{pins["package_run"]}` / `{pins["package_attempt"]}`\n'
+                    f'- AAB: `{aab["name"]}`\n- AAB SHA-256: `{aab["sha256"]}`\n'
+                    f'- Upload certificate SHA-256: `{manifest["details"]["certificateSha256"]}`\n'
+                    f'- Manifest SHA-256: `{expected}`\n\n'
+                    '此凭据仅证明打包来源与校验信息，尚未上传或分发；服务账号权限保持原样。\n'
+                    'This is package evidence only, not Play upload, distribution or device acceptance. No service-account permissions are changed.\n')
+                if p['profile'] == 'alpha':
+                    summary.write('\n[打开 Aegis Alpha internal / Open Aegis internal testing]'
+                        '(https://play.google.com/console/developers/9140196214398978128/app/4976000882814434046/tracks/internal-testing?releaseType=defaultReleases)\n')
 
 
 def main():

@@ -6,6 +6,20 @@ The Actions entrypoint uses the same `./release android` Fastlane package, Uploa
 
 Two thin manual entries share `android-delivery-backend.yml`; the local CLI is unchanged.
 
+All three entry modes remain source-bound:
+
+| Entry | Result | Acceptance still required |
+|---|---|---|
+| Local manual `./release android package` | Real Upload-key AAB and manifest | Independent signature, identity and digest checks; then authorized Console internal upload |
+| GitHub Actions Simple / Full | Same package backend and downloadable artifact with run/attempt/source/hash pins | Default-branch workflow registration, trusted source/quality and a qualified Android runner; green contracts alone do not build a package |
+| `candidate/android/<version>-<profile>.<versionCode>` tag | Existing candidate workflow builds an AAB and creates a private Draft | Exact tag/source readback, qualified runner, Draft asset download and digest verification |
+
+For example, the current native identity maps to `candidate/android/6.1.0.266-alpha.2006000266` only after the final clean source has been admitted. Adding this branch does not create or push a tag. Android's tag job forwards only the two Upload-key password secrets explicitly; it receives no Play or Apple secret. The shared backend declares its existing credential interface without changing the iOS/macOS jobs.
+
+Manual dispatch must first exist on the repository default branch ([GitHub documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)). A workflow on this candidate branch with green push contracts is not proof that the default-branch Run workflow entry has been installed or that privileged packaging is ready.
+
+The currently selected operational path is **package → independent verification → Play Console Alpha internal**, using `tools@gcsa.org`. The existing service account retains its HomeGuard-only application grant; Aegis API Status/Wait returned 403 and remain unqualified. A successful Package summary provides the artifact name, AAB hash, Upload certificate hash, manifest hash, exact source SHA/tree and producer run/attempt for this manual handoff. It never records Console upload/distribution as completed merely because packaging succeeded.
+
 Simple has four fields: **Operation, Version, Build (Android versionCode), Product**.
 Its bilingual operations are Package, Package and upload, Status, and Wait; **Status is the default**.
 Package requires the exact committed native identity. Status/Wait ignore Product and query the explicit versionCode on the internal track with GET only, without creating or aborting a Play edit. They can inspect an older versionCode without claiming it came from the current query source.

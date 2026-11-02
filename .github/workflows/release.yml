@@ -65,6 +65,23 @@ on:
         type: string
         default: "{}"
   workflow_call:
+    secrets:
+      AEGIS_ANDROID_STORE_PASSWORD:
+        required: false
+      AEGIS_ANDROID_KEY_PASSWORD:
+        required: false
+      MATCH_PASSWORD:
+        required: false
+      MATCH_GIT_BASIC_AUTHORIZATION:
+        required: false
+      AEGIS_ASC_KEY_ID:
+        required: false
+      AEGIS_ASC_ISSUER_ID:
+        required: false
+      AEGIS_ASC_KEY_BASE64:
+        required: false
+      AEGIS_PLAY_JSON_KEY_DATA:
+        required: false
     inputs:
       platform:
         type: string

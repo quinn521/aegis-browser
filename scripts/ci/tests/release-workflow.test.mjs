@@ -129,7 +129,7 @@ test('candidate tags reuse the reviewed workflow and cannot trigger public relea
   assert.equal(tag.jobs.release.uses, './.github/workflows/release.yml');
   assert.equal(tag.jobs.release.with.destination, 'github-draft');
   assert.equal(tag.jobs.release.with.operation, 'upload');
-  assert.deepEqual(Object.keys(tag.jobs), ['plan', 'release']);
+  assert.deepEqual(Object.keys(tag.jobs), ['plan', 'release', 'android-release']);
 });
 
 test('macOS has independent readiness and a protected native runtime without Android secrets', () => {

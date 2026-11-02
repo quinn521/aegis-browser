@@ -4,6 +4,20 @@
 
 Simple 与 Full 是两个薄入口，共用 `android-delivery-backend.yml` 和原有 `./release android` 后台。本分支不授权合并、公开发布或正式送审。
 
+最终同时支持三种来源绑定的入口：
+
+| 方式 | 交付结果 | 仍须完成的真实验收 |
+|---|---|---|
+| 本地手动 `./release android package` | Upload 密钥签名的真实 AAB 和 manifest | 独立验签、身份与摘要核对，再通过已授权 Console 上传 internal |
+| GitHub Actions Simple / Full | 共用后台，下载产物附 run/attempt、来源和摘要 | 默认分支注册入口、同源质量门禁、合格 Android runner；契约 CI 不等于打包 |
+| `candidate/android/<version>-<profile>.<versionCode>` Tag | 既有 candidate 工作流打包并创建私有 Draft | Tag/SHA 读回、合格 runner、Draft 资产下载验哈希 |
+
+当前产品身份对应的 Tag 示例为 `candidate/android/6.1.0.266-alpha.2006000266`，必须等待最终干净来源完成准入再使用。本次修改不创建或推送 Tag。Android Tag 作业只显式传递两项 Upload 密钥密码，不接收 Play 或 Apple secret；共享后台仅补齐既有凭据接口声明，iOS/macOS 作业不变。
+
+GitHub 的手动入口须先存在于[默认分支](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。候选分支 push 契约通过，不代表默认分支已接入 Run workflow，也不代表有权执行真实打包。
+
+当前实际交付路线为：**打包 → 独立验签 → `tools@gcsa.org` 的 Play Console Alpha internal**。服务账号继续仅保留 HomeGuard 应用授权，Aegis API Status/Wait 的 403 仍作为未通过项。Package 成功摘要会列出下载产物名、AAB/证书/manifest 摘要、准确 SHA/tree、producer run/attempt；打包成功不写成已上传或已分发。
+
 Simple 只有 operation、version、build、product 四项。中英文操作为 Package、Package and upload、Status、Wait，默认 Status。打包必须匹配提交中的真实版本和 Android versionCode；查询忽略 Product，只在 internal 轨道查询明确的 versionCode，可查询旧版本，不由当前工作流源码推断远端包来源。
 
 Simple Status/Wait 只发 GET，不创建或撤销 Play edit。官方[轨道摘要接口](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list)最多返回 20 个非废弃 release，不含 versionName、AAB 摘要或源码身份。NOT_OBSERVED 不能证明 versionCode 从未使用。Wait 最多十分钟，拒审报错，需开发者操作与已发布分别标示。查询不证明测试者可用性或真机验收。

@@ -239,14 +239,21 @@ class TransportTest(unittest.TestCase):
     def test_export_preserves_original_digest_and_both_attempt_pins(self):
         env = dict(GITHUB_RUN_ID='11', GITHUB_RUN_ATTEMPT='2', GITHUB_REPOSITORY='fixture/repo', GITHUB_STEP_SUMMARY=str(self.root/'summary'))
         with patch.dict(transport.os.environ, env), patch.object(transport, 'ROOT', self.root), patch.object(transport, 'directory', return_value=self.folder), patch.object(transport, 'source', return_value=self.source):
-            transport.export_state(dict(profile='alpha', version=NATIVE[0], build=NATIVE[1]), True)
+            transport.export_state(dict(operation='package', profile='alpha', version=NATIVE[0], build=NATIVE[1]), True)
         origin = json.loads((self.folder/'delivery-origin.json').read_text())
         self.assertEqual(origin['package_attempt'], '2')
         self.assertEqual(origin['state_attempt'], '2')
         self.assertEqual(origin['manifest_sha256'], self.digest)
         with zipfile.ZipFile(self.root/'.artifacts/android-delivery/package.zip') as z:
             self.assertEqual(z.read('Aegis.aab'), b'NON PRODUCT TRANSPORT FIXTURE')
-        self.assertIn(plan.encode(dict(PINS, manifest_sha256=self.digest)), (self.root/'summary').read_text())
+        summary = (self.root/'summary').read_text()
+        self.assertIn(plan.encode(dict(PINS, manifest_sha256=self.digest)), summary)
+        for pin in [self.source['sha'], self.source['tree'], self.digest, self.m['assets'][0]['sha256'],
+                    self.m['details']['certificateSha256'], 'android-delivery-11-2']:
+            self.assertIn(pin, summary)
+        self.assertIn('Manual Console handoff', summary)
+        self.assertIn('app/4976000882814434046/tracks/internal-testing', summary)
+        self.assertIn('not Play upload', summary)
 
     def test_plan_revalidation_uses_committed_native_and_tamper_fails(self):
         p = plan.normalize(dict(operation='upload', target=plan.encode(PINS)), NATIVE, mode='full')

@@ -116,3 +116,20 @@ test('Android candidate tag Admin admission stays on Android', async () => {
   f.environment.GITHUB_REF = 'refs/tags/candidate/ios/1.0.0-alpha.33';
   await assert.rejects(requireAndroidAdministrator(f));
 });
+
+test('Android tags keep one trigger and explicitly forward only Upload-key secrets to Draft', () => {
+  const tag = YAML.parse(readFileSync(new URL('../../../.github/workflows/release-candidate-tag.yml', import.meta.url), 'utf8'));
+  const release = YAML.parse(readFileSync(new URL('../../../.github/workflows/release.yml', import.meta.url), 'utf8'));
+  assert.deepEqual(tag.on.push.tags, ['candidate/ios/*', 'candidate/android/*', 'candidate/macos/*']);
+  assert.equal(tag.jobs.release.if, "${{ needs.plan.outputs.platform != 'android' }}");
+  const android = tag.jobs['android-release'];
+  assert.equal(android.if, "${{ needs.plan.outputs.platform == 'android' }}");
+  assert.equal(android.uses, './.github/workflows/release.yml');
+  assert.equal(android.with.platform, 'android');
+  assert.equal(android.with.destination, 'github-draft');
+  assert.equal(android.with.operation, 'upload');
+  assert.equal(android.with.format, 'aab');
+  assert.deepEqual(Object.keys(android.secrets).sort(), ['AEGIS_ANDROID_KEY_PASSWORD', 'AEGIS_ANDROID_STORE_PASSWORD']);
+  for (const key of Object.keys(android.secrets)) assert.ok(release.on.workflow_call.secrets[key]);
+  assert.doesNotMatch(JSON.stringify(android), /secrets\.(?:AEGIS_PLAY|AEGIS_ASC)|inherit/u);
+});
