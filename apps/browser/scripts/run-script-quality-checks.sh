@@ -55,6 +55,7 @@ run_check 'signing script syntax' bash -n ./scripts/sign-chromium-app.sh
 
 run_check 'build identity syntax' node --check ./scripts/write-build-identity.mjs
 run_check 'ordered patch lineage v2 regressions' node --test ./scripts/patch-lineage_test.mjs
+run_check 'MAC03 publication deadline regressions' node --test ./scripts/mac03-publication_test.mjs
 run_check 'build identity self-test' node ./scripts/write-build-identity.mjs --self-test
 run_check 'Agent runtime syntax' node --check ./scripts/verify-agent-runtime.mjs
 run_check 'Agent runtime self-test' node ./scripts/verify-agent-runtime.mjs --self-test
