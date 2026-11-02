@@ -41,6 +41,15 @@ case "$(uname -m)" in
       echo "Linux ARM64 试验需显式设置 AEGIS_ANDROID_EXPERIMENTAL_ARM64=true。" >&2
       exit 2
     fi
+    # The existing static QEMU 7 loader can map a large x64 ELF over its own
+    # brk heap before guest code runs (silent SIGSEGV in target_mmap/malloc).
+    # Reserve a separate 1 TiB guest address range for this build's children.
+    # This changes neither the pinned compiler nor shared VM/binfmt settings.
+    if [[ "${QEMU_RESERVED_VA:-1099511627776}" != 1099511627776 ]]; then
+      echo "ARM64 Android emulation requires QEMU_RESERVED_VA=1099511627776." >&2
+      exit 2
+    fi
+    export QEMU_RESERVED_VA=1099511627776
     echo "Experimental Linux ARM64 host; pinned x86-64 tools require working emulation."
     ;;
   *) echo "不支持的 Android Linux 构建宿主架构。" >&2; exit 2 ;;

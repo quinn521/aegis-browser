@@ -37,6 +37,16 @@ and JDK 17. Chromium's pinned Linux compiler is still x86-64, so the existing VM
 must execute it successfully through binfmt/QEMU; selecting an ARM64 label alone
 does not establish toolchain compatibility.
 
+The opted-in ARM64 build reserves a separate 1 TiB guest virtual address range
+with `QEMU_RESERVED_VA=1099511627776` for its child tools. This is virtual address
+space, not a RAM or disk allocation. The existing static QEMU 7 loader was
+reproduced crashing in `load_elf_image/target_mmap/page_set_flags/malloc` before
+the pinned TypeScript compiler started; even `tsc --version` could fail silently.
+The reservation prevents that loader/heap overlap without changing the compiler,
+shared VM or binfmt registration. An incompatible explicit override fails closed.
+The native host regression exercises the real locked compiler concurrently;
+retain the original failure, core/backtrace and source-bound build evidence.
+
 The Android GN configuration selects `host_cpu="x64"` for Chromium's pinned
 Linux host tools and Rust standard library, including in this ARM64 experiment.
 The physical host guard still requires the explicit ARM64 opt-in and a working
