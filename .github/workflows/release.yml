@@ -339,7 +339,7 @@ jobs:
       - package
     if: ${{ inputs.destination == 'github-draft' && inputs.operation == 'upload' }}
     runs-on: ubuntu-24.04
-    environment: aegis-github-draft
+    environment: ${{ inputs.platform == 'android' && 'aegis-android-draft' || 'aegis-github-draft' }}
     timeout-minutes: 60
     permissions:
       contents: write

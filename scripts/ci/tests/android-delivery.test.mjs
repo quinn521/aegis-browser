@@ -48,6 +48,7 @@ test('four bilingual Simple fields and thin Simple/Full wrappers over one explic
   assert.ok(!legacy.on.workflow_dispatch.inputs.platform.options.includes('android'));
   assert.ok(legacy.on.workflow_call.inputs.platform);
   assert.equal(backend.jobs.draft.permissions.contents, 'write');
+  assert.equal(backend.jobs.draft.environment, 'aegis-android-draft');
   assert.equal(workflow.permissions.contents, 'read');
 });
 

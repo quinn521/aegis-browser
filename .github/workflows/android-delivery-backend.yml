@@ -167,7 +167,7 @@ jobs:
     needs: admission
     if: ${{ fromJSON(needs.admission.outputs.plan).operation == 'upload' && fromJSON(needs.admission.outputs.plan).destination == 'github-draft' }}
     runs-on: ubuntu-24.04
-    environment: aegis-github-draft
+    environment: aegis-android-draft
     permissions:
       contents: write
       actions: read

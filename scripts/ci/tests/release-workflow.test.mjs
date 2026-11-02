@@ -73,7 +73,11 @@ test('credential and write permissions stay behind protected upload/build jobs',
   assert.doesNotMatch(JSON.stringify(workflow.jobs.package), /AEGIS_ASC_KEY|contents.*write/u);
   assert.equal(workflow.jobs.testflight.environment, 'aegis-testflight');
   assert.equal(workflow.jobs.testflight.permissions.contents, 'read');
-  assert.equal(workflow.jobs['github-draft'].environment, 'aegis-github-draft');
+  const environment=platform=>{
+    const value=workflow.jobs['github-draft'].environment;
+    return value.startsWith('${{') ? Function('inputs',`return (${value.slice(3,-2)});`)({platform}) : value;
+  };
+  assert.deepEqual(['ios','macos','android'].map(environment),['aegis-github-draft','aegis-github-draft','aegis-android-draft']);
   assert.equal(workflow.jobs['github-draft'].permissions.contents, 'write');
   assert.equal(workflow.jobs.play.environment, 'aegis-play');
   assert.equal(workflow.jobs.play.permissions.contents, 'read');
