@@ -49,3 +49,5 @@ Tag → 私有 Draft 继续使用既有 `release-candidate-tag.yml`，不增加 
 变更操作不允许 Actions rerun 重放。上传结果未知时先保留 intent/result，再读服务端对账，不能盲目重试。失败运行的产物仅用于诊断，不能成为成功交付来源。
 
 分支 push 只运行无凭据 contracts，不启动打包/Play/Draft，也不启用 runner readiness 或环境。fork 特权演练和上游 main 的同源质量门禁保持原约束；绿色契约 CI 不等于真实包、商店或设备验收。
+
+Android 独立 fork 准入使用固定 `codex/android-release-acceptance` 分支及 `android-release-validation.yml`。它要求显式启用、固定仓库 ID 与准确来源 SHA，且最新 run/attempt 的 hosted contracts 和无签名 `native-admission` 都成功；跳过、重复、不完整、来源变化或复核期间发生 rerun 均阻断。此链不调用 iOS archive，不改变上游 main/quality 准入。专用 runner 使用只读安装的 checkout 前 hook，绑定单个 run/attempt、actor、workflow、ref 和来源，拒绝时仅终止已验证的所属 worker。未完成真实正反验收前保持 release readiness=false；AAB10 继续使用自己的原进程与锁。
