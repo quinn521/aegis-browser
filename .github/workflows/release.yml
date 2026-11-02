@@ -248,9 +248,17 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
         run: bundle exec fastlane ios ci_signing
+      - name: Recheck Android Admin and exact source before signing credentials
+        if: ${{ inputs.platform == 'android' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/android-operator.mjs
+          node scripts/ci/release-preflight.mjs --sha "$GITHUB_SHA"
       - name: Build and verify package using the local release entrypoint
         id: package
         env:
+          GH_TOKEN: ${{ inputs.platform == 'android' && github.token || '' }}
           AEGIS_APPLE_TEAM_ID: ${{ vars.AEGIS_APPLE_TEAM_ID }}
           AEGIS_IOS_PROFILES: ${{ vars.AEGIS_IOS_PROFILES }}
           DEVELOPER_DIR: ${{ vars.AEGIS_DEVELOPER_DIR }}

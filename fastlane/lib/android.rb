@@ -21,6 +21,12 @@ module AegisRelease
     end
 
     def sign_android_bundle(source, target)
+      if ENV['GITHUB_ACTIONS'] == 'true'
+        current = AegisRelease.source(request.root)
+        AegisRelease.require!(current.fetch('sha') == ENV['GITHUB_SHA'], 'Signing source differs from immutable Actions SHA')
+        android_actions_operator!
+        run('node', File.join(request.root, 'scripts/ci/release-preflight.mjs'), '--sha', current.fetch('sha'))
+      end
       keystore = AegisRelease.file!(File.expand_path(required('AEGIS_ANDROID_KEYSTORE')))
       AegisRelease.require!((File.stat(keystore).mode & 0o077).zero?, 'Upload keystore must be private (mode 600)')
       key_alias = required('AEGIS_ANDROID_KEY_ALIAS')

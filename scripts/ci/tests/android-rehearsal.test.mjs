@@ -15,11 +15,11 @@ function fixture() {
     RELEASE_PLATFORM:'android', RELEASE_DESTINATION:'artifacts'};
   const run = {id:5, run_attempt:1, head_sha:sha, head_branch:branch, event:'push', path,status:'completed',conclusion:'success',
     repository:{id:777,full_name:repo}, head_repository:{id:777,full_name:repo}};
-  const jobs = ['contracts','native-admission'].map((name,i)=>({id:10+i,name,run_id:5,head_sha:sha,run_attempt:1,status:'completed',conclusion:'success'}));
+  const jobs = ['contracts','native-admission','read-token-admission'].map((name,i)=>({id:10+i,name,run_id:5,head_sha:sha,run_attempt:1,status:'completed',conclusion:'success'}));
   const f = {environment,run,jobs,ref:sha,finalRun:run,requests:[]};
   f.api = async (repository, endpoint) => {
     assert.equal(repository,repo); f.requests.push(endpoint);
-    if (endpoint === '') return {id:777,full_name:repo,fork:true,parent:{id:1348409663,full_name:'gcsagroup/aegis-browser'}};
+    if (endpoint === '') return {id:777,full_name:repo,private:false,fork:true,parent:{id:1348409663,full_name:'gcsagroup/aegis-browser'}};
     if (endpoint.startsWith('/git/ref/heads/') || endpoint.startsWith('/commits/')) return {sha:f.ref,object:{sha:f.ref}};
     if (endpoint.startsWith('/actions/workflows/')) return {total_count:1,workflow_runs:[f.run]};
     if (endpoint.includes('/jobs?')) return {total_count:f.jobs.length,jobs:f.jobs};
@@ -36,6 +36,20 @@ test('Android fork admission requires its exact contracts and unsigned native jo
   assert.equal(result.releaseReady,false);
   assert.ok(f.requests.some(p=>p.includes('/android-release-validation.yml/')));
   assert.ok(!f.requests.some(p=>p.includes('release-validation.yml/runs') && !p.includes('android-release-validation')));
+});
+
+test('missing skipped stale or duplicate read-token qualification cannot admit signing',async()=>{
+  for(const modify of [f=>f.jobs.pop(),f=>f.jobs[2].conclusion='skipped',
+    f=>f.jobs[2].head_sha='b'.repeat(40),f=>f.jobs[2].run_attempt=2,
+    f=>f.jobs.push({...f.jobs[2],id:30})]) {
+    const f=fixture();modify(f);await assert.rejects(call(f));
+  }
+});
+
+test('a public fork becoming private requires fresh token capability qualification',async()=>{
+  const f=fixture(),api=f.api;
+  f.api=async(...args)=>{const result=await api(...args);return args[1]===''?{...result,private:true}:result;};
+  await assert.rejects(call(f));
 });
 
 test('Android rehearsal rejects missing opt-in, wrong pin, production, arbitrary branch or external event before API',async()=>{

@@ -34,6 +34,14 @@
 - [ ] After its lock releases, run a real Actions package at the final clean candidate, then the existing candidate Tag→private Draft and download/hash every asset.
 - [ ] Record manual-button default-branch registration as incomplete until separately authorized integration; keep all three route receipts separate.
 
+## Task 4: Protected Android package token and fresh admission
+
+- [ ] Reproduce missing package token/fresh source preflight with workflow-boundary tests; preserve all non-Android package permissions and effective token values.
+- [ ] Add `scripts/ci/android-read-token.mjs` and behavioral tests for exact public fork/source/run/attempt/Admin and required GET access, rejecting unavailable APIs, stale metadata, private/foreign repositories and ref changes.
+- [ ] Add an unsigned hosted `read-token-admission` job with only `contents: read` to Android validation. Native waits for it; fork source admission requires contracts/read-token/native success together at the exact latest source/attempt.
+- [ ] Supply the ephemeral token only to Android package checks; repeat Admin/source immediately before the credential-bearing package step. Do not enable release flags, install secrets, or change other platform permissions.
+- [ ] Run focused checks/actionlint and full same-candidate fork contracts, then independent review/fix regression. New clean source still needs actual hosted read-token and fresh native qualification; no old source proof is reused.
+
 ## Review focus
 
 - A rerun starting during admission must invalidate the earlier attempt.
@@ -43,6 +51,8 @@
 - Native probe success is never a product or store acceptance claim.
 
 ## Execution ledger
+
+- Task4 implementation: Node52/52 focused checks, locked Ruby3.3.6/minitest5.25.4 signing/routing3/20, actionlint and diff check passed. Workflow/source/read-token requirements and actual post-build signing denial were observed RED before repair. A fresh independent Astra Ultra review of the8de delta plus new probe files found no Critical/Important/Minor findings, and independently ran38/38 checks. Full same-candidate CI, actual contents-only API capability, fresh native and signed package remain pending; no release/readiness flag or service-account grant was enabled. Keep the existing shared package permission at contents:read; a denied real token probe must stay closed rather than broadening shared permissions.
 
 - Protected-release follow-up after unsigned qualification: introduce `AEGIS_ANDROID_RELEASE_ENABLED` in `release-preflight.mjs`, `android-rehearsal.mjs`, `release.yml`, and `android-delivery-backend.yml`; retain the exact repository/source/ref pins and native prerequisites. Update `scripts/release/action.rb` so Android candidate Draft plans select only the admitted fork without shared flags. First observe failing source-admission, evaluated workflow-expression and real Ruby request tests; then implement, run focused tests/full contracts/actionlint, and request a fresh review before any enablement. No main change, environment secret installation, signing readiness enablement or AAB10 interruption is part of this code task.
 - Protected opt-in verification: Node35/35 focused checks, locked Ruby3.3.6/minitest5.25.4 request test1/13, actionlint and locked Linux full contracts167/167 passed (Ruby63/290, Status10/74, Python68 with6 expected skips). First full-suite fixture mounted the checkout read-only at `/repo` and failed8 checks because tests create temporary files and the linked Git common directory was absent; retained as fixture failure, corrected real-path writable test checkout/read-only common Git mount passed. No product was built by these checks.

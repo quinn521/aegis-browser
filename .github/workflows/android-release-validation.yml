@@ -33,8 +33,28 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm run ci:test
-  native-admission:
+  read-token-admission:
     needs: contracts
+    if: ${{ github.repository == 'quinn521/aegis-browser' && vars.AEGIS_ANDROID_NATIVE_ADMISSION_ENABLED == 'true' && github.sha == vars.AEGIS_ANDROID_REHEARSAL_SOURCE_SHA }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22.23.1
+      - name: Verify contents-only token can read exact admission evidence without credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AEGIS_ANDROID_REHEARSAL_SOURCE_SHA: ${{ vars.AEGIS_ANDROID_REHEARSAL_SOURCE_SHA }}
+        run: node scripts/ci/android-read-token.mjs
+  native-admission:
+    needs: [contracts, read-token-admission]
     if: ${{ github.repository == 'quinn521/aegis-browser' && vars.AEGIS_ANDROID_NATIVE_ADMISSION_ENABLED == 'true' && github.sha == vars.AEGIS_ANDROID_REHEARSAL_SOURCE_SHA }}
     runs-on: [self-hosted, Linux, ARM64, aegis-android-admission]
     timeout-minutes: 30

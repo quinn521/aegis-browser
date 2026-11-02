@@ -7,6 +7,23 @@ const root = new URL('../../../', import.meta.url);
 const text = readFileSync(new URL('.github/workflows/release.yml', root), 'utf8');
 const workflow = YAML.parse(text);
 
+test('Android rechecks source before package credentials and supplies its read token without changing other platform permissions', () => {
+  const job=workflow.jobs.package;
+  assert.deepEqual(job.permissions,{contents:'read'});
+  const build=job.steps.findIndex(step=>step.id==='package');
+  const gate=job.steps.findIndex(step=>step.run?.includes('android-operator.mjs') && step.run?.includes('release-preflight.mjs'));
+  assert.ok(gate>=0 && gate<build,'Android must recheck source and Admin before signing credentials');
+  const evaluate=(value,platform)=>Function('inputs','github',`return (${value.slice(3,-2)});`)({platform},{token:'fixture-token'});
+  assert.equal(evaluate(job.steps[gate].if,'android'),true);
+  assert.equal(evaluate(job.steps[gate].if,'ios'),false);
+  assert.equal(evaluate(job.steps[gate].if,'macos'),false);
+  assert.doesNotMatch(JSON.stringify(job.steps[gate]),/secrets\./u);
+  assert.equal(job.steps[gate].env.GH_TOKEN,'${{ github.token }}');
+  assert.equal(job.steps[build].if,undefined,'failed admission must not be bypassed');
+  assert.equal(evaluate(job.steps[build].env.GH_TOKEN,'android'),'fixture-token');
+  for(const platform of ['ios','macos']) assert.equal(evaluate(job.steps[build].env.GH_TOKEN,platform),'');
+});
+
 test('protected Android fork preflight uses its dedicated opt-in while shared release flags stay disabled', () => {
   const enabled = (changes = {}, input = {}) => {
     const github = {repository:'fixture/aegis-browser',repository_id:'777',sha:'a'.repeat(40),

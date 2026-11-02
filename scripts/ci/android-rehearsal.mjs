@@ -21,7 +21,7 @@ export async function requireAndroidRehearsal(sha, {environment:e=process.env, a
     (candidate || ['push','workflow_dispatch'].includes(e.GITHUB_EVENT_NAME) && e.GITHUB_REF===`refs/heads/${ANDROID_REHEARSAL_BRANCH}`),
     'Android fork rehearsal requires explicit repository, source pin, fixed ref and testing-only destination');
   const metadata=await api(repository,'',{token});
-  requireValue(metadata?.full_name===repository && String(metadata.id)===e.GITHUB_REPOSITORY_ID && metadata.fork===true &&
+  requireValue(metadata?.full_name===repository && String(metadata.id)===e.GITHUB_REPOSITORY_ID && metadata.private===false && metadata.fork===true &&
     metadata.parent?.full_name===UPSTREAM && metadata.parent?.id===1348409663,'Android rehearsal fork identity changed');
   const assertRefs=async()=>{
     const branch=await api(repository,`/git/ref/heads/${ANDROID_REHEARSAL_BRANCH}`,{token});
@@ -51,7 +51,7 @@ export async function requireAndroidRehearsal(sha, {environment:e=process.env, a
   const jobs=await api(repository,`/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`,{token});
   requireValue(Number.isInteger(jobs?.total_count) && jobs.total_count<=100 && Array.isArray(jobs.jobs) &&
     jobs.jobs.length===jobs.total_count,'Incomplete Android validation jobs');
-  for (const name of ['contracts','native-admission']) {
+  for (const name of ['contracts','read-token-admission','native-admission']) {
     const rows=jobs.jobs.filter(j=>j.name===name);
     requireValue(rows.length===1 && rows[0].run_id===run.id && rows[0].head_sha===sha && rows[0].run_attempt===run.run_attempt &&
       rows[0].status==='completed' && rows[0].conclusion==='success',`Android validation has not passed: ${name}`);
