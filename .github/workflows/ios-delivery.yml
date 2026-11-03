@@ -150,6 +150,9 @@ jobs:
           node scripts/ci/ios-release-preflight.mjs --sha "$GITHUB_SHA"
           bundle check
       - id: package
+        env:
+          AEGIS_IOS_FIREBASE_DEV_PLIST_BASE64: ${{ vars.AEGIS_IOS_FIREBASE_DEV_PLIST_BASE64 }}
+          AEGIS_IOS_FIREBASE_PROD_PLIST_BASE64: ${{ vars.AEGIS_IOS_FIREBASE_PROD_PLIST_BASE64 }}
         run: python3 scripts/release/ios-action.py package
       - name: Copy the delivery receipt for the next operation
         run: python3 scripts/release/ios-action.py receipt
