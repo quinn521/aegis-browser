@@ -1,6 +1,6 @@
-From 834603060ddd9936b10de4eeff55abfd4c3e3758 Mon Sep 17 00:00:00 2001
+From e3fcb4d945e8b62e64e1a763995152877619ab5d Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Tue, 3 Nov 2026 17:47:58 +0800
+Date: Tue, 3 Nov 2026 17:53:18 +0800
 Subject: [PATCH] fix(licenses): include Aegis resource and libtorrent credits
 
 ---
@@ -17,7 +17,7 @@ Subject: [PATCH] fix(licenses): include Aegis resource and libtorrent credits
 
 diff --git a/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt b/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt
 new file mode 100644
-index 0000000..36b7cd9
+index 0000000000000000000000000000000000000000..36b7cd93cdfbac762f5be4c6ce276df2ea6305c2
 --- /dev/null
 +++ b/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt
 @@ -0,0 +1,23 @@
@@ -46,7 +46,7 @@ index 0000000..36b7cd9
 +DEALINGS IN THE SOFTWARE.
 diff --git a/third_party/aegis_libtorrent/README.chromium b/third_party/aegis_libtorrent/README.chromium
 new file mode 100644
-index 0000000..3ef0f46
+index 0000000000000000000000000000000000000000..3ef0f4657a49c6991866c49058d5820ae5a9767e
 --- /dev/null
 +++ b/third_party/aegis_libtorrent/README.chromium
 @@ -0,0 +1,25 @@
@@ -76,7 +76,7 @@ index 0000000..3ef0f46
 +Header-only dependency of the macOS libtorrent integration. This records the
 +license, not a reproducible Boost version or release qualification.
 diff --git a/third_party/aegis_policy/BUILD.gn b/third_party/aegis_policy/BUILD.gn
-index f43e751..a9f0288 100644
+index f43e75194edd0af1e30b5d2de7ce3fc279dd4b30..a9f028824266b4b7aa2c5354bac000ae4bf6d4ae 100644
 --- a/third_party/aegis_policy/BUILD.gn
 +++ b/third_party/aegis_policy/BUILD.gn
 @@ -2,6 +2,7 @@
@@ -89,7 +89,7 @@ index f43e751..a9f0288 100644
  }
 diff --git a/third_party/aegis_webui_licenses/BUILD.gn b/third_party/aegis_webui_licenses/BUILD.gn
 new file mode 100644
-index 0000000..3b6acb9
+index 0000000000000000000000000000000000000000..3b6acb9eba7069c0c43463b15887c760ae91c026
 --- /dev/null
 +++ b/third_party/aegis_webui_licenses/BUILD.gn
 @@ -0,0 +1,5 @@
@@ -100,7 +100,7 @@ index 0000000..3b6acb9
 +}
 diff --git a/third_party/aegis_webui_licenses/README.chromium b/third_party/aegis_webui_licenses/README.chromium
 new file mode 100644
-index 0000000..e878a23
+index 0000000000000000000000000000000000000000..e878a231ffabdfa51a2aba4e9a5731ac8cf3b025
 --- /dev/null
 +++ b/third_party/aegis_webui_licenses/README.chromium
 @@ -0,0 +1,114 @@
