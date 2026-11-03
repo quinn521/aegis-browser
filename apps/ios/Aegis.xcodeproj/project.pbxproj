@@ -1212,6 +1212,7 @@
 				DC77D9043FD789C47428971A /* Assets.xcassets in Resources */,
 				966EA9CF1919C20609D86F5A /* InfoPlist.strings in Resources */,
 				F8BA4DB858988A9CEDBA5BB9 /* Localizable.xcstrings in Resources */,
+				A311F5AD95F4121B099AA004 /* ThirdPartyNotices.txt in Resources */,
 				C97391F838CD807B58557C14 /* PrivacyInfo.xcprivacy in Resources */,
 				58DBFB099C3AEB133708A0FD /* background.js in Resources */,
 				506B25D23A79E9EEB668B1DE /* manifest.json in Resources */,
@@ -1276,7 +1277,6 @@
 			files = (
 				CE1F43AC781BF4FC8CC4EC14 /* InfoPlist.strings in Resources */,
 				5BA2BC05AB5717FB6959EA8A /* Localizable.xcstrings in Resources */,
-				A311F5AD95F4121B099AA004 /* ThirdPartyNotices.txt in Resources */,
 				D785DD6FA16B07C963187150 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
