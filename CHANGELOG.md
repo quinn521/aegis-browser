@@ -8,7 +8,7 @@ The workspace package, historical iOS development candidates and source previews
 
 ## iOS / iPadOS 1.0.1 · TestFlight
 
-- 2026-11-04: Build 14 from upstream main (`18d167c`) completed the GitHub packaging and Draft stages. Apple processing, replacement of build 12 in external testing, and Beta review submission remain unverified. [Packaging and Draft run](https://github.com/gcsagroup/aegis-browser/actions/runs/41718146298)
+- 2026-11-04: Release build 14 for the 1.0.1 patch update completed GitHub packaging and Draft stages from upstream main (`18d167c`); the retained manifest and checksum confirm the Release profile and App Store export signing. Apple processing, association with App Store version 1.0.1, and formal App Review submission remain unverified. [Packaging and Draft run](https://github.com/gcsagroup/aegis-browser/actions/runs/41718146298)
 - Prepared English, Simplified Chinese, and Traditional Chinese App Store copy explaining the public source and license scope; saving it in App Store Connect remains pending. [Store copy and status](docs/releases/ios-1.0.1-build14-store-copy.zh-CN.md)
 - Packaged Beta build 13 from upstream main (`93ead15`) and verified the signed IPA and dSYM against the delivery receipt. [TestFlight upload run](https://github.com/gcsagroup/aegis-browser/actions/runs/41715274104). [Packaging run](https://github.com/gcsagroup/aegis-browser/actions/runs/41714005704)
 - Added Open Source Licenses & Acknowledgements in Settings → About, with bundled notices available offline. [Source changes](https://github.com/gcsagroup/aegis-browser/pull/70)
