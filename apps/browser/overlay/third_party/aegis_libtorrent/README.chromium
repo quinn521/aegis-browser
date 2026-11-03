@@ -1,0 +1,25 @@
+Name: libtorrent-rasterbar
+URL: https://www.libtorrent.org/
+Version: 2.1.1
+License: BSD-3-Clause
+License File: LICENSE
+Security Critical: yes
+Shipped: yes
+
+Description:
+Optional macOS torrent integration. Source provenance remains documented in
+README.aegis; adding credit metadata does not qualify it for production release.
+
+-------------------- DEPENDENCY DIVIDER --------------------
+
+Name: Boost headers (Aegis libtorrent integration)
+URL: https://www.boost.org/
+Version: host-provided; see build toolchain evidence
+License: BSL-1.0
+License File: BOOST_LICENSE_1_0.txt
+Security Critical: yes
+Shipped: yes
+
+Description:
+Header-only dependency of the macOS libtorrent integration. This records the
+license, not a reproducible Boost version or release qualification.
