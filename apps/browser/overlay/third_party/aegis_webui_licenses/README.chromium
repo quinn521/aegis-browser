@@ -64,7 +64,7 @@ Aegis bundled resource. The source component retains its own license.
 -------------------- DEPENDENCY DIVIDER --------------------
 
 Name: Bergamot Translator (Aegis wrapper modifications)
-URL: https://github.com/browsermt/bergamot-translator
+URL: https://github.com/gcsagroup/aegis-browser/tree/ea594be84df63c0514b94f9ab3873b36a2af3752/apps/browser/overlay/chrome/browser/resources/aegis_agent/local_ai/bergamot
 Version: 0.4.9
 License: MPL-2.0
 License File: //chrome/browser/resources/aegis_agent/local_ai/bergamot/LICENSE
@@ -106,7 +106,7 @@ Name: ONNX Runtime Web
 URL: https://github.com/microsoft/onnxruntime
 Version: 1.20.1
 License: MIT
-License File: //chrome/browser/resources/aegis_agent/local_ai/vendor/onnxruntime-web-LICENSE
+License File: //chrome/browser/resources/aegis_agent/local_ai/vendor/onnxruntime-web-LICENSE, //chrome/browser/resources/aegis_agent/local_ai/vendor/onnxruntime-web-NOTICES
 Security Critical: yes
 Shipped: yes
 

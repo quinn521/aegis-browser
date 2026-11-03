@@ -71,6 +71,15 @@ class NoticePackageTests(unittest.TestCase):
             self.assertIn(original.rstrip(), actual)
             self.assertIn(b"Copyright (c) 2003-2020, Arvid Norberg", actual)
             self.assertIn(b"Boost Software License", actual)
+            for name in ["TRY_SIGNAL_LICENSE.txt", "ED25519_LICENSE.txt"]:
+                original = notices.read(notices.ROOT, "apps/browser/overlay/third_party/aegis_libtorrent/" + name)
+                self.assertIn(original.rstrip(), actual)
+
+    def test_crashlytics_includes_the_libunwind_copyright(self):
+        content = notices.render("ios")
+        self.assertIn(b"Hewlett-Packard", content)
+        original = notices.read(notices.ROOT, f"{notices.SDK}/firebase-crashlytics.txt")
+        self.assertIn(original.rstrip(), content)
 
     def test_macos_notice_writer_does_not_follow_bundle_symlinks(self):
         with tempfile.TemporaryDirectory() as temp:

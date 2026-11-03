@@ -9,6 +9,10 @@ Third-party components retain their own licenses and notices.
 
 - **Chromium 155.0.8059.80** ([license](https://chromium.googlesource.com/chromium/src/+/43a195105613ac83c21d3f14de279f4a045c7da0/LICENSE)): preserve source notices and generated `chrome://credits` in distributions. See the pinned [credits generator](https://chromium.googlesource.com/chromium/src/+/43a195105613ac83c21d3f14de279f4a045c7da0/tools/licenses/licenses.py). Current source pins are [CHROMIUM_VERSION](apps/browser/CHROMIUM_VERSION) and [CHROMIUM_COMMIT](apps/browser/CHROMIUM_COMMIT); historical packages retain their own versions.
 - **libtorrent-rasterbar 2.1.1** (optional, [BSD-3-Clause](apps/browser/overlay/third_party/aegis_libtorrent/LICENSE)): [pin and provenance](apps/browser/overlay/third_party/aegis_libtorrent/README.aegis); mirror provenance remains release-pending.
+  Its compiled bundled components retain their own notices:
+  [try_signal](apps/browser/overlay/third_party/aegis_libtorrent/TRY_SIGNAL_LICENSE.txt)
+  and [ed25519](apps/browser/overlay/third_party/aegis_libtorrent/ED25519_LICENSE.txt),
+  imported from the same pinned source archive.
 - **Boost headers** used by the macOS torrent integration: [Boost Software License 1.0](apps/browser/overlay/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt). The build still uses host-provided headers; a license notice does not establish a reproducible dependency version.
 
 The macOS packager installs [Aegis's additional notices](apps/browser/MACOS_THIRD_PARTY_NOTICES.txt)
@@ -39,6 +43,8 @@ packages; resolution is not proof that every package is linked. These are not
 uniformly open-source runtime licenses: Google Analytics is not open source,
 and precompiled SDK binaries retain the applicable Google SDK/service terms.
 See [Firebase's upstream explanation](https://github.com/firebase/firebase-ios-sdk/blob/dc6dfd442b1f3ec215ed62b8beb2623ffab010d6/README.md#L59-L61).
+Component-specific notices are retained as well, including
+[Crashlytics' bundled libunwind copyright and MIT terms](scripts/licenses/sdk-licenses/firebase-crashlytics.txt).
 
 `python3 -B scripts/licenses/third_party_notices.py check` rejects stale generated
 notices or changed SDK pins. The iOS export verifier requires the notices and

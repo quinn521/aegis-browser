@@ -24,7 +24,15 @@
     "repository": "https://github.com/firebase/firebase-ios-sdk.git",
     "url": "https://raw.githubusercontent.com/firebase/firebase-ios-sdk/dc6dfd442b1f3ec215ed62b8beb2623ffab010d6/LICENSE",
     "file": "firebase-ios-sdk.txt",
-    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "additionalNotices": [
+      {
+        "file": "firebase-crashlytics.txt",
+        "url": "https://raw.githubusercontent.com/firebase/firebase-ios-sdk/dc6dfd442b1f3ec215ed62b8beb2623ffab010d6/Crashlytics/LICENSE",
+        "sha256": "50b21a92f4f7ced3432d8d8cdd9f6b7097c1487b77c9bedf771fa703259089ca",
+        "component": "FirebaseCrashlytics (including bundled libunwind declarations)"
+      }
+    ]
   },
   {
     "identity": "google-ads-on-device-conversion-ios-sdk",

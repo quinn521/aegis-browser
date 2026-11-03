@@ -37,11 +37,12 @@ def sdk_records(root):
     if expected != actual or len(records) != len(expected):
         raise ValueError("Swift Package pins changed; refresh the SDK license inventory")
     for item in records:
-        name = item["file"]
-        if Path(name).name != name:
-            raise ValueError("Invalid SDK license filename")
-        if hashlib.sha256(read(root, f"{SDK}/{name}")).hexdigest() != item["sha256"]:
-            raise ValueError(f"SDK license hash mismatch: {item['identity']}")
+        for notice in [item, *item.get("additionalNotices", [])]:
+            name = notice["file"]
+            if Path(name).name != name:
+                raise ValueError("Invalid SDK license filename")
+            if hashlib.sha256(read(root, f"{SDK}/{name}")).hexdigest() != notice["sha256"]:
+                raise ValueError(f"SDK license hash mismatch: {item['identity']} / {name}")
     return records
 
 
@@ -62,11 +63,14 @@ def render(platform, root=ROOT):
                 "apps/browser/overlay/third_party/aegis_libtorrent/LICENSE")
         include("Boost headers used by the libtorrent integration — Boost Software License 1.0",
                 "apps/browser/overlay/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt")
+        for title, name in [("libtorrent bundled try_signal — BSD-3-Clause", "TRY_SIGNAL_LICENSE.txt"),
+                            ("libtorrent bundled ed25519 — public-domain and zlib declarations", "ED25519_LICENSE.txt")]:
+            include(title, f"apps/browser/overlay/third_party/aegis_libtorrent/{name}")
         include("Local translation and model runtime — sources and modifications", f"{LOCAL_AI}/NOTICE.txt")
-        for name in ["bergamot/LICENSE", "vendor/fzstd-LICENSE", "vendor/js-md5-LICENSE", "vendor/onnxruntime-web-LICENSE"]:
+        for name in ["bergamot/LICENSE", "vendor/fzstd-LICENSE", "vendor/js-md5-LICENSE", "vendor/onnxruntime-web-LICENSE", "vendor/onnxruntime-web-NOTICES"]:
             include(name, f"{LOCAL_AI}/{name}")
         sections.append("\nBergamot modified source is distributed in the Aegis source repository:\n"
-                        "https://github.com/gcsagroup/aegis-browser/tree/main/"
+                        "https://github.com/gcsagroup/aegis-browser/tree/ea594be84df63c0514b94f9ab3873b36a2af3752/"
                         "apps/browser/overlay/chrome/browser/resources/aegis_agent/local_ai/bergamot\n"
                         "Downloaded model weights have separate notices and are not covered by this inventory.\n")
     elif platform == "ios":
@@ -87,6 +91,8 @@ def render(platform, root=ROOT):
                         "https://developers.google.com/terms and https://firebase.google.com/terms/analytics\n")
         for item in sdk_records(root):
             include(f"{item['identity']} {item['version']}\n{item['url']}", f"{SDK}/{item['file']}")
+            for notice in item.get("additionalNotices", []):
+                include(f"{notice['component']}\n{notice['url']}", f"{SDK}/{notice['file']}")
     else:
         raise ValueError("Unsupported notice platform")
     return "\n".join(sections).encode("utf-8")

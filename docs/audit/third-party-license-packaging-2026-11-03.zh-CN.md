@@ -17,7 +17,8 @@
 
 - macOS 打包在复制 App 后、签名前写入 `Contents/Resources/AegisThirdPartyNotices.txt`。
   因声明位于 App 内，仅含 App 的 ZIP、DMG 及单独拷贝 App 均保留它；不修改原始构建 App。
-  声明包含 libtorrent 原始版权、BSD 三项条款和免责声明，并补入 Boost 许可。
+  声明包含 libtorrent 原始版权、BSD 三项条款和免责声明，并补入 Boost、
+  同一固定归档内实际编译的 try_signal 和 ed25519 许可。
 - Chromium 的 libtorrent 目录增加 `README.chromium`；通过 GN 可达的资源许可 group
   登记九个 Aegis WebUI/本地推理组件，保留 `chrome://credits` 原机制。
   新补丁与 overlay 一起交付；实际 Chromium credits 仍需在新的确切构建中验证。
@@ -28,6 +29,9 @@
   补齐作者、原文件头、MIT 条款、转换说明并保留 Unlicense，不推断上游明确双许可。
 - iOS 设置的「关于」提供离线鸣谢，包含规则、JS 库、PSL 及当前 SwiftPM 解析图的仓库许可。
   SDK 的解析图与实际链接不同；Google Analytics 预编译部分不因仓库 LICENSE 而被视为开源。
+  FirebaseCrashlytics 另附组件级 LICENSE，保留其 libunwind 的 Hewlett-Packard 版权和 MIT 条款。
+  桌面 ONNX Runtime 1.20.1 另附上游 ThirdPartyNotices，补齐根 MIT 许可证以外的声明；
+  上游汇总也涵盖可选后端，不表示所有条目都进入每个平台。
 - 离线生成器绑定源文件和 SwiftPM pins。IPA 导出校验检查声明及原始许可资源，缺失、变动或重复成员时拒绝。
 
 ## 验证方法与尚待完成的门
