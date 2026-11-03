@@ -8,6 +8,8 @@
 
 ## iOS / iPadOS 1.0.1 · TestFlight
 
+- 2026-11-04：基于上游 main（`18d167c`）的构建 14 已完成 GitHub 打包与 Draft 阶段。Apple 处理、替换构建 12 的外测关联及 Beta 提审状态仍待核验。[打包与 Draft 记录](https://github.com/gcsagroup/aegis-browser/actions/runs/41718146298)
+- 准备英文、简体中文和繁体中文商店开源说明，介绍公开源码及许可范围；尚待保存至 App Store Connect。[商店文案与状态](docs/releases/ios-1.0.1-build14-store-copy.zh-CN.md)
 - 已基于上游 main（`93ead15`）完成 Beta 构建 13 打包，并按交付回执核验签名 IPA 和 dSYM。[TestFlight 上传记录](https://github.com/gcsagroup/aegis-browser/actions/runs/41715274104)。[打包记录](https://github.com/gcsagroup/aegis-browser/actions/runs/41714005704)
 - 在「设置 → 关于」中新增「开源许可与鸣谢」，随应用提供可离线查看的许可说明。[源码变更](https://github.com/gcsagroup/aegis-browser/pull/70)
 - 完成三种交付方式验证：手动 Fastlane 使用 Alpha 构建 8、GitHub Actions 使用 Beta 构建 12、Tag → Draft Release 使用 Release 构建 11；三者均已完成 Apple 处理。
