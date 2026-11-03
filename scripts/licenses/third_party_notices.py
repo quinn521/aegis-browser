@@ -61,6 +61,10 @@ def render(platform, root=ROOT):
                         "The following notices supplement, and do not replace, Chromium's generated credits.\n")
         include("libtorrent-rasterbar 2.1.1 — BSD-3-Clause — https://www.libtorrent.org/",
                 "apps/browser/overlay/third_party/aegis_libtorrent/LICENSE")
+        for title, name in [("libtorrent upstream complete license and component notices", "UPSTREAM_LICENSE.txt"),
+                            ("Apple Public Source License 2.0", "APSL-2.0.txt"),
+                            ("Bundled routing-header source availability", "SOURCE_OFFER.txt")]:
+            include(title, f"apps/browser/overlay/third_party/aegis_libtorrent/{name}")
         include("Boost headers used by the libtorrent integration — Boost Software License 1.0",
                 "apps/browser/overlay/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt")
         for title, name in [("libtorrent bundled try_signal — BSD-3-Clause", "TRY_SIGNAL_LICENSE.txt"),
@@ -136,7 +140,8 @@ def install_macos(bundle, root=ROOT):
     bundle = bundle.resolve()
     directory = bundle / "Contents/Resources"
     output = directory / "AegisThirdPartyNotices.txt"
-    for path in [output, directory, bundle / "Contents"]:
+    source_output = directory / "AegisLibtorrentRouteSource.txt"
+    for path in [output, source_output, directory, bundle / "Contents"]:
         if path.is_symlink():
             raise ValueError(f"Symlink in bundle notice path: {path}")
     if not bundle.is_dir():
@@ -144,6 +149,7 @@ def install_macos(bundle, root=ROOT):
     check_outputs(root)
     directory.mkdir(parents=True, exist_ok=True)
     output.write_bytes(render("macos", root))
+    source_output.write_bytes(read(root, "apps/browser/overlay/third_party/aegis_libtorrent/UPSTREAM_ROUTE_H.txt"))
 
 
 def main():

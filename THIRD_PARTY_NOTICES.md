@@ -13,6 +13,10 @@ Third-party components retain their own licenses and notices.
   [try_signal](apps/browser/overlay/third_party/aegis_libtorrent/TRY_SIGNAL_LICENSE.txt)
   and [ed25519](apps/browser/overlay/third_party/aegis_libtorrent/ED25519_LICENSE.txt),
   imported from the same pinned source archive.
+  [The archive's complete LICENSE](apps/browser/overlay/third_party/aegis_libtorrent/UPSTREAM_LICENSE.txt)
+  also preserves its macOS routing-header notices. [APSL terms](apps/browser/overlay/third_party/aegis_libtorrent/APSL-2.0.txt)
+  and the [corresponding source availability notice](apps/browser/overlay/third_party/aegis_libtorrent/SOURCE_OFFER.txt)
+  accompany the Mac App; its unmodified routing header is bundled as a separate resource.
 - **Boost headers** used by the macOS torrent integration: [Boost Software License 1.0](apps/browser/overlay/third_party/aegis_libtorrent/BOOST_LICENSE_1_0.txt). The build still uses host-provided headers; a license notice does not establish a reproducible dependency version.
 
 The macOS packager installs [Aegis's additional notices](apps/browser/MACOS_THIRD_PARTY_NOTICES.txt)

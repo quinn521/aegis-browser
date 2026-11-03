@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -71,9 +72,14 @@ class NoticePackageTests(unittest.TestCase):
             self.assertIn(original.rstrip(), actual)
             self.assertIn(b"Copyright (c) 2003-2020, Arvid Norberg", actual)
             self.assertIn(b"Boost Software License", actual)
-            for name in ["TRY_SIGNAL_LICENSE.txt", "ED25519_LICENSE.txt"]:
+            for name in ["TRY_SIGNAL_LICENSE.txt", "ED25519_LICENSE.txt", "UPSTREAM_LICENSE.txt", "APSL-2.0.txt", "SOURCE_OFFER.txt"]:
                 original = notices.read(notices.ROOT, "apps/browser/overlay/third_party/aegis_libtorrent/" + name)
                 self.assertIn(original.rstrip(), actual)
+            source = notices.read(notices.ROOT, "apps/browser/overlay/third_party/aegis_libtorrent/UPSTREAM_ROUTE_H.txt")
+            self.assertEqual(hashlib.sha256(source).hexdigest(), "3a32fc91cdb7ea12d0acc468072ae4e9de163939872ff277391032d8d4fc8929")
+            self.assertEqual((app / "Contents/Resources/AegisLibtorrentRouteSource.txt").read_bytes(), source)
+            self.assertIn(b"Apple Inc.", actual)
+            self.assertIn(b"Berkeley", actual)
 
     def test_crashlytics_includes_the_libunwind_copyright(self):
         content = notices.render("ios")

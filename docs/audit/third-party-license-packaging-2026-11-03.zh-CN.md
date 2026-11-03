@@ -19,6 +19,8 @@
   因声明位于 App 内，仅含 App 的 ZIP、DMG 及单独拷贝 App 均保留它；不修改原始构建 App。
   声明包含 libtorrent 原始版权、BSD 三项条款和免责声明，并补入 Boost、
   同一固定归档内实际编译的 try_signal 和 ed25519 许可。
+  同时保留上游完整 LICENSE 中的 Apple/APSL 与 UC Berkeley 路由头声明，
+  附 APSL 全文，并把原始 `route.h` 作为 `AegisLibtorrentRouteSource.txt` 随 App 提供。
 - Chromium 的 libtorrent 目录增加 `README.chromium`；通过 GN 可达的资源许可 group
   登记九个 Aegis WebUI/本地推理组件，保留 `chrome://credits` 原机制。
   新补丁与 overlay 一起交付；实际 Chromium credits 仍需在新的确切构建中验证。

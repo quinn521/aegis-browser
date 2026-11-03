@@ -1,14 +1,16 @@
 Name: libtorrent-rasterbar
 URL: https://www.libtorrent.org/
 Version: 2.1.1
-License: BSD-3-Clause
-License File: LICENSE
+License: BSD-3-Clause, APSL-2.0
+License File: LICENSE, UPSTREAM_LICENSE.txt, APSL-2.0.txt, SOURCE_OFFER.txt
 Security Critical: yes
 Shipped: yes
 
 Description:
 Optional macOS torrent integration. Source provenance remains documented in
 README.aegis; adding credit metadata does not qualify it for production release.
+The complete upstream LICENSE preserves the macOS routing-header notices.
+The corresponding original header accompanies the staged App as described in SOURCE_OFFER.txt.
 
 -------------------- DEPENDENCY DIVIDER --------------------
 
