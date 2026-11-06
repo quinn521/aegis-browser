@@ -168,38 +168,72 @@ final class AppLanguageTests: XCTestCase {
         let old = defaults.persistentDomain(forName: "com.gcsa.aegis.ios.ui-tests")?[key]
         defer { if let old { defaults.set(old, forKey: key) } else { defaults.removeObject(forKey: key) } }
         let language = AppLanguageSettings(store: .init(defaults: defaults))
-        language.select(.en)
-        let host = UIHostingController(rootView: FieldHarness(language: language))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let previous = scene.windows.first { $0.isKeyWindow }
-        let window = UIWindow(windowScene: scene)
-        window.rootViewController = host
-        window.makeKeyAndVisible()
-        defer { window.isHidden = true; previous?.makeKeyAndVisible() }
-        try await waitUntil { self.field("address-field", in: host.view) != nil && self.field("find-text", in: host.view) != nil }
-        let address = try XCTUnwrap(field("address-field", in: host.view))
-        let find = try XCTUnwrap(field("find-text", in: host.view))
-        address.becomeFirstResponder()
-        address.setMarkedText("草稿", selectedRange: NSRange(location: 2, length: 0))
-        let text = address.text
-        language.select(.de)
-        try await waitUntil { address.placeholder == "Suchen oder Adresse eingeben" && find.placeholder == "Suchtext" }
-        XCTAssertTrue(field("address-field", in: host.view) === address)
-        XCTAssertTrue(field("find-text", in: host.view) === find)
-        XCTAssertEqual(address.text, text)
-        XCTAssertNotNil(address.markedTextRange)
-        XCTAssertTrue(address.isFirstResponder)
+        // These controls normally own focus in separate browser/find surfaces.
+        // Do not mount two competing autofocus adapters in one artificial form.
+        for showsFind in [false, true] {
+            language.select(.en)
+            let host = FieldHostingController(rootView: FieldHarness(language: language, showsFind: showsFind))
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+            let identifier = showsFind ? "find-text" : "address-field"
+            let initialText = showsFind ? "KEEP_FIND" : "draft"
+            try await waitUntil {
+                guard host.didAppear, let field = self.field(identifier, in: host.view),
+                      field.window === window, field.isFirstResponder else { return false }
+                if showsFind { return true }
+                // Address autofocus schedules selection after layout. Wait for
+                // that actual selection, not merely for UITextField creation.
+                guard let range = field.selectedTextRange else { return false }
+                return field.offset(from: field.beginningOfDocument, to: range.start) == 0
+                    && field.offset(from: range.start, to: range.end) == initialText.utf16.count
+            }
+            let field = try XCTUnwrap(field(identifier, in: host.view))
+            XCTAssertTrue(host.didAppear)
+            XCTAssertTrue(field.isFirstResponder)
+            XCTAssertEqual(field.text, initialText)
+            let expectedLabel = showsFind ? "Suchtext" : "Suchen oder Adresse eingeben"
+            field.selectAll(nil)
+            field.setMarkedText("草稿", selectedRange: NSRange(location: 2, length: 0))
+            // Explicit preconditions distinguish setup failures from switching.
+            XCTAssertEqual(field.text, "草稿")
+            XCTAssertNotNil(field.markedTextRange)
+            XCTAssertTrue(field.isFirstResponder)
+            let text = field.text
+            language.select(.de)
+            try await waitUntil { field.placeholder == expectedLabel && field.accessibilityLabel == expectedLabel }
+            XCTAssertTrue(self.field(identifier, in: host.view) === field)
+            XCTAssertEqual(field.text, text)
+            XCTAssertNotNil(field.markedTextRange)
+            XCTAssertTrue(field.isFirstResponder)
+        }
+    }
+
+    private final class FieldHostingController: UIHostingController<FieldHarness> {
+        private(set) var didAppear = false
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            didAppear = true
+        }
     }
 
     private struct FieldHarness: View {
         @ObservedObject var language: AppLanguageSettings
+        let showsFind: Bool
         @State private var address = "draft"
         @State private var focused = true
         @State private var find = "KEEP_FIND"
         var body: some View {
-            VStack {
-                BrowserAddressField(address: $address, focused: $focused, displayText: "draft", selectionRequest: 0, submit: { _ in })
-                FindQueryField(text: $find)
+            Group {
+                if showsFind {
+                    FindQueryField(text: $find)
+                } else {
+                    BrowserAddressField(address: $address, focused: $focused, displayText: "draft", selectionRequest: 0, submit: { _ in })
+                }
             }.environment(\.locale, language.snapshot.locale)
         }
     }
