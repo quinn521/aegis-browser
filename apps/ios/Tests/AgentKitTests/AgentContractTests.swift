@@ -3,7 +3,7 @@ import XCTest
 
 final class AgentContractTests: XCTestCase {
     func testContractErrorDescriptionsHonorRequestedSystemLocale() throws {
-        // Run in a fresh test host with -testLanguage. Do not override the
+        // Matrix hosts supply AEGIS_EXPECTED_LANGUAGE independently. Do not override the
         // resource locale: exercise the same LocalizedError/NSError path as callers.
         let errors: [AgentContractError] = [
             .invalidState, .privateProfileDenied, .consentRequired, .expiredGrant,
@@ -19,15 +19,28 @@ final class AgentContractTests: XCTestCase {
         let selected = try XCTUnwrap(Bundle.preferredLocalizations(
             from: languages, forPreferences: requested
         ).first)
-        let context = "requested=\(requested), selected=\(selected), current=\(Locale.current.identifier)"
-        print("AgentContractError system locale: \(context)")
+        let override = ProcessInfo.processInfo.environment["AEGIS_EXPECTED_LANGUAGE"]
+        let expectedLanguage = override ?? selected
+        let evidence: [String: Any] = [
+            "expected": expectedLanguage,
+            "expectedSource": override == nil ? "system" : "environment",
+            "requested": requested,
+            "selected": selected,
+            "current": Locale.current.identifier,
+        ]
+        let context = String(decoding: try JSONSerialization.data(
+            withJSONObject: evidence, options: [.sortedKeys]
+        ), as: UTF8.self)
+        print("AEGIS_AGENT_LOCALE \(context)")
         let attachment = XCTAttachment(string: context)
         attachment.name = "AgentContractError requested and selected locales"
         attachment.lifetime = .keepAlways
         add(attachment)
+        XCTAssertTrue(languages.contains(expectedLanguage), context)
+        XCTAssertEqual(selected, expectedLanguage, "Stale or misconfigured test host: \(context)")
 
         let bundle = try XCTUnwrap(Bundle(identifier: "com.gcsa.aegis.agentkit"))
-        let tableURL = bundle.bundleURL.appendingPathComponent("\(selected).lproj")
+        let tableURL = bundle.bundleURL.appendingPathComponent("\(expectedLanguage).lproj")
             .appendingPathComponent("AgentErrors.strings")
         let table = try XCTUnwrap(PropertyListSerialization.propertyList(
             from: Data(contentsOf: tableURL), format: nil
