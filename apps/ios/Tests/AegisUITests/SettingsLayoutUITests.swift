@@ -83,62 +83,139 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(heading.isHittable)
         assertHorizontalBounds(heading, in: list)
         XCTAssertGreaterThan(heading.frame.height, 0)
-        let introduction = app.staticTexts["third-party-notices-introduction-0"]
-        XCTAssertTrue(reveal(introduction, app))
-        XCTAssertTrue(introduction.label.contains("Third-party licenses and acknowledgements"))
-        assertHorizontalBounds(introduction, in: list)
+        // Check the initial viewport before any scroll: the heading must wrap
+        // within the list and leave the first real component directly usable.
+        let firstComponent = app.buttons["third-party-notices-component-1"]
+        XCTAssertTrue(firstComponent.waitForExistence(timeout: 5))
+        XCTAssertTrue(firstComponent.isHittable)
+        assertHorizontalBounds(firstComponent, in: list)
+        XCTAssertGreaterThanOrEqual(firstComponent.frame.minY, heading.frame.maxY - 1)
+        XCTAssertGreaterThan(list.frame.intersection(firstComponent.frame).height, 0)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "GCSA Aegis — Third-party licenses and acknowledgements"
+        )).firstMatch.exists)
         capture(name + "-列表", app)
 
-        // The first component has a long heading, exercising wrapping in both
-        // the native list row and the separate detail at accessibility sizes.
-        let component = app.buttons["third-party-notices-component-0"]
-        XCTAssertTrue(reveal(component, app))
-        let componentTitle = "Web enhancements — component versions and sources"
-        XCTAssertTrue(component.label.contains(componentTitle))
-        assertHorizontalBounds(component, in: list)
-        component.tap()
-        let scroll = app.scrollViews["third-party-notice-detail-scroll"]
-        let detailExists = scroll.waitForExistence(timeout: 5)
-        capture(name + "-组件详情", app)
-        XCTAssertTrue(detailExists)
-        let detailHeading = app.staticTexts["third-party-notice-detail-title"]
-        XCTAssertEqual(detailHeading.label, componentTitle)
-        XCTAssertTrue(detailHeading.isHittable)
-        assertHorizontalBounds(detailHeading, in: scroll)
-        XCTAssertGreaterThan(detailHeading.frame.height, 0)
-        let source = app.staticTexts["third-party-notice-detail-paragraph-0"]
-        XCTAssertTrue(source.waitForExistence(timeout: 5))
-        XCTAssertTrue(source.label.contains("Source file:"))
-        assertHorizontalBounds(source, in: scroll)
-        // Selectable Text AX frames extend beyond the rendered glyphs and may
-        // overlap. Check vertical ordering rather than disjoint frame edges.
-        XCTAssertGreaterThan(source.frame.midY, detailHeading.frame.midY)
-        XCTAssertGreaterThan(source.frame.height, 0)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["third-party-notices-component-0"].exists)
+        let components = [
+            ("markdown-it", "15.0.2", "MIT"),
+            ("DOMPurify", "3.4.16", "Apache-2.0 OR MPL-2.0"),
+            ("markdown-it-task-lists", "2.1.1", "ISC"),
+            ("acorn", "8.15.0", "MIT"),
+            ("highlight.js", "11.12.0", "BSD-3-Clause")
+        ]
+        for (index, component) in components.enumerated() {
+            let (componentTitle, version, licenseID) = component
+            let entry = app.buttons["third-party-notices-component-\(index + 1)"]
+            if index == 0 {
+                XCTAssertTrue(entry.isHittable)
+            } else {
+                XCTAssertTrue(reveal(entry, app))
+            }
+            XCTAssertTrue(entry.label.contains(componentTitle))
+            XCTAssertTrue(entry.label.contains(version))
+            XCTAssertTrue(entry.label.contains(licenseID))
+            XCTAssertFalse(entry.label.contains("-LICENSE"))
+            assertHorizontalBounds(entry, in: list)
+            entry.tap()
+            let scroll = app.scrollViews["third-party-notice-detail-scroll"]
+            XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+            let detailHeading = app.staticTexts["third-party-notice-detail-title"]
+            XCTAssertEqual(detailHeading.label, componentTitle)
+            XCTAssertTrue(detailHeading.isHittable)
+            assertHorizontalBounds(detailHeading, in: scroll)
+            XCTAssertGreaterThan(detailHeading.frame.height, 0)
+            let metadata = app.staticTexts["third-party-notice-detail-metadata"]
+            XCTAssertTrue(revealNoticeElement(metadata, in: scroll, app: app))
+            XCTAssertEqual(metadata.label, "\(version) · \(licenseID)")
+            assertHorizontalBounds(metadata, in: scroll)
+            let website = app.descendants(matching: .any)
+                .matching(identifier: "third-party-notice-detail-website").firstMatch
+            XCTAssertTrue(revealNoticeElement(website, in: scroll, app: app))
+            XCTAssertEqual(website.label, title == "开源许可与鸣谢" ? "官方网站" : "Official Website")
+            assertHorizontalBounds(website, in: scroll)
+            let firstParagraph = app.staticTexts["third-party-notice-detail-paragraph-0"]
+            XCTAssertTrue(revealNoticeElement(firstParagraph, in: scroll, app: app))
+            XCTAssertFalse(firstParagraph.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            assertHorizontalBounds(firstParagraph, in: scroll)
+            assertNoNoticeEngineeringText(app)
+            capture(name + "-" + componentTitle, app)
 
-        let licenseEntry = app.buttons["third-party-notices-component-1"]
-        XCTAssertTrue(reveal(licenseEntry, app))
-        licenseEntry.tap()
-        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
-        XCTAssertEqual(detailHeading.label, "markdown-it-LICENSE")
-        let license = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Permission is hereby granted")).firstMatch
-        for _ in 0..<16 {
-            if license.exists, license.isHittable,
-               scroll.frame.intersection(license.frame).height >= min(100, license.frame.height) { break }
-            scroll.swipeUp()
+            if index == 0 {
+                // Exercise every legal paragraph, including the final disclaimer.
+                // Exact full bodies for all five libraries are checked by the model test.
+                for (paragraph, marker) in [
+                    (0, "Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin."),
+                    (1, "Permission is hereby granted"),
+                    (2, "included in all copies or substantial portions of the Software."),
+                    (3, "OTHER DEALINGS IN THE SOFTWARE.")
+                ] {
+                    let legal = app.staticTexts["third-party-notice-detail-paragraph-\(paragraph)"]
+                    XCTAssertTrue(revealNoticeElement(legal, in: scroll, app: app))
+                    XCTAssertTrue(legal.label.contains(marker))
+                    assertHorizontalBounds(legal, in: scroll)
+                    assertNoNoticeEngineeringText(app)
+                }
+                capture(name + "-完整许可条款", app)
+            }
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(list.waitForExistence(timeout: 5))
+            XCTAssertTrue(reveal(entry, app))
         }
-        XCTAssertTrue(license.exists)
-        XCTAssertTrue(license.isHittable)
-        assertHorizontalBounds(license, in: scroll)
-        XCTAssertGreaterThanOrEqual(scroll.frame.intersection(license.frame).height, 100)
-        XCTAssertTrue(license.label.contains("conditions:"))
-        capture(name + "-许可条款", app)
+        // The next independent notice remains reachable after the web libraries.
+        let otherNotice = app.buttons["third-party-notices-component-6"]
+        XCTAssertTrue(reveal(otherNotice, app))
+        XCTAssertTrue(otherNotice.label.contains("EasyList and EasyPrivacy"))
+        otherNotice.tap()
+        XCTAssertTrue(app.scrollViews["third-party-notice-detail-scroll"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["third-party-notice-detail-title"].label,
+                       "EasyList and EasyPrivacy — The EasyList authors")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(list.waitForExistence(timeout: 5))
-        XCTAssertTrue(reveal(licenseEntry, app))
+        // The rights note remains accessible below every component, including
+        // at largest text where the list needs more than the usual 14 swipes.
+        let introduction = app.staticTexts["third-party-notices-introduction-0"]
+        for _ in 0..<100 {
+            if introduction.exists, introduction.isHittable,
+               list.frame.intersection(introduction.frame).height >= min(80, introduction.frame.height) { break }
+            list.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.8))
+                .press(forDuration: 0.1, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.3)))
+        }
+        XCTAssertTrue(introduction.exists)
+        XCTAssertTrue(introduction.isHittable)
+        XCTAssertGreaterThanOrEqual(list.frame.intersection(introduction.frame).height,
+                                    min(80, introduction.frame.height))
+        XCTAssertTrue(introduction.label.contains("Third-party works retain their own licenses. These notices do not change those licenses."))
+        XCTAssertFalse(introduction.label.contains("GCSA Aegis — Third-party licenses and acknowledgements"))
+        assertHorizontalBounds(introduction, in: list)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.buttons["third-party-notices-link"].waitForExistence(timeout: 5))
+    }
+
+    private func assertNoNoticeEngineeringText(_ app: XCUIApplication) {
+        for text in ["Source file:", "manifest.json", "CDN", "网页增强内置资源",
+                     "Web enhancements — component versions and sources",
+                     "apps/browser/overlay/"] {
+            XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch.exists,
+                           "Engineering metadata must not appear in component details: \(text)")
+        }
+    }
+
+    private func revealNoticeElement(_ element: XCUIElement, in scroll: XCUIElement,
+                                     app: XCUIApplication) -> Bool {
+        for _ in 0..<24 {
+            assertNoNoticeEngineeringText(app)
+            // Lazy paragraphs may not exist yet. Selectable Text can report an AX
+            // frame taller than the viewport: require visible intersection, not a
+            // centered or fully contained frame, and keep gestures off the text.
+            if element.exists, element.isHittable,
+               scroll.frame.intersection(element.frame).height >= min(80, element.frame.height) {
+                return true
+            }
+            scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.8))
+                .press(forDuration: 0.1, thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.35)))
+        }
+        return false
     }
 
     private func assertHorizontalBounds(_ element: XCUIElement, in surface: XCUIElement) {

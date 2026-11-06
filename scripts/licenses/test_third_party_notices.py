@@ -37,8 +37,9 @@ class NoticePackageTests(unittest.TestCase):
         model = view.split("struct ThirdPartyNoticesDocument {", 1)[1].split(
             "\nstruct ThirdPartyNoticesView:", 1)[0]
         generated = notices.render("ios")
+        self.assertEqual(len(generated), 188442)
         expected_sources = re.findall(rb"^Source file: (.+)$", generated, re.MULTILINE)
-        self.assertGreater(len(expected_sources), 0)
+        self.assertEqual(len(expected_sources), 25)
         program = "import Foundation\nstruct ThirdPartyNoticesDocument {" + model + r'''
 let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
 let text = String(decoding: data, as: UTF8.self)
@@ -53,6 +54,93 @@ for (index, notice) in document.notices.enumerated() {
     let paragraphs = notice.body.components(separatedBy: "\n\n")
     precondition(paragraphs.joined(separator: "\n\n") == notice.body)
 }
+// Only the exact first generated title is omitted from the footer projection.
+let generatedTitle = "GCSA Aegis — Third-party licenses and acknowledgements\n"
+let rights = "Third-party works retain their own licenses. These notices do not change those licenses."
+precondition(document.introduction.hasPrefix(generatedTitle))
+precondition(document.presentedIntroduction == String(document.introduction.dropFirst(generatedTitle.count)))
+precondition(document.presentedIntroduction.contains(rights))
+precondition(!document.presentedIntroduction.contains("Third-party licenses and acknowledgements"))
+let extraIntroduction = "\nAdditional attribution and source-offer terms.\n" + generatedTitle
+let expandedIntroduction = document.introduction + extraIntroduction
+let expandedText = ([expandedIntroduction] + document.notices.map(\.text))
+    .joined(separator: ThirdPartyNoticesDocument.sectionDelimiter)
+let expanded = ThirdPartyNoticesDocument(text: expandedText)
+precondition(expanded.introduction == expandedIntroduction && expanded.fullText == expandedText)
+precondition(expanded.presentedIntroduction == document.presentedIntroduction + extraIntroduction)
+precondition(expanded.presentedNotices.count == 24)
+for unfamiliar in ["Custom introduction\n\n" + rights,
+                   "GCSA Aegis — Third-party licenses and acknowledgements (additional terms)\n" + rights,
+                   "Before the title\n" + generatedTitle + rights, ""] {
+    let unknown = ThirdPartyNoticesDocument(text: unfamiliar)
+    precondition(unknown.presentedIntroduction == unfamiliar && unknown.fullText == unfamiliar)
+}
+
+// Presentation is a projection; all legal bytes survive header removal.
+let presented = document.presentedNotices
+precondition(presented.count == 24)
+let identities = ["markdown-it", "DOMPurify", "markdown-it-task-lists", "acorn", "highlight.js"]
+let inventory = document.notices[0].generatedHeader!.content
+let entries = inventory.components(separatedBy: "\n").dropFirst().prefix(5)
+for (index, entry) in entries.enumerated() {
+    let fields = entry.components(separatedBy: " — ")
+    let item = presented[index]
+    precondition(item.title == identities[index])
+    precondition(item.title + " " + item.version! == fields[0])
+    precondition(item.license == fields[1] && item.website!.absoluteString == fields[2])
+    precondition(item.subtitle == item.version! + " · " + fields[1])
+    let raw = document.notices[index + 1]
+    let legal = raw.body.components(separatedBy: "\n\n").dropFirst().joined(separator: "\n\n")
+    precondition(item.body == legal && !legal.isEmpty, "Legal body changed")
+    for engineering in ["Source file:", "manifest.json", "CDN", "网页增强内置资源"] {
+        precondition(!item.body.contains(engineering))
+    }
+}
+precondition(presented[0].body.contains("Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin."))
+precondition(presented[0].body.contains("OTHER DEALINGS IN THE SOFTWARE."))
+for notice in document.notices.dropFirst(6) {
+    let item = presented.first { $0.id == notice.id }!
+    precondition(item.title == notice.title)
+    precondition(item.body == notice.generatedHeader!.content)
+}
+precondition(presented.contains { $0.body.contains("Source snapshot: https://github.com/publicsuffix/list/blob/") })
+precondition(!presented.contains { $0.body.contains("Source file:") })
+
+func replacingSection(_ index: Int, with replacement: String) -> String {
+    var sections = document.notices.map(\.text)
+    sections[index] = replacement
+    return ([document.introduction] + sections).joined(separator: ThirdPartyNoticesDocument.sectionDelimiter)
+}
+func assertFallback(_ input: String) {
+    let parsed = ThirdPartyNoticesDocument(text: input)
+    precondition(parsed.fullText == input)
+    precondition(parsed.presentedNotices.count == parsed.notices.count)
+    for (raw, shown) in zip(parsed.notices, parsed.presentedNotices) {
+        precondition(shown.id == raw.id && shown.title == raw.title)
+        precondition(shown.body == (raw.generatedHeader?.content ?? raw.body))
+    }
+}
+let originalInventory = document.notices[0].text
+assertFallback(replacingSection(0, with: originalInventory.replacingOccurrences(of: "markdown-it 15.0.2", with: "unknown 15.0.2")))
+assertFallback(replacingSection(0, with: originalInventory + "\nAdditional legal obligation.\n"))
+assertFallback(replacingSection(0, with: originalInventory.replacingOccurrences(of: "acorn 8.15.0", with: "markdown-it 8.15.0")))
+assertFallback(replacingSection(0, with: originalInventory.replacingOccurrences(of: "https://github.com/acornjs/acorn", with: "invalid URL")))
+assertFallback(replacingSection(1, with: "Missing license\nSource file: fixture\n\nKeep me."))
+assertFallback(text + ThirdPartyNoticesDocument.sectionDelimiter + document.notices[1].text)
+assertFallback(text + ThirdPartyNoticesDocument.sectionDelimiter + originalInventory)
+assertFallback(replacingSection(1, with: document.notices[1].text.components(separatedBy: "\n\n")[0] + "\n\n"))
+let updated = ThirdPartyNoticesDocument(text: replacingSection(0, with: originalInventory
+    .replacingOccurrences(of: "markdown-it 15.0.2 — MIT", with: "markdown-it 99.1 — Future-License")))
+precondition(updated.presentedNotices[0].subtitle == "99.1 · Future-License", "Metadata was hardcoded")
+// Header-shaped lines in legal content, including URLs and source offers, stay verbatim.
+let extraLegal = "\n\nSource file: substantive attribution\nhttps://example.org/source-offer\nCDN legal requirement\n"
+let augmented = ThirdPartyNoticesDocument(text: replacingSection(1, with: document.notices[1].text + extraLegal))
+precondition(augmented.presentedNotices[0].body == presented[0].body + extraLegal)
+let unknownHeader = ThirdPartyNoticesDocument.Notice(id: 0, text: "Title\nSource file: unknown/path\n\nLegal")
+precondition(unknownHeader.generatedHeader == nil)
+let misplacedHeader = ThirdPartyNoticesDocument.Notice(id: 0, text: "Title\nLegal first\n\nSource file: apps/ios/BrowserKit/Resources/legal\n\nKeep")
+precondition(misplacedHeader.generatedHeader == nil)
+
 // Internal license separators must remain inside their component.
 let internalSeparators = "Title\nSource file: fixture\n\nLicense\n" + String(repeating: "=", count: 20)
     + "\nMore license\n" + String(repeating: "-", count: 72) + "\nEnd\n"
@@ -69,7 +157,8 @@ print("Validated \(document.notices.count) notice sections and \(data.count) ori
             source.write_text(program)
             resource = directory / "ThirdPartyNotices.txt"
             resource.write_bytes(generated)
-            subprocess.run(["swift", str(source), str(resource), str(len(expected_sources))],
+            subprocess.run(["swift", "-module-cache-path", str(directory / "module-cache"),
+                            str(source), str(resource), str(len(expected_sources))],
                            check=True, timeout=120)
 
     def test_new_sdk_pin_cannot_silently_reuse_old_notices(self):
