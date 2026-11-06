@@ -35,7 +35,7 @@ final class SettingsLayoutUITests: XCTestCase {
                                "-UIPreferredContentSizeCategoryName", largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"]
         app.launch()
         XCTAssertTrue(app.navigationBars[largeText ? "设置" : "Settings"].waitForExistence(timeout: 10))
-        let name = app.staticTexts["Aegis Browser"]
+        let name = app.collectionViews.firstMatch.staticTexts["Aegis Browser"]
         XCTAssertTrue(reveal(name, app), "The About app name must remain visible at the requested text size")
         XCTAssertEqual(name.label, "Aegis Browser")
         XCTAssertTrue(name.isHittable)
