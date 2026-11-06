@@ -45,8 +45,11 @@ def validate_catalog(contract, catalog, probes):
     strings = catalog["strings"]
     locales = set(contract["resourceLocales"])
     assert catalog["sourceLanguage"] == "zh-Hans"
-    assert len(strings) == contract["catalogKeyCount"]
-    assert digest(sorted(strings)) == contract["catalogInventorySHA256"], "Catalog key inventory changed"
+    additions = set(contract.get("languageSelectorAddedKeys", []))
+    assert additions == {"语言", "地区版本自动匹配系统语言偏好，地区格式保持系统设置。"}
+    assert additions <= set(strings)
+    assert len(strings) == contract["catalogKeyCount"] + len(additions)
+    assert digest(sorted(set(strings) - additions)) == contract["catalogInventorySHA256"], "Catalog key inventory changed"
     assert set(contract["requestedLocales"]) == locales | set(contract["regionalFallbacks"])
     assert {locale for entry in strings.values() for locale in entry["localizations"]} == locales
     for locale, expected in contract["preservedLocalizationsSHA256"].items():
@@ -167,7 +170,16 @@ def validate_project(locales):
             assert any(objects[objects[key]["fileRef"]].get("path") == "ThirdPartyNoticesView.swift" for key in sources["files"])
         if target in {"Aegis", "SafariWebExtension"}:
             assert any(objects[key].get("path") == "_locales" and objects[key].get("lastKnownFileType") == "folder" for key in refs)
+    helper_targets = set()
+    for value in objects.values():
+        if value["isa"] != "PBXNativeTarget":
+            continue
+        sources = next((objects[key] for key in value["buildPhases"] if objects[key]["isa"] == "PBXSourcesBuildPhase"), None)
+        if sources and any(objects[objects[key]["fileRef"]].get("path") == "AppLocalization.swift" for key in sources["files"]):
+            helper_targets.add(value["name"])
+    assert helper_targets == {"Aegis", "BrowserKit", "AgentKit", "ShareExtension"}
     spec = (ROOT / "project.yml").read_text()
+    assert spec.count("path: Shared/AppLocalization.swift") == 4
     # Keep the directory hierarchy: flattening messages.json breaks WebExtension i18n.
     assert spec.count("path: SharedWebExtension/_locales\n        type: folder\n        buildPhase: resources") == 2
 
@@ -217,12 +229,12 @@ def exercise_bundles(work, contract, catalog):
                                     for locale in contract["resourceLocales"]}, ensure_ascii=False))
     executable = app / "Contents/MacOS/bundle-probe"
     executable.parent.mkdir()
-    run("xcrun", "swiftc", "-swift-version", "6", "-module-cache-path", work / "module-cache",
+    run("xcrun", "swiftc", "-swift-version", "6", "-D", "DEBUG", "-module-cache-path", work / "module-cache",
         ROOT / "Tests/Localization/main.swift", ROOT / "BrowserKit/FixtureSchemeHandler.swift",
-        ROOT / "Shared/ShareInbox.swift", "-o", executable)
+        ROOT / "Shared/ShareInbox.swift", ROOT / "Shared/AppLocalization.swift", "-o", executable)
     for locale in contract["requestedLocales"]:
         print(run(executable, app, locale, expected, work, hostile, ROOT / "SharedWebExtension", FIXTURES / "literal-probes.json",
-                  "-AppleLanguages", f"({locale})").strip(), flush=True)
+                  "-AppleLanguages", f"({locale})", "--ui-testing", "-browser.languageFamily.v1", "system").strip(), flush=True)
     # Resource availability is not translation completion: report the states separately.
     for locale in contract["resourceLocales"]:
         states = Counter(entry["localizations"][locale]["stringUnit"]["state"]

@@ -113,7 +113,9 @@ struct ThirdPartyNoticesView: View {
         .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
         .map { ThirdPartyNoticesDocument(text: $0) }
 
+    @Environment(\.locale) private var localizationLocale
     var body: some View {
+        let _ = localizationLocale
         List {
             Section {
                 if let document {
@@ -163,7 +165,9 @@ struct ThirdPartyNoticesView: View {
 private struct ThirdPartyNoticeDetailView: View {
     let notice: ThirdPartyNoticesDocument.PresentedNotice
 
+    @Environment(\.locale) private var localizationLocale
     var body: some View {
+        let _ = localizationLocale
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 Text(verbatim: notice.title)
@@ -200,7 +204,9 @@ private struct NoticeParagraphs: View {
     let text: String
     let identifier: String
 
+    @Environment(\.locale) private var localizationLocale
     var body: some View {
+        let _ = localizationLocale
         let paragraphs = text.components(separatedBy: "\n\n")
         ForEach(paragraphs.indices, id: \.self) { index in
             Text(verbatim: paragraphs[index])

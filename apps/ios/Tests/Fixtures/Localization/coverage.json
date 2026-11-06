@@ -2045,5 +2045,9 @@
         "reason": "The source first minute is written with the digit 1."
       }
     }
-  }
+  },
+  "languageSelectorAddedKeys": [
+    "语言",
+    "地区版本自动匹配系统语言偏好，地区格式保持系统设置。"
+  ]
 }

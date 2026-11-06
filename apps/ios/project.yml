@@ -44,6 +44,7 @@ targets:
     type: application
     platform: iOS
     sources:
+      - path: Shared/AppLocalization.swift
       - path: AegisApp
         excludes:
           - Aegis.entitlements
@@ -111,6 +112,7 @@ targets:
     type: framework
     platform: iOS
     sources:
+      - path: Shared/AppLocalization.swift
       - path: BrowserKit
         excludes:
           - Info.plist
@@ -146,6 +148,7 @@ targets:
     type: framework
     platform: iOS
     sources:
+      - path: Shared/AppLocalization.swift
       - path: AgentKit
         excludes:
           - Info.plist
@@ -190,6 +193,7 @@ targets:
     type: app-extension
     platform: iOS
     sources:
+      - path: Shared/AppLocalization.swift
       - path: AegisApp/Localizable.xcstrings
       - path: ShareExtension
         excludes:

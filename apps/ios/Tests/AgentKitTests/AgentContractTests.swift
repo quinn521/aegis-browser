@@ -16,17 +16,27 @@ final class AgentContractTests: XCTestCase {
         let appleLanguages = UserDefaults.standard.stringArray(forKey: "AppleLanguages") ?? []
         let requested = appleLanguages.isEmpty ? Locale.preferredLanguages : appleLanguages
         XCTAssertFalse(requested.isEmpty)
-        let selected = try XCTUnwrap(Bundle.preferredLocalizations(
+        let systemExpected = try XCTUnwrap(Bundle.preferredLocalizations(
             from: languages, forPreferences: requested
         ).first)
         let override = ProcessInfo.processInfo.environment["AEGIS_EXPECTED_LANGUAGE"]
-        let expectedLanguage = override ?? selected
+        let expectedLanguage = override ?? systemExpected
+        let bundle = try XCTUnwrap(Bundle(identifier: "com.gcsa.aegis.agentkit"))
+        let snapshot = AegisLocalization.current
+        let selected = try XCTUnwrap(AegisLocalization.resourceLocalization(in: bundle, snapshot: snapshot,
+            key: errors[0].localizedResource.key, table: "AgentErrors"))
+        let expectedFamily = ProcessInfo.processInfo.environment["AEGIS_EXPECTED_FAMILY"]
+            ?? ["en-GB": "en", "en-HK": "en", "zh-Hant-HK": "zh-Hant"][expectedLanguage] ?? expectedLanguage
         let evidence: [String: Any] = [
             "expected": expectedLanguage,
             "expectedSource": override == nil ? "system" : "environment",
             "requested": requested,
             "selected": selected,
             "current": Locale.current.identifier,
+            "expectedFamily": expectedFamily,
+            "selectedFamily": snapshot.family.rawValue,
+            "dialect": snapshot.dialect,
+            "region": Locale.current.region?.identifier ?? "",
         ]
         let context = String(decoding: try JSONSerialization.data(
             withJSONObject: evidence, options: [.sortedKeys]
@@ -36,10 +46,13 @@ final class AgentContractTests: XCTestCase {
         attachment.name = "AgentContractError requested and selected locales"
         attachment.lifetime = .keepAlways
         add(attachment)
+        XCTAssertEqual(snapshot.family.rawValue, expectedFamily, "Stale family override: \(context)")
+        if let expectedRegion = ProcessInfo.processInfo.environment["AEGIS_EXPECTED_REGION"] {
+            XCTAssertEqual(Locale.current.region?.identifier, expectedRegion, "Stale formatting region: \(context)")
+        }
         XCTAssertTrue(languages.contains(expectedLanguage), context)
         XCTAssertEqual(selected, expectedLanguage, "Stale or misconfigured test host: \(context)")
 
-        let bundle = try XCTUnwrap(Bundle(identifier: "com.gcsa.aegis.agentkit"))
         let tableURL = bundle.bundleURL.appendingPathComponent("\(expectedLanguage).lproj")
             .appendingPathComponent("AgentErrors.strings")
         let table = try XCTUnwrap(PropertyListSerialization.propertyList(

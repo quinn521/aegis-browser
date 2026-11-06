@@ -33,8 +33,6 @@ public enum AgentSurface: String, Codable, Sendable {
     case safariReadOnly
 }
 
-private final class AgentContractLocalizationBundleToken: NSObject {}
-
 public enum AgentContractError: Error, Equatable, LocalizedError, Sendable {
     case invalidState
     case privateProfileDenied
@@ -54,19 +52,7 @@ public enum AgentContractError: Error, Equatable, LocalizedError, Sendable {
     case unknownResource
 
     public var errorDescription: String? {
-        let bundle = Bundle(for: AgentContractLocalizationBundleToken.self)
-        let appleLanguages = UserDefaults.standard.stringArray(forKey: "AppleLanguages") ?? []
-        let requested = appleLanguages.isEmpty ? Locale.preferredLanguages : appleLanguages
-        // The host's base-language resources must not collapse a regional
-        // preference supported by AgentKit (for example, en-GB to en).
-        let selected = Bundle.preferredLocalizations(
-            from: bundle.localizations.filter { $0 != "Base" }, forPreferences: requested
-        ).first ?? bundle.developmentLocalization
-        var resource = localizedResource
-        if let selected {
-            resource.locale = Locale(identifier: selected)
-        }
-        return String(localized: resource)
+        AegisLocalization.string(localizedResource)
     }
 
     var localizedResource: LocalizedStringResource {
