@@ -155,39 +155,34 @@ final class AppLanguageUITests: XCTestCase {
             for step in 0...8 {
                 let menu = app.collectionViews.firstMatch
                 XCTAssertTrue(menu.exists)
-                // Traverse one snapshot's actual ancestry; native popup
-                // containers need not share the collection's origin or width.
-                let snapshot: any XCUIElementSnapshot
-                do { snapshot = try app.snapshot() }
-                catch { XCTFail("Cannot inspect active menu: \(error)"); return }
-                let regions = menuRegions(in: snapshot, clippedTo: snapshot.frame)
-                guard regions.count == 1, var bounds = regions.first else {
-                    XCTFail("Expected one visible native menu collection, found \(regions.count)")
-                    return
-                }
-                bounds = bounds.insetBy(dx: 8, dy: 8)
-                XCTAssertFalse(bounds.isEmpty)
-                if item.exists, item.isHittable,
-                   bounds.contains(CGPoint(x: item.frame.midX, y: item.frame.midY)) {
-                    item.tap(); return
+                let windowBounds = app.frame
+                let menuBounds = menu.frame.intersection(windowBounds)
+                let target = menu.buttons.matching(NSPredicate(format: "label IN %@", labels)).firstMatch
+                if target.exists, target.isHittable,
+                   menuBounds.contains(target.frame), !target.frame.isEmpty {
+                    target.tap(); return
                 }
                 guard step < 8 else { break }
-                let origin = menu.coordinate(withNormalizedOffset: .zero)
-                let x = bounds.midX - menu.frame.minX
-                let startY = bounds.minY + bounds.height * (down ? 0.15 : 0.4) - menu.frame.minY
-                let endY = bounds.minY + bounds.height * (down ? 0.4 : 0.15) - menu.frame.minY
-                origin.withOffset(CGVector(dx: x, dy: startY))
-                    .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: x, dy: endY)))
+                // AX container frames do not describe native popup clipping.
+                // Use a middle hittable row, with both endpoints inside that row.
+                let visibleCells = menu.cells.allElementsBoundByIndex.filter {
+                    $0.exists && $0.isHittable && !$0.frame.isEmpty && menuBounds.contains($0.frame)
+                }
+                let rows = visibleCells.isEmpty ? menu.buttons.allElementsBoundByIndex.filter {
+                    $0.exists && $0.isHittable && !$0.frame.isEmpty && menuBounds.contains($0.frame)
+                } : visibleCells
+                let ordered = rows.sorted { $0.frame.midY < $1.frame.midY }
+                guard !ordered.isEmpty else {
+                    XCTFail("No fully visible hittable native menu row for scrolling")
+                    return
+                }
+                let row = ordered[ordered.count / 2]
+                row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.25 : 0.75))
+                    .press(forDuration: 0.1, thenDragTo: row.coordinate(
+                        withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.75 : 0.25)))
             }
         }
         XCTFail("Unreachable menu item inside visible popup: \(labels)")
-    }
-
-    private func menuRegions(in node: any XCUIElementSnapshot, clippedTo ancestors: CGRect) -> [CGRect] {
-        let visible = ancestors.intersection(node.frame)
-        guard !visible.isNull, !visible.isEmpty else { return [] }
-        if node.elementType == .collectionView { return [visible] }
-        return node.children.flatMap { self.menuRegions(in: $0, clippedTo: visible) }
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
