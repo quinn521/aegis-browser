@@ -2,9 +2,15 @@ import XCTest
 
 @MainActor
 final class AppLanguageUITests: XCTestCase {
+    private var launchedApp: XCUIApplication?
     override func setUpWithError() throws {
         continueAfterFailure = false
         XCUIDevice.shared.orientation = .portrait
+    }
+
+    override func tearDownWithError() throws {
+        launchedApp?.terminate()
+        launchedApp = nil
     }
 
     func testLiveSwitchPickerChromeStartPageAndPersistence() {
@@ -75,9 +81,15 @@ final class AppLanguageUITests: XCTestCase {
         reveal(field, in: app)
         field.tap(); field.typeText(" LANGUAGE_DRAFT")
         let before = field.value as? String
-        // End editing without submitting or navigating the document.
-        let heading = app.webViews.staticTexts["城市绿地观察"]
-        reveal(heading, in: app); heading.tap()
+        // The fixture input has no form action. Use the native keyboard's
+        // dismissal control, never Return, a link, or a non-focusable heading.
+        let dismissKeyboard = app.buttons.matching(NSPredicate(
+            format: "label IN %@", ["Done", "Hide keyboard", "Dismiss keyboard"]
+        )).firstMatch
+        XCTAssertTrue(dismissKeyboard.waitForExistence(timeout: 5))
+        XCTAssertTrue(dismissKeyboard.isHittable)
+        dismissKeyboard.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         openMenuItem("open-browser-settings", in: app)
         openPicker(app)
         reveal(app.buttons["language-choice-en"], in: app)
@@ -97,6 +109,7 @@ final class AppLanguageUITests: XCTestCase {
 
     private func launch(settings: Bool = false, largeText: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
+        launchedApp = app
         app.launchArguments = ["--ui-testing", "-AppleLanguages", "(en-US)", "-AppleLocale", "en_GB"]
         if settings { app.launchArguments.append("--ui-testing-settings") }
         app.launchArguments += ["-UIPreferredContentSizeCategoryName",
@@ -138,16 +151,37 @@ final class AppLanguageUITests: XCTestCase {
     private func tapMenuItem(labels: [String], in app: XCUIApplication) {
         let item = app.buttons.matching(NSPredicate(format: "label IN %@", labels)).firstMatch
         _ = item.waitForExistence(timeout: 5)
-        for _ in 0..<8 {
-            if item.exists, item.isHittable { item.tap(); return }
-            let menu = app.collectionViews.firstMatch
-            XCTAssertTrue(menu.exists)
-            menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-                .press(forDuration: 0.1, thenDragTo: menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))
+        for down in [false, true] {
+            for step in 0...8 {
+                let menu = app.collectionViews.firstMatch
+                XCTAssertTrue(menu.exists)
+                // UIKit may expose a collection taller than its clipping popup.
+                // Intersect its containing popup frames as well as the window.
+                var bounds = menu.frame.intersection(app.frame)
+                for container in app.otherElements.containing(.collectionView, identifier: menu.identifier).allElementsBoundByIndex {
+                    let frame = container.frame
+                    if abs(frame.minX - menu.frame.minX) < 1,
+                       abs(frame.width - menu.frame.width) < 1,
+                       abs(frame.minY - menu.frame.minY) < 1 {
+                        bounds = bounds.intersection(frame)
+                    }
+                }
+                bounds = bounds.insetBy(dx: 8, dy: 8)
+                XCTAssertFalse(bounds.isEmpty)
+                if item.exists, item.isHittable,
+                   bounds.contains(CGPoint(x: item.frame.midX, y: item.frame.midY)) {
+                    item.tap(); return
+                }
+                guard step < 8 else { break }
+                let origin = menu.coordinate(withNormalizedOffset: .zero)
+                let x = bounds.midX - menu.frame.minX
+                let startY = bounds.minY + bounds.height * (down ? 0.3 : 0.7) - menu.frame.minY
+                let endY = bounds.minY + bounds.height * (down ? 0.7 : 0.3) - menu.frame.minY
+                origin.withOffset(CGVector(dx: x, dy: startY))
+                    .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: x, dy: endY)))
+            }
         }
-        XCTAssertTrue(item.exists, "Missing menu item: \(labels)")
-        XCTAssertTrue(item.isHittable, "Unreachable menu item: \(labels)")
-        item.tap()
+        XCTFail("Unreachable menu item inside visible popup: \(labels)")
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
