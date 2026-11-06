@@ -17,6 +17,8 @@ import signal
 import subprocess
 import sys
 import time
+import re
+import uuid
 
 REGIONS = {
     "de": "DE", "en": "US", "en-GB": "GB", "en-HK": "HK", "es": "ES",
@@ -25,6 +27,11 @@ REGIONS = {
     "zh-Hant-HK": "HK",
 }
 MARKER = "AEGIS_AGENT_LOCALE "
+
+
+def validate_case_name(name):
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", name):
+        raise ValueError("Unsafe locale case filename")
 
 
 def resolve_testroot(value, root):
@@ -92,7 +99,14 @@ def main():
     parser.add_argument("--policy-case", action="append", choices=policy_by_name,
                         help="Run an independent generic/region/manual fixture instead of the default 17 hosts; repeat as needed")
     args = parser.parse_args()
+    # The destination is an identifier, never extra xcodebuild options.
+    try:
+        device = str(uuid.UUID(args.device)).upper()
+    except ValueError:
+        parser.error("Expected a simulator UUID")
     base_path = args.xctestrun.resolve(strict=True)
+    if not base_path.is_file() or base_path.suffix != ".xctestrun":
+        parser.error("Expected an existing .xctestrun file")
     base_bytes = base_path.read_bytes()
     base = plistlib.loads(base_bytes)
     if (base.get("__xctestrun_metadata__", {}).get("FormatVersion") != 1
@@ -108,7 +122,7 @@ def main():
     work.mkdir(parents=True, exist_ok=False)
     manifest = {
         "base": str(base_path), "base_sha256": hashlib.sha256(base_bytes).hexdigest(),
-        "device": args.device, "languages": languages, "cases": cases, "status": "running", "runs": [],
+        "device": device, "languages": languages, "cases": cases, "status": "running", "runs": [],
     }
 
     def save():
@@ -119,6 +133,7 @@ def main():
         resolved = resolve_testroot(base, base_path.parent)
         for case in cases:
             name = case["name"]
+            validate_case_name(name)
             language = case["preferences"][0]
             configuration = copy.deepcopy(resolved)
             target = configuration["AegisTests"]
@@ -144,8 +159,8 @@ def main():
             language = run["language"]
             log = work / f"{language}.log"
             command = [
-                "xcodebuild", "test-without-building", "-xctestrun", run["configuration"],
-                "-destination", f"platform=iOS Simulator,id={args.device}",
+                "/usr/bin/xcrun", "xcodebuild", "test-without-building", "-xctestrun", run["configuration"],
+                "-destination", f"platform=iOS Simulator,id={device}",
                 "-only-testing:AegisTests/AgentContractTests",
                 "-only-testing:AegisTests/LocalizationTests",
                 "-parallel-testing-enabled", "NO",
@@ -157,8 +172,16 @@ def main():
             print(f"Running {language}", flush=True)
             started = time.monotonic()
             with log.open("wb") as output:
-                process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
-                                           start_new_session=True)
+                config = Path(run["configuration"])
+                if config.parent != work or config.is_symlink() or not config.is_file():
+                    raise ValueError("Expected generated task-owned xctestrun configuration")
+                process = subprocess.Popen(
+                    ["/usr/bin/xcrun", "xcodebuild", "test-without-building", "-xctestrun", str(config),
+                     "-destination", f"platform=iOS Simulator,id={device}",
+                     "-only-testing:AegisTests/AgentContractTests", "-only-testing:AegisTests/LocalizationTests",
+                     "-parallel-testing-enabled", "NO", "-collect-test-diagnostics", "never",
+                     "-resultBundlePath", str(work / f"{language}.xcresult")],
+                    stdout=output, stderr=subprocess.STDOUT, shell=False, start_new_session=True)
                 try:
                     run["exit_code"] = process.wait(timeout=900)
                 except subprocess.TimeoutExpired:
@@ -169,7 +192,13 @@ def main():
                 finally:
                     run["elapsed_seconds"] = round(time.monotonic() - started, 2)
             if run["exit_code"] != 0:
-                raise RuntimeError(f"{language}: XCTest exit {run['exit_code']}")
+                error = f"{language}: xcodebuild exit {run['exit_code']}"
+                run.update(status="failed", error=error)
+                manifest.update(status="failed", error=error)
+                # Persist the observed process failure before propagating it;
+                # a process exit alone never establishes that XCTest ran.
+                save()
+                raise RuntimeError(error)
             run["evidence"] = read_evidence(log, run["expected"], run["family"], run["preferences"], run["region"])
             run["status"] = "passed"
             save()
@@ -178,8 +207,10 @@ def main():
         manifest["status"] = "failed"
         manifest["error"] = str(error)
         for run in manifest["runs"]:
-            if run["status"] == "running":
-                run["status"] = "failed"
+            if run["status"] in {"running", "timeout"}:
+                if run["status"] == "running":
+                    run["status"] = "failed"
+                run["error"] = str(error)
         print(str(error), file=sys.stderr)
     finally:
         save()
