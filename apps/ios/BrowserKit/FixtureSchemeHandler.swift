@@ -58,7 +58,7 @@ final class FixtureSchemeHandler: NSObject, WKURLSchemeHandler {
         #endif
         default:
             content = """
-            <p class="eyebrow">GCSA AEGIS</p>
+            <p class="eyebrow">Aegis Browser</p>
             <h1>\(text("安心浏览，清楚掌控。"))</h1>
             <p>\(text("在地址栏搜索或输入网址。需要整理信息时，从更多菜单打开 AI 助手。"))</p>
             <div class="grid">
@@ -79,7 +79,7 @@ final class FixtureSchemeHandler: NSObject, WKURLSchemeHandler {
         .card{display:flex;flex-direction:column;gap:6px;padding:18px;border:1px solid rgba(34,71,104,.13);border-radius:18px;background:rgba(255,255,255,.72);color:inherit;text-decoration:none;box-shadow:0 12px 30px rgba(40,70,100,.07)}
         .card strong{font-size:17px}.card span{font-size:14px;color:#657286}
         @media(prefers-color-scheme:dark){body{background:linear-gradient(145deg,#101722,#12251f);color:#edf3ff}p,.card span{color:#aeb9c8}.card{background:rgba(31,42,55,.75);border-color:#34465c}}
-        </style><title>Aegis</title></head><body>\(content)</body></html>
+        </style><title>Aegis Browser</title></head><body>\(content)</body></html>
         """
     }
 

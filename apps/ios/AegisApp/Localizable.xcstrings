@@ -1514,91 +1514,91 @@
         }
       }
     },
-    "GCSA Aegis": {
+    "Aegis Browser": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "ms": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "pt": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "GCSA Aegis"
+            "value": "Aegis Browser"
           }
         }
       }

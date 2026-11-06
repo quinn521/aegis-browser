@@ -63,7 +63,7 @@ struct BrowserSettingsView: View {
                 Section("关于") {
                     LabeledContent(
                         "应用",
-                        value: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Aegis browser"
+                        value: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Aegis Browser"
                     )
                     LabeledContent("版本", value: version)
                     LabeledContent("网页引擎") { Text("系统 WebKit") }
