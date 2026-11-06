@@ -83,10 +83,21 @@ final class AppLanguageUITests: XCTestCase {
         let before = field.value as? String
         // The fixture input has no form action. Use the native keyboard's
         // dismissal control, never Return, a link, or a non-focusable heading.
-        let dismissKeyboard = app.buttons.matching(NSPredicate(
+        let dismissCandidates = app.buttons.matching(NSPredicate(
             format: "label IN %@", ["Done", "Hide keyboard", "Dismiss keyboard"]
-        )).firstMatch
-        XCTAssertTrue(dismissKeyboard.waitForExistence(timeout: 5))
+        ))
+        var dismissKeyboard: XCUIElement?
+        let dismissalReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            dismissKeyboard = dismissCandidates.allElementsBoundByIndex.first {
+                $0.exists && $0.isHittable && !$0.frame.isEmpty && app.frame.contains($0.frame)
+            }
+            return dismissKeyboard != nil
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissalReady], timeout: 5), .completed)
+        guard let dismissKeyboard else {
+            XCTFail("No visible, hittable native keyboard dismissal control")
+            return
+        }
         XCTAssertTrue(dismissKeyboard.isHittable)
         dismissKeyboard.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
