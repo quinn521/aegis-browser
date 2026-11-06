@@ -73,6 +73,22 @@ use British spelling such as “authorisation”. Hong Kong Traditional Chinese
 uses 身份 for page identity, and Taiwan Traditional Chinese uses 身分. Identical
 wording across regional variants is intentional where the meaning and usage agree.
 
+`AgentContractError.errorDescription` explicitly resolves `AppleLanguages` (or
+`Locale.preferredLanguages` when no override is present) against the owning
+framework's available localizations, then sets that locale on the generated
+`LocalizedStringResource` before materializing it. The inventory comes from
+AgentKit's bundle, not a second hardcoded language list. A fresh `en-GB` test host
+demonstrated that default resource lookup returned “authorization” instead of
+the framework's “authorisation”, even though explicit-locale lookup passed.
+Framework-specific selection preserves regional spelling without changing the
+app-wide `CFBundleAllowMixedLocalizations` policy or the generated symbol bindings.
+
+`testContractErrorDescriptionsHonorRequestedSystemLocale` compares all 16 actual
+`errorDescription` and bridged `NSError.localizedDescription` results with the
+selected compiled AgentKit table and records requested/selected locales. Run it
+in fresh test hosts for all 17 preferences; explicit-resource-locale tests alone
+do not validate this default caller path.
+
 For this batch, prefer String Catalogs over converting to per-language
 `.strings` files. The framework builds with generated symbols, existing app
 translations keep their inventory and regression checks, and the simulator

@@ -61,7 +61,10 @@ struct BrowserSettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("关于") {
-                    LabeledContent("应用", value: "GCSA Aegis")
+                    LabeledContent(
+                        "应用",
+                        value: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Aegis browser"
+                    )
                     LabeledContent("版本", value: version)
                     LabeledContent("网页引擎") { Text("系统 WebKit") }
                     NavigationLink("开源许可与鸣谢") { ThirdPartyNoticesView() }

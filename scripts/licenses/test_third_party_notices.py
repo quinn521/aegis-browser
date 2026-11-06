@@ -1,6 +1,9 @@
 import io
 import hashlib
 import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,6 +28,49 @@ class NoticePackageTests(unittest.TestCase):
 
     def test_generated_files_match_current_licenses_and_swift_package_pins(self):
         notices.check_outputs()
+
+    @unittest.skipUnless(shutil.which("swift"), "Swift is required to exercise the iOS notice parser")
+    def test_ios_component_parser_preserves_every_section_and_byte(self):
+        # Compile the actual Foundation-only model from the view file, avoiding
+        # an Xcode project change or a second implementation of its parser.
+        view = (notices.ROOT / "apps/ios/AegisApp/ThirdPartyNoticesView.swift").read_text()
+        model = view.split("struct ThirdPartyNoticesDocument {", 1)[1].split(
+            "\nstruct ThirdPartyNoticesView:", 1)[0]
+        generated = notices.render("ios")
+        expected_sources = re.findall(rb"^Source file: (.+)$", generated, re.MULTILINE)
+        self.assertGreater(len(expected_sources), 0)
+        program = "import Foundation\nstruct ThirdPartyNoticesDocument {" + model + r'''
+let data = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
+let text = String(decoding: data, as: UTF8.self)
+let document = ThirdPartyNoticesDocument(text: text)
+precondition(Data(document.fullText.utf8) == data, "Full notice bytes changed")
+precondition(document.notices.count == Int(CommandLine.arguments[2])!, "Missing generated sections")
+precondition(document.introduction.contains("Third-party works retain their own licenses."))
+for (index, notice) in document.notices.enumerated() {
+    precondition(notice.id == index && !notice.title.isEmpty)
+    precondition(notice.body.contains("Source file: "))
+    precondition(notice.title + notice.body == notice.text)
+    let paragraphs = notice.body.components(separatedBy: "\n\n")
+    precondition(paragraphs.joined(separator: "\n\n") == notice.body)
+}
+// Internal license separators must remain inside their component.
+let internalSeparators = "Title\nSource file: fixture\n\nLicense\n" + String(repeating: "=", count: 20)
+    + "\nMore license\n" + String(repeating: "-", count: 72) + "\nEnd\n"
+let fixture = "Introduction\n" + ThirdPartyNoticesDocument.sectionDelimiter + internalSeparators
+let parsed = ThirdPartyNoticesDocument(text: fixture)
+precondition(parsed.notices.count == 1)
+precondition(parsed.notices[0].text == internalSeparators && parsed.fullText == fixture)
+precondition(ThirdPartyNoticesDocument(text: "Introduction only\n").notices.isEmpty)
+print("Validated \(document.notices.count) notice sections and \(data.count) original bytes")
+'''
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            source = directory / "main.swift"
+            source.write_text(program)
+            resource = directory / "ThirdPartyNotices.txt"
+            resource.write_bytes(generated)
+            subprocess.run(["swift", str(source), str(resource), str(len(expected_sources))],
+                           check=True, timeout=120)
 
     def test_new_sdk_pin_cannot_silently_reuse_old_notices(self):
         with tempfile.TemporaryDirectory() as temp:

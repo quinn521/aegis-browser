@@ -21,11 +21,12 @@ final class SettingsLayoutUITests: XCTestCase {
 
     func testAboutLinksAtLargestTextSize() {
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+        // Standard-size coverage enters through the browser menu. Keep this
+        // large-type check focused on the About links and license content.
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         app.launch()
-        XCTAssertTrue(app.buttons["browser-more"].waitForExistence(timeout: 10))
-        openSettings(app)
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
         for identifier in ["aegis-website-link", "aegis-support-link", "aegis-privacy-policy-link", "third-party-notices-link"] {
             let link = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
             XCTAssertTrue(reveal(link, app), "关于中的链接必须可达：\(identifier)")
@@ -36,11 +37,110 @@ final class SettingsLayoutUITests: XCTestCase {
         let notices = app.buttons["third-party-notices-link"]
         XCTAssertTrue(reveal(notices, app))
         notices.tap()
-        let text = app.staticTexts["third-party-notices-text"]
-        XCTAssertTrue(text.waitForExistence(timeout: 5))
-        XCTAssertTrue(text.label.contains("Phishing Block List"))
-        XCTAssertTrue(text.label.contains("Permission is hereby granted"))
+        assertNoticesContent(app, title: "开源许可与鸣谢", name: "许可正文-最大字体")
         app.terminate()
+    }
+
+    func testThirdPartyNoticesAtStandardSize() {
+        inspectNotices(largeText: false)
+    }
+
+    func testThirdPartyNoticesAtLargestTextSize() {
+        inspectNotices(largeText: true)
+    }
+
+    func testThirdPartyNoticesInEnglishAtStandardSize() {
+        inspectNotices(largeText: false, language: "en")
+    }
+
+    func testThirdPartyNoticesInEnglishAtLargestTextSize() {
+        inspectNotices(largeText: true, language: "en")
+    }
+
+    private func inspectNotices(largeText: Bool, language: String = "zh-Hans") {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(\(language))",
+                               "-UIPreferredContentSizeCategoryName", largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"]
+        if largeText { app.launchArguments.append("--ui-testing-settings") }
+        app.launch()
+        if !largeText {
+            XCTAssertTrue(app.buttons["browser-more"].waitForExistence(timeout: 10))
+            openSettings(app, title: language == "en" ? "Settings" : "设置")
+        }
+        let entry = app.buttons["third-party-notices-link"]
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        let title = language == "en" ? "Open Source Licenses & Acknowledgements" : "开源许可与鸣谢"
+        assertNoticesContent(app, title: title, name: "许可正文-\(language)-\(largeText ? "最大字体" : "普通字体")")
+        app.terminate()
+    }
+
+    private func assertNoticesContent(_ app: XCUIApplication, title: String, name: String) {
+        let list = app.collectionViews["third-party-notices-list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        let heading = app.staticTexts["third-party-notices-title"]
+        XCTAssertEqual(heading.label, title)
+        XCTAssertTrue(heading.isHittable)
+        assertHorizontalBounds(heading, in: list)
+        XCTAssertGreaterThan(heading.frame.height, 0)
+        let introduction = app.staticTexts["third-party-notices-introduction-0"]
+        XCTAssertTrue(reveal(introduction, app))
+        XCTAssertTrue(introduction.label.contains("Third-party licenses and acknowledgements"))
+        assertHorizontalBounds(introduction, in: list)
+        capture(name + "-列表", app)
+
+        // The first component has a long heading, exercising wrapping in both
+        // the native list row and the separate detail at accessibility sizes.
+        let component = app.buttons["third-party-notices-component-0"]
+        XCTAssertTrue(reveal(component, app))
+        let componentTitle = "Web enhancements — component versions and sources"
+        XCTAssertTrue(component.label.contains(componentTitle))
+        assertHorizontalBounds(component, in: list)
+        component.tap()
+        let scroll = app.scrollViews["third-party-notice-detail-scroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        let detailHeading = app.staticTexts["third-party-notice-detail-title"]
+        XCTAssertEqual(detailHeading.label, componentTitle)
+        XCTAssertTrue(detailHeading.isHittable)
+        assertHorizontalBounds(detailHeading, in: scroll)
+        let source = app.staticTexts["third-party-notice-detail-paragraph-0"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        XCTAssertTrue(source.label.contains("Source file:"))
+        assertHorizontalBounds(source, in: scroll)
+        XCTAssertGreaterThanOrEqual(source.frame.minY, detailHeading.frame.maxY)
+        XCTAssertGreaterThan(source.frame.height, 0)
+        capture(name + "-组件详情", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+
+        let licenseEntry = app.buttons["third-party-notices-component-1"]
+        XCTAssertTrue(reveal(licenseEntry, app))
+        licenseEntry.tap()
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        XCTAssertEqual(detailHeading.label, "markdown-it-LICENSE")
+        let license = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Permission is hereby granted")).firstMatch
+        for _ in 0..<16 {
+            if license.exists, license.isHittable,
+               scroll.frame.intersection(license.frame).height >= min(100, license.frame.height) { break }
+            scroll.swipeUp()
+        }
+        XCTAssertTrue(license.exists)
+        XCTAssertTrue(license.isHittable)
+        assertHorizontalBounds(license, in: scroll)
+        XCTAssertGreaterThanOrEqual(scroll.frame.intersection(license.frame).height, 100)
+        XCTAssertTrue(license.label.contains("conditions:"))
+        capture(name + "-许可条款", app)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(list.waitForExistence(timeout: 5))
+        XCTAssertTrue(reveal(licenseEntry, app))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["third-party-notices-link"].waitForExistence(timeout: 5))
+    }
+
+    private func assertHorizontalBounds(_ element: XCUIElement, in surface: XCUIElement) {
+        XCTAssertGreaterThanOrEqual(element.frame.minX, surface.frame.minX - 1)
+        XCTAssertLessThanOrEqual(element.frame.maxX, surface.frame.maxX + 1)
+        XCTAssertGreaterThan(element.frame.width, 0)
     }
 
     func testSettingsPagesInLandscape() {
@@ -247,13 +347,13 @@ final class SettingsLayoutUITests: XCTestCase {
         capture("Aegis八类设置入口", app)
     }
 
-    private func openSettings(_ app: XCUIApplication) {
+    private func openSettings(_ app: XCUIApplication, title: String = "设置") {
         app.buttons["browser-more"].tap()
-        let settings = app.buttons["设置"]
+        let settings = app.buttons[title]
         _ = settings.waitForExistence(timeout: 5)
         // iPad 的大字号菜单会分页，手势必须落在右侧菜单内。
         for _ in 0..<8 {
-            if settings.exists { break }
+            if settings.exists, settings.isHittable { break }
             let menu = app.collectionViews.firstMatch
             XCTAssertTrue(menu.exists)
             menu.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
@@ -267,15 +367,17 @@ final class SettingsLayoutUITests: XCTestCase {
         _ = element.waitForExistence(timeout: 3)
         for _ in 0..<14 {
             // 导航动画期间集合视图会被替换，滚动坐标固定绑定应用窗口。
-            let bounds = app.frame
+            let form = app.collectionViews.firstMatch
+            let surface = form.exists ? form : app
+            let bounds = surface.frame
             let top = max(bounds.minY, app.navigationBars.allElementsBoundByIndex.last?.frame.maxY ?? bounds.minY) + 8
             let bottom = bounds.maxY - 8
             if element.exists, element.isHittable, element.frame.midY >= top, element.frame.midY <= bottom { return true }
             // Virtualized rows may have no frame. A caller returning to an earlier row
             // can supply the known direction instead of scrolling farther away.
             let down = scrollDown ?? (element.exists && !element.frame.isEmpty && element.frame.midY < top)
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.35 : 0.75))
-                .press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.75 : 0.35)))
+            surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.35 : 0.75))
+                .press(forDuration: 0.1, thenDragTo: surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: down ? 0.75 : 0.35)))
         }
         capture("无法定位设置控件", app)
         let hierarchy = XCTAttachment(string: app.debugDescription)

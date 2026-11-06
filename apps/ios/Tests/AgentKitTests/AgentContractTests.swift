@@ -2,6 +2,48 @@ import XCTest
 @testable import AgentKit
 
 final class AgentContractTests: XCTestCase {
+    func testContractErrorDescriptionsHonorRequestedSystemLocale() throws {
+        // Run in a fresh test host with -testLanguage. Do not override the
+        // resource locale: exercise the same LocalizedError/NSError path as callers.
+        let errors: [AgentContractError] = [
+            .invalidState, .privateProfileDenied, .consentRequired, .expiredGrant,
+            .unsupportedVersion, .toolDenied, .originDenied, .riskExceeded, .invalidLease,
+            .staleResourceRevision, .capabilityExpired, .capabilityAlreadyConsumed,
+            .capabilityMismatch, .invalidTransition, .resourceReuse, .unknownResource,
+        ]
+        let languages = ["de", "en", "en-GB", "en-HK", "es", "fr", "id", "it", "ja",
+                         "ko", "ms", "pt", "th", "vi", "zh-Hans", "zh-Hant", "zh-Hant-HK"]
+        let appleLanguages = UserDefaults.standard.stringArray(forKey: "AppleLanguages") ?? []
+        let requested = appleLanguages.isEmpty ? Locale.preferredLanguages : appleLanguages
+        XCTAssertFalse(requested.isEmpty)
+        let selected = try XCTUnwrap(Bundle.preferredLocalizations(
+            from: languages, forPreferences: requested
+        ).first)
+        let context = "requested=\(requested), selected=\(selected), current=\(Locale.current.identifier)"
+        print("AgentContractError system locale: \(context)")
+        let attachment = XCTAttachment(string: context)
+        attachment.name = "AgentContractError requested and selected locales"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        let bundle = try XCTUnwrap(Bundle(identifier: "com.gcsa.aegis.agentkit"))
+        let tableURL = bundle.bundleURL.appendingPathComponent("\(selected).lproj")
+            .appendingPathComponent("AgentErrors.strings")
+        let table = try XCTUnwrap(PropertyListSerialization.propertyList(
+            from: Data(contentsOf: tableURL), format: nil
+        ) as? [String: String])
+        XCTAssertEqual(errors.count, 16)
+        XCTAssertEqual(Set(table.keys), Set(errors.map { $0.localizedResource.key }), context)
+        for error in errors {
+            let key = error.localizedResource.key
+            let expected = try XCTUnwrap(table[key], "\(context), key=\(key)")
+            XCTAssertFalse(expected.isEmpty || expected == key, "\(context), key=\(key)")
+            XCTAssertEqual(error.errorDescription, expected, "errorDescription: \(context), key=\(key)")
+            XCTAssertEqual((error as NSError).localizedDescription, expected,
+                           "NSError.localizedDescription: \(context), key=\(key)")
+        }
+    }
+
     func testLocalizedContractErrorsInEverySupportedLocale() throws {
         let errors: [AgentContractError] = [
             .invalidState, .privateProfileDenied, .consentRequired, .expiredGrant,
