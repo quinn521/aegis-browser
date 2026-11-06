@@ -19,6 +19,31 @@ final class SettingsLayoutUITests: XCTestCase {
         inspectSettings(largeText: true)
     }
 
+    func testAboutAppNameAtStandardSize() {
+        inspectAboutAppName(largeText: false)
+    }
+
+    func testAboutAppNameAtLargestTextSize() {
+        inspectAboutAppName(largeText: true)
+    }
+
+    private func inspectAboutAppName(largeText: Bool) {
+        let app = XCUIApplication()
+        let language = largeText ? "zh-Hans" : "en"
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(\(language))",
+                               "-AppleLocale", largeText ? "zh_CN" : "en_US",
+                               "-UIPreferredContentSizeCategoryName", largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"]
+        app.launch()
+        XCTAssertTrue(app.navigationBars[largeText ? "设置" : "Settings"].waitForExistence(timeout: 10))
+        let name = app.staticTexts["Aegis Browser"]
+        XCTAssertTrue(reveal(name, app), "The About app name must remain visible at the requested text size")
+        XCTAssertEqual(name.label, "Aegis Browser")
+        XCTAssertTrue(name.isHittable)
+        assertInsideWindow(name, app)
+        capture("Aegis Browser-About-\(largeText ? "largest" : "standard")", app)
+        app.terminate()
+    }
+
     func testAboutLinksAtLargestTextSize() {
         let app = XCUIApplication()
         // Standard-size coverage enters through the browser menu. Keep this
