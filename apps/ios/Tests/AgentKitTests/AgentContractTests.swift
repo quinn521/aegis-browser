@@ -2,6 +2,34 @@ import XCTest
 @testable import AgentKit
 
 final class AgentContractTests: XCTestCase {
+    func testLocalizedContractErrorsInEverySupportedLocale() throws {
+        let errors: [AgentContractError] = [
+            .invalidState, .privateProfileDenied, .consentRequired, .expiredGrant,
+            .unsupportedVersion, .toolDenied, .originDenied, .riskExceeded, .invalidLease,
+            .staleResourceRevision, .capabilityExpired, .capabilityAlreadyConsumed,
+            .capabilityMismatch, .invalidTransition, .resourceReuse, .unknownResource,
+        ]
+        let bundle = try XCTUnwrap(Bundle(identifier: "com.gcsa.aegis.agentkit"))
+        let languages = ["de", "en", "en-GB", "en-HK", "es", "fr", "id", "it", "ja",
+                         "ko", "ms", "pt", "th", "vi", "zh-Hans", "zh-Hant", "zh-Hant-HK"]
+        XCTAssertEqual(Set(errors.map { $0.localizedResource.key }).count, errors.count)
+        for language in languages {
+            let folder = bundle.bundleURL.appendingPathComponent("\(language).lproj")
+            let tableURL = folder.appendingPathComponent("AgentErrors.strings")
+            let table = try XCTUnwrap(PropertyListSerialization.propertyList(
+                from: Data(contentsOf: tableURL), format: nil
+            ) as? [String: String])
+            XCTAssertEqual(Set(table.keys), Set(errors.map { $0.localizedResource.key }))
+            for error in errors {
+                var resource = error.localizedResource
+                resource.locale = Locale(identifier: language)
+                let expected = try XCTUnwrap(table[resource.key])
+                XCTAssertEqual(String(localized: resource), expected, "\(language)/\(resource.key)")
+                XCTAssertFalse(expected.isEmpty || expected == resource.key)
+            }
+        }
+    }
+
     func testConsentRequiredBeforePageRead() async throws {
         let profileID = UUID()
         let broker = AgentBroker(profileID: profileID, isPrivateProfile: false)

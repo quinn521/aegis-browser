@@ -60,6 +60,27 @@ per-key identical-English allowlist records exact values and reasons, including
 legitimate shared words such as French “Source” and German “Version”; it does not
 allow untranslated sentences or locale-prefixed English text.
 
+## Agent contract errors (iOS 1.0.1)
+
+The 16 user-facing contract errors use stable semantic keys in AgentKit's
+`AgentErrors.xcstrings`. The framework owns the table and the generated Swift
+symbols, so lookup follows the framework bundle. Editing a translation does
+not rename a Swift reference. The app and share extension continue to use
+their existing shared catalog for their own UI.
+
+The error table has all 17 requested localizations. UK and Hong Kong English
+use British spelling such as “authorisation”. Hong Kong Traditional Chinese
+uses 身份 for page identity, and Taiwan Traditional Chinese uses 身分. Identical
+wording across regional variants is intentional where the meaning and usage agree.
+
+For this batch, prefer String Catalogs over converting to per-language
+`.strings` files. The framework builds with generated symbols, existing app
+translations keep their inventory and regression checks, and the simulator
+can exercise the compiled framework table in each locale. Per-language files
+would isolate translation diffs, but replacing the existing catalogs would
+require migrating their checks and supplying a separate typed lookup mechanism.
+Use semantic keys incrementally as features change.
+
 ## Remaining gaps
 
 | Surface | Remaining work |

@@ -124,6 +124,25 @@ def verify_regression_detection(contract, catalog, probes):
     print(f"PASS: {len(mutations)} negative catalog regressions rejected", flush=True)
 
 
+def validate_agent_errors(contract):
+    catalog = json.loads((ROOT / "AgentKit/AgentErrors.xcstrings").read_text())
+    languages = set(contract["requestedLocales"])
+    assert catalog["sourceLanguage"] == "zh-Hans"
+    for key, entry in catalog["strings"].items():
+        assert key.startswith("agent.error.") and entry["extractionState"] == "manual", key
+        translations = entry["localizations"]
+        assert set(translations) == languages, key
+        source = translations[catalog["sourceLanguage"]]["stringUnit"]["value"]
+        for language, translation in translations.items():
+            unit = translation["stringUnit"]
+            value = unit["value"]
+            assert unit["state"] == "translated" and value.strip() and value != key, (key, language)
+            assert FORMAT.findall(value) == FORMAT.findall(source), (key, language)
+            assert numbers(value) == numbers(source), (key, language)
+            if language not in {"en", "en-GB", "en-HK"}:
+                assert value != translations["en"]["stringUnit"]["value"], (key, language)
+
+
 def validate_project(locales):
     project = plist(ROOT / "Aegis.xcodeproj/project.pbxproj")
     objects = project["objects"]
@@ -230,6 +249,7 @@ def main():
     verify_regression_detection(contract, catalog, probes)
     validate_project(contract["resourceLocales"])
     validate_web_extension()
+    validate_agent_errors(contract)
     exercise_bundles(work, contract, catalog)
     print("PASS: source preservation, registration, compiled resources and macOS Foundation behavior")
 
