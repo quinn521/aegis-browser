@@ -122,7 +122,7 @@ def main():
                 "-destination", f"platform=iOS Simulator,id={args.device}",
                 "-only-testing:AegisTests/AgentContractTests",
                 "-only-testing:AegisTests/LocalizationTests",
-                "-parallel-testing-enabled", "NO", "-test-iterations", "1",
+                "-parallel-testing-enabled", "NO",
                 "-collect-test-diagnostics", "never",
                 "-resultBundlePath", str(work / f"{language}.xcresult"),
             ]
