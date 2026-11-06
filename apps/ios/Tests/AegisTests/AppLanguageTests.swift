@@ -127,6 +127,67 @@ final class AppLanguageTests: XCTestCase {
         XCTAssertEqual(afterRejectedUpdate, original)
     }
 
+    func testHistoryRestoredStartPageUsesLatestLanguageWithoutTouchingExternalPage() async throws {
+        guard ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+              !ProcessInfo.processInfo.arguments.contains("-browser.languageFamily.v1") else {
+            throw XCTSkip("Requires isolated --ui-testing host without a fixed argument-domain family")
+        }
+        let suite = "com.gcsa.aegis.ios.ui-tests"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let key = Aegis.AegisLanguagePreferenceStore.key
+        let old = defaults.persistentDomain(forName: suite)?[key]
+        defer { if let old { defaults.set(old, forKey: key) } else { defaults.removeObject(forKey: key) } }
+        let language = AppLanguageSettings(store: .init(defaults: defaults))
+        language.select(.en)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     workspaceStore: WorkspaceStore(persistenceURL: nil),
+                                     preferences: BrowserPreferences(defaults: defaults))
+        let tab = try XCTUnwrap(browser.activeTab)
+        let view = tab.webView
+        defer { tab.stop() }
+        let headingScript = "document.querySelector('[data-aegis-start=heading]').textContent"
+        let tokenScript = "document.querySelector('meta[name=aegis-start-document]').content"
+        tab.load(URL(string: "aegis://start")!)
+        try await waitUntil {
+            let heading = try? await view.evaluateJavaScript(headingScript) as? String
+            return !tab.isLoading && heading == "Browse with clarity and control."
+        }
+        let originalToken = try await view.evaluateJavaScript(tokenScript) as? String
+        XCTAssertNotNil(originalToken)
+        tab.load(URL(string: "http://127.0.0.1:8768/article")!)
+        try await waitUntil { !tab.isLoading && tab.url?.path == "/article" && view.canGoBack }
+        _ = try await view.evaluateJavaScript("window.languageHistorySentinel=41;document.querySelector('input').value='KEEP_HISTORY_DRAFT'")
+        let externalHTML = try await view.evaluateJavaScript("document.documentElement.outerHTML") as? String
+        let epoch = tab.navigationEpoch
+        let historyCount = view.backForwardList.backList.count
+        language.select(.de)
+        browser.refreshLocalizedPresentation()
+        let unchangedHTML = try await view.evaluateJavaScript("document.documentElement.outerHTML") as? String
+        let draft = try await view.evaluateJavaScript("document.querySelector('input').value") as? String
+        let sentinel = try await view.evaluateJavaScript("window.languageHistorySentinel") as? Int
+        XCTAssertEqual(unchangedHTML, externalHTML)
+        XCTAssertEqual(draft, "KEEP_HISTORY_DRAFT")
+        XCTAssertEqual(sentinel, 41)
+        XCTAssertEqual(tab.navigationEpoch, epoch)
+        XCTAssertEqual(view.backForwardList.backList.count, historyCount)
+        XCTAssertFalse(tab.isLoading)
+
+        tab.goBack()
+        try await waitUntil {
+            let heading = try? await view.evaluateJavaScript(headingScript) as? String
+            return !tab.isLoading && tab.url?.absoluteString == "aegis://start"
+                && heading == "Sicher surfen. Die Kontrolle behalten."
+        }
+        let restoredToken = try await view.evaluateJavaScript(tokenScript) as? String
+        let restoredLanguage = try await view.evaluateJavaScript("document.documentElement.lang") as? String
+        // Prove this exercised the cached document, not a fresh scheme response.
+        XCTAssertEqual(restoredToken, originalToken)
+        XCTAssertEqual(restoredLanguage, "de")
+        XCTAssertTrue(browser.activeTab === tab)
+        XCTAssertTrue(tab.webView === view)
+        XCTAssertTrue(view.canGoForward)
+    }
+
     func testRefreshWhileDownloadAndModelStreamAreActive() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

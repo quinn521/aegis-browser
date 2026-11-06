@@ -394,6 +394,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         pendingNavigation = nil
         isLoading = false
         refreshState()
+        // History can restore a start document whose DOM predates the current
+        // language; a newly loaded document may also finish after a selection.
+        // Reuse the owned-document guards with the latest runtime snapshot.
+        refreshLocalizedPresentation()
         if restoresScrollOffset {
             let offset = savedScrollOffset
             let epoch = navigationEpoch
