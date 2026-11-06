@@ -155,16 +155,15 @@ final class AppLanguageUITests: XCTestCase {
             for step in 0...8 {
                 let menu = app.collectionViews.firstMatch
                 XCTAssertTrue(menu.exists)
-                // UIKit may expose a collection taller than its clipping popup.
-                // Intersect its containing popup frames as well as the window.
-                var bounds = menu.frame.intersection(app.frame)
-                for container in app.otherElements.containing(.collectionView, identifier: menu.identifier).allElementsBoundByIndex {
-                    let frame = container.frame
-                    if abs(frame.minX - menu.frame.minX) < 1,
-                       abs(frame.width - menu.frame.width) < 1,
-                       abs(frame.minY - menu.frame.minY) < 1 {
-                        bounds = bounds.intersection(frame)
-                    }
+                // Traverse one snapshot's actual ancestry; native popup
+                // containers need not share the collection's origin or width.
+                let snapshot: any XCUIElementSnapshot
+                do { snapshot = try app.snapshot() }
+                catch { XCTFail("Cannot inspect active menu: \(error)"); return }
+                let regions = menuRegions(in: snapshot, clippedTo: snapshot.frame)
+                guard regions.count == 1, var bounds = regions.first else {
+                    XCTFail("Expected one visible native menu collection, found \(regions.count)")
+                    return
                 }
                 bounds = bounds.insetBy(dx: 8, dy: 8)
                 XCTAssertFalse(bounds.isEmpty)
@@ -175,13 +174,20 @@ final class AppLanguageUITests: XCTestCase {
                 guard step < 8 else { break }
                 let origin = menu.coordinate(withNormalizedOffset: .zero)
                 let x = bounds.midX - menu.frame.minX
-                let startY = bounds.minY + bounds.height * (down ? 0.3 : 0.7) - menu.frame.minY
-                let endY = bounds.minY + bounds.height * (down ? 0.7 : 0.3) - menu.frame.minY
+                let startY = bounds.minY + bounds.height * (down ? 0.15 : 0.4) - menu.frame.minY
+                let endY = bounds.minY + bounds.height * (down ? 0.4 : 0.15) - menu.frame.minY
                 origin.withOffset(CGVector(dx: x, dy: startY))
                     .press(forDuration: 0.1, thenDragTo: origin.withOffset(CGVector(dx: x, dy: endY)))
             }
         }
         XCTFail("Unreachable menu item inside visible popup: \(labels)")
+    }
+
+    private func menuRegions(in node: any XCUIElementSnapshot, clippedTo ancestors: CGRect) -> [CGRect] {
+        let visible = ancestors.intersection(node.frame)
+        guard !visible.isNull, !visible.isEmpty else { return [] }
+        if node.elementType == .collectionView { return [visible] }
+        return node.children.flatMap { self.menuRegions(in: $0, clippedTo: visible) }
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
