@@ -98,18 +98,22 @@ final class SettingsLayoutUITests: XCTestCase {
         assertHorizontalBounds(component, in: list)
         component.tap()
         let scroll = app.scrollViews["third-party-notice-detail-scroll"]
-        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        let detailExists = scroll.waitForExistence(timeout: 5)
+        capture(name + "-组件详情", app)
+        XCTAssertTrue(detailExists)
         let detailHeading = app.staticTexts["third-party-notice-detail-title"]
         XCTAssertEqual(detailHeading.label, componentTitle)
         XCTAssertTrue(detailHeading.isHittable)
         assertHorizontalBounds(detailHeading, in: scroll)
+        XCTAssertGreaterThan(detailHeading.frame.height, 0)
         let source = app.staticTexts["third-party-notice-detail-paragraph-0"]
         XCTAssertTrue(source.waitForExistence(timeout: 5))
         XCTAssertTrue(source.label.contains("Source file:"))
         assertHorizontalBounds(source, in: scroll)
-        XCTAssertGreaterThanOrEqual(source.frame.minY, detailHeading.frame.maxY)
+        // Selectable Text AX frames extend beyond the rendered glyphs and may
+        // overlap. Check vertical ordering rather than disjoint frame edges.
+        XCTAssertGreaterThan(source.frame.midY, detailHeading.frame.midY)
         XCTAssertGreaterThan(source.frame.height, 0)
-        capture(name + "-组件详情", app)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(list.waitForExistence(timeout: 5))
 
