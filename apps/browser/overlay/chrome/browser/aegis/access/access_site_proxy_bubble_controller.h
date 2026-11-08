@@ -5,12 +5,14 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/supports_user_data.h"
 #include "chrome/browser/aegis/access/access_rule_store.h"
 #include "chrome/browser/aegis/access/access_service_coordinator.h"
+#include "chrome/browser/aegis/access/access_site_dev_allow_block_panel.h"
 #include "chrome/browser/aegis/access/access_site_proxy_bubble_model.h"
 #include "chrome/browser/aegis/access/access_site_proxy_session.h"
 #include "url/gurl.h"
@@ -56,6 +58,17 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
   // Disable locally commits even when the Access service is unavailable.
   // Returns false only when the host/toggle cannot be accepted.
   bool RequestHostProxySession(const AccessSiteHost& host, bool enabled);
+
+  // P-mac-4 DEV panel. False on Beta/Release — UI must not register the
+  // section. Never admits a general Access rule editor.
+  bool IsDevAllowBlockPanelRegistered() const;
+  AccessDevAllowBlockPanelSnapshot DevAllowBlockSnapshotForCommittedUrl(
+      const GURL& committed_url) const;
+  // Intent-only allow/block/off for an explicit host. Fail-closed when the
+  // channel does not admit the panel. Does not publish/ACK.
+  AccessDevAllowBlockApplyResult ApplyDevAllowBlock(
+      std::string_view raw_host,
+      AccessDevAllowBlockAction action);
 
   // P-mac-5: node/runtime fault while allow stays allow. Never clears the
   // PROXY selection or publishes DIRECT. |wait| holds new requests; otherwise
