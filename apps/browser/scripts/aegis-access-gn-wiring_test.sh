@@ -73,6 +73,7 @@ SITE_PROXY_BUBBLE_PATCH_FILE="$BROWSER_DIR/patches/0351-feat-access-toolbar-bubb
 SITE_PROXY_SESSION_PATCH_FILE="$BROWSER_DIR/patches/0352-feat-access-bubble-session.patch"
 SITE_PROXY_FAULT_PATCH_FILE="$BROWSER_DIR/patches/0353-feat-access-fault-no-direct.patch"
 SITE_DEV_ALLOW_BLOCK_PATCH_FILE="$BROWSER_DIR/patches/0354-feat-access-dev-allow-block-panel.patch"
+SITE_PROXY_PHASE1_EVIDENCE_PATCH_FILE="$BROWSER_DIR/patches/0355-feat-access-phase1-evidence.patch"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -299,6 +300,28 @@ rg -Fq 'ControlledOnFaultRecoveryOffPreservesRoute' "$BROWSER_PROXY_TEST" ||
   fail "browser proxy fixture must cover controlled fault without DIRECT"
 rg -Fq 'ProductFaultDrillHealthyOnFaultRecoveryOff' "$BROWSER_PROXY_TEST" ||
   fail "browser fault fixture must reference the product session drill"
+[[ -f "$SITE_PROXY_PHASE1_EVIDENCE_PATCH_FILE" ]] ||
+  fail "active series must include the phase-1 evidence sync patch"
+rg -Fq '+    "access_site_proxy_phase1_evidence_fixture.cc",' \
+  "$SITE_PROXY_PHASE1_EVIDENCE_PATCH_FILE" ||
+  fail "patch 0355 must deliver the phase-1 evidence fixture"
+rg -Fq 'RunSiteProxyPhase1EvidenceDrill' \
+  "$SITE_PROXY_PHASE1_EVIDENCE_PATCH_FILE" ||
+  fail "patch 0355 must deliver RunSiteProxyPhase1EvidenceDrill"
+rg -Fq 'Phase1EvidenceDrillOnLoadFaultRecoveryOff' \
+  "$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_site_proxy_session_unittest.cc" ||
+  fail "session regression must cover the phase-1 evidence drill"
+rg -Fq 'RunSiteProxyPhase1EvidenceDrill' "$BROWSER_PROXY_TEST" ||
+  fail "browser fixture must reference the phase-1 evidence drill"
+rg -Fq 'BuildPhase1EvidenceCorrelationId' \
+  "$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_site_proxy_phase1_evidence_fixture.h" ||
+  fail "phase-1 evidence fixture must define correlation IDs"
+REPO_ROOT="$(cd "$BROWSER_DIR/../.." && pwd)"
+[[ -f "$REPO_ROOT/docs/audit/evidence/macos-access-product-phase1/status.json" ]] ||
+  fail "phase-1 evidence pack status.json must exist"
+rg -Fq 'excluded-while-open' \
+  "$REPO_ROOT/docs/audit/evidence/macos-access-product-phase1/manifest.template.json" ||
+  fail "evidence pack must exclude unfinished pmac4 from PASS claim"
 rg -Fq 'NotifyRuntimeFault' \
   "$BROWSER_DIR/overlay/chrome/browser/aegis/access/access_site_proxy_session.h" ||
   fail "session controller must expose NotifyRuntimeFault"
