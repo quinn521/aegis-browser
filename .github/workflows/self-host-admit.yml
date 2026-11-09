@@ -1,5 +1,12 @@
 name: Self-host admit
 on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+    branches:
+      - develop
+    paths:
+      - .github/workflows/self-host-admit.yml
+      - scripts/ci/admit-self-host-internal.sh
   push:
     branches:
       - develop
