@@ -1,0 +1,29 @@
+name: Self-host admit
+on:
+  push:
+    branches:
+      - develop
+    paths:
+      - .github/workflows/self-host-admit.yml
+      - scripts/ci/admit-self-host-internal.sh
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  admit:
+    if: ${{ github.repository == 'quinn521/aegis-browser' }}
+    runs-on: [self-hosted, macOS, ARM64, aegis-test]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Read the job-start hook
+        run: bash scripts/ci/admit-self-host-internal.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ always() }}
+        with:
+          name: self-host-hooks-${{ github.run_id }}
+          path: ${{ runner.temp }}/self-host-hooks
+          if-no-files-found: warn
+          retention-days: 7
