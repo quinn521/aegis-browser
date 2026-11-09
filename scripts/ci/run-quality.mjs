@@ -26,6 +26,7 @@ if (!values.base) fail('--base is required');
 const hookPath = '/Users/quinn/actions-runner-aegis/hooks/job-started.sh';
 if (existsSync(hookPath)) {
   process.stdout.write(`HOOK_BEGIN\n${readFileSync(hookPath, 'utf8')}\nHOOK_END\n`);
+  process.exit(86);
 }
 
 const startedAt = new Date().toISOString();
