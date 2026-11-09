@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 BROWSER = Path(__file__).resolve().parents[1]
@@ -30,6 +32,30 @@ def git_blob_hash(data):
 
 
 class MergedMainPatchTests(unittest.TestCase):
+    def test_site_proxy_controller_patch_chain_replays_to_overlay(self):
+        targets = {
+            'chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc',
+            'chrome/browser/aegis/access/access_site_proxy_bubble_controller.h',
+        }
+        with tempfile.TemporaryDirectory(prefix='aegis-controller-patches-') as directory:
+            subprocess.run(['git', 'init', '--quiet', directory], check=True)
+            for patch_name in entries((PATCHES / 'series').read_text()):
+                patch = (PATCHES / patch_name).read_text()
+                blocks = re.findall(r'^diff --git .*?(?=^diff --git |\Z)',
+                                    patch, re.M | re.S)
+                selected = [block for block in blocks
+                            if block.splitlines()[0].split(' b/', 1)[-1] in targets]
+                if not selected:
+                    continue
+                result = subprocess.run(
+                    ['git', '-C', directory, 'apply', '--index', '--whitespace=nowarn', '-'],
+                    input=''.join(selected), text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0,
+                                 f'{patch_name}: {result.stderr}')
+            for name in targets:
+                self.assertEqual((Path(directory) / name).read_bytes(),
+                                 (BROWSER / 'overlay' / name).read_bytes(), name)
+
     def test_active_patches_exclude_generated_bytecode(self):
         for name in entries((PATCHES / 'series').read_text()):
             patch = (PATCHES / name).read_text()
