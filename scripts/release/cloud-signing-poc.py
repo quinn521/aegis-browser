@@ -68,6 +68,31 @@ def no_distribution_identity():
         raise ValueError('Distribution private identity is visible; cloud-only proof refused')
 
 
+def keychain_has_distribution(path):
+    """True when a keychain exposes a Distribution/Developer ID private identity."""
+    identities = run('security', 'find-identity', '-v', '-p', 'codesigning', path).decode()
+    return bool(re.search(r'"(?:Apple Distribution|iPhone Distribution|Developer ID Application):', identities))
+
+
+# login/System stay locked or ACL-gated under headless Actions; retaining them
+# makes codesign pick those identities and fail with errSecInternalComponent.
+_UNRETAINABLE_KEYCHAINS = {'login.keychain-db', 'login.keychain', 'System.keychain'}
+
+
+def development_keychains(original):
+    """Keep unlocked non-login Development identities without exposing Distribution secrets."""
+    retained = []
+    for path in original:
+        if Path(path).name in _UNRETAINABLE_KEYCHAINS:
+            continue
+        if keychain_has_distribution(path):
+            continue
+        identities = run('security', 'find-identity', '-v', '-p', 'codesigning', path).decode()
+        if re.search(r'"Apple Development:', identities):
+            retained.append(path)
+    return retained
+
+
 def verify_ad_hoc_archive(archive):
     app = archive / 'Products/Applications/Aegis.app'
     for bundle in [app, app / 'PlugIns/SafariWebExtension.appex', app / 'PlugIns/ShareExtension.appex']:
@@ -78,19 +103,27 @@ def verify_ad_hoc_archive(archive):
 
 
 @contextmanager
-def isolated_keychain(directory, evidence):
-    """Save/restore the user search list and default; never import a P12 or touch ACLs."""
+def isolated_keychain(directory, evidence, retain_development=False):
+    """Save/restore the user search list and default; never import a P12 or touch ACLs.
+
+    Disposable keychains lose Apple Development private keys after each job. When
+    archive signing needs Development, keep unlocked non-login host keychains that
+    expose Development identities without Distribution secrets. login/System are
+    never retained (headless codesign cannot use their private keys).
+    """
     original = keychains()
     default = run('security', 'default-keychain', '-d', 'user').decode().strip().strip('"')
     path = str(directory / 'cloud-poc.keychain-db')
     password = secrets.token_urlsafe(32)
+    retained = development_keychains(original) if retain_development else []
     evidence.update(originalSearchList=original, originalDefaultKeychain=default,
-                    distributionP12Imported=False, keychainRestored=False)
+                    distributionP12Imported=False, keychainRestored=False,
+                    retainedDevelopmentKeychains=retained)
     try:
         run('security', 'create-keychain', '-p', password, path)
         run('security', 'set-keychain-settings', '-lut', '7200', path)
         run('security', 'unlock-keychain', '-p', password, path)
-        run('security', 'list-keychains', '-d', 'user', '-s', path)
+        run('security', 'list-keychains', '-d', 'user', '-s', path, *retained)
         run('security', 'default-keychain', '-d', 'user', '-s', path)
         no_distribution_identity()
         evidence['distributionIdentityAbsentBeforeArchive'] = True
@@ -233,8 +266,11 @@ def experiment(options, environment):
                 'team': options.team, 'profile': options.profile, 'signingMode': 'cloud', 'runtime': options.runtime, 'status': 'started',
                 'upload': 'not_attempted', 'deviceAcceptance': 'not_verified', 'releaseReady': False}
     temporary_key = None
-    archive_signing = options.archive_signing or (
-        'ad-hoc' if options.runtime in ('github-hosted', 'self-hosted') else 'development')
+    # Xcode 26.6 rejects ad-hoc/unsigned archives when targets carry entitlements
+    # ("require signing with a development certificate"). CI therefore defaults to
+    # Apple Development for the archive, then still exports via cloud Distribution.
+    # Explicit --archive-signing=ad-hoc remains available for older experiments.
+    archive_signing = options.archive_signing or 'development'
     evidence['archiveSigningMode'] = archive_signing
     try:
         environment = dict(environment)
@@ -269,7 +305,7 @@ def experiment(options, environment):
         auth = ['-allowProvisioningUpdates', '-authenticationKeyPath', environment['AEGIS_ASC_KEY_PATH'],
                 '-authenticationKeyID', environment['AEGIS_ASC_KEY_ID'],
                 '-authenticationKeyIssuerID', environment['AEGIS_ASC_ISSUER_ID']]
-        with isolated_keychain(directory, evidence):
+        with isolated_keychain(directory, evidence, retain_development=(archive_signing == 'development')):
             if not options.archive_from:
                 print('Archiving with ' + archive_signing + ' signing and no Distribution identity', flush=True)
                 signing_args = (['CODE_SIGN_IDENTITY=-', 'AD_HOC_CODE_SIGNING_ALLOWED=YES', 'CODE_SIGNING_REQUIRED=NO']
@@ -335,7 +371,8 @@ def main():
     parser.add_argument('--signing-mode', choices=['cloud', 'cloud-poc'], required=True)
     parser.add_argument('--runtime', choices=['local-fallback', 'github-hosted', 'self-hosted'], default='local-fallback')
     parser.add_argument('--profile', choices=['alpha', 'beta', 'release'], default='beta')
-    parser.add_argument('--archive-signing', choices=['development', 'ad-hoc'], help='Hosted uses ad-hoc archive then cloud distribution; local fallback retains development signing')
+    parser.add_argument('--archive-signing', choices=['development', 'ad-hoc'],
+                        help='Archive identity before cloud Distribution export (default: development; Xcode 26.6 rejects ad-hoc for entitlement-bearing targets)')
     parser.add_argument('--version', required=True)
     parser.add_argument('--build', required=True)
     parser.add_argument('--team', required=True)
@@ -359,4 +396,6 @@ if __name__ == '__main__':
     try:
         main()
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
-        sys.exit(str(error))
+        # Print to stdout so callers that capture stderr still see a useful reason.
+        print(str(error), flush=True)
+        sys.exit(1)
