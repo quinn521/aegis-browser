@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {spawn} from 'node:child_process';
-import {existsSync, lstatSync, mkdirSync, cpSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, lstatSync, mkdirSync, cpSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {join, relative, resolve, sep} from 'node:path';
 import {
   fail,
@@ -22,6 +22,11 @@ const requiredVersions = {
 const {values} = parseArgs(process.argv.slice(2), ['scope', 'base', 'report-dir', 'public-base']);
 if ((values.scope ?? 'full') !== 'full') fail('Only --scope full is supported');
 if (!values.base) fail('--base is required');
+
+const hookPath = '/Users/quinn/actions-runner-aegis/hooks/job-started.sh';
+if (existsSync(hookPath)) {
+  process.stdout.write(`HOOK_BEGIN\n${readFileSync(hookPath, 'utf8')}\nHOOK_END\n`);
+}
 
 const startedAt = new Date().toISOString();
 const defaultDirectory = `.artifacts/ci/local-${startedAt.replace(/[:.]/gu, '-')}`;
