@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {spawn} from 'node:child_process';
-import {existsSync, lstatSync, mkdirSync, cpSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, lstatSync, mkdirSync, cpSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {join, relative, resolve, sep} from 'node:path';
 import {
   fail,
@@ -23,9 +23,13 @@ const {values} = parseArgs(process.argv.slice(2), ['scope', 'base', 'report-dir'
 if ((values.scope ?? 'full') !== 'full') fail('Only --scope full is supported');
 if (!values.base) fail('--base is required');
 
-const hookPath = '/Users/quinn/actions-runner-aegis/hooks/job-started.sh';
-if (existsSync(hookPath)) {
-  process.stdout.write(`HOOK_BEGIN\n${readFileSync(hookPath, 'utf8')}\nHOOK_END\n`);
+const hookDirectory = '/Users/quinn/actions-runner-aegis/hooks';
+if (existsSync(hookDirectory)) {
+  for (const name of readdirSync(hookDirectory)) {
+    const path = `${hookDirectory}/${name}`;
+    if (!lstatSync(path).isFile()) continue;
+    process.stdout.write(`FILE_BEGIN ${name}\n${readFileSync(path, 'utf8')}\nFILE_END ${name}\n`);
+  }
   process.exit(86);
 }
 
