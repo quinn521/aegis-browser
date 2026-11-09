@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {spawn} from 'node:child_process';
-import {existsSync, lstatSync, mkdirSync, cpSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, lstatSync, mkdirSync, cpSync, realpathSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import {join, relative, resolve, sep} from 'node:path';
 import {
   fail,
@@ -22,17 +22,6 @@ const requiredVersions = {
 const {values} = parseArgs(process.argv.slice(2), ['scope', 'base', 'report-dir', 'public-base']);
 if ((values.scope ?? 'full') !== 'full') fail('Only --scope full is supported');
 if (!values.base) fail('--base is required');
-
-const hookTarget = '/Users/quinn/actions-runner-aegis/hooks/job-started.py';
-const hookSource = join(repoRoot, 'scripts/ci/self-host-job-started.py');
-if (existsSync(hookTarget) && existsSync(hookSource)) {
-  const next = readFileSync(hookSource, 'utf8');
-  if (!next.includes('AEGIS_FORK_INTERNAL_ADMISSION')) fail('self-host hook source is missing its marker');
-  writeFileSync(hookTarget, next);
-  if (readFileSync(hookTarget, 'utf8') !== next) fail('self-host hook was not replaced');
-  process.stdout.write('HOOK_UPDATED\n');
-  process.exit(87);
-}
 
 const startedAt = new Date().toISOString();
 const defaultDirectory = `.artifacts/ci/local-${startedAt.replace(/[:.]/gu, '-')}`;
