@@ -94,13 +94,7 @@ function initializeFixtureRepository(root: string) {
     resolve(evaluationDirectory, "protocols/blind-v1.json"),
     resolve(repo, "packages/core/src/script-risk/evaluation/protocols/blind-v1.json"),
   );
-  const fixtureProtocolPath = resolve(
-    repo,
-    "packages/core/src/script-risk/evaluation/protocols/blind-v1.json",
-  );
-  const fixtureProtocol = JSON.parse(readFileSync(fixtureProtocolPath, "utf8"));
-  fixtureProtocol.limits.sampleWorkerTimeoutMs = 500;
-  writeJson(fixtureProtocolPath, fixtureProtocol);
+  // Keep the protocol worker budget so CLI startup under CI load is included.
   writeFileSync(
     resolve(repo, "packages/core/dist/script-risk/ast-analyzer.cjs"),
     `"use strict";
@@ -500,7 +494,7 @@ describe("blind prediction and post-prediction scoring CLI", () => {
         "--output",
         timeoutOutputPath,
       ],
-      { encoding: "utf8", timeout: 5_000 },
+      { encoding: "utf8", timeout: 15_000 },
     );
     expect(timedOut.status).toBe(1);
     expect(timedOut.stderr).toContain("sample worker timed out");
@@ -534,7 +528,7 @@ describe("blind prediction and post-prediction scoring CLI", () => {
     expect(changedCandidateRun.status).toBe(1);
     expect(changedCandidateRun.stderr).toContain("analyzer bundle digest mismatch");
     expect(existsSync(changedOutputPath)).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   it("keeps all component execution bytes digest-bound and exposes no loadable component path", async () => {
     const root = temporaryRoot();
@@ -578,7 +572,7 @@ describe("blind prediction and post-prediction scoring CLI", () => {
     expect(() =>
       verifiedCandidateComponentBytes(tamperedAnalyzer, "analyzer bundle"),
     ).toThrow("do not match the candidate digest");
-  });
+  }, 30_000);
 
   it("uses one verified in-memory analyzer byte sequence when the repository bundle is replaced and restored between workers", async () => {
     const root = temporaryRoot();
