@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -118,22 +119,27 @@ class RetainedTests(unittest.TestCase):
             with self.assertRaises(ValueError): p.validate(delivered)
 
     def test_operator_originals_use_frozen_authority_and_reject_changed_proof_digest(self):
-        from test_central_operator import fixture, operator
-        for tamper in (False, True):
+        from test_central_operator import fixture, operator, server
+        for tamper in ('none', 'proof_digest', 'request', 'executor', 'registry'):
             with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); source = root / 'original'; source.mkdir()
                 start, result, run = self.fixture(source, p.QUINN)
                 api, approval, now = fixture()
+                policy = p.parse(base64.b64decode(api.rows['repos/' + operator.CENTRAL + '/contents/'
+                    + operator.POLICY_PATH + '?ref=' + '1' * 40]['content']))
+                if tamper != 'request': approval['request_sha256'] = start['request_sha256']
+                api = server(approval, policy, now)
                 proof = operator.authenticate(api, approval, '3' * 40, p, now=now)
                 start.update(authorization=approval, operator_authorization=proof,
-                             registry_commit='3' * 40, executor_commit='1' * 40)
+                             registry_commit='3' * 40, executor_commit=('9' if tamper == 'executor' else '1') * 40)
                 start['execution']['workflow_commit'] = run['head_sha'] = '3' * 40
                 original = p.parse((source / 'result.json').read_bytes())
-                original.update(execution=start['execution'], executor_commit='1' * 40)
+                original.update(execution=start['execution'], executor_commit=start['executor_commit'])
                 (source / 'prepared.json').write_bytes(p.canonical(start))
                 (source / 'result.json').write_bytes(p.canonical(original))
                 result['result_sha256'] = p.file_digest(source / 'result.json')
-                result['operator_authorization_sha256'] = '0' * 64 if tamper else p.digest(proof)
+                result['registry_commit'] = ('9' if tamper == 'registry' else '3') * 40
+                result['operator_authorization_sha256'] = '0' * 64 if tamper == 'proof_digest' else p.digest(proof)
                 for asset in result['assets']:
                     path = source / asset['name']
                     asset.update(size=path.stat().st_size, digest='sha256:' + p.file_digest(path))
@@ -152,7 +158,7 @@ class RetainedTests(unittest.TestCase):
                 with patch.object(central, 'central_record', side_effect=lambda kind, key, token: start if kind == 'start' else result), \
                         patch.object(central, 'github_json', side_effect=github), patch.object(central, 'module', side_effect=modules):
                     options = SimpleNamespace(work=source, output=root / 'check', scope=p.QUINN.scope)
-                    if tamper:
+                    if tamper != 'none':
                         with self.assertRaises(ValueError): central.verify_retained(options, {'AEGIS_CENTRAL_READ_TOKEN': 'fixture'})
                     else:
                         central.verify_retained(options, {'AEGIS_CENTRAL_READ_TOKEN': 'fixture'})

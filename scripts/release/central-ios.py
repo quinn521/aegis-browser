@@ -190,6 +190,9 @@ def verify_retained(options, environment):
             operator_proof = start['operator_authorization']
             p.require(isinstance(operator_proof, dict)
                       and start['registry_commit'] == execution['workflow_commit']
+                      and result.get('registry_commit') == start['registry_commit']
+                      and start['authorization']['request_sha256'] == prepared['request_sha256']
+                      and start['authorization']['executor_commit'] == prepared['executor_commit']
                       and result.get('operator_authorization_sha256') == p.digest(operator_proof))
             authority = module('central_operator_authority', 'central_operator_authorization.py')
             prefix = 'repos/gcsagroup/apple-signing'
