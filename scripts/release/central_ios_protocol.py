@@ -6,7 +6,7 @@ import zipfile
 import json
 import re
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 SCHEMA = 'aegis-central-archive-v1'
 SOURCE = {'name': 'gcsagroup/aegis-browser', 'id': 1348409663}
@@ -24,7 +24,7 @@ class Policy(NamedTuple):
     producer_workflow: str
     registry_schema: str
     environment_prefix: str
-    actor_id: int | None
+    actor_id: Optional[int]
 
 
 PROD = Policy('production', SCHEMA, SOURCE['name'], SOURCE['id'], 'main',
