@@ -117,6 +117,51 @@ class RetainedTests(unittest.TestCase):
             p.validate(delivered, p.QUINN); self.assertEqual(p.allocation(delivered), original_budget)
             with self.assertRaises(ValueError): p.validate(delivered)
 
+    def test_operator_originals_use_frozen_authority_and_reject_changed_proof_digest(self):
+        from test_central_operator import fixture, operator
+        for tamper in (False, True):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); source = root / 'original'; source.mkdir()
+                start, result, run = self.fixture(source, p.QUINN)
+                api, approval, now = fixture()
+                proof = operator.authenticate(api, approval, '3' * 40, p, now=now)
+                start.update(authorization=approval, operator_authorization=proof,
+                             registry_commit='3' * 40, executor_commit='1' * 40)
+                start['execution']['workflow_commit'] = run['head_sha'] = '3' * 40
+                original = p.parse((source / 'result.json').read_bytes())
+                original.update(execution=start['execution'], executor_commit='1' * 40)
+                (source / 'prepared.json').write_bytes(p.canonical(start))
+                (source / 'result.json').write_bytes(p.canonical(original))
+                result['result_sha256'] = p.file_digest(source / 'result.json')
+                result['operator_authorization_sha256'] = '0' * 64 if tamper else p.digest(proof)
+                for asset in result['assets']:
+                    path = source / asset['name']
+                    asset.update(size=path.stat().st_size, digest='sha256:' + p.file_digest(path))
+                before = {path.name: path.read_bytes() for path in source.iterdir()}
+                prefix = 'repos/gcsagroup/apple-signing'
+                del api.rows[prefix + '/collaborators/GCSA-ToolsTeam/permission']
+                del api.rows[prefix + '/git/ref/heads/main']
+                def github(repository, path, token):
+                    return run if path.startswith('actions/runs/') else api(prefix + ('/' + path if path else ''))
+                def modules(name, filename):
+                    if filename == 'central_operator_authorization.py': return operator
+                    if filename == 'cloud-signing-poc.py':
+                        return SimpleNamespace(source=lambda: {'sha': 'a' * 40, 'tree': 'b' * 40})
+                    if filename == 'verify-signed-ios.py': return SimpleNamespace(verify=lambda *a, **k: {'ipaVerified': True})
+                    return SimpleNamespace(verify_delivered=lambda *a: {'symbolsVerified': True})
+                with patch.object(central, 'central_record', side_effect=lambda kind, key, token: start if kind == 'start' else result), \
+                        patch.object(central, 'github_json', side_effect=github), patch.object(central, 'module', side_effect=modules):
+                    options = SimpleNamespace(work=source, output=root / 'check', scope=p.QUINN.scope)
+                    if tamper:
+                        with self.assertRaises(ValueError): central.verify_retained(options, {'AEGIS_CENTRAL_READ_TOKEN': 'fixture'})
+                    else:
+                        central.verify_retained(options, {'AEGIS_CENTRAL_READ_TOKEN': 'fixture'})
+                        report = p.parse((root / 'check/retained-verification.json').read_bytes())
+                        self.assertEqual(report['activationOperator']['id'], 316909304)
+                        self.assertFalse(report['independentHumanApproval'])
+                        self.assertIsNone(report['environmentBypassObserved'])
+                self.assertEqual(before, {path.name: path.read_bytes() for path in source.iterdir()})
+
 
 if __name__ == '__main__':
     unittest.main()
