@@ -9,6 +9,7 @@ import {writeInputManifest} from './simulator-input-manifest.mjs';
 
 const scripts = path.dirname(fileURLToPath(import.meta.url));
 const vectorPath = 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json';
+const resourcePath = 'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/fixture.js';
 
 function write(root, relative, content) {
   const destination = path.join(root, relative);
@@ -28,6 +29,7 @@ function createFixture(t) {
   write(root, 'apps/ios/Aegis.xcodeproj/project.pbxproj', 'original project');
   write(root, 'apps/ios/AegisApp/Main.swift', 'struct Main {}\n');
   write(root, vectorPath, '{"vector_version":1}\n');
+  write(root, resourcePath, '// Shared browser resource.\n');
   write(root, 'packages/core/src/tracker/builtin-rules.ts', 'export const hosts = [];\n');
   for (const name of ['run-simulator-tests.sh', 'simulator-input-manifest.mjs', 'summarize-xccov.mjs']) {
     fs.mkdirSync(path.join(root, 'apps/ios/scripts'), {recursive: true});
@@ -80,6 +82,9 @@ if (tool === 'python3') {
     fs.mkdirSync(option('-resultBundlePath'), {recursive: true});
     if (process.env.EVIDENCE_MUTATE_VECTOR === '1') {
       fs.appendFileSync(path.join(root, '${vectorPath}'), ' ');
+    }
+    if (process.env.EVIDENCE_MUTATE_RESOURCE === '1') {
+      fs.appendFileSync(path.join(root, '${resourcePath}'), ' ');
     }
   } else {
     throw new Error('Unexpected xcodebuild call');
@@ -149,6 +154,7 @@ test('manifest includes shared and new inputs, deduplicates staged additions and
   const text = fs.readFileSync(manifest, 'utf8');
   assert.match(text, new RegExp(digest(path.join(root, vectorPath))));
   assert.match(text, /packages\/core\/src\/tracker\/builtin-rules.ts/);
+  assert.ok(text.includes(resourcePath));
   assert.equal(text.match(/packages\/core\/new.txt/g).length, 1);
   assert.ok(text.includes('apps/ios/new\\nfile.swift'));
   assert.ok(!text.includes('cache.ignored') && !text.includes('unrelated.txt'));
@@ -189,6 +195,14 @@ test('runner rejects shared-vector drift during testing and retains both manifes
   const metadata = fs.readFileSync(path.join(result.report, 'run-metadata.txt'), 'utf8');
   assert.match(metadata, /^source_git_tree_state=dirty$/m);
   assert.match(metadata, /^input_stability_exit=1$/m);
+  assert.notEqual(digest(path.join(result.report, 'ios-input-sha256-before.txt')),
+    digest(path.join(result.report, 'ios-input-sha256-after.txt')));
+});
+
+test('runner rejects drift in browser resources referenced by the iOS project', t => {
+  const result = runFixture(createFixture(t), {EVIDENCE_MUTATE_RESOURCE: '1'});
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.match(fs.readFileSync(path.join(result.report, 'run-metadata.txt'), 'utf8'), /^input_stability_exit=1$/m);
   assert.notEqual(digest(path.join(result.report, 'ios-input-sha256-before.txt')),
     digest(path.join(result.report, 'ios-input-sha256-after.txt')));
 });

@@ -367,7 +367,7 @@ xcrun simctl list runtimes -j \
   printf 'source_git_tree=%s\n' "$GIT_TREE"
   printf 'source_git_tree_state=%s\n' "$GIT_TREE_STATE"
   printf 'source_input_manifest_sha256=%s\n' "$SOURCE_MANIFEST_SHA256"
-  printf 'input_scope=apps/ios,packages/core\n'
+  printf 'input_scope=apps/ios,packages/core,apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared\n'
   printf 'host_os=%s\n' "$(sw_vers -productName) $(sw_vers -productVersion) $(sw_vers -buildVersion)"
   printf 'host_arch=%s\n' "$(uname -m)"
   printf 'developer_dir=%s\n' "$(xcode-select -p)"

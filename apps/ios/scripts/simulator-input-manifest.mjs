@@ -9,6 +9,7 @@ export function writeInputManifest(repoRoot, destination) {
   const output = execFileSync('git', [
     'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--',
     'apps/ios', 'packages/core',
+    'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared',
   ], {cwd: repoRoot, maxBuffer: 16 * 1024 * 1024}).toString('utf8');
   const files = [...new Set(output.split('\0').filter(Boolean))]
     .sort((left, right) => Buffer.from(left).compare(Buffer.from(right)));
