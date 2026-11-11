@@ -1,20 +1,20 @@
-From a61dabb55429d9a6da229f1bbee9d761534613c8 Mon Sep 17 00:00:00 2001
+From e1d82c7f259e805af5b7ac7a99c5721c6fa3fe8f Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Thu, 12 Nov 2026 01:33:57 +0800
+Date: Thu, 12 Nov 2026 01:48:17 +0800
 Subject: [PATCH] feat(access-account): query the current account from its
  macOS Profile
 
 ---
  chrome/browser/aegis/BUILD.gn                 |   5 +
- .../browser/aegis/access/access_account_mac.h |  12 +
- .../aegis/access/access_account_mac.mm        | 213 ++++++++++++++++++
+ .../browser/aegis/access/access_account_mac.h |  17 ++
+ .../aegis/access/access_account_mac.mm        | 222 ++++++++++++++++++
  chrome/browser/aegis/aegis_service.h          |   6 +
- .../aegis/aegis_service_access_account_mac.mm |  39 ++++
- .../aegis/aegis_ui_handler_unittest.cc        |  62 +++++
+ .../aegis/aegis_service_access_account_mac.mm |  44 ++++
+ .../aegis/aegis_ui_handler_unittest.cc        | 119 ++++++++++
  .../settings/aegis_page/aegis_page.ts         |   3 +
  .../ui/webui/aegis/aegis_ui_handler.cc        |  29 +++
  .../browser/ui/webui/aegis/aegis_ui_handler.h |   6 +
- 9 files changed, 375 insertions(+)
+ 9 files changed, 451 insertions(+)
  create mode 100644 chrome/browser/aegis/access/access_account_mac.h
  create mode 100644 chrome/browser/aegis/access/access_account_mac.mm
  create mode 100644 chrome/browser/aegis/aegis_service_access_account_mac.mm
@@ -45,28 +45,33 @@ index 033549f3840498426df0f8e6b3e5b5a1cb143b86..b1e92a2e2988e5272da741a6e0343dcb
        "aegis_mac_signing_unittest.cc",
 diff --git a/chrome/browser/aegis/access/access_account_mac.h b/chrome/browser/aegis/access/access_account_mac.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..ecbbd973b064f2ed9927f5e54e58d2558c234fb0
+index 0000000000000000000000000000000000000000..680874088e8ce3e4fe56a4b1fcdf8005245e3576
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_mac.h
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,17 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_ACCOUNT_MAC_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_ACCOUNT_MAC_H_
 +
 +#import <Foundation/Foundation.h>
 +
++// A non-nil state supersedes the prepared reply. Run this check immediately
++// before delivering it on the consumer sequence. It reads only file metadata.
++typedef NSString* (^AegisAccountBindingChange)(void);
++typedef void (^AegisAccountCompletion)(NSDictionary*, AegisAccountBindingChange);
++
 +// The caller supplies its own regular Profile directory, never a renderer path.
 +// Completion runs off the UI sequence. No response or session is cached.
 +void AegisQueryAccessAccount(NSString* profileDirectory,
-+                             void (^completion)(NSDictionary*));
++                             AegisAccountCompletion completion);
 +
 +#endif
 diff --git a/chrome/browser/aegis/access/access_account_mac.mm b/chrome/browser/aegis/access/access_account_mac.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..9022f008799104b20ad954c3f273fff396628e1b
+index 0000000000000000000000000000000000000000..3e670b2be381ee16cd954fc3a5fa47814847285c
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_mac.mm
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,222 @@
 +// Copyright 2026 GCSA
 +#import "chrome/browser/aegis/access/access_account_mac.h"
 +
@@ -101,7 +106,7 @@ index 0000000000000000000000000000000000000000..9022f008799104b20ad954c3f273fff3
 +  return c.URL;
 +}
 +
-+NSDictionary* ReadBinding(NSString* path, bool* missing) {
++NSDictionary* ReadBinding(NSString* path, bool* missing, AegisAccountBindingChange* change) {
 +  *missing = false;
 +  int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
 +  if (fd < 0) {
@@ -123,6 +128,18 @@ index 0000000000000000000000000000000000000000..9022f008799104b20ad954c3f273fff3
 +  NSCharacterSet* allowed = [NSCharacterSet characterSetWithCharactersInString:
 +      @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
 +  if ([token rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound) return nil;
++  // The retained open descriptor prevents inode reuse. Atomic replacements
++  // therefore cannot regain this identity, even on an A → B → A switch.
++  // ctime also covers modifying the open file or restoring it via a hard link.
++  *change = ^NSString* {
++    struct stat current;
++    if (lstat(path.fileSystemRepresentation, &current))
++      return errno == ENOENT ? @"signed_out" : @"unavailable";
++    if (file.fileDescriptor < 0 || current.st_dev != statbuf.st_dev ||
++        current.st_ino != statbuf.st_ino || current.st_ctimespec.tv_sec != statbuf.st_ctimespec.tv_sec ||
++        current.st_ctimespec.tv_nsec != statbuf.st_ctimespec.tv_nsec) return @"superseded";
++    return nil;
++  };
 +  return b;
 +}
 +
@@ -202,14 +219,14 @@ index 0000000000000000000000000000000000000000..9022f008799104b20ad954c3f273fff3
 +}  // namespace
 +
 +@interface AegisAccountTransfer : NSObject <NSURLSessionDataDelegate>
-+@property(nonatomic, copy) NSString* path;
++@property(nonatomic, copy) AegisAccountBindingChange bindingChange;
 +@property(nonatomic, copy) NSDictionary* binding;
-+@property(nonatomic, copy) void (^completion)(NSDictionary*);
++@property(nonatomic, copy) AegisAccountCompletion completion;
 +@property(nonatomic, strong) NSMutableData* body;
 +@end
 +
 +@implementation AegisAccountTransfer
-+@synthesize path = _path;
++@synthesize bindingChange = _bindingChange;
 +@synthesize binding = _binding;
 +@synthesize completion = _completion;
 +@synthesize body = _body;
@@ -236,31 +253,28 @@ index 0000000000000000000000000000000000000000..9022f008799104b20ad954c3f273fff3
 +- (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task
 +    didCompleteWithError:(NSError*)error {
 +  [session finishTasksAndInvalidate];
-+  bool missing;
-+  NSDictionary* current = ReadBinding(self.path, &missing);
 +  NSDictionary* result = nil;
-+  if (![self.binding isEqualToDictionary:current]) {
-+    result = State(missing ? @"signed_out" : @"superseded");
-+  } else if (!error && [task.response isKindOfClass:NSHTTPURLResponse.class]) {
++  if (!error && [task.response isKindOfClass:NSHTTPURLResponse.class]) {
 +    NSInteger status = ((NSHTTPURLResponse*)task.response).statusCode;
 +    if (status == 401) result = State(@"signed_out");
 +    if (status == 200) result = Entitlement(self.body, self.binding[@"accountId"]);
 +  }
-+  self.completion(result ?: State(@"unavailable"));
++  self.completion(result ?: State(@"unavailable"), self.bindingChange);
 +}
 +@end
 +
-+void AegisQueryAccessAccount(NSString* profileDirectory, void (^completion)(NSDictionary*)) {
++void AegisQueryAccessAccount(NSString* profileDirectory, AegisAccountCompletion completion) {
 +  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
 +    NSString* path = [profileDirectory stringByAppendingPathComponent:@"AegisAccessAccount.json"];
 +    bool missing;
-+    NSDictionary* binding = ReadBinding(path, &missing);
++    AegisAccountBindingChange change = nil;
++    NSDictionary* binding = ReadBinding(path, &missing, &change);
 +    if (!binding) {
-+      completion(State(missing ? @"signed_out" : @"unavailable"));
++      completion(State(missing ? @"signed_out" : @"unavailable"), nil);
 +      return;
 +    }
 +    AegisAccountTransfer* transfer = [[AegisAccountTransfer alloc] init];
-+    transfer.path = path;
++    transfer.bindingChange = change;
 +    transfer.binding = binding;
 +    transfer.completion = completion;
 +    transfer.body = [NSMutableData data];
@@ -306,10 +320,10 @@ index 1f66edae87e952ee5dadeda74f0ffb1f99fad8d6..9962615d1c6e5b251eeb7f4b0b4ad79f
    bool IsPhishInterstitialEnabled() const;
 diff --git a/chrome/browser/aegis/aegis_service_access_account_mac.mm b/chrome/browser/aegis/aegis_service_access_account_mac.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..888c1f55a7de8cc283f846c1798319497e01b0dd
+index 0000000000000000000000000000000000000000..00ea41c95e422bc50ff1bb4d90bd7fa1fd4cd16d
 --- /dev/null
 +++ b/chrome/browser/aegis/aegis_service_access_account_mac.mm
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,44 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/aegis_service.h"
 +
@@ -334,26 +348,31 @@ index 0000000000000000000000000000000000000000..888c1f55a7de8cc283f846c179831949
 +  // and Shutdown invalidate the Profile capability before a reply can escape.
 +  __block auto reply = base::BindPostTaskToCurrentDefault(base::BindOnce(
 +      [](base::WeakPtr<AegisService> service,
-+         base::OnceCallback<void(base::DictValue)> callback, base::DictValue result) {
-+        if (service && service->profile() && service->IsInitializedForProfile(service->profile()))
-+          std::move(callback).Run(std::move(result));
++         base::OnceCallback<void(base::DictValue)> callback, base::DictValue result,
++         AegisAccountBindingChange change) {
++        if (!service || !service->IsInitializedForProfile(service->profile())) return;
++        // The response may have waited in the Profile UI queue after the
++        // network finished. Verify the operator binding at the delivery point.
++        NSString* state = change ? change() : nil;
++        if (state) result = base::DictValue().Set("state", base::SysNSStringToUTF8(state));
++        std::move(callback).Run(std::move(result));
 +      }, weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 +  AegisQueryAccessAccount(base::SysUTF8ToNSString(profile_->GetPath().value()),
-+      ^(NSDictionary* result) {
++      ^(NSDictionary* result, AegisAccountBindingChange change) {
 +        NSData* json = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
 +        auto parsed = json ? base::JSONReader::ReadDict(
 +            std::string_view(static_cast<const char*>(json.bytes), json.length),
 +            base::JSON_PARSE_RFC) : std::nullopt;
 +        std::move(reply).Run(parsed ? std::move(*parsed)
-+                                    : base::DictValue().Set("state", "unavailable"));
++                                    : base::DictValue().Set("state", "unavailable"), change);
 +      });
 +}
 +}  // namespace aegis
 diff --git a/chrome/browser/aegis/aegis_ui_handler_unittest.cc b/chrome/browser/aegis/aegis_ui_handler_unittest.cc
-index faea43f005857d926e11c5655653864523915bdc..84220c76e85eca14f6c898bc00ea40b1ae0853c2 100644
+index faea43f005857d926e11c5655653864523915bdc..339f6cecdea232a991391a7cb5d5b0c9b0b06cb6 100644
 --- a/chrome/browser/aegis/aegis_ui_handler_unittest.cc
 +++ b/chrome/browser/aegis/aegis_ui_handler_unittest.cc
-@@ -2,11 +2,16 @@
+@@ -2,11 +2,20 @@
  
  #include "chrome/browser/ui/webui/aegis/aegis_ui_handler.h"
  
@@ -366,11 +385,15 @@ index faea43f005857d926e11c5655653864523915bdc..84220c76e85eca14f6c898bc00ea40b1
 +#include "base/json/json_writer.h"
 +#include "base/test/bind.h"
  #include "base/test/test_future.h"
++#include "base/test/test_simple_task_runner.h"
++#include "base/synchronization/waitable_event.h"
++#include "base/threading/thread_restrictions.h"
 +#include "base/test/run_until.h"
++#include "base/uuid.h"
  #include "base/values.h"
  #include "build/build_config.h"
  #include "chrome/browser/aegis/agent/aegis_browser_tools.h"
-@@ -27,6 +32,8 @@
+@@ -27,6 +36,8 @@
  #include "components/tabs/public/tab_interface.h"
  #include "content/public/browser/web_contents.h"
  #include "content/public/test/test_web_ui.h"
@@ -379,11 +402,25 @@ index faea43f005857d926e11c5655653864523915bdc..84220c76e85eca14f6c898bc00ea40b1
  #include "testing/gtest/include/gtest/gtest.h"
  #include "url/gurl.h"
  #include "url/origin.h"
-@@ -90,6 +97,61 @@ TEST_F(AegisUIHandlerTest, KeepsCnamePreferenceSeparateFromRuntimeDependency) {
+@@ -90,6 +101,114 @@ TEST_F(AegisUIHandlerTest, KeepsCnamePreferenceSeparateFromRuntimeDependency) {
    EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kCnameUncloakEnabled));
  }
  
 +#if BUILDFLAG(IS_MAC)
++class HeldAccountReplyRunner : public base::TestSimpleTaskRunner {
++ public:
++  bool PostDelayedTask(const base::Location& from, base::OnceClosure task,
++                       base::TimeDelta delay) override {
++    bool accepted = base::TestSimpleTaskRunner::PostDelayedTask(from, std::move(task), delay);
++    posted.Signal();
++    return accepted;
++  }
++  base::WaitableEvent posted;
++
++ protected:
++  ~HeldAccountReplyRunner() override = default;
++};
++
 +TEST_F(AegisUIHandlerTest, OnlyExplicitAccountReadQueriesTheCurrentProfile) {
 +  std::atomic<int> requests = 0;
 +  net::EmbeddedTestServer account_server;
@@ -435,6 +472,45 @@ index faea43f005857d926e11c5655653864523915bdc..84220c76e85eca14f6c898bc00ea40b1
 +  ASSERT_TRUE(account);
 +  EXPECT_EQ(*account, "A");
 +  EXPECT_EQ(requests.load(), 1);
++
++  auto install = [&](const char* id) {
++    auto next = binding.Clone();
++    next.Set("accountId", id);
++    next.Set("token", std::string("test-") + id);
++    next.Set("generation", base::Uuid::GenerateRandomV4().AsLowercaseString());
++    auto temp = file.AddExtensionASCII("new");
++    return base::WriteFile(temp, base::WriteJson(next).value()) &&
++           base::SetPosixFilePermissions(temp, 0600) && base::ReplaceFile(temp, file, nullptr);
++  };
++  for (auto action : {"switch", "switch_back", "sign_out"}) {
++    SCOPED_TRACE(action);
++    ASSERT_TRUE(install("A"));
++    auto held = base::MakeRefCounted<HeldAccountReplyRunner>();
++    const size_t prior = web_ui.call_data().size();
++    {
++      base::SingleThreadTaskRunner::CurrentHandleOverrideForTesting override(held);
++      web_ui.HandleReceivedMessage("getCurrentAccessAccount", args);
++    }
++    {
++      // The transport and HTTP server both run independently of the UI thread.
++      base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
++      ASSERT_TRUE(held->posted.TimedWait(base::Seconds(5)));
++    }
++    ASSERT_EQ(web_ui.call_data().size(), prior);
++    bool sign_out = std::string_view(action) == "sign_out";
++    if (sign_out) {
++      ASSERT_TRUE(base::DeleteFile(file));
++    } else {
++      ASSERT_TRUE(install("B"));
++      if (std::string_view(action) == "switch_back") ASSERT_TRUE(install("A"));
++    }
++    held->RunUntilIdle();
++    ASSERT_EQ(web_ui.call_data().size(), prior + 1);
++    const auto& delivered = web_ui.call_data().back()->arg3()->GetDict();
++    const auto* state = delivered.FindString("state");
++    EXPECT_EQ(state ? *state : "", sign_out ? "signed_out" : "superseded");
++    EXPECT_FALSE(delivered.contains("entitlement"));
++  }
 +}
 +#endif
 +

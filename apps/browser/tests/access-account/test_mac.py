@@ -121,6 +121,26 @@ class NativeQuery(unittest.TestCase):
                     release.set()
                 self.assertEqual(json.loads(p.communicate(timeout=8)[0]), {"state": wanted})
 
+    def test_binding_changes_after_service_response_before_delivery(self):
+        for action in ("switch", "switch_back", "sign_out"):
+            with self.subTest(action=action):
+                path = self.bind(self.a)
+                with subprocess.Popen([self.driver, self.a, "--hold-delivery"],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE) as job:
+                    try:
+                        self.assertEqual(job.stdout.readline(), b"queued\n")
+                        if action == "sign_out":
+                            path.unlink()
+                        else:
+                            self.bind(self.a, "B")
+                            if action == "switch_back":
+                                self.bind(self.a, "A")
+                    finally:
+                        output, _ = job.communicate(b"deliver\n", timeout=10)
+                    self.assertEqual(job.returncode, 0)
+                    state = "signed_out" if action == "sign_out" else "superseded"
+                    self.assertEqual(json.loads(output), {"state": state})
+
     def test_redirect_modes_and_untrusted_binding(self):
         captured = []
 

@@ -32,7 +32,7 @@ NSURL* Endpoint(id value) {
   return c.URL;
 }
 
-NSDictionary* ReadBinding(NSString* path, bool* missing) {
+NSDictionary* ReadBinding(NSString* path, bool* missing, AegisAccountBindingChange* change) {
   *missing = false;
   int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
   if (fd < 0) {
@@ -54,6 +54,18 @@ NSDictionary* ReadBinding(NSString* path, bool* missing) {
   NSCharacterSet* allowed = [NSCharacterSet characterSetWithCharactersInString:
       @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
   if ([token rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound) return nil;
+  // The retained open descriptor prevents inode reuse. Atomic replacements
+  // therefore cannot regain this identity, even on an A → B → A switch.
+  // ctime also covers modifying the open file or restoring it via a hard link.
+  *change = ^NSString* {
+    struct stat current;
+    if (lstat(path.fileSystemRepresentation, &current))
+      return errno == ENOENT ? @"signed_out" : @"unavailable";
+    if (file.fileDescriptor < 0 || current.st_dev != statbuf.st_dev ||
+        current.st_ino != statbuf.st_ino || current.st_ctimespec.tv_sec != statbuf.st_ctimespec.tv_sec ||
+        current.st_ctimespec.tv_nsec != statbuf.st_ctimespec.tv_nsec) return @"superseded";
+    return nil;
+  };
   return b;
 }
 
@@ -133,14 +145,14 @@ NSDictionary* Entitlement(NSData* data, NSString* account) {
 }  // namespace
 
 @interface AegisAccountTransfer : NSObject <NSURLSessionDataDelegate>
-@property(nonatomic, copy) NSString* path;
+@property(nonatomic, copy) AegisAccountBindingChange bindingChange;
 @property(nonatomic, copy) NSDictionary* binding;
-@property(nonatomic, copy) void (^completion)(NSDictionary*);
+@property(nonatomic, copy) AegisAccountCompletion completion;
 @property(nonatomic, strong) NSMutableData* body;
 @end
 
 @implementation AegisAccountTransfer
-@synthesize path = _path;
+@synthesize bindingChange = _bindingChange;
 @synthesize binding = _binding;
 @synthesize completion = _completion;
 @synthesize body = _body;
@@ -167,31 +179,28 @@ NSDictionary* Entitlement(NSData* data, NSString* account) {
 - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task
     didCompleteWithError:(NSError*)error {
   [session finishTasksAndInvalidate];
-  bool missing;
-  NSDictionary* current = ReadBinding(self.path, &missing);
   NSDictionary* result = nil;
-  if (![self.binding isEqualToDictionary:current]) {
-    result = State(missing ? @"signed_out" : @"superseded");
-  } else if (!error && [task.response isKindOfClass:NSHTTPURLResponse.class]) {
+  if (!error && [task.response isKindOfClass:NSHTTPURLResponse.class]) {
     NSInteger status = ((NSHTTPURLResponse*)task.response).statusCode;
     if (status == 401) result = State(@"signed_out");
     if (status == 200) result = Entitlement(self.body, self.binding[@"accountId"]);
   }
-  self.completion(result ?: State(@"unavailable"));
+  self.completion(result ?: State(@"unavailable"), self.bindingChange);
 }
 @end
 
-void AegisQueryAccessAccount(NSString* profileDirectory, void (^completion)(NSDictionary*)) {
+void AegisQueryAccessAccount(NSString* profileDirectory, AegisAccountCompletion completion) {
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
     NSString* path = [profileDirectory stringByAppendingPathComponent:@"AegisAccessAccount.json"];
     bool missing;
-    NSDictionary* binding = ReadBinding(path, &missing);
+    AegisAccountBindingChange change = nil;
+    NSDictionary* binding = ReadBinding(path, &missing, &change);
     if (!binding) {
-      completion(State(missing ? @"signed_out" : @"unavailable"));
+      completion(State(missing ? @"signed_out" : @"unavailable"), nil);
       return;
     }
     AegisAccountTransfer* transfer = [[AegisAccountTransfer alloc] init];
-    transfer.path = path;
+    transfer.bindingChange = change;
     transfer.binding = binding;
     transfer.completion = completion;
     transfer.body = [NSMutableData data];

@@ -22,18 +22,23 @@ void AegisService::QueryCurrentAccessAccount(
   // and Shutdown invalidate the Profile capability before a reply can escape.
   __block auto reply = base::BindPostTaskToCurrentDefault(base::BindOnce(
       [](base::WeakPtr<AegisService> service,
-         base::OnceCallback<void(base::DictValue)> callback, base::DictValue result) {
-        if (service && service->profile() && service->IsInitializedForProfile(service->profile()))
-          std::move(callback).Run(std::move(result));
+         base::OnceCallback<void(base::DictValue)> callback, base::DictValue result,
+         AegisAccountBindingChange change) {
+        if (!service || !service->IsInitializedForProfile(service->profile())) return;
+        // The response may have waited in the Profile UI queue after the
+        // network finished. Verify the operator binding at the delivery point.
+        NSString* state = change ? change() : nil;
+        if (state) result = base::DictValue().Set("state", base::SysNSStringToUTF8(state));
+        std::move(callback).Run(std::move(result));
       }, weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   AegisQueryAccessAccount(base::SysUTF8ToNSString(profile_->GetPath().value()),
-      ^(NSDictionary* result) {
+      ^(NSDictionary* result, AegisAccountBindingChange change) {
         NSData* json = [NSJSONSerialization dataWithJSONObject:result options:0 error:nil];
         auto parsed = json ? base::JSONReader::ReadDict(
             std::string_view(static_cast<const char*>(json.bytes), json.length),
             base::JSON_PARSE_RFC) : std::nullopt;
         std::move(reply).Run(parsed ? std::move(*parsed)
-                                    : base::DictValue().Set("state", "unavailable"));
+                                    : base::DictValue().Set("state", "unavailable"), change);
       });
 }
 }  // namespace aegis
