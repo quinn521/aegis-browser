@@ -256,6 +256,67 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     }
 
+    func testRedactedGrammarAndTargetsRoundTripWithoutLosingRecords() async throws {
+        for secret in ["ac", "2026", "26.11", "pre-connect", "private"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-redacted-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+            let capture = try XCTUnwrap(log.start(level: .info, secrets: [secret]))
+            defer { log.stop() }
+            let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: capture.path))
+            let events = """
+            2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //private.example:443
+            2026/11/11 00:00:00 [Warning] core: Xray 26.11.9 started
+            2026/11/11 00:00:00 [Warning] app/dispatcher: pre-connect failed
+            """ + "\n"
+            try writer.write(contentsOf: Data(events.utf8)); try writer.close()
+            let deadline = Date().addingTimeInterval(2)
+            while log.snapshot().split(separator: "\n").count < 3 && Date() < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let beforeRestart = log.snapshot()
+            XCTAssertEqual(beforeRestart.split(separator: "\n").count, 3)
+            XCTAssertFalse(beforeRestart.replacingOccurrences(of: "[redacted]", with: "").localizedCaseInsensitiveContains(secret))
+            try await log.flush()
+            log.stop()
+            let restarted = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+            try await restarted.flush()
+            XCTAssertEqual(restarted.snapshot(), beforeRestart, "secret collision: \(secret)")
+            XCTAssertFalse(restarted.persistenceUnavailable)
+        }
+    }
+
+    func testClearDiscardsUnreadPipePrefixAndPartialEvent() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-buffered-clear-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Keep the first poll in the future so Clear encounters unread bytes.
+        let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info, pollInterval: .seconds(1))
+        let capture = try XCTUnwrap(log.start(level: .info, secrets: []))
+        defer { log.stop() }
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: capture.path))
+        defer { try? writer.close() }
+        try writer.write(contentsOf: Data((
+            "2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //before-clear.invalid:443\n" +
+            "2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //partial-before").utf8))
+        XCTAssertTrue(log.snapshot().isEmpty)
+        try await log.clearStoredLogs()
+        try writer.write(contentsOf: Data((
+            "-clear.invalid:443\n" +
+            "2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //after-clear.invalid:443\n").utf8))
+        let deadline = Date().addingTimeInterval(3)
+        while !log.snapshot().contains("after-clear.invalid") && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(log.snapshot().contains("after-clear.invalid"))
+        XCTAssertFalse(log.snapshot().contains("before-clear"))
+        XCTAssertFalse(log.snapshot().contains("partial-before"))
+        try await log.flush()
+        log.stop()
+        let restarted = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+        try await restarted.flush()
+        XCTAssertEqual(restarted.snapshot(), log.snapshot())
+    }
+
     func testDiskWriterClearOrdersBehindQueuedSaveAndRejectsUnsafeFile() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-order-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

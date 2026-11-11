@@ -16,14 +16,17 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     public static let preferenceKey = "access.diagnostics.logLevel"
     private let queue = DispatchQueue(label: "aegis.access.diagnostics")
     private let limit: Int
+    private let pollInterval: DispatchTimeInterval
     private var lines: [String] = []
     private var byteCount = 0
     private var pending = Data()
     private var discardingLine = false
+    private var discardingBuffered = false
     private var enabled = false
     private var failed = false
     private var secrets: [String] = []
     private var reader: DispatchSourceTimer?
+    private var readerFD: Int32?
     private var directory: URL?
     private var captureID: UUID?
     private var minimumRank = 2
@@ -39,8 +42,10 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     private var flushWaiters: [@Sendable (Result<Void, Error>) -> Void] = []
 
     init(capacity: Int = 256 * 1024, storageDirectory: URL? = nil,
-         initialLevel: AccessLogLevel = .warning) {
+         initialLevel: AccessLogLevel = .warning,
+         pollInterval: DispatchTimeInterval = .milliseconds(100)) {
         limit = max(256, capacity)
+        self.pollInterval = pollInterval
         storage = storageDirectory.map { AccessDiagnosticLogStorage(directory: $0) }
         storageReady = storageDirectory == nil || initialLevel == .none
         minimumRank = Self.rank(initialLevel)
@@ -107,13 +112,15 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             minimumRank = Self.rank(level)
             pending.removeAll()
             discardingLine = false
+            discardingBuffered = false
             let source = DispatchSource.makeTimerSource(queue: queue)
             // A bounded poll also handles Darwin FIFO writers whose large
             // write does not trigger another readability edge.
-            source.schedule(deadline: .now(), repeating: .milliseconds(100), leeway: .milliseconds(20))
+            source.schedule(deadline: .now() + pollInterval, repeating: pollInterval, leeway: .milliseconds(20))
             source.setEventHandler { [weak self] in self?.drain(fd: fd) }
             source.setCancelHandler { close(fd) }
             reader = source
+            readerFD = fd
             source.resume()
         }
         return capture
@@ -149,6 +156,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             // still open throughout the rename.
             reader?.cancel()
             reader = nil
+            readerFD = nil
             secrets.removeAll()
             pending.removeAll()
             directory = nil
@@ -208,7 +216,19 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         var bytes = [UInt8](repeating: 0, count: 4096)
         for _ in 0..<4 {
             let count = read(fd, &bytes, bytes.count)
-            guard count > 0 else { return }
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else {
+                if count < 0 && errno != EAGAIN && errno != EWOULDBLOCK {
+                    enabled = false; failed = true
+                } else {
+                    discardingBuffered = false
+                }
+                return
+            }
+            if discardingBuffered {
+                discardingLine = bytes[count - 1] != 10
+                continue
+            }
             for byte in bytes.prefix(count) {
                 if byte == 10 {
                     if enabled && !discardingLine && !pending.isEmpty {
@@ -268,6 +288,10 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         for secret in secrets {
             text = text.replacingOccurrences(of: secret, with: "[redacted]", options: .caseInsensitive)
         }
+        // A short secret can also match the timestamp or fixed event grammar.
+        // Keep an explicit redacted record if that grammar no longer parses,
+        // so the sanitized representation round-trips unchanged on restart.
+        if restoredLine(text) != text { text = "[redacted]" }
         let size = text.utf8.count + 1
         guard size <= limit else { return }
         lines.append(text)
@@ -283,6 +307,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     }
 
     private func restoredLine(_ raw: String) -> String? {
+        if raw == "[redacted]" { return raw }
         let event = #"^(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d(?:\.\d+)?) \[(Debug|Info|Warning|Error|Access)\] (.*)$"#
         guard let timestamp = Self.firstMatch(event, in: raw, group: 1),
               let severity = Self.firstMatch(event, in: raw, group: 2),
@@ -340,6 +365,13 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         lines.removeAll(); byteCount = 0
         discardingLine = discardingLine || !pending.isEmpty
         pending.removeAll()
+        if let fd = readerFD {
+            // Discard through the first nonblocking empty read. The bounded
+            // drain can finish on later ticks under sustained output; until
+            // then none of the pre-clear pipe contents can be admitted.
+            discardingBuffered = true
+            drain(fd: fd)
+        }
         storageGeneration &+= 1
         let generation = storageGeneration
         dirty = false
