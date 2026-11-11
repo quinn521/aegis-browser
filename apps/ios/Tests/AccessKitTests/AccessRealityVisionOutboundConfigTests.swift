@@ -373,6 +373,33 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         }
     }
 
+    func testChangingCredentialsResanitizesHistoryThatAlreadyRestored() async throws {
+        for secret in ["2026", "ac", "private"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-restored-before-start-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let history = [
+                "2026/11/11 00:00:00 [Access] accepted private.example:443",
+                "2026/11/11 00:00:00 [Warning] core: Xray 26.11.9 started"]
+            try JSONSerialization.data(withJSONObject: ["version": 1, "lines": history])
+                .write(to: directory.appendingPathComponent("history.json"))
+            let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+            try await log.flush()
+            XCTAssertEqual(log.snapshot(), history.joined(separator: "\n"))
+            _ = try log.start(level: .info, secrets: [secret])
+            defer { log.stop() }
+            let sanitized = log.snapshot()
+            XCTAssertEqual(sanitized.split(separator: "\n").count, 2)
+            XCTAssertFalse(sanitized.replacingOccurrences(of: "[redacted]", with: "").localizedCaseInsensitiveContains(secret))
+            try await log.flush()
+            log.stop()
+            let restarted = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+            try await restarted.flush()
+            XCTAssertEqual(restarted.snapshot(), sanitized)
+            XCTAssertFalse(restarted.persistenceUnavailable)
+        }
+    }
+
     func testDiskWriterClearOrdersBehindQueuedSaveAndRejectsUnsafeFile() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-order-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

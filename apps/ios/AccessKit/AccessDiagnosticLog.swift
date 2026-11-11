@@ -109,6 +109,13 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         let capture = Capture(id: UUID(), path: fifo.path)
         queue.sync {
             self.secrets = secrets.filter { !$0.isEmpty }
+            let sanitized = lines.compactMap(restoredLine)
+            if sanitized != lines {
+                lines = sanitized
+                trimLocked()
+                dirty = true
+                scheduleSaveLocked()
+            }
             enabled = true
             failed = false
             directory = dir
