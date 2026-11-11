@@ -73,6 +73,11 @@ class AccountStoreTest(unittest.TestCase):
         with self.assertRaises(Unavailable):
             self.read(5999)
 
+    def test_pre_period_measurement_cannot_be_relabelled_by_late_receipt(self):
+        self.db.execute('UPDATE snapshots SET measured_at=999, received_at=1001')
+        with self.assertRaises(Unavailable):
+            self.read(1001)
+
     def test_pending_future_or_wrong_period_does_not_substitute_a_snapshot(self):
         with self.assertRaises(Unavailable):
             self.read(999)

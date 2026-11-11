@@ -32,7 +32,8 @@ def _response(account, usage, now):
     if plan is None:
         return result
     received, measured = usage["received_at"], usage["measured_at"]
-    if now < account["period_start"] or received is None or not account["period_start"] <= received <= now:
+    if (received is None or not account["period_start"] <= received <= now
+            or measured is not None and measured < account["period_start"]):
         raise Unavailable("current period or snapshot unavailable")
 
     quota = usage["quota_bytes"]

@@ -35,14 +35,26 @@ python3 -m services.access_account.server --database accounts.sqlite \
 ```
 
 The listener binds to 127.0.0.1. Remote clients require an HTTPS frontend.
-In 3.11.0 the `monitor` role cannot read this route. Keep the credential for
-`GET /panel/api/clients/traffic/:email` on the service host. Redirects are
+In 3.11.0 the `monitor` role cannot read these routes. Keep the credential for
+`GET /panel/api/clients/traffic/:email` and `GET /panel/api/clients/get/:email` on the service host. Redirects are
 refused. Set `AEGIS_3XUI_TOKEN` before starting the command above.
 For controlled, timestamped source snapshots, run the same command with
 `--stored-snapshots` in place of `--panel-url …` and provision the
 `snapshots` row with the matching account and period. The choice is explicit.
 In panel mode every subscribed query reads the panel and rechecks the Aegis
 session and plan after the response. A failed read returns 503.
+
+## Controlled native sessions
+
+On macOS the trusted `chrome://aegis` operation `getCurrentAccessAccount`
+reads the current regular Profile. Provision `AegisAccessAccount.json` inside that Profile through the
+operator account, using an atomic replacement and file mode 0600. Supply the
+service `origin`, expected `accountId`, opaque Aegis `token` and a fresh UUID
+`generation` for each bind, switch or rotation. Remove the file to sign out.
+
+On iOS the active app scene reads a device-only Keychain session bound to the
+configured service origin. The [iOS account guide](../../apps/ios/README.md#current-account-entitlement)
+describes controlled simulator provisioning and the app-hosted integration test.
 
 ## Response
 
@@ -60,7 +72,7 @@ source. All responses specify `Cache-Control: no-store`.
 watermark. In panel mode `receivedAt` is the time of the successful panel
 read, `measuredAt` and `snapshotAgeMs` are null, and `freshness` is
 `unavailable`. A timestamped source can return `current` through 5 seconds,
-`delayed` through 15 seconds and `unavailable` thereafter; the observed
+`delayed` through 15 seconds and `unavailable` thereafter. The observed
 bytes remain visible. Neither this query nor its business status authorizes
 traffic or enforces a quota.
 

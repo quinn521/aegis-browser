@@ -17,6 +17,7 @@ from services.access_account.tests.test_http import NOW, ROUTE, SCHEMA
 
 
 PREFIX = "/tenant/panel/api/clients/traffic/"
+SETTINGS = "/tenant/panel/api/clients/get/"
 FAILURE = (503, {"error": "entitlement_unavailable"})
 A, B = "client+a", "client@b"
 
@@ -36,6 +37,8 @@ class PanelHandler(BaseHTTPRequestHandler):
         status, body = panel.status, panel.body
         if self.headers.get_all("Authorization") != ["Bearer fixture-panel-key"]:
             status, body = 401, b"invalid credential"
+        elif self.path in panel.settings and body is None:
+            body = json.dumps({"success": True, "obj": {"client": panel.settings[self.path]}}).encode()
         elif self.path not in panel.rows:
             status, body = 404, b"wrong scoped route"
         elif body is None:
@@ -77,6 +80,10 @@ class PanelEntitlementTest(unittest.TestCase):
         self.a = traffic(A, 2**53 + 1, 89, 2**53 + 133)
         self.b = traffic(B, 17, 994, 1009)
         self.mock.rows = {PREFIX + "client%2Ba": self.a, PREFIX + "client%40b": self.b}
+        self.mock.settings = {
+            path.replace(PREFIX, SETTINGS): dict(row, totalGB=row["total"], trafficReset="never")
+            for path, row in self.mock.rows.items()
+        }
         self.mock.paths, self.mock.status, self.mock.body, self.mock.during_read = [], 200, None, None
         panel = Panel(f"http://127.0.0.1:{self.mock.server_port}/tenant/", "fixture-panel-key")
         server = self.start(create_server(self.path, clock_ms=lambda: NOW, panel=panel))
@@ -108,8 +115,9 @@ class PanelEntitlementTest(unittest.TestCase):
         self.assertEqual(self.read("A", ROUTE + "?account=B")[0], 404)
         self.assertEqual(self.read("unknown")[0], 401)
         self.assertEqual(self.read("empty")[1]["status"], "not_subscribed")
-        self.assertEqual(self.mock.paths, [PREFIX + "client%2Ba", PREFIX + "client%40b",
-                                          PREFIX + "client%2Ba"])
+        self.assertEqual(self.mock.paths, [route + client for client in
+                                          ("client%2Ba", "client%40b", "client%2Ba")
+                                          for route in (PREFIX, SETTINGS)])
 
     def test_failed_read_never_replays_success_or_follows_redirect(self):
         self.assertEqual(self.read()[0], 200)
@@ -120,17 +128,27 @@ class PanelEntitlementTest(unittest.TestCase):
             with self.subTest(status=status, body=body):
                 self.mock.status, self.mock.body = status, body
                 self.assertEqual(self.read(), FAILURE)
-        self.assertEqual(self.mock.paths, [PREFIX + "client%2Ba"] * 8)
+        self.assertEqual(self.mock.paths.count(PREFIX + "client%2Ba"), 8)
+        self.assertTrue(all(path.endswith("client%2Ba") for path in self.mock.paths))
 
     def test_only_finite_dedicated_plan_and_valid_integer_counters(self):
-        for field, value in [("enable", False), ("total", 0), ("expiryTime", 0), ("reset", 1),
-                             ("reset", False), ("resetDay", 0.0), ("resetDay", 7), ("resetWeekday", 2), ("up", -1), ("up", True),
-                             ("down", 3.5), ("total", "42"), ("up", 2**63)]:
-            with self.subTest(field=field, value=value):
+        account = self.mock.settings[SETTINGS + "client%2Ba"]
+        for field, value in [("enable", False), ("totalGB", 0), ("expiryTime", 0), ("reset", 1),
+                             ("reset", False), ("resetDay", 7), ("resetWeekday", 2),
+                             ("trafficReset", "daily"), ("totalGB", "42")]:
+            with self.subTest(field=field):
+                self.mock.settings[SETTINGS + "client%2Ba"] = dict(account, **{field: value})
+                self.assertEqual(self.read(), FAILURE)
+        self.mock.settings[SETTINGS + "client%2Ba"] = account
+        for field, value in [("enable", False), ("up", -1), ("up", True),
+                             ("down", 3.5), ("up", 2**63)]:
+            with self.subTest(field=field):
                 self.mock.rows[PREFIX + "client%2Ba"] = dict(self.a, **{field: value})
                 self.assertEqual(self.read(), FAILURE)
-        for extra, expected in [({"expiryTime": NOW}, "expired"), ({"total": 1}, "exhausted")]:
-            self.mock.rows[PREFIX + "client%2Ba"] = dict(self.a, enable=False, **extra)
+        self.mock.rows[PREFIX + "client%2Ba"] = dict(self.a, total=0, expiryTime=0)
+        self.assertEqual(self.read()[1]["quotaBytes"], str(account["totalGB"]))
+        for extra, expected in [({"expiryTime": NOW}, "expired"), ({"totalGB": 1}, "exhausted")]:
+            self.mock.settings[SETTINGS + "client%2Ba"] = dict(account, enable=False, **extra)
             self.assertEqual(self.read()[1]["status"], expected)
 
     def test_rechecks_session_and_plan_after_upstream_response(self):

@@ -21,14 +21,12 @@ class Panel:
         self.host = url.hostname
         self.port = url.port
         self.tls = url.scheme == "https"
-        self.prefix = url.path.rstrip("/") + "/panel/api/clients/traffic/"
+        self.prefix = url.path.rstrip("/") + "/panel/api/clients/"
         self.token = api_token
 
-    def read(self, client, now_ms):
-        if client in ("", ".", "..") or "/" in client or "\\" in client:
-            raise Unavailable("invalid panel client binding")
+    def _get(self, route, client):
         # http.client does not follow redirects or consult environment proxy settings.
-        target = self.prefix + quote(client, safe="")
+        target = self.prefix + route + "/" + quote(client, safe="")
         headers = {"Authorization": "Bearer " + self.token, "Accept": "application/json"}
         try:
             if self.tls:
@@ -48,23 +46,34 @@ class Panel:
         except (OSError, http.client.HTTPException, ValueError, RecursionError) as error:
             raise Unavailable("invalid panel response") from error
 
-        received = now_ms()
         if not isinstance(result, dict) or result.get("success") is not True:
             raise Unavailable("panel read failed")
-        row = result.get("obj")
-        if not isinstance(row, dict) or row.get("email") != client:
+        obj = result.get("obj")
+        if not isinstance(obj, dict):
             raise Unavailable("panel client unavailable")
-        for key in ("total", "up", "down", "expiryTime"):
-            value = row.get(key)
-            if type(value) is not int or not 0 <= value <= 2**63 - 1:
-                raise Unavailable("invalid panel counter or limit")
-        quota, up, down, expiry = (row[k] for k in ("total", "up", "down", "expiryTime"))
-        if (not quota or not 0 < expiry <= 2**53 - 1
-                or any(type(row.get(k)) is not int or row[k] != 0
+        return obj
+
+    def read(self, client, now_ms):
+        if client in ("", ".", "..") or "/" in client or "\\" in client:
+            raise Unavailable("invalid panel client binding")
+        usage = self._get("traffic", client)
+        received = now_ms()
+        # Node snapshots can clear the limit fields in client_traffics. 3X-UI
+        # keeps the configured limits and traffic-reset policy in ClientRecord.
+        settings = self._get("get", client).get("client")
+        if not isinstance(settings, dict) or any(row.get("email") != client for row in (settings, usage)):
+            raise Unavailable("wrong panel client")
+        quota, expiry = settings.get("totalGB"), settings.get("expiryTime")
+        up, down = usage.get("up"), usage.get("down")
+        if any(type(v) is not int or not 0 <= v <= 2**63 - 1 for v in (quota, expiry, up, down)):
+            raise Unavailable("invalid panel counter or limit")
+        if (not quota or not 0 < expiry <= 2**53 - 1 or settings.get("trafficReset") != "never"
+                or any(type(settings.get(k)) is not int or settings[k] != 0
                        for k in ("reset", "resetDay", "resetWeekday"))):
             raise Unavailable("a dedicated finite plan with an absolute expiry is required")
-        if type(row.get("enable")) is not bool or (not row["enable"] and up + down < quota
-                                                    and received < expiry):
-            raise Unavailable("panel client disabled")
+        for row in (settings, usage):
+            if type(row.get("enable")) is not bool or (not row["enable"] and up + down < quota
+                                                       and received < expiry):
+                raise Unavailable("panel client disabled")
         return dict(quota_bytes=quota, uploaded_bytes=up, downloaded_bytes=down,
                     expires_at=expiry, received_at=received, measured_at=None)
