@@ -134,6 +134,7 @@ struct AegisApp: App {
         .commands { BrowserKeyboardCommands(language: language) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { language.refresh(); AegisFirebase.shared.refreshOnForeground() }
+            if phase == .background { Task { try? await AccessDiagnosticLog.shared.flush() } }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { accountSession.refresh() }
