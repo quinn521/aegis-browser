@@ -11,8 +11,9 @@ thin bridge (`StartInstance` / `Dial`). Stock LibXray `Invoke` / `RunXray` is
 `embedded-core-lock.json` status is `verified_build` with both iOS slice digests.
 `AccessGoEmbeddedCore` wraps the linked module. The product publisher
 (`AccessEmbeddedProxyEntryFactory`) stays fail-closed until the lock may link,
-the framework is linked, **and** a local Reality Vision config is present via
-`AEGIS_ACCESS_LOCAL_V2RAY_CONFIG`. Digests alone do not dial.
+the framework is linked, **and** a supported Reality Vision config is present. Dev builds read a local path from
+`AEGIS_ACCESS_LOCAL_V2RAY_CONFIG` in the app process. Internal Alpha and Beta
+builds can use the app resource described below.
 
 ## Build / package
 
@@ -31,6 +32,30 @@ scripts/release/record-ios-access-core-digests.sh \
 
 Freeze matching digests into `embedded-core-lock.json` only after accepting the
 build. `Products/` is a local artifact (gitignored), linked by the Xcode project.
+
+## Internal Alpha and Beta test node
+
+The private signing repository owns the GitHub Environment secret
+`AEGIS_ACCESS_TEST_NODE_URI` (one complete VLESS Reality Vision share URI).
+Expose it only in the private internal archive step. With the locked framework
+prepared, call the wrapper from that step, selecting `alpha` or `beta`:
+
+```bash
+bash scripts/release/ios-private-test-node-archive.sh beta \
+  MARKETING_VERSION=0.8.0 CURRENT_PROJECT_VERSION=1
+```
+
+The wrapper accepts additional Xcode settings such as the private job's signing
+team. It writes the URI to a temporary file outside the checkout, removes the URI
+from Xcode's environment, and prints the private archive path. The input file
+and DerivedData are removed on exit. Anyone with the resulting app can extract
+the URI. Keep the archive, exported apps, and access to them private.
+
+The shared node's 1 GB daily allowance covers upload and download combined.
+It is separate from commercial account entitlements. Public PR, signing, and
+release workflows do not need this secret. Ordinary builds omit the node.
+Dev, release, and unrecognized channels remove the resource on a reused build
+directory and ignore it at runtime.
 
 ## Toolchain (verified local attempt)
 
