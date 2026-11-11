@@ -2,6 +2,7 @@ import Foundation
 
 /// Serial file access for already-filtered diagnostic records.
 final class AccessDiagnosticLogStorage: @unchecked Sendable {
+    static let maximumRecords = 8192
     enum StorageError: Error { case invalidHistory, unsafePath, tooLarge }
     private struct History: Codable { let version: Int; let lines: [String] }
     private let queue: DispatchQueue
@@ -25,7 +26,7 @@ final class AccessDiagnosticLogStorage: @unchecked Sendable {
                 let data = try handle.read(upToCount: self.maximumFileBytes + 1) ?? Data()
                 guard data.count <= self.maximumFileBytes else { throw StorageError.tooLarge }
                 let history = try JSONDecoder().decode(History.self, from: data)
-                guard history.version == 1, history.lines.count <= 8192,
+                guard history.version == 1, history.lines.count <= Self.maximumRecords,
                       history.lines.allSatisfy({ line in
                           !line.isEmpty && line.utf8.count <= 16 * 1024 &&
                           line.unicodeScalars.allSatisfy { !CharacterSet.controlCharacters.contains($0) }
@@ -38,6 +39,7 @@ final class AccessDiagnosticLogStorage: @unchecked Sendable {
     func save(_ lines: [String], completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         queue.async {
             completion(Result {
+                guard lines.count <= Self.maximumRecords else { throw StorageError.tooLarge }
                 let manager = FileManager.default
                 if manager.fileExists(atPath: self.directory.path) { try self.checkPath(self.directory, directory: true) }
                 try manager.createDirectory(at: self.directory, withIntermediateDirectories: true,

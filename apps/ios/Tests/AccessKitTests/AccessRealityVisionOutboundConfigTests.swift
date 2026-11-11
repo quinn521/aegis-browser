@@ -317,6 +317,62 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertEqual(restarted.snapshot(), log.snapshot())
     }
 
+    func testShortRedactedRecordsRespectTheDiskRecordLimit() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-record-limit-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = AccessDiagnosticLog(storageDirectory: directory)
+        let capture = try XCTUnwrap(log.start(level: .warning, secrets: ["2026"]))
+        defer { log.stop() }
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: capture.path))
+        let events = String(repeating: "2026/11/11 00:00:00 [Warning] core: Xray 26.11.9 started\n", count: 8193)
+        try writer.write(contentsOf: Data(events.utf8)); try writer.close()
+        let deadline = Date().addingTimeInterval(5)
+        while log.snapshot().split(separator: "\n").count < 8192 && Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(log.snapshot().split(separator: "\n").count, 8192)
+        try await log.flush()
+        log.stop()
+        let restarted = AccessDiagnosticLog(storageDirectory: directory)
+        try await restarted.flush()
+        XCTAssertEqual(restarted.snapshot(), log.snapshot())
+        XCTAssertFalse(restarted.persistenceUnavailable)
+        let storage = AccessDiagnosticLogStorage(directory: directory)
+        let rejected: Result<Void, Error> = await withCheckedContinuation { continuation in
+            storage.save(Array(repeating: "[redacted]", count: 8193)) { continuation.resume(returning: $0) }
+        }
+        if case .success = rejected { XCTFail("writer accepted history that its reader rejects") }
+    }
+
+    func testDelayedRestoreRedactsChangedCredentialsIntoRestartSafeRecords() async throws {
+        for secret in ["2026", "ac", "private"] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-late-restore-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let history = [
+                "2026/11/11 00:00:00 [Access] accepted private.example:443",
+                "2026/11/11 00:00:00 [Warning] core: Xray 26.11.9 started"]
+            try JSONSerialization.data(withJSONObject: ["version": 1, "lines": history])
+                .write(to: directory.appendingPathComponent("history.json"))
+            let storageQueue = DispatchQueue(label: "access.delayed.restore.test")
+            storageQueue.suspend()
+            let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info, storageQueue: storageQueue)
+            do { _ = try log.start(level: .info, secrets: [secret]) }
+            catch { storageQueue.resume(); throw error }
+            defer { log.stop() }
+            storageQueue.resume()
+            try await log.flush()
+            let redacted = log.snapshot()
+            XCTAssertEqual(redacted.split(separator: "\n").count, 2)
+            XCTAssertFalse(redacted.replacingOccurrences(of: "[redacted]", with: "").localizedCaseInsensitiveContains(secret))
+            log.stop()
+            let restarted = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+            try await restarted.flush()
+            XCTAssertEqual(restarted.snapshot(), redacted)
+            XCTAssertFalse(restarted.persistenceUnavailable)
+        }
+    }
+
     func testDiskWriterClearOrdersBehindQueuedSaveAndRejectsUnsafeFile() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-order-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

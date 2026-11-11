@@ -43,10 +43,14 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     init(capacity: Int = 256 * 1024, storageDirectory: URL? = nil,
          initialLevel: AccessLogLevel = .warning,
-         pollInterval: DispatchTimeInterval = .milliseconds(100)) {
+         pollInterval: DispatchTimeInterval = .milliseconds(100),
+         storageQueue: DispatchQueue? = nil) {
         limit = max(256, capacity)
         self.pollInterval = pollInterval
-        storage = storageDirectory.map { AccessDiagnosticLogStorage(directory: $0) }
+        storage = storageDirectory.map {
+            if let storageQueue { return AccessDiagnosticLogStorage(directory: $0, queue: storageQueue) }
+            return AccessDiagnosticLogStorage(directory: $0)
+        }
         storageReady = storageDirectory == nil || initialLevel == .none
         minimumRank = Self.rank(initialLevel)
         if let storage {
@@ -284,29 +288,40 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             }
         }
         guard severityRank >= minimumRank else { return }
-        var text = timestamp + " [\(severity)] " + detail
-        for secret in secrets {
-            text = text.replacingOccurrences(of: secret, with: "[redacted]", options: .caseInsensitive)
-        }
-        // A short secret can also match the timestamp or fixed event grammar.
-        // Keep an explicit redacted record if that grammar no longer parses,
-        // so the sanitized representation round-trips unchanged on restart.
-        if restoredLine(text) != text { text = "[redacted]" }
+        let text = redactedLine(timestamp + " [\(severity)] " + detail)
         let size = text.utf8.count + 1
         guard size <= limit else { return }
         lines.append(text)
         byteCount += size
-        while byteCount > limit, !lines.isEmpty { byteCount -= lines.removeFirst().utf8.count + 1 }
+        while byteCount > limit || lines.count > AccessDiagnosticLogStorage.maximumRecords {
+            byteCount -= lines.removeFirst().utf8.count + 1
+        }
         dirty = true
         scheduleSaveLocked()
     }
 
     private func trimLocked() {
         byteCount = lines.reduce(0) { $0 + $1.utf8.count + 1 }
-        while byteCount > limit, !lines.isEmpty { byteCount -= lines.removeFirst().utf8.count + 1 }
+        while byteCount > limit || lines.count > AccessDiagnosticLogStorage.maximumRecords {
+            byteCount -= lines.removeFirst().utf8.count + 1
+        }
     }
 
     private func restoredLine(_ raw: String) -> String? {
+        canonicalLine(raw).map(redactedLine)
+    }
+
+    private func redactedLine(_ safe: String) -> String {
+        var text = safe
+        for secret in secrets {
+            text = text.replacingOccurrences(of: secret, with: "[redacted]", options: .caseInsensitive)
+        }
+        // Short secrets can also match timestamps or fixed event grammar.
+        // Both live and restored records must retain a readable safe form.
+        return canonicalLine(text) == text ? text : "[redacted]"
+    }
+
+    private func canonicalLine(_ raw: String) -> String? {
         if raw == "[redacted]" { return raw }
         let event = #"^(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d(?:\.\d+)?) \[(Debug|Info|Warning|Error|Access)\] (.*)$"#
         guard let timestamp = Self.firstMatch(event, in: raw, group: 1),
@@ -329,9 +344,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             guard known.contains(message) else { return nil }
             detail = message
         }
-        var line = timestamp + " [\(severity)] " + detail
-        for secret in secrets { line = line.replacingOccurrences(of: secret, with: "[redacted]", options: .caseInsensitive) }
-        return line
+        return timestamp + " [\(severity)] " + detail
     }
 
     private func scheduleSaveLocked() {
