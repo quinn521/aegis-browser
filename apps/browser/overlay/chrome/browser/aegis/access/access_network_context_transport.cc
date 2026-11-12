@@ -239,7 +239,7 @@ bool AccessNetworkContextTransport::SetAccountNodeSites(
   if (!proxy.is_valid() || (!host.empty() && authorization.empty())) return false;
   config->rules.type = net::ProxyConfig::ProxyRules::Type::PROXY_LIST_PER_SCHEME;
   for (const auto& site : sites)
-    if (!config->rules.bypass_rules.AddRuleFromString(site)) return false;
+    config->rules.bypass_rules.AddAegisExactSite(site);
   // Keep this single endpoint exclusive to the config. The CONNECT-only node
   // rejects ordinary HTTP and no tunnel header accompanies those requests.
   config->rules.proxies_for_http.SetSingleProxyServer(proxy);

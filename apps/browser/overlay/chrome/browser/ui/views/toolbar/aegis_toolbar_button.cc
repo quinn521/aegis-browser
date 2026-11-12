@@ -265,7 +265,10 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
     const auto snapshot = Helper() ? Helper()->Snapshot() : base::DictValue();
     const int revision = store->state().FindInt("revision").value_or(0);
 #if BUILDFLAG(IS_MAC)
-    const auto state = aegis::access::AccountNodeForSite(browser_->GetProfile(), std::string(address_.host()));
+    const auto site = aegis::access::ResolveTrustedNavigationHost(address_);
+    const auto state = site.host
+        ? aegis::access::AccountNodeForSite(browser_->GetProfile(), site.host->value)
+        : aegis::access::AccountNodeStatus::kOff;
     if (state != paid_status_) { Build(); return; }
 #endif
     if (revision != revision_ || snapshot != snapshot_) Build();

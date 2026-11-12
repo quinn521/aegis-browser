@@ -1,6 +1,6 @@
-From 10cabb5cffed4e840c0ae726eda783dca45400cc Mon Sep 17 00:00:00 2001
+From 182545dc346a13c164f55d7be72c397be0690628 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Thu, 12 Nov 2026 11:49:14 +0800
+Date: Thu, 12 Nov 2026 12:37:33 +0800
 Subject: [PATCH] feat(access): connect account-bound sites through an
  authenticated TLS node
 
@@ -12,13 +12,15 @@ Subject: [PATCH] feat(access): connect account-bound sites through an
  .../access/access_network_context_transport.h |  11 ++
  .../aegis/access/access_paid_site_mac.h       |  14 ++
  .../aegis/access/access_paid_site_mac.mm      | 183 ++++++++++++++++++
- .../access/access_paid_site_mac_unittest.mm   | 105 ++++++++++
+ .../access/access_paid_site_mac_unittest.mm   | 141 ++++++++++++++
  .../aegis/access/access_site_intent.cc        |   3 +
  .../browser/aegis/access/access_site_intent.h |   2 +
  .../aegis/access/access_site_proxy_session.cc |   2 +
  .../aegis/access/access_site_proxy_session.h  |   4 +-
- .../ui/views/toolbar/aegis_toolbar_button.cc  |  38 +++-
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  41 +++-
  net/base/proxy_chain.h                        |   3 +
+ .../proxy_host_matching_rules.cc              |  33 ++++
+ .../proxy_host_matching_rules.h               |   4 +
  net/socket/connect_job_params_factory.cc      |   6 +-
  net/socket/ssl_client_socket_impl.cc          |   8 +-
  services/network/network_context.cc           |  24 ++-
@@ -30,7 +32,7 @@ Subject: [PATCH] feat(access): connect account-bound sites through an
  services/network/websocket.h                  |   1 +
  services/network/websocket_factory.cc         |   7 +
  services/network/websocket_factory.h          |   2 +
- 25 files changed, 613 insertions(+), 12 deletions(-)
+ 27 files changed, 689 insertions(+), 12 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.h
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.mm
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
@@ -203,7 +205,7 @@ index 3e670b2be381ee16cd954fc3a5fa47814847285c..2e30b0387954d50415194e8b4fada80d
 +  });
 +}
 diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
-index 487f309c0dace566f09e64456becf1ff8e5f0fb7..402e7f3ca8aaf511c3270d60c5ac4103b8ecf7f1 100644
+index 487f309c0dace566f09e64456becf1ff8e5f0fb7..a6b849edcd29527f3ec56c116358aea313ae07c8 100644
 --- a/chrome/browser/aegis/access/access_network_context_transport.cc
 +++ b/chrome/browser/aegis/access/access_network_context_transport.cc
 @@ -14,6 +14,7 @@
@@ -248,7 +250,7 @@ index 487f309c0dace566f09e64456becf1ff8e5f0fb7..402e7f3ca8aaf511c3270d60c5ac4103
 +  if (!proxy.is_valid() || (!host.empty() && authorization.empty())) return false;
 +  config->rules.type = net::ProxyConfig::ProxyRules::Type::PROXY_LIST_PER_SCHEME;
 +  for (const auto& site : sites)
-+    if (!config->rules.bypass_rules.AddRuleFromString(site)) return false;
++    config->rules.bypass_rules.AddAegisExactSite(site);
 +  // Keep this single endpoint exclusive to the config. The CONNECT-only node
 +  // rejects ordinary HTTP and no tunnel header accompanies those requests.
 +  config->rules.proxies_for_http.SetSingleProxyServer(proxy);
@@ -525,10 +527,10 @@ index 0000000000000000000000000000000000000000..9fc374b1cf82e08ec1d48b4fda04a9b8
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_paid_site_mac_unittest.mm b/chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..1bf43422fda3ab8bea1e7b1f12e7af269969c29a
+index 0000000000000000000000000000000000000000..54783850cea79968426fbbb3dfd34583762f4a8f
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,141 @@
 +// Copyright 2026 GCSA
 +#import <Foundation/Foundation.h>
 +
@@ -537,6 +539,7 @@ index 0000000000000000000000000000000000000000..1bf43422fda3ab8bea1e7b1f12e7af26
 +#include "base/json/json_writer.h"
 +#include "base/files/file_util.h"
 +#include "net/log/test_net_log.h"
++#include "net/proxy_resolution/proxy_info.h"
 +#include "base/files/scoped_temp_dir.h"
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/sys_string_conversions.h"
@@ -558,6 +561,37 @@ index 0000000000000000000000000000000000000000..1bf43422fda3ab8bea1e7b1f12e7af26
 +
 +namespace aegis::access {
 +namespace {
++TEST(PaidSiteMac, CanonicalDnsHostIsExactWithOrWithoutRootDots) {
++  content::BrowserTaskEnvironment task;
++  auto profile = TestingProfile::Builder().Build();
++  network::mojom::NetworkContextParams params;
++  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
++  auto* transport = AccessNetworkContextTransport::Get(profile.get());
++  for (bool assigned : {true, false}) {
++    ASSERT_TRUE(transport->SetAccountNodeSites({"example.com"}, assigned ? "node.test" : "",
++                                               assigned ? 443 : 0, assigned ? "Basic fixture" : ""));
++    const auto config = transport->BuildConfigForTesting({});
++    for (const char* url : {"https://example.com", "https://example.com.",
++                            "http://EXAMPLE.COM.:8080/path", "https://example.com..",
++                            "wss://example.com%2E./socket"}) {
++      SCOPED_TRACE(url);
++      net::ProxyInfo result;
++      config->rules.Apply(GURL(url), &result);
++      EXPECT_FALSE(result.is_direct());
++      if (!result.is_direct())
++        EXPECT_EQ(result.proxy_chain().First().host_port_pair().host(),
++                  assigned ? "node.test" : "blocked.invalid");
++    }
++    for (const char* url : {"https://sub.example.com.", "https://example.com.other.",
++                            "http://notexample.com..", "wss://localhost/socket"}) {
++      SCOPED_TRACE(url);
++      net::ProxyInfo result;
++      config->rules.Apply(GURL(url), &result);
++      EXPECT_TRUE(result.is_direct());
++    }
++  }
++}
++
 +// Optional wire fixture: the target accepts only traffic owned by its Xray
 +// peer and returns a known payload. No process-global trust changes.
 +TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
@@ -585,8 +619,12 @@ index 0000000000000000000000000000000000000000..1bf43422fda3ab8bea1e7b1f12e7af26
 +      std::move(params.initial_custom_proxy_config), std::move(params.custom_proxy_config_client_receiver),
 +      mojo::PendingRemote<network::mojom::CustomProxyConnectionObserver>()));
 +  auto network = builder->Build();
-+  GURL url(base::SysNSStringToUTF8(env[@"AEGIS_S3_HTTPS_URL"]));
-+  const std::string site(url.host());
++  GURL configured_url(base::SysNSStringToUTF8(env[@"AEGIS_S3_HTTPS_URL"]));
++  const std::string site(configured_url.host());
++  const std::string rooted_host = site + ".";
++  GURL::Replacements rooted;
++  rooted.SetHostStr(rooted_host);
++  const GURL url = configured_url.ReplaceComponents(rooted);
 +  ASSERT_TRUE(UsesAccountNode(profile.get()));
 +  // Same entry point invoked by the sole trusted toolbar toggle.
 +  ToggleAccountNodeSite(profile.get(), site);
@@ -704,7 +742,7 @@ index f75e7de5c3e25f213acf04fbf92aa8b998c04fc5..7b4e31ff403989902a617b3c924eea15
    std::map<AccessSiteHost, AccessSiteProxySessionSnapshot> snapshots_;
  };
 diff --git a/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc b/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
-index ea4e64dc50b7eb8c34a895f7ceb7d7e2e840e0c5..8970fe3e70cc884ac6272a1f6bd394db69d8c291 100644
+index ea4e64dc50b7eb8c34a895f7ceb7d7e2e840e0c5..1dedeecb2c4531ed070be107b9f95ee5cfdccd25 100644
 --- a/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
 +++ b/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
 @@ -24,6 +24,9 @@
@@ -717,18 +755,21 @@ index ea4e64dc50b7eb8c34a895f7ceb7d7e2e840e0c5..8970fe3e70cc884ac6272a1f6bd394db
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_commands.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -261,6 +264,10 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+@@ -261,6 +264,13 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
      auto* store = aegis::EnhancementStore::Get(browser_->GetProfile());
      const auto snapshot = Helper() ? Helper()->Snapshot() : base::DictValue();
      const int revision = store->state().FindInt("revision").value_or(0);
 +#if BUILDFLAG(IS_MAC)
-+    const auto state = aegis::access::AccountNodeForSite(browser_->GetProfile(), std::string(address_.host()));
++    const auto site = aegis::access::ResolveTrustedNavigationHost(address_);
++    const auto state = site.host
++        ? aegis::access::AccountNodeForSite(browser_->GetProfile(), site.host->value)
++        : aegis::access::AccountNodeStatus::kOff;
 +    if (state != paid_status_) { Build(); return; }
 +#endif
      if (revision != revision_ || snapshot != snapshot_) Build();
    }
    void RefreshSoon() {
-@@ -380,6 +387,14 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+@@ -380,6 +390,14 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
      if (!snap.has_trusted_site || !snap.toggle_enabled) {
        return;
      }
@@ -743,7 +784,7 @@ index ea4e64dc50b7eb8c34a895f7ceb7d7e2e840e0c5..8970fe3e70cc884ac6272a1f6bd394db
      // Publication path: enable → Prepare/Publish/ACK; disable commits locally
      // even when the service is unavailable. Switch state ≠ connectivity.
      controller->RequestHostProxySession(snap.host, !snap.toggle_on);
-@@ -401,12 +416,30 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+@@ -401,12 +419,30 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
        AddLabel(parent, ConnectionStatusCopy(snap.connection_status));
        return;
      }
@@ -775,7 +816,7 @@ index ea4e64dc50b7eb8c34a895f7ceb7d7e2e840e0c5..8970fe3e70cc884ac6272a1f6bd394db
      AddLabel(parent, IntentStatusCopy(snap.intent_status));
      AddLabel(parent, ConnectionStatusCopy(snap.connection_status));
      if (!snap.failure_reason.empty()) {
-@@ -605,6 +638,9 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+@@ -605,6 +641,9 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
    std::string document_, tab_;
    raw_ptr<views::View> panel_ = nullptr;
    base::DictValue snapshot_;
@@ -799,6 +840,79 @@ index 3f3d20a68fb7bdf4f071a5f8889a16f5a756fda7..6c65779998a6f106fbc03fa404033b8a
    std::optional<int> opaque_data() const { return opaque_data_; }
  
    friend bool operator==(const ProxyChain&, const ProxyChain&) = default;
+diff --git a/net/proxy_resolution/proxy_host_matching_rules.cc b/net/proxy_resolution/proxy_host_matching_rules.cc
+index 512b249860803957d2b5e6885a07213e85c0e142..ffb0c3082ac3be479d24610b0d156e43f8378a4e 100644
+--- a/net/proxy_resolution/proxy_host_matching_rules.cc
++++ b/net/proxy_resolution/proxy_host_matching_rules.cc
+@@ -69,6 +69,29 @@ bool IsIPv4MappedLoopback(const GURL& url) {
+   return ip_address.bytes()[12] == 127;
+ }
+ 
++// Proxy rules are copied across Mojo by serializing each rule to a string.
++constexpr std::string_view kAegisExactSitePrefix = "<aegis-exact-site:";
++
++class AegisExactSiteRule final : public SchemeHostPortMatcherRule {
++ public:
++  explicit AegisExactSiteRule(std::string_view host) : host_(host) {}
++
++  SchemeHostPortMatcherResult Evaluate(const GURL& url) const override {
++    // GURL has already applied URL host canonicalization, including IDNA.
++    // The toolbar additionally strips trailing dots from the committed host.
++    return base::TrimString(url.host(), ".", base::TRIM_TRAILING) == host_
++               ? SchemeHostPortMatcherResult::kInclude
++               : SchemeHostPortMatcherResult::kNoMatch;
++  }
++
++  std::string ToString() const override {
++    return std::string(kAegisExactSitePrefix) + host_ + ">";
++  }
++
++ private:
++  const std::string host_;
++};
++
+ class BypassSimpleHostnamesRule : public SchemeHostPortMatcherRule {
+  public:
+   BypassSimpleHostnamesRule() = default;
+@@ -118,6 +141,12 @@ std::unique_ptr<SchemeHostPortMatcherRule> ParseRule(
+     return std::make_unique<SubtractImplicitBypassesRule>();
+   }
+ 
++  if (raw.starts_with(kAegisExactSitePrefix)) {
++    raw.remove_prefix(kAegisExactSitePrefix.size());
++    if (!raw.ends_with('>') || raw.size() <= 1) return nullptr;
++    raw.remove_suffix(1);
++    return std::make_unique<AegisExactSiteRule>(raw);
++  }
+   return SchemeHostPortMatcherRule::FromUntrimmedRawString(raw_untrimmed);
+ }
+ 
+@@ -214,6 +243,10 @@ bool ProxyHostMatchingRules::AddRuleFromString(std::string_view raw_untrimmed) {
+   return false;
+ }
+ 
++void ProxyHostMatchingRules::AddAegisExactSite(std::string_view canonical_host) {
++  matcher_.AddAsLastRule(std::make_unique<AegisExactSiteRule>(canonical_host));
++}
++
+ void ProxyHostMatchingRules::AddRulesToSubtractImplicit() {
+   matcher_.AddAsLastRule(std::make_unique<SubtractImplicitBypassesRule>());
+ }
+diff --git a/net/proxy_resolution/proxy_host_matching_rules.h b/net/proxy_resolution/proxy_host_matching_rules.h
+index 1d7f3339c7df3ec68383fb40891f83febea84cea..dfa015c4a08e7e54caf69c5c6935c1f5f29db26e 100644
+--- a/net/proxy_resolution/proxy_host_matching_rules.h
++++ b/net/proxy_resolution/proxy_host_matching_rules.h
+@@ -87,6 +87,10 @@ class NET_EXPORT ProxyHostMatchingRules {
+   // For the supported format of bypass rules see //net/docs/proxy.md.
+   bool AddRuleFromString(std::string_view raw);
+ 
++  // Matches exactly the canonical host used by the account-site selector,
++  // including navigation URLs whose DNS names end in root dots.
++  void AddAegisExactSite(std::string_view canonical_host);
++
+   // Appends rules that "cancels out" the implicit bypass rules. See
+   // GetRulesToSubtractImplicit() for details.
+   void AddRulesToSubtractImplicit();
 diff --git a/net/socket/connect_job_params_factory.cc b/net/socket/connect_job_params_factory.cc
 index 83ba68d5f9e22af5339a1dff1c073c38846f5470..caf4ce12879dc87bb6c6fba021dc466b9bd86e08 100644
 --- a/net/socket/connect_job_params_factory.cc

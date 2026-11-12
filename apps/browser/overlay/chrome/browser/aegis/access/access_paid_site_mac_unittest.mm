@@ -6,6 +6,7 @@
 #include "base/json/json_writer.h"
 #include "base/files/file_util.h"
 #include "net/log/test_net_log.h"
+#include "net/proxy_resolution/proxy_info.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
@@ -27,6 +28,37 @@
 
 namespace aegis::access {
 namespace {
+TEST(PaidSiteMac, CanonicalDnsHostIsExactWithOrWithoutRootDots) {
+  content::BrowserTaskEnvironment task;
+  auto profile = TestingProfile::Builder().Build();
+  network::mojom::NetworkContextParams params;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
+  auto* transport = AccessNetworkContextTransport::Get(profile.get());
+  for (bool assigned : {true, false}) {
+    ASSERT_TRUE(transport->SetAccountNodeSites({"example.com"}, assigned ? "node.test" : "",
+                                               assigned ? 443 : 0, assigned ? "Basic fixture" : ""));
+    const auto config = transport->BuildConfigForTesting({});
+    for (const char* url : {"https://example.com", "https://example.com.",
+                            "http://EXAMPLE.COM.:8080/path", "https://example.com..",
+                            "wss://example.com%2E./socket"}) {
+      SCOPED_TRACE(url);
+      net::ProxyInfo result;
+      config->rules.Apply(GURL(url), &result);
+      EXPECT_FALSE(result.is_direct());
+      if (!result.is_direct())
+        EXPECT_EQ(result.proxy_chain().First().host_port_pair().host(),
+                  assigned ? "node.test" : "blocked.invalid");
+    }
+    for (const char* url : {"https://sub.example.com.", "https://example.com.other.",
+                            "http://notexample.com..", "wss://localhost/socket"}) {
+      SCOPED_TRACE(url);
+      net::ProxyInfo result;
+      config->rules.Apply(GURL(url), &result);
+      EXPECT_TRUE(result.is_direct());
+    }
+  }
+}
+
 // Optional wire fixture: the target accepts only traffic owned by its Xray
 // peer and returns a known payload. No process-global trust changes.
 TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
@@ -54,8 +86,12 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
       std::move(params.initial_custom_proxy_config), std::move(params.custom_proxy_config_client_receiver),
       mojo::PendingRemote<network::mojom::CustomProxyConnectionObserver>()));
   auto network = builder->Build();
-  GURL url(base::SysNSStringToUTF8(env[@"AEGIS_S3_HTTPS_URL"]));
-  const std::string site(url.host());
+  GURL configured_url(base::SysNSStringToUTF8(env[@"AEGIS_S3_HTTPS_URL"]));
+  const std::string site(configured_url.host());
+  const std::string rooted_host = site + ".";
+  GURL::Replacements rooted;
+  rooted.SetHostStr(rooted_host);
+  const GURL url = configured_url.ReplaceComponents(rooted);
   ASSERT_TRUE(UsesAccountNode(profile.get()));
   // Same entry point invoked by the sole trusted toolbar toggle.
   ToggleAccountNodeSite(profile.get(), site);
