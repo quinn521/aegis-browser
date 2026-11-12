@@ -4,6 +4,23 @@ import Foundation
 import UIKit
 import WebKit
 
+/// Captured when WebKit hands a native download to the browser. Each event
+/// keeps its own identity even when a tab requests the same URL again.
+public struct BrowserAccessDownload: Equatable {
+    fileprivate let requestID = UUID()
+    fileprivate let selectionID: UUID
+    public let tab: UUID
+    public let privateMode: Bool
+    public let target: URL
+    public let host: String
+
+    public static func canonicalHost(of url: URL?) -> String? {
+        guard let url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host, !host.isEmpty else { return nil }
+        return RegisteredDomain.normalizedHost(host)
+    }
+}
+
 public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
     case standard
     case privateMode
@@ -17,7 +34,8 @@ public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
 public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
     public let id: UUID
     public var onAccessContextClosed: (() -> Void)?
-    public var selectedAccessHost: String?
+    fileprivate var accessSelectionID = UUID()
+    public var selectedAccessHost: String? { didSet { accessSelectionID = UUID() } }
     private let configuration: WKWebViewConfiguration
     private var loadedWebView: WKWebView?
     private var titleObservation: NSKeyValueObservation?
@@ -689,7 +707,13 @@ public final class BrowserSession: ObservableObject {
         get { sessionErrorPresentation?.text }
         set { sessionErrorPresentation = newValue.map(AegisLocalizedMessage.verbatim) }
     }
-    public private(set) var pendingAccessDownload: (tab: UUID, privateMode: Bool, target: URL)?
+    public private(set) var pendingAccessDownload: BrowserAccessDownload?
+    public func ownsAccessDownload(_ request: BrowserAccessDownload) -> Bool {
+        guard pendingAccessDownload == request, let tab = activeTab, tab.id == request.tab,
+              tab.profile.isPrivate == request.privateMode, tab.accessSelectionID == request.selectionID,
+              tab.selectedAccessHost == request.host else { return false }
+        return BrowserAccessDownload.canonicalHost(of: tab.url) == request.host
+    }
     @Published public var pendingDownloadURL: URL? {
         didSet { if pendingDownloadURL == nil { pendingAccessDownload = nil } }
     }
@@ -1031,9 +1055,14 @@ public final class BrowserSession: ObservableObject {
         }
         tab.onDownload = { [weak self, weak tab] url in
             guard let self, let tab, self.profile == profile else { return }
-            if let host = tab.selectedAccessHost, tab.url?.host?.lowercased() == host, url.host?.lowercased() == host {
-                self.pendingAccessDownload = (tab.id, profile.isPrivate, url)
-            } else { self.pendingAccessDownload = nil }
+            let pageHost = BrowserAccessDownload.canonicalHost(of: tab.url)
+            let targetHost = BrowserAccessDownload.canonicalHost(of: url)
+            self.pendingAccessDownload = nil
+            if let host = tab.selectedAccessHost,
+               (pageHost == nil || pageHost == host), (targetHost == nil || targetHost == host) {
+                self.pendingAccessDownload = BrowserAccessDownload(selectionID: tab.accessSelectionID, tab: tab.id,
+                    privateMode: profile.isPrivate, target: url, host: host)
+            }
             self.pendingDownloadURL = url
         }
         return tab

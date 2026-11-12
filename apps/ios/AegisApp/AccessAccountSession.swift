@@ -3,6 +3,7 @@ import Foundation
 import Security
 import Network
 import BrowserKit
+import AegisPolicyKit
 
 struct AccessAccountCredential: Codable, Equatable, Sendable {
     let accountID, token, endpoint: String
@@ -154,7 +155,6 @@ final class AccessAccountSession: ObservableObject {
 /// An explicitly selected tab/site. Only the owning native transfer receives this transport.
 @MainActor
 private final class AccessTabGrant {
-    let contextID = UUID()
     let mode: AccessNodeMode
     let host: String
     var privateCredential: AccessAccountCredential?
@@ -192,7 +192,8 @@ extension AccessAccountSession {
     func selectProxy(for tab: UUID, host: String, privateMode: Bool, privateAccount: String = "",
                      privateToken: String = "") -> Task<Bool, Never> {
         closeProxy(for: tab)
-        let grant = AccessTabGrant(host: host.lowercased(), mode: privateMode ? .private : .regular,
+        guard let host = RegisteredDomain.normalizedHost(host) else { return Task { false } }
+        let grant = AccessTabGrant(host: host, mode: privateMode ? .private : .regular,
             privateCredential: privateMode ? client.map {
                 AccessAccountCredential(accountID: privateAccount, token: privateToken, endpoint: $0.endpoint.absoluteString)
             } : nil)
@@ -207,7 +208,10 @@ extension AccessAccountSession {
 
     func closeProxy(for tab: UUID) { grants.removeValue(forKey: tab)?.invalidate(client: client) }
 
-    func hasSelectedProxy(for tab: UUID, host: String) -> Bool { grants[tab]?.host == host.lowercased() }
+    func hasSelectedProxy(for tab: UUID, host: String) -> Bool {
+        guard let host = RegisteredDomain.normalizedHost(host) else { return false }
+        return grants[tab]?.host == host
+    }
 
     private func prepare(_ grant: AccessTabGrant, tab: UUID) async throws -> AccessNodeLease {
         guard let client, grants[tab] === grant else { throw AccountQueryError.invalid }
@@ -234,7 +238,9 @@ extension AccessAccountSession {
             guard try current(), entitlement.status == .active, let period = entitlement.periodId else {
                 throw AccountQueryError.unauthorized
             }
-            let lease = try await client.issue(account, contextID: grant.contextID, mode: grant.mode, periodID: period)
+            // The server replaces grants for the same context. A late POST from
+            // a previous epoch must never supersede a newer authorization.
+            let lease = try await client.issue(account, contextID: epoch, mode: grant.mode, periodID: period)
             guard (try? current()) == true else {
                 try? await client.revoke(account, lease: lease)
                 throw AccountQueryError.unauthorized
@@ -256,16 +262,34 @@ extension AccessAccountSession {
         return try await preparation.value
     }
 
+    func startDownload(_ plan: DownloadPlan, captured: BrowserAccessDownload?,
+                       browser: BrowserSession, downloads: DownloadManager) async throws -> UUID {
+        if let captured {
+            return try await startProtectedDownload(plan, context: captured, browser: browser, downloads: downloads)
+        }
+        return try downloads.start(plan)
+    }
+
     @discardableResult
-    func startProtectedDownload(_ plan: DownloadPlan, context: (tab: UUID, privateMode: Bool, target: URL),
+    func startProtectedDownload(_ plan: DownloadPlan, context: BrowserAccessDownload,
                                 browser: BrowserSession, downloads: DownloadManager) async throws -> UUID {
-        guard plan.urls == [context.target], browser.pendingAccessDownload?.tab == context.tab,
-              browser.pendingAccessDownload?.target == context.target else { throw AccountQueryError.invalid }
+        guard browser.ownsAccessDownload(context), plan.urls.count == 1, let requested = plan.urls.first,
+              context.target.scheme?.lowercased() == "https", context.target.user == nil, context.target.password == nil,
+              BrowserAccessDownload.canonicalHost(of: context.target) == context.host,
+              requested.scheme?.lowercased() == "https", requested.user == nil, requested.password == nil,
+              (requested.port ?? 443) == (context.target.port ?? 443),
+              BrowserAccessDownload.canonicalHost(of: requested) == context.host,
+              var components = URLComponents(url: requested, resolvingAgainstBaseURL: false) else {
+            throw AccountQueryError.invalid
+        }
+        components.host = context.host
+        guard let url = components.url else { throw AccountQueryError.invalid }
         let route = try await downloadSession(for: context.tab, privateMode: context.privateMode,
-                                              target: context.target, downloadDelegate: downloads)
-        guard browser.activeTab?.id == context.tab, browser.pendingAccessDownload?.target == context.target,
-              browser.pendingAccessDownload?.tab == context.tab else { throw AccountQueryError.invalid }
-        return try downloads.start(plan, accessSession: route)
+                                              target: url, downloadDelegate: downloads)
+        guard browser.ownsAccessDownload(context) else { throw AccountQueryError.invalid }
+        var normalized = plan
+        normalized.urls = [url]
+        return try downloads.start(normalized, accessSession: route)
     }
 
     /// Used only for a browser-originated same-site download. The ephemeral
@@ -273,7 +297,7 @@ extension AccessAccountSession {
     func downloadSession(for tab: UUID, privateMode: Bool, target: URL, downloadDelegate: URLSessionDownloadDelegate)
         async throws -> AccessDownloadTransport {
         guard target.scheme == "https", target.user == nil, target.password == nil,
-              let grant = grants[tab], target.host?.lowercased() == grant.host,
+              let grant = grants[tab], BrowserAccessDownload.canonicalHost(of: target) == grant.host,
               grant.mode == (privateMode ? .private : .regular) else { throw AccountQueryError.invalid }
         let lease = try await prepare(grant, tab: tab)
         guard grants[tab] === grant, grant.lease?.credentialId == lease.credentialId else { throw AccountQueryError.invalid }

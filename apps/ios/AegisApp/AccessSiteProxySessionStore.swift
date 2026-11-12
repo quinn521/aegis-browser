@@ -45,7 +45,7 @@ final class AccessSiteProxySessionStore: ObservableObject {
         setProxyEnabled(enabled, for: tab.url)
         if enabled {
             let tabID = tab.id
-            tab.selectedAccessHost = host.rawValue.lowercased()
+            tab.selectedAccessHost = host.rawValue
             tab.onAccessContextClosed = { [weak account] in account?.closeProxy(for: tabID) }
             return account.selectProxy(for: tabID, host: host.rawValue, privateMode: tab.profile.isPrivate,
                                        privateAccount: privateAccount, privateToken: privateToken)

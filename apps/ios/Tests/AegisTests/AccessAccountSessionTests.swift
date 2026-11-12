@@ -153,6 +153,157 @@ final class AccessAccountSessionTests: XCTestCase {
 #endif
 
 #if DEBUG && targetEnvironment(simulator)
+    func testProtectedCaptureSurvivesNormalizationAndEditedOrigin() async throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let tab = try XCTUnwrap(browser.activeTab)
+        let target = try XCTUnwrap(URL(string: "https://example.invalid/file?utm_source=example"))
+        let account = AccessAccountSession(client: nil, keychain: isolatedStore())
+        let downloads = DownloadManager(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                                        background: false)
+        defer { try? FileManager.default.removeItem(at: downloads.directory) }
+        try await waitUntil { downloads.isReady }
+        tab.prepareForRestore(url: target)
+        tab.selectedAccessHost = "example.invalid"
+        tab.onDownload?(target)
+        let captured = try XCTUnwrap(browser.pendingAccessDownload)
+        let clean = try DownloadManager.validatedURL(target.absoluteString)
+        XCTAssertNotEqual(clean, target)
+        let edited = try XCTUnwrap(URL(string: "https://other.invalid/replacement"))
+        for destination in [clean, edited] {
+            do {
+                _ = try await account.startDownload(.init(urls: [destination]), captured: captured,
+                                                    browser: browser, downloads: downloads)
+                XCTFail("A protected sheet started an ordinary transfer")
+            } catch { }
+        }
+        XCTAssertTrue(downloads.items.isEmpty)
+    }
+
+    func testRootDotCapturesProtectedDownload() throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let tab = try XCTUnwrap(browser.activeTab)
+        let page = try XCTUnwrap(URL(string: "https://example.invalid./"))
+        let download = try XCTUnwrap(URL(string: "https://EXAMPLE.INVALID./file"))
+        tab.prepareForRestore(url: page)
+        _ = AccessSiteProxySessionStore().setProxyEnabled(true, for: tab,
+            account: AccessAccountSession(client: nil, keychain: isolatedStore()))
+        tab.onDownload?(download)
+        XCTAssertEqual(browser.pendingAccessDownload?.tab, tab.id)
+    }
+
+    func testSheetCaptureIsNotReplacedByAnotherTabOrReusedAfterReselection() throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let first = try XCTUnwrap(browser.activeTab)
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/file"))
+        first.prepareForRestore(url: url)
+        first.selectedAccessHost = "example.invalid"
+        first.onDownload?(url)
+        let captured = try XCTUnwrap(browser.pendingAccessDownload)
+        XCTAssertTrue(browser.ownsAccessDownload(captured))
+        let second = browser.newTab()
+        second.prepareForRestore(url: url)
+        second.onDownload?(url)
+        XCTAssertNil(browser.pendingAccessDownload)
+        XCTAssertFalse(browser.ownsAccessDownload(captured))
+        browser.activate(first.id)
+        first.prepareForRestore(url: url)
+        first.onDownload?(url)
+        let nextRequest = try XCTUnwrap(browser.pendingAccessDownload)
+        XCTAssertTrue(browser.ownsAccessDownload(nextRequest))
+        XCTAssertFalse(browser.ownsAccessDownload(captured))
+        first.selectedAccessHost = nil
+        first.selectedAccessHost = "example.invalid"
+        XCTAssertFalse(browser.ownsAccessDownload(nextRequest))
+    }
+
+    private func resetIssuanceGate(_ origin: String) async throws -> URL {
+        let gate = try XCTUnwrap(URL(string: origin + "/gate"))
+        var reset = URLRequest(url: gate.appendingPathComponent("reset")); reset.httpMethod = "POST"
+        let (_, resetReply) = try await URLSession.shared.data(for: reset)
+        XCTAssertEqual((resetReply as? HTTPURLResponse)?.statusCode, 200)
+        return gate
+    }
+
+    private func waitForHeldIssuance(_ gate: URL) async throws {
+        let deadline = ContinuousClock.now + .seconds(8)
+        while true {
+            let (data, _) = try await URLSession.shared.data(from: gate)
+            let state = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if state?["firstWaiting"] as? Bool == true { break }
+            guard ContinuousClock.now < deadline else { throw AccountQueryError.invalid }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+    }
+
+    func testReplacedSheetRefusesTransferAfterAsyncIssuance() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let origin = env["AEGIS_S3_RACE_ORIGIN"] else { throw XCTSkip("Start the local gated issuer") }
+        let target = try XCTUnwrap(env["AEGIS_S3_HTTPS_URL"].flatMap(URL.init(string:)))
+        let host = try XCTUnwrap(target.host)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let tab = try XCTUnwrap(browser.activeTab)
+        let account = AccessAccountSession(client: try AccessAccountClient(origin: origin, allowSimulatorLoopback: true),
+                                           keychain: isolatedStore())
+        let downloads = DownloadManager(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                                        background: false)
+        defer { account.signOut(); try? FileManager.default.removeItem(at: downloads.directory) }
+        try await waitUntil { downloads.isReady }
+        await account.bind(accountID: try XCTUnwrap(env["AEGIS_S3_ID"]), token: try XCTUnwrap(env["AEGIS_S3_TOKEN"]))?.value
+        let gate = try await resetIssuanceGate(origin)
+        tab.prepareForRestore(url: target)
+        let pending = try XCTUnwrap(AccessSiteProxySessionStore().setProxyEnabled(true, for: tab, account: account))
+        tab.onDownload?(target)
+        let captured = try XCTUnwrap(browser.pendingAccessDownload)
+        let started = expectation(description: "Protected download enters async acquisition")
+        let consumer = Task {
+            started.fulfill()
+            return try await account.startDownload(.init(urls: [target]), captured: captured, browser: browser, downloads: downloads)
+        }
+        await fulfillment(of: [started], timeout: 5)
+        try await waitForHeldIssuance(gate)
+        let other = browser.newTab()
+        other.prepareForRestore(url: target)
+        other.onDownload?(target)
+        // An unrelated new tab replaces the pending sheet event while the old
+        // selected tab remains authorized. Return to it before the POST completes.
+        browser.activate(tab.id)
+        tab.prepareForRestore(url: target)
+        let releaseGate = await account.selectProxy(for: other.id, host: host, privateMode: false).value
+        XCTAssertTrue(releaseGate)
+        let prepared = await pending.value
+        XCTAssertTrue(prepared)
+        do { _ = try await consumer.value; XCTFail("A stale sheet started a transfer") } catch { }
+        XCTAssertTrue(downloads.items.isEmpty)
+    }
+
+    func testDelayedIssuanceCannotRevokeReplacement() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let origin = env["AEGIS_S3_RACE_ORIGIN"] else { throw XCTSkip("Start the local gated issuer") }
+        let target = try XCTUnwrap(env["AEGIS_S3_HTTPS_URL"].flatMap(URL.init(string:)))
+        let host = try XCTUnwrap(target.host), tab = UUID()
+        let account = AccessAccountSession(client: try AccessAccountClient(origin: origin, allowSimulatorLoopback: true),
+                                           keychain: isolatedStore())
+        let downloads = DownloadManager(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                                        background: false)
+        defer { account.signOut(); try? FileManager.default.removeItem(at: downloads.directory) }
+        try await waitUntil { downloads.isReady }
+        let gate = try await resetIssuanceGate(origin)
+        await account.bind(accountID: try XCTUnwrap(env["AEGIS_S3_ID"]), token: try XCTUnwrap(env["AEGIS_S3_TOKEN"]))?.value
+        let first = account.selectProxy(for: tab, host: host, privateMode: false)
+        try await waitForHeldIssuance(gate)
+        await account.refresh()?.value
+        let replacement = try await account.downloadSession(for: tab, privateMode: false, target: target, downloadDelegate: downloads)
+        let staleAccepted = await first.value
+        XCTAssertFalse(staleAccepted)
+        let download = try downloads.start(.init(urls: [target]), accessSession: replacement)
+        try await waitUntil { downloads.items.contains { $0.id == download && [.completed, .failed].contains($0.state) } }
+        XCTAssertEqual(downloads.items.first?.sha256, env["AEGIS_S3_EXPECTED_SHA256"])
+    }
+
     func testManagedRegularAndExplicitPrivateDownloadAndLiveLogout() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let origin = env["AEGIS_S3_ORIGIN"] else { throw XCTSkip("Start the managed TLS CONNECT/Xray fixture") }
@@ -188,12 +339,18 @@ final class AccessAccountSessionTests: XCTestCase {
         for tab in [regularTab, otr] {
             browser.switchProfile(to: tab.profile)
             browser.activate(tab.id)
-            tab.prepareForRestore(url: target)
-            XCTAssertEqual(tab.selectedAccessHost, target.host?.lowercased())
-            tab.onDownload?(target)
+            var source = try XCTUnwrap(URLComponents(url: target, resolvingAgainstBaseURL: false))
+            source.host = try XCTUnwrap(target.host) + "."
+            source.queryItems = [URLQueryItem(name: "utm_source", value: "native")]
+            let raw = try XCTUnwrap(source.url)
+            tab.prepareForRestore(url: raw)
+            tab.onDownload?(raw)
             let captured = try XCTUnwrap(browser.pendingAccessDownload)
-            let download = try await account.startProtectedDownload(.init(urls: [target]), context: captured, browser: browser,
-                                                                    downloads: downloads)
+            // Ordinary Start sanitizes the URL first. A same-origin manual edit is also
+            // allowed, but both paths must use this sheet's original paid transport.
+            let destination = tab.profile.isPrivate ? target : try DownloadManager.validatedURL(raw.absoluteString)
+            let download = try await account.startDownload(.init(urls: [destination]), captured: captured,
+                                                           browser: browser, downloads: downloads)
             try await waitUntil { downloads.items.contains { $0.id == download && [.completed, .failed].contains($0.state) } }
             let item = try XCTUnwrap(downloads.items.first { $0.id == download })
             XCTAssertEqual(item.state, .completed, item.message ?? "")

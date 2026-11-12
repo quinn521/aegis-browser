@@ -856,7 +856,7 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
               hash512.isEmpty || hash512.range(of: "^[a-f0-9]{128}$", options: .regularExpression) != nil else { throw DownloadError.invalidHash }
         guard plan.size == nil || (0...transferPreferences.boundedMaximumBytes).contains(plan.size!) else { throw DownloadError.tooLarge }
         try checkCapacity(required: plan.size ?? 0)
-        guard accessSession == nil || (accessSession?.session != nil && urls.count == 1 && urls[0].scheme == "https" && urls[0].host?.lowercased() == accessSession?.targetHost) else { throw DownloadError.invalidURL }
+        guard accessSession == nil || (accessSession?.session != nil && urls.count == 1 && urls[0].scheme == "https" && BrowserAccessDownload.canonicalHost(of: urls[0]) == accessSession?.targetHost) else { throw DownloadError.invalidURL }
         let item = BrowserDownload(id: UUID(), url: urls[0], filename: Self.safeFilename(plan.filename ?? urls[0].lastPathComponent),
                                    state: tasks.count < maximumConcurrentDownloads ? .running : .queued,
                                    expectedSHA256: hash.isEmpty ? nil : hash, mirrors: urls, mirrorIndex: 0,
