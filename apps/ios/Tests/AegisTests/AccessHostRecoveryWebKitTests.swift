@@ -181,7 +181,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertFalse(opener.transcript.contains("other.invalid"))
     }
 
-    func testFailedEndpointKeepsTheProxyAndDoesNotAddADirectRequest() async throws {
+    func testFailedEndpointKeepsTheProxyAndDisallowsDirectFailover() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_242, tunnels: opener)
         try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
@@ -232,11 +232,13 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             isPrivate: false
         )
         let nonce = UUID().uuidString
-        tab.load(URLRequest(url: URL(string: "http://example.invalid/again?n=\(nonce)")!))
-        // A failed health state retains the existing proxy route. Observe the
-        // new request at that proxy instead of rejecting delayed proxy traffic.
-        try await waitUntil({ opener.transcript.contains("GET /again?n=\(nonce) ") },
-                            message: opener.transcript)
+        let nextURL = URL(string: "http://example.invalid/again?n=\(nonce)")!
+        tab.load(URLRequest(url: nextURL))
+        // A failed health state retains the existing proxy route. WebKit may
+        // still send through that proxy or report its failure; neither result
+        // may replace this store or enable DIRECT fallback.
+        try await waitUntil({ !tab.isLoading }, message: opener.transcript)
+        XCTAssertEqual(tab.requestedURL, nextURL)
         XCTAssertTrue(tab.websiteDataStore === store)
         XCTAssertEqual(store.proxyConfigurations.count, before)
         XCTAssertFalse(store.proxyConfigurations.isEmpty)
