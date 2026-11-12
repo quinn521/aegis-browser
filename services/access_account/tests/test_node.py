@@ -121,6 +121,16 @@ class ControlledNodeTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn(b'Proxy-Authenticate: Basic realm="Aegis"\r\n', headers)
         return status, reader, writer
 
+    async def test_root_dotted_authority_uses_the_same_pinned_target(self):
+        dotted = f"CONTROLLED.INVALID.:{self.target_port}"
+        status, reader, writer = await self.connect(self.grants["a"], target=dotted)
+        self.assertEqual(status, 200)
+        writer.write(b"root")
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.readexactly(4), 1), b"root")
+        for other in ("child." + dotted, dotted.replace(".:", "..:")):
+            self.assertEqual((await self.connect(self.grants["a"], target=other))[0], 403)
+
     async def test_account_routing_headers_and_mixed_credentials(self):
         self.assertEqual((await self.connect(None))[0], 407)
         self.assertEqual((await self.connect(self.grants["a"], password=self.grants["b"]["password"]))[0], 407)
@@ -202,6 +212,16 @@ class ControlledNodeTest(unittest.IsolatedAsyncioTestCase):
         del self.node.upstreams["source-a"]
         self.assertEqual((await self.connect(self.grants["a"]))[0], 503)
         self.assertEqual(self.routes, [])
+
+    def test_dotted_and_undotted_pins_must_agree(self):
+        targets = dict(self.config["targets"])
+        dotted = f"controlled.invalid.:{self.target_port}"
+        targets[dotted] = targets[self.authority]
+        config = dict(self.config, targets=targets)
+        self.assertEqual(len(node.Node(config, None, panel=None).targets), 1)
+        targets[dotted] = "192.0.2.1"
+        with self.assertRaises(ValueError):
+            node.Node(config, None, panel=None)
 
     def test_shared_ports_and_unpinned_hosts_rejected(self):
         for config in (dict(self.config, upstreams={"a": 1234, "b": 1234}),

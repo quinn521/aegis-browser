@@ -30,6 +30,12 @@ class Reject(Exception):
         self.status = status
 
 
+def target_key(authority):
+    # A DNS root separator denotes the same absolute name and pinned address.
+    host, separator, port = authority.rpartition(":")
+    return host.removesuffix(".") + separator + port
+
+
 def parse_connect(data):
     request, *headers = data[:-4].split(b"\r\n")
     parts = request.split(b" ")
@@ -57,7 +63,7 @@ def parse_connect(data):
             raise ValueError
     except ValueError:
         raise Reject(407) from None
-    return target, username, password
+    return target_key(target), username, password
 
 
 async def socks_connect(reader, writer, address, port):
@@ -97,9 +103,12 @@ class Node:
         self.targets = {}
         for target, pin in config["targets"].items():
             match = _AUTHORITY.fullmatch(target)
-            if not match or int(match[2]) > 65535:
+            if not match or match[1].endswith("..") or int(match[2]) > 65535:
                 raise ValueError("expected a lowercase target authority and explicit port")
-            self.targets[target] = (ipaddress.ip_address(pin), int(match[2]))
+            key = target_key(target)
+            destination = (ipaddress.ip_address(pin), int(match[2]))
+            if self.targets.setdefault(key, destination) != destination:
+                raise ValueError("conflicting pins for the same authority")
         ports = list(self.upstreams.values())
         if (not isinstance(self.node_id, str) or not self.node_id or not self.targets or not ports
                 or any(type(port) is not int or not 0 < port <= 65535 for port in ports)
