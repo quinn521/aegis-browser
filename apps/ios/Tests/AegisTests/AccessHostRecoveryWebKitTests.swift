@@ -182,6 +182,13 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     }
 
     func testFailedEndpointKeepsTheProxyAndDoesNotAddADirectRequest() async throws {
+        let origin = OriginReceipt(port: 18_248)
+        try await origin.start()
+        defer { origin.stop() }
+        var probe = URLRequest(url: URL(string: "http://127.0.0.1:\(origin.port)/ping")!)
+        probe.timeoutInterval = 3
+        let response = try await URLSession.shared.data(for: probe).1 as? HTTPURLResponse
+        XCTAssertEqual(response?.statusCode, 200, origin.transcript)
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_242, tunnels: opener)
         try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
@@ -195,7 +202,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let window = show(tab.webView)
         defer { window.isHidden = true }
         let sink = NavigationSink()
-        tab.load(URLRequest(url: URL(string: "http://example.invalid/kept")!))
+        tab.load(URLRequest(url: URL(string: "http://127.0.0.1:\(origin.port)/kept")!))
         tab.webView.navigationDelegate = sink
         tab.webView.stopLoading()
         deliverFailure(tab)
@@ -207,9 +214,9 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
                 window.addSubview(tab.webView)
                 window.makeKeyAndVisible()
             }
-            return opener.transcript.contains("example.invalid")
+            return opener.transcript.contains("GET /kept")
         }, message: "proxy=\(opener.transcript) loads=\(tab.recoveryLoadCount) loading=\(tab.isLoading) failure=\(coordinator.lastRecoveryFailure ?? "") error=\(tab.loadingError ?? "")")
-        let host = try AccessSiteHost("example.invalid")
+        let host = try AccessSiteHost("127.0.0.1")
         let store = try XCTUnwrap(coordinator.registry.storeForTab(
             tabID: tab.instanceID.uuidString,
             scopeID: "ordinary",
@@ -219,7 +226,10 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             intent: .on
         ))
         let before = store.proxyConfigurations.count
-        let seen = opener.transcript
+        tab.webView.stopLoading()
+        // A failed entry keeps the last proxy configuration. Stop the actual
+        // listener too, and observe the reachable origin for any DIRECT fallback.
+        try listener.stop()
         coordinator.registry.setEndpoint(
             AccessManagedProxyEndpoint(
                 identity: "entry-failed",
@@ -232,11 +242,16 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             host: host,
             isPrivate: false
         )
-        tab.load(URLRequest(url: URL(string: "http://example.invalid/again")!))
-        try await Task.sleep(for: .milliseconds(700))
+        let nonce = UUID().uuidString
+        let failedURL = URL(string: "http://127.0.0.1:\(origin.port)/again?n=\(nonce)")!
+        tab.load(URLRequest(url: failedURL))
+        try await waitUntil({ tab.lastMainFrameFailure?.url == failedURL },
+                            message: "origin=\(origin.transcript) proxy=\(opener.transcript)")
+        XCTAssertTrue(tab.websiteDataStore === store)
         XCTAssertEqual(store.proxyConfigurations.count, before)
         XCTAssertFalse(store.proxyConfigurations.isEmpty)
-        XCTAssertEqual(opener.transcript, seen)
+        XCTAssertFalse(origin.transcript.contains(nonce), origin.transcript)
+        XCTAssertFalse(opener.transcript.contains(nonce), opener.transcript)
     }
 
     func testAutoRecoverySendsTheMemberThroughTheProxyAndTheOutsideHostToOrigin() async throws {
