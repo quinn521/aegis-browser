@@ -15,6 +15,7 @@
 #include "base/files/file_descriptor_watcher_posix.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/base64.h"
+#include "chrome/browser/aegis/access/access_core_log_share.h"
 #include "base/command_line.h"
 #include "base/base_paths.h"
 #include "base/files/file.h"
@@ -566,11 +567,8 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
   for (auto& weak : ShutdownHandle::Registry()) {
     if (auto handle = weak.lock()) handles.push_back(std::move(handle));
   }
-  if (handles.empty()) {
-    std::move(completion).Run();
-    return;
-  }
-  auto stopped = base::BarrierClosure(handles.size(), std::move(completion));
+  auto stopped = base::BarrierClosure(handles.size() + 1, std::move(completion));
+  CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
   for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
 }
 void AccessLocalCoreManager::SetStoppedCallback(

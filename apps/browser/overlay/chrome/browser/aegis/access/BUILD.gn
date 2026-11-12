@@ -112,6 +112,9 @@ source_set("access_local_core_manager") {
     "//net",
     "//url",
   ]
+  if (is_mac) {
+    deps += [ ":access_core_log_archive" ]
+  }
   if (aegis_private_test_node_enabled) {
     data_deps = [ ":alpha_access_resource_files" ]
   } else {

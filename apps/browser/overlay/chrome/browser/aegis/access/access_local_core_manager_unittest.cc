@@ -366,6 +366,106 @@ TEST(AccessCoreLogArchiveTest, ClosingPickerReleasesFileAndAllowsNextShare) {
   }
 }
 
+bool WaitWithoutUiReplies(const std::shared_ptr<base::WaitableEvent>& event) {
+  base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+  return event->TimedWait(base::Seconds(5));
+}
+
+TEST(AccessCoreLogArchiveTest, SessionEndingCleansAnOpenPickerWithoutUiReplies) {
+  base::test::TaskEnvironment environment;
+  base::ScopedTempDir parent;
+  ASSERT_TRUE(parent.CreateUniqueTempDir());
+  auto runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  base::FilePath archive;
+  base::ScopedClosureRunner picker_release;
+  CoreLogShareSession session;
+  session.StartForTesting("private destination", base::BindLambdaForTesting(
+      [&](base::FilePath path, base::ScopedClosureRunner release) {
+        archive = path;
+        picker_release = std::move(release);
+      }), runner, parent.GetPath());
+  environment.RunUntilIdle();
+  ASSERT_FALSE(archive.empty());
+  ASSERT_TRUE(base::PathExists(archive));
+  auto completed = std::make_shared<base::WaitableEvent>();
+  AccessLocalCoreManager::StopAllForSessionEnding(base::BindLambdaForTesting(
+      [completed] { completed->Signal(); }));
+  EXPECT_TRUE(WaitWithoutUiReplies(completed));
+  EXPECT_FALSE(base::PathExists(archive));
+  EXPECT_TRUE(base::IsDirectoryEmpty(parent.GetPath()));
+}
+
+TEST(AccessCoreLogArchiveTest, SessionEndingIncludesADestroyedShareOwner) {
+  base::test::TaskEnvironment environment;
+  base::ScopedTempDir parent;
+  ASSERT_TRUE(parent.CreateUniqueTempDir());
+  auto runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::WithBaseSyncPrimitives(),
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  bool picker_opened = false;
+  auto session = std::make_unique<CoreLogShareSession>();
+  session->StartForTesting("private destination", base::BindLambdaForTesting(
+      [&](base::FilePath, base::ScopedClosureRunner) { picker_opened = true; }),
+      runner, parent.GetPath());
+  auto written = std::make_shared<base::WaitableEvent>();
+  runner->PostTask(FROM_HERE, base::BindLambdaForTesting(
+      [written] { written->Signal(); }));
+  ASSERT_TRUE(WaitWithoutUiReplies(written));
+  ASSERT_FALSE(base::IsDirectoryEmpty(parent.GetPath()));
+  auto blocked = std::make_shared<base::WaitableEvent>();
+  auto resume = std::make_shared<base::WaitableEvent>();
+  base::ScopedClosureRunner unblock(base::BindLambdaForTesting(
+      [resume] { resume->Signal(); }));
+  runner->PostTask(FROM_HERE, base::BindLambdaForTesting([blocked, resume] {
+    blocked->Signal();
+    resume->Wait();
+  }));
+  ASSERT_TRUE(WaitWithoutUiReplies(blocked));
+  session.reset();
+  auto completed = std::make_shared<base::WaitableEvent>();
+  AccessLocalCoreManager::StopAllForSessionEnding(base::BindLambdaForTesting(
+      [completed] { completed->Signal(); }));
+  unblock.RunAndReset();
+  EXPECT_TRUE(WaitWithoutUiReplies(completed));
+  EXPECT_FALSE(picker_opened);
+  EXPECT_TRUE(base::IsDirectoryEmpty(parent.GetPath()));
+}
+
+TEST(AccessCoreLogArchiveTest, SessionEndingSuppressesAQueuedArchiveWrite) {
+  base::test::TaskEnvironment environment;
+  base::ScopedTempDir parent;
+  ASSERT_TRUE(parent.CreateUniqueTempDir());
+  auto runner = base::ThreadPool::CreateSequencedTaskRunner(
+      {base::MayBlock(), base::WithBaseSyncPrimitives(),
+       base::TaskShutdownBehavior::BLOCK_SHUTDOWN});
+  auto blocked = std::make_shared<base::WaitableEvent>();
+  auto resume = std::make_shared<base::WaitableEvent>();
+  base::ScopedClosureRunner unblock(base::BindLambdaForTesting(
+      [resume] { resume->Signal(); }));
+  runner->PostTask(FROM_HERE, base::BindLambdaForTesting([blocked, resume] {
+    blocked->Signal();
+    resume->Wait();
+  }));
+  ASSERT_TRUE(WaitWithoutUiReplies(blocked));
+  bool replied = false;
+  CoreLogShareSession session;
+  session.StartForTesting("private destination", base::BindLambdaForTesting(
+      [&](base::FilePath path, base::ScopedClosureRunner) {
+        EXPECT_TRUE(path.empty());
+        replied = true;
+      }), runner, parent.GetPath());
+  auto completed = std::make_shared<base::WaitableEvent>();
+  AccessLocalCoreManager::StopAllForSessionEnding(base::BindLambdaForTesting(
+      [completed] { completed->Signal(); }));
+  unblock.RunAndReset();
+  EXPECT_TRUE(WaitWithoutUiReplies(completed));
+  EXPECT_FALSE(replied);
+  EXPECT_TRUE(base::IsDirectoryEmpty(parent.GetPath()));
+  environment.RunUntilIdle();
+  EXPECT_TRUE(replied);
+}
+
 TEST_F(AccessLocalCoreFaultTest, MissingDiagnosticPipeStillStartsPinnedChild) {
   auto input = Input("unauthenticated-response");
   auto log = base::MakeRefCounted<AccessCoreLogStore>();

@@ -2,6 +2,7 @@
 #ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_CORE_LOG_SHARE_H_
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_CORE_LOG_SHARE_H_
 
+#include <memory>
 #include <string>
 
 #include "base/files/file_path.h"
@@ -25,6 +26,9 @@ class CoreLogShareSession {
   ~CoreLogShareSession();
   void Start(std::string preview, Ready ready);
   void ShutDown();
+  // Runs cleanup on writer sequences and completes without a UI reply. Also
+  // includes writers whose UI owner is already awaiting asynchronous destruction.
+  static void StopAllForSessionEnding(base::OnceClosure completion);
   void StartForTesting(std::string preview,
                        Ready ready,
                        scoped_refptr<base::SequencedTaskRunner> runner,
@@ -32,6 +36,7 @@ class CoreLogShareSession {
 
  private:
   class Writer;
+  class ShutdownHandle;
   void StartOn(std::string preview,
                Ready ready,
                scoped_refptr<base::SequencedTaskRunner> runner,
@@ -40,6 +45,7 @@ class CoreLogShareSession {
   void Finish();
 
   bool shutting_down_ = false;
+  std::shared_ptr<ShutdownHandle> shutdown_;
   base::SequenceBound<Writer> writer_;
   base::WeakPtrFactory<CoreLogShareSession> weak_{this};
 };
