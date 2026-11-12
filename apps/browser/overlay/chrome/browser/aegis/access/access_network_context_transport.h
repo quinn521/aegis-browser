@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "build/build_config.h"
+#include "mojo/public/cpp/bindings/struct_ptr.h"
 #include "base/functional/callback_forward.h"
 #include "base/supports_user_data.h"
 #include "base/memory/weak_ptr.h"
@@ -100,6 +102,12 @@ class AccessNetworkContextTransport
       std::vector<std::string> exact_hosts,
       const aegis_access::RegisteredProxyEndpoint& endpoint);
 
+#if BUILDFLAG(IS_MAC)
+  // Default partition only. A selected site with no credential stays blocked.
+  bool SetAccountNodeSites(const std::vector<std::string>& sites, const std::string& host,
+                          uint16_t port, const std::string& authorization);
+#endif
+
   // Clears the custom selection while keeping the update channel installed.
   // New requests then use Chromium's native proxy result again.
   bool ClearProxySelection(const base::FilePath& relative_partition_path);
@@ -148,6 +156,9 @@ class AccessNetworkContextTransport
   struct PartitionState {
     std::optional<aegis_access::RegisteredProxyEndpoint> endpoint;
     std::vector<std::string> exact_hosts;
+#if BUILDFLAG(IS_MAC)
+    network::mojom::CustomProxyConfigPtr account_config;
+#endif
     mojo::RemoteSet<network::mojom::CustomProxyConfigClient> clients;
     uint64_t clients_generation = 0;
   };

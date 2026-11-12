@@ -14,6 +14,7 @@
 #include "chrome/browser/aegis/aegis_profile_support.h"
 #include "chrome/browser/profiles/profile.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "net/base/proxy_server.h"
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -208,11 +209,52 @@ bool AccessNetworkContextTransport::PublishProxySelection(
   }
 
   PartitionState& state = partitions_[*key];
+#if BUILDFLAG(IS_MAC)
+  if (state.account_config) return false;
+#endif
   state.endpoint = std::move(candidate.endpoint);
   state.exact_hosts = std::move(candidate.exact_hosts);
   Broadcast(state);
   return true;
 }
+
+#if BUILDFLAG(IS_MAC)
+bool AccessNetworkContextTransport::SetAccountNodeSites(
+    const std::vector<std::string>& sites, const std::string& host, uint16_t port,
+    const std::string& authorization) {
+  auto found = partitions_.find("<default>");
+  if (found == partitions_.end()) return false;
+  auto& state = found->second;
+  if (sites.empty()) {
+    state.account_config.reset();
+    Broadcast(state);
+    return true;
+  }
+  if (!AreCanonicalExactHosts(sites) || state.endpoint) return false;
+  auto config = network::mojom::CustomProxyConfig::New();
+  auto blocked = net::ProxyServer::FromSchemeHostAndPort(
+      net::ProxyServer::SCHEME_HTTPS, "blocked.invalid", 443);
+  auto proxy = host.empty() ? blocked : net::ProxyServer::FromSchemeHostAndPort(
+      net::ProxyServer::SCHEME_HTTPS, host, port);
+  if (!proxy.is_valid() || (!host.empty() && authorization.empty())) return false;
+  config->rules.type = net::ProxyConfig::ProxyRules::Type::PROXY_LIST_PER_SCHEME;
+  for (const auto& site : sites)
+    if (!config->rules.bypass_rules.AddRuleFromString(site)) return false;
+  // Keep this single endpoint exclusive to the config. The CONNECT-only node
+  // rejects ordinary HTTP and no tunnel header accompanies those requests.
+  config->rules.proxies_for_http.SetSingleProxyServer(proxy);
+  config->rules.proxies_for_https.SetSingleProxyServer(proxy);
+  config->rules.reverse_bypass = true;
+  config->should_override_existing_config = true;
+  config->allow_non_idempotent_methods = true;
+  if (!authorization.empty())
+    config->connect_tunnel_headers.SetHeader(net::HttpRequestHeaders::kProxyAuthorization,
+                                              authorization);
+  state.account_config = std::move(config);
+  Broadcast(state);
+  return true;
+}
+#endif
 
 bool AccessNetworkContextTransport::ClearProxySelection(
     const base::FilePath& relative_partition_path) {
@@ -533,6 +575,9 @@ bool AccessNetworkContextTransport::IsEndpointCurrentForPartition(
 
 network::mojom::CustomProxyConfigPtr AccessNetworkContextTransport::BuildConfig(
     const PartitionState& state) const {
+#if BUILDFLAG(IS_MAC)
+  if (state.account_config) return state.account_config->Clone();
+#endif
   auto config = network::mojom::CustomProxyConfig::New();
   if (!state.endpoint.has_value() || state.exact_hosts.empty()) {
     return config;

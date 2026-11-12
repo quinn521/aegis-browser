@@ -235,6 +235,9 @@ AccessSiteIntentMutationResult BuildOrdinarySiteGroupMutation(
   return result;
 }
 
+AccessSiteIntentStore::AccessSiteIntentStore() = default;
+AccessSiteIntentStore::~AccessSiteIntentStore() = default;
+
 AccessSiteIntent AccessSiteIntentStore::Get(const AccessSiteHost& host) const {
   const auto it = values_.find(host);
   return it == values_.end() ? AccessSiteIntent::kOff : it->second;

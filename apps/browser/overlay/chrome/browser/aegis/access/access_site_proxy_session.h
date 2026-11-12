@@ -9,6 +9,7 @@
 
 #include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/aegis/access/access_site_intent.h"
 #include "chrome/browser/aegis/access/access_site_proxy_bubble_model.h"
 #include "components/aegis_access/access_route_types.h"
@@ -117,6 +118,7 @@ class AccessSiteProxySessionOrchestrating {
 // disable: local intent commit always; service may be unavailable
 class AccessSiteProxySessionController {
  public:
+  ~AccessSiteProxySessionController();
   explicit AccessSiteProxySessionController(
       AccessSiteProxySessionOrchestrating* orchestrator);
 
@@ -162,7 +164,7 @@ class AccessSiteProxySessionController {
       const AccessSiteHost& host,
       std::string_view operation_suffix);
 
-  AccessSiteProxySessionOrchestrating* const orchestrator_;
+  const raw_ptr<AccessSiteProxySessionOrchestrating> orchestrator_;
   AccessSiteIntentStore intent_store_;
   std::map<AccessSiteHost, AccessSiteProxySessionSnapshot> snapshots_;
 };

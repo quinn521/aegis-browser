@@ -180,6 +180,8 @@ AccessSiteProxySessionMutationPlan BuildSiteProxySessionMutationPlan(
   return plan;
 }
 
+AccessSiteProxySessionController::~AccessSiteProxySessionController() = default;
+
 AccessSiteProxySessionController::AccessSiteProxySessionController(
     AccessSiteProxySessionOrchestrating* orchestrator)
     : orchestrator_(orchestrator) {}
