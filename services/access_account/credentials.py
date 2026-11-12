@@ -22,9 +22,11 @@ Unavailable = store.Unavailable
 MAX_TTL_MS = 300_000
 MAX_SOURCE_AGE_MS = 15_000
 _BINDING = ('id', 'plan_id', 'period_id', 'period_start', 'period_end', 'panel_client')
-_LOOKUP = store._LOOKUP.replace('SELECT a.id,', '''SELECT
-    COALESCE((SELECT version FROM node_authority_versions WHERE account_id=a.id), 0)
-        AS authority_version, t.expires_at AS session_expiry, a.id,''')
+_LOOKUP = f"""
+    SELECT account.*, COALESCE(version.version, 0) AS authority_version
+    FROM ({store.CURRENT_ACCOUNT_SQL}) AS account
+    LEFT JOIN node_authority_versions AS version ON version.account_id = account.id
+"""
 _TOKEN = re.compile(r'[A-Za-z0-9_-]{1,256}', re.ASCII)
 
 
