@@ -4,6 +4,54 @@ import XCTest
 @testable import AccessKit
 
 final class AccessRealityVisionOutboundConfigTests: XCTestCase {
+    func testDiagnosticDefaultsFollowTheProductChannel() {
+        let expected: [AccessReleaseChannel: AccessLogLevel] = [
+            .dev: .debug, .alpha: .info, .beta: .warning, .release: .warning, .unknown: .warning]
+        let suite = "access.log-defaults." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for channel in AccessReleaseChannel.allCases {
+            XCTAssertEqual(AccessDiagnosticLog.defaultLevel(for: channel), expected[channel])
+            XCTAssertEqual(AccessDiagnosticLog.selectedLevel(defaults: defaults, channel: channel), expected[channel])
+        }
+        defaults.set("unrecognized", forKey: AccessDiagnosticLog.preferenceKey)
+        XCTAssertEqual(AccessDiagnosticLog.selectedLevel(defaults: defaults, channel: .release), .warning)
+    }
+
+    func testEveryExplicitLogChoiceOverridesChannelDefaultsIncludingNone() {
+        let suite = "access.log-overrides." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for level in AccessLogLevel.allCases {
+            defaults.set(level.rawValue, forKey: AccessDiagnosticLog.preferenceKey)
+            for channel in AccessReleaseChannel.allCases {
+                XCTAssertEqual(AccessDiagnosticLog.selectedLevel(defaults: defaults, channel: channel), level)
+            }
+        }
+        defaults.removeObject(forKey: AccessDiagnosticLog.preferenceKey)
+        XCTAssertEqual(AccessDiagnosticLog.selectedLevel(defaults: defaults, channel: .alpha), .info)
+    }
+
+    @MainActor
+    func testChannelDefaultReachesTheCoreWithoutChangingTheOutbound() async throws {
+        let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: makeParameters())
+        let suite = "access.log-core-defaults." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for channel in AccessReleaseChannel.allCases {
+            let diagnostics = AccessDiagnosticLog()
+            defer { diagnostics.stop() }
+            let core = PersistenceRecordingCore()
+            let level = AccessDiagnosticLog.selectedLevel(defaults: defaults, channel: channel)
+            _ = try await AccessEmbeddedProxyEntrySession.startCoreWithDiagnostics(
+                core: core, outbound: outbound, diagnostics: diagnostics, level: level)
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(core.configs.first)) as? [String: Any])
+            XCTAssertEqual((root["log"] as? [String: String])?["loglevel"], level.rawValue)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: root["outbounds"]!, options: .sortedKeys),
+                           try JSONSerialization.data(withJSONObject: outbound.jsonObject["outbounds"]!, options: .sortedKeys))
+        }
+    }
+
     func testEmbeddedLogLevelsRequireExplicitSinkAndKeepAccessLogOff() throws {
         let config = try AccessRealityVisionOutboundConfigBuilder.build(parameters: makeParameters())
         for level in AccessLogLevel.allCases {
@@ -610,8 +658,9 @@ private final class LogInitializationFailingCore: AccessEmbeddedCoreControlling,
 
 private final class PersistenceRecordingCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
     private var running = false
+    var configs: [Data] = []
     var isRunning: Bool { running }
-    func start(configData: Data) async throws { running = true }
+    func start(configData: Data) async throws { configs.append(configData); running = true }
     func stop() async { running = false }
     func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream { throw AccessEmbeddedCoreError.unverifiedAsset }
 }

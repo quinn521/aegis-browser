@@ -334,7 +334,7 @@ struct ModelSettingsView: View {
 }
 
 private struct AccessDiagnosticsView: View {
-    @AppStorage(AccessDiagnosticLog.preferenceKey) private var level = AccessLogLevel.warning.rawValue
+    @AppStorage(AccessDiagnosticLog.preferenceKey) private var level = AccessDiagnosticLog.defaultLevel.rawValue
     @State private var log = ""
     @State private var unavailable = false
     @State private var persistenceProblem = false

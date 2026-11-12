@@ -83,8 +83,25 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         }
     }
 
-    public static func selectedLevel(defaults: UserDefaults = .standard) -> AccessLogLevel {
-        defaults.string(forKey: preferenceKey).flatMap(AccessLogLevel.init(rawValue:)) ?? .warning
+    public static func defaultLevel(for channel: AccessReleaseChannel) -> AccessLogLevel {
+        switch channel {
+        case .dev: .debug
+        case .alpha: .info
+        case .beta, .release, .unknown: .warning
+        }
+    }
+
+    public static var defaultLevel: AccessLogLevel {
+        let raw = Bundle.main.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String
+        return defaultLevel(for: AccessReleaseChannel.parse(raw))
+    }
+
+    public static func selectedLevel(defaults: UserDefaults = .standard,
+                                     channel: AccessReleaseChannel? = nil) -> AccessLogLevel {
+        if let stored = defaults.string(forKey: preferenceKey).flatMap(AccessLogLevel.init(rawValue:)) {
+            return stored
+        }
+        return channel.map { defaultLevel(for: $0) } ?? defaultLevel
     }
 
     /// Creates the reader before Xray opens the FIFO, preventing an open from
