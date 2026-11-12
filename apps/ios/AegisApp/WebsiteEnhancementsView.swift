@@ -503,6 +503,7 @@ private struct CurrentWebsitePanel: View {
   @ObservedObject var store: WebsiteEnhancementStore
   let isPrivate: Bool
   @ObservedObject var accessSiteProxy: AccessSiteProxySessionStore
+  @EnvironmentObject private var accountSession: AccessAccountSession
   @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
   @State private var message: AegisLocalizedMessage = .verbatim("")
   @State private var markdownDocument: MarkdownDocument?
