@@ -60,6 +60,12 @@ void ReadSanitizedLines(AccessCoreLog& log, std::string_view text) {
 }
 }  // namespace
 
+void AccessCoreLogStore::FlushAllForSessionEnding(base::OnceClosure completion) {
+  // SessionEnding terminates directly, without ThreadPool shutdown. Its
+  // bounded rundown must also wait for an already-requested history deletion.
+  g_log_disk.Get()->PostTask(FROM_HERE, std::move(completion));
+}
+
 scoped_refptr<AccessCoreLogStore> AccessCoreLogStore::Open(
     const base::FilePath& profile,
     CoreLogProfile scope,

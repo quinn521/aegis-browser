@@ -4,6 +4,7 @@
 
 #include "build/build_config.h"
 #if BUILDFLAG(IS_MAC)
+#include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/aegis/access/access_core_log_disk.h"
 #endif
@@ -22,6 +23,9 @@ class AccessCoreLogStore
   static scoped_refptr<AccessCoreLogStore> Open(const base::FilePath& profile,
                                                 CoreLogProfile scope,
                                                 std::string_view level);
+  // Call after core writers stop. Completes on the disk sequence after all
+  // queued saves/deletions, without a reply to the blocked Browser sequence.
+  static void FlushAllForSessionEnding(base::OnceClosure completion);
   DiskStatus disk_status();
 #endif
   void SetLevel(std::string_view level);

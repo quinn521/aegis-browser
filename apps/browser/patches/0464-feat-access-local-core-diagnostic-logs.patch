@@ -1,4 +1,4 @@
-From 928ad378c4f71f3c0cefe114d90cdfdb3b938895 Mon Sep 17 00:00:00 2001
+From 8461606f750e1b53c3d2df33cbaf4d14602bbf2d Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
 Date: Thu, 12 Nov 2026 13:00:00 +0800
 Subject: [PATCH] feat(access): persist scoped diagnostics with channel
@@ -13,13 +13,13 @@ Subject: [PATCH] feat(access): persist scoped diagnostics with channel
  chrome/browser/aegis/access/access_core_log.h | 265 ++++++++++++++++++
  .../aegis/access/access_core_log_disk.cc      | 121 ++++++++
  .../aegis/access/access_core_log_disk.h       |  21 ++
- .../access/access_core_log_disk_unittest.cc   | 133 +++++++++
+ .../access/access_core_log_disk_unittest.cc   | 202 +++++++++++++
  .../aegis/access/access_core_log_share.cc     | 203 ++++++++++++++
  .../aegis/access/access_core_log_share.h      |  53 ++++
- .../aegis/access/access_core_log_store.cc     | 147 ++++++++++
- .../aegis/access/access_core_log_store.h      |  78 ++++++
+ .../aegis/access/access_core_log_store.cc     | 153 ++++++++++
+ .../aegis/access/access_core_log_store.h      |  82 ++++++
  .../aegis/access/access_core_log_unittest.cc  | 112 ++++++++
- .../aegis/access/access_local_core_manager.cc |  78 +++++-
+ .../aegis/access/access_local_core_manager.cc |  81 +++++-
  .../aegis/access/access_local_core_manager.h  |   9 +
  .../access_local_core_manager_unittest.cc     | 234 ++++++++++++++++
  .../access/access_local_core_test_child.cc    |   8 +
@@ -28,7 +28,7 @@ Subject: [PATCH] feat(access): persist scoped diagnostics with channel
  chrome/browser/aegis/aegis_prefs.cc           |   4 +
  chrome/browser/aegis/aegis_prefs.h            |   4 +
  .../ui/views/toolbar/aegis_toolbar_button.cc  |  80 ++++++
- 23 files changed, 1744 insertions(+), 12 deletions(-)
+ 23 files changed, 1826 insertions(+), 12 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_core_log.cc
  create mode 100644 chrome/browser/aegis/access/access_core_log.h
  create mode 100644 chrome/browser/aegis/access/access_core_log_disk.cc
@@ -665,16 +665,21 @@ index 0000000000000000000000000000000000000000..93de04735d99e7ab0feacffe282ba0f5
 +#endif
 diff --git a/chrome/browser/aegis/access/access_core_log_disk_unittest.cc b/chrome/browser/aegis/access/access_core_log_disk_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..cb930ef1fb442bb3c1eb286ed521cc9f3d6d8508
+index 0000000000000000000000000000000000000000..dd50fdd9e6a6a55e0958358536db6e207e8d9243
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_core_log_disk_unittest.cc
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,202 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_core_log_store.h"
 +
 +#include "base/files/file_util.h"
 +#include "base/files/scoped_temp_dir.h"
++#include "base/functional/callback_helpers.h"
++#include "base/synchronization/waitable_event.h"
++#include "base/test/bind.h"
 +#include "base/test/task_environment.h"
++#include "base/threading/thread_restrictions.h"
++#include "chrome/browser/aegis/access/access_local_core_manager.h"
 +#include "testing/gtest/include/gtest/gtest.h"
 +
 +namespace aegis::access {
@@ -799,6 +804,70 @@ index 0000000000000000000000000000000000000000..cb930ef1fb442bb3c1eb286ed521cc9f
 +  store->Clear();
 +  environment_.RunUntilIdle();
 +  EXPECT_EQ(store->disk_status(), Status::kReady);
++}
++
++void CheckPendingDeletionAtSessionEnding(bool disable) {
++  base::test::TaskEnvironment environment;
++  base::ScopedTempDir profile;
++  ASSERT_TRUE(profile.CreateUniqueTempDir());
++  auto regular = AccessCoreLogStore::Open(profile.GetPath(), Scope::kRegular, "info");
++  auto priv = AccessCoreLogStore::Open(profile.GetPath(), Scope::kPrivate, "info");
++  regular->Add(0, Entry("regular.example"), {});
++  priv->Add(0, Entry("private.example"), {});
++  environment.RunUntilIdle();
++  const auto directory = profile.GetPath().AppendASCII(kCoreLogDirectory);
++  const auto regular_file = directory.AppendASCII("regular.log");
++  const auto private_file = directory.AppendASCII("private.log");
++  ASSERT_TRUE(base::PathExists(regular_file));
++  ASSERT_TRUE(base::PathExists(private_file));
++
++  auto entered = std::make_shared<base::WaitableEvent>();
++  auto release = std::make_shared<base::WaitableEvent>();
++  base::ScopedClosureRunner unblock(base::BindLambdaForTesting(
++      [release] { release->Signal(); }));
++  AccessCoreLogStore::FlushAllForSessionEnding(base::BindLambdaForTesting(
++      [entered, release] {
++        base::ScopedAllowBaseSyncPrimitivesForTesting allow;
++        entered->Signal();
++        release->Wait();
++      }));
++  {
++    base::ScopedAllowBaseSyncPrimitivesForTesting allow;
++    ASSERT_TRUE(entered->TimedWait(base::Seconds(5)));
++  }
++  for (auto store : {regular, priv}) {
++    store->Add(0, Entry("queued.example"), {});
++    if (disable) store->SetLevel("none");
++    else store->Clear();
++  }
++  regular.reset();
++  priv.reset();
++  auto stopped = std::make_shared<base::WaitableEvent>();
++  AccessLocalCoreManager::StopAllForSessionEnding(base::BindLambdaForTesting(
++      [stopped] { stopped->Signal(); }));
++  EXPECT_FALSE(stopped->IsSignaled());
++  EXPECT_TRUE(base::PathExists(regular_file));
++  EXPECT_TRUE(base::PathExists(private_file));
++  unblock.RunAndReset();
++  {
++    // The session-ending Browser sequence does not process UI replies.
++    base::ScopedAllowBaseSyncPrimitivesForTesting allow;
++    ASSERT_TRUE(stopped->TimedWait(base::Seconds(5)));
++  }
++  EXPECT_FALSE(base::PathExists(regular_file));
++  EXPECT_FALSE(base::PathExists(private_file));
++  regular = AccessCoreLogStore::Open(profile.GetPath(), Scope::kRegular, "info");
++  priv = AccessCoreLogStore::Open(profile.GetPath(), Scope::kPrivate, "info");
++  environment.RunUntilIdle();
++  EXPECT_TRUE(regular->Snapshot().empty());
++  EXPECT_TRUE(priv->Snapshot().empty());
++}
++
++TEST(AccessCoreLogSessionEndingTest, PendingClearCompletesWithoutUiReplies) {
++  CheckPendingDeletionAtSessionEnding(false);
++}
++TEST(AccessCoreLogSessionEndingTest, PendingNoneCompletesWithoutUiReplies) {
++  CheckPendingDeletionAtSessionEnding(true);
 +}
 +}  // namespace
 +}  // namespace aegis::access
@@ -1072,10 +1141,10 @@ index 0000000000000000000000000000000000000000..7a664e9963491b569d14c0831bce7a4b
 +#endif
 diff --git a/chrome/browser/aegis/access/access_core_log_store.cc b/chrome/browser/aegis/access/access_core_log_store.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..359634645e7b547fba06ec93048522cf11d5a209
+index 0000000000000000000000000000000000000000..c5cb390730c186592af5f0d67a12aaf8d58b5d5d
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_core_log_store.cc
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,153 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_core_log_store.h"
 +
@@ -1137,6 +1206,12 @@ index 0000000000000000000000000000000000000000..359634645e7b547fba06ec93048522cf
 +  }
 +}
 +}  // namespace
++
++void AccessCoreLogStore::FlushAllForSessionEnding(base::OnceClosure completion) {
++  // SessionEnding terminates directly, without ThreadPool shutdown. Its
++  // bounded rundown must also wait for an already-requested history deletion.
++  g_log_disk.Get()->PostTask(FROM_HERE, std::move(completion));
++}
 +
 +scoped_refptr<AccessCoreLogStore> AccessCoreLogStore::Open(
 +    const base::FilePath& profile,
@@ -1225,16 +1300,17 @@ index 0000000000000000000000000000000000000000..359634645e7b547fba06ec93048522cf
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_core_log_store.h b/chrome/browser/aegis/access/access_core_log_store.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..862335ba08166c8d89dd31b2d6e10ed6d97a0add
+index 0000000000000000000000000000000000000000..7a46839423183a388e4b6ebbe9b640e98923e26e
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_core_log_store.h
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,82 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_CORE_LOG_STORE_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_CORE_LOG_STORE_H_
 +
 +#include "build/build_config.h"
 +#if BUILDFLAG(IS_MAC)
++#include "base/functional/callback.h"
 +#include "base/task/sequenced_task_runner.h"
 +#include "chrome/browser/aegis/access/access_core_log_disk.h"
 +#endif
@@ -1253,6 +1329,9 @@ index 0000000000000000000000000000000000000000..862335ba08166c8d89dd31b2d6e10ed6
 +  static scoped_refptr<AccessCoreLogStore> Open(const base::FilePath& profile,
 +                                                CoreLogProfile scope,
 +                                                std::string_view level);
++  // Call after core writers stop. Completes on the disk sequence after all
++  // queued saves/deletions, without a reply to the blocked Browser sequence.
++  static void FlushAllForSessionEnding(base::OnceClosure completion);
 +  DiskStatus disk_status();
 +#endif
 +  void SetLevel(std::string_view level);
@@ -1426,7 +1505,7 @@ index 0000000000000000000000000000000000000000..6dd0b660b42f23c030c87a08e1ecdb24
 +}  // namespace
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_local_core_manager.cc b/chrome/browser/aegis/access/access_local_core_manager.cc
-index 0b680a6f12acf368ff4cad26e2bc4194ba78c5af..e8728b5d8ebcc3f98c55b57410e80c26893b63ef 100644
+index 0b680a6f12acf368ff4cad26e2bc4194ba78c5af..18c9e049b089f3246257dff36dbcc016258e05f3 100644
 --- a/chrome/browser/aegis/access/access_local_core_manager.cc
 +++ b/chrome/browser/aegis/access/access_local_core_manager.cc
 @@ -2,12 +2,20 @@
@@ -1552,7 +1631,7 @@ index 0b680a6f12acf368ff4cad26e2bc4194ba78c5af..e8728b5d8ebcc3f98c55b57410e80c26
    base::ScopedTempDir directory_;
    base::Process process_;
    uint16_t port_ = 0;
-@@ -502,11 +567,8 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
+@@ -502,11 +567,11 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
    for (auto& weak : ShutdownHandle::Registry()) {
      if (auto handle = weak.lock()) handles.push_back(std::move(handle));
    }
@@ -1561,7 +1640,10 @@ index 0b680a6f12acf368ff4cad26e2bc4194ba78c5af..e8728b5d8ebcc3f98c55b57410e80c26
 -    return;
 -  }
 -  auto stopped = base::BarrierClosure(handles.size(), std::move(completion));
-+  auto stopped = base::BarrierClosure(handles.size() + 1, std::move(completion));
++  auto stopped = base::BarrierClosure(
++      handles.size() + 1,
++      base::BindOnce(&AccessCoreLogStore::FlushAllForSessionEnding,
++                     std::move(completion)));
 +  CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
    for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
  }

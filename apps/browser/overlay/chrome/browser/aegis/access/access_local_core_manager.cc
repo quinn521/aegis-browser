@@ -567,7 +567,10 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
   for (auto& weak : ShutdownHandle::Registry()) {
     if (auto handle = weak.lock()) handles.push_back(std::move(handle));
   }
-  auto stopped = base::BarrierClosure(handles.size() + 1, std::move(completion));
+  auto stopped = base::BarrierClosure(
+      handles.size() + 1,
+      base::BindOnce(&AccessCoreLogStore::FlushAllForSessionEnding,
+                     std::move(completion)));
   CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
   for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
 }

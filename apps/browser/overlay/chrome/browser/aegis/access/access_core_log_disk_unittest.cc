@@ -3,7 +3,12 @@
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/callback_helpers.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/test/bind.h"
 #include "base/test/task_environment.h"
+#include "base/threading/thread_restrictions.h"
+#include "chrome/browser/aegis/access/access_local_core_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace aegis::access {
@@ -128,6 +133,70 @@ TEST_F(AccessCoreLogDiskTest, UnsafeFilesShowFailureWithoutFollowingLinks) {
   store->Clear();
   environment_.RunUntilIdle();
   EXPECT_EQ(store->disk_status(), Status::kReady);
+}
+
+void CheckPendingDeletionAtSessionEnding(bool disable) {
+  base::test::TaskEnvironment environment;
+  base::ScopedTempDir profile;
+  ASSERT_TRUE(profile.CreateUniqueTempDir());
+  auto regular = AccessCoreLogStore::Open(profile.GetPath(), Scope::kRegular, "info");
+  auto priv = AccessCoreLogStore::Open(profile.GetPath(), Scope::kPrivate, "info");
+  regular->Add(0, Entry("regular.example"), {});
+  priv->Add(0, Entry("private.example"), {});
+  environment.RunUntilIdle();
+  const auto directory = profile.GetPath().AppendASCII(kCoreLogDirectory);
+  const auto regular_file = directory.AppendASCII("regular.log");
+  const auto private_file = directory.AppendASCII("private.log");
+  ASSERT_TRUE(base::PathExists(regular_file));
+  ASSERT_TRUE(base::PathExists(private_file));
+
+  auto entered = std::make_shared<base::WaitableEvent>();
+  auto release = std::make_shared<base::WaitableEvent>();
+  base::ScopedClosureRunner unblock(base::BindLambdaForTesting(
+      [release] { release->Signal(); }));
+  AccessCoreLogStore::FlushAllForSessionEnding(base::BindLambdaForTesting(
+      [entered, release] {
+        base::ScopedAllowBaseSyncPrimitivesForTesting allow;
+        entered->Signal();
+        release->Wait();
+      }));
+  {
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow;
+    ASSERT_TRUE(entered->TimedWait(base::Seconds(5)));
+  }
+  for (auto store : {regular, priv}) {
+    store->Add(0, Entry("queued.example"), {});
+    if (disable) store->SetLevel("none");
+    else store->Clear();
+  }
+  regular.reset();
+  priv.reset();
+  auto stopped = std::make_shared<base::WaitableEvent>();
+  AccessLocalCoreManager::StopAllForSessionEnding(base::BindLambdaForTesting(
+      [stopped] { stopped->Signal(); }));
+  EXPECT_FALSE(stopped->IsSignaled());
+  EXPECT_TRUE(base::PathExists(regular_file));
+  EXPECT_TRUE(base::PathExists(private_file));
+  unblock.RunAndReset();
+  {
+    // The session-ending Browser sequence does not process UI replies.
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow;
+    ASSERT_TRUE(stopped->TimedWait(base::Seconds(5)));
+  }
+  EXPECT_FALSE(base::PathExists(regular_file));
+  EXPECT_FALSE(base::PathExists(private_file));
+  regular = AccessCoreLogStore::Open(profile.GetPath(), Scope::kRegular, "info");
+  priv = AccessCoreLogStore::Open(profile.GetPath(), Scope::kPrivate, "info");
+  environment.RunUntilIdle();
+  EXPECT_TRUE(regular->Snapshot().empty());
+  EXPECT_TRUE(priv->Snapshot().empty());
+}
+
+TEST(AccessCoreLogSessionEndingTest, PendingClearCompletesWithoutUiReplies) {
+  CheckPendingDeletionAtSessionEnding(false);
+}
+TEST(AccessCoreLogSessionEndingTest, PendingNoneCompletesWithoutUiReplies) {
+  CheckPendingDeletionAtSessionEnding(true);
 }
 }  // namespace
 }  // namespace aegis::access
