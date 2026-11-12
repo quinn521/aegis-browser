@@ -142,11 +142,17 @@ def main():
     source.add_argument("--stored-snapshots", action="store_true", help="read provisioned snapshots offline")
     parser.add_argument("--sandbox-orders", action="store_true",
                         help="enable trusted local order redemption (stored snapshots only)")
+    parser.add_argument("--alpha-panel-client",
+                        help="opt in to a single Alpha panel client, allowing no panel expiry")
     args = parser.parse_args()
+    if args.alpha_panel_client is not None and (
+            not args.panel_url or args.stored_snapshots or args.sandbox_orders):
+        parser.error("--alpha-panel-client requires --panel-url without stored snapshots or sandbox orders")
     if args.sandbox_orders and not args.stored_snapshots:
         parser.error("--sandbox-orders requires --stored-snapshots")
     try:
-        panel = Panel(args.panel_url, os.environ.get("AEGIS_3XUI_TOKEN")) if args.panel_url else None
+        panel = (Panel(args.panel_url, os.environ.get("AEGIS_3XUI_TOKEN"),
+                       alpha_panel_client=args.alpha_panel_client) if args.panel_url else None)
     except ValueError as error:
         parser.error(str(error))
     with create_server(args.database, port=args.port, panel=panel,

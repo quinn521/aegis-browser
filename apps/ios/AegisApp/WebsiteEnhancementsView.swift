@@ -517,6 +517,14 @@ private struct CurrentWebsitePanel: View {
       AccessSiteProxyToggleView(store: accessSiteProxy, url: tab.url, tab: tab)
         .onAppear { accessSiteProxy.hostRouting = hostStores }
         .onChange(of: tab.navigationEpoch) { _, _ in accessSiteProxy.noteNavigationChanged() }
+      if !isPrivate {
+        AccessAccountUsageView(session: accountSession)
+      } else {
+        Section("Access 账户额度") {
+          Text("私密会话不显示普通账户的额度；请在普通窗口查询。")
+            .font(.footnote).foregroundStyle(.secondary)
+        }
+      }
       AccessDevAllowBlockSectionView(store: accessSiteProxy, url: tab.url)
       if let url = tab.url, ScriptMatch.origin(url) != nil {
         Section {

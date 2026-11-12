@@ -136,6 +136,7 @@ struct AegisApp: App {
             if phase == .active { language.refresh(); AegisFirebase.shared.refreshOnForeground() }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
+            accountSession.usageRefresh.setActive(phase == .active)
             if phase == .active { accountSession.refresh() }
             else { accountSession.suspend() }
         }
