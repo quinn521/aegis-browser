@@ -5,6 +5,8 @@
 #include "base/base64.h"
 #include "base/json/json_writer.h"
 #include "base/files/file_util.h"
+#include "net/base/load_flags.h"
+#include "net/http/access_proxy_route.h"
 #include "net/log/test_net_log.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "base/files/scoped_temp_dir.h"
@@ -28,6 +30,22 @@
 
 namespace aegis::access {
 namespace {
+TEST(PaidSiteMac, UnboundPrivateWindowPreservesConfiguredLocalNode) {
+  content::BrowserTaskEnvironment task;
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  TestingProfile::Builder builder;
+  builder.SetPath(temp.GetPath());
+  auto profile = builder.Build();
+  Profile* otr = profile->GetPrimaryOTRProfile(true);
+  ASSERT_TRUE(otr);
+  EXPECT_FALSE(UsesAccountNode(profile.get(), true));
+  EXPECT_FALSE(UsesAccountNode(otr, true));
+  EXPECT_TRUE(UsesAccountNode(otr, false));
+  ASSERT_TRUE(base::WriteFile(temp.GetPath().AppendASCII("AegisAccessAccount.json"), "{}"));
+  EXPECT_TRUE(UsesAccountNode(otr, true));
+}
+
 TEST(PaidSiteMac, CanonicalDnsHostIsExactWithOrWithoutRootDots) {
   content::BrowserTaskEnvironment task;
   auto profile = TestingProfile::Builder().Build();
@@ -56,6 +74,42 @@ TEST(PaidSiteMac, CanonicalDnsHostIsExactWithOrWithoutRootDots) {
       config->rules.Apply(GURL(url), &result);
       EXPECT_TRUE(result.is_direct());
     }
+  }
+}
+
+TEST(PaidSiteMac, ExplicitLocalRouteAndBypassCannotReplaceSelectedAccountSite) {
+  content::BrowserTaskEnvironment task(base::test::TaskEnvironment::MainThreadType::IO);
+  auto profile = TestingProfile::Builder().Build();
+  network::mojom::NetworkContextParams params;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
+  auto* transport = AccessNetworkContextTransport::Get(profile.get());
+  auto builder = net::CreateTestURLRequestContextBuilder();
+  builder->set_proxy_delegate(std::make_unique<network::NetworkServiceProxyDelegate>(
+      std::move(params.initial_custom_proxy_config), std::move(params.custom_proxy_config_client_receiver),
+      mojo::PendingRemote<network::mojom::CustomProxyConnectionObserver>()));
+  auto network = builder->Build();
+  auto local = net::AccessProxyRoute::Create(
+      {0, "profile", "partition", "group", "registration", "context", 1, 1, 1, 1, 1},
+      net::ProxyChain(net::ProxyServer::FromSchemeHostAndPort(
+          net::ProxyServer::SCHEME_HTTP, "127.0.0.1", 1)));
+  ASSERT_TRUE(local);
+  auto send = [&](const char* url, bool explicit_route) {
+    net::TestDelegate result;
+    auto request = network->CreateRequest(GURL(url), net::DEFAULT_PRIORITY, &result,
+        TRAFFIC_ANNOTATION_FOR_TESTS, net::handles::kInvalidNetworkHandle);
+    if (explicit_route) request->SetAccessProxyRoute(local);
+    else request->SetLoadFlags(net::LOAD_BYPASS_PROXY);
+    request->Start();
+    result.RunUntilComplete();
+    return result.request_status();
+  };
+  for (bool assigned : {true, false}) {
+    ASSERT_TRUE(transport->SetAccountNodeSites({"paid.example"}, assigned ? "node.test" : "",
+                                               assigned ? 443 : 0, assigned ? "Basic fixture" : ""));
+    task.RunUntilIdle();
+    EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, send("https://paid.example./", true));
+    EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, send("https://paid.example./", false));
+    EXPECT_EQ(net::ERR_PROXY_CONNECTION_FAILED, send("https://local.example/", true));
   }
 }
 

@@ -161,13 +161,16 @@ class SiteLease final : public base::SupportsUserData::Data {
   base::WeakPtrFactory<SiteLease> weak_{this};
 };
 }  // namespace
-bool UsesAccountNode(Profile* profile) {
+bool UsesAccountNode(Profile* profile, bool local_node_available) {
   if (!aegis::IsAegisProfileSupported(profile)) return false;
-  if (profile->IsOffTheRecord()) return true;
   auto* lease = static_cast<SiteLease*>(profile->GetUserData(kLeaseKey));
   if (lease && lease->HasSites()) return true;
+  // A configured local test node remains available in an unbound private
+  // window. Only check for the regular binding's existence to select the UI.
+  // Private authorization always prompts and never reads that binding.
+  if (profile->IsOffTheRecord() && !local_node_available) return true;
   struct stat binding;
-  return lstat(profile->GetPath().AppendASCII("AegisAccessAccount.json").value().c_str(),
+  return lstat(profile->GetOriginalProfile()->GetPath().AppendASCII("AegisAccessAccount.json").value().c_str(),
                &binding) == 0 || errno != ENOENT;
 }
 AccountNodeStatus AccountNodeForSite(Profile* profile, const std::string& site) {
