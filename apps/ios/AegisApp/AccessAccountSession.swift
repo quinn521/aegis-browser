@@ -1,6 +1,8 @@
 import Combine
 import Foundation
 import Security
+import Network
+import BrowserKit
 
 struct AccessAccountCredential: Codable, Equatable, Sendable {
     let accountID, token, endpoint: String
@@ -50,9 +52,11 @@ struct AccessAccountKeychain {
 final class AccessAccountSession: ObservableObject {
     enum State: Equatable { case signedOut, loading, unavailable, ready(AccessAccountEntitlement) }
     @Published private(set) var state: State = .signedOut
+    var supportsAccountAuthorization: Bool { client != nil }
     private let client: AccessAccountClient?
     private let keychain: AccessAccountKeychain
     private let fetch: @Sendable (AccessAccountClient, AccessAccountCredential) async throws -> AccessAccountEntitlement
+    private var grants: [UUID: AccessTabGrant] = [:]
     private var generation = UUID()
     private var task: Task<Void, Never>?
 
@@ -86,6 +90,7 @@ final class AccessAccountSession: ObservableObject {
     }
 
     func suspend() {
+        for grant in grants.values { grant.invalidate(client: client) }
         generation = UUID()
         task?.cancel()
         task = nil
@@ -143,5 +148,150 @@ final class AccessAccountSession: ObservableObject {
             }
         } catch { state = .unavailable }
         return task
+    }
+}
+
+/// An explicitly selected tab/site. Only the owning native transfer receives this transport.
+@MainActor
+private final class AccessTabGrant {
+    let contextID = UUID()
+    let mode: AccessNodeMode
+    let host: String
+    var privateCredential: AccessAccountCredential?
+    var lease: AccessNodeLease?
+    var credential: AccessAccountCredential?
+    var transfer: AccessDownloadTransport?
+    var expiry: Task<Void, Never>?
+    var epoch = UUID()
+    var preparation: Task<AccessNodeLease, Error>?
+
+    init(host: String, mode: AccessNodeMode, privateCredential: AccessAccountCredential?) {
+        self.host = host
+        self.mode = mode
+        self.privateCredential = privateCredential
+    }
+
+    func invalidate(client: AccessAccountClient?, clearAuthorization: Bool = true) {
+        epoch = UUID()
+        preparation = nil
+        transfer?.invalidate()
+        transfer = nil
+        expiry?.cancel()
+        expiry = nil
+        if let client, let credential, let lease {
+            Task { try? await client.revoke(credential, lease: lease) }
+        }
+        lease = nil
+        credential = nil
+        if clearAuthorization { privateCredential = nil }
+    }
+}
+
+extension AccessAccountSession {
+    @discardableResult
+    func selectProxy(for tab: UUID, host: String, privateMode: Bool, privateAccount: String = "",
+                     privateToken: String = "") -> Task<Bool, Never> {
+        closeProxy(for: tab)
+        let grant = AccessTabGrant(host: host.lowercased(), mode: privateMode ? .private : .regular,
+            privateCredential: privateMode ? client.map {
+                AccessAccountCredential(accountID: privateAccount, token: privateToken, endpoint: $0.endpoint.absoluteString)
+            } : nil)
+        grants[tab] = grant
+        let selectedGeneration = generation
+        return Task {
+            guard generation == selectedGeneration else { return false }
+            do { _ = try await prepare(grant, tab: tab); return true }
+            catch { return false }
+        }
+    }
+
+    func closeProxy(for tab: UUID) { grants.removeValue(forKey: tab)?.invalidate(client: client) }
+
+    func hasSelectedProxy(for tab: UUID, host: String) -> Bool { grants[tab]?.host == host.lowercased() }
+
+    private func prepare(_ grant: AccessTabGrant, tab: UUID) async throws -> AccessNodeLease {
+        guard let client, grants[tab] === grant else { throw AccountQueryError.invalid }
+        let account: AccessAccountCredential
+        if grant.mode == .private {
+            guard let supplied = grant.privateCredential, supplied.valid else { throw AccountQueryError.unauthorized }
+            account = supplied
+        } else {
+            guard let current = try keychain.read(), current.valid else { throw AccountQueryError.unauthorized }
+            account = current
+        }
+        let epoch = grant.epoch
+        func current() throws -> Bool {
+            guard self.grants[tab] === grant, grant.epoch == epoch else { return false }
+            if grant.mode == .private { return true }
+            return try keychain.read() == account
+        }
+        if let lease = grant.lease, grant.credential == account,
+           lease.expiresAt > Int64(Date().timeIntervalSince1970 * 1000), try current() { return lease }
+        if let preparation = grant.preparation { return try await preparation.value }
+        let preparation = Task<AccessNodeLease, Error> {
+            defer { if grant.epoch == epoch { grant.preparation = nil } }
+            let entitlement = try await client.read(account)
+            guard try current(), entitlement.status == .active, let period = entitlement.periodId else {
+                throw AccountQueryError.unauthorized
+            }
+            let lease = try await client.issue(account, contextID: grant.contextID, mode: grant.mode, periodID: period)
+            guard (try? current()) == true else {
+                try? await client.revoke(account, lease: lease)
+                throw AccountQueryError.unauthorized
+            }
+            grant.transfer?.invalidate()
+            grant.transfer = nil
+            grant.expiry?.cancel()
+            grant.credential = account
+            grant.lease = lease
+            grant.expiry = Task { [weak grant] in
+                let delay = max(0, lease.expiresAt - Int64(Date().timeIntervalSince1970 * 1000))
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard !Task.isCancelled, let grant, grant.lease?.credentialId == lease.credentialId else { return }
+                grant.invalidate(client: client, clearAuthorization: false)
+            }
+            return lease
+        }
+        grant.preparation = preparation
+        return try await preparation.value
+    }
+
+    @discardableResult
+    func startProtectedDownload(_ plan: DownloadPlan, context: (tab: UUID, privateMode: Bool, target: URL),
+                                browser: BrowserSession, downloads: DownloadManager) async throws -> UUID {
+        guard plan.urls == [context.target], browser.pendingAccessDownload?.tab == context.tab,
+              browser.pendingAccessDownload?.target == context.target else { throw AccountQueryError.invalid }
+        let route = try await downloadSession(for: context.tab, privateMode: context.privateMode,
+                                              target: context.target, downloadDelegate: downloads)
+        guard browser.activeTab?.id == context.tab, browser.pendingAccessDownload?.target == context.target,
+              browser.pendingAccessDownload?.tab == context.tab else { throw AccountQueryError.invalid }
+        return try downloads.start(plan, accessSession: route)
+    }
+
+    /// Used only for a browser-originated same-site download. The ephemeral
+    /// transfer's delegate refuses redirects before another destination is fetched.
+    func downloadSession(for tab: UUID, privateMode: Bool, target: URL, downloadDelegate: URLSessionDownloadDelegate)
+        async throws -> AccessDownloadTransport {
+        guard target.scheme == "https", target.user == nil, target.password == nil,
+              let grant = grants[tab], target.host?.lowercased() == grant.host,
+              grant.mode == (privateMode ? .private : .regular) else { throw AccountQueryError.invalid }
+        let lease = try await prepare(grant, tab: tab)
+        guard grants[tab] === grant, grant.lease?.credentialId == lease.credentialId else { throw AccountQueryError.invalid }
+        if let transfer = grant.transfer { return transfer }
+        guard let port = NWEndpoint.Port(rawValue: lease.port) else { throw AccountQueryError.invalid }
+        var proxy = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: .init(lease.host), port: port),
+                                       tlsOptions: NWProtocolTLS.Options())
+        proxy.allowFailover = false
+        proxy.applyCredential(username: lease.username, password: lease.password)
+        let config = URLSessionConfiguration.ephemeral
+        config.proxyConfigurations = [proxy]
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.urlCredentialStorage = nil
+        config.urlCache = nil
+        config.waitsForConnectivity = false
+        let session = AccessDownloadTransport(configuration: config, targetHost: grant.host, delegate: downloadDelegate)
+        grant.transfer = session
+        return session
     }
 }

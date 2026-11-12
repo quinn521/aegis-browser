@@ -4,6 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct DownloadsView: View {
+    @EnvironmentObject private var accountSession: AccessAccountSession
     @EnvironmentObject private var downloads: DownloadManager
     @EnvironmentObject private var browser: BrowserSession
     @Environment(\.dismiss) private var dismiss
@@ -219,8 +220,21 @@ struct DownloadsView: View {
     }
 
     private func start(_ plan: DownloadPlan) {
-        do { _ = try downloads.start(plan); importedPlan = nil; error = nil }
-        catch { self.error = .error(error) }
+        if let initialURL, let context = browser.pendingAccessDownload,
+           plan.urls.first == initialURL, context.target == initialURL {
+            guard plan.urls.count == 1 else { error = .resource("账户代理下载仅支持当前网站，不支持备用镜像。"); return }
+            Task {
+                do {
+                    _ = try await accountSession.startProtectedDownload(plan, context: context, browser: browser,
+                                                                        downloads: downloads)
+                    importedPlan = nil
+                    error = nil
+                } catch { self.error = .resource("账户代理下载不可用。") }
+            }
+        } else {
+            do { _ = try downloads.start(plan); importedPlan = nil; error = nil }
+            catch { self.error = .error(error) }
+        }
     }
 
     private var storageSection: some View {

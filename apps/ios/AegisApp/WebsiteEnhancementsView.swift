@@ -508,7 +508,7 @@ private struct CurrentWebsitePanel: View {
   var body: some View {
       let _ = localizationLocale
     Form {
-      AccessSiteProxyToggleView(store: accessSiteProxy, url: tab.url)
+      AccessSiteProxyToggleView(store: accessSiteProxy, tab: tab)
         .onChange(of: tab.navigationEpoch) { _, _ in accessSiteProxy.noteNavigationChanged() }
       AccessDevAllowBlockSectionView(store: accessSiteProxy, url: tab.url)
       if let url = tab.url, ScriptMatch.origin(url) != nil {

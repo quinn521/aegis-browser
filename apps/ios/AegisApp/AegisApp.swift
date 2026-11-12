@@ -198,7 +198,7 @@ private struct AegisWindowView: View {
                 browser.persistSession()
             }
             .onDisappear {
-                browser.persistSession(); browser.discardPrivateSession()
+                browser.persistSession(); browser.closeAccessContexts(); browser.discardPrivateSession()
                 windows.unregister(browser.windowID)
             }
     }

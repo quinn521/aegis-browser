@@ -16,6 +16,8 @@ public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
 @MainActor
 public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
     public let id: UUID
+    public var onAccessContextClosed: (() -> Void)?
+    public var selectedAccessHost: String?
     private let configuration: WKWebViewConfiguration
     private var loadedWebView: WKWebView?
     private var titleObservation: NSKeyValueObservation?
@@ -687,7 +689,10 @@ public final class BrowserSession: ObservableObject {
         get { sessionErrorPresentation?.text }
         set { sessionErrorPresentation = newValue.map(AegisLocalizedMessage.verbatim) }
     }
-    @Published public var pendingDownloadURL: URL?
+    public private(set) var pendingAccessDownload: (tab: UUID, privateMode: Bool, target: URL)?
+    @Published public var pendingDownloadURL: URL? {
+        didSet { if pendingDownloadURL == nil { pendingAccessDownload = nil } }
+    }
     @Published public var pendingMarkdown: MarkdownDocument?
     @Published public private(set) var standardGroups: [BrowserTabGroup] = []
     @Published public private(set) var privateGroups: [BrowserTabGroup] = []
@@ -841,8 +846,12 @@ public final class BrowserSession: ObservableObject {
         objectWillChange.send(); refreshBookmarkState(); persistSession()
     }
 
+    public func closeAccessContexts() {
+        for tab in standardTabs + privateTabs { tab.onAccessContextClosed?() }
+    }
+
     public func discardPrivateSession() {
-        privateTabs.forEach { $0.stop() }
+        privateTabs.forEach { $0.onAccessContextClosed?(); $0.stop() }
         privateTabs = []; privateGroups = []; privateGroupID = nil
         if profile.isPrivate { switchProfile(to: .standard) }
     }
@@ -889,7 +898,7 @@ public final class BrowserSession: ObservableObject {
     }
 
     public func close(_ tabID: UUID) {
-        visibleTabs.first { $0.id == tabID }?.stop()
+        if let tab = visibleTabs.first(where: { $0.id == tabID }) { tab.onAccessContextClosed?(); tab.stop() }
         if profile == .standard {
             standardTabs.removeAll { $0.id == tabID }
             if standardTabs.isEmpty { standardTabs = [makeTab(profile: .standard)] }
@@ -927,7 +936,7 @@ public final class BrowserSession: ObservableObject {
         guard !profile.isPrivate else { return }
         // WebKit 的普通网站存储由各窗口共享，清除前同时停止所有普通页面。
         for session in Self.sessions.compactMap(\.value) {
-            session.standardTabs.forEach { $0.stop() }
+            session.standardTabs.forEach { $0.onAccessContextClosed?(); $0.stop() }
             session.standardGroups = []; session.standardGroupID = nil
             session.standardTabs = [session.makeTab(profile: .standard)]
             session.standardActiveID = session.standardTabs.first?.id
@@ -1020,8 +1029,11 @@ public final class BrowserSession: ObservableObject {
             child.inheritedHardenedSecurity = hardened
             child.load(url)
         }
-        tab.onDownload = { [weak self] url in
-            guard let self, self.profile == profile else { return }
+        tab.onDownload = { [weak self, weak tab] url in
+            guard let self, let tab, self.profile == profile else { return }
+            if let host = tab.selectedAccessHost, tab.url?.host?.lowercased() == host, url.host?.lowercased() == host {
+                self.pendingAccessDownload = (tab.id, profile.isPrivate, url)
+            } else { self.pendingAccessDownload = nil }
             self.pendingDownloadURL = url
         }
         return tab

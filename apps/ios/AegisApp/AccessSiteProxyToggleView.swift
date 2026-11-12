@@ -1,4 +1,5 @@
 import AccessKit
+import BrowserKit
 import SwiftUI
 
 /// Current-page 「本站代理」 toggle: host + switch + intent/connection lines.
@@ -7,7 +8,16 @@ import SwiftUI
 /// connection is used — never “direct success” without verification.
 struct AccessSiteProxyToggleView: View {
     @ObservedObject var store: AccessSiteProxySessionStore
-    let url: URL?
+    @ObservedObject var tab: BrowserTab
+    @EnvironmentObject private var account: AccessAccountSession
+    @State private var authorizing = false
+    @State private var accountID = ""
+    @State private var sessionToken = ""
+    private var url: URL? { tab.url }
+
+    private func select(_ enabled: Bool) {
+        store.setProxyEnabled(enabled, for: tab, account: account, privateAccount: accountID, privateToken: sessionToken)
+    }
 
     @Environment(\.locale) private var localizationLocale
 
@@ -32,12 +42,31 @@ struct AccessSiteProxyToggleView: View {
             Toggle(
                 "使用本服务代理",
                 isOn: Binding(
-                    get: { snap.toggleOn },
-                    set: { store.setProxyEnabled($0, for: url) }
+                    get: { snap.host.map { account.hasSelectedProxy(for: tab.id, host: $0.rawValue) } ?? false },
+                    set: { enabled in
+                        if enabled && tab.profile.isPrivate && account.supportsAccountAuthorization { authorizing = true } else { select(enabled) }
+                    }
                 )
             )
             .disabled(!snap.toggleEnabled)
             .accessibilityIdentifier("access-site-proxy-toggle")
+            .sheet(isPresented: $authorizing, onDismiss: { accountID = ""; sessionToken = "" }) {
+                NavigationStack {
+                    Form {
+                        TextField("服务账户", text: $accountID).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("服务账户会话令牌", text: $sessionToken)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
+                    }
+                    .localizedNavigationTitle("授权本次私密会话")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("取消") { authorizing = false } }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("确认") { select(true); authorizing = false }
+                                .disabled(accountID.isEmpty || sessionToken.isEmpty)
+                        }
+                    }
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(AccessSiteProxyToggleModel.intentLine(for: snap.intentStatus))

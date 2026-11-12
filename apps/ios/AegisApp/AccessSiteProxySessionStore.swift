@@ -1,4 +1,5 @@
 import AccessKit
+import BrowserKit
 import Combine
 import Foundation
 
@@ -34,6 +35,25 @@ final class AccessSiteProxySessionStore: ObservableObject {
     func snapshot(for url: URL?) -> AccessSiteProxyToggleSnapshot {
         _ = revision
         return AccessSiteProxyToggleModel.buildSnapshot(url: url, controller: controller)
+    }
+
+    /// The trusted tab supplies both the committed site and the browsing mode.
+    @discardableResult
+    func setProxyEnabled(_ enabled: Bool, for tab: BrowserTab, account: AccessAccountSession,
+                         privateAccount: String = "", privateToken: String = "") -> Task<Bool, Never>? {
+        guard let host = AccessSiteProxyToggleModel.resolveTrustedHost(from: tab.url) else { return nil }
+        setProxyEnabled(enabled, for: tab.url)
+        if enabled {
+            let tabID = tab.id
+            tab.selectedAccessHost = host.rawValue.lowercased()
+            tab.onAccessContextClosed = { [weak account] in account?.closeProxy(for: tabID) }
+            return account.selectProxy(for: tabID, host: host.rawValue, privateMode: tab.profile.isPrivate,
+                                       privateAccount: privateAccount, privateToken: privateToken)
+        }
+        tab.selectedAccessHost = nil
+        tab.onAccessContextClosed?()
+        tab.onAccessContextClosed = nil
+        return nil
     }
 
     func setProxyEnabled(_ enabled: Bool, for url: URL?) {
