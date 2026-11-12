@@ -5,7 +5,29 @@ public enum AccessDiagnosticArchive {
     public enum ArchiveError: Error { case emptyLog, tooLarge, cannotCreateFile }
     private static let folderPrefix = "aegis-access-share-"
 
+    /// Runs once before this process can create an active share. Activity
+    /// completion is not delivered when iOS terminates the previous process.
+    public static let recoveredTemporaryArchives: Bool = {
+        do {
+            try removeAbandonedTemporaryArchives(in: FileManager.default.temporaryDirectory)
+            return true
+        } catch {
+            return false
+        }
+    }()
+
+    static func removeAbandonedTemporaryArchives(in directory: URL) throws {
+        let manager = FileManager.default
+        for folder in try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
+            let name = folder.lastPathComponent
+            guard name.hasPrefix(folderPrefix),
+                  UUID(uuidString: String(name.dropFirst(folderPrefix.count))) != nil else { continue }
+            try manager.removeItem(at: folder)
+        }
+    }
+
     public static func createTemporary(snapshot: String) throws -> URL {
+        guard recoveredTemporaryArchives else { throw ArchiveError.cannotCreateFile }
         let input = Data(snapshot.utf8)
         guard !input.isEmpty else { throw ArchiveError.emptyLog }
         guard input.count <= Int(UInt32.max) else { throw ArchiveError.tooLarge }

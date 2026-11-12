@@ -167,6 +167,10 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     private func stop(ifID: UUID?) -> Bool {
         let result: (Bool, URL?) = queue.sync {
             if let ifID, captureID != ifID { return (true, nil) }
+            // The core has stopped, but its final complete records may still
+            // be in the FIFO before the next poll. Keep clear/none's discard
+            // state while draining a bounded amount of nonblocking input.
+            if let readerFD { drain(fd: readerFD, maximumReads: 64) }
             enabled = false
             var retired: URL?
             if let directory {
@@ -240,9 +244,9 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     func markUnavailable() { queue.sync { failed = true } }
 
-    private func drain(fd: Int32) {
+    private func drain(fd: Int32, maximumReads: Int = 4) {
         var bytes = [UInt8](repeating: 0, count: 4096)
-        for _ in 0..<4 {
+        for _ in 0..<maximumReads {
             let count = read(fd, &bytes, bytes.count)
             if count < 0 && errno == EINTR { continue }
             guard count > 0 else {

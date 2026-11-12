@@ -365,10 +365,15 @@ private struct AccessDiagnosticsView: View {
                     Text("磁盘日志读取或保存失败；当前内存日志仍可查看。清理后可重试。")
                         .foregroundStyle(.secondary)
                 }
+                if !AccessDiagnosticArchive.recoveredTemporaryArchives {
+                    Text("上次分享的临时文件清理失败，压缩分享暂不可用。请重启后重试。")
+                        .foregroundStyle(.secondary)
+                }
                 if unavailable {
                     Text("日志接收器不可用；代理仍可使用。请重新启动代理后重试。")
                         .foregroundStyle(.secondary)
-                } else if log.isEmpty {
+                }
+                if log.isEmpty {
                     Text("暂无日志").foregroundStyle(.secondary)
                 } else {
                     Text(log).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
@@ -424,7 +429,7 @@ private struct AccessDiagnosticsView: View {
             do {
                 try await AccessDiagnosticLog.shared.clearStoredLogs()
                 log = AccessDiagnosticLog.shared.snapshot()
-                clearMessage = "已清理已有日志；新日志仍会继续记录。"
+                clearMessage = "已清理历史日志；新日志仍会继续记录。"
             } catch {
                 errorMessage = "未能删除磁盘日志，请重试。"
             }

@@ -119,6 +119,69 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    func testStopDrainsFinalCompleteRecordsBeforeTheFirstPollAndPersistsThem() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("access-final-record-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info, pollInterval: .seconds(60))
+        let capture = try XCTUnwrap(log.start(level: .info, secrets: ["synthetic-secret"]))
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: capture.path))
+        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //final.example:443/path?token=synthetic-secret\nunfinished".utf8))
+        try writer.close()
+        XCTAssertTrue(log.stop(capture: capture))
+        XCTAssertTrue(log.snapshot().contains("accepted final.example:443"))
+        XCTAssertFalse(log.snapshot().contains("synthetic-secret"))
+        XCTAssertFalse(log.snapshot().contains("unfinished"))
+        try await log.flush()
+        let restored = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info)
+        try await restored.flush()
+        XCTAssertEqual(restored.snapshot(), log.snapshot())
+        restored.markUnavailable()
+        XCTAssertTrue(restored.unavailable)
+        XCTAssertTrue(restored.snapshot().contains("final.example:443"))
+    }
+
+    func testStopDrainPreservesClearAndNoneDiscardBoundaries() throws {
+        for disable in [false, true] {
+            let log = AccessDiagnosticLog(pollInterval: .seconds(60))
+            let capture = try XCTUnwrap(log.start(level: .info, secrets: []))
+            let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: capture.path))
+            try writer.write(contentsOf: Data("2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //before-clear.example:443\npartial".utf8))
+            if disable { log.disableAndClear() } else { log.clear() }
+            try writer.write(contentsOf: Data("-tail\n2026/11/11 00:00:00 from 127.0.0.1:1234 accepted //after-clear.example:443\n".utf8))
+            try writer.close()
+            XCTAssertTrue(log.stop(capture: capture))
+            XCTAssertFalse(log.snapshot().contains("before-clear"))
+            XCTAssertFalse(log.snapshot().contains("partial"))
+            if disable { XCTAssertEqual(log.snapshot(), "") }
+            else { XCTAssertTrue(log.snapshot().contains("after-clear.example:443")) }
+        }
+    }
+
+    func testStartupCleanupRemovesAbandonedArchivesWithoutFollowingLinks() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent("access-archive-recovery-" + UUID().uuidString)
+        defer { try? manager.removeItem(at: root) }
+        let temporary = root.appendingPathComponent("tmp")
+        let outside = root.appendingPathComponent("outside")
+        try manager.createDirectory(at: temporary, withIntermediateDirectories: true)
+        try manager.createDirectory(at: outside, withIntermediateDirectories: true)
+        let kept = outside.appendingPathComponent("keep")
+        try Data("keep".utf8).write(to: kept)
+        let abandoned = temporary.appendingPathComponent("aegis-access-share-" + UUID().uuidString)
+        try manager.createDirectory(at: abandoned, withIntermediateDirectories: false)
+        try Data("private.example".utf8).write(to: abandoned.appendingPathComponent("aegis-access-diagnostics.zip"))
+        let link = temporary.appendingPathComponent("aegis-access-share-" + UUID().uuidString)
+        try manager.createSymbolicLink(at: link, withDestinationURL: outside)
+        let unrelated = temporary.appendingPathComponent("aegis-access-share-not-an-archive")
+        try Data("unrelated".utf8).write(to: unrelated)
+        try AccessDiagnosticArchive.removeAbandonedTemporaryArchives(in: temporary)
+        XCTAssertFalse(manager.fileExists(atPath: abandoned.path))
+        XCTAssertFalse(manager.fileExists(atPath: link.path))
+        XCTAssertEqual(try Data(contentsOf: kept), Data("keep".utf8))
+        XCTAssertTrue(manager.fileExists(atPath: unrelated.path))
+        XCTAssertThrowsError(try AccessDiagnosticArchive.removeAbandonedTemporaryArchives(in: root.appendingPathComponent("missing")))
+    }
+
     func testOldCaptureCannotStopNewCaptureAndWarningOmitsAccess() throws {
         let diagnostics = AccessDiagnosticLog(capacity: 512)
         let old = try XCTUnwrap(diagnostics.start(level: .info, secrets: []))
