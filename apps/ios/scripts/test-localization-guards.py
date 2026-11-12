@@ -210,7 +210,7 @@ class LocalizationGuardTests(unittest.TestCase):
                     patch.object(self.runner.subprocess, "Popen", side_effect=native_fixture) as process:
                 self.assertEqual(self.runner.main(), 0)
                 config = work / "None-en-en_GB17.xctestrun"
-                self.assertEqual(process.call_args.args[0][4], str(config))
+                self.assertEqual(process.call_args.args[0][4], str(config.resolve()))
                 settings = plistlib.loads(config.read_bytes())["AegisTests"]
                 self.assertEqual(settings["TestRegion"], "GB")
                 self.assertEqual(settings["EnvironmentVariables"]["AEGIS_EXPECTED_LANGUAGE"], "en-GB")
@@ -276,7 +276,7 @@ class LocalizationGuardTests(unittest.TestCase):
                 self.assertEqual(self.runner.main(), 1, "A zero process exit cannot replace locale evidence")
                 argv = process.call_args.args[0]
                 self.assertEqual(argv[:4], ["/usr/bin/xcrun", "xcodebuild", "test-without-building", "-xctestrun"])
-                self.assertEqual(argv[4], str(work / "en.xctestrun"))
+                self.assertEqual(argv[4], str((work / "en.xctestrun").resolve()))
                 self.assertEqual(argv[argv.index("-destination") + 1],
                                  "platform=iOS Simulator,id=D5367C00-914D-4ED9-89F1-746C5ED9277A")
                 self.assertIs(process.call_args.kwargs["shell"], False)
