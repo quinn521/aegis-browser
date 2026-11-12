@@ -98972,6 +98972,630 @@
         }
       }
     }
+,
+    "网站级代理，页面内第三方资源随页面连接；不是全设备 VPN。": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Website-level proxy; third-party page resources follow the page connection. Not a device-wide VPN."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "網站級代理，頁面內第三方資源隨頁面連線；不是全裝置 VPN。"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Website-Proxy: Drittanbieter-Ressourcen der Seite nutzen deren Verbindung. Kein geräteweites VPN."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy por sitio web; los recursos de terceros siguen la conexión de la página. No es una VPN para todo el dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy par site : les ressources tierces suivent la connexion de la page. Ce n’est pas un VPN pour tout l’appareil."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proksi tingkat situs; sumber daya pihak ketiga mengikuti koneksi halaman. Bukan VPN seluruh perangkat."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy per sito: le risorse di terze parti seguono la connessione della pagina. Non è una VPN per tutto il dispositivo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サイト単位のプロキシです。ページ内の第三者リソースも同じ接続を使います。端末全体の VPN ではありません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사이트별 프록시로, 페이지의 타사 리소스도 같은 연결을 사용합니다. 기기 전체 VPN이 아닙니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proksi per laman; sumber pihak ketiga mengikut sambungan halaman. Bukan VPN seluruh peranti."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy por site; recursos de terceiros seguem a conexão da página. Não é uma VPN para todo o dispositivo."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "พร็อกซีระดับเว็บไซต์ ทรัพยากรบุคคลที่สามในหน้าใช้การเชื่อมต่อของหน้า ไม่ใช่ VPN ทั้งอุปกรณ์"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy theo trang web; tài nguyên bên thứ ba dùng kết nối của trang. Không phải VPN cho toàn thiết bị."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网站级代理，页面内第三方资源随页面连接；不是全设备 VPN。"
+          }
+        }
+      }
+    },
+    "未找到可用节点配置": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No usable node configuration found"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未找到可用節點設定"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keine nutzbare Knotenkonfiguration gefunden"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se encontró una configuración de nodo utilizable"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune configuration de nœud utilisable trouvée"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konfigurasi node yang dapat digunakan tidak ditemukan"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna configurazione del nodo utilizzabile trovata"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "利用可能なノード設定が見つかりません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 가능한 노드 설정을 찾지 못했습니다"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tiada konfigurasi nod yang boleh digunakan"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma configuração de nó utilizável encontrada"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่พบการตั้งค่าโหนดที่ใช้ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không tìm thấy cấu hình nút dùng được"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未找到可用节点配置"
+          }
+        }
+      }
+    },
+    "已配置节点（匿名标识）": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configured node (anonymous ID)"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已設定節點（匿名識別碼）"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konfigurierter Knoten (anonyme Kennung)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nodo configurado (ID anónimo)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nœud configuré (identifiant anonyme)"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Node terkonfigurasi (ID anonim)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nodo configurato (ID anonimo)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "設定済みノード（匿名識別子）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정된 노드(익명 식별자)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nod dikonfigurasi (ID tanpa nama)"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nó configurado (ID anônimo)"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "โหนดที่ตั้งค่าไว้ (รหัสไม่ระบุตัวตน)"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nút đã cấu hình (mã ẩn danh)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已配置节点（匿名标识）"
+          }
+        }
+      }
+    },
+    "当前页面尚未接入代理": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This page is not attached to the proxy"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目前頁面尚未接入代理"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Seite nutzt den Proxy noch nicht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta página aún no usa el proxy"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette page n’utilise pas encore le proxy"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halaman ini belum terhubung ke proksi"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa pagina non usa ancora il proxy"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このページはまだプロキシに接続されていません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재 페이지는 프록시에 연결되지 않았습니다"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halaman ini belum disambungkan ke proksi"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta página ainda não usa o proxy"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "หน้านี้ยังไม่ได้เชื่อมต่อกับพร็อกซี"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trang này chưa kết nối với proxy"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前页面尚未接入代理"
+          }
+        }
+      }
+    },
+    "本地代理入口已就绪；远端连接未验证": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local proxy entry is ready; remote connection is unverified"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本機代理入口已就緒；遠端連線未驗證"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lokaler Proxy-Zugang bereit; entfernte Verbindung nicht verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrada local del proxy lista; conexión remota sin verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrée locale du proxy prête ; connexion distante non vérifiée"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jalur masuk proksi lokal siap; koneksi jarak jauh belum diverifikasi"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ingresso proxy locale pronto; connessione remota non verificata"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローカルプロキシ入口は準備完了です。リモート接続は未検証です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "로컬 프록시 진입점 준비 완료, 원격 연결은 확인되지 않음"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pintu masuk proksi setempat sedia; sambungan jauh belum disahkan"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrada local do proxy pronta; conexão remota não verificada"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ทางเข้าพร็อกซีในเครื่องพร้อมแล้ว ยังไม่ได้ยืนยันการเชื่อมต่อระยะไกล"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đầu vào proxy cục bộ đã sẵn sàng; kết nối từ xa chưa được xác minh"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本地代理入口已就绪；远端连接未验证"
+          }
+        }
+      }
+    },
+    "代理入口不可用；未切回原连接": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy entry unavailable; no fallback to the original connection"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理入口無法使用；未切回原連線"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proxy-Zugang nicht verfügbar; kein Rückfall auf die ursprüngliche Verbindung"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrada del proxy no disponible; no se volvió a la conexión original"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrée du proxy indisponible ; aucun retour à la connexion initiale"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jalur masuk proksi tidak tersedia; tidak beralih ke koneksi awal"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ingresso proxy non disponibile; nessun ritorno alla connessione originale"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロキシ入口を利用できません。元の接続には戻していません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프록시 진입점 사용 불가, 원래 연결로 전환하지 않음"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pintu masuk proksi tidak tersedia; tidak beralih ke sambungan asal"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Entrada do proxy indisponível; sem retorno à conexão original"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ทางเข้าพร็อกซีไม่พร้อมใช้ ไม่ได้สลับกลับไปการเชื่อมต่อเดิม"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đầu vào proxy không khả dụng; không chuyển về kết nối ban đầu"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理入口不可用；未切回原连接"
+          }
+        }
+      }
+    },
+    "节点标识仅代表本地配置，不证明远端已连接，也不证明与面板查询账户对应。": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The node ID identifies only local configuration. It proves neither a remote connection nor a match with the panel-query account."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "節點識別碼僅代表本機設定，不證明遠端已連線，也不證明與面板查詢帳戶對應。"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Knotenkennung bezeichnet nur die lokale Konfiguration. Sie belegt weder eine entfernte Verbindung noch die Zuordnung zum Konto der Panel-Abfrage."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El ID del nodo identifica solo la configuración local. No demuestra una conexión remota ni la correspondencia con la cuenta consultada en el panel."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’identifiant du nœud désigne seulement la configuration locale. Il ne prouve ni une connexion distante ni une association au compte interrogé dans le panneau."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID node hanya menunjukkan konfigurasi lokal. Ini tidak membuktikan koneksi jarak jauh atau kecocokan dengan akun kueri panel."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’ID del nodo identifica solo la configurazione locale. Non dimostra una connessione remota né la corrispondenza con l’account interrogato nel pannello."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ノード識別子はローカル設定のみを表します。リモート接続やパネル照会アカウントとの対応を証明するものではありません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "노드 식별자는 로컬 설정만 나타내며 원격 연결이나 패널 조회 계정과의 연결 관계를 증명하지 않습니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID nod hanya mengenal pasti konfigurasi setempat. Ia tidak membuktikan sambungan jauh atau padanan dengan akaun pertanyaan panel."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O ID do nó identifica apenas a configuração local. Não comprova uma conexão remota nem a correspondência com a conta consultada no painel."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "รหัสโหนดระบุเฉพาะการตั้งค่าในเครื่อง ไม่ยืนยันว่าเชื่อมต่อระยะไกลแล้วหรือว่าเชื่อมโยงกับบัญชีที่สอบถามผ่านแผงควบคุม"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mã nút chỉ xác định cấu hình cục bộ. Mã này không chứng minh kết nối từ xa hoặc sự tương ứng với tài khoản tra cứu bảng điều khiển."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节点标识仅代表本地配置，不证明远端已连接，也不证明与面板查询账户对应。"
+          }
+        }
+      }
+    }
   },
   "version": "1.0"
 }
