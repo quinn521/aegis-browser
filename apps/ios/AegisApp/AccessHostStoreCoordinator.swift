@@ -834,6 +834,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         armTimeout(operationID: operationID, deadline: deadline)
         let publisher = self.publisher
         Task { @MainActor [weak self] in
+            // A synchronous Stop/Off may run before this task gets its first turn.
+            guard self?.operations[operationID]?.state == .preparing else { return }
+            // Cancellation or owner teardown can race the awaited preparation.
+            // The task must remove its own waiter even when no operation survives.
+            defer { publisher.cancel(operationID: operationID) }
             do {
                 let result = try await publisher.prepare(
                     AccessProxyEntryPrepareRequest(operationID: operationID, deadline: deadline)

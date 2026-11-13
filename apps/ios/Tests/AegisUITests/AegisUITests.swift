@@ -1359,11 +1359,14 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
         XCTAssertEqual(toggle.value as? String, "1")
         XCTAssertTrue(toggle.isHittable)
-        toggle.tap()
-        XCTAssertEqual(toggle.value as? String, "0")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let off = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "0"), object: toggle)
+        let offResult = XCTWaiter.wait(for: [off], timeout: 5)
         screenshot("site-switch-current-off")
-        toggle.tap()
-        XCTAssertEqual(toggle.value as? String, "1")
+        guard offResult == .completed else { XCTFail("Visible current-site switch did not turn off"); return }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let on = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: toggle)
+        XCTAssertEqual(XCTWaiter.wait(for: [on], timeout: 5), .completed)
         screenshot("site-switch-current-on")
         app.navigationBars.buttons["完成"].tap()
         _ = try waitForContent(app, site: first)

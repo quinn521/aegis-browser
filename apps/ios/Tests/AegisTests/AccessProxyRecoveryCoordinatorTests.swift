@@ -6,6 +6,19 @@ import XCTest
 
 @MainActor
 final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
+    func testImmediateOffBeforePreparationTaskStartsDoesNotRetainEntry() async throws {
+        let publisher = AccessProxyEntryPublisher { generation, _ in ready(generation, port: 18_198) }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
+        let tab = try failedTab(coordinator: coordinator, url: "https://cancel-before-start.invalid/")
+        let host = try AccessSiteHost("cancel-before-start.invalid")
+        XCTAssertNotNil(coordinator.retryViaProxy(tab: tab))
+        coordinator.setProxyEnabled(false, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        await settle(seconds: 0.1) { false }
+        XCTAssertEqual(publisher.provisionCount, 0)
+        XCTAssertNil(publisher.currentEndpoint)
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+    }
+
     func testRepeatedFailedPreparationsDoNotRetainNavigationHistoryAfterClose() async throws {
         let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
