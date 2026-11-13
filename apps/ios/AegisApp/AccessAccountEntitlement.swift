@@ -117,6 +117,14 @@ struct AccessAccountClient: Sendable {
         return lease
     }
 
+    func renew(_ credential: AccessAccountCredential, lease: AccessNodeLease) async throws -> AccessNodeLease {
+        let url = endpoint.deletingLastPathComponent().appendingPathComponent("node-credentials")
+            .appendingPathComponent(lease.credentialId).appendingPathComponent("renew")
+        let body = try JSONEncoder().encode(["contextId": lease.contextId, "mode": lease.mode.rawValue])
+        let data = try await request(credential, url: url, method: "POST", body: body, accepted: [200])
+        return try lease.renewed(with: data)
+    }
+
     func revoke(_ credential: AccessAccountCredential, lease: AccessNodeLease) async throws {
         let url = endpoint.deletingLastPathComponent().appendingPathComponent("node-credentials")
             .appendingPathComponent(lease.credentialId)
@@ -131,7 +139,23 @@ struct AccessNodeLease: Decodable, Sendable {
     let accountId, periodId, credentialId, contextId, host, username, password: String
     let mode: AccessNodeMode
     let port: UInt16
-    let expiresAt: Int64
+    private(set) var expiresAt: Int64
+
+    func renewed(with data: Data, now: Date = Date()) throws -> Self {
+        struct Renewal: Decodable {
+            let accountId, periodId, credentialId, contextId: String
+            let mode: AccessNodeMode
+            let expiresAt: Int64
+        }
+        let reply = try JSONDecoder().decode(Renewal.self, from: data)
+        let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+        guard reply.accountId == accountId, reply.periodId == periodId, reply.credentialId == credentialId,
+              reply.contextId == contextId, reply.mode == mode, reply.expiresAt > expiresAt,
+              expiresAt > nowMs else { throw AccountQueryError.invalid }
+        var renewed = self
+        renewed.expiresAt = reply.expiresAt
+        return renewed
+    }
 
     func validate(account: String, period: String, context: String, mode expectedMode: AccessNodeMode,
                   now: Date = Date()) throws {

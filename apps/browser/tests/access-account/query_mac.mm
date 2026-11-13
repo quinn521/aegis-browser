@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
       }
       dispatch_semaphore_t done = dispatch_semaphore_create(0);
       AegisIssueNode([NSString stringWithUTF8String:argv[1]], NSUUID.UUID.UUIDString.lowercaseString,
-                     otr, binding, ^(NSDictionary* lease, AegisAccountBindingChange change, AegisNodeRevoke revoke) {
+                     otr, binding, ^(NSDictionary* lease, AegisAccountBindingChange change, AegisNodeRevoke revoke, AegisNodeRenew) {
         puts(lease && (!change || !change()) ? "assigned" : "unavailable");
         if (revoke) revoke();
         dispatch_semaphore_signal(done);

@@ -4,6 +4,7 @@
 #include "chrome/browser/aegis/access/access_paid_site_mac.h"
 
 #include <sys/stat.h>
+#include <algorithm>
 #include <set>
 #include <vector>
 
@@ -101,17 +102,17 @@ class SiteLease final : public base::SupportsUserData::Data {
     const bool otr = profile_->IsOffTheRecord();
     __block auto reply = base::BindPostTaskToCurrentDefault(base::BindOnce(
         [](base::WeakPtr<SiteLease> self, NSDictionary* lease,
-           AegisAccountBindingChange change, AegisNodeRevoke revoke) {
+           AegisAccountBindingChange change, AegisNodeRevoke revoke, AegisNodeRenew renew) {
           if (!self) { if (revoke) revoke(); return; }
-          self->Accept(lease, change, revoke);
+          self->Accept(lease, change, revoke, renew);
         }, weak_.GetWeakPtr()));
     AegisIssueNode(otr ? nil : base::SysUTF8ToNSString(profile_->GetPath().value()),
                    context_, otr, private_binding_,
-                   ^(NSDictionary* lease, AegisAccountBindingChange change, AegisNodeRevoke revoke) {
-                     std::move(reply).Run(lease, change, revoke);
+                   ^(NSDictionary* lease, AegisAccountBindingChange change, AegisNodeRevoke revoke, AegisNodeRenew renew) {
+                     std::move(reply).Run(lease, change, revoke, renew);
                    });
   }
-  void Accept(NSDictionary* lease, AegisAccountBindingChange change, AegisNodeRevoke revoke) {
+  void Accept(NSDictionary* lease, AegisAccountBindingChange change, AegisNodeRevoke revoke, AegisNodeRenew renew) {
     in_flight_ = false;
     if (!lease || (change_ && change_()) || (change && change())) {
       if (revoke) revoke();
@@ -119,13 +120,12 @@ class SiteLease final : public base::SupportsUserData::Data {
     }
     if (revoke_) revoke_();
     revoke_ = revoke;
+    extend_ = renew;
     change_ = change;
     expires_ = [lease[@"expiresAt"] doubleValue];
     double now = NSDate.date.timeIntervalSince1970 * 1000;
     if (now >= expires_) { Reset(); Publish(); return; }
-    // Once near the account/period boundary, wait until expiry rather than
-    // repeatedly asking for leases that can't outlive the same deadline.
-    renew_ = expires_ - now > 10000 ? expires_ - 5000 : expires_;
+    renew_ = RenewalTime(now, expires_);
     NSString* pair = [NSString stringWithFormat:@"%@:%@", lease[@"username"], lease[@"password"]];
     NSString* auth = [@"Basic " stringByAppendingString:
         [[pair dataUsingEncoding:NSUTF8StringEncoding] base64EncodedStringWithOptions:0]];
@@ -136,19 +136,35 @@ class SiteLease final : public base::SupportsUserData::Data {
     guard_.Start(FROM_HERE, base::Milliseconds(200), base::BindRepeating(
         &SiteLease::Check, weak_.GetWeakPtr()));
   }
+  static double RenewalTime(double now, double expires) {
+    return expires - std::min(5000.0, (expires - now) / 2);
+  }
   void Check() {
-    if (change_ && change_()) { Reset(); Publish(); return; }
     double now = NSDate.date.timeIntervalSince1970 * 1000;
-    if (now >= expires_ && !auth_.empty()) {
-      auth_.clear(); host_.clear(); port_ = 0; Publish();
+    if (now >= expires_ || (change_ && change_())) { Reset(); Publish(); return; }
+    if (now < renew_ || in_flight_) return;
+    in_flight_ = true;
+    __block auto reply = base::BindPostTaskToCurrentDefault(base::BindOnce(
+        &SiteLease::Renewed, weak_.GetWeakPtr()));
+    extend_(^(int64_t expiry) { std::move(reply).Run(expiry); });
+  }
+  void Renewed(int64_t expiry) {
+    in_flight_ = false;
+    double now = NSDate.date.timeIntervalSince1970 * 1000;
+    if (now >= expires_ || now >= expiry || (change_ && change_())) {
+      Reset(); Publish(); return;
     }
-    if (now >= renew_ && !in_flight_) Issue();
+    // At the session/period boundary the service may return the same final
+    // deadline. Wait for it instead of repeatedly renewing a capped grant.
+    renew_ = expiry > expires_ ? RenewalTime(now, expiry) : expiry;
+    expires_ = expiry;
   }
   void Reset() {
     weak_.InvalidateWeakPtrs();
     guard_.Stop();
     if (revoke_) revoke_();
     revoke_ = nil;
+    extend_ = nil;
     change_ = nil;
     private_binding_ = nil;
     auth_.clear(); host_.clear(); port_ = 0;
@@ -164,6 +180,7 @@ class SiteLease final : public base::SupportsUserData::Data {
   NSString* context_ = nil;
   AegisAccountBindingChange change_ = nil;
   AegisNodeRevoke revoke_ = nil;
+  AegisNodeRenew extend_ = nil;
   double expires_ = 0;
   base::RepeatingTimer guard_;
   base::WeakPtrFactory<SiteLease> weak_{this};

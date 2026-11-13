@@ -37,6 +37,25 @@ final class AccessAccountSessionTests: XCTestCase {
         }
     }
 
+    func testRenewalRejectsChangedBindingAndLateOrNonExtendingReplies() throws {
+        let lease = AccessNodeLease(accountId: "a", periodId: "p", credentialId: "id", contextId: "ctx", host: "node.invalid",
+                                    username: "id", password: "synthetic", mode: .private, port: 443, expiresAt: 5000)
+        let fields: [String: Any] = ["accountId": "a", "periodId": "p", "credentialId": "id",
+                                     "contextId": "ctx", "mode": "private", "expiresAt": 8000]
+        func renew(_ changes: [String: Any], now: TimeInterval = 4) throws -> AccessNodeLease {
+            try lease.renewed(with: JSONSerialization.data(withJSONObject: fields.merging(changes) { _, new in new }),
+                              now: Date(timeIntervalSince1970: now))
+        }
+        let renewed = try renew([:])
+        XCTAssertEqual(renewed.expiresAt, 8000)
+        XCTAssertEqual(renewed.password, lease.password)
+        for changes: [String: Any] in [["accountId": "b"], ["periodId": "q"], ["credentialId": "other"],
+                                        ["contextId": "other"], ["mode": "regular"], ["expiresAt": 5000]] {
+            XCTAssertThrowsError(try renew(changes))
+        }
+        XCTAssertThrowsError(try renew([:], now: 5))
+    }
+
     func testStatusFreshnessAndIntegerWireContract() throws {
         let complete: [String: Any] = ["entitlementAccountId": "A", "status": "active",
             "planId": "p", "periodId": "1", "periodStart": 0, "periodEnd": 30000, "expiresAt": 28000,
@@ -376,6 +395,57 @@ final class AccessAccountSessionTests: XCTestCase {
         } catch AccountQueryError.unauthorized { }
     }
 
+    func testSlowProtectedDownloadExtendsOnlyItsActiveLease() async throws {
+        try await exerciseSlowDownload(allowRenewal: true)
+    }
+
+    func testDeniedRenewalStopsSlowProtectedDownloadAtOriginalDeadline() async throws {
+        try await exerciseSlowDownload(allowRenewal: false)
+    }
+
+    private func exerciseSlowDownload(allowRenewal: Bool) async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let seconds = env["AEGIS_S3_LEASE_TTL_SECONDS"], let ttl = Int(seconds) else {
+            throw XCTSkip("Start the short-lease managed node fixture")
+        }
+        let origin = try XCTUnwrap(env[allowRenewal ? "AEGIS_S3_ORIGIN" : "AEGIS_S3_RENEW_DENIED_ORIGIN"])
+        let slow = try XCTUnwrap(env["AEGIS_S3_SLOW_URL"].flatMap(URL.init(string:)))
+        let sha = try XCTUnwrap(env["AEGIS_S3_SLOW_SHA256"])
+        let account = AccessAccountSession(client: try AccessAccountClient(origin: origin, allowSimulatorLoopback: true),
+                                           keychain: isolatedStore())
+        await account.bind(accountID: try XCTUnwrap(env["AEGIS_S3_ID"]), token: try XCTUnwrap(env["AEGIS_S3_TOKEN"]))?.value
+        defer { account.signOut() }
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.prepareForRestore(url: slow)
+        let downloads = DownloadManager(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                                        background: false)
+        defer { try? FileManager.default.removeItem(at: downloads.directory) }
+        try await waitUntil { downloads.isReady }
+        let started = ContinuousClock.now
+        let selected = await AccessSiteProxySessionStore().setProxyEnabled(true, for: tab, account: account)?.value
+        XCTAssertEqual(selected, true)
+        tab.onDownload?(slow)
+        let captured = try XCTUnwrap(browser.pendingAccessDownload)
+        let id = try await account.startDownload(.init(urls: [slow], sha256: sha), captured: captured, browser: browser, downloads: downloads)
+        try await waitUntil(timeout: .seconds(55)) {
+            downloads.items.contains { $0.id == id && [.completed, .failed, .cancelled].contains($0.state) }
+        }
+        let item = try XCTUnwrap(downloads.items.first { $0.id == id })
+        let elapsed = started.duration(to: .now)
+        if allowRenewal {
+            XCTAssertEqual(item.state, .completed)
+            XCTAssertEqual(item.sha256, sha)
+            XCTAssertGreaterThan(elapsed, .seconds(ttl * 2))
+        } else {
+            XCTAssertTrue([.failed, .cancelled].contains(item.state))
+            XCTAssertGreaterThan(item.received, 0)
+            XCTAssertNil(item.sha256)
+            XCTAssertGreaterThanOrEqual(elapsed, .seconds(ttl - 1))
+            XCTAssertLessThan(elapsed, .seconds(ttl + 4))
+        }
+    }
+
     func testClosingWindowRevokesLivePaidDownloadWhileDisposingWebKitTab() async throws {
         let env = ProcessInfo.processInfo.environment
         guard let origin = env["AEGIS_S3_ORIGIN"] else { throw XCTSkip("Start the managed TLS CONNECT/Xray fixture") }
@@ -403,8 +473,8 @@ final class AccessAccountSessionTests: XCTestCase {
         try await waitUntil { downloads.items.contains { $0.id == transfer && [.failed, .cancelled].contains($0.state) } }
     }
 
-    private func waitUntil(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(24)
+    private func waitUntil(timeout: Duration = .seconds(24), _ predicate: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
         while !predicate() {
             guard ContinuousClock.now < deadline else { throw NSError(domain: "ManagedTransferDeadline", code: 1) }
             try await Task.sleep(for: .milliseconds(40))

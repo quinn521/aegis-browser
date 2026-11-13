@@ -277,14 +277,14 @@ void AegisIssueNode(NSString* directory, NSString* context, bool isPrivate,
                             &missing, &change);
     }
     if (!UUIDValue(context) || !Nonempty(binding[@"accountId"]) || !Token(binding[@"token"]) ||
-        !Endpoint(binding[@"origin"])) { completion(nil, nil, nil); return; }
+        !Endpoint(binding[@"origin"])) { completion(nil, nil, nil, nil); return; }
     NSString* mode = isPrivate ? @"private" : @"regular";
     NodeRequest(binding, @"/v1/me/node-credentials", @"POST", @{@"mode":mode, @"contextId":context},
                 ^(NSInteger code, NSData* data) {
-      if (code != 200 && code != 201) { completion(nil, nil, nil); return; }
+      if (code != 200 && code != 201) { completion(nil, nil, nil, nil); return; }
       id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
       if (![obj isKindOfClass:NSDictionary.class] || !UUIDValue(obj[@"credentialId"])) {
-        completion(nil, nil, nil); return;
+        completion(nil, nil, nil, nil); return;
       }
       NSString* revokePath = [@"/v1/me/node-credentials/" stringByAppendingString:obj[@"credentialId"]];
       AegisNodeRevoke revoke = ^{ NodeRequest(binding, revokePath, @"DELETE", nil, ^(NSInteger, NSData*){}); };
@@ -298,9 +298,26 @@ void AegisIssueNode(NSString* directory, NSString* context, bool isPrivate,
           !Nonempty(host) || host.length > 253 || [host rangeOfCharacterFromSet:bad].location != NSNotFound ||
           !port || *port < 1 || *port > 65535 || !expiry ||
           *expiry <= NSDate.date.timeIntervalSince1970 * 1000 || (change && change())) {
-        revoke(); completion(nil, nil, nil); return;
+        revoke(); completion(nil, nil, nil, nil); return;
       }
-      completion(obj, change, revoke);
+      NSString* period = obj[@"periodId"];
+      NSString* credential = obj[@"credentialId"];
+      AegisNodeRenew renew = ^(void (^done)(int64_t)) {
+        if (change && change()) { done(0); return; }
+        NodeRequest(binding, [revokePath stringByAppendingString:@"/renew"], @"POST",
+                    @{@"mode":mode, @"contextId":context}, ^(NSInteger status, NSData* bytes) {
+          id reply = status == 200 && bytes.length
+              ? [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil] : nil;
+          if (![reply isKindOfClass:NSDictionary.class] ||
+              ![reply[@"accountId"] isEqual:binding[@"accountId"]] ||
+              ![reply[@"periodId"] isEqual:period] || ![reply[@"credentialId"] isEqual:credential] ||
+              ![reply[@"contextId"] isEqual:context] || ![reply[@"mode"] isEqual:mode]) {
+            done(0); return;
+          }
+          done(Time(reply[@"expiresAt"]).value_or(0));
+        });
+      };
+      completion(obj, change, revoke, renew);
     });
   });
 }

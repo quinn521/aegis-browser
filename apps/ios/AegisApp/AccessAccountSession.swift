@@ -162,6 +162,7 @@ private final class AccessTabGrant {
     var credential: AccessAccountCredential?
     var transfer: AccessDownloadTransport?
     var expiry: Task<Void, Never>?
+    var renewal: Task<Void, Never>?
     var epoch = UUID()
     var preparation: Task<AccessNodeLease, Error>?
 
@@ -178,6 +179,8 @@ private final class AccessTabGrant {
         transfer = nil
         expiry?.cancel()
         expiry = nil
+        renewal?.cancel()
+        renewal = nil
         if let client, let credential, let lease {
             Task { try? await client.revoke(credential, lease: lease) }
         }
@@ -223,6 +226,9 @@ extension AccessAccountSession {
             guard let current = try keychain.read(), current.valid else { throw AccountQueryError.unauthorized }
             account = current
         }
+        if let lease = grant.lease, lease.expiresAt <= Int64(Date().timeIntervalSince1970 * 1000) || grant.credential != account {
+            grant.invalidate(client: client, clearAuthorization: false)
+        }
         let epoch = grant.epoch
         func current() throws -> Bool {
             guard self.grants[tab] === grant, grant.epoch == epoch else { return false }
@@ -247,19 +253,52 @@ extension AccessAccountSession {
             }
             grant.transfer?.invalidate()
             grant.transfer = nil
-            grant.expiry?.cancel()
             grant.credential = account
-            grant.lease = lease
-            grant.expiry = Task { [weak grant] in
-                let delay = max(0, lease.expiresAt - Int64(Date().timeIntervalSince1970 * 1000))
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard !Task.isCancelled, let grant, grant.lease?.credentialId == lease.credentialId else { return }
-                grant.invalidate(client: client, clearAuthorization: false)
-            }
+            install(lease, on: grant, client: client)
             return lease
         }
         grant.preparation = preparation
         return try await preparation.value
+    }
+
+    private func install(_ lease: AccessNodeLease, on grant: AccessTabGrant, client: AccessAccountClient) {
+        grant.lease = lease
+        grant.expiry?.cancel()
+        grant.expiry = Task { [weak grant] in
+            let delay = max(0, lease.expiresAt - Int64(Date().timeIntervalSince1970 * 1000))
+            try? await Task.sleep(for: .milliseconds(delay))
+            guard !Task.isCancelled, let grant, grant.lease?.credentialId == lease.credentialId,
+                  grant.lease?.expiresAt == lease.expiresAt else { return }
+            grant.invalidate(client: client, clearAuthorization: false)
+        }
+    }
+
+    private func renewWhileDownloading(_ grant: AccessTabGrant, tab: UUID) {
+        guard let client, grant.renewal == nil, let account = grant.credential else { return }
+        let epoch = grant.epoch
+        func ownsCredential() throws -> Bool {
+            if grant.mode == .private { return grant.privateCredential == account }
+            return try keychain.read() == account
+        }
+        grant.renewal = Task { [weak self, weak grant] in
+            guard let self, let grant else { return }
+            defer { if grant.epoch == epoch { grant.renewal = nil } }
+            while let lease = grant.lease, grant.epoch == epoch, grants[tab] === grant {
+                let remaining = lease.expiresAt - Int64(Date().timeIntervalSince1970 * 1000)
+                guard remaining > 0 else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(remaining / 2))
+                    guard grant.transfer?.hasRunningTransfers == true, grant.epoch == epoch,
+                          try ownsCredential() else { return }
+                    let renewed = try await client.renew(account, lease: lease)
+                    guard !Task.isCancelled, grants[tab] === grant, grant.epoch == epoch,
+                          grant.lease?.credentialId == lease.credentialId,
+                          lease.expiresAt > Int64(Date().timeIntervalSince1970 * 1000),
+                          try ownsCredential() else { return }
+                    install(renewed, on: grant, client: client)
+                } catch { return } // The independent expiry timer still closes the transport.
+            }
+        }
     }
 
     func startDownload(_ plan: DownloadPlan, captured: BrowserAccessDownload?,
@@ -314,7 +353,9 @@ extension AccessAccountSession {
         config.urlCredentialStorage = nil
         config.urlCache = nil
         config.waitsForConnectivity = false
-        let session = AccessDownloadTransport(configuration: config, targetHost: grant.host, delegate: downloadDelegate)
+        let session = AccessDownloadTransport(configuration: config, targetHost: grant.host, delegate: downloadDelegate) { [weak self, weak grant] in
+            if let grant { self?.renewWhileDownloading(grant, tab: tab) }
+        }
         grant.transfer = session
         return session
     }

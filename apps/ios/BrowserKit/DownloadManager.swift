@@ -10,9 +10,21 @@ public final class AccessDownloadTransport {
     fileprivate private(set) var session: URLSession?
     fileprivate let targetHost: String
 
-    public init(configuration: URLSessionConfiguration, targetHost: String, delegate: URLSessionDownloadDelegate) {
+    private let activeTasks = NSHashTable<URLSessionTask>.weakObjects()
+    private let onStart: () -> Void
+
+    public var hasRunningTransfers: Bool { activeTasks.allObjects.contains { $0.state == .running } }
+
+    public init(configuration: URLSessionConfiguration, targetHost: String, delegate: URLSessionDownloadDelegate,
+                onStart: @escaping () -> Void = {}) {
+        self.onStart = onStart
         self.targetHost = targetHost
         session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: .main)
+    }
+
+    fileprivate func didStart(_ task: URLSessionTask) {
+        activeTasks.add(task)
+        onStart()
     }
 
     public func invalidate() {
@@ -894,6 +906,7 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
         task.taskDescription = description(item)
         tasks[item.id] = task
         startTransfer(task)
+        accessTransfers[item.id]?.didStart(task)
     }
 
     public func setTransferPreferences(_ value: DownloadTransferPreferences) throws {

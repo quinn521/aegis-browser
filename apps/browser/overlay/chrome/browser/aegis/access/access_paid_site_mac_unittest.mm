@@ -13,6 +13,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_run_loop_timeout.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
@@ -208,10 +209,15 @@ TEST(PaidSiteMac, ExplicitLocalRouteAndBypassCannotReplaceSelectedAccountSite) {
 
 // Optional wire fixture: the target accepts only traffic owned by its Xray
 // peer and returns a known payload. No process-global trust changes.
-TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
+enum class WireScenario { kShortRequest, kSlow, kDenyRenewal, kSignOut };
+
+void RunAccountWire(WireScenario scenario) {
   NSDictionary* env = NSProcessInfo.processInfo.environment;
   if (!env[@"AEGIS_S3_HTTPS_URL"]) GTEST_SKIP() << "requires controlled node fixture";
   content::BrowserTaskEnvironment task(base::test::TaskEnvironment::MainThreadType::IO);
+  const bool slow = scenario != WireScenario::kShortRequest;
+  if (slow && !env[@"AEGIS_S3_LEASE_TTL_SECONDS"]) GTEST_SKIP() << "requires short lease fixture";
+  base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Minutes(1));
   base::ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
   TestingProfile::Builder profile_builder;
@@ -219,7 +225,7 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
   auto profile = profile_builder.Build();
   auto path = temp.GetPath().AppendASCII("AegisAccessAccount.json");
   NSData* binding = [NSJSONSerialization dataWithJSONObject:@{
-      @"origin":env[@"AEGIS_S3_ORIGIN"], @"token":env[@"AEGIS_S3_TOKEN"],
+      @"origin":env[scenario == WireScenario::kDenyRenewal ? @"AEGIS_S3_RENEW_DENIED_ORIGIN" : @"AEGIS_S3_ORIGIN"], @"token":env[@"AEGIS_S3_TOKEN"],
       @"accountId":env[@"AEGIS_S3_ID"], @"generation":NSUUID.UUID.UUIDString }
       options:0 error:nil];
   ASSERT_TRUE(base::WriteFile(path, base::SysNSStringToUTF8([[NSString alloc] initWithData:binding encoding:NSUTF8StringEncoding])));
@@ -233,7 +239,7 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
       std::move(params.initial_custom_proxy_config), std::move(params.custom_proxy_config_client_receiver),
       mojo::PendingRemote<network::mojom::CustomProxyConnectionObserver>()));
   auto network = builder->Build();
-  GURL configured_url(base::SysNSStringToUTF8(env[@"AEGIS_S3_HTTPS_URL"]));
+  GURL configured_url(base::SysNSStringToUTF8(env[slow ? @"AEGIS_S3_SLOW_URL" : @"AEGIS_S3_HTTPS_URL"]));
   const std::string site(configured_url.host());
   const std::string rooted_host = site + ".";
   GURL::Replacements rooted;
@@ -253,8 +259,37 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
   net::TestDelegate result;
   auto request = network->CreateRequest(url, net::DEFAULT_PRIORITY, &result,
                                         TRAFFIC_ANNOTATION_FOR_TESTS, net::handles::kInvalidNetworkHandle);
+  const auto start = base::TimeTicks::Now();
   request->Start();
-  result.RunUntilComplete();
+  if (scenario == WireScenario::kSignOut) {
+    base::RunLoop finished;
+    result.set_on_complete(finished.QuitClosure());
+    ASSERT_TRUE(base::test::RunUntil([&] { return !result.data_received().empty(); }));
+    ASSERT_TRUE(base::DeleteFile(path));
+    finished.Run();
+  } else {
+    result.RunUntilComplete();
+  }
+  if (slow) {
+    const auto elapsed = base::TimeTicks::Now() - start;
+    const auto ttl = base::Seconds([env[@"AEGIS_S3_LEASE_TTL_SECONDS"] intValue]);
+    ASSERT_EQ(200, request->GetResponseCode());
+    if (scenario == WireScenario::kSlow) {
+      EXPECT_GT(elapsed, ttl * 2);
+      EXPECT_EQ(net::OK, result.request_status());
+      EXPECT_EQ(base::HexEncodeLower(crypto::hash::Sha256(result.data_received())),
+                base::SysNSStringToUTF8(env[@"AEGIS_S3_SLOW_SHA256"]));
+      EXPECT_EQ(AccountNodeStatus::kAssigned, AccountNodeForSite(profile.get(), site));
+    } else {
+      EXPECT_NE(net::OK, result.request_status());
+      EXPECT_GT(result.data_received().size(), 0u);
+      EXPECT_LT(result.data_received().size(), 409600u);
+      EXPECT_LT(elapsed, ttl * 2);
+      EXPECT_EQ(AccountNodeStatus::kUnavailable, AccountNodeForSite(profile.get(), site));
+    }
+    ToggleAccountNodeSite(profile.get(), site);
+    return;
+  }
   ASSERT_EQ(net::OK, result.request_status());
   ASSERT_EQ(200, request->GetResponseCode());
   EXPECT_EQ(base::HexEncodeLower(crypto::hash::Sha256(result.data_received())),
@@ -324,6 +359,18 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
   EXPECT_EQ(200, restored->GetResponseCode());
   ToggleAccountNodeSite(profile.get(), "second.example");
   ToggleAccountNodeSite(profile.get(), site);
+}
+TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
+  RunAccountWire(WireScenario::kShortRequest);
+}
+TEST(PaidSiteMac, ActiveDownloadSurvivesLeaseRenewals) {
+  RunAccountWire(WireScenario::kSlow);
+}
+TEST(PaidSiteMac, DeniedRenewalStopsActiveDownload) {
+  RunAccountWire(WireScenario::kDenyRenewal);
+}
+TEST(PaidSiteMac, SignOutRevokesActiveDownload) {
+  RunAccountWire(WireScenario::kSignOut);
 }
 }  // namespace
 }  // namespace aegis::access
