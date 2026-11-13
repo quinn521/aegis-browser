@@ -414,7 +414,12 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
     if (UseAccountNode(controller, snap, aegis::access::AccountNodeForSite(
             browser_->GetProfile(), snap.host.value))) {
       auto weak = weak_.GetWeakPtr();
-      aegis::access::ToggleAccountNodeSite(browser_->GetProfile(), snap.host.value);
+      if (snap.toggle_on) {
+        controller->RequestHostProxySession(snap.host, false, base::BindOnce(
+            &aegis::access::DisableAccountNodeSite, browser_->GetProfile(), snap.host.value));
+      } else if (snap.connection != aegis::access::AccessSiteConnectionState::kConnecting) {
+        aegis::access::ToggleAccountNodeSite(browser_->GetProfile(), snap.host.value);
+      }
       if (weak) weak->RefreshSoon();
       return;
     }

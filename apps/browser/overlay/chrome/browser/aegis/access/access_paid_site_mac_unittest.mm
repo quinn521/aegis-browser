@@ -28,8 +28,101 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
+#include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
+#include "services/network/test/test_url_loader_client.h"
+#include "services/network/test/test_url_loader_factory.h"
+#include "base/test/test_future.h"
+
 namespace aegis::access {
 namespace {
+class HeldAccountConfig : public network::mojom::CustomProxyConfigClient {
+ public:
+  explicit HeldAccountConfig(network::mojom::NetworkContextParams& params)
+      : receiver(this, std::move(params.custom_proxy_config_client_receiver)) {}
+  void OnCustomProxyConfigUpdated(network::mojom::CustomProxyConfigPtr,
+                                  OnCustomProxyConfigUpdatedCallback callback) override {
+    replies.push_back(std::move(callback));
+  }
+  void OnAegisAccessPolicyPublished(network::mojom::AegisAccessPolicyPublicationMetadataPtr,
+                                    OnAegisAccessPolicyPublishedCallback callback) override {
+    std::move(callback).Run(true);
+  }
+  std::vector<OnCustomProxyConfigUpdatedCallback> replies;
+  mojo::Receiver<network::mojom::CustomProxyConfigClient> receiver;
+};
+
+TEST(PaidSiteMac, BrowserDispatchWaitsForCurrentConfigOnEveryPipe) {
+  content::BrowserTaskEnvironment task;
+  auto profile = TestingProfile::Builder().Build();
+  network::mojom::NetworkContextParams params;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
+  HeldAccountConfig first(params);
+  auto* transport = AccessNetworkContextTransport::Get(profile.get());
+  const auto owner = *transport->OwnerForPartition(aegis_access::ChannelNamespace::kDev, {});
+  network::TestURLLoaderFactory origin;
+  mojo::PendingRemote<network::mojom::URLLoaderFactory> target;
+  origin.Clone(target.InitWithNewPipeAndPassReceiver());
+  mojo::Remote<network::mojom::URLLoaderFactory> requests;
+  AccessProxyingURLLoaderFactory wrapper(profile.get(), content::FrameTreeNodeId(1), {}, {}, nullptr, owner, {},
+      requests.BindNewPipeAndPassReceiver(), std::move(target), {}, base::DoNothing());
+  auto dispatch = [&](const char* address) {
+    network::ResourceRequest request;
+    request.url = GURL(address);
+    origin.AddResponse(address, "origin received request");
+    mojo::Remote<network::mojom::URLLoader> loader;
+    network::TestURLLoaderClient client;
+    requests->CreateLoaderAndStart(loader.BindNewPipeAndPassReceiver(), 1, 0, request,
+        client.CreateRemote(), net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
+    client.RunUntilComplete();
+    return client.completion_status().error_code;
+  };
+  const char* selected = "https://paid.example./";
+  ASSERT_TRUE(transport->SetAccountNodeSites({"paid.example"}, "", 0, ""));
+  EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, dispatch(selected));
+  EXPECT_EQ(net::OK, dispatch("https://sub.paid.example./"));
+  ASSERT_EQ(first.replies.size(), 1u);
+  ASSERT_TRUE(transport->SetAccountNodeSites({"paid.example"}, "node.test", 443, "Basic test"));
+  std::move(first.replies[0]).Run();
+  task.RunUntilIdle();
+  EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, dispatch(selected));
+  network::mojom::NetworkContextParams next;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &next));
+  HeldAccountConfig second(next);
+  task.RunUntilIdle();
+  ASSERT_EQ(first.replies.size(), 3u);
+  ASSERT_EQ(second.replies.size(), 1u);
+  std::move(first.replies[1]).Run();
+  std::move(first.replies[2]).Run();
+  task.RunUntilIdle();
+  EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, dispatch(selected));
+  std::move(second.replies[0]).Run();
+  task.RunUntilIdle();
+  EXPECT_EQ(net::OK, dispatch(selected));
+  ASSERT_TRUE(transport->SetAccountNodeSites({}, "", 0, ""));
+  task.RunUntilIdle();
+  ASSERT_EQ(first.replies.size(), 4u);
+  std::move(first.replies.back()).Run();
+  second.receiver.reset();
+  task.RunUntilIdle();
+  EXPECT_EQ(net::ERR_BLOCKED_BY_CLIENT, dispatch(selected));
+}
+
+TEST(PaidSiteMac, PaidWebsiteRejectsLocalErrorPageRetryForAliases) {
+  content::BrowserTaskEnvironment task;
+  auto profile = TestingProfile::Builder().Build();
+  auto* transport = AccessNetworkContextTransport::GetOrCreate(profile.get());
+  ASSERT_TRUE(transport->SetAccountNodeSites({"news.example.com"}, "", 0, ""));
+  auto* controller = AccessSiteProxyBubbleController::GetOrCreate(profile.get());
+  for (const char* url : {"https://news.example.com./", "https://cdn.example.com/"}) {
+    base::test::TestFuture<bool> result;
+    controller->RequestFailedNavigationProxy(GURL(url), result.GetCallback());
+    EXPECT_FALSE(result.Get());
+    EXPECT_EQ(AccessSiteConnectionState::kIdle,
+              controller->SnapshotForCommittedUrl(GURL(url)).connection);
+  }
+}
+
 TEST(PaidSiteMac, UnboundPrivateWindowPreservesConfiguredLocalNode) {
   content::BrowserTaskEnvironment task;
   base::ScopedTempDir temp;
@@ -177,7 +270,10 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
   }
   for (const auto& [id, bytes] : socket_bytes) EXPECT_FALSE(bytes.contains(*authorization));
   ToggleAccountNodeSite(profile.get(), "second.example");
-  EXPECT_EQ(AccountNodeStatus::kAssigned, AccountNodeForSite(profile.get(), "second.example"));
+  EXPECT_EQ(AccountNodeStatus::kAcquiring, AccountNodeForSite(profile.get(), "second.example"));
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kAssigned;
+  }));
   ToggleAccountNodeSite(profile.get(), "second.example");
   EXPECT_EQ(AccountNodeStatus::kAssigned, AccountNodeForSite(profile.get(), site));
   ASSERT_TRUE(base::DeleteFile(path));

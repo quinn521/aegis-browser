@@ -376,6 +376,33 @@ final class AccessAccountSessionTests: XCTestCase {
         } catch AccountQueryError.unauthorized { }
     }
 
+    func testClosingWindowRevokesLivePaidDownloadWhileDisposingWebKitTab() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let origin = env["AEGIS_S3_ORIGIN"] else { throw XCTSkip("Start the managed TLS CONNECT/Xray fixture") }
+        let slow = try XCTUnwrap(env["AEGIS_S3_SLOW_URL"].flatMap(URL.init(string:)))
+        let account = AccessAccountSession(client: try AccessAccountClient(origin: origin, allowSimulatorLoopback: true),
+                                           keychain: isolatedStore())
+        await account.bind(accountID: try XCTUnwrap(env["AEGIS_S3_ID"]), token: try XCTUnwrap(env["AEGIS_S3_TOKEN"]))?.value
+        defer { account.signOut() }
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.prepareForRestore(url: slow)
+        let prepared = await AccessSiteProxySessionStore().setProxyEnabled(true, for: tab, account: account)?.value
+        XCTAssertEqual(prepared, true)
+        let downloads = DownloadManager(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                                        background: false)
+        defer { try? FileManager.default.removeItem(at: downloads.directory) }
+        try await waitUntil { downloads.isReady }
+        let route = try await account.downloadSession(for: tab.id, privateMode: false, target: slow, downloadDelegate: downloads)
+        let transfer = try downloads.start(.init(urls: [slow]), accessSession: route)
+        try await waitUntil { downloads.items.contains { $0.id == transfer && $0.received > 0 } }
+        browser.closeWindow()
+        XCTAssertTrue(tab.isDisposed)
+        XCTAssertFalse(account.hasSelectedProxy(for: tab.id, host: try XCTUnwrap(slow.host)))
+        XCTAssertThrowsError(try downloads.start(.init(urls: [slow]), accessSession: route))
+        try await waitUntil { downloads.items.contains { $0.id == transfer && [.failed, .cancelled].contains($0.state) } }
+    }
+
     private func waitUntil(_ predicate: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(24)
         while !predicate() {

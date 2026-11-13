@@ -56,7 +56,11 @@ class SiteLease final : public base::SupportsUserData::Data {
   ~SiteLease() override { if (revoke_) revoke_(); }
   AccountNodeStatus Status(const std::string& site) const {
     if (!sites_.contains(site)) return AccountNodeStatus::kOff;
-    if (!auth_.empty()) return AccountNodeStatus::kAssigned;
+    if (!auth_.empty()) {
+      auto* transport = AccessNetworkContextTransport::Get(profile_);
+      return transport && !transport->AccountDispatchBlocked(GURL("https://" + site + "/"))
+          ? AccountNodeStatus::kAssigned : AccountNodeStatus::kAcquiring;
+    }
     return in_flight_ ? AccountNodeStatus::kAcquiring : AccountNodeStatus::kUnavailable;
   }
   bool HasSites() const { return !sites_.empty(); }
@@ -176,6 +180,10 @@ bool UsesAccountNode(Profile* profile, bool local_node_available) {
 AccountNodeStatus AccountNodeForSite(Profile* profile, const std::string& site) {
   auto* lease = static_cast<SiteLease*>(profile->GetUserData(kLeaseKey));
   return lease ? lease->Status(site) : AccountNodeStatus::kOff;
+}
+void DisableAccountNodeSite(Profile* profile, const std::string& site) {
+  auto* lease = static_cast<SiteLease*>(profile->GetUserData(kLeaseKey));
+  if (lease && lease->Status(site) != AccountNodeStatus::kOff) lease->Toggle(site);
 }
 void ToggleAccountNodeSite(Profile* profile, const std::string& site) {
   if (!aegis::IsAegisProfileSupported(profile) || site.empty()) return;

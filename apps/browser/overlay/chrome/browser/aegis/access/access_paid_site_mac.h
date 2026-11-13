@@ -9,6 +9,7 @@ namespace aegis::access {
 enum class AccountNodeStatus { kOff, kAcquiring, kAssigned, kUnavailable };
 bool UsesAccountNode(Profile* profile, bool local_node_available = false);
 AccountNodeStatus AccountNodeForSite(Profile* profile, const std::string& site);
+void DisableAccountNodeSite(Profile* profile, const std::string& site);
 void ToggleAccountNodeSite(Profile* profile, const std::string& site);
 }  // namespace aegis::access
 #endif

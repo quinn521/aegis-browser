@@ -4,11 +4,12 @@ import XCTest
 @MainActor
 final class WebsiteEnhancementUITests: XCTestCase {
   override func setUpWithError() throws { continueAfterFailure = false }
-  private func launch(reset: Bool = true) -> XCUIApplication {
+  private func launch(reset: Bool = true, accountOrigin: String? = nil) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments =
       ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
       + (reset ? ["--ui-testing-enhancements-reset"] : [])
+    if let accountOrigin { app.launchEnvironment["AEGIS_ACCOUNT_SIM_ORIGIN"] = accountOrigin }
     app.launch()
     return app
   }
@@ -65,6 +66,49 @@ final class WebsiteEnhancementUITests: XCTestCase {
     XCTAssertEqual(app.switches["site-copy"].value as? String, "0")
     capture("私密设置没有继承")
   }
+
+  func testAccessIntentIsolatedBetweenOrdinaryAndPrivateStores() {
+    let app = launch()
+    navigate(app, "http://127.0.0.1:8768/enhancements/page")
+    XCTAssertTrue(app.webViews.staticTexts["网站增强验收文章"].firstMatch.waitForExistence(timeout: 12))
+    app.buttons["page-protection"].tap()
+    let toggle = app.switches["access-site-proxy-toggle"]
+    XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+    toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+    XCTAssertEqual(toggle.value as? String, "1")
+    app.navigationBars["当前网站"].buttons["完成"].tap()
+    app.buttons["browser-more"].tap()
+    let modeMenu = app.descendants(matching: .any).matching(
+      NSPredicate(format: "identifier == %@ OR label == %@", "profile-menu", "普通")
+    ).firstMatch
+    XCTAssertTrue(modeMenu.waitForExistence(timeout: 5), app.debugDescription)
+    modeMenu.tap()
+    app.buttons["私密"].tap()
+    navigate(app, "http://127.0.0.1:8768/enhancements/page")
+    XCTAssertTrue(app.webViews.staticTexts["网站增强验收文章"].firstMatch.waitForExistence(timeout: 12))
+    app.buttons["page-protection"].tap()
+    let privateToggle = app.switches["access-site-proxy-toggle"]
+    XCTAssertTrue(privateToggle.waitForExistence(timeout: 5))
+    XCTAssertEqual(privateToggle.value as? String, "0")
+    capture("私密代理意图没有继承")
+  }
+  func testPaidDownloadSelectionIsIndependentOfWebsiteRecovery() {
+    let app = launch(accountOrigin: "http://127.0.0.1:8768")
+    navigate(app, "http://127.0.0.1:8768/enhancements/page")
+    XCTAssertTrue(app.webViews.staticTexts["网站增强验收文章"].firstMatch.waitForExistence(timeout: 12))
+    app.buttons["page-protection"].tap()
+    let recovery = app.switches["access-site-proxy-toggle"]
+    let download = app.switches["access-account-site-download-toggle"]
+    XCTAssertTrue(download.waitForExistence(timeout: 5))
+    XCTAssertEqual(recovery.value as? String, "0")
+    download.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+    XCTAssertEqual(download.value as? String, "1")
+    XCTAssertEqual(recovery.value as? String, "0")
+    recovery.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+    XCTAssertEqual(recovery.value as? String, "1")
+    XCTAssertEqual(download.value as? String, "1")
+  }
+
   func testScriptDraftTrialEnableAndRecovery() {
     let app = launch()
     navigate(app, "http://127.0.0.1:8768/enhancements/page")

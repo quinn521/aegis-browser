@@ -8,21 +8,29 @@ import SwiftUI
 /// connection is used — never “direct success” without verification.
 struct AccessSiteProxyToggleView: View {
     @ObservedObject var store: AccessSiteProxySessionStore
-    @ObservedObject var tab: BrowserTab
+    let url: URL?
+    var tab: BrowserTab?
+
     @EnvironmentObject private var account: AccessAccountSession
     @State private var authorizing = false
     @State private var accountID = ""
     @State private var sessionToken = ""
-    private var url: URL? { tab.url }
-
-    private func select(_ enabled: Bool) {
-        store.setProxyEnabled(enabled, for: tab, account: account, privateAccount: accountID, privateToken: sessionToken)
-    }
+    @State private var authorizationHost: String?
 
     @Environment(\.locale) private var localizationLocale
 
     private var snapshot: AccessSiteProxyToggleSnapshot {
-        store.snapshot(for: url)
+        if let tab { return store.snapshot(for: tab) }
+        return store.snapshot(for: url)
+    }
+
+    private var paidHost: AccessSiteHost? {
+        AccessSiteProxyToggleModel.resolveTrustedHost(from: tab?.committedMainFrameURL ?? tab?.url)
+    }
+
+    private var attachment: AccessProxyAttachment {
+        guard let tab else { return .notAttached }
+        return store.attachment(tab: tab, url: url)
     }
 
     var body: some View {
@@ -40,31 +48,99 @@ struct AccessSiteProxyToggleView: View {
             }
 
             Toggle(
-                "使用本服务代理",
+                AccessAutoRecoveryCopy.toggleTitle,
                 isOn: Binding(
-                    get: { snap.host.map { account.hasSelectedProxy(for: tab.id, host: $0.rawValue) } ?? false },
+                    get: { snap.autoRecoveryEnabled || snap.toggleOn },
                     set: { enabled in
-                        if enabled && tab.profile.isPrivate && account.supportsAccountAuthorization { authorizing = true } else { select(enabled) }
+                        guard let tab else { return }
+                        if enabled {
+                            _ = store.setAutoRecoveryEnabled(true, for: tab)
+                        } else if snap.autoRecoveryEnabled {
+                            // Auto-off must keep an independently armed manual proxy.
+                            _ = store.setAutoRecoveryEnabled(false, for: tab)
+                        } else {
+                            store.setProxyEnabled(false, for: tab)
+                        }
                     }
                 )
             )
-            .disabled(!snap.toggleEnabled)
+            .disabled(!snap.toggleEnabled || tab == nil)
             .accessibilityIdentifier("access-site-proxy-toggle")
-            .sheet(isPresented: $authorizing, onDismiss: { accountID = ""; sessionToken = "" }) {
-                NavigationStack {
-                    Form {
-                        TextField("服务账户", text: $accountID).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        SecureField("服务账户会话令牌", text: $sessionToken)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
-                    }
-                    .localizedNavigationTitle("授权本次私密会话")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("取消") { authorizing = false } }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("确认") { select(true); authorizing = false }
-                                .disabled(accountID.isEmpty || sessionToken.isEmpty)
+            if let tab, account.supportsAccountAuthorization {
+                Toggle(
+                    "通过账户代理下载本站文件",
+                    isOn: Binding(
+                        get: { paidHost.map { account.hasSelectedProxy(for: tab.id, host: $0.rawValue) } ?? false },
+                        set: { enabled in
+                            if enabled && tab.profile.isPrivate {
+                                authorizationHost = paidHost?.rawValue
+                                authorizing = true
+                            } else {
+                                store.setProxyEnabled(enabled, for: tab, account: account)
+                            }
+                        }
+                    )
+                )
+                .disabled(paidHost == nil)
+                .accessibilityIdentifier("access-account-site-download-toggle")
+                .sheet(isPresented: $authorizing, onDismiss: { accountID = ""; sessionToken = ""; authorizationHost = nil }) {
+                    NavigationStack {
+                        Form {
+                            TextField("服务账户", text: $accountID).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            SecureField("服务账户会话令牌", text: $sessionToken)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
+                        }
+                        .localizedNavigationTitle("授权本次私密会话")
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) { Button("取消") { authorizing = false } }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("确认") {
+                                    if !tab.isDisposed, let authorizationHost, authorizationHost == paidHost?.rawValue {
+                                        store.setProxyEnabled(true, for: tab, account: account, privateAccount: accountID, privateToken: sessionToken)
+                                    }
+                                    authorizing = false
+                                }
+                                    .disabled(accountID.isEmpty || sessionToken.isEmpty)
+                            }
                         }
                     }
+                }
+            }
+            if let line = snap.autoRecoveryLine {
+                Text(line)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("access-site-auto-recovery-status")
+            }
+            if !snap.debugMemberHosts.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("组成员（只读）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(snap.debugMemberHosts, id: \.self) { member in
+                        Text(member)
+                            .font(.footnote.monospaced())
+                            .textSelection(.enabled)
+                    }
+                }
+                .accessibilityIdentifier("access-site-debug-members")
+            }
+            if snap.showsDebugSiteGroupDetails {
+                Button(snap.probeBusy ? "正在探测…" : "探测候选（建议）") {
+                    guard let tab else { return }
+                    _ = store.runAutoRecoveryProbe(for: tab)
+                }
+                .disabled(tab == nil || snap.probeBusy || !snap.autoRecoveryEnabled)
+                .accessibilityIdentifier("access-site-probe-button")
+                if !snap.probeSuggestionLines.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(snap.probeSuggestionLines, id: \.self) { line in
+                            Text(line)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("access-site-probe-suggestions")
                 }
             }
 
@@ -77,6 +153,15 @@ struct AccessSiteProxyToggleView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("access-site-proxy-connection")
+                if let attachment = AccessSiteProxyToggleModel.attachmentLine(
+                    for: attachment,
+                    intent: snap.intent
+                ) {
+                    Text(attachment)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("access-site-proxy-attachment")
+                }
                 if let reason = snap.failureReason, !reason.isEmpty {
                     Text(reason)
                         .font(.footnote)
@@ -87,7 +172,9 @@ struct AccessSiteProxyToggleView: View {
         } header: {
             Text("本站代理")
         } footer: {
-            Text("开关表示本站是否使用本服务代理；连接状态单独显示，开启不等于已连通。关闭后使用浏览器原有连接。")
+            Text(AccessAutoRecoveryCopy.explanation)
+                .font(.footnote)
+            Text(AccessAutoRecoveryCopy.scopeWarning)
                 .font(.footnote)
         }
     }

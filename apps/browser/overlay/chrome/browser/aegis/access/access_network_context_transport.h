@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -125,6 +126,8 @@ class AccessNetworkContextTransport
       base::OnceCallback<void(bool)> completion);
 
 #if BUILDFLAG(IS_MAC)
+  bool AccountDispatchBlocked(const GURL& url) const;
+  const std::vector<std::string>& AccountSites() const;
   // Default partition only. A selected site with no credential stays blocked.
   bool SetAccountNodeSites(const std::vector<std::string>& sites, const std::string& host,
                           uint16_t port, const std::string& authorization);
@@ -201,6 +204,9 @@ class AccessNetworkContextTransport
     std::vector<std::string> exact_hosts;
 #if BUILDFLAG(IS_MAC)
     network::mojom::CustomProxyConfigPtr account_config;
+    std::vector<std::string> account_sites;
+    std::set<std::string> account_fenced;
+    uint64_t account_publication = 0;
 #endif
     mojo::RemoteSet<network::mojom::CustomProxyConfigClient> clients;
     uint64_t clients_generation = 0;
@@ -236,6 +242,9 @@ class AccessNetworkContextTransport
       const aegis_access::PolicyPublicationIdentity& identity,
       const aegis_access::OwnershipKey& owner,
       base::OnceCallback<void(bool)> all_clients_settled);
+#if BUILDFLAG(IS_MAC)
+  void PublishAccountConfig(PartitionState& state);
+#endif
   void Broadcast(PartitionState& state);
   void PublishPrivateContext(const aegis_access::OwnershipKey& owner,
                              const std::string& incarnation);

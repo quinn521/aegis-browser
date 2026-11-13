@@ -10,6 +10,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/functional/bind.h"
+#include "base/no_destructor.h"
 #include "base/functional/callback_helpers.h"
 #include "base/uuid.h"
 #include "base/task/sequenced_task_runner.h"
@@ -94,6 +95,12 @@ AccessNetworkContextTransport* AccessNetworkContextTransport::GetOrCreate(
   auto transport = std::unique_ptr<AccessNetworkContextTransport>(
       new AccessNetworkContextTransport());
   auto* result = transport.get();
+#if BUILDFLAG(IS_MAC)
+  profile->SetAccountProxyDispatchGate(base::BindRepeating(
+      [](base::WeakPtr<AccessNetworkContextTransport> self, const GURL& url) {
+        return !self || self->AccountDispatchBlocked(url);
+      }, result->weak_factory_.GetWeakPtr()));
+#endif
   profile->SetUserData(kTransportUserDataKey, std::move(transport));
   return result;
 }
@@ -158,6 +165,10 @@ bool AccessNetworkContextTransport::ConfigureNetworkContext(
   }
   ++state.clients_generation;
   state.clients.Add(std::move(client));
+#if BUILDFLAG(IS_MAC)
+  if (!state.account_fenced.empty() || !state.account_sites.empty())
+    transport->PublishAccountConfig(state);
+#endif
   return true;
 }
 
@@ -221,15 +232,42 @@ bool AccessNetworkContextTransport::PublishProxySelection(
 }
 
 #if BUILDFLAG(IS_MAC)
+const std::vector<std::string>& AccessNetworkContextTransport::AccountSites() const {
+  static const base::NoDestructor<std::vector<std::string>> empty;
+  const auto it = partitions_.find("<default>");
+  return it == partitions_.end() ? *empty : it->second.account_sites;
+}
+
+bool AccessNetworkContextTransport::AccountDispatchBlocked(const GURL& url) const {
+  auto it = partitions_.find("<default>");
+  if (it == partitions_.end()) return false;
+  std::string host(url.host());
+  while (!host.empty() && host.back() == '.') host.pop_back();
+  return it->second.account_fenced.contains(host);
+}
+
+void AccessNetworkContextTransport::PublishAccountConfig(PartitionState& state) {
+  const auto revision = ++state.account_publication;
+  if (state.clients.empty()) return;
+  auto config = BuildConfig(state);
+  if (!config) return;
+  UpdateClientConfigs(state, config, base::BindOnce(
+      [](base::WeakPtr<AccessNetworkContextTransport> self, uint64_t revision, bool accepted) {
+        if (!self || !accepted) return;
+        auto& current = self->partitions_.at("<default>");
+        if (current.account_publication == revision) current.account_fenced.clear();
+      }, weak_factory_.GetWeakPtr(), revision));
+}
+
 bool AccessNetworkContextTransport::SetAccountNodeSites(
     const std::vector<std::string>& sites, const std::string& host, uint16_t port,
     const std::string& authorization) {
-  auto found = partitions_.find("<default>");
-  if (found == partitions_.end()) return false;
-  auto& state = found->second;
+  auto& state = partitions_["<default>"];
   if (sites.empty()) {
+    state.account_fenced.insert(state.account_sites.begin(), state.account_sites.end());
+    state.account_sites.clear();
     state.account_config.reset();
-    Broadcast(state);
+    PublishAccountConfig(state);
     return true;
   }
   // Private request routes carry their own per-request endpoint. Only the
@@ -256,8 +294,21 @@ bool AccessNetworkContextTransport::SetAccountNodeSites(
   // The delegate never sends that placeholder on the wire.
   config->connect_tunnel_headers.SetHeader(net::HttpRequestHeaders::kProxyAuthorization,
                                            authorization);
+  // The Browser dispatch path and all NetworkContexts have separate pipes.
+  // Fence changed exact hosts before publishing, until every recipient ACKs.
+  if (!state.account_config ||
+      state.account_config->connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization) !=
+          config->connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization) ||
+      state.account_config->rules.proxies_for_https.AllChains() != config->rules.proxies_for_https.AllChains()) {
+    state.account_fenced.insert(state.account_sites.begin(), state.account_sites.end());
+    state.account_fenced.insert(sites.begin(), sites.end());
+  } else {
+    std::set_symmetric_difference(state.account_sites.begin(), state.account_sites.end(),
+        sites.begin(), sites.end(), std::inserter(state.account_fenced, state.account_fenced.end()));
+  }
+  state.account_sites = sites;
   state.account_config = std::move(config);
-  Broadcast(state);
+  PublishAccountConfig(state);
   return true;
 }
 #endif
