@@ -209,7 +209,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             let sourceAuthorized = intents[source] == .on ||
                 (executingTabs[tab.instanceID.uuidString] == source && groupStillLists(source))
             if intents[key] != .off, sourceAuthorized {
-                if bound == parent, let endpoint = registry.endpoint(scopeID: key.scopeID, host: parent, isPrivate: key.isPrivate) {
+                if let bound, bound != host,
+                   let endpoint = registry.endpoint(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate) {
                     registry.setEndpoint(endpoint, scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
                 }
                 // Once attached, the child store keeps its generation even if the idle
@@ -942,6 +943,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         for tab in BrowserSession.openTabs() where bound.contains(tab.instanceID.uuidString)
             || (tab.browsingScopeID == key.scopeID && tab.profile.isPrivate == key.isPrivate
                 && tab.proxyLandingParent == key.host.rawValue) {
+            if tab.proxyLandingParent == key.host.rawValue, let rawHost = tab.boundHostName,
+               let host = try? AccessSiteHost(rawHost), host != key.host {
+                tab.clearProxyLanding()
+                let landing = AccessHostStoreKey(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
+                if intents[landing] == .on || executingTabs[tab.instanceID.uuidString] == landing { continue }
+            }
             registry.unbind(tab.instanceID.uuidString)
             if executingTabs[tab.instanceID.uuidString] == key {
                 executingTabs.removeValue(forKey: tab.instanceID.uuidString)

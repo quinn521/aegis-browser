@@ -110,6 +110,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Tab-local parent of a canonical HTTPS landing page. The landing host has its own store.
     public private(set) var proxyLandingParent: String?
     private var proxyLandingTarget: String?
+    public func clearProxyLanding() {
+        proxyLandingParent = nil
+        proxyLandingTarget = nil
+    }
+
     public func parentForProxyLanding(_ url: URL) -> String? {
         guard url.scheme == "https", url.port == nil || url.port == 443,
               url.host?.lowercased() == proxyLandingTarget else { return nil }
@@ -501,8 +506,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             && url.host?.lowercased() != nil
             && previous?.host?.lowercased() != url.host?.lowercased()
         if url.scheme != "https" || (url.port != nil && url.port != 443) || url.host?.lowercased() != proxyLandingTarget {
-            proxyLandingParent = nil
-            proxyLandingTarget = nil
+            clearProxyLanding()
         }
         let routed = hostCoordinator?.dataStoreForMainFrame(tab: self, url: url)
         let desired = routed ?? originalWebsiteDataStore
@@ -699,8 +703,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public func rebindWebsiteDataStore(_ store: WKWebsiteDataStore, host: String?) {
         guard !isDisposed else { return }
         if host == nil {
-            proxyLandingParent = nil
-            proxyLandingTarget = nil
+            clearProxyLanding()
         }
         guard store !== configuration.websiteDataStore else {
             boundHostName = host
@@ -1020,7 +1023,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         webPreferences.allowsContentJavaScript = site.javaScript ?? preferences.values.javaScript
         let decision = navigationDecision(requestURL, method: navigationAction.request.httpMethod ?? "GET")
         if decision.kind != .blocked, navigationAction.navigationType == .other,
-           let parent = boundHostName, let target = requestURL.host?.lowercased(),
+           boundHostName != nil, let parent = proxyLandingParent ?? boundHostName, let target = requestURL.host?.lowercased(),
            requestedURL?.scheme == "https", requestURL.scheme == "https",
            requestURL.port == nil || requestURL.port == 443,
            (navigationAction.request.httpMethod ?? "GET") == "GET",
@@ -1029,8 +1032,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             proxyLandingParent = parent
             proxyLandingTarget = target
         }
-        let storeMismatch = hostCoordinator?.dataStoreForMainFrame(tab: self, url: requestURL)
-            .map { $0 !== websiteDataStore } == true
+        let routedStore = hostCoordinator?.dataStoreForMainFrame(tab: self, url: requestURL)
+        if decision.kind != .blocked, parentForProxyLanding(requestURL) != nil, routedStore == nil {
+            loadingErrorPresentation = .resource("代理入口还不能使用")
+            loadingErrorAllowsProxyRetry = false
+            isLoading = false
+            finish(.cancel)
+            return
+        }
+        let storeMismatch = routedStore.map { $0 !== websiteDataStore } == true
         let hostMismatch = requestedURL.map { $0.host?.lowercased() != requestURL.host?.lowercased() } ?? false
         if decision.kind != .blocked,
            navigationAction.targetFrame?.isMainFrame != false,
