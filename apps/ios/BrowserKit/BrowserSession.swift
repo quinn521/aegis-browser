@@ -183,6 +183,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     @Published public private(set) var lastMainFrameFailure: BrowserMainFrameFailure?
     @Published public private(set) var loadingErrorAllowsProxyRetry = false
     @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
+    /// The address the user is navigating or recovering, even when WebKit still
+    /// displays an older document or its internal HTTPS warning page.
+    public var addressBarURL: URL? {
+        if let pendingAddressNavigation, matchesPendingAddressNavigation(pendingAddressNavigation) {
+            return pendingAddressNavigation.url
+        }
+        if isLoading { return requestedURL ?? url }
+        return lastMainFrameFailure?.url ?? url
+    }
     private var pendingProxyRequest: URLRequest?
     /// Set only after the recovery navigation commits while this attempt is a proxy retry.
     @Published public private(set) var proxyRecoveryCommitted = false
@@ -1870,7 +1879,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private func refreshState() {
         updateTitle(webView.title, url: webView.url)
         url = webView.url
-        if let url { requestedURL = url }
+        if let failure = lastMainFrameFailure { requestedURL = failure.url }
+        else if let url { requestedURL = url }
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
     }

@@ -6,6 +6,7 @@ struct BrowserAddressField: UIViewRepresentable {
     @Binding var address: String
     @Binding var focused: Bool
     let displayText: String
+    var displayAddress: String? = nil
     let selectionRequest: Int
     let submit: (String) -> Void
 
@@ -38,7 +39,7 @@ struct BrowserAddressField: UIViewRepresentable {
         let text = focused ? address : displayText
         if field.text != text, field.markedTextRange == nil { field.text = text }
         field.textAlignment = focused ? .left : .center
-        field.accessibilityValue = address
+        field.accessibilityValue = focused ? address : (displayAddress ?? address)
         if focused {
             let needsSelection = coordinator.lastSelectionRequest != selectionRequest || !field.isFirstResponder
             coordinator.lastSelectionRequest = selectionRequest
@@ -66,6 +67,7 @@ struct BrowserAddressField: UIViewRepresentable {
         init(_ parent: BrowserAddressField) { self.parent = parent }
 
         func textFieldDidBeginEditing(_ field: UITextField) {
+            if !parent.focused { parent.address = parent.displayAddress ?? parent.address }
             field.text = parent.address
             field.textAlignment = .left
             if !parent.focused { parent.focused = true }
@@ -79,7 +81,7 @@ struct BrowserAddressField: UIViewRepresentable {
             // updateUIView 主动结束编辑时状态已经是 false，避免在视图更新中重复写入。
             if parent.focused { parent.focused = false }
             field.text = parent.displayText
-            field.accessibilityValue = parent.address
+            field.accessibilityValue = parent.displayAddress ?? parent.address
         }
 
         func textFieldShouldReturn(_ field: UITextField) -> Bool {

@@ -1585,8 +1585,9 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             let observedAddress = ux["observed_address"] as? String ?? "UNREADABLE"
             receipt["recovery_target"] = exposedTarget
             receipt["recovery_target_source"] = ux["target_source"]
-            receipt["recovery_binding_source"] = pending ? "EXPOSED_PENDING_TARGET" : "OBSERVED_ADDRESS_FIELD_ONLY"
-            guard host(pending ? exposedTarget : observedAddress).map(site.contains) == true else {
+            let hasExposedTarget = exposedTarget != "NOT_EXPOSED" && exposedTarget != "UNREADABLE"
+            receipt["recovery_binding_source"] = hasExposedTarget ? "EXPOSED_NAVIGATION_TARGET" : "OBSERVED_ADDRESS_FIELD_ONLY"
+            guard host(hasExposedTarget ? exposedTarget : observedAddress).map(site.contains) == true else {
                 receipt["result"] = "RECOVERY_TARGET_MISMATCH"; screenshot(prefix + "-target-mismatch")
                 return
             }
@@ -1606,7 +1607,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 receipt["recovery_action"] = "VISIBLE_SITE_PROXY_TOGGLE"
                 receipt["recovery_action_count"] = 1
                 receipt["recovery_target"] = siteAction["target"]
-                receipt["recovery_target_source"] = "COMMITTED_SITE_MENU_HOST_AND_ADDRESS"
+                receipt["recovery_target_source"] = siteAction["target_source"]
                 receipt["result"] = "AWAITING_CONTENT"
             }
         }
@@ -1696,14 +1697,16 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let nodes = nativeDescendants(snapshot)
         let address = nodes.first { $0.elementType == .textField && $0.identifier == "address-field" }
         let pending = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-host" }
+        let failed = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-failed-host" }
         let status = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-status" }
         let knownStatus = ["正在准备代理连接…", "正在连接此网址。你可以选择通过代理打开。"]
-        let targetValue = pending?.value as? String
-        let target = targetValue ?? pending?.label
+        let targetNode = pending ?? failed
+        let targetValue = targetNode?.value as? String
+        let target = targetValue ?? targetNode?.label
         let controls = nodes.filter { $0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label) }
         return ["result": "OBSERVED", "observed_address": sanitizedURL(address?.value as? String ?? ""),
                 "target": target.map(sanitizedURL) ?? "NOT_EXPOSED",
-                "target_source": targetValue != nil ? "PENDING_ACCESSIBILITY_VALUE" : pending != nil ? "PENDING_VISIBLE_LABEL" : "NOT_EXPOSED",
+                "target_source": pending != nil ? "PENDING_NATIVE_HOST" : failed != nil ? "FAILED_NATIVE_HOST" : "NOT_EXPOSED",
                 "pending_status": status.map { knownStatus.contains($0.label) ? $0.label : "UNRECOGNIZED" } ?? "NOT_EXPOSED",
                 "recovery_controls": controls.prefix(8).map { item in
                     ["type": item.elementType.rawValue, "identifier_match": item.identifier == "page-load-proxy-retry",
@@ -1725,10 +1728,15 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let field = app.textFields["address-field"]
         let address = field.exists ? field.value as? String ?? "" : ""
         let web = app.webViews.firstMatch
-        guard let addressHost = host(address), site.contains(addressHost), web.exists,
-              let page = try? pageEvidence(web),
-              page["classification"] as? String != "BROWSER_START_PAGE" else {
-            return ["performed": false, "result": "NO_COMMITTED_SITE_EVIDENCE"]
+        let native = preActionEvidence(app)
+        let failedHost = native["target_source"] as? String == "FAILED_NATIVE_HOST"
+            ? (native["target"] as? String).flatMap(host) : nil
+        let committedPage = web.exists && (try? pageEvidence(web)["classification"] as? String).map {
+            $0 != "BROWSER_START_PAGE"
+        } == true
+        guard let addressHost = host(address), site.contains(addressHost),
+              committedPage || failedHost == addressHost else {
+            return ["performed": false, "result": "NO_VISIBLE_CURRENT_SITE_EVIDENCE"]
         }
         let menu = app.buttons["page-protection"]
         guard menu.exists, menu.isHittable else { return ["performed": false, "result": "MENU_UNAVAILABLE"] }
@@ -1752,6 +1760,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: toggle)
         let changed = XCTWaiter.wait(for: [enabled], timeout: 5) == .completed
         return ["performed": changed, "result": changed ? "VISIBLE_SWITCH_ENABLED" : "VISIBLE_SWITCH_UNCHANGED", "target": addressHost,
+                "target_source": failedHost == addressHost ? "FAILED_HOST_AND_SITE_MENU_AND_ADDRESS" : "COMMITTED_SITE_MENU_HOST_AND_ADDRESS",
                 "toggle_value_after": toggle.exists ? toggle.value as? String ?? "UNREADABLE" : "UNAVAILABLE"]
     }
 

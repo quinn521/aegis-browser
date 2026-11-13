@@ -138,7 +138,7 @@ struct AegisRootView: View {
     }
 
     private func updateAddress() {
-        address = browser.activeTab?.url?.absoluteString ?? "aegis://start"
+        address = browser.activeTab?.addressBarURL?.absoluteString ?? "aegis://start"
     }
 
     private func consumeSharedURLIfPresent() {
@@ -228,6 +228,7 @@ private struct BrowserPane: View {
 
     private func editAddress() {
         toolbarCollapsed = false
+        address = tab.addressBarURL?.absoluteString ?? address
         addressFocused = true
         addressSelectionRequest += 1
     }
@@ -247,8 +248,7 @@ private struct BrowserPane: View {
 
     /// 浏览时只显示主机名；输入和辅助功能始终可取得完整网址。
     private var displayedAddress: String {
-        let destination = tab.isLoading ? (tab.requestedURL ?? tab.url) : (tab.lastMainFrameFailure?.url ?? tab.url)
-        guard let url = destination, url.scheme != "aegis" else { return AegisLocalization.string("起始页") }
+        guard let url = tab.addressBarURL, url.scheme != "aegis" else { return AegisLocalization.string("起始页") }
         return url.host(percentEncoded: true) ?? url.absoluteString
     }
 
@@ -279,7 +279,8 @@ private struct BrowserPane: View {
                     .accessibilityIdentifier("page-protection")
                 }
                 BrowserAddressField(address: $address, focused: $addressFocused,
-                                    displayText: displayedAddress, selectionRequest: addressSelectionRequest) { destination in
+                                    displayText: displayedAddress, displayAddress: tab.addressBarURL?.absoluteString,
+                                    selectionRequest: addressSelectionRequest) { destination in
                     browser.navigate(address: destination)
                 }
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 44)
@@ -302,7 +303,7 @@ private struct BrowserPane: View {
             .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
             if addressFocused {
                 Button("取消") {
-                    address = tab.url?.absoluteString ?? "aegis://start"
+                    address = tab.addressBarURL?.absoluteString ?? "aegis://start"
                     addressFocused = false
                     tab.webView.becomeFirstResponder()
                 }.frame(minWidth: 44, minHeight: 44)
@@ -445,6 +446,12 @@ struct PageLoadFailureBanner: View {
         let _ = localizationLocale
         if let error = tab.loadingError {
             VStack(alignment: .leading, spacing: 8) {
+                if let failure = tab.lastMainFrameFailure {
+                    Text(failure.url.host(percentEncoded: true) ?? failure.url.absoluteString)
+                        .font(.callout.weight(.semibold))
+                        .accessibilityIdentifier("page-load-failed-host")
+                        .accessibilityValue(failure.url.absoluteString)
+                }
                 Text("页面加载失败：\(error)").font(.caption)
                 Button("重试") { tab.reload() }
                 if setAutoRecovery != nil {
@@ -551,13 +558,8 @@ private struct ActiveTabView: View {
                     .accessibilityIdentifier("browser-webview")
             }
         }
-        .onChange(of: tab.url) { _, url in
-            if !addressIsEditing {
-                address = (tab.isLoading ? tab.requestedURL : url)?.absoluteString ?? address
-            }
-        }
-        .onChange(of: tab.pendingAddressNavigation) { _, pending in
-            if !addressIsEditing, let pending { address = pending.url.absoluteString }
+        .onChange(of: tab.addressBarURL) { _, url in
+            if !addressIsEditing, let url { address = url.absoluteString }
         }
     }
 }

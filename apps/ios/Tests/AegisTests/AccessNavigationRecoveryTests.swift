@@ -9,6 +9,27 @@ import XCTest
 
 @MainActor
 final class AccessNavigationRecoveryTests: XCTestCase {
+    func testAddressPresentationKeepsFailedTargetUntilANewNavigationSupersedesIt() async throws {
+        let tab = makeTab()
+        tab.load(URL(string: "aegis://start")!)
+        await waitUntil { tab.url?.absoluteString == "aegis://start" && !tab.isLoading }
+        XCTAssertEqual(tab.url?.absoluteString, "aegis://start")
+        let target = URL(string: "https://192.0.2.1/failed-page")!
+        tab.loadFromAddressBar(target)
+        XCTAssertEqual(tab.addressBarURL, target)
+        await waitUntil { tab.currentNavigationForTests != nil }
+        let navigation = try XCTUnwrap(tab.currentNavigationForTests)
+        tab.webView(tab.webView, didFailProvisionalNavigation: navigation, withError: URLError(.timedOut))
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertEqual(tab.lastMainFrameFailure?.url, target)
+        XCTAssertEqual(tab.addressBarURL, target, "An internal or older WebKit document must not replace the failed address")
+        XCTAssertEqual(tab.requestedURL, target, "A manual retry must retain the failed destination")
+        let next = URL(string: "https://192.0.2.2/next")!
+        tab.loadFromAddressBar(next)
+        XCTAssertNil(tab.lastMainFrameFailure)
+        XCTAssertEqual(tab.addressBarURL, next)
+    }
+
     func testAlreadyArmedAddressUsesItsRouteWithoutOfferingAnotherProxyChoice() throws {
         let coordinator = AccessHostStoreCoordinator()
         let tab = makeTab()
