@@ -143,7 +143,7 @@ func (f *Flow) Write(w io.Writer, p []byte, start, end int, path string) (int, e
 		}
 		*total += delta
 		f.paths[path] += delta
-		if reportErr := f.reliableSend(map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path]}); reportErr != nil {
+		if reportErr := f.reliableSend(map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path], "measuredAt": time.Now().UnixMilli()}); reportErr != nil {
 			f.broken = true
 			return n, reportErr
 		}

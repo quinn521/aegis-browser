@@ -45,6 +45,11 @@ def _validate(frame):
             or not isinstance(frame.get('flow'), str)
             or not re.fullmatch('[0-9a-f]{32}', frame['flow'])):
         raise ValueError('invalid frame')
+    if 'measuredAt' in frame:
+        if (frame.get('op') != 'sample' or not _count(frame['measuredAt'])
+                or frame['measuredAt'] == 0):
+            raise ValueError('invalid measurement instant')
+        frame = {k:v for k,v in frame.items() if k != 'measuredAt'}
     op = frame.get('op')
     extra = set(frame) - {'v', 'op', 'flow'}
     if op == 'open' and extra == {'client'} and isinstance(frame['client'], str):
@@ -101,7 +106,10 @@ class Meter:
             elif row is None:
                 raise ValueError('unknown flow')
             elif frame['op'] == 'sample':
-                self._sample(db, key, row, frame, now)
+                stamp = frame.get('measuredAt', now)
+                if stamp > now:
+                    raise ValueError('future measurement')
+                self._sample(db, key, row, frame, stamp)
             else:
                 self._finish(db, key, row, frame, now)
             db.commit()
