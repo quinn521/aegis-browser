@@ -13,6 +13,7 @@ import stat
 import sys
 import time
 
+from . import settlement
 from .credentials import ManagedNode
 
 PATHS = {'up': ('target_tcp',), 'down': ('vision_padded', 'vision_plain', 'vision_raw')}
@@ -80,31 +81,38 @@ class Meter:
         with closing(_connect(self.database, 'rw')) as db:
             db.execute('PRAGMA synchronous=FULL')
             db.execute('BEGIN IMMEDIATE')
-            key = (self.node, frame['flow'])
-            row = db.execute('SELECT * FROM node_meter_flows WHERE node_id=? AND flow_id=?',
-                             key).fetchone()
-            now = self.clock_ms()
-            if frame['op'] == 'open':
-                client = frame['client']
-                if client not in self.clients or row is not None and row['panel_client'] != client:
-                    raise ValueError('unknown binding')
-                if row is None:
-                    binding = db.execute('SELECT b.account_id, b.period_id FROM panel_bindings b '
-                                         'JOIN plans p USING (panel_client,account_id,period_id) '
-                                         'WHERE b.panel_client=? AND p.period_start<=? AND p.period_end>?',
-                                         (client, now, now)).fetchone()
-                    if binding is None:
-                        raise ValueError('inactive binding')
-                    db.execute('INSERT INTO node_meter_flows '
-                               '(node_id,flow_id,panel_client,account_id,period_id) VALUES (?,?,?,?,?)',
-                               (*key, client, *binding))
-            elif row is None:
-                raise ValueError('unknown flow')
-            elif frame['op'] == 'sample':
-                self._sample(db, key, row, frame, now)
-            else:
-                self._finish(db, key, row, frame, now)
+            self._apply(db, frame, self.clock_ms())
             db.commit()
+
+    def _apply(self, db, frame, now):
+        """Apply a validated writer frame inside an existing immediate transaction."""
+        key = (self.node, frame['flow'])
+        row = db.execute('SELECT * FROM node_meter_flows WHERE node_id=? AND flow_id=?',
+                         key).fetchone()
+        if frame['op'] == 'open':
+            client = frame['client']
+            if client not in self.clients or row is not None and row['panel_client'] != client:
+                raise ValueError('unknown binding')
+            if row is None:
+                binding = db.execute('SELECT b.account_id, b.period_id FROM panel_bindings b '
+                                     'JOIN plans p USING (panel_client,account_id,period_id) '
+                                     'WHERE b.panel_client=? AND p.period_start<=? AND p.period_end>?',
+                                     (client, now, now)).fetchone()
+                if binding is None:
+                    raise ValueError('inactive binding')
+                db.execute('INSERT INTO node_meter_flows '
+                           '(node_id,flow_id,panel_client,account_id,period_id) VALUES (?,?,?,?,?)',
+                           (*key, client, *binding))
+        elif row is None:
+            raise ValueError('unknown flow')
+        elif frame['op'] == 'sample':
+            self._sample(db, key, row, frame, now)
+        else:
+            self._finish(db, key, row, frame, now)
+        new = db.execute('SELECT * FROM node_meter_flows WHERE node_id=? AND flow_id=?', key).fetchone()
+        settlement.advance(db, self.node, new['account_id'], new['period_id'],
+                           new['uploaded'] - (row['uploaded'] if row else 0),
+                           new['downloaded'] - (row['downloaded'] if row else 0), new['sampled_at'], now)
 
     @staticmethod
     def _sample(db, key, row, frame, now):
