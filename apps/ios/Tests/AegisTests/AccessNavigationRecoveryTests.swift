@@ -9,6 +9,225 @@ import XCTest
 
 @MainActor
 final class AccessNavigationRecoveryTests: XCTestCase {
+    func testProvisionalTimeoutRecordsFailureBeforeReentrantCancellation() async throws {
+        let tab = makeTab()
+        tab.load(URLRequest(url: URL(string: "https://192.0.2.1/timeout")!, timeoutInterval: 30))
+        await waitUntil { tab.currentNavigationForTests != nil }
+        let navigation = try XCTUnwrap(tab.currentNavigationForTests)
+        var stopped = false
+        tab.failProvisionalNavigationOnTimeout(navigation) {
+            stopped = true
+            XCTAssertNotNil(tab.lastMainFrameFailure)
+            XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+            tab.webView(tab.webView, didFailProvisionalNavigation: navigation, withError: URLError(.cancelled))
+        }
+        XCTAssertTrue(stopped)
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+        let failureID = try XCTUnwrap(tab.lastMainFrameFailure?.failureID)
+        tab.webView(tab.webView, didFailProvisionalNavigation: navigation, withError: URLError(.cancelled))
+        tab.failProvisionalNavigationOnTimeout(navigation) { XCTFail("An expired timeout must be retired") }
+        XCTAssertEqual(tab.lastMainFrameFailure?.failureID, failureID)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+    }
+
+    func testExpiredOldNavigationCannotStopOrFailItsReplacement() async throws {
+        let tab = makeTab()
+        tab.load(URLRequest(url: URL(string: "https://192.0.2.1/old")!))
+        await waitUntil { tab.currentNavigationForTests != nil }
+        let old = try XCTUnwrap(tab.currentNavigationForTests)
+        tab.load(URLRequest(url: URL(string: "https://192.0.2.2/new")!))
+        tab.failProvisionalNavigationOnTimeout(old) { XCTFail("Old deadline stopped its replacement") }
+        XCTAssertTrue(tab.isLoading)
+        XCTAssertNil(tab.lastMainFrameFailure)
+        XCTAssertEqual(tab.requestedURL?.host, "192.0.2.2")
+    }
+
+    func testTimeoutDoesNotStopAutomaticallyStartedProxyRecovery() async throws {
+        let coordinator = AccessHostStoreCoordinator()
+        let tab = makeTab()
+        tab.hostCoordinator = coordinator
+        let host = try AccessSiteHost("192.0.2.1")
+        tab.load(URLRequest(url: URL(string: "https://192.0.2.1/timeout")!))
+        await waitUntil { tab.currentNavigationForTests != nil }
+        let navigation = try XCTUnwrap(tab.currentNavigationForTests)
+        coordinator.registry.setEndpoint(readyEndpoint(), scopeID: "ordinary", host: host, isPrivate: false)
+        coordinator.setProxyEnabled(true, host: host, scopeID: "ordinary", isPrivate: false)
+        tab.failProvisionalNavigationOnTimeout(navigation) { XCTFail("Timeout stopped the newly started proxy recovery") }
+        XCTAssertEqual(tab.recoveryLoadCount, 1)
+        XCTAssertTrue(tab.isLoading)
+        tab.webView(tab.webView, didFailProvisionalNavigation: navigation, withError: URLError(.cancelled))
+        XCTAssertEqual(tab.recoveryLoadCount, 1)
+        XCTAssertTrue(tab.isLoading)
+    }
+
+    func testAddressSubmissionOffersChoiceBeforeWebKitStartsWithoutInventingFailure() throws {
+        let coordinator = AccessHostStoreCoordinator()
+        let tab = makeTab()
+        tab.hostCoordinator = coordinator
+        let target = URL(string: "https://192.0.2.1/address")!
+        tab.loadFromAddressBar(target)
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertEqual(pending.url, target)
+        XCTAssertEqual(pending.navigationID, tab.currentAttemptIDForTests)
+        XCTAssertTrue(tab.matchesPendingAddressNavigation(pending))
+        XCTAssertNil(tab.currentNavigationForTests)
+        XCTAssertNil(tab.lastMainFrameFailure)
+        XCTAssertNil(tab.loadingError)
+        XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
+        XCTAssertNil(coordinator.snapshot(for: tab).host)
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+    }
+
+    func testOnlySafeExplicitAddressSubmissionOffersEarlyProxy() throws {
+        let tab = makeTab()
+        let target = URL(string: "https://192.0.2.1/address")!
+        tab.load(target)
+        XCTAssertNil(tab.pendingAddressNavigation)
+        for raw in ["http://192.0.2.1/", "https://user:secret@192.0.2.1/", "https://192.0.2.1:8443/", "aegis://start"] {
+            tab.loadFromAddressBar(URL(string: raw)!)
+            XCTAssertNil(tab.pendingAddressNavigation, raw)
+        }
+        var post = URLRequest(url: target)
+        post.httpMethod = "POST"
+        post.httpBody = Data("private".utf8)
+        tab.load(post)
+        XCTAssertNil(tab.pendingAddressNavigation)
+    }
+
+    func testPendingAddressRedirectChangesVisibleTargetAndRequiresANewClick() throws {
+        let coordinator = AccessHostStoreCoordinator()
+        let tab = makeTab()
+        tab.hostCoordinator = coordinator
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/old")!)
+        let old = try XCTUnwrap(tab.pendingAddressNavigation)
+        let redirected = URL(string: "https://192.0.2.2/actual")!
+        tab.adoptPolicyMainFrameNavigationForTests(url: redirected, continuesExistingNavigation: true)
+        let current = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertEqual(current.url, redirected)
+        XCTAssertFalse(tab.matchesPendingAddressNavigation(old))
+        XCTAssertTrue(tab.matchesPendingAddressNavigation(current))
+        XCTAssertNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: old))
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+        XCTAssertNil(coordinator.snapshot(for: tab).host)
+        tab.adoptPolicyMainFrameNavigationForTests(url: redirected, continuesExistingNavigation: true, hasReplayableBody: true)
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: current))
+    }
+
+    func testStopSupersedeCommitAndFailureRetireThePendingAddressChoice() throws {
+        let tab = makeTab()
+        let target = URL(string: "https://192.0.2.1/address")!
+        tab.loadFromAddressBar(target)
+        let first = try XCTUnwrap(tab.pendingAddressNavigation)
+        tab.stop()
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertFalse(tab.matchesPendingAddressNavigation(first))
+        tab.loadFromAddressBar(target)
+        let second = try XCTUnwrap(tab.pendingAddressNavigation)
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/new")!)
+        XCTAssertFalse(tab.matchesPendingAddressNavigation(second))
+        tab.commitPendingMainFrameForTests()
+        XCTAssertNil(tab.pendingAddressNavigation)
+        tab.loadFromAddressBar(target)
+        deliver(tab)
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertNotNil(tab.lastMainFrameFailure)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+    }
+
+    func testExplicitPendingAddressChoicePreparesManagedEntryAndSendsOnce() async throws {
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            AccessProxyEntryPublisher.Provision(
+                endpoint: AccessManagedProxyEndpoint(identity: "address-entry", generation: generation,
+                    loopbackHost: "127.0.0.1", port: 18_081, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
+        let tab = makeTab()
+        tab.hostCoordinator = coordinator
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/address")!)
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertEqual(publisher.provisionCount, 0)
+        let first = coordinator.openPendingAddressViaProxy(tab: tab, pending: pending)
+        XCTAssertNotNil(first)
+        XCTAssertEqual(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending), first)
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: tab))
+        await waitUntil { tab.recoveryLoadCount == 1 }
+        XCTAssertEqual(tab.recoveryLoadCount, 1)
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertEqual(tab.boundHostName, "192.0.2.1")
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertNil(tab.lastMainFrameFailure)
+        XCTAssertNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+    }
+
+    func testPendingPreparationCannotSendAfterStopSupersedeCommitOrClose() async throws {
+        for action in ["stop", "supersede", "commit", "close", "redirect"] {
+            var release: CheckedContinuation<AccessProxyEntryPublisher.Provision, Never>?
+            let publisher = AccessProxyEntryPublisher { _, _ in
+                await withCheckedContinuation { release = $0 }
+            }
+            let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
+            let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+            let tab = try XCTUnwrap(browser.activeTab)
+            tab.hostCoordinator = coordinator
+            tab.loadFromAddressBar(URL(string: "https://192.0.2.1/old")!)
+            let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+            XCTAssertNotNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+            await waitUntil { release != nil }
+            let continuation = try XCTUnwrap(release)
+            switch action {
+            case "stop": tab.stop()
+            case "supersede": tab.loadFromAddressBar(URL(string: "https://192.0.2.1/new")!)
+            case "commit": tab.commitPendingMainFrameForTests()
+            case "close": browser.close(tab.id)
+            default: tab.adoptPolicyMainFrameNavigationForTests(url: URL(string: "https://192.0.2.2/actual")!, continuesExistingNavigation: true)
+            }
+            XCTAssertFalse(coordinator.isPreparingAddressProxy(tab: tab), action)
+            continuation.resume(returning: AccessProxyEntryPublisher.Provision(
+                endpoint: AccessManagedProxyEndpoint(identity: "late-entry", generation: 1,
+                    loopbackHost: "127.0.0.1", port: 18_081, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true))
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(tab.recoveryLoadCount, 0, action)
+            XCTAssertNil(coordinator.registry.endpoint(scopeID: "ordinary", host: try AccessSiteHost("192.0.2.1"), isPrivate: false), action)
+            browser.standardTabs.forEach { $0.stop() }
+        }
+    }
+
+    func testPrivatePendingChoiceDoesNotAuthorizeOrdinaryScopeOrSiblingTab() async throws {
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            AccessProxyEntryPublisher.Provision(
+                endpoint: AccessManagedProxyEndpoint(identity: "private-address-entry", generation: generation,
+                    loopbackHost: "127.0.0.1", port: 18_081, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer {
+            browser.standardTabs.forEach { $0.stop() }
+            browser.privateTabs.forEach { $0.stop() }
+        }
+        let ordinary = try XCTUnwrap(browser.activeTab)
+        ordinary.hostCoordinator = coordinator
+        browser.switchProfile(to: .privateMode)
+        let privateTab = try XCTUnwrap(browser.activeTab)
+        privateTab.hostCoordinator = coordinator
+        privateTab.loadFromAddressBar(URL(string: "https://192.0.2.1/private")!)
+        let pending = try XCTUnwrap(privateTab.pendingAddressNavigation)
+        XCTAssertNil(coordinator.openPendingAddressViaProxy(tab: ordinary, pending: pending))
+        XCTAssertNotNil(coordinator.openPendingAddressViaProxy(tab: privateTab, pending: pending))
+        await waitUntil { privateTab.recoveryLoadCount == 1 }
+        XCTAssertEqual(privateTab.recoveryLoadCount, 1)
+        XCTAssertTrue(privateTab.profile.isPrivate)
+        let host = try AccessSiteHost("192.0.2.1")
+        XCTAssertNotNil(coordinator.registry.endpoint(scopeID: privateTab.browsingScopeID, host: host, isPrivate: true))
+        XCTAssertNil(coordinator.registry.endpoint(scopeID: "ordinary", host: host, isPrivate: false))
+        XCTAssertEqual(ordinary.recoveryLoadCount, 0)
+        XCTAssertTrue(ordinary.websiteDataStore === ordinary.originalWebsiteDataStore)
+    }
+
     private func makeTab() -> BrowserTab {
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         let tab = browser.activeTab!

@@ -76,6 +76,13 @@ public struct BrowserMainFrameFailure: Equatable, Sendable {
     }
 }
 
+/// An explicit address submission, independent of WebKit's commit/failure callbacks.
+/// This is a choice to change connection, never evidence of a network failure.
+public struct BrowserPendingAddressNavigation: Equatable, Sendable {
+    public let navigationID: String
+    public let url: URL
+}
+
 @MainActor
 public protocol BrowserHostStoreCoordinating: AnyObject {
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
@@ -166,6 +173,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private var confirmedRedirectPolicy: (navigationID: String, url: URL)?
     @Published public private(set) var lastMainFrameFailure: BrowserMainFrameFailure?
     @Published public private(set) var loadingErrorAllowsProxyRetry = false
+    @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
     /// Set only after the recovery navigation commits while this attempt is a proxy retry.
     @Published public private(set) var proxyRecoveryCommitted = false
     internal private(set) var recoveryLoadCount = 0
@@ -185,6 +193,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         guard ["http", "https"].contains(scheme) else { return }
         committedMainFrameURL = recorded
         url = recorded
+        clearPendingAddressNavigation()
     }
 
     /// Unit tests have no WebKit commit. Production sets the flag in `didCommit`.
@@ -331,6 +340,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     ) {
         invalidateDeferredDocumentLoad()
         hostCoordinator?.pendingRecoveryInvalidated(tab: self)
+        pendingAddressNavigation = nil
         programmaticPolicyNavigationID = nil
         confirmedRedirectPolicy = nil
         if realignedNavigationURL != url { realignedNavigationURL = nil }
@@ -403,6 +413,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         hasReplayableBody: Bool = false,
         policyType: WKNavigationType? = nil
     ) {
+        defer { refreshPendingAddressNavigation() }
         let normalizedMethod = method.uppercased()
         let confirmedRedirect = attempt.acceptsRedirectPolicy(policyType)
             && confirmedRedirectPolicy?.navigationID == attempt.navigationID
@@ -705,8 +716,23 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         guard provisionalDeadlineExpired, navigation === provisionalNavigation, navigation === pendingNavigation,
               isCurrent(navigation), isLoading, let view = loadedWebView else { return }
         provisionalDeadlineExpired = false
-        view.stopLoading()
+        failProvisionalNavigationOnTimeout(navigation) { view.stopLoading() }
+    }
+
+    /// Commit the timeout before stopping WebKit: stopLoading can synchronously
+    /// deliver -999, which must not consume the identity ahead of the timeout.
+    /// Kept internal so regression tests can inject that exact reentrant callback.
+    func failProvisionalNavigationOnTimeout(_ navigation: WKNavigation, stopLoading: () -> Void) {
+        guard navigation === pendingNavigation, isCurrent(navigation), isLoading,
+              let view = loadedWebView else { return }
+        let navigationID = attempt.navigationID
         webView(view, didFailProvisionalNavigation: navigation, withError: URLError(.timedOut))
+        // The failure callback can synchronously start an authorized recovery or
+        // replace the web view. Never stop that replacement navigation.
+        if view === loadedWebView, !isLoading,
+           lastMainFrameFailure?.navigationID == navigationID {
+            stopLoading()
+        }
     }
 
     private func flushPendingAttachedLoad() {
@@ -720,6 +746,66 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func load(_ request: URLRequest) {
         commitPreservingMethod(request)
+    }
+
+    /// Only the address field creates this early choice; page links, forms,
+    /// restored tabs and arbitrary programmatic loads cannot acquire it.
+    public func loadFromAddressBar(_ url: URL) {
+        load(url)
+        guard isLoading, loadingError == nil, Self.safeAddressProxyURL(attempt.url),
+              attempt.method == "GET", !attempt.hasReplayableBody else { return }
+        pendingAddressNavigation = BrowserPendingAddressNavigation(navigationID: attempt.navigationID, url: attempt.url)
+    }
+
+    public func matchesPendingAddressNavigation(_ pending: BrowserPendingAddressNavigation) -> Bool {
+        !isDisposed && isLoading && loadingError == nil && pendingAddressNavigation == pending
+            && attempt.navigationID == pending.navigationID && attempt.url == pending.url
+            && attempt.method == "GET" && !attempt.hasReplayableBody && Self.safeAddressProxyURL(pending.url)
+    }
+
+    private static func safeAddressProxyURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host?.isEmpty == false
+            && url.user == nil && url.password == nil && (url.port == nil || url.port == 443)
+    }
+
+    private func clearPendingAddressNavigation() {
+        guard pendingAddressNavigation != nil else { return }
+        pendingAddressNavigation = nil
+        hostCoordinator?.pendingRecoveryInvalidated(tab: self)
+    }
+
+    private func refreshPendingAddressNavigation() {
+        guard let pending = pendingAddressNavigation else { return }
+        guard attempt.navigationID == pending.navigationID, attempt.method == "GET",
+              !attempt.hasReplayableBody, Self.safeAddressProxyURL(attempt.url) else {
+            clearPendingAddressNavigation()
+            return
+        }
+        let current = BrowserPendingAddressNavigation(navigationID: attempt.navigationID, url: attempt.url)
+        if current != pending {
+            // A redirect changes the visible choice and cancels preparation for
+            // the old URL. It never transfers that click to a foreign host.
+            hostCoordinator?.pendingRecoveryInvalidated(tab: self)
+            pendingAddressNavigation = current
+        }
+    }
+
+    @discardableResult
+    public func openPendingAddressViaProxy(
+        _ pending: BrowserPendingAddressNavigation,
+        recoveryOperationID: UUID
+    ) -> Bool {
+        guard matchesPendingAddressNavigation(pending) else { return false }
+        pendingAddressNavigation = nil
+        loadTask?.cancel()
+        invalidateDeferredDocumentLoad()
+        retireAllNavigationIdentities()
+        loadedWebView?.stopLoading()
+        attempt.recoveryOperationID = recoveryOperationID
+        attempt.failureID = nil
+        recoveryLoadCount += 1
+        commitPreservingMethod(URLRequest(url: pending.url, timeoutInterval: 30), continuesAttempt: true)
+        return isLoading
     }
 
     /// Reloads the failed main-frame request without minting a new navigation identity.
@@ -1260,6 +1346,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if isLatestAttempt(recorded) {
             attempt = recorded
             requestedURL = redirected
+            refreshPendingAddressNavigation()
             failExpiredProvisionalNavigation(navigation)
         }
     }
@@ -1292,6 +1379,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard webView === loadedWebView, isCurrent(navigation) else { return }
+        clearPendingAddressNavigation()
         provisionalNavigation = nil
         provisionalDeadline?.cancel()
         confirmedRedirectPolicy = nil
@@ -1317,6 +1405,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             retireNavigationIdentity(navigation)
             return
         }
+        clearPendingAddressNavigation()
         retireNavigationIdentity(navigation)
         retireUnboundAttempt(navigationID: attempt.navigationID)
         if deferredDocumentNavigationID == attempt.navigationID {
@@ -1394,6 +1483,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         pendingNavigation = nil
         isLoading = false
+        clearPendingAddressNavigation()
         invalidateDeferredDocumentLoad()
         retireUnboundAttempt(navigationID: recorded.navigationID)
         if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
@@ -2097,7 +2187,7 @@ public final class BrowserSession: ObservableObject {
             }
             return
         }
-        tab.load(url)
+        tab.loadFromAddressBar(url)
     }
 
     public func toggleBookmark(privateSaveConfirmed: Bool = false) {

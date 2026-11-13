@@ -579,6 +579,25 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         startRecovery(tab: tab, trigger: .userRetry)
     }
 
+    func isPreparingAddressProxy(tab: BrowserTab) -> Bool {
+        guard let pending = tab.pendingAddressNavigation else { return false }
+        return operations.values.contains {
+            $0.tabID == tab.instanceID.uuidString && $0.addressNavigation == pending && $0.state == .preparing
+        }
+    }
+
+    /// A visible address choice authorizes only this safe, still-pending target.
+    /// No failed-navigation ticket or trusted committed host is synthesized.
+    @discardableResult
+    func openPendingAddressViaProxy(tab: BrowserTab, pending: BrowserPendingAddressNavigation) -> UUID? {
+        guard tab.matchesPendingAddressNavigation(pending), let host = Self.httpHost(pending.url) else { return nil }
+        if let existing = operations.values.first(where: {
+            $0.tabID == tab.instanceID.uuidString && $0.addressNavigation == pending && $0.state == .preparing
+        }) { return existing.id }
+        let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
+        return beginPrepare(for: tab, key: key, failure: nil, trigger: .userRetry, addressNavigation: pending)
+    }
+
     private func startRecovery(tab: BrowserTab, trigger: AccessNavigationRetryTrigger) -> UUID? {
         guard tab.loadingErrorAllowsProxyRetry, let failure = tab.lastMainFrameFailure else { return nil }
         guard let host = try? AccessSiteHost.normalize(failure.url.host ?? "") else { return nil }
@@ -692,7 +711,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         key: AccessHostStoreKey,
         failure: BrowserMainFrameFailure?,
         trigger: AccessNavigationRetryTrigger,
-        authorization: AccessAutoRecoveryGrant? = nil
+        authorization: AccessAutoRecoveryGrant? = nil,
+        addressNavigation: BrowserPendingAddressNavigation? = nil
     ) -> UUID? {
         guard !tab.isDisposed else { return nil }
         let method = (failure?.method ?? "GET").uppercased()
@@ -705,7 +725,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         }
         let operationID = UUID()
         let deadline = clock.now + prepareBudget
-        if authorization == nil, intents[key] != .on {
+        if addressNavigation == nil, authorization == nil, intents[key] != .on {
             setProxyEnabled(true, host: key.host, scopeID: key.scopeID, isPrivate: key.isPrivate)
         }
         var ticket: AccessNavigationRetryTicket?
@@ -734,7 +754,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             deadline: deadline,
             state: .preparing,
             ticket: ticket,
-            authorization: authorization
+            authorization: authorization,
+            addressNavigation: addressNavigation,
+            addressSwitchGeneration: addressNavigation == nil ? nil : registry.switchGeneration
         )
         phases[tab.instanceID.uuidString] = .preparing
         armTimeout(operationID: operationID, deadline: deadline)
@@ -768,6 +790,19 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             publisher.cancel(operationID: operationID)
             return
         }
+        if let pending = operation.addressNavigation {
+            guard let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }),
+                  tab.browsingScopeID == operation.key.scopeID, tab.profile.isPrivate == operation.key.isPrivate,
+                  tab.matchesPendingAddressNavigation(pending),
+                  operation.addressSwitchGeneration == registry.switchGeneration else {
+                operation.state = .cancelled
+                operations[operationID] = operation
+                phases[operation.tabID] = nil
+                publisher.cancel(operationID: operationID)
+                revision &+= 1
+                return
+            }
+        }
         guard publisher.validateReady(result), publisher.retain(result.endpoint, for: operation.key) else {
             fail(operationID, reason: "代理入口还不能使用")
             return
@@ -778,7 +813,15 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             host: operation.key.host,
             isPrivate: operation.key.isPrivate
         )
-        if operation.ticket != nil {
+        if let pending = operation.addressNavigation,
+           let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
+            setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
+            operation.state = .sent
+            operations[operationID] = operation
+            phases[operation.tabID] = .sent
+            _ = tab.openPendingAddressViaProxy(pending, recoveryOperationID: operationID)
+            publisher.cancel(operationID: operationID)
+        } else if operation.ticket != nil {
             retryReadyTabs(operationID: operationID)
         } else {
             operation.state = .completed
@@ -1041,6 +1084,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         var state: RecoveryState
         var ticket: AccessNavigationRetryTicket?
         var authorization: AccessAutoRecoveryGrant?
+        var addressNavigation: BrowserPendingAddressNavigation? = nil
+        var addressSwitchGeneration: UInt64? = nil
     }
 
     private enum RecoveryState {
