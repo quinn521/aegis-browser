@@ -37,6 +37,7 @@ public final class AccessHostDataStoreRegistry {
         var store: WKWebsiteDataStore
         var record: AccessHostStoreRecord
         var appliedGeneration: UInt64?
+        var retiringDocuments: Set<UUID> = []
     }
 
     public init() {}
@@ -181,7 +182,11 @@ public final class AccessHostDataStoreRegistry {
 
     public func sweep(now: Date, endingPrivateScopeID: String? = nil) {
         let evictions = AccessHostStoreEvictionPolicy.evictions(
-            records: entries.values.map(\.record),
+            records: entries.values.map { entry in
+                var record = entry.record
+                if !entry.retiringDocuments.isEmpty { record.boundTabIDs.insert("retiring-document") }
+                return record
+            },
             now: now,
             endingPrivateScopeID: endingPrivateScopeID
         )
@@ -192,6 +197,29 @@ public final class AccessHostDataStoreRegistry {
 
     public func ordinaryStores() -> [WKWebsiteDataStore] {
         entries.values.filter { !$0.record.key.isPrivate }.map(\.store)
+    }
+
+    /// The registry can select a replacement before WebKit acknowledges that
+    /// the previous realm is inert. Such a store is not idle yet.
+    public func retainRetiringDocument(scopeID: String, host: AccessSiteHost, isPrivate: Bool) -> (@MainActor () -> Void)? {
+        let storeKey = key(scopeID, host, isPrivate)
+        guard entries[storeKey] != nil else { return nil }
+        let token = UUID()
+        entries[storeKey]?.retiringDocuments.insert(token)
+        return { [weak self] in
+            guard let self else { return }
+            self.entries[storeKey]?.retiringDocuments.remove(token)
+            if self.entries[storeKey]?.retiringDocuments.isEmpty == true,
+               self.entries[storeKey]?.record.boundTabIDs.isEmpty == true {
+                self.entries[storeKey]?.record.idleSince = Date()
+            }
+            self.sweep(now: Date())
+        }
+    }
+
+    public func removeUnstoredEndpoint(for key: AccessHostStoreKey) {
+        guard entries[key] == nil else { return }
+        endpoints[key] = nil
     }
 
     public func releaseIdleStores() {
@@ -270,7 +298,8 @@ public final class AccessHostDataStoreRegistry {
     }
 
     private func retire(_ key: AccessHostStoreKey) {
-        guard let entry = entries.removeValue(forKey: key) else { return }
+        guard entries[key]?.retiringDocuments.isEmpty == true,
+              let entry = entries.removeValue(forKey: key) else { return }
         entry.store.proxyConfigurations = []
         endpoints[key] = nil
         onRetire?(key)

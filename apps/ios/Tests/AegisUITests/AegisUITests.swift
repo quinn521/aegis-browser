@@ -1342,15 +1342,17 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 1)); action = recoveryButton(app)
             }
             action?.coordinate.tap()
-            let content = try waitForContent(app, site: site)
+            var content = try waitForContent(app, site: site)
             var route = readRoute(app)
             if route["local_entry_ready"] as? Bool != true {
                 let change = enableVisibleSiteRecovery(app, site: site, prefix: "direct-quota-\(site.id)")
                 XCTAssertEqual(change["performed"] as? Bool, true)
-                _ = try waitForContent(app, site: site)
+                content = try waitForContent(app, site: site)
                 route = readRoute(app)
             }
             XCTAssertEqual(route["local_entry_ready"] as? Bool, true)
+            XCTAssertTrue(site.contains(route["host"] as? String ?? ""))
+            XCTAssertEqual(content["expected_site_address_observed"] as? Bool, true)
             attachJSON(content, name: "direct-quota-\(site.id)-content.json")
             attachJSON(route, name: "direct-quota-\(site.id)-route.json")
             screenshot("direct-quota-\(site.id)-content")

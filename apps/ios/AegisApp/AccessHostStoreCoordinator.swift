@@ -300,6 +300,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 tab.clearProxyLanding()
             }
         }
+        if wouldSwitchStore(tab: tab, url: url), let bound,
+           let release = registry.retainRetiringDocument(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate) {
+            tab.afterCurrentDocumentBecomesInert(release)
+        }
         return registry.storeForTab(
             tabID: tab.instanceID.uuidString,
             scopeID: tab.browsingScopeID,
@@ -728,16 +732,26 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     func pendingRecoveryInvalidated(tab: BrowserTab) {
         let tabID = tab.instanceID.uuidString
+        let affectedKeys = Set(operations.values.filter { $0.tabID == tabID }.map(\.key))
         for (id, operation) in operations where operation.tabID == tabID {
             operations.removeValue(forKey: id)
             timeoutTasks.removeValue(forKey: id)?.cancel()
             publisher.cancel(operationID: id)
         }
+        for key in affectedKeys { releaseUnstoredConsumerIfUnused(key) }
         tab.invalidateDeferredDocumentLoad()
         if !operations.values.contains(where: { $0.tabID == tabID && $0.state == .preparing }) {
             if phases[tabID] == .preparing { phases[tabID] = nil }
         }
         revision &+= 1
+    }
+
+    private func releaseUnstoredConsumerIfUnused(_ key: AccessHostStoreKey) {
+        guard registry.store(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate) == nil,
+              !operations.values.contains(where: { $0.key == key && ($0.state == .preparing || $0.state == .sent) })
+        else { return }
+        registry.removeUnstoredEndpoint(for: key)
+        publisher.release(for: key)
     }
 
     func tabClosed(_ tab: BrowserTab) {
@@ -957,6 +971,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             tab.failPendingProxyNavigation(pending)
         }
         publisher.cancel(operationID: operationID)
+        releaseUnstoredConsumerIfUnused(operation.key)
         revision &+= 1
     }
 

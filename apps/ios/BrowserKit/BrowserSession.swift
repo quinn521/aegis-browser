@@ -177,6 +177,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private weak var provisionalNavigation: WKNavigation?
     private var provisionalDeadlineExpired = false
     private var provisionalDeadline: Task<Void, Never>?
+    private var retiringStoreReleases: [@MainActor () -> Void] = []
     private var deferredDocumentNavigationID: String?
     private var programmaticPolicyNavigationID: String?
     private var confirmedRedirectPolicy: (navigationID: String, url: URL)?
@@ -596,7 +597,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if terminatingProxyDocuments > 0 {
             deferUntilProxyDocumentStops(url: url, method: method, unsafeReplay: unsafeReplay,
                                          preservesAttempt: continuesAttempt) { [weak self] in
-                self?.commitPreservingMethod(request, continuesAttempt: continuesAttempt)
+                self?.commitPreservingMethod(request, continuesAttempt: true)
             }
             return
         }
@@ -870,9 +871,22 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         else { afterProxyDocumentStops = action }
     }
 
+    public func afterCurrentDocumentBecomesInert(_ release: @escaping @MainActor () -> Void) {
+        if loadedWebView == nil && terminatingProxyDocuments == 0 { release() }
+        else { retiringStoreReleases.append(release) }
+    }
+
+    private func releaseRetiringStoresIfReady() {
+        guard terminatingProxyDocuments == 0 else { return }
+        let releases = retiringStoreReleases
+        retiringStoreReleases = []
+        releases.forEach { $0() }
+    }
+
     private func terminateDocumentForProxyHold() {
         guard let view = loadedWebView as? BrowserContentWebView else {
             releaseWebView()
+            releaseRetiringStoresIfReady()
             return
         }
         terminatingProxyDocuments += 1
@@ -881,6 +895,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             guard let self else { return }
             self.terminatingProxyDocuments -= 1
             guard self.terminatingProxyDocuments == 0 else { return }
+            self.releaseRetiringStoresIfReady()
             self.documentStopDeadline?.cancel()
             self.documentStopDeadline = nil
             if self.isDisposed {
@@ -1112,11 +1127,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         load(url, preservingScroll: false)
     }
 
-    private func load(_ url: URL, preservingScroll: Bool) {
+    private func load(_ url: URL, preservingScroll: Bool, continuesAttempt: Bool = false) {
         guard !isDisposed else { return }
         if terminatingProxyDocuments > 0 {
-            deferUntilProxyDocumentStops(url: url, method: "GET", unsafeReplay: false) { [weak self] in
-                self?.load(url, preservingScroll: preservingScroll)
+            deferUntilProxyDocumentStops(url: url, method: "GET", unsafeReplay: false,
+                                         preservesAttempt: continuesAttempt) { [weak self] in
+                self?.load(url, preservingScroll: preservingScroll, continuesAttempt: true)
             }
             return
         }
@@ -1132,7 +1148,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         navigationEpoch &+= 1
         loadTask?.cancel()
         loadGeneration = UUID()
-        beginUserNavigation(url: url, method: "GET")
+        if !continuesAttempt { beginUserNavigation(url: url, method: "GET") }
         deferredDocumentNavigationID = attempt.navigationID
         let decision = navigationDecision(url)
         if decision.kind == .blocked {
@@ -1259,7 +1275,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     public func stop() {
-        beginUserNavigation(url: requestedURL ?? url ?? URL(string: "about:blank")!, method: committedRequestMethod)
+        beginUserNavigation(url: requestedURL ?? url ?? URL(string: "about:blank")!,
+                            method: attempt.method, hasReplayableBody: attempt.hasReplayableBody)
         // Stop retires every in-flight WKNavigation identity so a late failure
         // cannot reopen automatic proxy recovery for the cancelled load.
         retireAllNavigationIdentities()
@@ -1598,7 +1615,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         lastMainFrameFailure = nil
         attempt.recoveryOperationID = nil
         attempt.failureID = nil
-        attempt.hasReplayableBody = false
+        // Finishing does not make a body/header-bearing request replay-safe.
         refreshState()
         // History can restore a start document whose DOM predates the current
         // language; a newly loaded document may also finish after a selection.

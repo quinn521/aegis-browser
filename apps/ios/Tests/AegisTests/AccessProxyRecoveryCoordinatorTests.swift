@@ -292,6 +292,36 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         ))
     }
 
+    func testCancelledStalePrivateRetryReleasesEndpointWithoutAStore() async throws {
+        let clock = AccessManualPreparationClock()
+        var shutdowns = 0
+        let publisher = AccessProxyEntryPublisher(provision: { generation, _ in
+            try await clock.sleep(until: .seconds(5))
+            return ready(generation, port: 18_086)
+        }, shutdown: { _ in shutdowns += 1 })
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        retainedSessions.append(browser)
+        browser.hostCoordinator = coordinator
+        browser.switchProfile(to: .privateMode)
+        let tab = try XCTUnwrap(browser.activeTab)
+        fail(tab, url: "https://private-stale.invalid/old")
+        XCTAssertNotNil(coordinator.retryViaProxy(tab: tab))
+        coordinator.setProxyEnabled(true, host: try AccessSiteHost("other.invalid"), scopeID: "ordinary", isPrivate: false)
+        clock.advance(to: .seconds(5))
+        let host = try AccessSiteHost("private-stale.invalid")
+        await settle { coordinator.registry.endpoint(scopeID: tab.browsingScopeID, host: host, isPrivate: true)?.state == .ready }
+        XCTAssertNotNil(publisher.currentEndpoint)
+        XCTAssertEqual(coordinator.registry.endpoint(scopeID: tab.browsingScopeID, host: host, isPrivate: true)?.state, .ready)
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+        XCTAssertNil(coordinator.registry.store(scopeID: tab.browsingScopeID, host: host, isPrivate: true))
+        tab.stop()
+        browser.discardPrivateSession()
+        await settle { publisher.currentEndpoint == nil }
+        XCTAssertNil(publisher.currentEndpoint)
+        XCTAssertEqual(shutdowns, 1)
+    }
+
     func testAnotherToggleRejectsThePreparingTicket() async throws {
         let clock = AccessManualPreparationClock()
         let publisher = AccessProxyEntryPublisher { generation, _ in
