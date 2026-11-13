@@ -53,6 +53,14 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         XCTAssertEqual(parameters.fingerprint, "chrome")
     }
 
+    func testExplicitEmptyShortIDAndSpiderPath() throws {
+        let uri = sampleShareURI.replacingOccurrences(of: "sid=abcd1234", with: "sid=&spx=%2Fexample")
+        let parameters = try AccessLocalV2RayConfigLoader.parseShareURI(uri)
+        XCTAssertEqual(parameters.shortID, "")
+        XCTAssertEqual(parameters.spiderX, "/example")
+        XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseShareURI(uri.replacingOccurrences(of: "&sid=", with: "")))
+    }
+
     func testParsesShareURIWithEmptyEncryptionQuery() throws {
         let uri =
             "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"

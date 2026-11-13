@@ -141,7 +141,9 @@ public enum AccessLocalV2RayConfigLoader {
 
         let serverName = try requiredQuery(query, keys: ["sni", "serverName", "server_name"], field: "serverName")
         let publicKey = try requiredQuery(query, keys: ["pbk", "publicKey", "public_key"], field: "publicKey")
-        let shortID = try requiredQuery(query, keys: ["sid", "shortId", "short_id"], field: "shortID")
+        guard let shortID = query["sid"] ?? query["shortId"] ?? query["short_id"] else {
+            throw AccessLocalV2RayConfigError.emptyField("shortID")
+        }
         let fingerprint = query["fp"] ?? query["fingerprint"] ?? AccessRealityVisionParameters.defaultFingerprint
 
         return try AccessRealityVisionParameters(
@@ -151,7 +153,8 @@ public enum AccessLocalV2RayConfigLoader {
             serverName: serverName,
             publicKey: publicKey,
             shortID: shortID,
-            fingerprint: fingerprint
+            fingerprint: fingerprint,
+            spiderX: query["spx"] ?? ""
         )
     }
 
@@ -204,7 +207,7 @@ public enum AccessLocalV2RayConfigLoader {
         }
         var result: [String: String] = [:]
         for item in components.queryItems ?? [] {
-            guard let value = item.value, !value.isEmpty else { continue }
+            guard let value = item.value, !value.isEmpty || ["sid", "shortId", "short_id"].contains(item.name) else { continue }
             result[item.name] = value
         }
         return result

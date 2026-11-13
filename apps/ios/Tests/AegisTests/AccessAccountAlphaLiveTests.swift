@@ -24,7 +24,10 @@ final class AccessAccountAlphaLiveTests: XCTestCase {
         #else
         // A trusted native test launcher supplies the temporary Aegis session.
         // Physical devices retain the signed HTTPS origin and normal bind path.
-        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "AegisAccountServiceOrigin") as? String, origin)
+        guard Bundle.main.object(forInfoDictionaryKey: "AegisAccountServiceOrigin") as? String == origin else {
+            XCTFail("Signed service origin differs from the authorized test origin")
+            return
+        }
         let session = AccessAccountSession.product(keychain: keychain)
         await session.bind(accountID: account, token: token)?.value
         #endif
