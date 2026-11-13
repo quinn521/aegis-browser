@@ -9,6 +9,60 @@ import XCTest
 
 @MainActor
 final class AccessNavigationRecoveryTests: XCTestCase {
+    func testDisposeWaitsForDocumentAlreadyHeldBeforeClose() async throws {
+        let tab = makeTab()
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/held-close")!)
+        let oldView = tab.webView
+        XCTAssertNotNil(tab.holdForProxy(try XCTUnwrap(tab.safeRouteReloadRequest)))
+        var completed = false
+        tab.dispose { completed = true }
+        XCTAssertFalse(completed, "held old view must become inert before releasing its store")
+        XCTAssertNil(oldView.load(URLRequest(url: URL(string: "https://192.0.2.1/resurrect")!)))
+        await waitUntil { completed }
+        XCTAssertTrue(completed)
+    }
+
+    func testSameStoreResumeRebuildsHooksWithoutReenablingRetiredController() throws {
+        let tab = makeTab()
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/held-hooks")!)
+        let oldView = tab.webView
+        let oldController = oldView.configuration.userContentController
+        let store = tab.websiteDataStore
+        XCTAssertNotNil(tab.holdForProxy(try XCTUnwrap(tab.safeRouteReloadRequest)))
+        XCTAssertTrue(oldController.userScripts.isEmpty)
+        tab.rebindWebsiteDataStore(store, host: nil)
+        let replacement = tab.webView
+        XCTAssertFalse(replacement.configuration.userContentController === oldController)
+        XCTAssertTrue(replacement.configuration.userContentController.userScripts.contains { $0.source.contains("__aegisHasEdits") })
+        XCTAssertTrue(oldController.userScripts.isEmpty)
+    }
+
+    func testExplicitAddressProxyHoldIgnoresOldDirectTimeout() async throws {
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            try await clock.sleep(until: .seconds(5))
+            return AccessProxyEntryPublisher.Provision(
+                endpoint: AccessManagedProxyEndpoint(identity: "held-address", generation: generation,
+                    loopbackHost: "127.0.0.1", port: 18_081, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock)
+        let tab = makeTab()
+        tab.hostCoordinator = coordinator
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/held-deadline")!)
+        await waitUntil { tab.currentNavigationForTests != nil }
+        let oldNavigation = try XCTUnwrap(tab.currentNavigationForTests)
+        let oldView = tab.webView
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertNotNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+        tab.webView(oldView, didFailProvisionalNavigation: oldNavigation, withError: URLError(.timedOut))
+        XCTAssertTrue(tab.matchesPendingAddressNavigation(pending))
+        await waitUntil { publisher.provisionCount == 1 }
+        clock.advance(to: .seconds(5))
+        await waitUntil { tab.recoveryLoadCount == 1 }
+        XCTAssertEqual(tab.recoveryLoadCount, 1)
+    }
+
     func testRepeatedRoutePausePreservesUnsafeGetAndHeadUntilNewNavigation() throws {
         for variant in 0..<3 {
             let tab = makeTab()
@@ -364,6 +418,8 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         deliver(tab)
         XCTAssertEqual(tab.recoveryLoadCount, 1)
 
+        // A store replacement now waits for the old document's terminal receipt.
+        await waitUntil { tab.currentNavigationForTests != nil }
         deliver(tab)
         XCTAssertEqual(tab.recoveryLoadCount, 1)
         XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)

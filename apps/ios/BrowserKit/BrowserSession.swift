@@ -195,6 +195,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private var pendingProxyRequest: URLRequest?
     private var terminatingProxyDocuments = 0
     private var afterProxyDocumentStops: (@MainActor () -> Void)?
+    private var documentDisposalCompletion: (@MainActor () -> Void)?
+    private var contentHooksNeedReinstall = false
     private var documentStopDeadline: Task<Void, Never>?
     /// Set only after the recovery navigation commits while this attempt is a proxy retry.
     @Published public private(set) var proxyRecoveryCommitted = false
@@ -248,6 +250,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             return placeholder
         }
         if let loadedWebView { return loadedWebView }
+        if contentHooksNeedReinstall {
+            // Terminal views retain their old controller. Never re-enable its hooks.
+            configuration.userContentController = WKUserContentController()
+            installContentHooks()
+        }
         let view = BrowserContentWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = self; view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
@@ -344,6 +351,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     private func installContentHooks() {
+        contentHooksNeedReinstall = false
         PageProtection.applySystem(configuration, hardened: preferences.values.hardenedSecurity ?? false)
         configuration.userContentController.addUserScript(WKUserScript(source: """
         globalThis.__aegisHasEdits = false;
@@ -853,12 +861,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     private func terminateCurrentDocument() {
-        if let view = loadedWebView as? BrowserContentWebView {
-            view.terminateDocument(completion: {})
-            releaseWebView(keepTerminalDelegate: true)
-        } else {
-            releaseWebView()
-        }
+        terminateDocumentForProxyHold()
     }
 
     /// Keep the existing host binding until the previous realm is inert.
@@ -873,17 +876,29 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             return
         }
         terminatingProxyDocuments += 1
+        contentHooksNeedReinstall = true
         view.terminateDocument { [weak self] in
             guard let self else { return }
             self.terminatingProxyDocuments -= 1
             guard self.terminatingProxyDocuments == 0 else { return }
             self.documentStopDeadline?.cancel()
             self.documentStopDeadline = nil
+            if self.isDisposed {
+                self.finishDocumentDisposalIfReady()
+                return
+            }
             let action = self.afterProxyDocumentStops
             self.afterProxyDocumentStops = nil
             action?()
         }
         releaseWebView(keepTerminalDelegate: true)
+    }
+
+    private func finishDocumentDisposalIfReady() {
+        guard terminatingProxyDocuments == 0 else { return }
+        let completion = documentDisposalCompletion
+        documentDisposalCompletion = nil
+        completion?()
     }
 
     private func deferUntilProxyDocumentStops(
@@ -1069,13 +1084,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         onAccessContextClosed = nil
         selectedAccessHost = nil
         stop()
-        if let view = loadedWebView as? BrowserContentWebView {
-            view.terminateDocument(completion: completion)
-            releaseWebView(keepTerminalDelegate: true)
-        } else {
-            releaseWebView()
-            completion()
-        }
+        documentDisposalCompletion = completion
+        terminateCurrentDocument()
+        finishDocumentDisposalIfReady()
         hostCoordinator = nil
         onNavigation = nil
     }

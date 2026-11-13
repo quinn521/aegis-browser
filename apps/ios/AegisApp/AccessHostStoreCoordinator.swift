@@ -669,6 +669,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             $0.tabID == tab.instanceID.uuidString && $0.addressNavigation == pending && $0.state == .preparing
         }) { return existing.id }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
+        guard let request = tab.safeRouteReloadRequest,
+              tab.holdForProxy(request) == pending else { return nil }
         return beginPrepare(for: tab, key: key, failure: nil, trigger: .userRetry, addressNavigation: pending)
     }
 
@@ -714,6 +716,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         operation.ticket = ticket
         operation.state = .sent
         operations[operationID] = operation
+        timeoutTasks.removeValue(forKey: operationID)?.cancel()
         if operation.authorization != nil || intents[operation.key] == .on {
             executing.insert(operation.key)
             executingTabs[operation.tabID] = operation.key
@@ -870,7 +873,6 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     private func finishPrepare(_ operationID: UUID, result: AccessProxyEntryPrepareResult) {
-        timeoutTasks.removeValue(forKey: operationID)?.cancel()
         guard var operation = operations[operationID], operation.state == .preparing else { return }
         guard clock.now < operation.deadline else {
             fail(operationID, reason: "代理在 15 秒内没有就绪")
@@ -911,6 +913,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
             operation.state = .sent
             operations[operationID] = operation
+            timeoutTasks.removeValue(forKey: operationID)?.cancel()
             executing.insert(operation.key)
             executingTabs[operation.tabID] = operation.key
             phases[operation.tabID] = .sent
@@ -921,6 +924,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         } else {
             operation.state = .completed
             operations[operationID] = operation
+            timeoutTasks.removeValue(forKey: operationID)?.cancel()
             phases[operation.tabID] = nil
             publisher.cancel(operationID: operationID)
         }

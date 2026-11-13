@@ -310,6 +310,10 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         clock.advance(to: .seconds(5))
         await settle(seconds: 0.4) { false }
         XCTAssertEqual(tab.recoveryLoadCount, 0)
+        clock.advance(to: .seconds(16))
+        await settle { coordinator.lastRecoveryFailure == "代理在 15 秒内没有就绪" }
+        XCTAssertEqual(coordinator.lastRecoveryFailure, "代理在 15 秒内没有就绪")
+        XCTAssertNotNil(coordinator.retryViaProxy(tab: tab))
     }
 
     func testOldFailureDoesNotReplaceANewerReadyEntry() async throws {

@@ -1323,6 +1323,78 @@ private extension XCUIElement {
 /// full-page acceptance: each receipt and both screenshots require visual review.
 @MainActor
 final class AegisRealWebsiteSmokeTests: XCTestCase {
+    func testDirectSubscriptionQuotaChangesAfterRealProxyBrowsing() throws {
+        guard ProcessInfo.processInfo.environment["AEGIS_DIRECT_SUBSCRIPTION_SMOKE"] == "1" else {
+            throw XCTSkip("Requires the authorized embedded node and private subscription descriptor")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.buttons["page-protection"].waitForExistence(timeout: 10))
+        let before = try readDirectQuota(app, name: "direct-quota-before")
+        for site in [Site(id: 6, host: "wikipedia.org"), Site(id: 26, host: "bbc.com")] {
+            let address = app.textFields["address-field"]
+            address.tap(); address.clearAndType(site.url); address.typeText("\n")
+            let deadline = Date(timeIntervalSinceNow: 15)
+            var action = recoveryButton(app)
+            while action == nil, Date() < deadline {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 1)); action = recoveryButton(app)
+            }
+            action?.coordinate.tap()
+            let content = try waitForContent(app, site: site)
+            var route = readRoute(app)
+            if route["local_entry_ready"] as? Bool != true {
+                let change = enableVisibleSiteRecovery(app, site: site, prefix: "direct-quota-\(site.id)")
+                XCTAssertEqual(change["performed"] as? Bool, true)
+                _ = try waitForContent(app, site: site)
+                route = readRoute(app)
+            }
+            XCTAssertEqual(route["local_entry_ready"] as? Bool, true)
+            attachJSON(content, name: "direct-quota-\(site.id)-content.json")
+            attachJSON(route, name: "direct-quota-\(site.id)-route.json")
+            screenshot("direct-quota-\(site.id)-content")
+        }
+        var after = try readDirectQuota(app, name: "direct-quota-after")
+        for attempt in 0..<3 where (after["uploaded"] ?? 0) <= (before["uploaded"] ?? 0)
+            || (after["downloaded"] ?? 0) <= (before["downloaded"] ?? 0) {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 5))
+            after = try readDirectQuota(app, name: "direct-quota-after-\(attempt)")
+        }
+        XCTAssertGreaterThan(try XCTUnwrap(after["uploaded"]), try XCTUnwrap(before["uploaded"]))
+        XCTAssertGreaterThan(try XCTUnwrap(after["downloaded"]), try XCTUnwrap(before["downloaded"]))
+        XCTAssertLessThan(try XCTUnwrap(after["remaining"]), try XCTUnwrap(before["remaining"]))
+    }
+
+    private func readDirectQuota(_ app: XCUIApplication, name: String) throws -> [String: UInt64] {
+        app.buttons["page-protection"].tap()
+        let refresh = app.buttons["access-usage-refresh"]
+        for _ in 0..<8 where !refresh.isHittable { app.swipeUp() }
+        XCTAssertTrue(refresh.waitForExistence(timeout: 10))
+        if refresh.isEnabled && refresh.isHittable { refresh.tap() }
+        var values: [String: UInt64] = [:]
+        let deadline = Date(timeIntervalSinceNow: 15)
+        repeat {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+            values = [:]
+            func visit(_ snapshot: XCUIElementSnapshot) {
+                for key in ["quota", "uploaded", "downloaded", "used", "remaining"] where snapshot.identifier == "access-usage-" + key {
+                    if let raw = snapshot.value as? String, let bytes = UInt64(raw) { values[key] = bytes }
+                }
+                for child in snapshot.children { visit(child) }
+            }
+            visit(try app.snapshot())
+        } while values.count != 5 && Date() < deadline
+        screenshot(name)
+        attachJSON(values.mapValues { String($0) }, name: name + ".json")
+        XCTAssertEqual(values["quota"], 10_000_000_000)
+        let used = try XCTUnwrap(values["used"])
+        XCTAssertEqual(used, try XCTUnwrap(values["uploaded"]) + XCTUnwrap(values["downloaded"]))
+        XCTAssertEqual(values["remaining"], used < 10_000_000_000 ? 10_000_000_000 - used : 0)
+        app.navigationBars.buttons["完成"].tap()
+        return values
+    }
+
     func testCurrentSiteProxySwitchPreservesOtherSite() throws {
         guard ProcessInfo.processInfo.environment["AEGIS_REAL_SITE_SWITCH_SMOKE"] == "1" else {
             throw XCTSkip("Requires an explicitly enabled real-node UI run")

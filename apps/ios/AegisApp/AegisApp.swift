@@ -33,6 +33,7 @@ struct AegisApp: App {
     @StateObject private var downloads: DownloadManager
     @StateObject private var assistantTasks: AssistantTaskStore
     @StateObject private var accountSession = AccessAccountSession.product()
+    @StateObject private var subscriptionUsage = AccessSubscriptionUsageSession.product()
     @StateObject private var readingLibrary: ReadingLibrary
     @StateObject private var accessSiteProxyRegistry: AccessSiteProxyStoreRegistry
     @StateObject private var hostStores: AccessHostStoreCoordinator
@@ -125,6 +126,7 @@ struct AegisApp: App {
                 .environmentObject(assistantTasks)
                 .environmentObject(readingLibrary)
                 .environmentObject(accountSession)
+                .environmentObject(subscriptionUsage)
                 .environmentObject(accessSiteProxyRegistry)
                 .environmentObject(hostStores)
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
@@ -144,6 +146,7 @@ struct AegisApp: App {
             }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
+            subscriptionUsage.setActive(phase == .active)
             accountSession.usageRefresh.setActive(phase == .active)
             if phase != .active { accountSession.suspend() }
         }
