@@ -133,8 +133,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost) {
         guard !tab.isDisposed, host(for: tab) == displayedHost else { return }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: displayedHost, isPrivate: tab.profile.isPrivate)
-        let affected = BrowserSession.openTabs().filter {
-            $0.browsingScopeID == key.scopeID && $0.profile.isPrivate == key.isPrivate && host(for: $0) == key.host
+        let affected = BrowserSession.openTabs().filter { current in
+            let pendingHost = current.pendingAddressNavigation.flatMap { pending in
+                current.matchesPendingAddressNavigation(pending) ? Self.httpHost(pending.url) : nil
+            }
+            return current.browsingScopeID == key.scopeID && current.profile.isPrivate == key.isPrivate
+                && (host(for: current) == key.host || (!enabled && pendingHost == key.host))
         }
         let reloads = affected.compactMap { current -> (BrowserTab, URLRequest)? in
             guard let request = current.safeRouteReloadRequest, let url = request.url,
@@ -287,7 +291,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                     // Refuse before storeForTab can unbind the currently displayed document.
                     guard let bound, let endpoint = registry.endpoint(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate),
                           endpoint.state == .ready else { return nil }
-                    registry.setEndpoint(endpoint, scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
+                    guard retainLandingEndpoint(endpoint, for: key) else { return nil }
                 }
                 // Once attached, the child store keeps its generation even if the idle
                 // root store is evicted. A failed bound generation stays fail-closed.
@@ -304,6 +308,16 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             boundHost: bound,
             intent: intent
         )
+    }
+
+    /// A landing store owns its entry independently of the idle redirect source.
+    func retainLandingEndpoint(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey) -> Bool {
+        guard endpoint.state == .ready else { return false }
+        if let current = registry.endpoint(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate),
+           current.generation > endpoint.generation { return false }
+        guard publisher.retain(endpoint, for: key) else { return false }
+        registry.setEndpoint(endpoint, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
+        return true
     }
 
     @discardableResult
@@ -832,20 +846,23 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         )
         phases[tab.instanceID.uuidString] = .preparing
         armTimeout(operationID: operationID, deadline: deadline)
-        let publisher = self.publisher
-        Task { @MainActor [weak self] in
-            // A synchronous Stop/Off may run before this task gets its first turn.
-            guard self?.operations[operationID]?.state == .preparing else { return }
-            // Cancellation or owner teardown can race the awaited preparation.
-            // The task must remove its own waiter even when no operation survives.
-            defer { publisher.cancel(operationID: operationID) }
-            do {
-                let result = try await publisher.prepare(
-                    AccessProxyEntryPrepareRequest(operationID: operationID, deadline: deadline)
-                )
-                self?.finishPrepare(operationID, result: result)
-            } catch {
-                self?.fail(operationID, reason: (error as? AccessSiteSessionError)?.readableMessage ?? "代理没有就绪")
+        tab.afterProxyHoldDocumentStops { [weak self] in
+            guard let self else { return }
+            let publisher = self.publisher
+            Task { @MainActor [weak self] in
+                // A synchronous Stop/Off may run before this task gets its first turn.
+                guard self?.operations[operationID]?.state == .preparing else { return }
+                // Cancellation or owner teardown can race the awaited preparation.
+                // The task must remove its own waiter even when no operation survives.
+                defer { publisher.cancel(operationID: operationID) }
+                do {
+                    let result = try await publisher.prepare(
+                        AccessProxyEntryPrepareRequest(operationID: operationID, deadline: deadline)
+                    )
+                    self?.finishPrepare(operationID, result: result)
+                } catch {
+                    self?.fail(operationID, reason: (error as? AccessSiteSessionError)?.readableMessage ?? "代理没有就绪")
+                }
             }
         }
         revision &+= 1

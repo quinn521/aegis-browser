@@ -9,6 +9,26 @@ import XCTest
 
 @MainActor
 final class AccessNavigationRecoveryTests: XCTestCase {
+    func testRepeatedRoutePausePreservesUnsafeGetAndHeadUntilNewNavigation() throws {
+        for variant in 0..<3 {
+            let tab = makeTab()
+            var request = URLRequest(url: URL(string: "https://unsafe-pause.invalid/submission")!)
+            request.httpMethod = variant == 1 ? "HEAD" : "GET"
+            if variant == 0 { request.httpBody = Data("submission".utf8) }
+            if variant == 1 { request.httpBodyStream = InputStream(data: Data("stream".utf8)) }
+            if variant == 2 { request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization") }
+            tab.load(request)
+            XCTAssertNil(tab.safeRouteReloadRequest)
+            tab.pauseAfterRouteChange()
+            XCTAssertNil(tab.safeRouteReloadRequest)
+            tab.pauseAfterRouteChange()
+            XCTAssertNil(tab.safeRouteReloadRequest, "Repeated toggles must not erase replay restrictions")
+            let fresh = URL(string: "https://unsafe-pause.invalid/fresh")!
+            tab.load(fresh)
+            XCTAssertEqual(tab.safeRouteReloadRequest?.url, fresh)
+        }
+    }
+
     func testAddressPresentationKeepsFailedTargetUntilANewNavigationSupersedesIt() async throws {
         let tab = makeTab()
         tab.load(URL(string: "aegis://start")!)

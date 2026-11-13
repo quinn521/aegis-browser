@@ -6,6 +6,76 @@ import XCTest
 
 @MainActor
 final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
+    func testLandingConsumerSurvivesParentEvictionAndReleasesAfterClose() async throws {
+        var shutdowns = 0
+        let publisher = AccessProxyEntryPublisher(provision: { generation, _ in
+            ready(generation, port: 18_291)
+        }, shutdown: { _ in shutdowns += 1 })
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher)
+        let parent = try AccessSiteHost("example.com"), child = try AccessSiteHost("www.example.com")
+        let parentKey = AccessHostStoreKey(scopeID: "ordinary", host: parent, isPrivate: false)
+        let childKey = AccessHostStoreKey(scopeID: "ordinary", host: child, isPrivate: false)
+        let operation = UUID()
+        let prepared = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(15)))
+        XCTAssertTrue(publisher.retain(prepared.endpoint, for: parentKey))
+        publisher.cancel(operationID: operation)
+        coordinator.registry.setEndpoint(prepared.endpoint, scopeID: "ordinary", host: parent, isPrivate: false)
+        let now = Date()
+        XCTAssertNotNil(coordinator.registry.storeForTab(tabID: "landing", scopeID: "ordinary", isPrivate: false,
+            targetHost: parent, boundHost: nil, intent: .on, now: now))
+        XCTAssertTrue(coordinator.retainLandingEndpoint(prepared.endpoint, for: childKey))
+        XCTAssertNotNil(coordinator.registry.storeForTab(tabID: "landing", scopeID: "ordinary", isPrivate: false,
+            targetHost: child, boundHost: parent, intent: .on, now: now))
+        coordinator.registry.sweep(now: now.addingTimeInterval(61))
+        XCTAssertNil(coordinator.registry.store(scopeID: "ordinary", host: parent, isPrivate: false))
+        XCTAssertNotNil(coordinator.registry.store(scopeID: "ordinary", host: child, isPrivate: false))
+        XCTAssertEqual(publisher.currentEndpoint, prepared.endpoint)
+        XCTAssertEqual(shutdowns, 0)
+        coordinator.registry.unbind("landing", now: now.addingTimeInterval(61))
+        coordinator.registry.releaseIdleStores()
+        XCTAssertNil(publisher.currentEndpoint)
+        XCTAssertEqual(shutdowns, 1)
+    }
+
+    func testLandingCannotRetainAnUnownedEndpoint() throws {
+        let publisher = AccessProxyEntryPublisher { generation, _ in ready(generation, port: 18_291) }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher)
+        let key = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("www.example.com"), isPrivate: false)
+        XCTAssertFalse(coordinator.retainLandingEndpoint(ready(1, port: 18_291).endpoint, for: key))
+        XCTAssertNil(coordinator.registry.endpoint(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate))
+    }
+
+    func testOffResumesPendingSiblingAndLatePreparationCannotReattachIt() async throws {
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            try await clock.sleep(until: .seconds(10))
+            return ready(generation, port: 18_291)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock)
+        let target = URL(string: "https://pending-sibling.invalid/page")!
+        let host = try AccessSiteHost("pending-sibling.invalid")
+        let primary = try failedTab(coordinator: coordinator, url: target.absoluteString)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        retainedSessions.append(browser)
+        let sibling = try XCTUnwrap(browser.activeTab)
+        sibling.hostCoordinator = coordinator
+        coordinator.setProxyEnabled(true, host: host, scopeID: sibling.browsingScopeID, isPrivate: false)
+        sibling.load(URLRequest(url: target))
+        await settle { publisher.provisionCount == 1 }
+        XCTAssertNotNil(sibling.pendingAddressNavigation)
+        XCTAssertNil(sibling.committedMainFrameURL)
+        coordinator.setSiteProxyEnabled(false, for: primary, displayedHost: host)
+        await settle { sibling.currentNavigationForTests != nil || sibling.lastMainFrameFailure != nil }
+        XCTAssertNil(sibling.pendingAddressNavigation)
+        XCTAssertTrue(sibling.currentNavigationForTests != nil || sibling.lastMainFrameFailure != nil)
+        XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: target))
+        clock.advance(to: .seconds(10))
+        await settle(seconds: 0.2) { false }
+        XCTAssertEqual(sibling.recoveryLoadCount, 0)
+        XCTAssertNil(sibling.boundHostName)
+        XCTAssertNil(publisher.currentEndpoint)
+    }
+
     func testImmediateOffBeforePreparationTaskStartsDoesNotRetainEntry() async throws {
         let publisher = AccessProxyEntryPublisher { generation, _ in ready(generation, port: 18_198) }
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())

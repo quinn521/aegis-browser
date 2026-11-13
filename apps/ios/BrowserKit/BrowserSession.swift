@@ -193,6 +193,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         return lastMainFrameFailure?.url ?? url
     }
     private var pendingProxyRequest: URLRequest?
+    private var terminatingProxyDocuments = 0
+    private var afterProxyDocumentStops: (@MainActor () -> Void)?
+    private var documentStopDeadline: Task<Void, Never>?
     /// Set only after the recovery navigation commits while this attempt is a proxy retry.
     @Published public private(set) var proxyRecoveryCommitted = false
     internal private(set) var recoveryLoadCount = 0
@@ -357,6 +360,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         hasReplayableBody: Bool = false,
         policyType: WKNavigationType? = nil
     ) {
+        afterProxyDocumentStops = nil
+        documentStopDeadline?.cancel()
+        documentStopDeadline = nil
         invalidateDeferredDocumentLoad()
         hostCoordinator?.pendingRecoveryInvalidated(tab: self)
         pendingAddressNavigation = nil
@@ -579,6 +585,13 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let method = request.httpMethod ?? "GET"
         let url = request.url ?? URL(string: "about:blank")!
         let unsafeReplay = BrowserMainFrameFailure.requestHasUnsafeReplaySurface(request)
+        if terminatingProxyDocuments > 0 {
+            deferUntilProxyDocumentStops(url: url, method: method, unsafeReplay: unsafeReplay,
+                                         preservesAttempt: continuesAttempt) { [weak self] in
+                self?.commitPreservingMethod(request, continuesAttempt: continuesAttempt)
+            }
+            return
+        }
         if !continuesAttempt {
             // Supersede deferred allows from an earlier load (commonly `aegis://start`
             // from `setActive`). Policy-adopted competing allows still stack via
@@ -799,9 +812,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         loadTask?.cancel()
         invalidateDeferredDocumentLoad()
         retireAllNavigationIdentities()
-        loadedWebView?.stopLoading()
+        terminateDocumentForProxyHold()
         requestedURL = attempt.url
         isLoading = true
+        isSuspended = false
         loadingErrorPresentation = nil
         pendingProxyRequest = request
         let pending = BrowserPendingAddressNavigation(navigationID: attempt.navigationID, url: attempt.url)
@@ -829,7 +843,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     public func pauseAfterRouteChange() {
+        let method = attempt.method
+        let unsafeReplay = attempt.hasReplayableBody
         stop()
+        attempt.method = method
+        attempt.hasReplayableBody = unsafeReplay
         terminateCurrentDocument()
         loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
     }
@@ -840,6 +858,55 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             releaseWebView(keepTerminalDelegate: true)
         } else {
             releaseWebView()
+        }
+    }
+
+    /// Keep the existing host binding until the previous realm is inert.
+    public func afterProxyHoldDocumentStops(_ action: @escaping @MainActor () -> Void) {
+        if terminatingProxyDocuments == 0 { action() }
+        else { afterProxyDocumentStops = action }
+    }
+
+    private func terminateDocumentForProxyHold() {
+        guard let view = loadedWebView as? BrowserContentWebView else {
+            releaseWebView()
+            return
+        }
+        terminatingProxyDocuments += 1
+        view.terminateDocument { [weak self] in
+            guard let self else { return }
+            self.terminatingProxyDocuments -= 1
+            guard self.terminatingProxyDocuments == 0 else { return }
+            self.documentStopDeadline?.cancel()
+            self.documentStopDeadline = nil
+            let action = self.afterProxyDocumentStops
+            self.afterProxyDocumentStops = nil
+            action?()
+        }
+        releaseWebView(keepTerminalDelegate: true)
+    }
+
+    private func deferUntilProxyDocumentStops(
+        url: URL, method: String, unsafeReplay: Bool, preservesAttempt: Bool = false,
+        action: @escaping @MainActor () -> Void
+    ) {
+        if !preservesAttempt {
+            beginUserNavigation(url: url, method: method, hasReplayableBody: unsafeReplay)
+        } else {
+            documentStopDeadline?.cancel()
+        }
+        requestedURL = url
+        isLoading = true
+        let navigationID = attempt.navigationID
+        afterProxyHoldDocumentStops { [weak self] in
+            guard let self, !self.isDisposed, self.attempt.navigationID == navigationID else { return }
+            action()
+        }
+        documentStopDeadline = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            guard let self, self.terminatingProxyDocuments > 0,
+                  self.attempt.navigationID == navigationID else { return }
+            self.pauseAfterRouteChange()
         }
     }
 
@@ -1036,6 +1103,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func load(_ url: URL, preservingScroll: Bool) {
         guard !isDisposed else { return }
+        if terminatingProxyDocuments > 0 {
+            deferUntilProxyDocumentStops(url: url, method: "GET", unsafeReplay: false) { [weak self] in
+                self?.load(url, preservingScroll: preservingScroll)
+            }
+            return
+        }
         if !preservingScroll { savedScrollOffset = .zero }
         restoresScrollOffset = preservingScroll
         isSuspended = false

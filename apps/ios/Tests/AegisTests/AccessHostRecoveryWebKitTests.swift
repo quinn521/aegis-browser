@@ -452,6 +452,49 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertEqual(direct.websiteDataStore.proxyConfigurations.count, 0)
     }
 
+    func testEnablingProxyStopsOldDirectDocumentBeforePreparationAndFailure() async throws {
+        let html = """
+        <title>Direct preparation fixture</title><script>
+        setInterval(() => fetch('/pulse?proxy-hold', {cache:'no-store'}).catch(()=>{}), 40);
+        </script>
+        """
+        let origin = OriginReceipt(port: 18_292, body: html)
+        try await origin.start()
+        defer { origin.stop() }
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { _, _ in
+            try await clock.sleep(until: .seconds(10))
+            throw AccessSiteSessionError.nodeUnavailable
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.load(URL(string: "http://localhost:\(origin.port)/page?proxy-hold")!)
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        try await waitUntil(seconds: 15, {
+            attach(tab.webView, to: window)
+            return origin.transcript.components(separatedBy: "/pulse?proxy-hold").count > 3
+        }, message: origin.transcript)
+        let oldView = tab.webView
+        coordinator.setSiteProxyEnabled(true, for: tab, displayedHost: try AccessSiteHost("localhost"))
+        try await waitUntil(seconds: 10, {
+            oldView.url?.absoluteString == "about:blank" && publisher.provisionCount == 1
+        }, message: "The old direct document must become inert before preparation starts")
+        try await Task.sleep(for: .milliseconds(150))
+        let stopped = origin.transcript.components(separatedBy: "/pulse?proxy-hold").count
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(origin.transcript.components(separatedBy: "/pulse?proxy-hold").count, stopped)
+        XCTAssertNil(oldView.load(URLRequest(url: URL(string: "http://localhost:\(origin.port)/resurrect")!)))
+        clock.advance(to: .seconds(10))
+        try await waitUntil(seconds: 5, { !tab.isLoading && tab.loadingError != nil }, message: "Preparation must fail closed")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(origin.transcript.components(separatedBy: "/pulse?proxy-hold").count, stopped)
+        XCTAssertFalse(origin.transcript.contains("/resurrect"))
+    }
+
     func testRetainedClosedPageStopsBeforeHostStoreRetirement() async throws {
         let html = """
         <title>Terminal window fixture</title><script>
