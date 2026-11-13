@@ -1679,17 +1679,23 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
               recoveryLabels.contains(candidate.label) else { return nil }
         // Identifier propagation must never turn a container or an unrelated
         // descendant into a tap target. Require a unique native button and label.
-        let button = app.descendants(matching: .any).matching(NSPredicate(
-            format: "elementType == %d AND (identifier == %@ OR label == %@)",
-            Int(XCUIElement.ElementType.button.rawValue), "page-load-proxy-retry", candidate.label
-        )).firstMatch
-        guard button.exists, button.isEnabled, button.isHittable,
-              let live = try? button.snapshot(), live.elementType == .button,
+        // isHittable can itself raise an XCTest failure while the pending
+        // button is replaced by a timeout button. Observe two complete native
+        // snapshots instead; the later route/content checks still decide if
+        // this one attempted action actually worked.
+        guard let current = try? app.snapshot() else { return nil }
+        let currentCandidates = nativeDescendants(current).filter {
+            $0.elementType == .button && $0.isEnabled
+                && ($0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label))
+                && !$0.frame.isEmpty && !$0.frame.isInfinite && !$0.frame.isNull
+                && current.frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
+        }
+        guard currentCandidates.count == 1, let live = currentCandidates.first,
               live.frame == candidate.frame, live.label == candidate.label else { return nil }
         return ObservedRecoveryAction(label: live.label,
             coordinate: app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-                dx: live.frame.midX - snapshot.frame.minX,
-                dy: live.frame.midY - snapshot.frame.minY)))
+                dx: live.frame.midX - current.frame.minX,
+                dy: live.frame.midY - current.frame.minY)))
     }
 
     private func preActionEvidence(_ app: XCUIApplication) -> [String: Any] {

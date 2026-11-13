@@ -26,14 +26,12 @@ struct AccessSiteProxyToggleView: View {
         return store.snapshot(for: url)
     }
 
-    private var attachment: AccessProxyAttachment {
-        guard let tab else { return .notAttached }
-        return store.attachment(tab: tab, url: url)
-    }
-
     var body: some View {
         let _ = localizationLocale
         let snap = snapshot
+        // The failed target can differ from WebKit's last committed URL. All
+        // route labels must describe the same host as the visible site switch.
+        let attachment = snap.attachment
         let capability = AccessProxyCapabilityPresentation.make(
             nodeID: configuredNodeID,
             attached: attachment != .notAttached,
