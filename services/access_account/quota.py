@@ -71,6 +71,14 @@ class EnforcedMeter(metering.Meter):
     def _validate_quota(frame):
         if not isinstance(frame, dict):
             raise ValueError("invalid frame")
+        if "measuredAt" in frame:
+            if (
+                frame.get("op") != "commit"
+                or not metering._count(frame["measuredAt"])
+                or frame["measuredAt"] == 0
+            ):
+                raise ValueError("invalid measurement time")
+            frame = {k: v for k, v in frame.items() if k != "measuredAt"}
         base = {"v", "flow", "op"}
         op = frame.get("op")
         # Reuse the protocol version and random flow ID validation.
@@ -257,6 +265,9 @@ class EnforcedMeter(metering.Meter):
             if (n, complete) != (w["confirmed"], bool(w["complete"])):
                 raise ValueError("conflicting confirmation")
             return dict(ok=True)
+        stamp = frame.get("measuredAt", now)
+        if stamp > now:
+            raise ValueError("future measurement")
         released = w["granted"] - n if complete else 0
         db.execute(
             "UPDATE quota_writers SET confirmed=?,complete=?,held=held-?,"
@@ -279,6 +290,7 @@ class EnforcedMeter(metering.Meter):
                     bytes=row[metering.DIRECTION[direction]] + n,
                     path=path,
                     pathBytes=row[path] + n,
+                    measuredAt=stamp,
                 ),
                 now,
             )
