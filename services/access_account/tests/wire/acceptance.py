@@ -148,7 +148,7 @@ def exercise(rt, emit):
     cache_control(rt, emit)
 
 
-def main():
+def run(work=exercise, runtime_class=Runtime):
     parser = argparse.ArgumentParser(description=__doc__, epilog="Test dependencies: requests==2.32.5 and CacheControl==0.14.3.")
     parser.add_argument("--client", required=True, type=Path, help="stock Xray binary")
     parser.add_argument("--server", required=True, type=Path, help="meter-enabled Xray binary")
@@ -165,8 +165,8 @@ def main():
                           "sha256": {str(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in files}})
         try:
             with tempfile.TemporaryDirectory(prefix="n1-") as tmp, contextlib.ExitStack() as stack:
-                rt = Runtime(Path(tmp), stack, args.client.resolve(), args.server.resolve(), Path(tmp) / "m.sock")
-                exercise(rt, emit)
+                rt = runtime_class(Path(tmp), stack, args.client.resolve(), args.server.resolve(), Path(tmp) / "m.sock")
+                work(rt, emit)
         except Exception as error:
             emit("failed", str(error))
             raise
@@ -174,4 +174,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run()

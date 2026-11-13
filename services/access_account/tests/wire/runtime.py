@@ -89,6 +89,7 @@ class Runtime:
                 raise RuntimeError(f"{name} exited with {proc.returncode}")
             return ready(service_port) if service_port else socket_path.exists()
         until(listening)
+        return proc
 
     def serve(self, server):
         self.stack.callback(server.server_close)

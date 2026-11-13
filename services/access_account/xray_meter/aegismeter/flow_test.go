@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -121,5 +123,87 @@ func TestFailedAckStopsNewWrites(t *testing.T) {
 	events := <-done
 	if len(events) != 1 || events[0]["op"] != "sample" {
 		t.Fatal(events)
+	}
+}
+
+func TestCollectorRestartReplaysConfirmedPrefixAndFinish(t *testing.T) {
+	// sockaddr_un has a short platform limit; the fixture owns this tiny directory.
+	root, err := os.MkdirTemp("/tmp", "aegismeter-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(root, "meter.sock")
+	dir, err := recoveryDirectory(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, done := collector(t, true)
+	f.recoveryDir = dir
+	if n, err := f.Write(io.Discard, []byte{1, 2, 3}, 0, 3, "target_tcp"); n != 3 || err == nil {
+		t.Fatal(n, err)
+	}
+	<-done
+	if err := f.Finish(); err == nil {
+		t.Fatal("offline finish unexpectedly acknowledged")
+	}
+	frames, err := pending(filepath.Join(dir, f.id+".json"))
+	if err != nil || len(frames) != 2 {
+		t.Fatal(frames, err)
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	seen := make(chan []observed, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		var messages []observed
+		for scanner.Scan() {
+			var frame observed
+			if err := json.Unmarshal(scanner.Bytes(), &frame); err != nil {
+				return
+			}
+			messages = append(messages, frame)
+			io.WriteString(conn, "{\"ok\":true}\n")
+			if frame["op"] == "finish" {
+				break
+			}
+		}
+		seen <- messages
+	}()
+	replay(socket, dir)
+	messages := <-seen
+	if len(messages) != 2 || messages[0]["bytes"] != float64(3) || messages[1]["uploadedBytes"] != float64(3) {
+		t.Fatal(messages)
+	}
+	frames, err = pending(filepath.Join(dir, f.id+".json"))
+	if err != nil || len(frames) != 0 {
+		t.Fatal(frames, err)
+	}
+}
+
+func TestRecoveryPreservesLargeIntegers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "record.json")
+	large := int64(9007199254740993)
+	if err := save(path, []map[string]any{{"bytes": large}}); err != nil {
+		t.Fatal(err)
+	}
+	frames, err := pending(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := frames[0]["bytes"].(json.Number).Int64()
+	if err != nil || n != large {
+		t.Fatal(n, err)
 	}
 }
