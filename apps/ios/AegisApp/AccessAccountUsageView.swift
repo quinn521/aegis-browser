@@ -65,7 +65,7 @@ struct AccessAccountUsageView: View {
                 }
             }
             Button {
-                session.refresh()
+                session.usageRefresh.refreshNow()
             } label: {
                 HStack {
                     Text("刷新额度")

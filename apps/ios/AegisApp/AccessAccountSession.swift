@@ -117,6 +117,7 @@ final class AccessAccountSession: ObservableObject {
     }
 
     func suspend() {
+        usageRefresh.identityDidChange()
         for grant in grants.values { grant.invalidate(client: client) }
         generation = UUID()
         task?.cancel()
@@ -197,17 +198,22 @@ final class AccessAccountSession: ObservableObject {
                         && receivedUptime.isFinite && receivedUptime >= requestStartedUptime
                         ? requestStartedUptime : nil
                     state = .ready(result)
+                    usageRefresh.didComplete(succeeded: true)
                 } catch {
                     guard self.generation == generation else { return }
                     guard revalidateIdentity(credential) else { return }
                     if case AccountQueryError.unauthorized = error { signOut() }
-                    else { state = .unavailable }
+                    else {
+                        state = .unavailable
+                        usageRefresh.didComplete(succeeded: false)
+                    }
                 }
             }
         } catch {
             // Unknown Keychain identity is not an HTTP outage: discard every old number.
             suspend()
             state = .unavailable
+            usageRefresh.didComplete(succeeded: false)
         }
         return task
     }
