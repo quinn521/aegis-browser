@@ -785,11 +785,6 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             fail(operationID, reason: "这次准备已经失效")
             return
         }
-        guard authorizationStillValid(operation) else {
-            fail(operationID, reason: "这次准备已经失效")
-            publisher.cancel(operationID: operationID)
-            return
-        }
         if let pending = operation.addressNavigation {
             guard let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }),
                   tab.browsingScopeID == operation.key.scopeID, tab.profile.isPrivate == operation.key.isPrivate,
@@ -802,6 +797,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 revision &+= 1
                 return
             }
+        } else if !authorizationStillValid(operation) {
+            fail(operationID, reason: "这次准备已经失效")
+            publisher.cancel(operationID: operationID)
+            return
         }
         guard publisher.validateReady(result), publisher.retain(result.endpoint, for: operation.key) else {
             fail(operationID, reason: "代理入口还不能使用")
@@ -818,6 +817,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
             operation.state = .sent
             operations[operationID] = operation
+            executing.insert(operation.key)
+            executingTabs[operation.tabID] = operation.key
             phases[operation.tabID] = .sent
             _ = tab.openPendingAddressViaProxy(pending, recoveryOperationID: operationID)
             publisher.cancel(operationID: operationID)

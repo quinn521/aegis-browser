@@ -146,6 +146,10 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
         let tab = makeTab()
         tab.hostCoordinator = coordinator
+        let host = try AccessSiteHost("192.0.2.1")
+        coordinator.setProxyEnabled(false, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        let originalStore = tab.websiteDataStore
+        XCTAssertTrue(originalStore.proxyConfigurations.isEmpty)
         tab.loadFromAddressBar(URL(string: "https://192.0.2.1/address")!)
         let pending = try XCTUnwrap(tab.pendingAddressNavigation)
         XCTAssertEqual(publisher.provisionCount, 0)
@@ -157,6 +161,12 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         XCTAssertEqual(tab.recoveryLoadCount, 1)
         XCTAssertEqual(publisher.provisionCount, 1)
         XCTAssertEqual(tab.boundHostName, "192.0.2.1")
+        let managedStore = tab.websiteDataStore
+        XCTAssertFalse(managedStore === originalStore)
+        XCTAssertTrue(tab.webView.configuration.websiteDataStore === managedStore)
+        XCTAssertFalse(managedStore.proxyConfigurations.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(managedStore.proxyConfigurations.first).allowFailover)
+        XCTAssertTrue(coordinator.dataStoreForMainFrame(tab: tab, url: URL(string: "https://192.0.2.1/redirected")!) === managedStore)
         XCTAssertNil(tab.pendingAddressNavigation)
         XCTAssertNil(tab.lastMainFrameFailure)
         XCTAssertNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
@@ -224,6 +234,11 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         let host = try AccessSiteHost("192.0.2.1")
         XCTAssertNotNil(coordinator.registry.endpoint(scopeID: privateTab.browsingScopeID, host: host, isPrivate: true))
         XCTAssertNil(coordinator.registry.endpoint(scopeID: "ordinary", host: host, isPrivate: false))
+        XCTAssertFalse(privateTab.websiteDataStore === privateTab.originalWebsiteDataStore)
+        XCTAssertTrue(privateTab.webView.configuration.websiteDataStore === privateTab.websiteDataStore)
+        XCTAssertFalse(privateTab.websiteDataStore.isPersistent)
+        XCTAssertFalse(privateTab.websiteDataStore.proxyConfigurations.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(privateTab.websiteDataStore.proxyConfigurations.first).allowFailover)
         XCTAssertEqual(ordinary.recoveryLoadCount, 0)
         XCTAssertTrue(ordinary.websiteDataStore === ordinary.originalWebsiteDataStore)
     }

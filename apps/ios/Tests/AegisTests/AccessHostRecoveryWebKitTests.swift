@@ -10,6 +10,52 @@ import XCTest
 /// Failed page reloads through the app HTTP CONNECT listener, not a test-only proxy socket.
 @MainActor
 final class AccessHostRecoveryWebKitTests: XCTestCase {
+    func testFirstPendingAddressChoiceFromOffUsesManagedWebViewAndConnectListener() async throws {
+        let opener = AnsweringOpener()
+        let listener = try await makeListener(port: 18_271, tunnels: opener)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_271))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.hostCoordinator = coordinator
+        try await tab.prepareContentRulesForTests()
+        let host = try AccessSiteHost("pending-address.invalid")
+        coordinator.setProxyEnabled(false, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        let originalView = tab.webView
+        let originalStore = tab.websiteDataStore
+        XCTAssertTrue(originalStore.proxyConfigurations.isEmpty)
+        let window = show(originalView)
+        defer { window.isHidden = true }
+        let target = URL(string: "https://pending-address.invalid/address")!
+        tab.loadFromAddressBar(target)
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertNotNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+        try await waitUntil(seconds: 10, {
+            self.attach(tab.webView, to: window)
+            return opener.authorities.contains("pending-address.invalid:443")
+        }, message: "authorities=\(opener.authorities) bound=\(tab.boundHostName ?? "nil") error=\(coordinator.lastRecoveryFailure ?? "nil")")
+        let managed = tab.websiteDataStore
+        XCTAssertFalse(tab.webView === originalView)
+        XCTAssertFalse(managed === originalStore)
+        XCTAssertTrue(tab.webView.configuration.websiteDataStore === managed)
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+        XCTAssertFalse(managed.proxyConfigurations.isEmpty)
+        XCTAssertFalse(try XCTUnwrap(managed.proxyConfigurations.first).allowFailover)
+        // This fixture records the real CONNECT route. It does not issue a
+        // trusted TLS certificate or claim successful HTTPS document rendering.
+        let firstConnections = opener.authorities.count
+        tab.load(URL(string: "https://pending-address.invalid/next")!)
+        try await waitUntil(seconds: 10, {
+            self.attach(tab.webView, to: window)
+            return opener.authorities.count > firstConnections
+        }, message: "same-host continuation must retain the managed route: \(opener.authorities)")
+        XCTAssertTrue(tab.websiteDataStore === managed)
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+        XCTAssertNil(coordinator.dataStoreForMainFrame(tab: tab, url: URL(string: "https://unrelated.invalid/")!))
+    }
+
     func testPaidDownloadSelectionFollowsDisplayedSiteAfterFailedCrossHostNavigation() async throws {
         let first = OriginReceipt(port: 18_267)
         let second = OriginReceipt(port: 18_268)
@@ -828,11 +874,14 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
     private let body: String?
     init(body: String? = nil) { self.body = body }
     private let lock = OSAllocatedUnfairLock(initialState: "")
+    private let authorityLock = OSAllocatedUnfairLock(initialState: [String]())
+    var authorities: [String] { authorityLock.withLock { $0 } }
     var transcript: String {
         lock.withLock { $0 }
     }
 
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+        authorityLock.withLock { $0.append("\(host):\(port)") }
         let stream = AnsweringStream(host: host, body: body)
         stream.onRequest = { [weak self] request in
             self?.append(request)
