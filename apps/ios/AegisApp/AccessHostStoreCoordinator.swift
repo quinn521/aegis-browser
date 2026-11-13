@@ -134,11 +134,13 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         guard !tab.isDisposed, host(for: tab) == displayedHost else { return }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: displayedHost, isPrivate: tab.profile.isPrivate)
         let affected = BrowserSession.openTabs().filter { current in
-            let pendingHost = current.pendingAddressNavigation.flatMap { pending in
-                current.matchesPendingAddressNavigation(pending) ? Self.httpHost(pending.url) : nil
-            }
+            // A committed document may remain visible while a different host is
+            // loading or held for proxy preparation. Its new navigation is not
+            // owned by the previous document's site toggle.
+            let targetHost = current.isLoading
+                ? current.addressBarURL.flatMap(Self.httpHost) : host(for: current)
             return current.browsingScopeID == key.scopeID && current.profile.isPrivate == key.isPrivate
-                && (host(for: current) == key.host || (!enabled && pendingHost == key.host))
+                && targetHost == key.host
         }
         let reloads = affected.compactMap { current -> (BrowserTab, URLRequest)? in
             guard let request = current.safeRouteReloadRequest, let url = request.url,
@@ -982,6 +984,15 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             operations[id] = cancelled
             timeoutTasks.removeValue(forKey: id)?.cancel()
             publisher.cancel(operationID: id)
+            phases[operation.tabID] = nil
+            if let pending = operation.addressNavigation,
+               let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }),
+               tab.matchesPendingAddressNavigation(pending) {
+                // The original navigation was retired by holdForProxy. Cancelling
+                // its preparation and deadline must also settle that UI hold.
+                tab.failPendingProxyNavigation(pending)
+                phases[operation.tabID] = .failed
+            }
         }
     }
 

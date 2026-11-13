@@ -6,6 +6,56 @@ import XCTest
 
 @MainActor
 final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
+    func testSiteToggleDoesNotCancelANewerForeignHostNavigation() throws {
+        for enabled in [false, true] {
+            for held in [false, true] {
+                let publisher = AccessProxyEntryPublisher { generation, _ in ready(generation, port: 18_291) }
+                let coordinator = AccessHostStoreCoordinator(publisher: publisher)
+                let host = try AccessSiteHost("192.0.2.1")
+                let primary = try committedTab(coordinator: coordinator, url: "https://192.0.2.1/primary")
+                let sibling = try committedTab(coordinator: coordinator, url: "https://192.0.2.1/old")
+                let target = URL(string: "https://192.0.2.2/new")!
+                sibling.loadFromAddressBar(target)
+                if held { XCTAssertNotNil(sibling.holdForProxy(try XCTUnwrap(sibling.safeRouteReloadRequest))) }
+                let pending = try XCTUnwrap(sibling.pendingAddressNavigation)
+                coordinator.setSiteProxyEnabled(enabled, for: primary, displayedHost: host)
+                XCTAssertTrue(sibling.isLoading)
+                XCTAssertNil(sibling.loadingError)
+                XCTAssertEqual(sibling.addressBarURL, target)
+                XCTAssertTrue(sibling.matchesPendingAddressNavigation(pending))
+            }
+        }
+    }
+
+    func testRevokingAutoRecoverySettlesAnEarlyManualAddressHold() async throws {
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            try await clock.sleep(until: .seconds(10))
+            return ready(generation, port: 18_291)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock)
+        let tab = try committedTab(coordinator: coordinator, url: "https://192.0.2.1/old")
+        guard case .armed = coordinator.setAutoRecoveryEnabled(true, for: tab) else {
+            return XCTFail("Expected an armed group")
+        }
+        let target = URL(string: "https://192.0.2.1/new")!
+        tab.loadFromAddressBar(target)
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertNotNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+        await settle { publisher.provisionCount == 1 }
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: tab))
+        _ = coordinator.setAutoRecoveryEnabled(false, for: tab)
+        XCTAssertFalse(coordinator.isPreparingAddressProxy(tab: tab))
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertEqual(tab.lastMainFrameFailure?.url, target)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+        clock.advance(to: .seconds(20))
+        await settle(seconds: 0.1) { false }
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+        XCTAssertNil(publisher.currentEndpoint)
+    }
+
     func testLandingConsumerSurvivesParentEvictionAndReleasesAfterClose() async throws {
         var shutdowns = 0
         let publisher = AccessProxyEntryPublisher(provision: { generation, _ in
