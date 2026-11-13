@@ -190,13 +190,23 @@ func replay(socket, dir string) {
 // An opening has no target bytes until this returns. Its recovery record only
 // closes a possible zero-byte row and is harmless if open never reached SQLite.
 func (f *Flow) open(frame map[string]any) error {
+	_, err := f.openWithReply(frame)
+	return err
+}
+
+// Quota admission also consumes the expiry bound in the successful reply.
+func (f *Flow) openWithReply(frame map[string]any) (response, error) {
 	recoveryMu.Lock()
 	defer recoveryMu.Unlock()
 	if err := f.retainLocked(map[string]any{"op": "abort"}); err != nil {
-		return err
+		return response{}, err
 	}
-	if err := f.send(frame); err != nil {
-		return err
+	ack, err := f.exchange(frame)
+	if err != nil {
+		return ack, err
 	}
-	return save(filepath.Join(f.recoveryDir, f.id+".json"), nil)
+	if !ack.OK {
+		return ack, errors.New("meter open rejected")
+	}
+	return ack, save(filepath.Join(f.recoveryDir, f.id+".json"), nil)
 }
