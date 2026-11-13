@@ -37,7 +37,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     }
 
     func testExplicitSiteRoutesShareEntryAndTurningOneOffKeepsTheOtherProxied() async throws {
-        let opener = AnsweringOpener()
+        let opener = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_273, tunnels: opener)
         try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
         defer { try? listener.stop() }
@@ -65,9 +65,9 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertEqual(a.boundHostName, ha.rawValue)
         XCTAssertEqual(b.boundHostName, hb.rawValue)
         let bStore = b.websiteDataStore
-        // The fixture records CONNECT and deliberately does not complete TLS.
-        // Surface that failure through the product delegate to exercise its visible host.
-        deliverFailure(a)
+        // Record CONNECT and finish the synthetic TLS failure before the next
+        // navigation, rather than leave WebKit parked in a fixture handshake.
+        try await waitUntil { a.loadingError != nil && b.loadingError != nil }
         _ = coordinator.setAutoRecoveryEnabled(true, for: a)
         coordinator.setSiteProxyEnabled(false, for: a, displayedHost: ha)
         a.load(URL(string: "https://site-a.invalid:444/after-off")!)
@@ -76,7 +76,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         try await waitUntil(seconds: 10, {
             self.attach(a.webView, to: wa); self.attach(b.webView, to: wb)
             return opener.authorities.contains("site-b.invalid:444")
-        }, message: "\(opener.authorities)")
+        }, message: "\(opener.authorities) loading=\(b.isLoading) error=\(b.loadingError ?? "none") bound=\(b.boundHostName ?? "none")")
         XCTAssertFalse(opener.authorities.contains("site-a.invalid:444"))
         XCTAssertTrue(a.websiteDataStore === a.originalWebsiteDataStore)
         XCTAssertNil(a.boundHostName)
@@ -956,7 +956,11 @@ private final class OriginReceipt: @unchecked Sendable {
 
 private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendable {
     private let body: String?
-    init(body: String? = nil) { self.body = body }
+    private let finishAfterRecording: Bool
+    init(body: String? = nil, finishAfterRecording: Bool = false) {
+        self.body = body
+        self.finishAfterRecording = finishAfterRecording
+    }
     private let lock = OSAllocatedUnfairLock(initialState: "")
     private let authorityLock = OSAllocatedUnfairLock(initialState: [String]())
     var authorities: [String] { authorityLock.withLock { $0 } }
@@ -966,6 +970,7 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
 
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         authorityLock.withLock { $0.append("\(host):\(port)") }
+        if finishAfterRecording { throw URLError(.secureConnectionFailed) }
         let stream = AnsweringStream(host: host, body: body)
         stream.onRequest = { [weak self] request in
             self?.append(request)
