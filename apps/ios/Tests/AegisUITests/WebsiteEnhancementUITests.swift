@@ -69,13 +69,17 @@ final class WebsiteEnhancementUITests: XCTestCase {
 
   func testConfiguredNodeAndBoundQuotaAreVisible() throws {
     let env = ProcessInfo.processInfo.environment
+    guard let origin = env["AEGIS_S1_FIXTURE_ORIGIN"], let token = env["AEGIS_S1_FIXTURE_C"],
+          let nodeConfig = env["AEGIS_UI_NODE_CONFIG"] else {
+      throw XCTSkip("Start the controlled account service and supply the authorized node config")
+    }
     let app = XCUIApplication()
     app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
-    app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = try XCTUnwrap(env["AEGIS_UI_NODE_CONFIG"])
-    app.launchEnvironment["AEGIS_ACCOUNT_SIM_ORIGIN"] = try XCTUnwrap(env["AEGIS_S1_FIXTURE_ORIGIN"])
+    app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = nodeConfig
+    app.launchEnvironment["AEGIS_ACCOUNT_SIM_ORIGIN"] = origin
     app.launchEnvironment["AEGIS_ACCOUNT_SIM_ACTION"] = "bind"
     app.launchEnvironment["AEGIS_ACCOUNT_SIM_ID"] = "C"
-    app.launchEnvironment["AEGIS_ACCOUNT_SIM_TOKEN"] = try XCTUnwrap(env["AEGIS_S1_FIXTURE_C"])
+    app.launchEnvironment["AEGIS_ACCOUNT_SIM_TOKEN"] = token
     app.launch()
     navigate(app, "http://127.0.0.1:8768/enhancements/page")
     XCTAssertTrue(app.webViews.staticTexts["网站增强验收文章"].firstMatch.waitForExistence(timeout: 12))

@@ -20,8 +20,9 @@ final class AccessAccountRefreshTests: XCTestCase {
 
     func testQuotaRefreshCannotCancelQueuedProxySelection() async throws {
         let env = ProcessInfo.processInfo.environment
-        let origin = try XCTUnwrap(env["AEGIS_S1_FIXTURE_ORIGIN"])
-        let token = try XCTUnwrap(env["AEGIS_S1_FIXTURE_C"])
+        guard let origin = env["AEGIS_S1_FIXTURE_ORIGIN"], let token = env["AEGIS_S1_FIXTURE_C"] else {
+            throw XCTSkip("Start the controlled account service for managed selection tests")
+        }
         let client = try AccessAccountClient(origin: origin, allowSimulatorLoopback: true)
         let session = AccessAccountSession(client: client, keychain: store())
         defer { session.signOut() }
@@ -40,8 +41,9 @@ final class AccessAccountRefreshTests: XCTestCase {
 
     func testSignOutAndRebindCannotReviveQueuedProxySelection() async throws {
         let env = ProcessInfo.processInfo.environment
-        let origin = try XCTUnwrap(env["AEGIS_S1_FIXTURE_ORIGIN"])
-        let token = try XCTUnwrap(env["AEGIS_S1_FIXTURE_C"])
+        guard let origin = env["AEGIS_S1_FIXTURE_ORIGIN"], let token = env["AEGIS_S1_FIXTURE_C"] else {
+            throw XCTSkip("Start the controlled account service for managed selection tests")
+        }
         let client = try AccessAccountClient(origin: origin, allowSimulatorLoopback: true)
         let session = AccessAccountSession(client: client, keychain: store())
         defer { session.signOut() }
