@@ -33,21 +33,28 @@ func From(ctx context.Context) *Flow {
 
 type Flow struct {
 	// Finish waits for both directions' in-flight writes, and fences new ones.
-	lifetime  sync.RWMutex
-	finished  bool
-	mu        sync.Mutex
-	broken    bool
-	uncertain bool
-	up, down  int64
-	paths     map[string]int64
-	id        string
-	conn      net.Conn
-	reader    *bufio.Reader
-	quota     *quotaGuard
-	tickets   [2]int64
+	lifetime    sync.RWMutex
+	finished    bool
+	mu          sync.Mutex
+	broken      bool
+	uncertain   bool
+	up, down    int64
+	paths       map[string]int64
+	id          string
+	recoveryDir string
+	conn        net.Conn
+	reader      *bufio.Reader
+	quota       *quotaGuard
+	tickets     [2]int64
 }
 
 func Open(ctx context.Context, client string, inbound net.Conn) (context.Context, *Flow, error) {
+	socket := os.Getenv(socketEnv)
+	dir, err := recoveryDirectory(socket)
+	if err != nil {
+		return ctx, nil, err
+	}
+	startReplay(socket, dir)
 	var id [16]byte
 	if quotaRequested() && os.Getenv("AEGIS_XRAY_QUOTA") != "enforce" {
 		return ctx, nil, errors.New("unknown quota mode")
@@ -55,11 +62,11 @@ func Open(ctx context.Context, client string, inbound net.Conn) (context.Context
 	if _, err := rand.Read(id[:]); err != nil {
 		return ctx, nil, err
 	}
-	conn, err := net.DialTimeout("unix", os.Getenv(socketEnv), timeout)
+	conn, err := net.DialTimeout("unix", socket, timeout)
 	if err != nil {
 		return ctx, nil, err
 	}
-	f := &Flow{id: hex.EncodeToString(id[:]), conn: conn, reader: bufio.NewReaderSize(conn, 4096), paths: make(map[string]int64)}
+	f := &Flow{id: hex.EncodeToString(id[:]), conn: conn, reader: bufio.NewReaderSize(conn, 4096), paths: make(map[string]int64), recoveryDir: dir}
 	msg := map[string]any{"op": "open", "client": client}
 	if quotaRequested() {
 		msg["mode"] = "enforce"
@@ -131,10 +138,7 @@ func (f *Flow) Finish() error {
 	defer f.lifetime.Unlock()
 	f.finished = true
 	defer f.conn.Close()
-	if f.broken {
-		return errors.New("meter stream incomplete")
-	}
-	return f.send(map[string]any{"op": "finish", "uploadedBytes": f.up, "downloadedBytes": f.down, "complete": !f.uncertain})
+	return f.reliableSend(map[string]any{"op": "finish", "uploadedBytes": f.up, "downloadedBytes": f.down, "complete": !f.uncertain})
 }
 
 // Write uses a concrete writer from the pinned transport. [start,end) is the
@@ -178,10 +182,7 @@ func (f *Flow) Write(w io.Writer, p []byte, start, end int, path string) (int, e
 		}
 		*total += delta
 		f.paths[path] += delta
-		if f.broken {
-			return n, errors.New("meter stream incomplete")
-		}
-		if reportErr := f.send(map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path]}); reportErr != nil {
+		if reportErr := f.reliableSend(map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path]}); reportErr != nil {
 			f.broken = true
 			return n, reportErr
 		}

@@ -273,7 +273,12 @@ python3 -m services.access_account.metering serve \
 
 Start the metered server with `AEGIS_XRAY_METER_SOCKET` set to that socket's
 absolute path. Use a separate Xray process/configuration for the outbound
-client. If a crash leaves the socket path behind, confirm that the owning
+client. Confirmed writes and terminal records are persisted in a private
+`<socket>.outbox` directory before reporting. The process retries unacknowledged
+records in order, including after restart, and stops a flow on reporting failure.
+Preserve that directory across restarts. A process or storage failure before a
+writer can persist its result leaves the flow open with a confirmed lower bound.
+If a crash leaves the socket path behind, confirm that the owning
 collector is stopped before removing that path.
 
 Read a consistent account and node snapshot for one period with:
@@ -312,3 +317,8 @@ directional counts with the independent target during concurrent transfers
 and after close. A separate plaintext TCP target exercises the unpadded Vision
 writer. A direct transfer, an HTTP cache hit and a REALITY cover probe must
 leave usage unchanged.
+
+Run the collector and Xray restart regression with the same arguments using
+`python3 -m services.access_account.tests.wire.recovery`. It interrupts the
+collector while a target accepts bytes, restarts both processes, and verifies
+that the pending confirmed prefix and terminal record are recovered.
