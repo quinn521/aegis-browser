@@ -86,6 +86,10 @@ struct BrowserAddressField: UIViewRepresentable {
             let destination = field.text ?? ""
             parent.address = destination
             parent.focused = false
+            // Finish editing synchronously before navigation can replace the
+            // WebView. A deferred SwiftUI update can otherwise leave the old
+            // input session's keyboard covering the newly loaded page.
+            field.resignFirstResponder()
             parent.submit(destination)
             return true
         }

@@ -1345,7 +1345,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
                 action = recoveryButton(app)
             }
-            if let action, action.exists, action.isEnabled, action.isHittable { action.tap() }
+            action?.coordinate.tap()
             _ = try waitForContent(app, site: site)
             var route = readRoute(app)
             if route["local_entry_ready"] as? Bool != true {
@@ -1379,6 +1379,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         XCTAssertEqual(readRoute(app)["local_entry_ready"] as? Bool, true)
         let address = app.textFields["address-field"]
         address.tap(); address.clearAndType(second.url); address.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Address submission must dismiss the keyboard")
         _ = try waitForContent(app, site: second)
         let otherRoute = readRoute(app)
         XCTAssertEqual(otherRoute["local_entry_ready"] as? Bool, true)
@@ -1561,6 +1562,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             return
         }
         address.typeText("\n")
+        receipt["keyboard_dismissed_after_submit"] = app.keyboards.firstMatch.waitForNonExistence(timeout: 5)
         let initialUX = preActionEvidence(app)
         attachJSON(initialUX, name: prefix + "-pre-action-initial.json")
         screenshot(prefix + "-pre-action-initial")
@@ -1589,8 +1591,13 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 return
             }
             receipt["recovery_action"] = pending ? "VISIBLE_PENDING_PROXY" : "VISIBLE_FAILURE_RETRY"
-            retry.tap()
+            // The page may finish between observing the native button and the
+            // tap. Use the observed point, not a stale element query that aborts
+            // the entire batch. This is only an attempted action; the later
+            // host, route and content receipts still decide whether it worked.
+            retry.coordinate.tap()
             receipt["recovery_action_count"] = 1
+            receipt["recovery_action_requires_route_confirmation"] = true
         } else {
             receipt["result"] = "ACTION_UNAVAILABLE"
             let siteAction = enableVisibleSiteRecovery(app, site: site, prefix: prefix)
@@ -1655,7 +1662,12 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
 
     private let recoveryLabels = ["通过代理打开", "通过代理重试"]
 
-    private func recoveryButton(_ app: XCUIApplication) -> XCUIElement? {
+    private struct ObservedRecoveryAction {
+        let label: String
+        let coordinate: XCUICoordinate
+    }
+
+    private func recoveryButton(_ app: XCUIApplication) -> ObservedRecoveryAction? {
         guard let snapshot = try? app.snapshot() else { return nil }
         let candidates = nativeDescendants(snapshot).filter {
             $0.elementType == .button && $0.isEnabled
@@ -1673,7 +1685,10 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         guard button.exists, button.isEnabled, button.isHittable,
               let live = try? button.snapshot(), live.elementType == .button,
               live.frame == candidate.frame, live.label == candidate.label else { return nil }
-        return button
+        return ObservedRecoveryAction(label: live.label,
+            coordinate: app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: live.frame.midX - snapshot.frame.minX,
+                dy: live.frame.midY - snapshot.frame.minY)))
     }
 
     private func preActionEvidence(_ app: XCUIApplication) -> [String: Any] {

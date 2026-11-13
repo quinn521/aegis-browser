@@ -281,7 +281,6 @@ private struct BrowserPane: View {
                 BrowserAddressField(address: $address, focused: $addressFocused,
                                     displayText: displayedAddress, selectionRequest: addressSelectionRequest) { destination in
                     browser.navigate(address: destination)
-                    tab.webView.becomeFirstResponder()
                 }
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 44)
                 .padding(.horizontal, addressFocused || isCollapsed ? 14 : 0)
