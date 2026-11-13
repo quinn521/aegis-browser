@@ -35,6 +35,10 @@ on:
         default: cloud
   workflow_call:
     secrets:
+      AEGIS_IOS_TEST_NODE_BASE64:
+        required: false
+      AEGIS_IOS_TEST_SUBSCRIPTION_BASE64:
+        required: false
       AEGIS_ASC_KEY_ID:
         required: true
       AEGIS_ASC_ISSUER_ID:
@@ -275,6 +279,9 @@ jobs:
         run: python3 scripts/release/hosted-signing.py setup
       - id: package
         env:
+          AEGIS_IOS_BETA_TEST_NODE_ENABLED: ${{ needs.admission.outputs.profile == 'beta' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && 'true' || 'false' }}
+          AEGIS_IOS_TEST_NODE_BASE64: ${{ needs.admission.outputs.profile == 'beta' && needs.admission.outputs.signing_mode == 'manual' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && secrets.AEGIS_IOS_TEST_NODE_BASE64 || '' }}
+          AEGIS_IOS_TEST_SUBSCRIPTION_BASE64: ${{ needs.admission.outputs.profile == 'beta' && needs.admission.outputs.signing_mode == 'manual' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && secrets.AEGIS_IOS_TEST_SUBSCRIPTION_BASE64 || '' }}
           AEGIS_CLOUD_ARCHIVE_INPUT: ${{ needs.admission.outputs.signing_mode == 'cloud' && format('{0}/aegis-development-input', runner.temp) || '' }}
           AEGIS_CLOUD_ARCHIVE_MANIFEST_SHA256: ${{ needs.ios-archive.outputs.manifest_sha256 }}
           AEGIS_ASC_KEY_ID: ${{ needs.admission.outputs.signing_mode == 'cloud' && secrets.AEGIS_ASC_KEY_ID || '' }}

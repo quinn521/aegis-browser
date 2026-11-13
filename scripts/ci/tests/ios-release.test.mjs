@@ -16,6 +16,24 @@ const load = async () => {
   return {iosReleasePreflight: (source, options) => preflight(source, {authorize: async () => true, ...options})};
 };
 
+test('private Beta inputs stay in the protected manual package step', () => {
+  const workflow = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
+  const job = workflow.jobs['ios-package'];
+  assert.equal(job.environment, 'aegis-ios-signing');
+  const step = job.steps.find(item => item.id === 'package');
+  for (const name of ['AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64']) {
+    const expression = step.env[name];
+    assert(expression.includes("outputs.profile == 'beta'"));
+    assert(expression.includes("outputs.signing_mode == 'manual'"));
+    assert(expression.includes("vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true'"));
+    assert(expression.endsWith("|| '' }}"));
+    assert(!JSON.stringify({...job, steps: job.steps.filter(item => item !== step)}).includes(name));
+    for (const [id, other] of Object.entries(workflow.jobs)) {
+      if (id !== 'ios-package') assert(!JSON.stringify(other).includes(name));
+    }
+  }
+});
+
 test('archive gets only non-secret settings from the existing environment', () => {
   const {jobs} = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
   const archive = jobs['ios-archive'];
@@ -304,8 +322,9 @@ test('Full explicitly forwards named secrets while protected jobs resolve enviro
   const expected = ['AEGIS_ASC_KEY_ID', 'AEGIS_ASC_ISSUER_ID', 'AEGIS_ASC_KEY_BASE64'];
   const signing = ['AEGIS_IOS_DISTRIBUTION_P12_BASE64', 'AEGIS_IOS_DISTRIBUTION_P12_PASSWORD',
     'AEGIS_IOS_APP_PROFILE_BASE64', 'AEGIS_IOS_SAFARI_PROFILE_BASE64', 'AEGIS_IOS_SHARE_PROFILE_BASE64'];
-  assert.deepEqual(Object.keys(simple.on.workflow_call.secrets), [...expected, ...signing]);
-  assert.deepEqual(Object.keys(full.jobs.delivery.secrets), [...expected, ...signing]);
+  const privateBeta = ['AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64'];
+  assert.deepEqual(Object.keys(simple.on.workflow_call.secrets), [...privateBeta, ...expected, ...signing]);
+  assert.deepEqual(Object.keys(full.jobs.delivery.secrets), [...privateBeta, ...expected, ...signing]);
   for (const name of expected) {
     assert.equal(simple.on.workflow_call.secrets[name].required, true);
     assert.equal(full.jobs.delivery.secrets[name], '${{ secrets.'+name+' }}');
@@ -314,7 +333,7 @@ test('Full explicitly forwards named secrets while protected jobs resolve enviro
   for (const id of ['status-query', 'check-unused', 'store', 'upload-new']) assert.equal(simple.jobs[id].environment, 'aegis-ios-store');
   assert(!JSON.stringify(simple.jobs.admission).includes('secrets.'));
   assert(!JSON.stringify(simple.jobs['ios-package'].env).includes('AEGIS_ASC'));
-  for (const name of signing) {
+  for (const name of [...signing, ...privateBeta]) {
     assert.equal(simple.on.workflow_call.secrets[name].required, false);
     assert.equal(full.jobs.delivery.secrets[name], '${{ secrets.'+name+' }}');
   }
