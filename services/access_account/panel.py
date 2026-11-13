@@ -79,8 +79,9 @@ class Panel:
         if any(type(v) is not int or not 0 <= v <= 2**63 - 1 for v in (quota, expiry, up, down)):
             raise Unavailable("invalid panel counter or limit")
         minimum_expiry = 0 if self.alpha_panel_client is not None else 1
+        allowed_resets = ("never", "daily") if self.alpha_panel_client is not None else ("never",)
         if (not quota or not minimum_expiry <= expiry <= 2**53 - 1
-                or settings.get("trafficReset") != "never"
+                or settings.get("trafficReset") not in allowed_resets
                 or any(type(settings.get(k)) is not int or settings[k] != 0
                        for k in ("reset", "resetDay", "resetWeekday"))):
             raise Unavailable("a dedicated finite plan with an absolute expiry is required")

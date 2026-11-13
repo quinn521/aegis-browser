@@ -59,6 +59,11 @@ python3 -m services.access_account.server --database accounts.sqlite --port 8787
   --panel-url "${PANEL_URL:?}" --alpha-panel-client "${ALPHA_CLIENT:?}"
 ```
 
+The explicit Alpha client may use the panel's `never` or `daily` traffic reset
+policy. Daily readings show that client's current panel counters, including a
+legitimate decrease after its scheduled reset. Measurement time remains unknown.
+The ordinary finite-period adapter still requires `never`.
+
 Only the exact configured client is readable: an authenticated plan bound to any
 other client fails with 503 **before any panel HTTP request**. There is no list,
 search, fallback, or main-account query. Bind the approved client in the private
@@ -71,7 +76,7 @@ Alpha accepts `expiryTime=0` only as **no panel expiry**, not permanent service
 authorization. Its `expiresAt` remains positive and equals the local `periodEnd`.
 For positive panel expiry it equals `min(periodEnd, panel expiry)`. Local period
 expiry takes precedence over quota exhaustion. Negative relative expiries,
-unlimited `totalGB=0`, invalid counters, automatic resets and manually disabled
+unlimited `totalGB=0`, invalid counters, unsupported reset policies and manually disabled
 clients remain rejected (a disabled exhausted/expired client can still report
 that terminal status, as in strict mode). `totalGB` is already bytes: for example
 `1000000000` is returned as the decimal string `"1000000000"`, without conversion.

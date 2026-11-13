@@ -233,12 +233,28 @@ class PanelEntitlementTest(unittest.TestCase):
                             ("quotaSource", "panelExpiryMode", "panelExpiresAt")))
         self.assertEqual(self.mock.paths, [])
 
+    def test_alpha_daily_reads_current_panel_counters_across_reset(self):
+        self.alpha()
+        self.mock.settings[SETTINGS + "client%2Ba"]["trafficReset"] = "daily"
+        self.mock.settings[SETTINGS + "client%2Ba"]["totalGB"] = 10000000000
+        for up, down in [(85356101, 920205026), (0, 0), (17, 39)]:
+            with self.subTest(up=up, down=down):
+                self.a.update(up=up, down=down)
+                code, data = self.read()
+                self.assertEqual(code, 200)
+                self.assertEqual(data["quotaSource"], "3xui_alpha")
+                self.assertEqual((data["quotaBytes"], data["uploadedBytes"], data["downloadedBytes"]),
+                                 ("10000000000", str(up), str(down)))
+                self.assertEqual(data["remainingBytes"], str(10000000000-up-down))
+                self.assertEqual((data["measuredAt"], data["snapshotAgeMs"], data["freshness"]),
+                                 (None, None, "unavailable"))
+
     def test_alpha_rejects_invalid_limits_resets_and_panel_failures(self):
         self.alpha()
         settings = self.mock.settings[SETTINGS + "client%2Ba"]
         for field, value in [("expiryTime", -1), ("expiryTime", True),
                               ("expiryTime", 2**53), ("totalGB", 0), ("totalGB", -1),
-                              ("trafficReset", "daily"), ("reset", 1),
+                              ("trafficReset", "hourly"), ("reset", 1),
                               ("resetDay", 1), ("resetWeekday", 1)]:
             with self.subTest(field=field, value=value):
                 self.mock.settings[SETTINGS + "client%2Ba"] = dict(settings, **{field: value})
