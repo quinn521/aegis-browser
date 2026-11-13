@@ -12,7 +12,24 @@ int wmain(int argc, wchar_t* argv[]) {
   // The CRT provides argc pointers. Each argument access is count-checked.
   if (argc == 2 &&
       UNSAFE_BUFFERS(std::wstring_view(argv[1])) == L"--access-fixture-grandchild") {
+    // Keep the private configuration open without sharing deletion.
+    HANDLE config = ::CreateFileW(L"config.json", GENERIC_READ, FILE_SHARE_READ,
+                                  nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (config == INVALID_HANDLE_VALUE) {
+      return 6;
+    }
+    {
+      std::ofstream ready("grandchild-ready");
+      ready << "ready\n";
+      ready.close();
+      if (!ready) {
+        ::CloseHandle(config);
+        return 7;
+      }
+    }
     ::Sleep(INFINITE);
+    ::CloseHandle(config);
     return 0;
   }
   std::error_code error;

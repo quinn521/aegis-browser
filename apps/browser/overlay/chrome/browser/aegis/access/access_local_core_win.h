@@ -21,6 +21,9 @@ base::Process LaunchOwnedCore(const base::CommandLine& command,
                               const base::FilePath& directory,
                               base::win::ScopedHandle& job);
 
+// Bounds the job rundown and the retry window for deleting locked files.
+void StopOwnedCore(base::win::ScopedHandle& job, base::ScopedTempDir& directory);
+
 }  // namespace aegis::access
 
 #endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_

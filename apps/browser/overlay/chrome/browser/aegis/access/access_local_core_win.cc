@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <string>
 #include <utility>
 
@@ -11,8 +12,11 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/logging.h"
 #include "base/path_service.h"
 #include "base/process/launch.h"
+#include "base/threading/platform_thread.h"
+#include "base/time/time.h"
 #include "base/uuid.h"
 #include "base/win/access_token.h"
 #include "base/win/scoped_process_information.h"
@@ -84,6 +88,51 @@ base::Process LaunchOwnedCore(const base::CommandLine& command,
   base::win::ScopedProcessInformation child_handles(child);
   job = std::move(owned_job);
   return base::Process(child_handles.TakeProcessHandle());
+}
+
+void StopOwnedCore(base::win::ScopedHandle& job,
+                   base::ScopedTempDir& directory) {
+  constexpr auto kPollInterval = base::Milliseconds(20);
+  const auto deadline = base::TimeTicks::Now() + base::Seconds(2);
+  if (job.is_valid()) {
+    bool job_empty = false;
+    if (::TerminateJobObject(job.get(), 1)) {
+      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting = {};
+      do {
+        if (!::QueryInformationJobObject(job.get(),
+                                         JobObjectBasicAccountingInformation,
+                                         &accounting, sizeof(accounting),
+                                         nullptr)) {
+          break;
+        }
+        if (accounting.ActiveProcesses == 0) {
+          job_empty = true;
+          break;
+        }
+        const auto remaining = deadline - base::TimeTicks::Now();
+        if (!remaining.is_positive()) break;
+        base::PlatformThread::Sleep(std::min(remaining, kPollInterval));
+      } while (base::TimeTicks::Now() < deadline);
+    }
+    // Kill-on-close still applies if termination or observation failed.
+    job.Close();
+    if (!job_empty) {
+      LOG(WARNING) << "Access core process tree rundown could not be confirmed.";
+    }
+  }
+  if (!directory.IsValid()) {
+    return;
+  }
+  do {
+    if (directory.Delete()) {
+      return;
+    }
+    const auto remaining = deadline - base::TimeTicks::Now();
+    if (!remaining.is_positive()) break;
+    base::PlatformThread::Sleep(std::min(remaining, kPollInterval));
+  } while (base::TimeTicks::Now() < deadline);
+  // Keep the private directory owned so the next Stop or destruction retries.
+  LOG(WARNING) << "Access core private directory could not be removed.";
 }
 
 }  // namespace aegis::access

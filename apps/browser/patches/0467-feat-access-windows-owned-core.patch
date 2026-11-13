@@ -1,18 +1,18 @@
-From 0c0ca8be6b5baaf55e2bf2c9e52f4fbcd217c83d Mon Sep 17 00:00:00 2001
+From d62db6c6699cfc9d876ad2788b1a9a7f312c7e79 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Fri, 13 Nov 2026 21:02:31 +0800
+Date: Fri, 13 Nov 2026 21:10:09 +0800
 Subject: [PATCH] feat(access): add the Windows owned-core adapter
 
 ---
  chrome/browser/BUILD.gn                       |   9 +-
  chrome/browser/aegis/access/BUILD.gn          |  18 ++
- .../aegis/access/access_local_core_manager.cc |  92 +++++++--
- .../aegis/access/access_local_core_win.cc     |  89 ++++++++
- .../aegis/access/access_local_core_win.h      |  26 +++
- .../access_local_core_win_test_child.cc       |  54 +++++
- .../access/access_local_core_win_unittest.cc  | 194 ++++++++++++++++++
+ .../aegis/access/access_local_core_manager.cc |  91 ++++++--
+ .../aegis/access/access_local_core_win.cc     | 138 ++++++++++++
+ .../aegis/access/access_local_core_win.h      |  29 +++
+ .../access_local_core_win_test_child.cc       |  71 +++++++
+ .../access/access_local_core_win_unittest.cc  | 197 ++++++++++++++++++
  chrome/browser/browser_process_impl.cc        |   7 +-
- 8 files changed, 464 insertions(+), 25 deletions(-)
+ 8 files changed, 535 insertions(+), 25 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_local_core_win.cc
  create mode 100644 chrome/browser/aegis/access/access_local_core_win.h
  create mode 100644 chrome/browser/aegis/access/access_local_core_win_test_child.cc
@@ -82,7 +82,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..30a7d8f01d0d86b53caa13cac025af65
  }
  
 diff --git a/chrome/browser/aegis/access/access_local_core_manager.cc b/chrome/browser/aegis/access/access_local_core_manager.cc
-index 18c9e049b089f3246257dff36dbcc016258e05f3..8cf14649b2c7056ba50608580538886a47b7d726 100644
+index 18c9e049b089f3246257dff36dbcc016258e05f3..481d1cdfa346ef94899a16ea03c448d566a16600 100644
 --- a/chrome/browser/aegis/access/access_local_core_manager.cc
 +++ b/chrome/browser/aegis/access/access_local_core_manager.cc
 @@ -1,21 +1,10 @@
@@ -263,7 +263,7 @@ index 18c9e049b089f3246257dff36dbcc016258e05f3..8cf14649b2c7056ba50608580538886a
    bool WaitForChildExit(base::TimeDelta maximum_wait) {
      auto deadline = maximum_wait.is_max()
          ? base::TimeTicks::Max() : base::TimeTicks::Now() + maximum_wait;
-@@ -466,12 +503,20 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+@@ -466,12 +503,17 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
        if (remaining <= base::TimeDelta()) return false;
      }
    }
@@ -275,24 +275,24 @@ index 18c9e049b089f3246257dff36dbcc016258e05f3..8cf14649b2c7056ba50608580538886a
      request_.reset();
      context_.reset();
 +#if BUILDFLAG(IS_WIN)
-+    job_.Close();
-+    if (process_.IsValid()) {
-+      process_.WaitForExitWithTimeout(base::Seconds(1), nullptr);
-+      process_.Close();
-+    }
++    StopOwnedCore(job_, directory_);
++    process_.Close();
 +#else
      if (process_.IsValid()) {
        if (Running()) {
          process_.Terminate(0, false);
-@@ -487,6 +532,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+@@ -487,19 +529,26 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
      log_read_.reset();
      framer_ = CoreLogFramer();
      protected_values_.clear();
 +#endif
      credentials_.reset();
      authenticated_ = false;
++#if BUILDFLAG(IS_MAC)
      const bool deleted = directory_.Delete();
-@@ -495,11 +541,15 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     (void)deleted;
++#endif
+   }
  
    AccessLocalCoreInput input_;
    std::shared_ptr<ShutdownHandle> shutdown_;
@@ -308,7 +308,7 @@ index 18c9e049b089f3246257dff36dbcc016258e05f3..8cf14649b2c7056ba50608580538886a
    base::ScopedTempDir directory_;
    base::Process process_;
    uint16_t port_ = 0;
-@@ -567,11 +617,15 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
+@@ -567,11 +616,15 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
    for (auto& weak : ShutdownHandle::Registry()) {
      if (auto handle = weak.lock()) handles.push_back(std::move(handle));
    }
@@ -326,15 +326,16 @@ index 18c9e049b089f3246257dff36dbcc016258e05f3..8cf14649b2c7056ba50608580538886a
  void AccessLocalCoreManager::SetStoppedCallback(
 diff --git a/chrome/browser/aegis/access/access_local_core_win.cc b/chrome/browser/aegis/access/access_local_core_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..d3c219d72e97f9f6e01a053b3494b5cdfd97459e
+index 0000000000000000000000000000000000000000..9b770a77f572c0feffd7875cd566482a9300ff97
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_local_core_win.cc
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,138 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_local_core_win.h"
 +
 +#include <windows.h>
 +
++#include <algorithm>
 +#include <string>
 +#include <utility>
 +
@@ -343,8 +344,11 @@ index 0000000000000000000000000000000000000000..d3c219d72e97f9f6e01a053b3494b5cd
 +#include "base/files/file_path.h"
 +#include "base/files/file_util.h"
 +#include "base/files/scoped_temp_dir.h"
++#include "base/logging.h"
 +#include "base/path_service.h"
 +#include "base/process/launch.h"
++#include "base/threading/platform_thread.h"
++#include "base/time/time.h"
 +#include "base/uuid.h"
 +#include "base/win/access_token.h"
 +#include "base/win/scoped_process_information.h"
@@ -418,13 +422,58 @@ index 0000000000000000000000000000000000000000..d3c219d72e97f9f6e01a053b3494b5cd
 +  return base::Process(child_handles.TakeProcessHandle());
 +}
 +
++void StopOwnedCore(base::win::ScopedHandle& job,
++                   base::ScopedTempDir& directory) {
++  constexpr auto kPollInterval = base::Milliseconds(20);
++  const auto deadline = base::TimeTicks::Now() + base::Seconds(2);
++  if (job.is_valid()) {
++    bool job_empty = false;
++    if (::TerminateJobObject(job.get(), 1)) {
++      JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting = {};
++      do {
++        if (!::QueryInformationJobObject(job.get(),
++                                         JobObjectBasicAccountingInformation,
++                                         &accounting, sizeof(accounting),
++                                         nullptr)) {
++          break;
++        }
++        if (accounting.ActiveProcesses == 0) {
++          job_empty = true;
++          break;
++        }
++        const auto remaining = deadline - base::TimeTicks::Now();
++        if (!remaining.is_positive()) break;
++        base::PlatformThread::Sleep(std::min(remaining, kPollInterval));
++      } while (base::TimeTicks::Now() < deadline);
++    }
++    // Kill-on-close still applies if termination or observation failed.
++    job.Close();
++    if (!job_empty) {
++      LOG(WARNING) << "Access core process tree rundown could not be confirmed.";
++    }
++  }
++  if (!directory.IsValid()) {
++    return;
++  }
++  do {
++    if (directory.Delete()) {
++      return;
++    }
++    const auto remaining = deadline - base::TimeTicks::Now();
++    if (!remaining.is_positive()) break;
++    base::PlatformThread::Sleep(std::min(remaining, kPollInterval));
++  } while (base::TimeTicks::Now() < deadline);
++  // Keep the private directory owned so the next Stop or destruction retries.
++  LOG(WARNING) << "Access core private directory could not be removed.";
++}
++
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_local_core_win.h b/chrome/browser/aegis/access/access_local_core_win.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..5d298063d9425845a80fca7667775ae99572b247
+index 0000000000000000000000000000000000000000..f6cef7fd442a7e0391a00f2a60cdf682636c6bcf
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_local_core_win.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,29 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_
@@ -448,15 +497,18 @@ index 0000000000000000000000000000000000000000..5d298063d9425845a80fca7667775ae9
 +                              const base::FilePath& directory,
 +                              base::win::ScopedHandle& job);
 +
++// Bounds the job rundown and the retry window for deleting locked files.
++void StopOwnedCore(base::win::ScopedHandle& job, base::ScopedTempDir& directory);
++
 +}  // namespace aegis::access
 +
 +#endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_
 diff --git a/chrome/browser/aegis/access/access_local_core_win_test_child.cc b/chrome/browser/aegis/access/access_local_core_win_test_child.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f87076681061841ecaa788679020f6388ef44ab3
+index 0000000000000000000000000000000000000000..241482eca0fb1ef679f0af65f5b456caf21e73e9
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_local_core_win_test_child.cc
-@@ -0,0 +1,54 @@
+@@ -0,0 +1,71 @@
 +// Copyright 2026 GCSA
 +#include <windows.h>
 +
@@ -471,7 +523,24 @@ index 0000000000000000000000000000000000000000..f87076681061841ecaa788679020f638
 +  // The CRT provides argc pointers. Each argument access is count-checked.
 +  if (argc == 2 &&
 +      UNSAFE_BUFFERS(std::wstring_view(argv[1])) == L"--access-fixture-grandchild") {
++    // Keep the private configuration open without sharing deletion.
++    HANDLE config = ::CreateFileW(L"config.json", GENERIC_READ, FILE_SHARE_READ,
++                                  nullptr, OPEN_EXISTING,
++                                  FILE_ATTRIBUTE_NORMAL, nullptr);
++    if (config == INVALID_HANDLE_VALUE) {
++      return 6;
++    }
++    {
++      std::ofstream ready("grandchild-ready");
++      ready << "ready\n";
++      ready.close();
++      if (!ready) {
++        ::CloseHandle(config);
++        return 7;
++      }
++    }
 +    ::Sleep(INFINITE);
++    ::CloseHandle(config);
 +    return 0;
 +  }
 +  std::error_code error;
@@ -513,10 +582,10 @@ index 0000000000000000000000000000000000000000..f87076681061841ecaa788679020f638
 +}
 diff --git a/chrome/browser/aegis/access/access_local_core_win_unittest.cc b/chrome/browser/aegis/access/access_local_core_win_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..b8e4b7d6cea57d002a6ba50c29b1cf41ce22824c
+index 0000000000000000000000000000000000000000..82561c424ede8e37919b7fff663b4585938e7e57
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_local_core_win_unittest.cc
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,197 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_local_core_manager.h"
 +
@@ -633,6 +702,9 @@ index 0000000000000000000000000000000000000000..b8e4b7d6cea57d002a6ba50c29b1cf41
 +    ASSERT_TRUE(base::test::RunUntil([&] {
 +      directory = FindCoreDirectory();
 +      if (directory.empty()) return false;
++      if (!base::PathExists(directory.AppendASCII("grandchild-ready"))) {
++        return false;
++      }
 +      return base::ReadFileToString(directory.AppendASCII("fixture-pids"),
 +                                    &pids) &&
 +             pids.ends_with('\n');

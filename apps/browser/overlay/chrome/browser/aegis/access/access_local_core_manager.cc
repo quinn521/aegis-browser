@@ -511,11 +511,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     request_.reset();
     context_.reset();
 #if BUILDFLAG(IS_WIN)
-    job_.Close();
-    if (process_.IsValid()) {
-      process_.WaitForExitWithTimeout(base::Seconds(1), nullptr);
-      process_.Close();
-    }
+    StopOwnedCore(job_, directory_);
+    process_.Close();
 #else
     if (process_.IsValid()) {
       if (Running()) {
@@ -535,8 +532,10 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
 #endif
     credentials_.reset();
     authenticated_ = false;
+#if BUILDFLAG(IS_MAC)
     const bool deleted = directory_.Delete();
     (void)deleted;
+#endif
   }
 
   AccessLocalCoreInput input_;

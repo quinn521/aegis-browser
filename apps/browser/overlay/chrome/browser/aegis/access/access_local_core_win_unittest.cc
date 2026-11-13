@@ -114,6 +114,9 @@ class AccessLocalCoreWinTest : public testing::Test {
     ASSERT_TRUE(base::test::RunUntil([&] {
       directory = FindCoreDirectory();
       if (directory.empty()) return false;
+      if (!base::PathExists(directory.AppendASCII("grandchild-ready"))) {
+        return false;
+      }
       return base::ReadFileToString(directory.AppendASCII("fixture-pids"),
                                     &pids) &&
              pids.ends_with('\n');
