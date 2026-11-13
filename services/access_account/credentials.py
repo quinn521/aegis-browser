@@ -111,6 +111,10 @@ def _same(first, second):
         first[key] == second[key] for key in (*_BINDING, 'session_expiry', 'authority_version'))
 
 
+def _bound_to(grant, account):
+    return all(grant['account_id' if k == 'id' else k] == account[k] for k in _BINDING)
+
+
 def _usage(account, observed, now, live):
     if account['plan_id'] is None:
         return None
@@ -134,9 +138,10 @@ def _observe(db, digest, clock_ms, panel, admitted_clients=None):
     return account, observed
 
 
-def issue(database_path, token, context_id, mode, clock_ms, *, node, panel=None):
-    """Return a new grant, None for invalid session, or {} for no active plan."""
-    if not _uuid(context_id) or mode not in ('regular', 'private'):
+def issue(database_path, token, context_id, mode, clock_ms, *, node, panel=None, renew_id=None):
+    """Issue a new grant or extend a matching live grant without rotating its secret."""
+    if (not _uuid(context_id) or mode not in ('regular', 'private')
+            or renew_id is not None and not _uuid(renew_id)):
         raise ValueError('invalid credential scope')
     if not isinstance(node, ManagedNode):
         raise ValueError('invalid managed node configuration')
@@ -155,12 +160,28 @@ def issue(database_path, token, context_id, mode, clock_ms, *, node, panel=None)
                 raise Unavailable('authorization changed')
             if current['plan_id'] is not None and current['panel_client'] not in node.admitted_clients:
                 raise Unavailable('managed node unavailable')
+            if renew_id is not None:
+                grant = db.execute('SELECT * FROM node_credentials WHERE credential_id=? '
+                                   'AND token_hash=? AND node_id=? AND context_id=? AND mode=? '
+                                   'AND revoked=0 AND expires_at>?',
+                                   (renew_id, digest, node.node_id, context_id, mode, now)).fetchone()
+                if grant is None or not _bound_to(grant, current):
+                    return {}
             usage = _usage(current, observed if panel is not None else current, now,
                            panel is not None)
             if usage is None:
+                if renew_id is not None:
+                    db.execute('UPDATE node_credentials SET revoked=1 WHERE credential_id=?', (renew_id,))
+                    db.commit()
                 return {}
             expiry = min(now + node.ttl_ms, current['session_expiry'],
                          current['period_end'], usage['expiresAt'])
+            if renew_id is not None:
+                db.execute('UPDATE node_credentials SET expires_at=? WHERE credential_id=?',
+                           (expiry, renew_id))
+                db.commit()
+                return dict(accountId=current['id'], periodId=current['period_id'],
+                            credentialId=renew_id, contextId=context_id, mode=mode, expiresAt=expiry)
             credential_id, password = str(uuid.uuid4()), secrets.token_urlsafe(32)
             db.execute('DELETE FROM node_credentials WHERE expires_at<=?', (now,))
             db.execute('UPDATE node_credentials SET revoked=1 WHERE token_hash=? '
@@ -218,10 +239,11 @@ def verify_node(database_path, username, password, clock_ms, *, panel=None, node
             latest = db.execute('SELECT * FROM node_credentials WHERE credential_id=?',
                                 (username,)).fetchone()
             current = _account(db, grant['token_hash'], now)
-            if (latest is None or tuple(latest) != tuple(grant) or grant['expires_at'] <= now
+            if (latest is None or latest['expires_at'] <= now
+                    or any(latest[k] != grant[k] for k in grant.keys() if k != 'expires_at')
                     or not _same(initial, current)):
                 return None
-            if any(grant['account_id' if k == 'id' else k] != current[k] for k in _BINDING):
+            if not _bound_to(latest, current):
                 return None
             usage = _usage(current, observed if panel is not None else current, now,
                            panel is not None)

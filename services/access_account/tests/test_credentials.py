@@ -195,6 +195,40 @@ class CredentialTest(CredentialFixture, unittest.TestCase):
         self.now += 1
         self.assertIsNone(self.verify(grant))
 
+    def test_renew_fences_revocation_rotation_and_expiry_during_panel_read(self):
+        for action in ('revoke', 'rotate', 'expire', 'replace-plan'):
+            with self.subTest(action=action):
+                self.now = 10000
+                grant = self.issue()
+                def change():
+                    if action == 'revoke':
+                        c.revoke(self.path, 'token-A', grant['credentialId'], self.clock)
+                    elif action == 'rotate':
+                        self.issue()
+                    elif action == 'expire':
+                        self.now = grant['expiresAt']
+                    else:
+                        self.db.execute("UPDATE plans SET period_end=period_end WHERE account_id='A'")
+                def renew():
+                    return c.issue(self.path, 'token-A', self.context, 'regular', self.clock,
+                                   node=self.node, panel=self.panel(change), renew_id=grant['credentialId'])
+                if action == 'replace-plan':
+                    with self.assertRaises(c.Unavailable):
+                        renew()
+                else:
+                    self.assertEqual(renew(), {})
+                self.assertIsNone(self.verify(grant))
+
+    def test_verify_accepts_renewal_committed_during_panel_read(self):
+        grant = self.issue()
+        self.now += 5000
+        def renew():
+            result = c.issue(self.path, 'token-A', self.context, 'regular', self.clock,
+                             panel=self.panel(), node=self.node, renew_id=grant['credentialId'])
+            self.assertEqual(result['expiresAt'], 75000)
+            self.now = grant['expiresAt']
+        self.assertEqual(self.verify(grant, panel=self.panel(renew)), 'client-A')
+
     def test_current_exhaustion_and_expiry_are_checked(self):
         grant = self.issue()
         self.db.execute("UPDATE snapshots SET uploaded_bytes=9997 WHERE account_id='A'")
@@ -374,6 +408,25 @@ class CredentialHTTPTest(CredentialFixture, unittest.TestCase):
         self.server.managed_node = None
         self.assertEqual(self.request()[0], 404)
         self.assertEqual(self.request('GET', '/v1/me/entitlement')[0], 200)
+
+    def test_http_renew_preserves_grant_and_fails_closed(self):
+        _, grant = self.request()
+        path = '/v1/me/node-credentials/' + grant['credentialId'] + '/renew'
+        self.now += 10000
+        expected = {k: grant[k] for k in ('accountId', 'periodId', 'contextId', 'mode', 'credentialId')}
+        self.assertEqual(self.request(path=path), (200, dict(expected, expiresAt=80000)))
+        self.assertEqual(self.verify(grant), 'client-A')
+        for token, status in (('token-B', 403), ('unknown', 401), (None, 401)):
+            self.assertEqual(self.request(path=path, token=token)[0], status)
+        for context, mode in ((str(uuid.uuid4()), 'regular'), (self.context, 'private')):
+            body = json.dumps({'contextId': context, 'mode': mode})
+            self.assertEqual(self.request(path=path, body=body)[0], 403)
+        self.now = grant['expiresAt']
+        self.assertEqual(self.request(path=path)[0], 503)  # stale stored snapshot
+        self.server.panel = self.panel()
+        self.assertEqual(self.request(path=path), (200, dict(expected, expiresAt=80000)))
+        self.now = 80000
+        self.assertEqual(self.request(path=path)[0], 403)
 
     def test_http_auth_input_and_errors_are_private(self):
         for token in (None, 'unknown'):

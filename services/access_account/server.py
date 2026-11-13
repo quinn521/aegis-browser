@@ -24,14 +24,14 @@ class _Handler(BaseHTTPRequestHandler):
         match = _BEARER.fullmatch(values[0]) if len(values) == 1 else None
         return match[1] if match else None
 
-    def _credential_request(self, deleting=False):
+    def _credential_request(self, deleting=False, renew_id=None):
         if self.request_version == "HTTP/0.9":
             self.close_connection = True
             return
         target = self.requestline.split()[1]
         suffix = target[len(_CREDENTIAL_PATH) + 1:]
         valid = (target.startswith(_CREDENTIAL_PATH + "/") and credentials._uuid(suffix)
-                 if deleting else target == _CREDENTIAL_PATH)
+                 if deleting else renew_id is not None or target == _CREDENTIAL_PATH)
         if not valid or self.server.managed_node is None:
             self._json(404, {"error": "not_found"})
             return
@@ -71,7 +71,8 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ValueError
             result = credentials.issue(self.server.database_path, token, data["contextId"],
                                        data["mode"], self.server.clock_ms,
-                                       node=self.server.managed_node, panel=self.server.panel)
+                                       node=self.server.managed_node, panel=self.server.panel,
+                                       renew_id=renew_id)
         except (ValueError, RecursionError, OSError):
             self._json(400, {"error": "invalid_request"})
             return
@@ -91,6 +92,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._redeem_order()
         elif target == _CREDENTIAL_PATH:
             self._credential_request()
+        elif target.startswith(_CREDENTIAL_PATH + "/") and target.endswith("/renew"):
+            identifier = target[len(_CREDENTIAL_PATH) + 1:-len("/renew")]
+            if credentials._uuid(identifier):
+                self._credential_request(renew_id=identifier)
+            else:
+                self._json(404, {"error": "not_found"})
         else:
             self._json(404, {"error": "not_found"})
 

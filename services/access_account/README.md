@@ -168,6 +168,14 @@ account, plan period, node and regular/private context. Its default lifetime
 is 60 seconds (configurable up to five minutes), capped by the earliest
 session or plan expiry. The authority stores a password digest.
 
+Before expiry, the owning session can POST the original JSON scope
+(`contextId`, `mode`) with its Bearer token to
+`/v1/me/node-credentials/{credentialId}/renew`. A successful response contains
+`accountId`, `periodId`, `contextId`, `mode`, `credentialId` and the new
+`expiresAt` in UTC milliseconds. The credential ID and password remain usable
+on the existing connection. Renewal checks current entitlement, usage freshness,
+the session, node and original scope. Expiry or revocation requires fresh issuance.
+
 Configure a dedicated Xray SOCKS5 listener on numeric loopback for each
 enabled panel client. Each listener must use the outbound for that client's
 own 3X-UI identity. Use a distinct port per identity. Keep the node's private
