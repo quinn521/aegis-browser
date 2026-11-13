@@ -526,7 +526,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         guard !rejectUnavailableLanding(url, store: routed) else { return false }
         let desired = routed ?? originalWebsiteDataStore
         guard hostChanged || desired !== configuration.websiteDataStore else { return true }
-        if ["POST", "PATCH"].contains(method.uppercased()), body == nil, hostChanged {
+        if ["POST", "PATCH"].contains(method.uppercased()), body == nil, desired !== configuration.websiteDataStore {
             loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
             loadingErrorAllowsProxyRetry = false
             return false
@@ -1088,7 +1088,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let body = navigationAction.request.httpBody
         let hostMismatch = requestedURL.map { $0.host?.lowercased() != requestURL.host?.lowercased() } ?? false
         if ["POST", "PATCH"].contains(method.uppercased()), body == nil,
-           hostMismatch || hostCoordinator?.wouldSwitchStore(tab: self, url: requestURL) == true {
+           hostCoordinator?.wouldSwitchStore(tab: self, url: requestURL) == true {
             (proxyLandingParent, proxyLandingTarget) = previousLanding
             loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
             loadingErrorAllowsProxyRetry = false
@@ -1104,7 +1104,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let storeMismatch = (routedStore ?? originalWebsiteDataStore) !== websiteDataStore
         if decision.kind != .blocked,
            navigationAction.targetFrame?.isMainFrame != false,
-           hostMismatch || storeMismatch,
+           storeMismatch || (hostMismatch && !["POST", "PATCH"].contains(method.uppercased())),
            realignedNavigationURL != requestURL {
             realignedNavigationURL = requestURL
             finish(.cancel)
