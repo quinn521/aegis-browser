@@ -165,6 +165,7 @@ func (f *Flow) Write(w io.Writer, p []byte, start, end int, path string) (int, e
 		return f.quotaWrite(w, p, start, end, path)
 	}
 	n, err := w.Write(p)
+	measuredAt := time.Now().UnixMilli()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if n < 0 || n > len(p) {
@@ -189,7 +190,7 @@ func (f *Flow) Write(w io.Writer, p []byte, start, end int, path string) (int, e
 		}
 		*total += delta
 		f.paths[path] += delta
-		frame := map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path]}
+		frame := map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path], "measuredAt": measuredAt}
 		var reportErr error
 		if f.broken {
 			reportErr = f.retain(frame)

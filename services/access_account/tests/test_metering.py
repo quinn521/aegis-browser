@@ -39,6 +39,16 @@ class MeterTest(unittest.TestCase):
     def usage(self):
         return m.usage(self.db, 'node-1', 'p')
 
+    def test_delayed_replay_preserves_measurement_time(self):
+        sample = dict(self.sample('up', 'target_tcp', 3, 3), measuredAt=450)
+        self.meter.accept(sample)
+        self.assertEqual(self.usage()['sampledAt'], 450)
+        self.now = 700
+        self.meter.accept(sample)
+        self.assertEqual(self.usage()['sampledAt'], 450)
+        with self.assertRaises(ValueError):
+            self.meter.accept(dict(sample, measuredAt=701))
+
     def test_reordered_path_samples_restart_and_terminal_replay(self):
         late = self.sample('down', 'vision_raw', 100, 40)
         early = self.sample('down', 'vision_padded', 60, 60)
