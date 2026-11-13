@@ -1399,18 +1399,40 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             XCTFail("Address bar unavailable for site \(site.id)")
             return
         }
-        address.tap(); address.clearAndType(site.url); address.typeText("\n")
-        let retry = app.buttons["page-load-proxy-retry"]
-        if retry.waitForExistence(timeout: 25), retry.isEnabled, retry.isHittable {
-            let pending = app.staticTexts["page-load-pending-host"]
-            let target = pending.exists ? (pending.value as? String ?? pending.label) : site.url
-            receipt["recovery_target"] = sanitizedURL(target)
-            guard host(target).map(site.contains) == true else {
+        address.tap(); address.clearAndType(site.url)
+        let typed = address.value as? String ?? ""
+        receipt["typed_address"] = sanitizedURL(typed)
+        receipt["typed_address_matches_request"] = typed == site.url
+        guard typed == site.url else {
+            receipt["result"] = "TYPED_ADDRESS_MISMATCH"; screenshot(prefix + "-typed-address-mismatch")
+            return
+        }
+        address.typeText("\n")
+        let initialUX = preActionEvidence(app)
+        attachJSON(initialUX, name: prefix + "-pre-action-initial.json")
+        screenshot(prefix + "-pre-action-initial")
+        let deadline = Date(timeIntervalSinceNow: 38)
+        var retry = recoveryButton(app)
+        while retry == nil, Date() < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+            retry = recoveryButton(app)
+        }
+        let ux = preActionEvidence(app)
+        receipt["pre_action"] = ux
+        attachJSON(ux, name: prefix + "-pre-action-final.json")
+        screenshot(prefix + "-before-recovery")
+        if let retry {
+            let pending = retry.label == "通过代理打开"
+            let exposedTarget = ux["target"] as? String ?? "NOT_EXPOSED"
+            let observedAddress = ux["observed_address"] as? String ?? "UNREADABLE"
+            receipt["recovery_target"] = exposedTarget
+            receipt["recovery_target_source"] = ux["target_source"]
+            receipt["recovery_binding_source"] = pending ? "EXPOSED_PENDING_TARGET" : "OBSERVED_ADDRESS_FIELD_ONLY"
+            guard host(pending ? exposedTarget : observedAddress).map(site.contains) == true else {
                 receipt["result"] = "RECOVERY_TARGET_MISMATCH"; screenshot(prefix + "-target-mismatch")
                 return
             }
-            receipt["recovery_action"] = pending.exists ? "VISIBLE_PENDING_PROXY" : "VISIBLE_FAILURE_RETRY"
-            screenshot(prefix + "-before-recovery")
+            receipt["recovery_action"] = pending ? "VISIBLE_PENDING_PROXY" : "VISIBLE_FAILURE_RETRY"
             retry.tap()
             receipt["recovery_action_count"] = 1
         } else {
@@ -1463,6 +1485,59 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             screenshot(prefix + "-snapshot-unavailable")
             XCTFail("Real-site snapshot unavailable for site \(site.id)")
         }
+    }
+
+    private let recoveryLabels = ["通过代理打开", "通过代理重试"]
+
+    private func recoveryButton(_ app: XCUIApplication) -> XCUIElement? {
+        guard let snapshot = try? app.snapshot() else { return nil }
+        let candidates = nativeDescendants(snapshot).filter {
+            $0.elementType == .button && $0.isEnabled
+                && ($0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label))
+                && !$0.frame.isEmpty && $0.frame.intersects(snapshot.frame)
+        }
+        guard candidates.count == 1, let candidate = candidates.first,
+              recoveryLabels.contains(candidate.label) else { return nil }
+        // Identifier propagation must never turn a container or an unrelated
+        // descendant into a tap target. Require a unique native button and label.
+        let button = app.descendants(matching: .any).matching(NSPredicate(
+            format: "elementType == %d AND (identifier == %@ OR label == %@)",
+            Int(XCUIElement.ElementType.button.rawValue), "page-load-proxy-retry", candidate.label
+        )).firstMatch
+        guard button.exists, button.isEnabled, button.isHittable,
+              let live = try? button.snapshot(), live.elementType == .button,
+              live.frame == candidate.frame, live.label == candidate.label else { return nil }
+        return button
+    }
+
+    private func preActionEvidence(_ app: XCUIApplication) -> [String: Any] {
+        guard let snapshot = try? app.snapshot() else { return ["result": "SNAPSHOT_UNAVAILABLE"] }
+        let nodes = nativeDescendants(snapshot)
+        let address = nodes.first { $0.elementType == .textField && $0.identifier == "address-field" }
+        let pending = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-host" }
+        let status = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-status" }
+        let knownStatus = ["正在准备代理连接…", "正在连接此网址。你可以选择通过代理打开。"]
+        let targetValue = pending?.value as? String
+        let target = targetValue ?? pending?.label
+        let controls = nodes.filter { $0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label) }
+        return ["result": "OBSERVED", "observed_address": sanitizedURL(address?.value as? String ?? ""),
+                "target": target.map(sanitizedURL) ?? "NOT_EXPOSED",
+                "target_source": targetValue != nil ? "PENDING_ACCESSIBILITY_VALUE" : pending != nil ? "PENDING_VISIBLE_LABEL" : "NOT_EXPOSED",
+                "pending_status": status.map { knownStatus.contains($0.label) ? $0.label : "UNRECOGNIZED" } ?? "NOT_EXPOSED",
+                "recovery_controls": controls.prefix(8).map { item in
+                    ["type": item.elementType.rawValue, "identifier_match": item.identifier == "page-load-proxy-retry",
+                     "label": recoveryLabels.contains(item.label) ? item.label : "UNRECOGNIZED",
+                     "enabled": item.isEnabled, "frame": String(describing: item.frame)] as [String: Any]
+                }]
+    }
+
+    private func nativeDescendants(_ root: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+        var pending = [root], result: [XCUIElementSnapshot] = []
+        while let item = pending.popLast(), result.count < 2_000 {
+            if item.elementType == .webView { continue }
+            result.append(item); pending.append(contentsOf: item.children.reversed())
+        }
+        return result
     }
 
     private func waitForContent(_ app: XCUIApplication) throws -> [String: Any] {
