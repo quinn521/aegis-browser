@@ -138,7 +138,14 @@ func (f *Flow) Finish() error {
 	defer f.lifetime.Unlock()
 	f.finished = true
 	defer f.conn.Close()
-	return f.reliableSend(map[string]any{"op": "finish", "uploadedBytes": f.up, "downloadedBytes": f.down, "complete": !f.uncertain})
+	frame := map[string]any{"op": "finish", "uploadedBytes": f.up, "downloadedBytes": f.down, "complete": !f.uncertain}
+	if f.broken {
+		if err := f.retain(frame); err != nil {
+			return err
+		}
+		return errors.New("meter terminal queued for replay")
+	}
+	return f.reliableSend(frame)
 }
 
 // Write uses a concrete writer from the pinned transport. [start,end) is the
@@ -182,7 +189,17 @@ func (f *Flow) Write(w io.Writer, p []byte, start, end int, path string) (int, e
 		}
 		*total += delta
 		f.paths[path] += delta
-		if reportErr := f.reliableSend(map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path]}); reportErr != nil {
+		frame := map[string]any{"op": "sample", "direction": direction, "bytes": *total, "path": path, "pathBytes": f.paths[path]}
+		var reportErr error
+		if f.broken {
+			reportErr = f.retain(frame)
+			if reportErr == nil {
+				reportErr = errors.New("meter sample queued for replay")
+			}
+		} else {
+			reportErr = f.reliableSend(frame)
+		}
+		if reportErr != nil {
 			f.broken = true
 			return n, reportErr
 		}
