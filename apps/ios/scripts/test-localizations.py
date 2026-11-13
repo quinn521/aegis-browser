@@ -50,6 +50,7 @@ def validate_catalog(contract, catalog, probes):
     require(catalog["sourceLanguage"] == "zh-Hans", 'Guard failed: catalog["sourceLanguage"] == "zh-Hans"')
     additions = set(contract.get("languageSelectorAddedKeys", []))
     require(additions == {"语言", "地区版本自动匹配系统语言偏好，地区格式保持系统设置。"}, 'Guard failed: additions == {"语言", "地区版本自动匹配系统语言偏好，地区格式保持系统设置。"}')
+    additions.update(contract["paidAccessAddedKeys"])
     require(additions <= set(strings), 'Guard failed: additions <= set(strings)')
     require(len(strings) == contract["catalogKeyCount"] + len(additions), 'Guard failed: len(strings) == contract["catalogKeyCount"] + len(additions)')
     require(digest(sorted(set(strings) - additions)) == contract["catalogInventorySHA256"], "Catalog key inventory changed")

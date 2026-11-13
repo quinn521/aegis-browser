@@ -18,6 +18,46 @@ final class AccessAccountRefreshTests: XCTestCase {
             snapshotAgeMs: nil, freshness: .unavailable)
     }
 
+    func testQuotaRefreshCannotCancelQueuedProxySelection() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let origin = try XCTUnwrap(env["AEGIS_S1_FIXTURE_ORIGIN"])
+        let token = try XCTUnwrap(env["AEGIS_S1_FIXTURE_C"])
+        let client = try AccessAccountClient(origin: origin, allowSimulatorLoopback: true)
+        let session = AccessAccountSession(client: client, keychain: store())
+        defer { session.signOut() }
+        await session.bind(accountID: "C", token: token)?.value
+        let tab = UUID()
+        let selection = session.selectProxy(for: tab, host: "site.example", privateMode: false)
+        let refresh = session.refresh()
+        let selected = await selection.value
+        await refresh?.value
+        XCTAssertTrue(selected, "Same-account quota reads must preserve the selected authorization")
+        XCTAssertEqual(session.lastSnapshot?.entitlementAccountId, "C")
+        XCTAssertTrue(session.hasSelectedProxy(for: tab, host: "site.example"))
+        session.closeProxy(for: tab)
+        XCTAssertFalse(session.hasSelectedProxy(for: tab, host: "site.example"))
+    }
+
+    func testSignOutAndRebindCannotReviveQueuedProxySelection() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let origin = try XCTUnwrap(env["AEGIS_S1_FIXTURE_ORIGIN"])
+        let token = try XCTUnwrap(env["AEGIS_S1_FIXTURE_C"])
+        let client = try AccessAccountClient(origin: origin, allowSimulatorLoopback: true)
+        let session = AccessAccountSession(client: client, keychain: store())
+        defer { session.signOut() }
+        await session.bind(accountID: "C", token: token)?.value
+        let tab = UUID()
+        let selection = session.selectProxy(for: tab, host: "site.example", privateMode: false)
+        session.signOut()
+        let rebound = session.bind(accountID: "C", token: token)
+        let selected = await selection.value
+        await rebound?.value
+        XCTAssertFalse(selected, "A cleared authorization must require a new explicit selection")
+        let replacement = session.selectProxy(for: tab, host: "site.example", privateMode: false)
+        let replaced = await replacement.value
+        XCTAssertTrue(replaced)
+    }
+
     func testSlowReadCoalescesAndCompletedReadCanRefreshAgain() async throws {
         let reads = RefreshReadGate()
         let client = try AccessAccountClient(origin: "https://account.example.test")
