@@ -1,6 +1,7 @@
 """付费编排的失败边界；用真实子进程和临时 Git 仓库验证。"""
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -130,7 +131,7 @@ class HostedTrialTest(unittest.TestCase):
             self.runner.run('space', [sys.executable, '-c', 'exit(0)'], self.root)
         self.assertFalse((self.logs / 'space.log').exists())
 
-    def test_test_receipt_rejects_empty_failed_and_wrong_count(self):
+    def test_test_receipt_rejects_empty_failed_and_wrong_cases(self):
         receipt = self.root / 'tests.json'
         for data in [{}, {'per_iteration_data': [{}]},
                      {'per_iteration_data': [{'A': [{'status': 'FAILURE'}]}]},
@@ -139,9 +140,23 @@ class HostedTrialTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 hosted.check_test_summary(receipt)
         receipt.write_text(json.dumps({'per_iteration_data': [{'A': [{'status': 'SUCCESS'}]}]}))
-        self.assertEqual(hosted.check_test_summary(receipt, 1), 1)
-        with self.assertRaisesRegex(ValueError, '数量'):
-            hosted.check_test_summary(receipt, 4)
+        self.assertEqual(hosted.check_test_summary(receipt, {'A'}), 1)
+        with self.assertRaisesRegex(ValueError, '清单'):
+            hosted.check_test_summary(receipt, {'B'})
+
+    def test_windows_trial_test_names_match_native_sources(self):
+        source = hosted.BROWSER / 'overlay/chrome/browser/aegis'
+        enhancements = (source / 'enhancements/enhancement_browsertest.cc').read_text()
+        access = (source / 'access/access_local_core_win_unittest.cc').read_text()
+        self.assertEqual(hosted.ENHANCEMENT_CASES, {
+            'EnhancementBrowserTest.' + name for name in re.findall(
+                r'IN_PROC_BROWSER_TEST_F\(EnhancementBrowserTest,\s*(\w+)\)', enhancements)
+        })
+        self.assertEqual(hosted.ACCESS_CORE_CASES, {
+            suite + '.' + name for suite, name in re.findall(
+                r'TEST(?:_F)?\((\w+),\s*(\w+)\)', access)
+        })
+        self.assertIn(hosted.ACCESS_CORE_TESTS, hosted.TARGETS)
 
     def test_patch_replay_and_dirty_source_boundary(self):
         source = self.root / 'src'

@@ -101,6 +101,12 @@ source_set("access_local_core_manager") {
   public_deps = [ ":access_core_log" ]
   if (is_mac) {
     sources += [ "access_local_core_manager.cc" ]
+  } else if (is_win) {
+    sources += [
+      "access_local_core_manager.cc",
+      "access_local_core_win.cc",
+      "access_local_core_win.h",
+    ]
   } else {
     sources += [ "access_local_core_manager_unavailable.cc" ]
   }
@@ -145,6 +151,8 @@ test("access_local_core_manager_unittests") {
       "access_core_log_unittest.cc",
       "access_local_core_manager_unittest.cc",
     ]
+  } else if (is_win) {
+    sources = [ "access_local_core_win_unittest.cc" ]
   } else {
     sources = [ "access_local_core_manager_unavailable_unittest.cc" ]
   }
@@ -165,6 +173,16 @@ test("access_local_core_manager_unittests") {
       "//third_party/zlib/google:compression_utils",
     ]
     data_deps = [ ":access_local_core_test_child" ]
+  } else if (is_win) {
+    data_deps = [ ":access_local_core_win_test_child" ]
+  }
+}
+
+if (is_win) {
+  executable("access_local_core_win_test_child") {
+    testonly = true
+    sources = [ "access_local_core_win_test_child.cc" ]
+    deps = [ "//base" ]
   }
 }
 

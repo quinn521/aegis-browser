@@ -1,0 +1,748 @@
+From 0c0ca8be6b5baaf55e2bf2c9e52f4fbcd217c83d Mon Sep 17 00:00:00 2001
+From: Aegis Browser <aegis@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 21:02:31 +0800
+Subject: [PATCH] feat(access): add the Windows owned-core adapter
+
+---
+ chrome/browser/BUILD.gn                       |   9 +-
+ chrome/browser/aegis/access/BUILD.gn          |  18 ++
+ .../aegis/access/access_local_core_manager.cc |  92 +++++++--
+ .../aegis/access/access_local_core_win.cc     |  89 ++++++++
+ .../aegis/access/access_local_core_win.h      |  26 +++
+ .../access_local_core_win_test_child.cc       |  54 +++++
+ .../access/access_local_core_win_unittest.cc  | 194 ++++++++++++++++++
+ chrome/browser/browser_process_impl.cc        |   7 +-
+ 8 files changed, 464 insertions(+), 25 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_local_core_win.cc
+ create mode 100644 chrome/browser/aegis/access/access_local_core_win.h
+ create mode 100644 chrome/browser/aegis/access/access_local_core_win_test_child.cc
+ create mode 100644 chrome/browser/aegis/access/access_local_core_win_unittest.cc
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index fa2bb8fb26df3e8d053a655ccb189461a79c3664..4e9ce4e4ca947dc3d43c0a0165b3ecd47bb1797c 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1974,10 +1974,11 @@ source_set("core") {
+   }
+ 
+   if (is_mac) {
+-    deps += [
+-      ":chrome_browser_main_mac",
+-      "//chrome/browser/aegis/access:access_local_core_manager",
+-    ]
++    deps += [ ":chrome_browser_main_mac" ]
++  }
++
++  if (is_mac || is_win) {
++    deps += [ "//chrome/browser/aegis/access:access_local_core_manager" ]
+   }
+ 
+   if (is_chrome_for_testing) {
+diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
+index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..30a7d8f01d0d86b53caa13cac025af655f004504 100644
+--- a/chrome/browser/aegis/access/BUILD.gn
++++ b/chrome/browser/aegis/access/BUILD.gn
+@@ -101,6 +101,12 @@ source_set("access_local_core_manager") {
+   public_deps = [ ":access_core_log" ]
+   if (is_mac) {
+     sources += [ "access_local_core_manager.cc" ]
++  } else if (is_win) {
++    sources += [
++      "access_local_core_manager.cc",
++      "access_local_core_win.cc",
++      "access_local_core_win.h",
++    ]
+   } else {
+     sources += [ "access_local_core_manager_unavailable.cc" ]
+   }
+@@ -145,6 +151,8 @@ test("access_local_core_manager_unittests") {
+       "access_core_log_unittest.cc",
+       "access_local_core_manager_unittest.cc",
+     ]
++  } else if (is_win) {
++    sources = [ "access_local_core_win_unittest.cc" ]
+   } else {
+     sources = [ "access_local_core_manager_unavailable_unittest.cc" ]
+   }
+@@ -165,6 +173,16 @@ test("access_local_core_manager_unittests") {
+       "//third_party/zlib/google:compression_utils",
+     ]
+     data_deps = [ ":access_local_core_test_child" ]
++  } else if (is_win) {
++    data_deps = [ ":access_local_core_win_test_child" ]
++  }
++}
++
++if (is_win) {
++  executable("access_local_core_win_test_child") {
++    testonly = true
++    sources = [ "access_local_core_win_test_child.cc" ]
++    deps = [ "//base" ]
+   }
+ }
+ 
+diff --git a/chrome/browser/aegis/access/access_local_core_manager.cc b/chrome/browser/aegis/access/access_local_core_manager.cc
+index 18c9e049b089f3246257dff36dbcc016258e05f3..8cf14649b2c7056ba50608580538886a47b7d726 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager.cc
++++ b/chrome/browser/aegis/access/access_local_core_manager.cc
+@@ -1,21 +1,10 @@
+ // Copyright 2026 GCSA
+ #include "chrome/browser/aegis/access/access_local_core_manager.h"
+ 
+-#include <signal.h>
+-#include <unistd.h>
+-
+-#include <algorithm>
+ #include <atomic>
+-#include <cerrno>
+ #include <vector>
+ 
+ #include "base/barrier_closure.h"
+-#include "base/strings/string_util.h"
+-
+-#include "base/files/file_descriptor_watcher_posix.h"
+-#include "base/posix/eintr_wrapper.h"
+-#include "base/base64.h"
+-#include "chrome/browser/aegis/access/access_core_log_share.h"
+ #include "base/command_line.h"
+ #include "base/base_paths.h"
+ #include "base/files/file.h"
+@@ -54,6 +43,22 @@
+ #include "net/url_request/url_request_context.h"
+ #include "net/url_request/url_request_context_builder.h"
+ 
++#if BUILDFLAG(IS_WIN)
++#include "chrome/browser/aegis/access/access_local_core_win.h"
++#else
++#include <signal.h>
++#include <unistd.h>
++
++#include <algorithm>
++#include <cerrno>
++
++#include "base/base64.h"
++#include "base/files/file_descriptor_watcher_posix.h"
++#include "base/posix/eintr_wrapper.h"
++#include "base/strings/string_util.h"
++#include "chrome/browser/aegis/access/access_core_log_share.h"
++#endif
++
+ namespace aegis::access {
+ std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput() {
+ #if BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
+@@ -93,6 +98,7 @@ constexpr auto kCanaryAnnotation = net::DefineNetworkTrafficAnnotation(
+       })");
+ constexpr char kCanary[] = "https://www.gstatic.com/generate_204";
+ std::string Token() { return base::Uuid::GenerateRandomV4().AsLowercaseString(); }
++#if BUILDFLAG(IS_MAC)
+ // Keep configured strings out of access targets as well as free-form messages.
+ // Exceeding the small comparison budget disables address disclosure.
+ void ProtectValue(const base::Value& value, std::vector<std::string>& values) {
+@@ -105,6 +111,7 @@ void ProtectValue(const base::Value& value, std::vector<std::string>& values) {
+     values.push_back(base::ToLowerASCII(value.GetString()));
+   }
+ }
++#endif
+ }  // namespace
+ 
+ class AccessLocalCoreManager::ShutdownHandle
+@@ -270,13 +277,16 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     } else {
+       const auto* path = manifest->FindString("binaryPath");
+       if (!path) return false;
+-      binary = base::FilePath(*path);
++      if (path->find('\0') != std::string::npos) return false;
++      binary = base::FilePath::FromUTF8Unsafe(*path);
+     }
+     const auto* pin = manifest->FindString("binarySha256");
+-    if (!pin) return false;
++    if (!pin || !binary.IsAbsolute()) return false;
++#if BUILDFLAG(IS_WIN)
++    if (!binary.MatchesExtension(FILE_PATH_LITERAL(".exe"))) return false;
++#endif
+     auto bytes = base::ReadFileToBytes(binary);
+-    if (!binary.IsAbsolute() || !bytes ||
+-        base::HexEncodeLower(crypto::hash::Sha256(*bytes)) != *pin)
++    if (!bytes || base::HexEncodeLower(crypto::hash::Sha256(*bytes)) != *pin)
+       return false;
+     const auto* outbounds = node->FindList("outbounds");
+     if (!outbounds || outbounds->empty() || !outbounds->front().is_dict()) return false;
+@@ -288,8 +298,22 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+         !security || *security != "reality") return false;
+     // The selected outbound is copied privately; no subscription, system
+     // routing, original V2Ray process or original input file is changed.
++#if BUILDFLAG(IS_WIN)
++    if (!CreatePrivateCoreDirectory(directory_)) return false;
++    // Launch the exact bytes that passed the pin, from the private directory.
++    binary = directory_.GetPath().AppendASCII("xray.exe");
++    {
++      base::File executable(binary,
++                             base::File::FLAG_CREATE | base::File::FLAG_WRITE);
++      if (!executable.IsValid() ||
++          !executable.WriteAtCurrentPosAndCheck(*bytes)) {
++        return false;
++      }
++    }
++#else
+     if (!directory_.CreateUniqueTempDir() ||
+         !base::SetPosixFilePermissions(directory_.GetPath(), 0700)) return false;
++#endif
+     auto reservation = std::make_unique<net::TCPServerSocket>(nullptr, net::NetLogSource());
+     if (reservation->Listen(net::IPEndPoint(net::IPAddress::IPv4Localhost(), 0),
+                             1, std::nullopt) != net::OK) return false;
+@@ -301,6 +325,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     credentials_.emplace(base::UTF8ToUTF16(user), base::UTF8ToUTF16(password));
+     registration_ = Token();
+     std::string level = "none";
++#if BUILDFLAG(IS_MAC)
+     if (input_.log_store) std::tie(level, log_generation_) = input_.log_store->LaunchConfig();
+     protected_values_ = {user, password, registration_,
+                          base::ToLowerASCII(base::Base64Encode(user + ":" + password))};
+@@ -308,6 +333,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+       ProtectValue(outbounds->front(), protected_values_);
+       if (protected_values_.size() >= 256) protected_values_ = {""};
+     }
++#endif
+     auto log = base::DictValue().Set("loglevel", level);
+     if (CoreLogRank(level) >= 2) log.Set("access", "none");
+     auto config = base::DictValue()
+@@ -322,18 +348,25 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     if (!base::JSONWriter::Write(config, &serialized)) return false;
+     // Create private before writing secret bytes, rather than chmod after.
+     base::File file(config_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+-    if (!file.IsValid() || !base::SetPosixFilePermissions(config_path, 0600) ||
+-        !file.WriteAtCurrentPosAndCheck(base::as_byte_span(serialized))) return false;
++    if (!file.IsValid()) return false;
++#if BUILDFLAG(IS_MAC)
++    if (!base::SetPosixFilePermissions(config_path, 0600)) return false;
++#endif
++    if (!file.WriteAtCurrentPosAndCheck(base::as_byte_span(serialized))) return false;
+     file.Close();
+     base::CommandLine command(binary);
+     command.AppendArg("run");
+     command.AppendArg("-config");
+     command.AppendArgPath(config_path);
++    // Release the reservation immediately before launching. A port race is a
++    // preparation failure: only the authenticated HTTPS probe may admit it.
++#if BUILDFLAG(IS_WIN)
++    reservation.reset();
++    process_ = LaunchOwnedCore(command, directory_.GetPath(), job_);
++#else
+     base::LaunchOptions options;
+     options.clear_environment = true;
+     options.current_directory = directory_.GetPath();
+-    // Release the reservation immediately before launching. A port race is a
+-    // preparation failure: only the authenticated HTTPS probe may admit it.
+     reservation.reset();
+     base::File null_output(base::FilePath("/dev/null"),
+                            base::File::FLAG_OPEN | base::File::FLAG_WRITE);
+@@ -350,8 +383,10 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     }
+     options.fds_to_remap = {{output, STDOUT_FILENO}, {output, STDERR_FILENO}};
+     process_ = base::LaunchProcess(command, options);
++#endif
+     return process_.IsValid();
+   }
++#if BUILDFLAG(IS_MAC)
+   void DrainLog() {
+     // Bound each turn so noisy children cannot starve cancellation or probes.
+     char chunk[4096];
+@@ -368,6 +403,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+       });
+     }
+   }
++#endif
+   void StartProbe() {
+     if (!Running()) {
+       Complete(false, "The local proxy exited before becoming ready.");
+@@ -447,6 +483,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     StopChild();
+     if (stopped_callback_) stopped_callback_.Run(registration);
+   }
++#if BUILDFLAG(IS_MAC)
+   bool WaitForChildExit(base::TimeDelta maximum_wait) {
+     auto deadline = maximum_wait.is_max()
+         ? base::TimeTicks::Max() : base::TimeTicks::Now() + maximum_wait;
+@@ -466,12 +503,20 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+       if (remaining <= base::TimeDelta()) return false;
+     }
+   }
++#endif
+   void StopChild() {
+     health_.Stop();
+     timeout_.Stop();
+     retry_.Stop();
+     request_.reset();
+     context_.reset();
++#if BUILDFLAG(IS_WIN)
++    job_.Close();
++    if (process_.IsValid()) {
++      process_.WaitForExitWithTimeout(base::Seconds(1), nullptr);
++      process_.Close();
++    }
++#else
+     if (process_.IsValid()) {
+       if (Running()) {
+         process_.Terminate(0, false);
+@@ -487,6 +532,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     log_read_.reset();
+     framer_ = CoreLogFramer();
+     protected_values_.clear();
++#endif
+     credentials_.reset();
+     authenticated_ = false;
+     const bool deleted = directory_.Delete();
+@@ -495,11 +541,15 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+ 
+   AccessLocalCoreInput input_;
+   std::shared_ptr<ShutdownHandle> shutdown_;
++#if BUILDFLAG(IS_WIN)
++  base::win::ScopedHandle job_;
++#else
+   base::ScopedFD log_read_;
+   std::unique_ptr<base::FileDescriptorWatcher::Controller> log_watch_;
+   CoreLogFramer framer_;
+   uint64_t log_generation_ = 0;
+   std::vector<std::string> protected_values_;
++#endif
+   base::ScopedTempDir directory_;
+   base::Process process_;
+   uint16_t port_ = 0;
+@@ -567,11 +617,15 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
+   for (auto& weak : ShutdownHandle::Registry()) {
+     if (auto handle = weak.lock()) handles.push_back(std::move(handle));
+   }
++#if BUILDFLAG(IS_MAC)
+   auto stopped = base::BarrierClosure(
+       handles.size() + 1,
+       base::BindOnce(&AccessCoreLogStore::FlushAllForSessionEnding,
+                      std::move(completion)));
+   CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
++#else
++  auto stopped = base::BarrierClosure(handles.size(), std::move(completion));
++#endif
+   for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
+ }
+ void AccessLocalCoreManager::SetStoppedCallback(
+diff --git a/chrome/browser/aegis/access/access_local_core_win.cc b/chrome/browser/aegis/access/access_local_core_win.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..d3c219d72e97f9f6e01a053b3494b5cdfd97459e
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_local_core_win.cc
+@@ -0,0 +1,89 @@
++// Copyright 2026 GCSA
++#include "chrome/browser/aegis/access/access_local_core_win.h"
++
++#include <windows.h>
++
++#include <string>
++#include <utility>
++
++#include "base/base_paths_win.h"
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/path_service.h"
++#include "base/process/launch.h"
++#include "base/uuid.h"
++#include "base/win/access_token.h"
++#include "base/win/scoped_process_information.h"
++#include "base/win/security_descriptor.h"
++#include "base/win/startup_information.h"
++
++namespace aegis::access {
++
++bool CreatePrivateCoreDirectory(base::ScopedTempDir& directory) {
++  base::FilePath root;
++  auto token = base::win::AccessToken::FromCurrentProcess();
++  if (!token || !base::PathService::Get(base::DIR_LOCAL_APP_DATA, &root)) {
++    return false;
++  }
++
++  auto descriptor = base::win::SecurityDescriptor::CreateWithEmptyDacl();
++  descriptor.set_dacl_protected(true);
++  constexpr DWORD kInheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
++  if (!descriptor.SetDaclEntry(*token, base::win::SecurityAccessMode::kGrant,
++                               FILE_ALL_ACCESS, kInheritance)) {
++    return false;
++  }
++  auto absolute = descriptor.ToAbsolute();
++  SECURITY_ATTRIBUTES attributes{sizeof(attributes), &absolute, FALSE};
++  const auto path = root.AppendASCII(
++      "AegisAccess-" + base::Uuid::GenerateRandomV4().AsLowercaseString());
++  if (!::CreateDirectoryW(path.value().c_str(), &attributes)) {
++    return false;
++  }
++  if (!directory.Set(path)) {
++    base::DeletePathRecursively(path);
++    return false;
++  }
++  // A filesystem without persistent ACLs may ignore the creation descriptor.
++  const auto applied = base::win::SecurityDescriptor::FromFile(
++      path, DACL_SECURITY_INFORMATION);
++  return applied && applied->dacl_protected() && applied->dacl() &&
++         !applied->dacl()->is_null() && applied->dacl()->get()->AceCount == 1;
++}
++
++base::Process LaunchOwnedCore(const base::CommandLine& command,
++                              const base::FilePath& directory,
++                              base::win::ScopedHandle& job) {
++  base::win::ScopedHandle owned_job(::CreateJobObjectW(nullptr, nullptr));
++  if (!owned_job.is_valid() ||
++      !base::SetJobObjectLimitFlags(owned_job.get(),
++                                  JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)) {
++    return {};
++  }
++  HANDLE job_handle = owned_job.get();
++  base::win::StartupInformation startup;
++  if (!startup.InitializeProcThreadAttributeList(1) ||
++      !startup.UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_JOB_LIST,
++                                         &job_handle, sizeof(job_handle))) {
++    return {};
++  }
++
++  PROCESS_INFORMATION child = {};
++  std::wstring command_line = command.GetCommandLineString();
++  wchar_t empty_environment[2] = {};
++  if (!::CreateProcessW(command.GetProgram().value().c_str(), command_line.data(),
++                        nullptr, nullptr, FALSE,
++                        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
++                            CREATE_NO_WINDOW,
++                        empty_environment, directory.value().c_str(),
++                        startup.startup_info(), &child)) {
++    return {};
++  }
++  base::win::ScopedProcessInformation child_handles(child);
++  job = std::move(owned_job);
++  return base::Process(child_handles.TakeProcessHandle());
++}
++
++}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_local_core_win.h b/chrome/browser/aegis/access/access_local_core_win.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..5d298063d9425845a80fca7667775ae99572b247
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_local_core_win.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 GCSA
++#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_
++#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_
++
++#include "base/process/process.h"
++#include "base/win/scoped_handle.h"
++
++namespace base {
++class CommandLine;
++class FilePath;
++class ScopedTempDir;
++}  // namespace base
++
++namespace aegis::access {
++
++bool CreatePrivateCoreDirectory(base::ScopedTempDir& directory);
++
++// The browser owns the only job handle. Windows assigns the child to the job
++// at creation and terminates its processes if the browser exits unexpectedly.
++base::Process LaunchOwnedCore(const base::CommandLine& command,
++                              const base::FilePath& directory,
++                              base::win::ScopedHandle& job);
++
++}  // namespace aegis::access
++
++#endif  // CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOCAL_CORE_WIN_H_
+diff --git a/chrome/browser/aegis/access/access_local_core_win_test_child.cc b/chrome/browser/aegis/access/access_local_core_win_test_child.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f87076681061841ecaa788679020f6388ef44ab3
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_local_core_win_test_child.cc
+@@ -0,0 +1,54 @@
++// Copyright 2026 GCSA
++#include <windows.h>
++
++#include <filesystem>
++#include <fstream>
++#include <string>
++#include <string_view>
++
++#include "base/compiler_specific.h"
++
++int wmain(int argc, wchar_t* argv[]) {
++  // The CRT provides argc pointers. Each argument access is count-checked.
++  if (argc == 2 &&
++      UNSAFE_BUFFERS(std::wstring_view(argv[1])) == L"--access-fixture-grandchild") {
++    ::Sleep(INFINITE);
++    return 0;
++  }
++  std::error_code error;
++  const auto directory = std::filesystem::current_path(error);
++  if (error) {
++    return 1;
++  }
++  const auto config_path = directory / L"config.json";
++  if (argc != 4 || UNSAFE_BUFFERS(std::wstring_view(argv[1])) != L"run" ||
++      UNSAFE_BUFFERS(std::wstring_view(argv[2])) != L"-config" ||
++      UNSAFE_BUFFERS(std::filesystem::path(argv[3])) != config_path) {
++    return 2;
++  }
++  {
++    std::ifstream config(config_path);
++    if (config.peek() != '{') {
++      return 3;
++    }
++  }
++  std::wstring child_command = L"\"access fixture\" --access-fixture-grandchild";
++  STARTUPINFOW startup{.cb = sizeof(startup)};
++  PROCESS_INFORMATION child = {};
++  if (!::CreateProcessW(argv[0], child_command.data(), nullptr, nullptr, FALSE,
++                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &child)) {
++    return 4;
++  }
++  ::CloseHandle(child.hProcess);
++  ::CloseHandle(child.hThread);
++  {
++    std::ofstream pids(directory / L"fixture-pids");
++    pids << ::GetCurrentProcessId() << ' ' << child.dwProcessId << '\n';
++    pids.close();
++    if (!pids) {
++      return 5;
++    }
++  }
++  ::Sleep(INFINITE);
++  return 0;
++}
+diff --git a/chrome/browser/aegis/access/access_local_core_win_unittest.cc b/chrome/browser/aegis/access/access_local_core_win_unittest.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..b8e4b7d6cea57d002a6ba50c29b1cf41ce22824c
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_local_core_win_unittest.cc
+@@ -0,0 +1,194 @@
++// Copyright 2026 GCSA
++#include "chrome/browser/aegis/access/access_local_core_manager.h"
++
++#include <windows.h>
++
++#include <memory>
++#include <string>
++
++#include "base/base_paths.h"
++#include "base/base_paths_win.h"
++#include "base/command_line.h"
++#include "base/files/file_enumerator.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/functional/callback_helpers.h"
++#include "base/json/json_writer.h"
++#include "base/path_service.h"
++#include "base/process/process.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_split.h"
++#include "base/synchronization/waitable_event.h"
++#include "base/test/bind.h"
++#include "base/test/run_until.h"
++#include "base/test/scoped_command_line.h"
++#include "base/test/scoped_path_override.h"
++#include "base/test/scoped_run_loop_timeout.h"
++#include "base/test/task_environment.h"
++#include "base/test/test_future.h"
++#include "base/threading/thread_restrictions.h"
++#include "base/timer/timer.h"
++#include "base/values.h"
++#include "base/win/security_descriptor.h"
++#include "chrome/browser/aegis/access/access_build_channel.h"
++#include "chrome/browser/aegis/access/access_buildflags.h"
++#include "crypto/hash.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace aegis::access {
++namespace {
++
++TEST(AccessLocalCoreWinInputTest, OnlyExplicitDevBindingResolves) {
++  base::test::ScopedCommandLine command;
++  auto* line = command.GetProcessCommandLine();
++  line->RemoveSwitch("aegis-access-dev-core-manifest");
++  line->RemoveSwitch("aegis-access-dev-node-config");
++  EXPECT_FALSE(ResolveAccessLocalCoreInput());
++  line->AppendSwitchPath("aegis-access-dev-core-manifest",
++                         base::FilePath(L"C:\\测试\\manifest.json"));
++  EXPECT_FALSE(ResolveAccessLocalCoreInput());
++  line->AppendSwitchPath("aegis-access-dev-node-config",
++                         base::FilePath(L"C:\\测试\\node.json"));
++  const auto input = ResolveAccessLocalCoreInput();
++  const bool dev = BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED) &&
++                   AccessChannelForCurrentBuild() ==
++                       aegis_access::ChannelNamespace::kDev;
++  ASSERT_EQ(input.has_value(), dev);
++  if (input) {
++    EXPECT_EQ(input->source, AccessLocalCoreSource::kDevFiles);
++    EXPECT_EQ(input->manifest, base::FilePath(L"C:\\测试\\manifest.json"));
++    EXPECT_EQ(input->node_config, base::FilePath(L"C:\\测试\\node.json"));
++  }
++}
++
++class AccessLocalCoreWinTest : public testing::Test {
++ protected:
++  void SetUp() override {
++    ASSERT_TRUE(root_.CreateUniqueTempDir());
++    profile_ = root_.GetPath().AppendASCII("Local AppData");
++    ASSERT_TRUE(base::CreateDirectory(profile_));
++    profile_override_ =
++        std::make_unique<base::ScopedPathOverride>(base::DIR_LOCAL_APP_DATA,
++                                                   profile_);
++    base::FilePath bin;
++    ASSERT_TRUE(base::PathService::Get(base::DIR_EXE, &bin));
++    binary_ = root_.GetPath().Append(L"核心 fixture.exe");
++    ASSERT_TRUE(base::CopyFile(
++        bin.AppendASCII("access_local_core_win_test_child.exe"), binary_));
++    auto bytes = base::ReadFileToBytes(binary_);
++    ASSERT_TRUE(bytes);
++    pin_ = base::HexEncodeLower(crypto::hash::Sha256(*bytes));
++    input_.manifest = root_.GetPath().AppendASCII("manifest.json");
++    input_.node_config = root_.GetPath().AppendASCII("node.json");
++    ASSERT_TRUE(base::WriteFile(input_.node_config, R"({
++      "outbounds": [{"protocol": "vless",
++        "streamSettings": {"network": "tcp", "security": "reality"}}]
++    })"));
++  }
++
++  void WriteManifest(const std::string& pin) {
++    auto manifest = base::JSONWriter::Write(base::DictValue()
++        .Set("binaryPath", binary_.AsUTF8Unsafe())
++        .Set("binarySha256", pin));
++    ASSERT_TRUE(manifest);
++    ASSERT_TRUE(base::WriteFile(input_.manifest, *manifest));
++  }
++
++  base::FilePath FindCoreDirectory() {
++    base::FileEnumerator entries(profile_, false,
++                                 base::FileEnumerator::DIRECTORIES,
++                                 L"AegisAccess-*");
++    return entries.Next();
++  }
++
++  void VerifyShutdown(bool session_ending) {
++    ASSERT_NO_FATAL_FAILURE(WriteManifest(pin_));
++    AccessLocalCoreManager manager(input_);
++    base::test::TestFuture<AccessLocalCoreReady> ready;
++    manager.Prepare(ready.GetCallback());
++    base::FilePath directory;
++    std::string pids;
++    base::test::ScopedRunLoopTimeout timeout(FROM_HERE, base::Seconds(10));
++    base::RepeatingTimer poll;
++    poll.Start(FROM_HERE, base::Milliseconds(20), base::DoNothing());
++    ASSERT_TRUE(base::test::RunUntil([&] {
++      directory = FindCoreDirectory();
++      if (directory.empty()) return false;
++      return base::ReadFileToString(directory.AppendASCII("fixture-pids"),
++                                    &pids) &&
++             pids.ends_with('\n');
++    }));
++    poll.Stop();
++    EXPECT_FALSE(ready.IsReady());
++    auto acl = base::win::SecurityDescriptor::FromFile(
++        directory, DACL_SECURITY_INFORMATION);
++    ASSERT_TRUE(acl && acl->dacl());
++    EXPECT_TRUE(acl->dacl_protected());
++    EXPECT_EQ(acl->dacl()->get()->AceCount, 1);
++    auto config_acl = base::win::SecurityDescriptor::FromFile(
++        directory.AppendASCII("config.json"), DACL_SECURITY_INFORMATION);
++    ASSERT_TRUE(config_acl && config_acl->dacl());
++    EXPECT_EQ(config_acl->dacl()->get()->AceCount, 1);
++
++    auto ids = base::SplitStringPiece(pids, " ", base::TRIM_WHITESPACE,
++                                      base::SPLIT_WANT_NONEMPTY);
++    ASSERT_EQ(ids.size(), 2u);
++    unsigned child_pid = 0;
++    unsigned grandchild_pid = 0;
++    ASSERT_TRUE(base::StringToUint(ids[0], &child_pid));
++    ASSERT_TRUE(base::StringToUint(ids[1], &grandchild_pid));
++    auto child = base::Process::Open(child_pid);
++    auto grandchild = base::Process::Open(grandchild_pid);
++    ASSERT_TRUE(child.IsValid() && grandchild.IsValid());
++    if (session_ending) {
++      auto stopped = std::make_shared<base::WaitableEvent>();
++      AccessLocalCoreManager::StopAllForSessionEnding(
++          base::BindLambdaForTesting([stopped] { stopped->Signal(); }));
++      base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
++      ASSERT_TRUE(stopped->TimedWait(base::Seconds(5)));
++    } else {
++      base::test::TestFuture<void> stopped;
++      manager.Stop(stopped.GetCallback());
++      ASSERT_TRUE(stopped.Wait());
++    }
++    {
++      base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
++      EXPECT_TRUE(child.WaitForExitWithTimeout(base::Seconds(1), nullptr));
++      EXPECT_TRUE(grandchild.WaitForExitWithTimeout(base::Seconds(1), nullptr));
++    }
++    EXPECT_FALSE(base::PathExists(directory));
++    ASSERT_TRUE(ready.Wait());
++    EXPECT_FALSE(ready.Get().ready);
++    EXPECT_FALSE(ready.Get().local_credentials);
++  }
++
++  base::test::TaskEnvironment environment_;
++  base::ScopedTempDir root_;
++  std::unique_ptr<base::ScopedPathOverride> profile_override_;
++  base::FilePath profile_;
++  base::FilePath binary_;
++  std::string pin_;
++  AccessLocalCoreInput input_;
++};
++
++TEST_F(AccessLocalCoreWinTest, WrongPinCannotLaunchOrPublish) {
++  ASSERT_NO_FATAL_FAILURE(WriteManifest(std::string(64, '0')));
++  AccessLocalCoreManager manager(input_);
++  base::test::TestFuture<AccessLocalCoreReady> ready;
++  manager.Prepare(ready.GetCallback());
++  EXPECT_FALSE(ready.Get().ready);
++  EXPECT_FALSE(ready.Get().local_credentials);
++  EXPECT_EQ(ready.Get().port, 0);
++  EXPECT_TRUE(FindCoreDirectory().empty());
++}
++
++TEST_F(AccessLocalCoreWinTest, StopCleansProcessTreeAndPrivateConfig) {
++  VerifyShutdown(false);
++}
++
++TEST_F(AccessLocalCoreWinTest, SessionEndingCleansWithoutUiReplies) {
++  VerifyShutdown(true);
++}
++
++}  // namespace
++}  // namespace aegis::access
+diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
+index e48a86e5ca2759303ebcc405ef5bda65916ab0f6..edd8e24f454d9e3e6af5626e0dae9f20dde4eb45 100644
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -40,6 +40,10 @@
+ #include "base/time/time.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
++
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++#include "chrome/browser/aegis/access/access_local_core_manager.h"
++#endif
+ #include "build/chromeos_buildflags.h"
+ #include "build/config/linux/dbus/buildflags.h"
+ #include "chrome/browser/accessibility/soda_installer_impl.h"
+@@ -170,7 +174,6 @@
+ #include "chrome/installer/util/install_util.h"
+ #include "components/os_crypt/async/browser/dpapi_key_provider.h"
+ #elif BUILDFLAG(IS_MAC)
+-#include "chrome/browser/aegis/access/access_local_core_manager.h"
+ #include "chrome/browser/chrome_browser_main_mac.h"
+ #include "chrome/browser/shutdown_watchdog_mac.h"
+ #endif
+@@ -875,7 +878,7 @@ void BrowserProcessImpl::EndSession() {
+   ProfileManager* pm = profile_manager();
+   scoped_refptr<RundownTaskCounter> rundown_counter =
+       base::MakeRefCounted<RundownTaskCounter>();
+-#if BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+   // SessionEnding terminates the Browser without destroying profile services.
+   // Reap owned proxy children on their core threads within the existing bounded
+   // rundown, without posting a completion back to this blocked sequence.
+-- 
+2.54.0 (Apple Git-157)
+

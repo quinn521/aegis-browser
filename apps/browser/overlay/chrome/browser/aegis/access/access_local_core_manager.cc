@@ -1,21 +1,10 @@
 // Copyright 2026 GCSA
 #include "chrome/browser/aegis/access/access_local_core_manager.h"
 
-#include <signal.h>
-#include <unistd.h>
-
-#include <algorithm>
 #include <atomic>
-#include <cerrno>
 #include <vector>
 
 #include "base/barrier_closure.h"
-#include "base/strings/string_util.h"
-
-#include "base/files/file_descriptor_watcher_posix.h"
-#include "base/posix/eintr_wrapper.h"
-#include "base/base64.h"
-#include "chrome/browser/aegis/access/access_core_log_share.h"
 #include "base/command_line.h"
 #include "base/base_paths.h"
 #include "base/files/file.h"
@@ -53,6 +42,22 @@
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
+
+#if BUILDFLAG(IS_WIN)
+#include "chrome/browser/aegis/access/access_local_core_win.h"
+#else
+#include <signal.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <cerrno>
+
+#include "base/base64.h"
+#include "base/files/file_descriptor_watcher_posix.h"
+#include "base/posix/eintr_wrapper.h"
+#include "base/strings/string_util.h"
+#include "chrome/browser/aegis/access/access_core_log_share.h"
+#endif
 
 namespace aegis::access {
 std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput() {
@@ -93,6 +98,7 @@ constexpr auto kCanaryAnnotation = net::DefineNetworkTrafficAnnotation(
       })");
 constexpr char kCanary[] = "https://www.gstatic.com/generate_204";
 std::string Token() { return base::Uuid::GenerateRandomV4().AsLowercaseString(); }
+#if BUILDFLAG(IS_MAC)
 // Keep configured strings out of access targets as well as free-form messages.
 // Exceeding the small comparison budget disables address disclosure.
 void ProtectValue(const base::Value& value, std::vector<std::string>& values) {
@@ -105,6 +111,7 @@ void ProtectValue(const base::Value& value, std::vector<std::string>& values) {
     values.push_back(base::ToLowerASCII(value.GetString()));
   }
 }
+#endif
 }  // namespace
 
 class AccessLocalCoreManager::ShutdownHandle
@@ -270,13 +277,16 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     } else {
       const auto* path = manifest->FindString("binaryPath");
       if (!path) return false;
-      binary = base::FilePath(*path);
+      if (path->find('\0') != std::string::npos) return false;
+      binary = base::FilePath::FromUTF8Unsafe(*path);
     }
     const auto* pin = manifest->FindString("binarySha256");
-    if (!pin) return false;
+    if (!pin || !binary.IsAbsolute()) return false;
+#if BUILDFLAG(IS_WIN)
+    if (!binary.MatchesExtension(FILE_PATH_LITERAL(".exe"))) return false;
+#endif
     auto bytes = base::ReadFileToBytes(binary);
-    if (!binary.IsAbsolute() || !bytes ||
-        base::HexEncodeLower(crypto::hash::Sha256(*bytes)) != *pin)
+    if (!bytes || base::HexEncodeLower(crypto::hash::Sha256(*bytes)) != *pin)
       return false;
     const auto* outbounds = node->FindList("outbounds");
     if (!outbounds || outbounds->empty() || !outbounds->front().is_dict()) return false;
@@ -288,8 +298,22 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
         !security || *security != "reality") return false;
     // The selected outbound is copied privately; no subscription, system
     // routing, original V2Ray process or original input file is changed.
+#if BUILDFLAG(IS_WIN)
+    if (!CreatePrivateCoreDirectory(directory_)) return false;
+    // Launch the exact bytes that passed the pin, from the private directory.
+    binary = directory_.GetPath().AppendASCII("xray.exe");
+    {
+      base::File executable(binary,
+                             base::File::FLAG_CREATE | base::File::FLAG_WRITE);
+      if (!executable.IsValid() ||
+          !executable.WriteAtCurrentPosAndCheck(*bytes)) {
+        return false;
+      }
+    }
+#else
     if (!directory_.CreateUniqueTempDir() ||
         !base::SetPosixFilePermissions(directory_.GetPath(), 0700)) return false;
+#endif
     auto reservation = std::make_unique<net::TCPServerSocket>(nullptr, net::NetLogSource());
     if (reservation->Listen(net::IPEndPoint(net::IPAddress::IPv4Localhost(), 0),
                             1, std::nullopt) != net::OK) return false;
@@ -301,6 +325,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     credentials_.emplace(base::UTF8ToUTF16(user), base::UTF8ToUTF16(password));
     registration_ = Token();
     std::string level = "none";
+#if BUILDFLAG(IS_MAC)
     if (input_.log_store) std::tie(level, log_generation_) = input_.log_store->LaunchConfig();
     protected_values_ = {user, password, registration_,
                          base::ToLowerASCII(base::Base64Encode(user + ":" + password))};
@@ -308,6 +333,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       ProtectValue(outbounds->front(), protected_values_);
       if (protected_values_.size() >= 256) protected_values_ = {""};
     }
+#endif
     auto log = base::DictValue().Set("loglevel", level);
     if (CoreLogRank(level) >= 2) log.Set("access", "none");
     auto config = base::DictValue()
@@ -322,18 +348,25 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     if (!base::JSONWriter::Write(config, &serialized)) return false;
     // Create private before writing secret bytes, rather than chmod after.
     base::File file(config_path, base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-    if (!file.IsValid() || !base::SetPosixFilePermissions(config_path, 0600) ||
-        !file.WriteAtCurrentPosAndCheck(base::as_byte_span(serialized))) return false;
+    if (!file.IsValid()) return false;
+#if BUILDFLAG(IS_MAC)
+    if (!base::SetPosixFilePermissions(config_path, 0600)) return false;
+#endif
+    if (!file.WriteAtCurrentPosAndCheck(base::as_byte_span(serialized))) return false;
     file.Close();
     base::CommandLine command(binary);
     command.AppendArg("run");
     command.AppendArg("-config");
     command.AppendArgPath(config_path);
+    // Release the reservation immediately before launching. A port race is a
+    // preparation failure: only the authenticated HTTPS probe may admit it.
+#if BUILDFLAG(IS_WIN)
+    reservation.reset();
+    process_ = LaunchOwnedCore(command, directory_.GetPath(), job_);
+#else
     base::LaunchOptions options;
     options.clear_environment = true;
     options.current_directory = directory_.GetPath();
-    // Release the reservation immediately before launching. A port race is a
-    // preparation failure: only the authenticated HTTPS probe may admit it.
     reservation.reset();
     base::File null_output(base::FilePath("/dev/null"),
                            base::File::FLAG_OPEN | base::File::FLAG_WRITE);
@@ -350,8 +383,10 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     }
     options.fds_to_remap = {{output, STDOUT_FILENO}, {output, STDERR_FILENO}};
     process_ = base::LaunchProcess(command, options);
+#endif
     return process_.IsValid();
   }
+#if BUILDFLAG(IS_MAC)
   void DrainLog() {
     // Bound each turn so noisy children cannot starve cancellation or probes.
     char chunk[4096];
@@ -368,6 +403,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       });
     }
   }
+#endif
   void StartProbe() {
     if (!Running()) {
       Complete(false, "The local proxy exited before becoming ready.");
@@ -447,6 +483,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     StopChild();
     if (stopped_callback_) stopped_callback_.Run(registration);
   }
+#if BUILDFLAG(IS_MAC)
   bool WaitForChildExit(base::TimeDelta maximum_wait) {
     auto deadline = maximum_wait.is_max()
         ? base::TimeTicks::Max() : base::TimeTicks::Now() + maximum_wait;
@@ -466,12 +503,20 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       if (remaining <= base::TimeDelta()) return false;
     }
   }
+#endif
   void StopChild() {
     health_.Stop();
     timeout_.Stop();
     retry_.Stop();
     request_.reset();
     context_.reset();
+#if BUILDFLAG(IS_WIN)
+    job_.Close();
+    if (process_.IsValid()) {
+      process_.WaitForExitWithTimeout(base::Seconds(1), nullptr);
+      process_.Close();
+    }
+#else
     if (process_.IsValid()) {
       if (Running()) {
         process_.Terminate(0, false);
@@ -487,6 +532,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     log_read_.reset();
     framer_ = CoreLogFramer();
     protected_values_.clear();
+#endif
     credentials_.reset();
     authenticated_ = false;
     const bool deleted = directory_.Delete();
@@ -495,11 +541,15 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
 
   AccessLocalCoreInput input_;
   std::shared_ptr<ShutdownHandle> shutdown_;
+#if BUILDFLAG(IS_WIN)
+  base::win::ScopedHandle job_;
+#else
   base::ScopedFD log_read_;
   std::unique_ptr<base::FileDescriptorWatcher::Controller> log_watch_;
   CoreLogFramer framer_;
   uint64_t log_generation_ = 0;
   std::vector<std::string> protected_values_;
+#endif
   base::ScopedTempDir directory_;
   base::Process process_;
   uint16_t port_ = 0;
@@ -567,11 +617,15 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
   for (auto& weak : ShutdownHandle::Registry()) {
     if (auto handle = weak.lock()) handles.push_back(std::move(handle));
   }
+#if BUILDFLAG(IS_MAC)
   auto stopped = base::BarrierClosure(
       handles.size() + 1,
       base::BindOnce(&AccessCoreLogStore::FlushAllForSessionEnding,
                      std::move(completion)));
   CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
+#else
+  auto stopped = base::BarrierClosure(handles.size(), std::move(completion));
+#endif
   for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
 }
 void AccessLocalCoreManager::SetStoppedCallback(
