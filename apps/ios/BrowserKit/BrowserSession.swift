@@ -766,6 +766,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// restored tabs and arbitrary programmatic loads cannot acquire it.
     public func loadFromAddressBar(_ url: URL) {
         load(url)
+        // An authorized route either sends directly to its entry or has already
+        // installed a preparation hold. Do not offer a second proxy choice.
+        guard hostCoordinator?.requiresProxy(tab: self, url: url) != true,
+              parentForProxyLanding(url) == nil else { return }
         guard isLoading, loadingError == nil, Self.safeAddressProxyURL(attempt.url),
               attempt.method == "GET", !attempt.hasReplayableBody else { return }
         pendingAddressNavigation = BrowserPendingAddressNavigation(navigationID: attempt.navigationID, url: attempt.url)

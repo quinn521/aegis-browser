@@ -9,6 +9,19 @@ import XCTest
 
 @MainActor
 final class AccessNavigationRecoveryTests: XCTestCase {
+    func testAlreadyArmedAddressUsesItsRouteWithoutOfferingAnotherProxyChoice() throws {
+        let coordinator = AccessHostStoreCoordinator()
+        let tab = makeTab()
+        tab.hostCoordinator = coordinator
+        let host = try AccessSiteHost("192.0.2.1")
+        coordinator.registry.setEndpoint(readyEndpoint(), scopeID: tab.browsingScopeID, host: host, isPrivate: false)
+        coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        tab.loadFromAddressBar(URL(string: "https://192.0.2.1/already-on")!)
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+        XCTAssertFalse(tab.websiteDataStore === tab.originalWebsiteDataStore)
+    }
+
     func testProvisionalTimeoutRecordsFailureBeforeReentrantCancellation() async throws {
         let tab = makeTab()
         tab.load(URLRequest(url: URL(string: "https://192.0.2.1/timeout")!, timeoutInterval: 30))

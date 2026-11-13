@@ -1345,9 +1345,15 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
                 action = recoveryButton(app)
             }
-            if let action, action.isEnabled { action.tap() }
+            if let action, action.exists, action.isEnabled, action.isHittable { action.tap() }
             _ = try waitForContent(app, site: site)
-            let route = readRoute(app)
+            var route = readRoute(app)
+            if route["local_entry_ready"] as? Bool != true {
+                let change = enableVisibleSiteRecovery(app, site: site, prefix: "site-switch-\(site.id)")
+                XCTAssertEqual(change["performed"] as? Bool, true)
+                _ = try waitForContent(app, site: site)
+                route = readRoute(app)
+            }
             XCTAssertEqual(route["local_entry_ready"] as? Bool, true)
             attachJSON(route, name: "site-switch-\(site.id)-route.json")
         }
@@ -1568,6 +1574,9 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         receipt["pre_action"] = ux
         attachJSON(ux, name: prefix + "-pre-action-final.json")
         screenshot(prefix + "-before-recovery")
+        // The initial direct page may finish while evidence is captured. Resolve
+        // the visible action again; a vanished banner is not a successful tap.
+        retry = recoveryButton(app)
         if let retry {
             let pending = retry.label == "通过代理打开"
             let exposedTarget = ux["target"] as? String ?? "NOT_EXPOSED"
@@ -1724,8 +1733,10 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             return ["performed": false, "result": "NO_VISIBLE_ENABLED_OFF_SWITCH", "target": addressHost]
         }
         screenshot(prefix + "-before-site-toggle")
-        toggle.tap()
-        return ["performed": true, "result": "VISIBLE_OFF_SWITCH_TAPPED", "target": addressHost,
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: toggle)
+        let changed = XCTWaiter.wait(for: [enabled], timeout: 5) == .completed
+        return ["performed": changed, "result": changed ? "VISIBLE_SWITCH_ENABLED" : "VISIBLE_SWITCH_UNCHANGED", "target": addressHost,
                 "toggle_value_after": toggle.exists ? toggle.value as? String ?? "UNREADABLE" : "UNAVAILABLE"]
     }
 

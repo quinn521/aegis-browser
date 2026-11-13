@@ -48,6 +48,8 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { browser.closeWindow() }
         let a = try XCTUnwrap(browser.activeTab)
         let b = browser.newTab()
+        try await a.prepareContentRulesForTests()
+        try await b.prepareContentRulesForTests()
         let wa = show(a.webView), wb = show(b.webView)
         defer { wa.isHidden = true; wb.isHidden = true }
         let ha = try AccessSiteHost("site-a.invalid"), hb = try AccessSiteHost("site-b.invalid")
@@ -65,14 +67,16 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertEqual(a.boundHostName, ha.rawValue)
         XCTAssertEqual(b.boundHostName, hb.rawValue)
         let bStore = b.websiteDataStore
-        // Record CONNECT and finish the synthetic TLS failure before the next
-        // navigation, rather than leave WebKit parked in a fixture handshake.
-        try await waitUntil { a.loadingError != nil && b.loadingError != nil }
+        // The fixture proves real CONNECT routing but cannot commit a TLS page.
+        // Supply only the trusted control host; actual document rendering and
+        // the visible switch are covered by the opt-in real-node UI test.
+        a.commitPendingMainFrameForTests()
+        b.commitPendingMainFrameForTests()
         _ = coordinator.setAutoRecoveryEnabled(true, for: a)
         coordinator.setSiteProxyEnabled(false, for: a, displayedHost: ha)
         a.load(URL(string: "https://site-a.invalid:444/after-off")!)
         b.stop()
-        b.load(URL(string: "https://site-b.invalid:444/still-on")!)
+        b.load(URLRequest(url: URL(string: "https://site-b.invalid:444/still-on")!))
         try await waitUntil(seconds: 10, {
             self.attach(a.webView, to: wa); self.attach(b.webView, to: wb)
             return opener.authorities.contains("site-b.invalid:444")
