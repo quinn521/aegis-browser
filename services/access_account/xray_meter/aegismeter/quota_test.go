@@ -363,3 +363,91 @@ func TestQuotaInvalidSpanNeverWrites(t *testing.T) {
 		peer.Close()
 	}
 }
+
+func TestQuotaOpenReplyAndLostAcknowledgement(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(map[bool]string{false: "expiry reply", true: "lost ACK"}[lost], func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+			f := &Flow{id: "0123456789abcdef0123456789abcdef", conn: client, reader: bufio.NewReader(client), recoveryDir: t.TempDir()}
+			expiry := time.Now().Add(time.Minute).UnixMilli()
+			seen := make(chan map[string]any, 1)
+			go func() {
+				defer server.Close()
+				var frame map[string]any
+				if err := json.NewDecoder(server).Decode(&frame); err != nil {
+					return
+				}
+				seen <- frame
+				if !lost {
+					json.NewEncoder(server).Encode(map[string]any{"ok": true, "expiresAt": expiry})
+				}
+			}()
+			ack, err := f.openWithReply(map[string]any{"op": "open", "client": "bound-client", "mode": "enforce"})
+			if (err != nil) != lost || !lost && ack.ExpiresAt != expiry {
+				t.Fatal(ack, err)
+			}
+			frame := <-seen
+			if frame["op"] != "open" || frame["mode"] != "enforce" {
+				t.Fatal(frame)
+			}
+			frames, err := pending(filepath.Join(f.recoveryDir, f.id+".json"))
+			if err != nil || !lost && len(frames) != 0 || lost && (len(frames) != 1 || len(frames[0]) != 3 || frames[0]["op"] != "abort") {
+				t.Fatal(frames, err)
+			}
+		})
+	}
+}
+
+func TestExpiredQuotaOpenFinishesZeroByteFlow(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "quota-open-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	socket := filepath.Join(root, "m.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	t.Setenv(socketEnv, socket)
+	t.Setenv("AEGIS_XRAY_QUOTA", "enforce")
+	seen := make(chan []map[string]any, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		var frames []map[string]any
+		for scanner.Scan() {
+			var frame map[string]any
+			if json.Unmarshal(scanner.Bytes(), &frame) != nil {
+				return
+			}
+			frames = append(frames, frame)
+			json.NewEncoder(conn).Encode(map[string]any{"ok": true, "expiresAt": time.Now().Add(-time.Second).UnixMilli()})
+			if frame["op"] == "finish" {
+				break
+			}
+		}
+		seen <- frames
+	}()
+	inbound, peer := net.Pipe()
+	defer peer.Close()
+	defer inbound.Close()
+	if _, f, err := Open(context.Background(), "bound-client", inbound); f != nil || !errors.Is(err, errCutoff) {
+		t.Fatal(f, err)
+	}
+	select {
+	case frames := <-seen:
+		if len(frames) != 2 || frames[0]["op"] != "open" || frames[0]["mode"] != "enforce" ||
+			frames[1]["op"] != "finish" || frames[1]["uploadedBytes"] != float64(0) || frames[1]["downloadedBytes"] != float64(0) || frames[1]["complete"] != true {
+			t.Fatal(frames)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("guard failure did not finish zero-byte flow")
+	}
+}

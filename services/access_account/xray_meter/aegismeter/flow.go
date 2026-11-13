@@ -71,16 +71,15 @@ func Open(ctx context.Context, client string, inbound net.Conn) (context.Context
 	if quotaRequested() {
 		msg["mode"] = "enforce"
 	}
-	ack, err := f.exchange(msg)
-	if err != nil || !ack.OK {
+	ack, err := f.openWithReply(msg)
+	if err != nil {
 		conn.Close()
-		return ctx, nil, errors.New("meter open rejected")
+		return ctx, nil, err
 	}
 	if quotaRequested() {
 		f.quota, err = startGuard(ctx, os.Getenv(socketEnv), f.id, inbound, ack.ExpiresAt)
 		if err != nil {
-			conn.Close()
-			return ctx, nil, err
+			return ctx, nil, errors.Join(err, f.Finish())
 		}
 	}
 	return context.WithValue(ctx, key{}, f), f, nil
