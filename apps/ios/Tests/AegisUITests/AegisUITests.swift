@@ -1437,9 +1437,18 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             receipt["recovery_action_count"] = 1
         } else {
             receipt["result"] = "ACTION_UNAVAILABLE"
+            let siteAction = enableVisibleSiteRecovery(app, site: site, prefix: prefix)
+            receipt["site_menu_action"] = siteAction
+            if siteAction["performed"] as? Bool == true {
+                receipt["recovery_action"] = "VISIBLE_SITE_AUTO_RECOVERY_TOGGLE"
+                receipt["recovery_action_count"] = 1
+                receipt["recovery_target"] = siteAction["target"]
+                receipt["recovery_target_source"] = "COMMITTED_SITE_MENU_HOST_AND_ADDRESS"
+                receipt["result"] = "AWAITING_CONTENT"
+            }
         }
         do {
-            let page = try waitForContent(app)
+            let page = try waitForContent(app, site: site)
             receipt["content"] = page
             receipt["address_before_scroll"] = sanitizedURL(address.exists ? address.value as? String ?? "" : "")
             screenshot(prefix + "-before-scroll")
@@ -1475,6 +1484,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 receipt["link_result"] = "SKIPPED_INITIAL_CONTENT_OR_ROUTE_UNVERIFIED"
                 if contentClass == "CONTENT_PRESENT_NEEDS_VISUAL_REVIEW", scrolledClass == contentClass,
                    site.contains(finalHost), routeHost == finalHost,
+                   route["local_entry_ready"] as? Bool == true,
                    route["menu_closed"] as? Bool == true {
                     receipt["link"] = try followSafeLink(app, site: site, prefix: prefix)
                     receipt["link_result"] = (receipt["link"] as? [String: Any])?["result"]
@@ -1540,28 +1550,79 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         return result
     }
 
-    private func waitForContent(_ app: XCUIApplication) throws -> [String: Any] {
+    private func enableVisibleSiteRecovery(_ app: XCUIApplication, site: Site, prefix: String) -> [String: Any] {
+        let field = app.textFields["address-field"]
+        let address = field.exists ? field.value as? String ?? "" : ""
+        let web = app.webViews.firstMatch
+        guard let addressHost = host(address), site.contains(addressHost), web.exists,
+              let page = try? pageEvidence(web),
+              page["classification"] as? String != "BROWSER_START_PAGE" else {
+            return ["performed": false, "result": "NO_COMMITTED_SITE_EVIDENCE"]
+        }
+        let menu = app.buttons["page-protection"]
+        guard menu.exists, menu.isHittable else { return ["performed": false, "result": "MENU_UNAVAILABLE"] }
+        menu.tap()
+        defer {
+            let done = app.navigationBars.buttons["完成"]
+            if done.exists, done.isHittable { done.tap(); _ = done.waitForNonExistence(timeout: 3) }
+        }
+        let committedHost = app.staticTexts["access-site-proxy-host"]
+        guard committedHost.waitForExistence(timeout: 5), committedHost.label.lowercased() == addressHost else {
+            return ["performed": false, "result": "COMMITTED_HOST_MISMATCH"]
+        }
+        let toggle = app.switches["access-site-proxy-toggle"]
+        guard toggle.exists, toggle.isEnabled, toggle.isHittable,
+              toggle.value as? String == "0", let snapshot = try? toggle.snapshot(),
+              snapshot.elementType == .switch else {
+            return ["performed": false, "result": "NO_VISIBLE_ENABLED_OFF_SWITCH", "target": addressHost]
+        }
+        screenshot(prefix + "-before-site-toggle")
+        toggle.tap()
+        return ["performed": true, "result": "VISIBLE_OFF_SWITCH_TAPPED", "target": addressHost,
+                "toggle_value_after": toggle.exists ? toggle.value as? String ?? "UNREADABLE" : "UNAVAILABLE"]
+    }
+
+    private func waitForContent(_ app: XCUIApplication, site: Site, previousAddress: String? = nil,
+                                previousContent: String? = nil) throws -> [String: Any] {
         let deadline = Date(timeIntervalSinceNow: 45)
         var last: [String: Any] = ["classification": "NO_WEBVIEW"]
         var previous = "", stable = 0
         var observedHosts: [String] = []
         repeat {
-            if let current = host(app.textFields["address-field"].value as? String ?? ""), !observedHosts.contains(current) {
+            let field = app.textFields["address-field"]
+            let currentAddress = field.exists ? field.value as? String ?? "" : ""
+            let currentHost = host(currentAddress)
+            if let current = currentHost, !observedHosts.contains(current) {
                 observedHosts.append(current)
             }
             let web = app.webViews.firstMatch
             if web.exists {
                 last = try pageEvidence(web)
-                let signature = "\(last["classification"] ?? ""): \(last["visible_text_characters"] ?? 0): \(app.textFields["address-field"].value ?? "")"
+                let signature = contentSignature(last) + ":" + currentAddress
                 stable = signature == previous ? stable + 1 : 0
                 previous = signature
-                if stable >= 2, (last["visible_text_characters"] as? Int ?? 0) > 30 { break }
+                let addressMatches = currentHost.map(site.contains) == true && currentAddress.hasPrefix("https://")
+                let moved = previousAddress.map { sanitizedURL($0) != sanitizedURL(currentAddress) } ?? true
+                let changed = previousContent.map { $0 != contentSignature(last) } ?? true
+                last["expected_site_address_observed"] = addressMatches
+                last["navigation_away_from_previous_address"] = moved
+                last["destination_content_changed"] = changed
+                if stable >= 2, addressMatches, moved, changed,
+                   last["classification"] as? String != "BROWSER_START_PAGE",
+                   (last["visible_text_characters"] as? Int ?? 0) > 30 { break }
             }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
         } while Date() < deadline
-        last["settled_observation"] = stable >= 2
+        last["settled_observation"] = stable >= 2 && last["expected_site_address_observed"] as? Bool == true
+            && last["navigation_away_from_previous_address"] as? Bool == true && last["destination_content_changed"] as? Bool == true
+            && last["classification"] as? String != "BROWSER_START_PAGE"
         last["observed_hosts"] = observedHosts
         return last
+    }
+
+    private func contentSignature(_ evidence: [String: Any]) -> String {
+        ["classification", "visible_text_characters", "visible_links", "visible_images"]
+            .map { String(describing: evidence[$0] ?? "") }.joined(separator: ":")
     }
 
     private func pageEvidence(_ web: XCUIElement) throws -> [String: Any] {
@@ -1580,7 +1641,8 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
            ["password", "email", "sign up", "密码", "注册"].contains(where: text.contains), !detected.contains("LOGIN") {
             detected.append("LOGIN")
         }
-        let classification = detected.first.map { $0 + "_REQUIRES_MANUAL_REVIEW" } ??
+        let startPage = text.contains("安心浏览，清楚掌控") && text.contains("网页摘要与研究")
+        let classification = startPage ? "BROWSER_START_PAGE" : detected.first.map { $0 + "_REQUIRES_MANUAL_REVIEW" } ??
             (text.count < 30 ? "BLANK_OR_INSUFFICIENT_CONTENT" : "CONTENT_PRESENT_NEEDS_VISUAL_REVIEW")
         return ["classification": classification, "signals": detected, "visible_text_characters": text.count,
                 "visible_links": nodes.filter { $0.elementType == .link }.count,
@@ -1608,7 +1670,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let connection = app.staticTexts["access-site-proxy-connection"]
         result["connection_ui"] = connection.exists ? connection.label : "UNAVAILABLE"
         let done = app.navigationBars.buttons["完成"]
-        if done.exists, done.isHittable { done.tap() }
+        if done.exists, done.isHittable { done.tap(); _ = done.waitForNonExistence(timeout: 3) }
         result["menu_closed"] = !done.exists
         return result
     }
@@ -1618,7 +1680,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         guard web.exists else { return ["result": "NO_WEBVIEW"] }
         // Only a real page link exposing a verifiable href is eligible. No consent,
         // login, TLS, download, search, menu or system-interstitial interaction.
-        let safePaths = ["/about", "/about/", "/help", "/help/"]
+        let safePaths = ["/about", "/about/", "/help", "/help/"] + (site.host == "lemonde.fr" ? ["/en/international/"] : [])
         let links = descendants(try web.snapshot()).filter { $0.elementType == .link }
         guard let candidate = links.first(where: { item in
             guard let raw = item.value as? String, let url = URLComponents(string: raw),
@@ -1630,15 +1692,22 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let link = web.links.matching(NSPredicate(format: "label == %@ AND value == %@", candidate.label, raw)).firstMatch
         guard link.exists, link.isHittable else { return ["result": "SAFE_LINK_NOT_VISIBLE"] }
         let before = app.textFields["address-field"].value as? String ?? ""
+        let beforeContent = contentSignature(try pageEvidence(web))
         link.tap()
-        let content = try waitForContent(app)
+        let content = try waitForContent(app, site: site, previousAddress: before, previousContent: beforeContent)
         let after = app.textFields["address-field"].value as? String ?? ""
         let actualHost = host(after) ?? ""
         screenshot(prefix + "-after-safe-link")
+        let route = readRoute(app)
+        let contentObserved = content["classification"] as? String == "CONTENT_PRESENT_NEEDS_VISUAL_REVIEW"
+            && content["settled_observation"] as? Bool == true
+        let routeObserved = route["host"] as? String == actualHost && route["local_entry_ready"] as? Bool == true
         return ["target": sanitizedURL(raw), "actual_address": sanitizedURL(after), "actual_host": actualHost,
                 "result": actualHost.isEmpty ? "ADDRESS_UNREADABLE" : !site.contains(actualHost) ? "FOREIGN_HOST" :
-                    sanitizedURL(before) == sanitizedURL(after) ? "NO_NAVIGATION_OBSERVED" : "SAME_SITE_NAVIGATION_OBSERVED",
-                "content": content]
+                    sanitizedURL(before) == sanitizedURL(after) ? "NO_NAVIGATION_OBSERVED" :
+                    !contentObserved ? "DESTINATION_CONTENT_UNVERIFIED" : !routeObserved ? "DESTINATION_ROUTE_UNVERIFIED" :
+                    "SAME_SITE_CONTENT_AND_ROUTE_OBSERVED_NEEDS_VISUAL_REVIEW",
+                "content": content, "route": route]
     }
 
     private func descendants(_ root: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
