@@ -208,7 +208,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             let source = AccessHostStoreKey(scopeID: key.scopeID, host: parent, isPrivate: key.isPrivate)
             let sourceAuthorized = intents[source] == .on ||
                 (executingTabs[tab.instanceID.uuidString] == source && groupStillLists(source))
-            if intents[key] != .off, sourceAuthorized {
+            let independentReady = intent == .on &&
+                registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state == .ready
+            if independentReady {
+                tab.clearProxyLanding()
+            } else if intents[key] != .off, sourceAuthorized {
                 if bound != host {
                     // Refuse before storeForTab can unbind the currently displayed document.
                     guard let bound, let endpoint = registry.endpoint(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate),

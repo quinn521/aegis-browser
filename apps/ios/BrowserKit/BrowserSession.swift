@@ -1032,6 +1032,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         webPreferences.preferredContentMode = (site.desktop ?? preferences.values.desktop) ? .desktop : .recommended
         webPreferences.allowsContentJavaScript = site.javaScript ?? preferences.values.javaScript
         let decision = navigationDecision(requestURL, method: navigationAction.request.httpMethod ?? "GET")
+        let previousLanding = (proxyLandingParent, proxyLandingTarget)
         if decision.kind != .blocked, navigationAction.navigationType == .other,
            boundHostName != nil, let parent = proxyLandingParent ?? boundHostName, let target = requestURL.host?.lowercased(),
            requestedURL?.scheme == "https", requestURL.scheme == "https",
@@ -1044,10 +1045,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         let routedStore = hostCoordinator?.dataStoreForMainFrame(tab: self, url: requestURL)
         if decision.kind != .blocked, rejectUnavailableLanding(requestURL, store: routedStore) {
+            (proxyLandingParent, proxyLandingTarget) = previousLanding
             finish(.cancel)
             return
         }
-        let storeMismatch = routedStore.map { $0 !== websiteDataStore } == true
+        let storeMismatch = (routedStore ?? originalWebsiteDataStore) !== websiteDataStore
         let hostMismatch = requestedURL.map { $0.host?.lowercased() != requestURL.host?.lowercased() } ?? false
         if decision.kind != .blocked,
            navigationAction.targetFrame?.isMainFrame != false,
