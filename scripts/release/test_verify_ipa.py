@@ -14,7 +14,7 @@ spec.loader.exec_module(ipa)
 
 
 class VerifyIPATests(unittest.TestCase):
-    def fixture(self, path, *, identifier="com.gcsa.aegis", extension_build="70", profile=True, manifest=None, icon_data=None, dictionary_versions=None, channel="prod", private_resources=()):
+    def fixture(self, path, *, identifier="com.gcsa.aegis", extension_build="70", profile=True, manifest=None, icon_data=None, dictionary_versions=None, channel="prod", release_profile="alpha", private_resources=()):
         with zipfile.ZipFile(path, "w") as archive:
             for suffix, app_id, build in [("", identifier, "70"),
                                           ("PlugIns/SafariWebExtension.appex/", "com.gcsa.aegis.safari", extension_build),
@@ -24,7 +24,7 @@ class VerifyIPATests(unittest.TestCase):
                                  "CFBundleInfoDictionaryVersion": (dictionary_versions or {}).get(app_id, "6.0"),
                                  "CFBundleShortVersionString": "3.2", "CFBundleVersion": build,
                                  "AegisAccessReleaseChannel": channel,
-                                 "AegisReleaseProfile": "alpha"}))
+                                 "AegisReleaseProfile": release_profile}))
                 if profile:
                     archive.writestr(root + "embedded.mobileprovision", "fixture")
             safari = "Payload/Aegis.app/PlugIns/SafariWebExtension.appex/"
@@ -49,12 +49,12 @@ class VerifyIPATests(unittest.TestCase):
                              'PlugIns/ShareExtension.appex/AegisPrivateTestSubscription.json'):
                 with self.subTest(channel=channel, resource=resource), tempfile.TemporaryDirectory() as temp:
                     path = Path(temp) / 'test.ipa'
-                    self.fixture(path, channel=channel, private_resources=[resource])
-                    if channel in ('dev', 'alpha'):
-                        self.assertTrue(ipa.verify(path, '3.2', '70', 'alpha'))
+                    self.fixture(path, channel=channel, release_profile=channel, private_resources=[resource])
+                    if channel in ('dev', 'alpha', 'beta'):
+                        self.assertTrue(ipa.verify(path, '3.2', '70', channel))
                     else:
                         with self.assertRaisesRegex(ValueError, 'Private test resources'):
-                            ipa.verify(path, '3.2', '70', 'alpha')
+                            ipa.verify(path, '3.2', '70', channel)
 
     def test_identity_and_extensions(self):
         with tempfile.TemporaryDirectory() as temp:

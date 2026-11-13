@@ -17,6 +17,26 @@ private func subscriptionUsage(upload: UInt64 = 10, download: UInt64 = 20) -> Ac
 
 @MainActor
 final class AccessSubscriptionUsageTests: XCTestCase {
+    func testBetaSelectsBundledNodeQuotaWhileReleaseRejectsIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for channel in ["alpha", "beta", "release", "prod", ""] {
+            let directory = root.appendingPathComponent(UUID().uuidString + ".bundle")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try subscriptionFixtureNode.write(to: directory.appendingPathComponent("AegisPrivateTestNode.vless"))
+            let config = subscriptionConfiguration()
+            let descriptor: [String: Any] = ["subscriptionInfoURL": config.subscriptionInfoURL.absoluteString,
+                "allowedTestClient": config.allowedTestClient, "expectedQuotaBytes": config.expectedQuotaBytes,
+                "trafficReset": config.trafficReset, "nodeSHA256": config.nodeSHA256]
+            try JSONSerialization.data(withJSONObject: descriptor).write(to: directory.appendingPathComponent("AegisPrivateTestSubscription.json"))
+            let info = ["CFBundleIdentifier": "fixture." + UUID().uuidString, "AegisAccessReleaseChannel": channel]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+                .write(to: directory.appendingPathComponent("Info.plist"))
+            let session = AccessSubscriptionUsageSession.product(bundle: try XCTUnwrap(Bundle(url: directory)))
+            XCTAssertEqual(session.isSelected, ["alpha", "beta"].contains(channel))
+        }
+    }
+
     func testIdentityExactCountersResetAndMalformedResponses() throws {
         let configuration = subscriptionConfiguration()
         try configuration.validate(node: subscriptionFixtureNode)

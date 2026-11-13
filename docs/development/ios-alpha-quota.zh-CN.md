@@ -2,9 +2,9 @@
 
 ## 范围
 
-Dev/Alpha 内置测试节点现在直接查询 3X-UI 3.11.0 的 HTTPS 订阅信息入口 `GET ?format=info`。响应中的 `uploadByte`、`downloadByte`、`totalByte` 为精确字节整数，`expire` 为 Unix 秒（0 表示未设到期），`enabled` 为面板状态。App 不访问面板管理 API，也不下载或应用订阅中的代理配置。既有 Aegis 账户查询与轻量中转仍是独立的账户服务路径，不作为本测试节点额度的依赖。
+Dev/Alpha/Beta 内置测试节点现在直接查询 3X-UI 3.11.0 的 HTTPS 订阅信息入口 `GET ?format=info`。响应中的 `uploadByte`、`downloadByte`、`totalByte` 为精确字节整数，`expire` 为 Unix 秒（0 表示未设到期），`enabled` 为面板状态。App 不访问面板管理 API，也不下载或应用订阅中的代理配置。既有 Aegis 账户查询与轻量中转仍是独立的账户服务路径，不作为本测试节点额度的依赖。
 
-直读使用私有构建输入 `AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE`，默认 `/dev/null`；描述文件与实际内置节点的 SHA-256 绑定，仅在 Dev/Alpha 注入，其他渠道清除生成资源，运行时也检查渠道和绑定。描述文件包含 `subscriptionInfoURL`、`allowedTestClient`、`expectedQuotaBytes`（本测试合同为 10,000,000,000）、`trafficReset`（daily）。订阅 URL 具有凭据作用，不进入源码或日志；响应虽无 `links` 字段，仍包含订阅 URL，因此只解码所需字段，不记录或持久化响应体。面板管理凭据始终留在服务端。
+直读使用私有构建输入 `AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE`，默认 `/dev/null`；描述文件与实际内置节点的 SHA-256 绑定，仅在 Dev/Alpha/Beta 注入，其他渠道清除生成资源，运行时也检查渠道和绑定。描述文件包含 `subscriptionInfoURL`、`allowedTestClient`、`expectedQuotaBytes`（本测试合同为 10,000,000,000）、`trafficReset`（daily）。订阅 URL 具有凭据作用，不进入源码或日志；响应虽无 `links` 字段，仍包含订阅 URL，因此只解码所需字段，不记录或持久化响应体。面板管理凭据始终留在服务端。
 
 读取拒绝重定向和非 HTTPS，使用系统 TLS 校验、独立无缓存无 Cookie 会话、有限请求时长和 64 KiB 响应上限。只有订阅身份、唯一批准客户端和预期总额度一致时才显示数值；缺失字段、整数溢出、身份不符或网络错误不能变成零余额。上次查询时间不是服务端测量时间；没有水位时标记未知。后台取消传输，迟到响应失效；普通窗口展示节点额度，私密窗口不继承此展示。额度只是观察，不授权代理、不触发直连回退。
 
@@ -15,6 +15,12 @@ Dev/Alpha 内置测试节点现在直接查询 3X-UI 3.11.0 的 HTTPS 订阅信�
 `expiryTime=0` 表示面板节点未设到期。Alpha 响应使用 `panelExpiryMode=none`、`panelExpiresAt=null`，有效查询周期仍有限；界面分别显示节点到期和查询授权截止。普通模式显示当前账户，私密模式不继承普通额度展示。
 
 前台额度区块可见时每次查询结束后等待 5 秒再刷新；其他前台浏览等待 30 秒。多个窗口共享一次查询与刷新计划。后台暂停轮询，回到前台立即查询。手动刷新首击立即执行，1 秒内的连续点击以及进行中的查询合并，不排队补发。当前账户查询失败后依次等待 15、30 秒，连续失败保持 30 秒；成功后恢复当前界面的正常间隔。切换账户清除旧账户的退避与点击状态，迟到的旧响应不得影响新账户数据或刷新计划。
+
+## TestFlight Beta 内置测试节点
+
+本轮测试包允许 Beta 使用同一个私有节点与只读额度描述；Release/正式版仍清除资源并在运行时拒绝读取。节点与订阅 URL 不进入 Git，构建默认输入仍为空。Beta 打包必须同时显式传入 `AEGIS_PRIVATE_TEST_NODE_FILE` 与 `AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE`，并使用 `AEGIS_ACCESS_RELEASE_CHANNEL=beta`、匹配的 `AegisReleaseProfile=beta`。私有签名归档入口 `scripts/release/ios-private-test-node-archive.sh beta` 支持该渠道；节点通过受保护环境变量读入临时文件，额度描述通过文件路径构建参数传入。打包后核对两份资源、节点 SHA-256 绑定及各 bundle 的 Beta profile，再导出用于 TestFlight 的签名包。
+
+默认云端无凭据归档不会自动取得本机私有配置，不能将默认空节点归档当作该测试 Beta。发布负责人必须使用上述私有输入归档；本 PR 不上传 TestFlight，也不修改现有云端无凭据归档的信任边界。
 
 ## 本机原生联调
 

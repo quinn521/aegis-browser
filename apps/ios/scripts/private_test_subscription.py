@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 def install(channel, source, node_source, output):
     output.unlink(missing_ok=True)
-    if channel not in ('dev', 'alpha') or source == '/dev/null':
+    if channel not in ('dev', 'alpha', 'beta') or source == '/dev/null':
         return
     with open(source, 'rb') as stream:
         raw = stream.read(8193)

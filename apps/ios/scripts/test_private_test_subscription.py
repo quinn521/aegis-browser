@@ -16,14 +16,14 @@ class SubscriptionPackagingTests(unittest.TestCase):
             source.write_text(json.dumps(dict(subscriptionInfoURL='https://example.invalid/sub/test?format=info',
                                              allowedTestClient='fixture', expectedQuotaBytes=10_000_000_000,
                                              trafficReset='daily', ignored='must not ship')))
-            for channel in ('dev', 'alpha'):
+            for channel in ('dev', 'alpha', 'beta'):
                 install(channel, str(source), str(node), output)
                 result = json.loads(output.read_text())
                 self.assertEqual(result['nodeSHA256'], hashlib.sha256(node.read_bytes().strip()).hexdigest())
                 self.assertNotIn('ignored', result)
                 install(channel, '/dev/null', str(node), output)
                 self.assertFalse(output.exists())
-            for channel in ('beta', 'prod', '', None):
+            for channel in ('release', 'prod', '', None):
                 output.write_text('stale secret')
                 install(channel, str(source), str(node), output)
                 self.assertFalse(output.exists())

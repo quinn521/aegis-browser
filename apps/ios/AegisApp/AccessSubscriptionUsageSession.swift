@@ -116,7 +116,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
 
     static func product(bundle: Bundle = .main) -> AccessSubscriptionUsageSession {
         let channel = bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String
-        guard ["dev", "alpha"].contains(channel ?? ""),
+        guard ["dev", "alpha", "beta"].contains(channel ?? ""),
               let path = AccessLocalV2RayConfigLoader.productPath(bundle: bundle) else {
             return .init(isSelected: false, configuration: nil)
         }
