@@ -52,6 +52,8 @@ def _validate(frame):
         frame = {k:v for k,v in frame.items() if k != 'measuredAt'}
     op = frame.get('op')
     extra = set(frame) - {'v', 'op', 'flow'}
+    if op == 'abort' and not extra:
+        return
     if op == 'open' and extra == {'client'} and isinstance(frame['client'], str):
         return
     if op == 'sample' and extra == {'direction', 'bytes', 'path', 'pathBytes'}:
@@ -103,6 +105,11 @@ class Meter:
                     db.execute('INSERT INTO node_meter_flows '
                                '(node_id,flow_id,panel_client,account_id,period_id) VALUES (?,?,?,?,?)',
                                (*key, client, *binding))
+            elif frame['op'] == 'abort':
+                if row is None:
+                    db.commit()
+                    return
+                self._finish(db, key, row, dict(uploadedBytes=0, downloadedBytes=0, complete=True), now)
             elif row is None:
                 raise ValueError('unknown flow')
             elif frame['op'] == 'sample':
