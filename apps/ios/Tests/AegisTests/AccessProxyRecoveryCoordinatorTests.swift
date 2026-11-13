@@ -6,6 +6,26 @@ import XCTest
 
 @MainActor
 final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
+    func testRepeatedFailedPreparationsDoNotRetainNavigationHistoryAfterClose() async throws {
+        let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        let tab = try XCTUnwrap(browser.activeTab)
+        coordinator.setProxyEnabled(true, host: try AccessSiteHost("churn.invalid"),
+                                    scopeID: tab.browsingScopeID, isPrivate: false)
+        for index in 0..<60 {
+            tab.load(URL(string: "https://churn.invalid/\(index)")!)
+            await settle { tab.loadingError != nil }
+            XCTAssertNotNil(tab.loadingError)
+            XCTAssertLessThanOrEqual(coordinator.retainedOperationCount, 1)
+        }
+        browser.closeWindow()
+        await settle { coordinator.retainedOperationCount == 0 }
+        XCTAssertEqual(coordinator.retainedOperationCount, 0)
+        XCTAssertNil(publisher.currentEndpoint)
+    }
+
     private var retainedSessions: [BrowserSession] = []
 
     override func tearDown() async throws {

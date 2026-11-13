@@ -1323,6 +1323,60 @@ private extension XCUIElement {
 /// full-page acceptance: each receipt and both screenshots require visual review.
 @MainActor
 final class AegisRealWebsiteSmokeTests: XCTestCase {
+    func testCurrentSiteProxySwitchPreservesOtherSite() throws {
+        guard ProcessInfo.processInfo.environment["AEGIS_REAL_SITE_SWITCH_SMOKE"] == "1" else {
+            throw XCTSkip("Requires an explicitly enabled real-node UI run")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+        let first = Site(id: 6, host: "wikipedia.org")
+        let second = Site(id: 14, host: "dropbox.com")
+        for site in [first, second, first] {
+            let address = app.textFields["address-field"]
+            XCTAssertTrue(address.waitForExistence(timeout: 10))
+            address.tap(); address.clearAndType(site.url)
+            XCTAssertEqual(address.value as? String, site.url)
+            address.typeText("\n")
+            let deadline = Date(timeIntervalSinceNow: 15)
+            var action = recoveryButton(app)
+            while action == nil, Date() < deadline {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+                action = recoveryButton(app)
+            }
+            if let action, action.isEnabled { action.tap() }
+            _ = try waitForContent(app, site: site)
+            let route = readRoute(app)
+            XCTAssertEqual(route["local_entry_ready"] as? Bool, true)
+            attachJSON(route, name: "site-switch-\(site.id)-route.json")
+        }
+        app.buttons["page-protection"].tap()
+        let currentHost = app.staticTexts["access-site-proxy-host"]
+        XCTAssertTrue(currentHost.waitForExistence(timeout: 5))
+        XCTAssertTrue(first.contains(currentHost.label.lowercased()))
+        let toggle = app.switches["access-site-proxy-toggle"]
+        for _ in 0..<4 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertEqual(toggle.value as? String, "1")
+        XCTAssertTrue(toggle.isHittable)
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+        screenshot("site-switch-current-off")
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        screenshot("site-switch-current-on")
+        app.navigationBars.buttons["完成"].tap()
+        _ = try waitForContent(app, site: first)
+        XCTAssertEqual(readRoute(app)["local_entry_ready"] as? Bool, true)
+        let address = app.textFields["address-field"]
+        address.tap(); address.clearAndType(second.url); address.typeText("\n")
+        _ = try waitForContent(app, site: second)
+        let otherRoute = readRoute(app)
+        XCTAssertEqual(otherRoute["local_entry_ready"] as? Bool, true)
+        attachJSON(otherRoute, name: "site-switch-other-site-still-on.json")
+        screenshot("site-switch-other-site-still-on")
+    }
+
     private struct Site {
         let id: Int
         let host: String
@@ -1440,7 +1494,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             let siteAction = enableVisibleSiteRecovery(app, site: site, prefix: prefix)
             receipt["site_menu_action"] = siteAction
             if siteAction["performed"] as? Bool == true {
-                receipt["recovery_action"] = "VISIBLE_SITE_AUTO_RECOVERY_TOGGLE"
+                receipt["recovery_action"] = "VISIBLE_SITE_PROXY_TOGGLE"
                 receipt["recovery_action_count"] = 1
                 receipt["recovery_target"] = siteAction["target"]
                 receipt["recovery_target_source"] = "COMMITTED_SITE_MENU_HOST_AND_ADDRESS"

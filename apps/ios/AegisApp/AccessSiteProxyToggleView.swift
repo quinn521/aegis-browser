@@ -73,25 +73,27 @@ struct AccessSiteProxyToggleView: View {
                     .accessibilityIdentifier("access-site-proxy-no-host")
             }
 
+            Toggle("本站使用代理", isOn: Binding(
+                get: { snap.toggleOn },
+                set: { enabled in
+                    guard let tab, let host = snap.host else { return }
+                    store.setSiteProxyEnabled(enabled, for: tab, displayedHost: host)
+                }
+            ))
+            .disabled(!snap.toggleEnabled || tab == nil)
+            .accessibilityIdentifier("access-site-proxy-toggle")
             Toggle(
                 AccessAutoRecoveryCopy.toggleTitle,
                 isOn: Binding(
-                    get: { snap.autoRecoveryEnabled || snap.toggleOn },
+                    get: { snap.autoRecoveryEnabled },
                     set: { enabled in
                         guard let tab else { return }
-                        if enabled {
-                            _ = store.setAutoRecoveryEnabled(true, for: tab)
-                        } else if snap.autoRecoveryEnabled {
-                            // Auto-off must keep an independently armed manual proxy.
-                            _ = store.setAutoRecoveryEnabled(false, for: tab)
-                        } else {
-                            store.setProxyEnabled(false, for: tab)
-                        }
+                        _ = store.setAutoRecoveryEnabled(enabled, for: tab)
                     }
                 )
             )
             .disabled(!snap.toggleEnabled || tab == nil)
-            .accessibilityIdentifier("access-site-proxy-toggle")
+            .accessibilityIdentifier("access-site-auto-recovery-toggle")
             if let tab, account.supportsAccountAuthorization {
                 let paidHost = store.paidDownloadHost(for: tab)
                 Toggle(

@@ -10,6 +10,87 @@ import XCTest
 /// Failed page reloads through the app HTTP CONNECT listener, not a test-only proxy socket.
 @MainActor
 final class AccessHostRecoveryWebKitTests: XCTestCase {
+    func testExplicitOnCannotSendToOriginWhilePreparationFails() async throws {
+        let origin = OriginReceipt(port: 18_274)
+        try await origin.start()
+        defer { origin.stop() }
+        let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let host = try AccessSiteHost("127.0.0.1")
+        coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        tab.load(URL(string: "http://127.0.0.1:18274/must-not-be-direct")!)
+        try await waitUntil { tab.loadingError != nil }
+        XCTAssertTrue(origin.transcript.isEmpty)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+        XCTAssertNil(tab.boundHostName)
+        coordinator.setSiteProxyEnabled(false, for: tab, displayedHost: host)
+        try await waitUntil {
+            self.attach(tab.webView, to: window)
+            return origin.transcript.contains("GET /must-not-be-direct ")
+        }
+    }
+
+    func testExplicitSiteRoutesShareEntryAndTurningOneOffKeepsTheOtherProxied() async throws {
+        let opener = AnsweringOpener()
+        let listener = try await makeListener(port: 18_273, tunnels: opener)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let publisher = readyPublisher(port: 18_273)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .alpha)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let a = try XCTUnwrap(browser.activeTab)
+        let b = browser.newTab()
+        let wa = show(a.webView), wb = show(b.webView)
+        defer { wa.isHidden = true; wb.isHidden = true }
+        let ha = try AccessSiteHost("site-a.invalid"), hb = try AccessSiteHost("site-b.invalid")
+        for host in [ha, hb] {
+            coordinator.setProxyEnabled(true, host: host, scopeID: a.browsingScopeID, isPrivate: false)
+        }
+        let ua = URL(string: "https://site-a.invalid/first")!
+        a.load(ua)
+        b.load(URL(string: "https://site-b.invalid/first")!)
+        try await waitUntil(seconds: 10, {
+            self.attach(a.webView, to: wa); self.attach(b.webView, to: wb)
+            return opener.authorities.contains("site-a.invalid:443") && opener.authorities.contains("site-b.invalid:443")
+        }, message: "\(opener.authorities)")
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertEqual(a.boundHostName, ha.rawValue)
+        XCTAssertEqual(b.boundHostName, hb.rawValue)
+        let bStore = b.websiteDataStore
+        // The fixture records CONNECT and deliberately does not complete TLS.
+        // Surface that failure through the product delegate to exercise its visible host.
+        deliverFailure(a)
+        _ = coordinator.setAutoRecoveryEnabled(true, for: a)
+        coordinator.setSiteProxyEnabled(false, for: a, displayedHost: ha)
+        a.load(URL(string: "https://site-a.invalid:444/after-off")!)
+        b.stop()
+        b.load(URL(string: "https://site-b.invalid:444/still-on")!)
+        try await waitUntil(seconds: 10, {
+            self.attach(a.webView, to: wa); self.attach(b.webView, to: wb)
+            return opener.authorities.contains("site-b.invalid:444")
+        }, message: "\(opener.authorities)")
+        XCTAssertFalse(opener.authorities.contains("site-a.invalid:444"))
+        XCTAssertTrue(a.websiteDataStore === a.originalWebsiteDataStore)
+        XCTAssertNil(a.boundHostName)
+        XCTAssertTrue(b.websiteDataStore === bStore)
+        XCTAssertTrue(listener.isListening)
+        XCTAssertFalse(coordinator.requiresProxy(tab: a, url: ua))
+        browser.closeWindow()
+        try await waitUntil {
+            coordinator.releaseIdleResources()
+            return publisher.currentEndpoint == nil
+        }
+        XCTAssertNil(publisher.currentEndpoint)
+    }
+
     func testFirstPendingAddressChoiceFromOffUsesManagedWebViewAndConnectListener() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_271, tunnels: opener)

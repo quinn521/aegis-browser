@@ -127,6 +127,9 @@ struct AegisApp: App {
                 .environmentObject(accountSession)
                 .environmentObject(accessSiteProxyRegistry)
                 .environmentObject(hostStores)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    hostStores.releaseIdleResources()
+                }
                 .preferredColorScheme(settings.colorScheme)
                 .tint(Color(red: 0.09, green: 0.47, blue: 0.37))
         } defaultValue: {
@@ -135,7 +138,10 @@ struct AegisApp: App {
         .commands { BrowserKeyboardCommands(language: language) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { language.refresh(); AegisFirebase.shared.refreshOnForeground() }
-            if phase == .background { Task { try? await AccessDiagnosticLog.shared.flush() } }
+            if phase == .background {
+                hostStores.releaseIdleResources()
+                Task { try? await AccessDiagnosticLog.shared.flush() }
+            }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             accountSession.usageRefresh.setActive(phase == .active)

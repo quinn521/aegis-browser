@@ -31,6 +31,7 @@ public final class AccessHostDataStoreRegistry {
     public private(set) var switchGeneration: UInt64 = 0
     private var entries: [AccessHostStoreKey: Entry] = [:]
     private var endpoints: [AccessHostStoreKey: AccessManagedProxyEndpoint] = [:]
+    public var onRetire: ((AccessHostStoreKey) -> Void)?
 
     private struct Entry {
         var store: WKWebsiteDataStore
@@ -193,6 +194,10 @@ public final class AccessHostDataStoreRegistry {
         entries.values.filter { !$0.record.key.isPrivate }.map(\.store)
     }
 
+    public func releaseIdleStores() {
+        for (key, entry) in entries where !entry.record.isInUse { retire(key) }
+    }
+
     public func store(
         scopeID: String,
         host: AccessSiteHost,
@@ -268,6 +273,7 @@ public final class AccessHostDataStoreRegistry {
         guard let entry = entries.removeValue(forKey: key) else { return }
         entry.store.proxyConfigurations = []
         endpoints[key] = nil
+        onRetire?(key)
     }
 
     private func apply(_ endpoint: AccessManagedProxyEndpoint, to store: WKWebsiteDataStore) {
