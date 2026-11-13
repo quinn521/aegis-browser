@@ -78,6 +78,7 @@ public struct BrowserMainFrameFailure: Equatable, Sendable {
 
 @MainActor
 public protocol BrowserHostStoreCoordinating: AnyObject {
+    func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore?
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError)
     func pendingRecoveryInvalidated(tab: BrowserTab)
@@ -1032,6 +1033,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         webPreferences.preferredContentMode = (site.desktop ?? preferences.values.desktop) ? .desktop : .recommended
         webPreferences.allowsContentJavaScript = site.javaScript ?? preferences.values.javaScript
         let decision = navigationDecision(requestURL, method: navigationAction.request.httpMethod ?? "GET")
+        // A blocked action never commits a navigation or changes registry membership.
+        if decision.kind == .blocked {
+            blockNavigation(decision)
+            lastPolicyIntervention = decision
+            pendingNavigation = nil
+            isLoading = false
+            finish(.cancel)
+            return
+        }
         let previousLanding = (proxyLandingParent, proxyLandingTarget)
         if decision.kind != .blocked, navigationAction.navigationType == .other,
            boundHostName != nil, let parent = proxyLandingParent ?? boundHostName, let target = requestURL.host?.lowercased(),
@@ -1043,6 +1053,17 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             proxyLandingParent = parent
             proxyLandingTarget = target
         }
+        let method = navigationAction.request.httpMethod ?? "GET"
+        let body = navigationAction.request.httpBody
+        let hostMismatch = requestedURL.map { $0.host?.lowercased() != requestURL.host?.lowercased() } ?? false
+        if ["POST", "PATCH"].contains(method.uppercased()), body == nil,
+           hostMismatch || hostCoordinator?.wouldSwitchStore(tab: self, url: requestURL) == true {
+            (proxyLandingParent, proxyLandingTarget) = previousLanding
+            loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
+            loadingErrorAllowsProxyRetry = false
+            finish(.cancel)
+            return
+        }
         let routedStore = hostCoordinator?.dataStoreForMainFrame(tab: self, url: requestURL)
         if decision.kind != .blocked, rejectUnavailableLanding(requestURL, store: routedStore) {
             (proxyLandingParent, proxyLandingTarget) = previousLanding
@@ -1050,19 +1071,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             return
         }
         let storeMismatch = (routedStore ?? originalWebsiteDataStore) !== websiteDataStore
-        let hostMismatch = requestedURL.map { $0.host?.lowercased() != requestURL.host?.lowercased() } ?? false
         if decision.kind != .blocked,
            navigationAction.targetFrame?.isMainFrame != false,
            hostMismatch || storeMismatch,
            realignedNavigationURL != requestURL {
-            let method = navigationAction.request.httpMethod ?? "GET"
-            let body = navigationAction.request.httpBody
-            if ["POST", "PATCH"].contains(method.uppercased()), body == nil {
-                loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
-                loadingErrorAllowsProxyRetry = false
-                finish(.cancel)
-                return
-            }
             realignedNavigationURL = requestURL
             finish(.cancel)
             var request = navigationAction.request

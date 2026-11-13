@@ -194,6 +194,19 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         return snapshot
     }
 
+    /// Preflight body-less writes before touching the registry or releasing the live document.
+    func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool {
+        guard let host = try? AccessSiteHost.normalize(url.host ?? "") else { return tab.boundHostName != nil }
+        let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
+        let bound = tab.boundHostName == host.rawValue
+        let intent = routeIntent(key: key, boundToTarget: bound, tabID: tab.instanceID.uuidString)
+        if bound {
+            return intent != .on && tab.parentForProxyLanding(url) == nil
+        }
+        if tab.boundHostName != nil { return true }
+        return intent == .on && registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state == .ready
+    }
+
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? {
         guard !tab.isDisposed else { return nil }
         guard let host = try? AccessSiteHost.normalize(url.host ?? "") else { return nil }
@@ -210,9 +223,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 (executingTabs[tab.instanceID.uuidString] == source && groupStillLists(source))
             let independentReady = intent == .on &&
                 registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state == .ready
-            if independentReady {
-                tab.clearProxyLanding()
-            } else if intents[key] != .off, sourceAuthorized {
+            if !independentReady && intents[key] != .off && sourceAuthorized {
                 if bound != host {
                     // Refuse before storeForTab can unbind the currently displayed document.
                     guard let bound, let endpoint = registry.endpoint(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate),
@@ -222,7 +233,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 // Once attached, the child store keeps its generation even if the idle
                 // root store is evicted. A failed bound generation stays fail-closed.
                 intent = .on
-            } else {
+            } else if intents[key] == .off || !sourceAuthorized {
                 tab.clearProxyLanding()
             }
         }
