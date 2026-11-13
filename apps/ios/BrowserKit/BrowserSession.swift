@@ -519,6 +519,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let hostChanged = previous?.host?.lowercased() != nil
             && url.host?.lowercased() != nil
             && previous?.host?.lowercased() != url.host?.lowercased()
+        if ["POST", "PATCH"].contains(method.uppercased()), body == nil,
+           hostCoordinator?.wouldSwitchStore(tab: self, url: url) == true {
+            loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
+            loadingErrorAllowsProxyRetry = false
+            return false
+        }
         if url.scheme != "https" || (url.port != nil && url.port != 443) || url.host?.lowercased() != proxyLandingTarget {
             clearProxyLanding()
         }
