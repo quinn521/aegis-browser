@@ -26,7 +26,9 @@ python3 -B apps/ios/scripts/alpha-entitlement-runner.py \
 
 runner 先通过实际适配器只读预检，再启动临时 loopback 中转和独立有限期 Aegis 会话；数据库仅保存会话摘要。只有该独立会话传入测试进程，面板管理 token 不透传。子进程输出被抑制，检查退出码、receipt 和 xcresult，不把启动成功当作联调通过。退出后清理服务和临时数据库。
 
-`AccessAccountAlphaLiveTests` 是明确 opt-in 的受控 TEST 合同（有限 1 GB、面板无到期）。它不是通用用户数据测试，不能改用主账户执行。
+`AccessAccountAlphaLiveTests` 是明确 opt-in 的受控 TEST 合同（每天 10 GB，即 10,000,000,000 B，上下行合计、面板无到期）。每日重置由面板按其服务器时区执行；测试按真实总额度校验剩余字节，不以查询时间替代测量水位。它不是通用用户数据测试，不能改用主账户执行。
+
+上述 runner 用于模拟器的 loopback 中转。真机测试须在隔离签名变体中配置手机可达的受信任 HTTPS origin，并由可信原生测试启动器传入同名 `AEGIS_ALPHA_*` 临时 Aegis 会话。测试核对其与签名 origin 一致后调用正常的原生 `bind`，使用独立测试 Keychain；不放宽产品的模拟器环境入口或 TLS 校验。
 
 ## 隔离真机变体
 

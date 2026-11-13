@@ -1,7 +1,7 @@
 import XCTest
 @testable import Aegis
 
-/// Opt-in read-only test through the local relay; never receives panel credentials.
+/// Opt-in read-only test through the entitlement service; never receives panel credentials.
 @MainActor
 final class AccessAccountAlphaLiveTests: XCTestCase {
     func testTestClientQuotaThroughNativeSessionAndRelay() async throws {
@@ -13,6 +13,7 @@ final class AccessAccountAlphaLiveTests: XCTestCase {
         }
         let keychain = AccessAccountKeychain(service: "test.access.alpha." + UUID().uuidString)
         defer { try? keychain.save(nil) }
+        #if targetEnvironment(simulator)
         let session = AccessAccountSession.product(environment: [
             "AEGIS_ACCOUNT_SIM_ORIGIN": origin,
             "AEGIS_ACCOUNT_SIM_ACTION": "bind",
@@ -20,6 +21,13 @@ final class AccessAccountAlphaLiveTests: XCTestCase {
             "AEGIS_ACCOUNT_SIM_TOKEN": token
         ], keychain: keychain)
         await session.refresh()?.value
+        #else
+        // A trusted native test launcher supplies the temporary Aegis session.
+        // Physical devices retain the signed HTTPS origin and normal bind path.
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "AegisAccountServiceOrigin") as? String, origin)
+        let session = AccessAccountSession.product(keychain: keychain)
+        await session.bind(accountID: account, token: token)?.value
+        #endif
         guard case let .ready(value) = session.state else {
             XCTFail("Authorized TEST quota could not be read through the relay")
             return
@@ -29,7 +37,8 @@ final class AccessAccountAlphaLiveTests: XCTestCase {
         XCTAssertEqual(value.panelExpiryMode, AccessAccountEntitlement.PanelExpiryMode.none)
         XCTAssertNil(value.panelExpiresAt)
         XCTAssertEqual(value.expiresAt, value.periodEnd)
-        XCTAssertEqual(value.quotaBytes, "1000000000")
+        let expectedQuota: UInt64 = 10_000_000_000
+        XCTAssertEqual(value.quotaBytes, String(expectedQuota))
         XCTAssertEqual(value.freshness, .unavailable)
         XCTAssertNil(value.measuredAt)
         XCTAssertNil(value.snapshotAgeMs)
@@ -38,7 +47,7 @@ final class AccessAccountAlphaLiveTests: XCTestCase {
         let used = try XCTUnwrap(value.usedBytes.flatMap(UInt64.init))
         let remaining = try XCTUnwrap(value.remainingBytes.flatMap(UInt64.init))
         XCTAssertEqual(used, up + down)
-        XCTAssertEqual(remaining, used < 1_000_000_000 ? 1_000_000_000 - used : 0)
+        XCTAssertEqual(remaining, used < expectedQuota ? expectedQuota - used : 0)
         XCTAssertNotNil(session.snapshotReceivedUptime)
         XCTAssertFalse(session.snapshotIsStale)
         session.signOut()
