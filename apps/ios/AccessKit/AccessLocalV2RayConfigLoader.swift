@@ -26,7 +26,8 @@ public enum AccessLocalV2RayConfigLoader {
         switch bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String {
         case "dev":
             return configuredPath(environment: environment)
-        case "alpha", "beta":
+                ?? bundle.url(forResource: "AegisPrivateTestNode", withExtension: "vless")?.path
+        case "alpha":
             return bundle.url(forResource: "AegisPrivateTestNode", withExtension: "vless")?.path
         default:
             return nil
