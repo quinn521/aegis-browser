@@ -1318,3 +1318,284 @@ private extension XCUIElement {
         typeText(text)
     }
 }
+
+/// Opt-in evidence collection on a physical iPhone. XCTest completion is not a
+/// full-page acceptance: each receipt and both screenshots require visual review.
+@MainActor
+final class AegisRealWebsiteSmokeTests: XCTestCase {
+    private struct Site {
+        let id: Int
+        let host: String
+        var url: String { "https://\(host)/" }
+        func contains(_ candidate: String) -> Bool {
+            candidate == host || candidate.hasSuffix("." + host)
+        }
+    }
+
+    private static let sites: [Site] = [
+        .init(id: 1, host: "google.com"), .init(id: 3, host: "youtube.com"),
+        .init(id: 4, host: "instagram.com"), .init(id: 5, host: "x.com"),
+        .init(id: 6, host: "wikipedia.org"), .init(id: 7, host: "pinterest.com"),
+        .init(id: 13, host: "nih.gov"), .init(id: 14, host: "dropbox.com"),
+        .init(id: 23, host: "theguardian.com"), .init(id: 26, host: "bbc.com"),
+        .init(id: 31, host: "reuters.com"), .init(id: 38, host: "issuu.com"),
+        .init(id: 46, host: "goodreads.com"), .init(id: 56, host: "slideshare.net"),
+        .init(id: 62, host: "nike.com"), .init(id: 64, host: "lemonde.fr"),
+        .init(id: 65, host: "bandcamp.com"), .init(id: 75, host: "imgur.com"),
+        .init(id: 76, host: "perplexity.ai"), .init(id: 97, host: "huggingface.co")
+    ]
+
+    func testSelectedRealWebsites() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["AEGIS_REAL_SITE_SMOKE"] == "1" else {
+            throw XCTSkip("External websites require AEGIS_REAL_SITE_SMOKE=1 and AEGIS_REAL_SITE_IDS.")
+        }
+#if targetEnvironment(simulator)
+        throw XCTSkip("Real-site smoke requires a physical iPhone.")
+#else
+        let selection = environment["AEGIS_REAL_SITE_IDS"] ?? ""
+        let ids = selection.split(separator: ",", omittingEmptySubsequences: false)
+            .compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        let selected = selection == "all" ? Self.sites : Self.sites.filter { ids.contains($0.id) }
+        guard selection == "all" || (!ids.isEmpty && ids.count == selection.split(separator: ",", omittingEmptySubsequences: false).count
+            && Set(ids).count == ids.count && selected.count == ids.count) else {
+            XCTFail("Select all or a comma-separated subset of the 20 documented site IDs; raw URLs are rejected.")
+            return
+        }
+        continueAfterFailure = true
+        for site in selected {
+            XCTContext.runActivity(named: "Real site \(site.id): \(site.host)") { _ in
+                collect(site, tryLink: environment["AEGIS_REAL_SITE_LINKS"] == "1")
+            }
+        }
+#endif
+    }
+
+    private func collect(_ site: Site, tryLink: Bool) {
+        let app = XCUIApplication()
+        let prefix = String(format: "real-site-%03d-%@", site.id, site.host)
+        var receipt: [String: Any] = [
+            "schema": 1, "site_id": site.id, "requested_url": site.url,
+            "started_at": ISO8601DateFormatter().string(from: Date()),
+            "recovery_action_count": 0, "recovery_action": "NONE",
+            "result": "HARNESS_INCOMPLETE", "acceptance": "NOT_ESTABLISHED",
+            "visual_review_required": true, "link_result": "NOT_REQUESTED",
+            "checklist": ["Read initial and scrolled screenshots for complete content and missing assets.",
+                          "Reject consent, challenge, login shell, blank or incomplete pages as full-page passes.",
+                          "Confirm final host and route; local proxy readiness does not verify the remote connection.",
+                          "Review redirect and optional link outcomes separately from the first recovery action."]
+        ]
+        defer {
+            receipt["finished_at"] = ISO8601DateFormatter().string(from: Date())
+            attachJSON(receipt, name: prefix + "-receipt.json")
+            app.terminate()
+        }
+        // Standard UI-test launch resets tabs and test preferences between sites.
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        let address = app.textFields["address-field"]
+        guard address.waitForExistence(timeout: 10), address.isHittable else {
+            receipt["result"] = "ADDRESS_UNAVAILABLE"; screenshot(prefix + "-launch")
+            XCTFail("Address bar unavailable for site \(site.id)")
+            return
+        }
+        address.tap(); address.clearAndType(site.url); address.typeText("\n")
+        let retry = app.buttons["page-load-proxy-retry"]
+        if retry.waitForExistence(timeout: 25), retry.isEnabled, retry.isHittable {
+            let pending = app.staticTexts["page-load-pending-host"]
+            let target = pending.exists ? (pending.value as? String ?? pending.label) : site.url
+            receipt["recovery_target"] = sanitizedURL(target)
+            guard host(target).map(site.contains) == true else {
+                receipt["result"] = "RECOVERY_TARGET_MISMATCH"; screenshot(prefix + "-target-mismatch")
+                return
+            }
+            receipt["recovery_action"] = pending.exists ? "VISIBLE_PENDING_PROXY" : "VISIBLE_FAILURE_RETRY"
+            screenshot(prefix + "-before-recovery")
+            retry.tap()
+            receipt["recovery_action_count"] = 1
+        } else {
+            receipt["result"] = "ACTION_UNAVAILABLE"
+        }
+        do {
+            let page = try waitForContent(app)
+            receipt["content"] = page
+            receipt["address_before_scroll"] = sanitizedURL(address.exists ? address.value as? String ?? "" : "")
+            screenshot(prefix + "-before-scroll")
+            let web = app.webViews.firstMatch
+            var scrolledClass = "NO_WEBVIEW"
+            if web.exists, !web.frame.isEmpty {
+                web.swipeUp()
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
+                let scrolled = try pageEvidence(web)
+                receipt["after_scroll_content"] = scrolled
+                scrolledClass = scrolled["classification"] as? String ?? "SNAPSHOT_UNAVAILABLE"
+                receipt["scroll_result"] = "GESTURE_SENT_REQUIRES_VISUAL_REVIEW"
+            } else { receipt["scroll_result"] = "NO_WEBVIEW" }
+            screenshot(prefix + "-after-scroll")
+            let finalAddress = address.exists ? address.value as? String ?? "" : ""
+            let finalHost = host(finalAddress) ?? ""
+            receipt["final_address"] = sanitizedURL(finalAddress)
+            receipt["final_host"] = finalHost
+            receipt["redirect_class"] = finalHost.isEmpty ? "UNREADABLE_ADDRESS" :
+                finalHost == site.host ? "SAME_HOST" : site.contains(finalHost) ? "SAME_REGISTRABLE_DOMAIN" : "CROSS_REGISTRABLE_DOMAIN"
+            receipt["cross_registrable_redirect_observed"] = (page["observed_hosts"] as? [String] ?? []).contains { !site.contains($0) }
+            let route = readRoute(app)
+            receipt["route"] = route
+            let routeHost = route["host"] as? String ?? ""
+            receipt["route_address_match"] = !finalHost.isEmpty && routeHost == finalHost
+            let contentClass = page["classification"] as? String ?? "SNAPSHOT_UNAVAILABLE"
+            if receipt["result"] as? String != "ACTION_UNAVAILABLE" {
+                receipt["result"] = !site.contains(finalHost) ? "OFF_HOST_OR_UNREADABLE" :
+                    routeHost != finalHost ? "ROUTE_ADDRESS_UNVERIFIED" :
+                    route["local_entry_ready"] as? Bool != true ? "PROXY_ROUTE_UNVERIFIED" : contentClass
+            }
+            if tryLink {
+                receipt["link_result"] = "SKIPPED_INITIAL_CONTENT_OR_ROUTE_UNVERIFIED"
+                if contentClass == "CONTENT_PRESENT_NEEDS_VISUAL_REVIEW", scrolledClass == contentClass,
+                   site.contains(finalHost), routeHost == finalHost,
+                   route["menu_closed"] as? Bool == true {
+                    receipt["link"] = try followSafeLink(app, site: site, prefix: prefix)
+                    receipt["link_result"] = (receipt["link"] as? [String: Any])?["result"]
+                }
+            }
+        } catch {
+            receipt["result"] = "SNAPSHOT_UNAVAILABLE"
+            screenshot(prefix + "-snapshot-unavailable")
+            XCTFail("Real-site snapshot unavailable for site \(site.id)")
+        }
+    }
+
+    private func waitForContent(_ app: XCUIApplication) throws -> [String: Any] {
+        let deadline = Date(timeIntervalSinceNow: 45)
+        var last: [String: Any] = ["classification": "NO_WEBVIEW"]
+        var previous = "", stable = 0
+        var observedHosts: [String] = []
+        repeat {
+            if let current = host(app.textFields["address-field"].value as? String ?? ""), !observedHosts.contains(current) {
+                observedHosts.append(current)
+            }
+            let web = app.webViews.firstMatch
+            if web.exists {
+                last = try pageEvidence(web)
+                let signature = "\(last["classification"] ?? ""): \(last["visible_text_characters"] ?? 0): \(app.textFields["address-field"].value ?? "")"
+                stable = signature == previous ? stable + 1 : 0
+                previous = signature
+                if stable >= 2, (last["visible_text_characters"] as? Int ?? 0) > 30 { break }
+            }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
+        } while Date() < deadline
+        last["settled_observation"] = stable >= 2
+        last["observed_hosts"] = observedHosts
+        return last
+    }
+
+    private func pageEvidence(_ web: XCUIElement) throws -> [String: Any] {
+        // Resolve once; never index a live, changing web descendants query.
+        let snapshot = try web.snapshot()
+        let nodes = descendants(snapshot).filter { !$0.frame.isEmpty && $0.frame.intersects(snapshot.frame) }
+        let text = nodes.filter { $0.elementType == .staticText || $0.elementType == .link }
+            .map(\.label).filter { !$0.isEmpty }.joined(separator: " ").lowercased()
+        let signals: [(String, [String])] = [
+            ("CHALLENGE", ["verify you are human", "checking your browser", "just a moment", "验证码", "验证您是人类", "access denied", "unusual traffic"]),
+            ("CONSENT", ["accept all cookies", "reject all cookies", "before you continue to", "consent preferences", "接受所有", "同意并继续"]),
+            ("LOGIN", ["log in to continue", "sign in to continue", "login to continue", "登录以继续", "登录后继续"])
+        ]
+        var detected = signals.filter { $0.1.contains(where: text.contains) }.map(\.0)
+        if text.count < 700, ["log in", "sign in", "登录"].contains(where: text.contains),
+           ["password", "email", "sign up", "密码", "注册"].contains(where: text.contains), !detected.contains("LOGIN") {
+            detected.append("LOGIN")
+        }
+        let classification = detected.first.map { $0 + "_REQUIRES_MANUAL_REVIEW" } ??
+            (text.count < 30 ? "BLANK_OR_INSUFFICIENT_CONTENT" : "CONTENT_PRESENT_NEEDS_VISUAL_REVIEW")
+        return ["classification": classification, "signals": detected, "visible_text_characters": text.count,
+                "visible_links": nodes.filter { $0.elementType == .link }.count,
+                "visible_images": nodes.filter { $0.elementType == .image }.count]
+    }
+
+    private func readRoute(_ app: XCUIApplication) -> [String: Any] {
+        let button = app.buttons["page-protection"]
+        if !button.exists || !button.isHittable {
+            if app.webViews.firstMatch.exists { app.webViews.firstMatch.swipeDown() }
+        }
+        guard button.exists, button.isHittable else { return ["result": "MENU_UNAVAILABLE", "menu_closed": true] }
+        button.tap()
+        let routeHost = app.staticTexts["access-site-proxy-host"]
+        guard routeHost.waitForExistence(timeout: 5) else {
+            let done = app.navigationBars.buttons["完成"]
+            if done.exists, done.isHittable { done.tap() }
+            return ["result": "ROUTE_HOST_UNAVAILABLE", "menu_closed": !done.exists]
+        }
+        let route = app.staticTexts["access-proxy-page-route"]
+        let routeText = route.exists ? route.label : ""
+        var result: [String: Any] = ["result": "OBSERVED", "host": routeHost.label.lowercased(),
+                                   "local_entry_ready": routeText == "本地代理入口已就绪；远端连接未验证",
+                                   "remote_connection_verified": false]
+        let connection = app.staticTexts["access-site-proxy-connection"]
+        result["connection_ui"] = connection.exists ? connection.label : "UNAVAILABLE"
+        let done = app.navigationBars.buttons["完成"]
+        if done.exists, done.isHittable { done.tap() }
+        result["menu_closed"] = !done.exists
+        return result
+    }
+
+    private func followSafeLink(_ app: XCUIApplication, site: Site, prefix: String) throws -> [String: Any] {
+        let web = app.webViews.firstMatch
+        guard web.exists else { return ["result": "NO_WEBVIEW"] }
+        // Only a real page link exposing a verifiable href is eligible. No consent,
+        // login, TLS, download, search, menu or system-interstitial interaction.
+        let safePaths = ["/about", "/about/", "/help", "/help/"]
+        let links = descendants(try web.snapshot()).filter { $0.elementType == .link }
+        guard let candidate = links.first(where: { item in
+            guard let raw = item.value as? String, let url = URLComponents(string: raw),
+                  url.scheme == "https", let target = url.host?.lowercased(), site.contains(target),
+                  url.query == nil, url.fragment == nil, url.user == nil, url.password == nil,
+                  safePaths.contains(url.path) else { return false }
+            return !item.label.isEmpty
+        }), let raw = candidate.value as? String else { return ["result": "NO_VERIFIABLE_SAFE_SAME_SITE_LINK"] }
+        let link = web.links.matching(NSPredicate(format: "label == %@ AND value == %@", candidate.label, raw)).firstMatch
+        guard link.exists, link.isHittable else { return ["result": "SAFE_LINK_NOT_VISIBLE"] }
+        let before = app.textFields["address-field"].value as? String ?? ""
+        link.tap()
+        let content = try waitForContent(app)
+        let after = app.textFields["address-field"].value as? String ?? ""
+        let actualHost = host(after) ?? ""
+        screenshot(prefix + "-after-safe-link")
+        return ["target": sanitizedURL(raw), "actual_address": sanitizedURL(after), "actual_host": actualHost,
+                "result": actualHost.isEmpty ? "ADDRESS_UNREADABLE" : !site.contains(actualHost) ? "FOREIGN_HOST" :
+                    sanitizedURL(before) == sanitizedURL(after) ? "NO_NAVIGATION_OBSERVED" : "SAME_SITE_NAVIGATION_OBSERVED",
+                "content": content]
+    }
+
+    private func descendants(_ root: XCUIElementSnapshot) -> [XCUIElementSnapshot] {
+        var pending = [root], result: [XCUIElementSnapshot] = []
+        while let item = pending.popLast(), result.count < 8_000 {
+            result.append(item); pending.append(contentsOf: item.children.reversed())
+        }
+        return result
+    }
+
+    private func host(_ raw: String) -> String? {
+        URLComponents(string: raw.contains("://") ? raw : "https://" + raw)?.host?.lowercased()
+    }
+
+    private func sanitizedURL(_ raw: String) -> String {
+        guard var url = URLComponents(string: raw.contains("://") ? raw : "https://" + raw),
+              ["https", "http"].contains(url.scheme ?? ""), url.host != nil else { return "UNREADABLE" }
+        url.query = nil; url.fragment = nil; url.user = nil; url.password = nil
+        return url.string ?? "UNREADABLE"
+    }
+
+    private func screenshot(_ name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+
+    private func attachJSON(_ value: [String: Any], name: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else {
+            XCTFail("Could not encode real-site receipt")
+            return
+        }
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+}
