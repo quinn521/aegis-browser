@@ -157,7 +157,12 @@ final class AccessAccountSession: ObservableObject {
     @discardableResult
     func refresh() -> Task<Void, Never>? {
         do {
-            guard let credential = try keychain.read() else { suspend(); return nil }
+            guard let credential = try keychain.read() else {
+                // Repeated signed-out quota reads do not end an independent private grant.
+                if currentCredential != nil { suspend() }
+                else { state = .signedOut }
+                return nil
+            }
             guard let client, credential.valid, client.endpoint.absoluteString == credential.endpoint else {
                 throw AccountQueryError.invalid
             }
