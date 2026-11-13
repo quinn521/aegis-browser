@@ -45,12 +45,15 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(managed.proxyConfigurations.first).allowFailover)
         // This fixture records the real CONNECT route. It does not issue a
         // trusted TLS certificate or claim successful HTTPS document rendering.
-        let firstConnections = opener.authorities.count
-        tab.load(URL(string: "https://pending-address.invalid/next")!)
+        // The HTTP fixture cannot complete a TLS handshake. End that load and
+        // use a distinct origin on the same host, so connection reuse cannot
+        // masquerade as either a missing route or a second proxy connection.
+        tab.stop()
+        tab.load(URL(string: "https://pending-address.invalid:444/next")!)
         try await waitUntil(seconds: 10, {
             self.attach(tab.webView, to: window)
-            return opener.authorities.count > firstConnections
-        }, message: "same-host continuation must retain the managed route: \(opener.authorities)")
+            return opener.authorities.contains("pending-address.invalid:444")
+        }, message: "distinct same-host origin must retain the managed route: \(opener.authorities)")
         XCTAssertTrue(tab.websiteDataStore === managed)
         XCTAssertEqual(tab.boundHostName, host.rawValue)
         XCTAssertNil(coordinator.dataStoreForMainFrame(tab: tab, url: URL(string: "https://unrelated.invalid/")!))
