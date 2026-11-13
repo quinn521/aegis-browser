@@ -24,20 +24,23 @@ func quotaRequested() bool { _, ok := os.LookupEnv("AEGIS_XRAY_QUOTA"); return o
 // idle reader or a blocked Reality writer without waiting for its TLS mutex.
 type quotaGuard struct {
 	mu              sync.Mutex
+	writers         [2]sync.Mutex
 	inbound, target net.Conn
 	expires         time.Time
 	stopped         bool
 	closed          chan struct{}
+	expiryChanged   chan struct{}
 	cancel          context.CancelFunc
 }
 
 func startGuard(parent context.Context, path, id string, inbound net.Conn, expiry int64) (*quotaGuard, error) {
 	ctx, cancel := context.WithCancel(parent)
-	q := &quotaGuard{inbound: inbound, expires: time.UnixMilli(expiry), closed: make(chan struct{}), cancel: cancel}
+	q := &quotaGuard{inbound: inbound, expires: time.UnixMilli(expiry), closed: make(chan struct{}), expiryChanged: make(chan struct{}, 1), cancel: cancel}
 	if !time.Now().Before(q.expires) {
 		q.stop()
 		return nil, errCutoff
 	}
+	go q.expire(ctx)
 	go q.watch(ctx, path, id)
 	return q, nil
 }
@@ -86,6 +89,32 @@ func (q *quotaGuard) shorten(ms int64) {
 	defer q.mu.Unlock()
 	if e := time.UnixMilli(ms); e.Before(q.expires) {
 		q.expires = e
+		select {
+		case q.expiryChanged <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// The deadline is independent of a blocked check exchange. In particular a
+// shorter deadline returned by reserve must also close idle sockets on time.
+func (q *quotaGuard) expire(ctx context.Context) {
+	defer q.stop()
+	for {
+		wait := time.Until(q.deadline())
+		if wait <= 0 {
+			return
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-q.expiryChanged:
+			timer.Stop()
+		case <-timer.C:
+			// Re-read the deadline in case a concurrent shorten won the race.
+		}
 	}
 }
 
@@ -154,6 +183,10 @@ func (f *Flow) reserve(direction, path string, size int) (ticket int64, granted 
 		default:
 		}
 		f.mu.Lock()
+		if f.broken || f.uncertain {
+			f.mu.Unlock()
+			return 0, 0, errCutoff
+		}
 		ack, e := f.exchange(map[string]any{"op": "reserve", "ticket": ticket, "direction": direction, "path": path, "bytes": size})
 		f.mu.Unlock()
 		if e != nil {
@@ -192,11 +225,28 @@ func compactFrame(p []byte, start, end, grant int, path string) []byte {
 func (f *Flow) quotaWrite(w io.Writer, p []byte, start, end int, path string) (int, error) {
 	q := f.quota
 	direction := "down"
+	writer := 1
 	if path == "target_tcp" {
 		direction = "up"
+		writer = 0
+	}
+	// Each direction has one outstanding ticket. Preserve its reservation,
+	// confirmed write, and commit order even if a caller overlaps writes.
+	q.writers[writer].Lock()
+	defer q.writers[writer].Unlock()
+	select {
+	case <-q.closed:
+		return 0, errCutoff
+	default:
 	}
 	requested := end - start
-	if requested < 0 || requested > maxGrant || (path == "vision_padded" && start < 5) {
+	if start < 0 || end < start || end > len(p) || requested > maxGrant ||
+		(path == "vision_padded" && start < 5) ||
+		(path != "vision_padded" && (start != 0 || end != len(p))) {
+		q.stop()
+		return 0, errCutoff
+	}
+	if !time.Now().Before(q.deadline()) {
 		q.stop()
 		return 0, errCutoff
 	}
@@ -210,6 +260,8 @@ func (f *Flow) quotaWrite(w io.Writer, p []byte, start, end int, path string) (i
 		if !errors.Is(err, errCutoff) {
 			f.mu.Lock()
 			f.broken = true
+			// The collector may have issued this grant before the ACK was lost.
+			f.uncertain = true
 			f.mu.Unlock()
 		}
 		q.stop()
@@ -244,18 +296,28 @@ func (f *Flow) quotaWrite(w io.Writer, p []byte, start, end int, path string) (i
 		known = true
 	}
 	f.mu.Lock()
-	ackErr := f.send(map[string]any{"op": "commit", "direction": direction, "ticket": ticket, "bytes": actual, "complete": known})
+	// The writer already confirmed this prefix. Count it locally even when the
+	// collector's ACK is lost so the queued terminal watermark matches replay.
+	if !known {
+		f.uncertain = true
+	}
+	if direction == "up" {
+		f.up += int64(actual)
+	} else {
+		f.down += int64(actual)
+	}
+	frame := map[string]any{"op": "commit", "direction": direction, "ticket": ticket, "bytes": actual, "complete": known}
+	var ackErr error
+	if f.broken {
+		ackErr = f.retain(frame)
+		if ackErr == nil {
+			ackErr = errors.New("quota commit queued for replay")
+		}
+	} else {
+		ackErr = f.reliableSend(frame)
+	}
 	if ackErr != nil {
 		f.broken = true
-	} else {
-		if !known {
-			f.uncertain = true
-		}
-		if direction == "up" {
-			f.up += int64(actual)
-		} else {
-			f.down += int64(actual)
-		}
 	}
 	f.mu.Unlock()
 	if ackErr != nil {
