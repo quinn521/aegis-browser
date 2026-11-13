@@ -87,6 +87,7 @@ class PanelEntitlementTest(unittest.TestCase):
         self.mock.paths, self.mock.status, self.mock.body, self.mock.during_read = [], 200, None, None
         panel = Panel(f"http://127.0.0.1:{self.mock.server_port}/tenant/", "fixture-panel-key")
         server = self.start(create_server(self.path, clock_ms=lambda: NOW, panel=panel))
+        self.server = server
         self.http = http.client.HTTPConnection(*server.server_address, timeout=4)
         self.addCleanup(self.http.close)
 
@@ -118,6 +119,16 @@ class PanelEntitlementTest(unittest.TestCase):
         self.assertEqual(self.mock.paths, [route + client for client in
                                           ("client%2Ba", "client%40b", "client%2Ba")
                                           for route in (PREFIX, SETTINGS)])
+
+    def test_verdict_after_panel_receipt_can_cross_expiry_with_unknown_measurement(self):
+        ticks = iter((NOW, NOW + 999, NOW + 1000))
+        self.server.clock_ms = lambda: next(ticks)
+        status, data = self.read()
+        self.assertEqual(status, 200)
+        self.assertEqual((data['status'], data['receivedAt'], data['evaluatedAt']),
+                         ('expired', NOW + 999, NOW + 1000))
+        self.assertEqual((data['measuredAt'], data['snapshotAgeMs'], data['freshness']),
+                         (None, None, 'unavailable'))
 
     def test_failed_read_never_replays_success_or_follows_redirect(self):
         self.assertEqual(self.read()[0], 200)
