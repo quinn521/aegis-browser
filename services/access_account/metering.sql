@@ -16,3 +16,10 @@ CREATE TABLE IF NOT EXISTS node_meter_flows (
     PRIMARY KEY (node_id, flow_id)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS node_meter_usage ON node_meter_flows(node_id, period_id, account_id);
+
+-- A timed-out OPEN may reach SQLite after its recovery ABORT on another socket.
+CREATE TABLE IF NOT EXISTS node_meter_aborts (
+    node_id TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    PRIMARY KEY(node_id,flow_id)
+) STRICT;

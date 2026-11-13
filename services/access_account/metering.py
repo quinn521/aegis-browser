@@ -97,6 +97,9 @@ class Meter:
         row = db.execute('SELECT * FROM node_meter_flows WHERE node_id=? AND flow_id=?',
                          key).fetchone()
         if frame['op'] == 'open':
+            if db.execute('SELECT 1 FROM node_meter_aborts WHERE node_id=? AND flow_id=?',
+                          key).fetchone():
+                raise ValueError('opening previously aborted')
             client = frame['client']
             if client not in self.clients or row is not None and row['panel_client'] != client:
                 raise ValueError('unknown binding')
@@ -111,6 +114,7 @@ class Meter:
                            '(node_id,flow_id,panel_client,account_id,period_id) VALUES (?,?,?,?,?)',
                            (*key, client, *binding))
         elif frame['op'] == 'abort':
+            db.execute('INSERT INTO node_meter_aborts VALUES (?,?) ON CONFLICT DO NOTHING', key)
             if row is None:
                 return
             self._finish(db, key, row, dict(uploadedBytes=0, downloadedBytes=0, complete=True), now)
