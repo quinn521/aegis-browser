@@ -227,7 +227,9 @@ test('Simple and Full expose bounded English forms and share the same exact-sour
   for (const id of ['ios-package', 'store']) {
     const steps = simple.jobs[id].steps;
     const emit = steps.findIndex(s => s.run === 'python3 scripts/release/ios-action.py receipt');
-    assert(emit > 0 && !steps[emit].if);
+    assert(emit > 0);
+    assert.equal(steps[emit].if, id === 'ios-package'
+      ? "${{ steps.package.outputs.private_beta == 'false' }}" : undefined);
   }
 });
 
@@ -293,7 +295,7 @@ test('candidate admission bounds version components and rejects trailing data be
   }
 });
 
-test('new-package upload is bound to the successful same-run producer and never loads ASC secrets while signing', () => {
+test('public package upload is bound to the successful same-run producer', () => {
   const doc = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
   const packageJob = doc.jobs['ios-package'];
   assert(packageJob.needs.includes('check-unused'));
@@ -306,7 +308,7 @@ test('new-package upload is bound to the successful same-run producer and never 
   assert.equal(fresh.environment, 'aegis-ios-store');
   const upload = doc.jobs['upload-new'];
   assert.deepEqual(upload.needs, ['admission', 'ios-package', 'seal-package']);
-  assert.equal(upload.if, "${{ needs.admission.outputs.operation == 'package-upload' }}");
+  assert.equal(upload.if, "${{ needs.admission.outputs.operation == 'package-upload' && needs.ios-package.outputs.private_beta == 'false' }}");
   assert.equal(upload.env.RELEASE_MANIFEST_SHA256, '${{ needs.ios-package.outputs.manifest_sha256 }}');
   assert.equal(upload.env.PACKAGE_RUN_ID, '${{ github.run_id }}');
   assert.equal(upload.env.IMPORT_KIND, 'new-upload');
@@ -314,6 +316,24 @@ test('new-package upload is bound to the successful same-run producer and never 
   assert(upload.steps.find(s => s.run?.includes('ios-restore.py')));
   assert(upload.steps.find(s => s.run === 'python3 scripts/release/ios-action.py export').if.includes('always()'));
   assert.equal(upload.steps.find(s => s.run === 'python3 scripts/release/ios-action.py receipt').if, undefined);
+});
+
+test('private Beta uploads only after signing cleanup and publishes only a sanitized receipt', () => {
+  const {jobs} = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
+  const steps = jobs['ios-package'].steps;
+  const pack = steps.findIndex(s => s.id === 'package');
+  const cleanup = steps.findIndex(s => s.run === 'python3 scripts/release/hosted-signing.py cleanup');
+  const direct = steps.findIndex(s => s.run === 'python3 scripts/release/ios-action.py private-beta-upload');
+  assert(pack >= 0 && pack < cleanup && cleanup < direct);
+  assert.equal(steps[direct].if, "${{ steps.package.outputs.private_beta == 'true' }}");
+  assert.equal(steps[direct].env.RELEASE_MANIFEST_SHA256, '${{ steps.package.outputs.manifest_sha256 }}');
+  assert(!Object.keys(steps[direct].env).some(key => key.includes('TEST_NODE') || key.includes('DISTRIBUTION')));
+  const archive = steps.find(s => s.with?.path === '.artifacts/ios-delivery/package.zip');
+  assert.equal(archive.if, "${{ steps.package.outputs.private_beta == 'false' }}");
+  assert(steps.some(s => s.with?.path === '${{ steps.private-evidence.outputs.receipt_path }}'));
+  for (const job of ['seal-package', 'upload-new', 'ios-draft']) {
+    assert(jobs[job].if.includes("needs.ios-package.outputs.private_beta == 'false'"));
+  }
 });
 
 test('Full explicitly forwards named secrets while protected jobs resolve environment values', () => {

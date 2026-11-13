@@ -1334,8 +1334,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["page-protection"].waitForExistence(timeout: 10))
         let before = try readDirectQuota(app, name: "direct-quota-before")
         for site in [Site(id: 6, host: "wikipedia.org"), Site(id: 26, host: "bbc.com")] {
-            let address = app.textFields["address-field"]
-            address.tap(); address.clearAndType(site.url); address.typeText("\n")
+            try submitAddress(site.url, in: app)
             let deadline = Date(timeIntervalSinceNow: 15)
             var action = recoveryButton(app)
             while action == nil, Date() < deadline {
@@ -1408,11 +1407,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let first = Site(id: 6, host: "wikipedia.org")
         let second = Site(id: 14, host: "dropbox.com")
         for site in [first, second, first] {
-            let address = app.textFields["address-field"]
-            XCTAssertTrue(address.waitForExistence(timeout: 10))
-            address.tap(); address.clearAndType(site.url)
-            XCTAssertEqual(address.value as? String, site.url)
-            address.typeText("\n")
+            try submitAddress(site.url, in: app)
             let deadline = Date(timeIntervalSinceNow: 15)
             var action = recoveryButton(app)
             while action == nil, Date() < deadline {
@@ -1451,14 +1446,37 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         app.navigationBars.buttons["完成"].tap()
         _ = try waitForContent(app, site: first)
         XCTAssertEqual(readRoute(app)["local_entry_ready"] as? Bool, true)
-        let address = app.textFields["address-field"]
-        address.tap(); address.clearAndType(second.url); address.typeText("\n")
+        try submitAddress(second.url, in: app)
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Address submission must dismiss the keyboard")
         _ = try waitForContent(app, site: second)
         let otherRoute = readRoute(app)
         XCTAssertEqual(otherRoute["local_entry_ready"] as? Bool, true)
         attachJSON(otherRoute, name: "site-switch-other-site-still-on.json")
         screenshot("site-switch-other-site-still-on")
+    }
+
+    private func submitAddress(_ url: String, in app: XCUIApplication) throws {
+        let address = app.textFields["address-field"]
+        let cancel = app.buttons["取消"]
+        for attempt in 0..<2 {
+            guard address.waitForExistence(timeout: 10), address.isHittable else { break }
+            address.tap()
+            guard cancel.waitForExistence(timeout: 3) else { continue }
+            let keyboard = app.keyboards.firstMatch
+            let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                keyboard.exists && keyboard.frame.intersects(app.frame)
+            }, object: nil)
+            _ = XCTWaiter.wait(for: [ready], timeout: 3)
+            address.clearAndType(url)
+            if address.value as? String == url {
+                address.typeText("\n")
+                return
+            }
+            screenshot("address-entry-attempt-\(attempt + 1)")
+            if cancel.isHittable { cancel.tap() }
+        }
+        throw NSError(domain: "AegisRealWebsiteSmoke", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "Address entry did not reach the requested URL before submission"])
     }
 
     private struct Site {

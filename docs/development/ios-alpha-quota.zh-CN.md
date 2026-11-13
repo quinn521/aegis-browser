@@ -63,6 +63,6 @@ runner 先通过实际适配器只读预检，再启动临时 loopback 中转和
 
 本轮 TestFlight Beta 1.0.3 使用上游现有 `aegis-ios-signing` 受保护环境和显式 `manual` 签名。环境变量 `AEGIS_IOS_BETA_TEST_NODE_ENABLED=true` 开启本轮 Beta 注入；同一环境的 `AEGIS_IOS_TEST_NODE_BASE64` 和 `AEGIS_IOS_TEST_SUBSCRIPTION_BASE64` 分别保存已有私有节点文件和额度描述符的 Base64。真实值不得写入仓库、PR、workflow 输入或日志。
 
-Simple/Full 仅为 Beta manual 包加载这两项 secret。打包器先消费并移除进程环境中的私有值，写入任务专属临时目录，沿用产品校验器验证输入，再向 Xcode 传文件路径。导出的 IPA 必须包含与输入逐字节一致的节点及绑定后的额度描述符；遗漏或不匹配直接失败，不产生成功交付收据。临时输入在成功或失败后清除。签名 IPA 本身按授权包含测试配置，须遵循现有受保护制品交付规则。
+Simple/Full 仅为 Beta manual 包加载这两项 secret。打包器先消费并移除进程环境中的私有值，写入任务专属临时目录，沿用产品校验器验证输入，再向 Xcode 传文件路径。导出的 IPA 必须包含与输入逐字节一致的节点及绑定后的额度描述符；遗漏或不匹配直接失败，不产生成功交付收据。临时输入在成功或失败后清除。内置私有输入的 IPA 在同一个受保护的签名任务中直接交给 TestFlight。清除签名材料后才加载 ASC 上传凭据。公开 Actions 工件只保留构建身份与上传状态 JSON。任务结束时清理该次打包目录。
 
-开关已启用时选择 cloud 会明确失败，不会静默上传空节点包；本轮应显式选 Beta / manual / Package and upload。Release 不加载这些 secret，产品打包脚本继续排除测试资源。关闭开关恢复默认无私有输入的打包方式；不能把默认空包宣称为本轮测试节点交付。
+开关已启用时选择 cloud 会明确失败，不会静默上传空节点包；本轮应显式选 Beta / manual / Package and upload。Release 不加载这些 secret，产品打包脚本继续排除测试资源。关闭开关恢复默认无私有输入的打包方式。若上传响应丢失，使用版本及构建号执行 `Status`，对照永久 `upload-start` 和 `upload-result` 记录核对 Apple 结果。私有 Beta 没有公开 IPA 或 Full 恢复令牌。同一构建号不可重跑；确认结果后，若需重建，另选未分配构建号。

@@ -296,12 +296,14 @@ module AegisRelease
       Dir.mkdir(request.directory, 0o700)
       paths, details = package_ios(archive_args)
       sha = Receipt.create(request, paths, source, details)
-      publish_args = request.destination == 'github-draft' ? ['--draft'] : []
-      begin
-        run('python3', File.join(request.root, 'scripts/release/ios-publish.py'),
-            '--directory', request.directory, '--manifest-sha256', sha, *publish_args)
-      rescue Error
-        warn 'Downloads catalogue copy failed; retain the verified package and rerun ios-publish.py.'
+      unless details['privateBetaTestNode']
+        publish_args = request.destination == 'github-draft' ? ['--draft'] : []
+        begin
+          run('python3', File.join(request.root, 'scripts/release/ios-publish.py'),
+              '--directory', request.directory, '--manifest-sha256', sha, *publish_args)
+        rescue Error
+          warn 'Downloads catalogue copy failed; retain the verified package and rerun ios-publish.py.'
+        end
       end
       puts "Manifest SHA-256: #{sha}"
       if ENV['GITHUB_OUTPUT']
@@ -489,6 +491,7 @@ module AegisRelease
       receipt = Receipt.verify(request, expected_digest)
       preflight_upload
       if request.destination == 'github-draft'
+        AegisRelease.require!(!receipt.fetch('details')['privateBetaTestNode'], 'Private Beta is only delivered to TestFlight')
         result = Draft.new(request, receipt, expected_digest, admission: method(:preflight_upload)).upload
         AegisRelease.write_new(File.join(request.directory, 'github-upload-result.json'), result)
       else

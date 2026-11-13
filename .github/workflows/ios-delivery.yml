@@ -222,8 +222,11 @@ jobs:
     timeout-minutes: 50
     outputs:
       manifest_sha256: ${{ steps.package.outputs.manifest_sha256 }}
+      private_beta: ${{ steps.package.outputs.private_beta }}
     env:
       RELEASE_STAGE: package
+      RELEASE_OPERATION: ${{ needs.admission.outputs.operation }}
+      AEGIS_IOS_BETA_TEST_NODE_ENABLED: ${{ needs.admission.outputs.profile == 'beta' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && 'true' || 'false' }}
       RELEASE_SIGNING_MODE: ${{ needs.admission.outputs.signing_mode }}
       RELEASE_PACKAGE_ENTRYPOINT: ${{ needs.admission.outputs.package_entrypoint }}
       RELEASE_PROFILE: ${{ needs.admission.outputs.profile }}
@@ -279,7 +282,6 @@ jobs:
         run: python3 scripts/release/hosted-signing.py setup
       - id: package
         env:
-          AEGIS_IOS_BETA_TEST_NODE_ENABLED: ${{ needs.admission.outputs.profile == 'beta' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && 'true' || 'false' }}
           AEGIS_IOS_TEST_NODE_BASE64: ${{ needs.admission.outputs.profile == 'beta' && needs.admission.outputs.signing_mode == 'manual' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && secrets.AEGIS_IOS_TEST_NODE_BASE64 || '' }}
           AEGIS_IOS_TEST_SUBSCRIPTION_BASE64: ${{ needs.admission.outputs.profile == 'beta' && needs.admission.outputs.signing_mode == 'manual' && vars.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && secrets.AEGIS_IOS_TEST_SUBSCRIPTION_BASE64 || '' }}
           AEGIS_CLOUD_ARCHIVE_INPUT: ${{ needs.admission.outputs.signing_mode == 'cloud' && format('{0}/aegis-development-input', runner.temp) || '' }}
@@ -303,9 +305,37 @@ jobs:
             .artifacts/cloud-signing-poc/*/*.log
           if-no-files-found: warn
           retention-days: 14
+      - name: Upload private Beta directly to TestFlight
+        if: ${{ steps.package.outputs.private_beta == 'true' }}
+        env:
+          RELEASE_STAGE: upload
+          RELEASE_MANIFEST_SHA256: ${{ steps.package.outputs.manifest_sha256 }}
+          AEGIS_ASC_KEY_ID: ${{ secrets.AEGIS_ASC_KEY_ID }}
+          AEGIS_ASC_ISSUER_ID: ${{ secrets.AEGIS_ASC_ISSUER_ID }}
+          AEGIS_ASC_KEY_BASE64: ${{ secrets.AEGIS_ASC_KEY_BASE64 }}
+        run: python3 scripts/release/ios-action.py private-beta-upload
+      - name: Read permanent upload state for private Beta
+        id: private-evidence
+        if: ${{ always() && steps.package.outputs.private_beta == 'true' }}
+        env:
+          RELEASE_MANIFEST_SHA256: ${{ steps.package.outputs.manifest_sha256 }}
+        run: python3 scripts/release/ios-action.py private-beta-evidence
+      - name: Clean private Beta workspace
+        if: ${{ always() && env.AEGIS_IOS_BETA_TEST_NODE_ENABLED == 'true' && env.RELEASE_OPERATION == 'package-upload' && env.RELEASE_SIGNING_MODE == 'manual' && github.run_attempt == 1 }}
+        run: python3 scripts/release/ios-action.py cleanup-private-beta
+      - name: Preserve private Beta upload receipt
+        if: ${{ always() && steps.private-evidence.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ios-private-beta-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.private-evidence.outputs.receipt_path }}
+          if-no-files-found: error
+          retention-days: 30
       - name: Copy the delivery receipt for the next operation
+        if: ${{ steps.package.outputs.private_beta == 'false' }}
         run: python3 scripts/release/ios-action.py receipt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: ${{ steps.package.outputs.private_beta == 'false' }}
         with:
           name: ${{ needs.admission.outputs.operation == 'package-upload' && format('ios-package-{0}-{1}', github.run_id, github.run_attempt) || format('ios-delivery-{0}-{1}', github.run_id, github.run_attempt) }}
           path: .artifacts/ios-delivery/package.zip
@@ -314,7 +344,7 @@ jobs:
     if: ${{ !cancelled() && needs.admission.result == 'success' && (needs.admission.outputs.signing_mode != 'cloud' || needs.ios-archive.result == 'success') && (needs.admission.outputs.operation == 'package' || (needs.admission.outputs.operation == 'package-upload' && needs.check-unused.result == 'success')) }}
   seal-package:
     needs: [admission, ios-package]
-    if: ${{ !cancelled() && needs.ios-package.result == 'success' }}
+    if: ${{ !cancelled() && needs.ios-package.result == 'success' && needs.ios-package.outputs.private_beta == 'false' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -343,7 +373,7 @@ jobs:
           python3 -B scripts/release/ios-durable.py seal --directory ".artifacts/release/ios/$RELEASE_RUN_ID"
           python3 -B scripts/release/ios-action.py receipt
   ios-draft:
-    if: ${{ !cancelled() && needs.admission.result == 'success' && needs.ios-package.result == 'success' && needs.admission.outputs.operation == 'package' && needs.admission.outputs.destination == 'github-draft' }}
+    if: ${{ !cancelled() && needs.admission.result == 'success' && needs.ios-package.result == 'success' && needs.ios-package.outputs.private_beta == 'false' && needs.admission.outputs.operation == 'package' && needs.admission.outputs.destination == 'github-draft' }}
     needs:
       - admission
       - ios-package
@@ -559,7 +589,7 @@ jobs:
           path: .artifacts/ios-delivery/package.zip
           if-no-files-found: error
           retention-days: 30
-    if: ${{ needs.admission.outputs.operation == 'package-upload' }}
+    if: ${{ needs.admission.outputs.operation == 'package-upload' && needs.ios-package.outputs.private_beta == 'false' }}
   status-query:
     name: status-query
     needs: admission
