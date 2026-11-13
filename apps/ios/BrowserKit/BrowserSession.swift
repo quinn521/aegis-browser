@@ -158,6 +158,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private var unboundAttempts: [MainFrameAttempt] = []
     /// Only app-issued loads waiting for content rules / a window / the next turn.
     /// Policy-approved page actions already belong to WebKit and must survive cancellation here.
+    private var provisionalDeadline: Task<Void, Never>?
     private var deferredDocumentNavigationID: String?
     private var programmaticPolicyNavigationID: String?
     private var confirmedRedirectPolicy: (navigationID: String, url: URL)?
@@ -326,6 +327,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         hasReplayableBody: Bool = false,
         policyType: WKNavigationType? = nil
     ) {
+        provisionalDeadline?.cancel()
         invalidateDeferredDocumentLoad()
         hostCoordinator?.pendingRecoveryInvalidated(tab: self)
         programmaticPolicyNavigationID = nil
@@ -668,8 +670,24 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if let navigation {
             // A synchronous policy acknowledgment can add request details before load returns.
             bindNavigation(navigation, to: attempt.navigationID == recorded.navigationID ? attempt : recorded)
+            if ["http", "https"].contains(request.url?.scheme ?? ""), request.timeoutInterval > 0 {
+                armProvisionalDeadline(for: navigation, seconds: request.timeoutInterval)
+            }
         } else {
             retireUnboundAttempt(navigationID: recorded.navigationID)
+        }
+    }
+
+    /// Some WebKit failures end the network load without delivering a terminal
+    /// delegate callback. Bound the provisional phase of this exact request.
+    private func armProvisionalDeadline(for navigation: WKNavigation, seconds: TimeInterval) {
+        provisionalDeadline?.cancel()
+        provisionalDeadline = Task { @MainActor [weak self, weak navigation] in
+            do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+            guard let self, let navigation, navigation === pendingNavigation,
+                  isCurrent(navigation), isLoading, let view = loadedWebView else { return }
+            view.stopLoading()
+            webView(view, didFailProvisionalNavigation: navigation, withError: URLError(.timedOut))
         }
     }
 
@@ -804,6 +822,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     private func releaseWebView(keepTerminalDelegate: Bool = false) {
+        provisionalDeadline?.cancel()
         userScripts?.navigated()
         inspectionEnabled = false
         navigationEpoch &+= 1
@@ -1254,6 +1273,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard webView === loadedWebView, isCurrent(navigation) else { return }
+        provisionalDeadline?.cancel()
         confirmedRedirectPolicy = nil
         if let navigation, let recorded = attemptsByNavigation[ObjectIdentifier(navigation)] {
             let scheme = recorded.url.scheme?.lowercased() ?? ""
