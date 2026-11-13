@@ -500,8 +500,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         deferredDocumentNavigationID = nil
     }
 
-    func alignStore(for url: URL, previous: URL?, method: String, body: Data?) {
-        guard !isDisposed else { return }
+    private func rejectUnavailableLanding(_ url: URL, store: WKWebsiteDataStore?) -> Bool {
+        guard parentForProxyLanding(url) != nil, store == nil else { return false }
+        loadingErrorPresentation = .resource("代理入口还不能使用")
+        loadingErrorAllowsProxyRetry = false
+        isLoading = false
+        return true
+    }
+
+    func alignStore(for url: URL, previous: URL?, method: String, body: Data?) -> Bool {
+        guard !isDisposed else { return false }
         let hostChanged = previous?.host?.lowercased() != nil
             && url.host?.lowercased() != nil
             && previous?.host?.lowercased() != url.host?.lowercased()
@@ -509,14 +517,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             clearProxyLanding()
         }
         let routed = hostCoordinator?.dataStoreForMainFrame(tab: self, url: url)
+        guard !rejectUnavailableLanding(url, store: routed) else { return false }
         let desired = routed ?? originalWebsiteDataStore
-        guard hostChanged || desired !== configuration.websiteDataStore else { return }
+        guard hostChanged || desired !== configuration.websiteDataStore else { return true }
         if ["POST", "PATCH"].contains(method.uppercased()), body == nil, hostChanged {
             loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
             loadingErrorAllowsProxyRetry = false
-            return
+            return false
         }
         rebindWebsiteDataStore(desired, host: routed == nil ? nil : url.host?.lowercased())
+        return true
     }
 
     func commitPreservingMethod(_ request: URLRequest, continuesAttempt: Bool = false) {
@@ -543,7 +553,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         deferredDocumentNavigationID = attempt.navigationID
         committedRequestMethod = method
-        alignStore(for: url, previous: requestedURL, method: method, body: request.httpBody)
+        guard alignStore(for: url, previous: requestedURL, method: method, body: request.httpBody) else { return }
         requestedURL = url
         isLoading = true
         var outgoing = request
@@ -845,7 +855,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         attempt.url = url
         attempt.method = "GET"
         committedRequestMethod = "GET"
-        alignStore(for: url, previous: previous, method: "GET", body: nil)
+        guard alignStore(for: url, previous: previous, method: "GET", body: nil) else { return }
         // Store replacement releases the old WebView and changes loadGeneration.
         let generation = loadGeneration
         isLoading = true
@@ -1033,10 +1043,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             proxyLandingTarget = target
         }
         let routedStore = hostCoordinator?.dataStoreForMainFrame(tab: self, url: requestURL)
-        if decision.kind != .blocked, parentForProxyLanding(requestURL) != nil, routedStore == nil {
-            loadingErrorPresentation = .resource("代理入口还不能使用")
-            loadingErrorAllowsProxyRetry = false
-            isLoading = false
+        if decision.kind != .blocked, rejectUnavailableLanding(requestURL, store: routedStore) {
             finish(.cancel)
             return
         }

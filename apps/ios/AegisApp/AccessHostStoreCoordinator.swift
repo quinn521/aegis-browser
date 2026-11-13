@@ -209,13 +209,17 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             let sourceAuthorized = intents[source] == .on ||
                 (executingTabs[tab.instanceID.uuidString] == source && groupStillLists(source))
             if intents[key] != .off, sourceAuthorized {
-                if let bound, bound != host,
-                   let endpoint = registry.endpoint(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate) {
+                if bound != host {
+                    // Refuse before storeForTab can unbind the currently displayed document.
+                    guard let bound, let endpoint = registry.endpoint(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate),
+                          endpoint.state == .ready else { return nil }
                     registry.setEndpoint(endpoint, scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
                 }
                 // Once attached, the child store keeps its generation even if the idle
                 // root store is evicted. A failed bound generation stays fail-closed.
                 intent = .on
+            } else {
+                tab.clearProxyLanding()
             }
         }
         return registry.storeForTab(
