@@ -53,6 +53,9 @@ final class AccessAccountSession: ObservableObject {
     @Published private(set) var lastSnapshot: AccessAccountEntitlement?
     /// Receipt anchor only; never a substitute for the server's measurement watermark.
     @Published private(set) var snapshotReceivedUptime: TimeInterval?
+    /// Request start conservatively includes network and MainActor delivery time.
+    /// Invalid or regressing timing makes freshness unavailable, never newer.
+    @Published private(set) var snapshotFreshnessAnchorUptime: TimeInterval?
     @Published private(set) var isRefreshing = false
     /// Query validity only. The UI must separately age the server's freshness metadata.
     var snapshotIsStale: Bool {
@@ -116,6 +119,7 @@ final class AccessAccountSession: ObservableObject {
         currentCredential = nil
         lastSnapshot = nil
         snapshotReceivedUptime = nil
+        snapshotFreshnessAnchorUptime = nil
         state = .signedOut
     }
 
@@ -159,6 +163,7 @@ final class AccessAccountSession: ObservableObject {
             if let task { return task }
             generation = UUID()
             let generation = generation
+            let requestStartedUptime = uptime()
             state = .loading
             isRefreshing = true
             task = Task {
@@ -175,7 +180,11 @@ final class AccessAccountSession: ObservableObject {
                     guard revalidateIdentity(credential) else { return }
                     try result.validate(for: credential.accountID)
                     lastSnapshot = result
-                    snapshotReceivedUptime = uptime()
+                    let receivedUptime = uptime()
+                    snapshotReceivedUptime = receivedUptime
+                    snapshotFreshnessAnchorUptime = requestStartedUptime.isFinite && requestStartedUptime >= 0
+                        && receivedUptime.isFinite && receivedUptime >= requestStartedUptime
+                        ? requestStartedUptime : nil
                     state = .ready(result)
                 } catch {
                     guard self.generation == generation else { return }

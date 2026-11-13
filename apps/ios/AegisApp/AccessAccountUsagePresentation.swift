@@ -6,6 +6,7 @@ struct AccessAccountUsagePresentation {
 
     static func freshness(
         snapshot: AccessAccountEntitlement,
+        // The earliest trustworthy local anchor, including request/transport time.
         receivedUptime: TimeInterval?,
         nowUptime: TimeInterval,
         stale: Bool

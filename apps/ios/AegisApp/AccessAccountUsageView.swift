@@ -118,7 +118,7 @@ struct AccessAccountUsageView: View {
 
     private func freshnessText(_ snapshot: AccessAccountEntitlement) -> LocalizedStringResource {
         switch AccessAccountUsagePresentation.freshness(
-            snapshot: snapshot, receivedUptime: session.snapshotReceivedUptime,
+            snapshot: snapshot, receivedUptime: session.snapshotFreshnessAnchorUptime,
             nowUptime: ProcessInfo.processInfo.systemUptime, stale: session.snapshotIsStale
         ) {
         case .current: return "用量测量较新"

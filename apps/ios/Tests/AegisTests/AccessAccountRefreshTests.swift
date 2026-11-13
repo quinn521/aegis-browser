@@ -46,6 +46,75 @@ final class AccessAccountRefreshTests: XCTestCase {
         XCTAssertEqual(session.state, .ready(snapshot("A", plan: "next")))
     }
 
+    func testResponseTransitAndPostDeliveryTimeAgeTheDisplayedMeasurement() async throws {
+        let reads = RefreshReadGate()
+        var now: TimeInterval = 42
+        let client = try AccessAccountClient(origin: "https://account.example.test")
+        let session = AccessAccountSession(client: client, keychain: store(), uptime: { now }) { _, credential in
+            try await reads.fetch(credential.token)
+        }
+        let measured = AccessAccountEntitlement(entitlementAccountId: "A", status: .active,
+            planId: "p", periodId: "period", periodStart: 0, periodEnd: 100_000, expiresAt: 100_000,
+            quotaBytes: "100", uploadedBytes: "2", downloadedBytes: "3", usedBytes: "5",
+            remainingBytes: "95", measuredAt: 0, receivedAt: 10_000,
+            snapshotAgeMs: 10_000, freshness: .delayed)
+        let initial = try XCTUnwrap(session.bind(accountID: "A", token: "one"))
+        await reads.started(1)
+        now = 48 // Six seconds in transit cross the 15-second stale boundary.
+        await reads.respond(1, .success(measured))
+        await initial.value
+        XCTAssertEqual(session.snapshotReceivedUptime, 48)
+        XCTAssertEqual(session.snapshotFreshnessAnchorUptime, 42)
+        XCTAssertEqual(session.lastSnapshot, measured, "Keep the server watermark unchanged")
+        XCTAssertEqual(AccessAccountUsagePresentation.freshness(snapshot: measured,
+            receivedUptime: session.snapshotFreshnessAnchorUptime, nowUptime: now,
+            stale: session.snapshotIsStale), .unavailable)
+
+        // A new successful read gets its own start. Receipt time alone cannot reset age.
+        let next = try XCTUnwrap(session.refresh())
+        await reads.started(2)
+        now = 52
+        await reads.respond(2, .success(measured))
+        await next.value
+        XCTAssertEqual(session.snapshotFreshnessAnchorUptime, 48)
+        XCTAssertEqual(AccessAccountUsagePresentation.freshness(snapshot: measured,
+            receivedUptime: session.snapshotFreshnessAnchorUptime, nowUptime: 53,
+            stale: false), .delayed)
+        XCTAssertEqual(AccessAccountUsagePresentation.freshness(snapshot: measured,
+            receivedUptime: session.snapshotFreshnessAnchorUptime, nowUptime: 53.001,
+            stale: false), .unavailable)
+        session.signOut()
+        XCTAssertNil(session.snapshotFreshnessAnchorUptime)
+    }
+
+    func testInvalidOrRegressingRequestTimingCannotProduceFreshness() async throws {
+        for (start, end): (TimeInterval, TimeInterval) in [
+            (-1, 5), (.nan, 5), (.infinity, 5), (5, 4), (5, .nan), (5, .infinity)
+        ] {
+            let reads = RefreshReadGate()
+            var now = start
+            let client = try AccessAccountClient(origin: "https://account.example.test")
+            let session = AccessAccountSession(client: client, keychain: store(), uptime: { now }) { _, credential in
+                try await reads.fetch(credential.token)
+            }
+            let measured = AccessAccountEntitlement(entitlementAccountId: "A", status: .active,
+                planId: "p", periodId: "period", periodStart: 0, periodEnd: 100_000, expiresAt: 100_000,
+                quotaBytes: "100", uploadedBytes: "2", downloadedBytes: "3", usedBytes: "5",
+                remainingBytes: "95", measuredAt: 10_000, receivedAt: 10_000,
+                snapshotAgeMs: 0, freshness: .current)
+            let task = try XCTUnwrap(session.bind(accountID: "A", token: "one"))
+            await reads.started(1)
+            now = end
+            await reads.respond(1, .success(measured))
+            await task.value
+            XCTAssertEqual(session.lastSnapshot, measured)
+            XCTAssertNil(session.snapshotFreshnessAnchorUptime)
+            XCTAssertEqual(AccessAccountUsagePresentation.freshness(snapshot: measured,
+                receivedUptime: session.snapshotFreshnessAnchorUptime, nowUptime: 5,
+                stale: false), .unavailable)
+        }
+    }
+
     func testSameIdentityRefreshRetainsStaleSnapshotAndReceiptUntilSuccess() async throws {
         let reads = RefreshReadGate()
         var now: TimeInterval = 42
