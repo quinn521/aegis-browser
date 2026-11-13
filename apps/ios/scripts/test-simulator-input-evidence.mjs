@@ -155,7 +155,7 @@ test('manifest includes shared and new inputs, deduplicates staged additions and
   write(root, 'unrelated.txt', 'outside input scope');
   writeInputManifest(root, manifest);
   const text = fs.readFileSync(manifest, 'utf8');
-  assert.match(text, new RegExp(digest(path.join(root, vectorPath))));
+  assert.ok(text.split('\n').includes(`${digest(path.join(root, vectorPath))}  ${vectorPath}`));
   assert.match(text, /packages\/core\/src\/tracker\/builtin-rules.ts/);
   assert.ok(text.includes(resourcePath));
   assert.equal(text.match(/packages\/core\/new.txt/g).length, 1);
@@ -165,6 +165,21 @@ test('manifest includes shared and new inputs, deduplicates staged additions and
   fs.appendFileSync(path.join(root, vectorPath), ' ');
   writeInputManifest(root, manifest);
   assert.notEqual(digest(manifest), before);
+});
+
+test('manifest rejects symbolic links in the input set', t => {
+  const {root, sandbox} = createFixture(t);
+  const manifest = path.join(sandbox, 'inputs.txt');
+  const link = path.join(root, 'apps/ios/alias.yml');
+  fs.symlinkSync('project.yml', link);
+  assert.throws(() => writeInputManifest(root, manifest), /input must be a regular file/u);
+  assert.ok(!fs.existsSync(manifest));
+
+  fs.unlinkSync(link);
+  write(sandbox, 'outside.yml', 'outside the checkout');
+  fs.symlinkSync(path.join(sandbox, 'outside.yml'), link);
+  assert.throws(() => writeInputManifest(root, manifest), /input is outside the repository/u);
+  assert.ok(!fs.existsSync(manifest));
 });
 
 test('runner distinguishes clean source from generated inputs and binds coverage to the built version', t => {
@@ -181,8 +196,9 @@ test('runner distinguishes clean source from generated inputs and binds coverage
   const after = path.join(result.report, 'ios-input-sha256-after.txt');
   assert.notEqual(digest(source), digest(before));
   assert.equal(digest(before), digest(after));
-  assert.match(metadata, new RegExp(`^source_input_manifest_sha256=${digest(source)}$`, 'm'));
-  assert.match(metadata, new RegExp(`^input_manifest_sha256=${digest(before)}$`, 'm'));
+  const records = metadata.split('\n');
+  assert.ok(records.includes(`source_input_manifest_sha256=${digest(source)}`));
+  assert.ok(records.includes(`input_manifest_sha256=${digest(before)}`));
   const coverage = JSON.parse(fs.readFileSync(path.join(result.report, 'iPhone-swift-coverage.json'), 'utf8'));
   assert.equal(coverage.metadata.gitTreeState, 'dirty');
   assert.equal(coverage.metadata.buildNumber, '35');

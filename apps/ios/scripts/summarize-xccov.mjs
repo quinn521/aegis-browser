@@ -6,6 +6,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+const UNKNOWN_METADATA = "<unknown>";
+
 const PRODUCT_EXCLUDED_DIRECTORIES = new Set([
   ".build",
   "DerivedData",
@@ -196,14 +198,14 @@ function main() {
   const inventory = collectProductSwiftFiles(iosRoot);
   const summary = summarizeCoverage(report, inventory, {
     deviceLabel: args["device-label"],
-    gitSha: args["git-sha"] ?? "<unknown>",
-    gitTreeState: args["git-tree-state"] ?? "<unknown>",
-    buildNumber: args["build-number"] ?? "<unknown>",
-    inputManifestSha256: args["input-manifest-sha256"] ?? "<unknown>",
-    runtimeId: args["runtime-id"] ?? "<unknown>",
-    deviceName: args["device-name"] ?? "<unknown>",
-    deviceUdid: args["device-udid"] ?? "<unknown>",
-    xcodeVersion: args["xcode-version"] ?? "<unknown>",
+    gitSha: args["git-sha"] ?? UNKNOWN_METADATA,
+    gitTreeState: args["git-tree-state"] ?? UNKNOWN_METADATA,
+    buildNumber: args["build-number"] ?? UNKNOWN_METADATA,
+    inputManifestSha256: args["input-manifest-sha256"] ?? UNKNOWN_METADATA,
+    runtimeId: args["runtime-id"] ?? UNKNOWN_METADATA,
+    deviceName: args["device-name"] ?? UNKNOWN_METADATA,
+    deviceUdid: args["device-udid"] ?? UNKNOWN_METADATA,
+    xcodeVersion: args["xcode-version"] ?? UNKNOWN_METADATA,
   });
 
   fs.writeFileSync(args["output-json"], `${JSON.stringify(summary, null, 2)}\n`);
