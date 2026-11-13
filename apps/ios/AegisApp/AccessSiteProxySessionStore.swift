@@ -45,11 +45,20 @@ final class AccessSiteProxySessionStore: ObservableObject {
         return AccessSiteProxyToggleModel.buildSnapshot(url: url, controller: controller)
     }
 
-    /// The trusted tab supplies both the committed site and the browsing mode.
+    /// A failed navigation may put another site's recovery controls above the last committed document.
+    func paidDownloadHost(for tab: BrowserTab) -> AccessSiteHost? {
+        guard !tab.isDisposed,
+              let displayed = snapshot(for: tab).host,
+              displayed == AccessSiteProxyToggleModel.resolveTrustedHost(from: tab.committedMainFrameURL ?? tab.url)
+        else { return nil }
+        return displayed
+    }
+
+    /// Revalidate the host captured by the control before changing authorization.
     @discardableResult
     func setProxyEnabled(_ enabled: Bool, for tab: BrowserTab, account: AccessAccountSession,
-                         privateAccount: String = "", privateToken: String = "") -> Task<Bool, Never>? {
-        guard !tab.isDisposed, let host = AccessSiteProxyToggleModel.resolveTrustedHost(from: tab.committedMainFrameURL ?? tab.url) else { return nil }
+                         displayedHost: AccessSiteHost? = nil, privateAccount: String = "", privateToken: String = "") -> Task<Bool, Never>? {
+        guard let host = paidDownloadHost(for: tab), displayedHost == nil || host == displayedHost else { return nil }
         revision &+= 1
         if enabled {
             let tabID = tab.id

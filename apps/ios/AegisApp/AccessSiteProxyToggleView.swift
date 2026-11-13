@@ -15,17 +15,13 @@ struct AccessSiteProxyToggleView: View {
     @State private var authorizing = false
     @State private var accountID = ""
     @State private var sessionToken = ""
-    @State private var authorizationHost: String?
+    @State private var authorizationHost: AccessSiteHost?
 
     @Environment(\.locale) private var localizationLocale
 
     private var snapshot: AccessSiteProxyToggleSnapshot {
         if let tab { return store.snapshot(for: tab) }
         return store.snapshot(for: url)
-    }
-
-    private var paidHost: AccessSiteHost? {
-        AccessSiteProxyToggleModel.resolveTrustedHost(from: tab?.committedMainFrameURL ?? tab?.url)
     }
 
     private var attachment: AccessProxyAttachment {
@@ -67,16 +63,18 @@ struct AccessSiteProxyToggleView: View {
             .disabled(!snap.toggleEnabled || tab == nil)
             .accessibilityIdentifier("access-site-proxy-toggle")
             if let tab, account.supportsAccountAuthorization {
+                let paidHost = store.paidDownloadHost(for: tab)
                 Toggle(
                     "通过账户代理下载本站文件",
                     isOn: Binding(
                         get: { paidHost.map { account.hasSelectedProxy(for: tab.id, host: $0.rawValue) } ?? false },
                         set: { enabled in
+                            guard let paidHost else { return }
                             if enabled && tab.profile.isPrivate {
-                                authorizationHost = paidHost?.rawValue
+                                authorizationHost = paidHost
                                 authorizing = true
                             } else {
-                                store.setProxyEnabled(enabled, for: tab, account: account)
+                                store.setProxyEnabled(enabled, for: tab, account: account, displayedHost: paidHost)
                             }
                         }
                     )
@@ -95,8 +93,8 @@ struct AccessSiteProxyToggleView: View {
                             ToolbarItem(placement: .cancellationAction) { Button("取消") { authorizing = false } }
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("确认") {
-                                    if !tab.isDisposed, let authorizationHost, authorizationHost == paidHost?.rawValue {
-                                        store.setProxyEnabled(true, for: tab, account: account, privateAccount: accountID, privateToken: sessionToken)
+                                    if let authorizationHost {
+                                        store.setProxyEnabled(true, for: tab, account: account, displayedHost: authorizationHost, privateAccount: accountID, privateToken: sessionToken)
                                     }
                                     authorizing = false
                                 }

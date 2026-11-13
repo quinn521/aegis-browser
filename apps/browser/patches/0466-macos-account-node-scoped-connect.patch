@@ -1,6 +1,6 @@
-From e82bbdc6c9a025af2700c1303497575b59418f23 Mon Sep 17 00:00:00 2001
+From 57e22d5a06662491e9c26d39e89d1217e7825d98 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Fri, 13 Nov 2026 08:08:49 +0800
+Date: Fri, 13 Nov 2026 08:33:39 +0800
 Subject: [PATCH] feat(access): fence account-bound site dispatch through
  authenticated TLS nodes
 
@@ -29,16 +29,18 @@ Subject: [PATCH] feat(access): fence account-bound site dispatch through
  .../proxy_host_matching_rules.h               |   4 +
  net/socket/connect_job_params_factory.cc      |   6 +-
  net/socket/ssl_client_socket_impl.cc          |   8 +-
- services/network/network_context.cc           |  24 +-
+ services/network/network_context.cc           |  42 ++-
  .../network/network_service_proxy_delegate.cc |  32 +-
  .../network/network_service_proxy_delegate.h  |   6 +-
  ...network_service_proxy_delegate_unittest.cc |  27 ++
  services/network/url_loader.cc                |   5 +
  services/network/url_loader.h                 |   3 +
+ services/network/web_transport.h              |   1 +
+ services/network/web_transport_unittest.cc    |  88 +++++-
  services/network/websocket.h                  |   1 +
  services/network/websocket_factory.cc         |   7 +
  services/network/websocket_factory.h          |   2 +
- 33 files changed, 1074 insertions(+), 18 deletions(-)
+ 35 files changed, 1179 insertions(+), 20 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.h
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.mm
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
@@ -1484,7 +1486,7 @@ index f586acfe0f086bda8db1244fb5c054d8d90b732e..5e8d8c71aca3fd1d3bfaf6beafdc3c55
  }
  
 diff --git a/services/network/network_context.cc b/services/network/network_context.cc
-index 9d7e611a5e595770676e437d0b50659050f83402..6934c2ae0ff03aa751b61a9b68413c24690cde86 100644
+index 9d7e611a5e595770676e437d0b50659050f83402..ecd9ef291b43bf12e77831866d92813f18953e51 100644
 --- a/services/network/network_context.cc
 +++ b/services/network/network_context.cc
 @@ -115,6 +115,7 @@
@@ -1495,7 +1497,26 @@ index 9d7e611a5e595770676e437d0b50659050f83402..6934c2ae0ff03aa751b61a9b68413c24
  #include "net/url_request/url_request_context.h"
  #include "net/url_request/url_request_context_builder.h"
  #include "services/network/brokered_client_socket_factory.h"
-@@ -3011,7 +3012,28 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
+@@ -2287,6 +2288,18 @@ void NetworkContext::CreateWebTransport(
+         net::WebTransportError(net::ERR_NETWORK_ACCESS_REVOKED));
+     return;
+   }
++  // HTTP/3 WebTransport cannot use the account's CONNECT node. Check the
++  // live exact-site configuration at admission as well as on config changes.
++  if (auto* delegate = url_request_context()->proxy_delegate()) {
++    net::ProxyInfo selection;
++    selection.UseDirect();
++    delegate->OnResolveProxy(url, key, "CONNECT", {}, &selection);
++    if (!selection.is_empty() && selection.proxy_chain().is_aegis_account_node()) {
++      mojo::Remote<mojom::WebTransportHandshakeClient>(std::move(pending_handshake_client))
++          ->OnHandshakeFailed(net::WebTransportError(net::ERR_BLOCKED_BY_CLIENT));
++      return;
++    }
++  }
+   web_transports_.insert(std::make_unique<WebTransport>(
+       url, origin, key, fingerprints, application_protocols, congestion_control,
+       anticipated_concurrent_incoming_unidirectional_streams,
+@@ -3011,7 +3024,34 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
      builder.set_proxy_delegate(std::make_unique<NetworkServiceProxyDelegate>(
          std::move(params_->initial_custom_proxy_config),
          std::move(params_->custom_proxy_config_client_receiver),
@@ -1517,6 +1538,12 @@ index 9d7e611a5e595770676e437d0b50659050f83402..6934c2ae0ff03aa751b61a9b68413c24
 +            if (auto* loader = URLLoader::ForRequest(*req); loader && changed(req->url()))
 +              aborts.push_back(loader->AbortAccountRoute());
 +          }
++          // WebTransport has its own QUIC client and can be waiting for DNS
++          // or local-network permission after its one-time proxy check.
++          // Destroy pending and established clients before the config ACK.
++          std::erase_if(context->web_transports_, [&](const auto& transport) {
++            return changed(transport->url());
++          });
 +          for (auto& abort : aborts) std::move(abort).Run();
 +#if BUILDFLAG(ENABLE_WEBSOCKETS)
 +          if (context->websocket_factory_) context->websocket_factory_->AbortAccountRoutes(changed);
@@ -1694,6 +1721,150 @@ index a3a1e7eb85c72b7086f503439fca7597953fda16..b4af937f5b487d70072b436233a23455
    static URLLoader* ForRequest(const net::URLRequest& request);
  
    static const void* const kUserDataKey;
+diff --git a/services/network/web_transport.h b/services/network/web_transport.h
+index 1ab671cac609603f3517aee761c7818e4be372d6..8422d85724ed168d912ddf38026f7071e40bc911 100644
+--- a/services/network/web_transport.h
++++ b/services/network/web_transport.h
+@@ -79,6 +79,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) WebTransport final
+           url_loader_network_observer,
+       mojom::ClientSecurityStatePtr client_security_state);
+   ~WebTransport() override;
++  const GURL& url() const { return url_; }
+ 
+   // mojom::WebTransport implementation:
+   void SendDatagram(base::span<const uint8_t> data,
+diff --git a/services/network/web_transport_unittest.cc b/services/network/web_transport_unittest.cc
+index 1f25484cb8520b5ba0d50880571ed489fcc4e166..f7d7fa76670217dfe0957266e32e44c85d75bc3b 100644
+--- a/services/network/web_transport_unittest.cc
++++ b/services/network/web_transport_unittest.cc
+@@ -466,7 +466,8 @@ class WebTransportTest : public testing::TestWithParam<std::string_view> {
+   WebTransportTest()
+       : WebTransportTest(
+             quic::test::crypto_test_utils::ProofSourceForTesting()) {}
+-  explicit WebTransportTest(std::unique_ptr<quic::ProofSource> proof_source)
++  explicit WebTransportTest(std::unique_ptr<quic::ProofSource> proof_source,
++                            bool account_config = false)
+       : version_(GetTestVersion()),
+         origin_(url::Origin::Create(GURL("https://example.org/"))),
+         task_environment_(base::test::TaskEnvironment::MainThreadType::IO),
+@@ -474,12 +475,19 @@ class WebTransportTest : public testing::TestWithParam<std::string_view> {
+         network_context_remote_(mojo::NullRemote()) {
+     auto host_resolver = std::make_unique<net::MockHostResolver>();
+     host_resolver->rules()->AddRule("test.example.com", "127.0.0.1");
++    auto params = CreateNetworkContextParams();
++    if (account_config) {
++      host_resolver->rules()->AddRule("test.example.com.", "127.0.0.1");
++      host_resolver->rules()->AddRule("other.example.com", "127.0.0.1");
++      params->initial_custom_proxy_config = mojom::CustomProxyConfig::New();
++      params->custom_proxy_config_client_receiver = account_config_.BindNewPipeAndPassReceiver();
++    }
+     network_service_->set_host_resolver_factory_for_testing(
+         std::make_unique<HostResolverFactory>(std::move(host_resolver)));
+     network_context_ = NetworkContext::CreateForTesting(
+         network_service_.get(),
+         network_context_remote_.BindNewPipeAndPassReceiver(),
+-        CreateNetworkContextParams(),
++        std::move(params),
+         base::BindOnce([](net::URLRequestContextBuilder* builder) {
+           auto cert_verifier = std::make_unique<net::MockCertVerifier>();
+           cert_verifier->set_default_result(net::OK);
+@@ -589,6 +597,19 @@ class WebTransportTest : public testing::TestWithParam<std::string_view> {
+         {"https://test.example.com:", base::NumberToString(port), suffix}));
+   }
+ 
++  void InstallAccountBlock() {
++    auto config = mojom::CustomProxyConfig::New();
++    config->rules.ParseFromString("https://blocked.invalid:443");
++    config->rules.bypass_rules.AddAegisExactSite("test.example.com");
++    config->rules.reverse_bypass = true;
++    config->should_override_existing_config = true;
++    config->allow_non_idempotent_methods = true;
++    config->connect_tunnel_headers.SetHeader(net::HttpRequestHeaders::kProxyAuthorization, "");
++    base::test::TestFuture<void> ack;
++    account_config_->OnCustomProxyConfigUpdated(std::move(config), ack.GetCallback());
++    ASSERT_TRUE(ack.Wait());
++  }
++
+   const url::Origin& origin() const { return origin_; }
+   const NetworkContext& network_context() const { return *network_context_; }
+   NetworkContext& mutable_network_context() { return *network_context_; }
+@@ -645,6 +666,7 @@ class WebTransportTest : public testing::TestWithParam<std::string_view> {
+   net::RecordingNetLogObserver net_log_observer_;
+ 
+   std::unique_ptr<NetworkContext> network_context_;
++  mojo::Remote<mojom::CustomProxyConfigClient> account_config_;
+ 
+   quic::test::QuicTestBackend backend_;
+   std::unique_ptr<net::QuicSimpleServer> http_server_;
+@@ -750,6 +772,68 @@ class LNAPermissionURLLoaderNetworkObserver
+   bool lna_permission_granted = false;
+ };
+ 
++class AccountWebTransportTest : public WebTransportTest {
++ public:
++  AccountWebTransportTest()
++      : WebTransportTest(quic::test::crypto_test_utils::ProofSourceForTesting(), true) {}
++};
++
++TEST_F(AccountWebTransportTest, ConfigAckDropsOnlySelectedPendingAndLiveQuicSessions) {
++  base::test::ScopedFeatureList features(features::kLocalNetworkAccessChecksWebTransport);
++  class HeldPermission : public TestURLLoaderNetworkObserver {
++   public:
++    void OnLocalNetworkAccessPermissionRequired(mojom::TransportType,
++        mojom::IPAddressSpace, OnLocalNetworkAccessPermissionRequiredCallback reply) override {
++      pending.SetValue(std::move(reply));
++    }
++    base::test::TestFuture<OnLocalNetworkAccessPermissionRequiredCallback> pending;
++  } permission;
++  GURL active = GetURL("/echo");
++  GURL::Replacements host;
++  host.SetHostStr("other.example.com");
++  GURL other = active.ReplaceComponents(host);
++  host.SetHostStr("test.example.com.");
++  GURL dotted = active.ReplaceComponents(host);
++  auto connect = [&](const GURL& url) {
++    base::test::TestFuture<void> ready;
++    mojo::PendingRemote<mojom::WebTransportHandshakeClient> remote;
++    TestHandshakeClient client(remote.InitWithNewPipeAndPassReceiver(), ready.GetCallback());
++    CreateWebTransport(url, origin(), std::move(remote));
++    EXPECT_TRUE(ready.Wait());
++    EXPECT_TRUE(client.has_seen_connection_establishment());
++    return mojo::Remote<mojom::WebTransport>(client.PassTransport());
++  };
++  auto selected_session = connect(active);
++  auto other_session = connect(other);
++  ASSERT_TRUE(selected_session && other_session);
++  base::test::TestFuture<void> pending_done;
++  mojo::PendingRemote<mojom::WebTransportHandshakeClient> remote;
++  TestHandshakeClient pending(remote.InitWithNewPipeAndPassReceiver(), pending_done.GetCallback());
++  CreateWebTransport(dotted, origin(), net::NetworkAnonymizationKey(), {}, {},
++      std::move(remote), permission.Bind(), ClientSecurityStateBuilder().WithIsSecureContext(true)
++          .WithLocalNetworkAccessRequestPolicy(mojom::LocalNetworkAccessRequestPolicy::kPermissionBlock)
++          .WithIPAddressSpace(mojom::IPAddressSpace::kPublic).Build());
++  auto grant = permission.pending.Take();
++  ASSERT_EQ(3u, network_context().NumOpenWebTransports());
++  InstallAccountBlock();
++  EXPECT_EQ(1u, network_context().NumOpenWebTransports());
++  std::move(grant).Run(mojom::LocalNetworkAccessResult::kGranted);
++  ASSERT_TRUE(pending_done.Wait());
++  EXPECT_FALSE(pending.has_seen_connection_establishment());
++  selected_session.FlushForTesting();
++  EXPECT_FALSE(selected_session.is_connected());
++  base::test::TestFuture<mojom::WebTransportStatsPtr> stats;
++  other_session->GetStats(stats.GetCallback());
++  EXPECT_TRUE(stats.Get());
++  base::test::TestFuture<void> denied;
++  mojo::PendingRemote<mojom::WebTransportHandshakeClient> late;
++  TestHandshakeClient late_client(late.InitWithNewPipeAndPassReceiver(), denied.GetCallback());
++  CreateWebTransport(active, origin(), std::move(late));
++  ASSERT_TRUE(denied.Wait());
++  EXPECT_TRUE(late_client.has_seen_handshake_failure());
++  EXPECT_EQ(1u, network_context().NumOpenWebTransports());
++}
++
+ TEST_F(WebTransportTest, ConnectLNAPermissionDenied) {
+   base::test::ScopedFeatureList scoped_features(
+       features::kLocalNetworkAccessChecksWebTransport);
 diff --git a/services/network/websocket.h b/services/network/websocket.h
 index 850c54a80b882881a948429ebed6d910e17526c5..dba9b1a0e513bd571195c8d15ab67211ee838937 100644
 --- a/services/network/websocket.h
