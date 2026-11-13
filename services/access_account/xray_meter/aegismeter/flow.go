@@ -62,7 +62,7 @@ func Open(ctx context.Context, client string) (context.Context, *Flow, error) {
 		return ctx, nil, err
 	}
 	f := &Flow{id: hex.EncodeToString(id[:]), conn: conn, reader: bufio.NewReaderSize(conn, 4096), paths: make(map[string]int64), recoveryDir: dir}
-	if err := f.send(map[string]any{"op": "open", "client": client}); err != nil {
+	if err := f.open(map[string]any{"op": "open", "client": client}); err != nil {
 		conn.Close()
 		return ctx, nil, err
 	}

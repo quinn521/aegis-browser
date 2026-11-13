@@ -186,3 +186,17 @@ func replay(socket, dir string) {
 		conn.Close()
 	}
 }
+
+// An opening has no target bytes until this returns. Its recovery record only
+// closes a possible zero-byte row and is harmless if open never reached SQLite.
+func (f *Flow) open(frame map[string]any) error {
+	recoveryMu.Lock()
+	defer recoveryMu.Unlock()
+	if err := f.retainLocked(map[string]any{"op": "abort"}); err != nil {
+		return err
+	}
+	if err := f.send(frame); err != nil {
+		return err
+	}
+	return save(filepath.Join(f.recoveryDir, f.id+".json"), nil)
+}

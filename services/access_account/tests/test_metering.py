@@ -39,6 +39,19 @@ class MeterTest(unittest.TestCase):
     def usage(self):
         return m.usage(self.db, 'node-1', 'p')
 
+    def test_abort_opening_is_idempotent_and_cannot_erase_traffic(self):
+        abort = self.frame('abort')
+        self.meter.accept(abort)
+        self.meter.accept(abort)
+        self.assertEqual(self.usage()['openFlows'], 0)
+        self.flow = '2' * 32
+        self.meter.accept(self.frame('abort'))
+        self.meter.accept(self.frame('open', client='client-A'))
+        self.meter.accept(self.sample('up', 'target_tcp', 1, 1))
+        with self.assertRaises(ValueError):
+            self.meter.accept(self.frame('abort'))
+        self.assertEqual(self.usage()['uploadedBytes'], 1)
+
     def test_delayed_replay_preserves_measurement_time(self):
         sample = dict(self.sample('up', 'target_tcp', 3, 3), measuredAt=450)
         self.meter.accept(sample)
