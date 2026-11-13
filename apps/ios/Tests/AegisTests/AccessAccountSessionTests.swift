@@ -395,6 +395,60 @@ final class AccessAccountSessionTests: XCTestCase {
         } catch AccountQueryError.unauthorized { }
     }
 
+    func testQueuedProtectedDownloadsKeepOnlyTheirLiveAuthorization() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let seconds = env["AEGIS_S3_LEASE_TTL_SECONDS"], let ttl = Int(seconds) else {
+            throw XCTSkip("Start the short-lease managed node fixture")
+        }
+        let origin = try XCTUnwrap(env["AEGIS_S3_ORIGIN"])
+        let slow = try XCTUnwrap(env["AEGIS_S3_SLOW_URL"].flatMap(URL.init(string:)))
+        let fast = try XCTUnwrap(env["AEGIS_S3_HTTPS_URL"].flatMap(URL.init(string:)))
+        let account = AccessAccountSession(client: try AccessAccountClient(origin: origin, allowSimulatorLoopback: true),
+                                           keychain: isolatedStore())
+        await account.bind(accountID: try XCTUnwrap(env["AEGIS_S3_ID"]), token: try XCTUnwrap(env["AEGIS_S3_TOKEN"]))?.value
+        defer { account.signOut() }
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), workspaceStore: WorkspaceStore(persistenceURL: nil))
+        let downloads = DownloadManager(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                                        background: false, maximumConcurrentDownloads: 1)
+        defer { try? FileManager.default.removeItem(at: downloads.directory) }
+        try await waitUntil { downloads.isReady }
+        let site = AccessSiteProxySessionStore()
+        func authorize(_ tab: BrowserTab) async {
+            tab.prepareForRestore(url: fast)
+            let selected = await site.setProxyEnabled(true, for: tab, account: account)?.value
+            XCTAssertEqual(selected, true)
+        }
+        func start(_ tab: BrowserTab, _ url: URL) async throws -> UUID {
+            tab.prepareForRestore(url: url)
+            tab.onDownload?(url)
+            let captured = try XCTUnwrap(browser.pendingAccessDownload)
+            return try await account.startDownload(.init(urls: [url]), captured: captured, browser: browser, downloads: downloads)
+        }
+        let first = try XCTUnwrap(browser.activeTab)
+        await authorize(first)
+        let blocker = try await start(first, slow)
+        try await waitUntil { downloads.items.contains { $0.id == blocker && $0.received > 0 } }
+
+        let second = browser.newTab()
+        await authorize(second)
+        let cancelled = try await start(second, fast)
+        let waiting = try await start(second, fast)
+        downloads.cancel(cancelled)
+        let closedTab = browser.newTab()
+        await authorize(closedTab)
+        let closed = try await start(closedTab, fast)
+        site.setProxyEnabled(false, for: closedTab, account: account)
+
+        try await Task.sleep(for: .seconds(ttl + 2))
+        XCTAssertEqual(downloads.items.first { $0.id == waiting }?.state, .queued)
+        downloads.cancel(blocker)
+        try await waitUntil { downloads.items.contains { $0.id == waiting && [.completed, .failed].contains($0.state) } }
+        try await waitUntil { downloads.items.contains { $0.id == closed && $0.state == .failed } }
+        XCTAssertEqual(downloads.items.first { $0.id == waiting }?.sha256, env["AEGIS_S3_EXPECTED_SHA256"])
+        XCTAssertEqual(downloads.items.first { $0.id == cancelled }?.state, .cancelled)
+        XCTAssertEqual(downloads.items.first { $0.id == closed }?.received, 0)
+    }
+
     func testSlowProtectedDownloadExtendsOnlyItsActiveLease() async throws {
         try await exerciseSlowDownload(allowRenewal: true)
     }

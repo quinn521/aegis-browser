@@ -10,22 +10,20 @@ public final class AccessDownloadTransport {
     fileprivate private(set) var session: URLSession?
     fileprivate let targetHost: String
 
-    private let activeTasks = NSHashTable<URLSessionTask>.weakObjects()
-    private let onStart: () -> Void
+    fileprivate weak var downloads: DownloadManager?
+    private let onDemand: () -> Void
 
-    public var hasRunningTransfers: Bool { activeTasks.allObjects.contains { $0.state == .running } }
+    public var needsLease: Bool { downloads?.hasPendingTransfer(on: self) == true }
 
-    public init(configuration: URLSessionConfiguration, targetHost: String, delegate: URLSessionDownloadDelegate,
-                onStart: @escaping () -> Void = {}) {
-        self.onStart = onStart
+    public init(configuration: URLSessionConfiguration, targetHost: String, downloads: DownloadManager,
+                onDemand: @escaping () -> Void) {
+        self.onDemand = onDemand
         self.targetHost = targetHost
-        session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: .main)
+        self.downloads = downloads
+        session = URLSession(configuration: configuration, delegate: downloads, delegateQueue: .main)
     }
 
-    fileprivate func didStart(_ task: URLSessionTask) {
-        activeTasks.add(task)
-        onStart()
-    }
+    fileprivate func admitted() { onDemand() }
 
     public func invalidate() {
         session?.invalidateAndCancel()
@@ -868,7 +866,11 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
               hash512.isEmpty || hash512.range(of: "^[a-f0-9]{128}$", options: .regularExpression) != nil else { throw DownloadError.invalidHash }
         guard plan.size == nil || (0...transferPreferences.boundedMaximumBytes).contains(plan.size!) else { throw DownloadError.tooLarge }
         try checkCapacity(required: plan.size ?? 0)
-        guard accessSession == nil || (accessSession?.session != nil && urls.count == 1 && urls[0].scheme == "https" && BrowserAccessDownload.canonicalHost(of: urls[0]) == accessSession?.targetHost) else { throw DownloadError.invalidURL }
+        if let accessSession {
+            guard accessSession.downloads === self, accessSession.session != nil, urls.count == 1,
+                  urls[0].scheme == "https", BrowserAccessDownload.canonicalHost(of: urls[0]) == accessSession.targetHost
+            else { throw DownloadError.invalidURL }
+        }
         let item = BrowserDownload(id: UUID(), url: urls[0], filename: Self.safeFilename(plan.filename ?? urls[0].lastPathComponent),
                                    state: tasks.count < maximumConcurrentDownloads ? .running : .queued,
                                    expectedSHA256: hash.isEmpty ? nil : hash, mirrors: urls, mirrorIndex: 0,
@@ -880,8 +882,13 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
         do { try persist(candidate) } catch { reportStorage(error); throw error }
         items = candidate
         accessTransfers[item.id] = accessSession
+        accessSession?.admitted()
         if item.state == .running { begin(item, useResumeData: false) }
         return item.id
+    }
+
+    fileprivate func hasPendingTransfer(on transport: AccessDownloadTransport) -> Bool {
+        items.contains { ($0.state == .queued || $0.state == .running) && accessTransfers[$0.id] === transport }
     }
 
     private func begin(_ item: BrowserDownload, useResumeData: Bool) {
@@ -906,7 +913,6 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
         task.taskDescription = description(item)
         tasks[item.id] = task
         startTransfer(task)
-        accessTransfers[item.id]?.didStart(task)
     }
 
     public func setTransferPreferences(_ value: DownloadTransferPreferences) throws {
@@ -985,6 +991,7 @@ public final class DownloadManager: NSObject, ObservableObject, URLSessionDownlo
         releasePause(description(items[index]))
         nativePauses[description(items[index])] = nil // The committed new generation retires this tombstone.
         items = candidate
+        accessTransfers[id]?.admitted()
         if !useResumeData { try? FileManager.default.removeItem(at: resumeURL(id)) }
         if items[index].state == .running { begin(items[index], useResumeData: useResumeData) }
     }

@@ -288,10 +288,11 @@ extension AccessAccountSession {
                 guard remaining > 0 else { return }
                 do {
                     try await Task.sleep(for: .milliseconds(remaining / 2))
-                    guard grant.transfer?.hasRunningTransfers == true, grant.epoch == epoch,
+                    guard grant.transfer?.needsLease == true, grant.epoch == epoch,
                           try ownsCredential() else { return }
                     let renewed = try await client.renew(account, lease: lease)
-                    guard !Task.isCancelled, grants[tab] === grant, grant.epoch == epoch,
+                    guard !Task.isCancelled, grant.transfer?.needsLease == true,
+                          grants[tab] === grant, grant.epoch == epoch,
                           grant.lease?.credentialId == lease.credentialId,
                           lease.expiresAt > Int64(Date().timeIntervalSince1970 * 1000),
                           try ownsCredential() else { return }
@@ -333,7 +334,7 @@ extension AccessAccountSession {
 
     /// Used only for a browser-originated same-site download. The ephemeral
     /// transfer's delegate refuses redirects before another destination is fetched.
-    func downloadSession(for tab: UUID, privateMode: Bool, target: URL, downloadDelegate: URLSessionDownloadDelegate)
+    func downloadSession(for tab: UUID, privateMode: Bool, target: URL, downloadDelegate: DownloadManager)
         async throws -> AccessDownloadTransport {
         guard target.scheme == "https", target.user == nil, target.password == nil,
               let grant = grants[tab], BrowserAccessDownload.canonicalHost(of: target) == grant.host,
@@ -353,7 +354,7 @@ extension AccessAccountSession {
         config.urlCredentialStorage = nil
         config.urlCache = nil
         config.waitsForConnectivity = false
-        let session = AccessDownloadTransport(configuration: config, targetHost: grant.host, delegate: downloadDelegate) { [weak self, weak grant] in
+        let session = AccessDownloadTransport(configuration: config, targetHost: grant.host, downloads: downloadDelegate) { [weak self, weak grant] in
             if let grant { self?.renewWhileDownloading(grant, tab: tab) }
         }
         grant.transfer = session
