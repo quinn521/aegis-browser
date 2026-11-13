@@ -56,6 +56,46 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertNil(publisher.currentEndpoint)
     }
 
+    func testDisablingOldProxyBindingPreservesNewHostPreparation() async throws {
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            try await clock.sleep(until: .seconds(5))
+            return ready(generation, port: 18_291)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock)
+        let host = try AccessSiteHost("192.0.2.1")
+        let primary = try committedTab(coordinator: coordinator, url: "https://192.0.2.1/primary")
+        let sibling = try committedTab(coordinator: coordinator, url: "https://192.0.2.1/old")
+        let scope = sibling.browsingScopeID
+        coordinator.setProxyEnabled(true, host: host, scopeID: scope, isPrivate: false)
+        coordinator.registry.setEndpoint(ready(1, port: 18_291).endpoint, scopeID: scope, host: host, isPrivate: false)
+        let store = try XCTUnwrap(coordinator.dataStoreForMainFrame(tab: sibling, url: URL(string: "https://192.0.2.1/old")!))
+        sibling.rebindWebsiteDataStore(store, host: host.rawValue)
+        var oldViewStopped = false
+        sibling.afterCurrentDocumentBecomesInert { oldViewStopped = true }
+        await settle(seconds: 4) { oldViewStopped }
+        XCTAssertTrue(oldViewStopped)
+        _ = sibling.webView
+        let target = URL(string: "https://192.0.2.2/new")!
+        coordinator.setProxyEnabled(true, host: try AccessSiteHost("192.0.2.2"), scopeID: scope, isPrivate: false)
+        sibling.load(URLRequest(url: target))
+        let pending = try XCTUnwrap(sibling.pendingAddressNavigation)
+        XCTAssertEqual(sibling.boundHostName, host.rawValue)
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: sibling))
+        coordinator.setSiteProxyEnabled(false, for: primary, displayedHost: host)
+        XCTAssertNil(sibling.boundHostName)
+        XCTAssertTrue(sibling.websiteDataStore === sibling.originalWebsiteDataStore)
+        XCTAssertTrue(sibling.matchesPendingAddressNavigation(pending))
+        XCTAssertFalse(store.proxyConfigurations.isEmpty, "The retiring document still needs its mandatory route")
+        await settle(seconds: 4) { publisher.provisionCount == 1 }
+        XCTAssertEqual(publisher.provisionCount, 1)
+        clock.advance(to: .seconds(5))
+        await settle(seconds: 4) { sibling.recoveryLoadCount == 1 }
+        XCTAssertEqual(sibling.recoveryLoadCount, 1)
+        XCTAssertEqual(sibling.addressBarURL, target)
+        XCTAssertTrue(store.proxyConfigurations.isEmpty)
+    }
+
     func testLandingConsumerSurvivesParentEvictionAndReleasesAfterClose() async throws {
         var shutdowns = 0
         let publisher = AccessProxyEntryPublisher(provision: { generation, _ in

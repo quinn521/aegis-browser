@@ -1036,6 +1036,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         boundHostName = host
     }
 
+    /// The hold already retired the old view. Reset its store without clearing
+    /// the pending request, its preparation deadline, or its loading state.
+    public func detachStoreDuringProxyHold(_ pending: BrowserPendingAddressNavigation) -> Bool {
+        guard matchesPendingAddressNavigation(pending), pendingProxyRequest != nil else { return false }
+        rebindWebsiteDataStore(originalWebsiteDataStore, host: nil)
+        isLoading = true
+        isSuspended = false
+        return true
+    }
+
     func prepareForRestore(url: URL?, title: String? = nil, scrollOffset: Double? = nil) {
         self.url = url; requestedURL = url
         updateTitle(title, url: url)

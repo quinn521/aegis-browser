@@ -1131,10 +1131,17 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         executing.remove(key)
         hostRevisions[key, default: 0] += 1
         cancelOperations(for: key)
+        let tabs = BrowserSession.openTabs()
+        for tab in tabs where tab.browsingScopeID == key.scopeID && tab.profile.isPrivate == key.isPrivate
+            && tab.boundHostName == key.host.rawValue {
+            if let release = registry.retainRetiringDocument(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate) {
+                tab.afterCurrentDocumentBecomesInert(release)
+            }
+        }
         registry.setProxyEnabled(false, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
         let bound = registry.revoke(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
         publisher.release(for: key)
-        for tab in BrowserSession.openTabs() where bound.contains(tab.instanceID.uuidString)
+        for tab in tabs where bound.contains(tab.instanceID.uuidString)
             || (tab.browsingScopeID == key.scopeID && tab.profile.isPrivate == key.isPrivate
                 && tab.proxyLandingParent == key.host.rawValue) {
             if tab.proxyLandingParent == key.host.rawValue, let rawHost = tab.boundHostName,
@@ -1147,6 +1154,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             if executingTabs[tab.instanceID.uuidString] == key {
                 executingTabs.removeValue(forKey: tab.instanceID.uuidString)
             }
+            if let pending = tab.pendingAddressNavigation, let target = Self.httpHost(pending.url),
+               target != key.host, tab.detachStoreDuringProxyHold(pending) { continue }
             tab.invalidateDeferredDocumentLoad()
             tab.rebindWebsiteDataStore(tab.originalWebsiteDataStore, host: nil)
         }

@@ -41,6 +41,11 @@ on:
         type: choice
         options: [cloud, manual]
         default: cloud
+      private_beta:
+        description: "Embed protected test inputs and upload privately (Beta/manual only)"
+        type: choice
+        options: ['no', 'yes']
+        default: 'no'
       package_entrypoint:
         description: "Package through the Actions CLI adapter or directly through Fastlane"
         type: choice
@@ -63,8 +68,6 @@ jobs:
       delivery_mode: full
       delivery_inputs: ${{ toJSON(inputs) }}
     secrets:
-      AEGIS_IOS_TEST_NODE_BASE64: ${{ secrets.AEGIS_IOS_TEST_NODE_BASE64 }}
-      AEGIS_IOS_TEST_SUBSCRIPTION_BASE64: ${{ secrets.AEGIS_IOS_TEST_SUBSCRIPTION_BASE64 }}
       AEGIS_ASC_KEY_ID: ${{ secrets.AEGIS_ASC_KEY_ID }}
       AEGIS_ASC_ISSUER_ID: ${{ secrets.AEGIS_ASC_ISSUER_ID }}
       AEGIS_ASC_KEY_BASE64: ${{ secrets.AEGIS_ASC_KEY_BASE64 }}
