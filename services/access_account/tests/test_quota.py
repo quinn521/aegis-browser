@@ -87,6 +87,18 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(self.reserve(7, "down", 25)["granted"], 8)
         self.assertEqual(quota.inspect(self.db, "a", "p")["heldBytes"], 23)
 
+    def test_abort_lost_open_ack_cannot_erase_reserved_or_delivered_bytes(self):
+        self.assertEqual(self.send(2, "abort"), {"ok": True})
+        self.assertFalse(self.send(2, "check")["ok"])
+        self.assertEqual(self.send(99, "abort"), {"ok": True})
+        self.reserve(0, "up", 3)
+        with self.assertRaises(ValueError):
+            self.send(0, "abort")
+        self.commit(0, "up", 3)
+        with self.assertRaises(ValueError):
+            self.send(0, "abort")
+        self.assertEqual(quota.inspect(self.db, "a", "p")["confirmedBytes"], 3)
+
     def test_expiry_and_invalid_frames(self):
         with self.assertRaises(ValueError):
             self.send(0, "sample", direction="up", bytes=7, path="target_tcp", pathBytes=7)

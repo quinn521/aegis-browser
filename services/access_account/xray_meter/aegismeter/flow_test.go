@@ -207,3 +207,26 @@ func TestRecoveryPreservesLargeIntegers(t *testing.T) {
 		t.Fatal(n, err)
 	}
 }
+
+func TestLostOpenAckRetainsOnlyZeroByteAbort(t *testing.T) {
+	dir := t.TempDir()
+	client, server := net.Pipe()
+	f := &Flow{id: "0123456789abcdef0123456789abcdef", conn: client, reader: bufio.NewReader(client)}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(server)
+		scanner.Scan() // Simulate a committed OPEN whose acknowledgement is lost.
+		server.Close()
+	}()
+	f.recoveryDir = dir
+	if err := f.open(map[string]any{"op": "open", "client": "bound-client"}); err == nil {
+		t.Fatal("unexpected ack")
+	}
+	<-done
+	f.conn.Close()
+	frames, err := pending(filepath.Join(dir, f.id+".json"))
+	if err != nil || len(frames) != 1 || frames[0]["op"] != "abort" {
+		t.Fatal(frames, err)
+	}
+}

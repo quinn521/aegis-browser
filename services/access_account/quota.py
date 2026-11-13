@@ -89,7 +89,7 @@ class EnforcedMeter(metering.Meter):
         if op == "finish":
             metering._validate(frame)
             return
-        if op == "check" and set(frame) == base:
+        if op in ("check", "abort") and set(frame) == base:
             return
         if op in ("reserve", "commit"):
             direction = frame.get("direction")
@@ -122,6 +122,13 @@ class EnforcedMeter(metering.Meter):
         key = (self.node, frame["flow"])
         flow = db.execute("SELECT * FROM quota_flows WHERE node_id=? AND flow_id=?", key).fetchone()
         op = frame["op"]
+        if op == "abort":
+            if self._pending(db, key):
+                raise ValueError("cannot abort a reserved writer")
+            self._apply(db, frame, now)
+            if flow is not None:
+                self._cut(db, key, now, "aborted")
+            return dict(ok=True)
         if op == "open":
             self._apply(db, {k: v for k, v in frame.items() if k != "mode"}, now)
             if flow is None:
