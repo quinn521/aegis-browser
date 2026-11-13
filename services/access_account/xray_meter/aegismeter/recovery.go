@@ -131,7 +131,7 @@ func (f *Flow) reliableSend(frame map[string]any) error {
 	if err := f.retainLocked(frame); err != nil {
 		return err
 	}
-	if len(previous) != 0 {
+	if f.broken || len(previous) != 0 {
 		return errors.New("meter recovery pending")
 	}
 	if err := f.send(frame); err != nil {
