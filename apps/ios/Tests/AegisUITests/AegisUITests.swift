@@ -1848,6 +1848,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         var last: [String: Any] = ["classification": "NO_WEBVIEW"]
         var previous = "", stable = 0
         var observedHosts: [String] = []
+        var invalidSnapshotCount = 0
         repeat {
             let field = app.textFields["address-field"]
             let currentAddress = field.exists ? field.value as? String ?? "" : ""
@@ -1857,7 +1858,18 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             }
             let web = app.webViews.firstMatch
             if web.exists {
-                last = try pageEvidence(web)
+                do { last = try pageEvidence(web) }
+                catch {
+                    let failure = error as NSError
+                    guard failure.domain == "com.apple.dt.xctest.automation-support.error", failure.code == 8 else { throw error }
+                    // Rebinding replaces a WebView between existence and snapshot.
+                    // Retry within the original deadline, never accept an old snapshot.
+                    invalidSnapshotCount += 1
+                    last = ["classification": "SNAPSHOT_UNAVAILABLE"]
+                    stable = 0; previous = ""
+                    RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
+                    continue
+                }
                 let signature = contentSignature(last) + ":" + currentAddress
                 stable = signature == previous ? stable + 1 : 0
                 previous = signature
@@ -1870,13 +1882,18 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
                 if stable >= 2, addressMatches, moved, changed,
                    last["classification"] as? String != "BROWSER_START_PAGE",
                    (last["visible_text_characters"] as? Int ?? 0) > 30 { break }
+            } else {
+                last = ["classification": "NO_WEBVIEW"]
+                stable = 0; previous = ""
             }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 2))
         } while Date() < deadline
         last["settled_observation"] = stable >= 2 && last["expected_site_address_observed"] as? Bool == true
             && last["navigation_away_from_previous_address"] as? Bool == true && last["destination_content_changed"] as? Bool == true
             && last["classification"] as? String != "BROWSER_START_PAGE"
+            && (last["visible_text_characters"] as? Int ?? 0) > 30
         last["observed_hosts"] = observedHosts
+        last["invalid_snapshot_retries"] = invalidSnapshotCount
         return last
     }
 
