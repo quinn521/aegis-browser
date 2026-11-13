@@ -1,6 +1,6 @@
-From e906c9b405e8d8877adc72273e339bf8968986c3 Mon Sep 17 00:00:00 2001
+From 7b3bc4d0dea73711457f79a83a256d2e53ab7b26 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Fri, 13 Nov 2026 08:49:57 +0800
+Date: Fri, 13 Nov 2026 09:02:17 +0800
 Subject: [PATCH] feat(access): fence account-bound site dispatch through
  authenticated TLS nodes
 
@@ -30,9 +30,9 @@ Subject: [PATCH] feat(access): fence account-bound site dispatch through
  net/socket/connect_job_params_factory.cc      |   6 +-
  net/socket/ssl_client_socket_impl.cc          |   8 +-
  services/network/network_context.cc           |  42 ++-
- .../network/network_service_proxy_delegate.cc |  32 +-
- .../network/network_service_proxy_delegate.h  |   6 +-
- ...network_service_proxy_delegate_unittest.cc |  27 ++
+ .../network/network_service_proxy_delegate.cc |  67 +++-
+ .../network/network_service_proxy_delegate.h  |  16 +-
+ ...network_service_proxy_delegate_unittest.cc |  76 ++++
  services/network/url_loader.cc                |   5 +
  services/network/url_loader.h                 |   3 +
  services/network/web_transport.h              |   1 +
@@ -40,7 +40,7 @@ Subject: [PATCH] feat(access): fence account-bound site dispatch through
  services/network/websocket.h                  |   1 +
  services/network/websocket_factory.cc         |   7 +
  services/network/websocket_factory.h          |   2 +
- 35 files changed, 1221 insertions(+), 20 deletions(-)
+ 35 files changed, 1315 insertions(+), 20 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.h
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.mm
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
@@ -1528,7 +1528,7 @@ index f586acfe0f086bda8db1244fb5c054d8d90b732e..5e8d8c71aca3fd1d3bfaf6beafdc3c55
  }
  
 diff --git a/services/network/network_context.cc b/services/network/network_context.cc
-index 9d7e611a5e595770676e437d0b50659050f83402..ecd9ef291b43bf12e77831866d92813f18953e51 100644
+index 9d7e611a5e595770676e437d0b50659050f83402..f9ec433efa0699857f4b6e79d212589cf04a9a4c 100644
 --- a/services/network/network_context.cc
 +++ b/services/network/network_context.cc
 @@ -115,6 +115,7 @@
@@ -1566,14 +1566,14 @@ index 9d7e611a5e595770676e437d0b50659050f83402..ecd9ef291b43bf12e77831866d92813f
 +        std::move(params_->custom_proxy_connection_observer_remote),
 +        base::BindRepeating([](NetworkContext* context, const mojom::CustomProxyConfig& before,
 +                               const mojom::CustomProxyConfig& after) {
-+          auto auth = [](const auto& config, const GURL& url) {
-+            net::ProxyInfo info;
-+            config.rules.Apply(url, &info);
-+            return !info.is_empty() && !info.is_direct()
-+                ? config.connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization)
-+                : std::optional<std::string>{};
++          const bool credentials_changed =
++              before.connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization) !=
++              after.connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization);
++          auto changed = [&](const GURL& url) {
++            auto old_proxy = NetworkServiceProxyDelegate::AccountProxyForUrl(before, url);
++            auto new_proxy = NetworkServiceProxyDelegate::AccountProxyForUrl(after, url);
++            return old_proxy != new_proxy || (credentials_changed && new_proxy.has_value());
 +          };
-+          auto changed = [&](const GURL& url) { return auth(before, url) != auth(after, url); };
 +          std::vector<base::OnceClosure> aborts;
 +          if (!context->url_request_context()) return;
 +          for (const auto& req : *context->url_request_context()->url_requests()) {
@@ -1595,19 +1595,25 @@ index 9d7e611a5e595770676e437d0b50659050f83402..ecd9ef291b43bf12e77831866d92813f
  
    net::NetLog* net_log = nullptr;
 diff --git a/services/network/network_service_proxy_delegate.cc b/services/network/network_service_proxy_delegate.cc
-index 1b0db936c8705879f37c19a5813cd3e16b2527b6..2bcf4f040ae335cd0c9168d6adc306c0468aca8e 100644
+index 1b0db936c8705879f37c19a5813cd3e16b2527b6..dfb3fd1a6ce7bd9d9ca2aa105ddf29adce79c06e 100644
 --- a/services/network/network_service_proxy_delegate.cc
 +++ b/services/network/network_service_proxy_delegate.cc
-@@ -4,6 +4,8 @@
+@@ -4,10 +4,14 @@
  
  #include "services/network/network_service_proxy_delegate.h"
  
++#include <algorithm>
 +#include <limits>
 +
  #include "base/feature_list.h"
  #include "base/functional/bind.h"
  #include "base/memory/scoped_refptr.h"
-@@ -108,8 +110,9 @@ NetworkServiceProxyDelegate::NetworkServiceProxyDelegate(
+ #include "base/strings/strcat.h"
++#include "base/strings/string_util.h"
+ #include "base/types/expected.h"
+ #include "net/base/completion_once_callback.h"
+ #include "net/base/features.h"
+@@ -108,8 +112,9 @@ NetworkServiceProxyDelegate::NetworkServiceProxyDelegate(
      mojom::CustomProxyConfigPtr initial_config,
      mojo::PendingReceiver<mojom::CustomProxyConfigClient>
          config_client_receiver,
@@ -1619,7 +1625,25 @@ index 1b0db936c8705879f37c19a5813cd3e16b2527b6..2bcf4f040ae335cd0c9168d6adc306c0
        receiver_(this, std::move(config_client_receiver)) {
    // Make sure there is always a valid proxy config so we don't need to null
    // check it.
-@@ -143,7 +146,18 @@ void NetworkServiceProxyDelegate::OnResolveProxy(
+@@ -129,6 +134,17 @@ NetworkServiceProxyDelegate::NetworkServiceProxyDelegate(
+ 
+ NetworkServiceProxyDelegate::~NetworkServiceProxyDelegate() = default;
+ 
++std::optional<net::ProxyServer> NetworkServiceProxyDelegate::AccountProxyForUrl(
++    const mojom::CustomProxyConfig& config, const GURL& url) {
++  if (!config.connect_tunnel_headers.HasHeader(net::HttpRequestHeaders::kProxyAuthorization))
++    return std::nullopt;
++  net::ProxyInfo route;
++  config.rules.Apply(url, &route);
++  if (route.is_empty() || !route.proxy_chain().is_single_proxy() ||
++      !route.proxy_chain().First().is_https()) return std::nullopt;
++  return route.proxy_chain().First();
++}
++
+ void NetworkServiceProxyDelegate::OnResolveProxy(
+     const GURL& url,
+     const net::NetworkAnonymizationKey& network_anonymization_key,
+@@ -143,7 +159,26 @@ void NetworkServiceProxyDelegate::OnResolveProxy(
    if (ApplyProxyConfigToProxyInfo(proxy_config_->rules, proxy_retry_info, url,
                                    &proxy_info)) {
      DCHECK(!proxy_info.is_empty() && !proxy_info.is_direct());
@@ -1631,28 +1655,40 @@ index 1b0db936c8705879f37c19a5813cd3e16b2527b6..2bcf4f040ae335cd0c9168d6adc306c0
 +            net::HttpRequestHeaders::kProxyAuthorization) &&
 +        proxy_info.proxy_chain().is_single_proxy() &&
 +        proxy_info.proxy_chain().First().is_https()) {
-+      result->UseProxyChain(net::ProxyChain::WithOpaqueData(
-+          {proxy_info.proxy_chain().First()}, -account_generation_));
++      std::string site(base::TrimString(url.host(), ".", base::TRIM_TRAILING));
++      const auto& proxy = proxy_info.proxy_chain().First();
++      auto found = account_tunnels_.find(site);
++      if (found == account_tunnels_.end() || found->second.proxy != proxy) {
++        // Reserve INT_MIN as a permanently unauthorized chain on exhaustion.
++        const int id = last_account_tunnel_id_ == std::numeric_limits<int>::max()
++            ? std::numeric_limits<int>::min() : -(++last_account_tunnel_id_);
++        found = account_tunnels_.insert_or_assign(site, AccountTunnel{id, proxy}).first;
++      }
++      result->UseProxyChain(net::ProxyChain::WithOpaqueData({proxy}, found->second.id));
 +    } else {
 +      result->OverrideProxyList(proxy_info.proxy_list());
 +    }
    }
  }
  
-@@ -166,6 +180,12 @@ NetworkServiceProxyDelegate::OnBeforeTunnelRequest(
+@@ -166,6 +201,16 @@ NetworkServiceProxyDelegate::OnBeforeTunnelRequest(
    if (IsInProxyConfig(proxy_chain)) {
      MergeRequestHeaders(&extra_headers, proxy_config_->connect_tunnel_headers);
    }
 +  if (!proxy_chain.is_single_proxy() || !proxy_chain.First().is_https() ||
-+      proxy_chain.opaque_data() != -account_generation_ ||
-+      account_generation_ == std::numeric_limits<int>::max() ||
++      !proxy_chain.is_aegis_account_node() ||
++      proxy_chain.opaque_data() == std::numeric_limits<int>::min() ||
++      !std::ranges::any_of(account_tunnels_, [&](const auto& entry) {
++        return proxy_chain.opaque_data() == entry.second.id &&
++               proxy_chain.First() == entry.second.proxy;
++      }) ||
 +      extra_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization)
 +          .value_or("").empty())
 +    extra_headers.RemoveHeader(net::HttpRequestHeaders::kProxyAuthorization);
    return extra_headers;
  }
  
-@@ -193,7 +213,13 @@ void NetworkServiceProxyDelegate::OnCustomProxyConfigUpdated(
+@@ -193,7 +238,23 @@ void NetworkServiceProxyDelegate::OnCustomProxyConfigUpdated(
      mojom::CustomProxyConfigPtr proxy_config,
      OnCustomProxyConfigUpdatedCallback callback) {
    DCHECK(IsValidCustomProxyConfig(*proxy_config));
@@ -1660,17 +1696,35 @@ index 1b0db936c8705879f37c19a5813cd3e16b2527b6..2bcf4f040ae335cd0c9168d6adc306c0
    proxy_config_ = std::move(proxy_config);
 +  if (previous->connect_tunnel_headers.HasHeader(net::HttpRequestHeaders::kProxyAuthorization) ||
 +      proxy_config_->connect_tunnel_headers.HasHeader(net::HttpRequestHeaders::kProxyAuthorization)) {
-+    if (account_generation_ < std::numeric_limits<int>::max()) ++account_generation_;
++    if (previous->connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization) !=
++        proxy_config_->connect_tunnel_headers.GetHeader(net::HttpRequestHeaders::kProxyAuthorization)) {
++      account_tunnels_.clear();
++    } else {
++      // Paid rules select canonical hosts on both HTTP and HTTPS. Retain
++      // their pool IDs only while this exact site still selects its TLS node.
++      std::erase_if(account_tunnels_, [&](const auto& entry) {
++        return AccountProxyForUrl(*proxy_config_, GURL("https://" + entry.first + "/")) !=
++               entry.second.proxy;
++      });
++    }
 +    if (account_route_change_) account_route_change_.Run(*previous, *proxy_config_);
 +  }
    std::move(callback).Run();
  }
  
 diff --git a/services/network/network_service_proxy_delegate.h b/services/network/network_service_proxy_delegate.h
-index 39b4f143180050ef9fb749e4577325e2acc06de3..2fa2333df8ccb2e7dcddf2a4f6cef48031235687 100644
+index 39b4f143180050ef9fb749e4577325e2acc06de3..5350ce1d83465a8f46bc599defe838884b40eefb 100644
 --- a/services/network/network_service_proxy_delegate.h
 +++ b/services/network/network_service_proxy_delegate.h
-@@ -34,12 +34,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyDelegate
+@@ -7,6 +7,7 @@
+ 
+ #include <cstdint>
+ #include <map>
++#include <optional>
+ #include <string>
+ 
+ #include "base/component_export.h"
+@@ -34,12 +35,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyDelegate
      : public net::ProxyDelegate,
        public mojom::CustomProxyConfigClient {
   public:
@@ -1686,20 +1740,36 @@ index 39b4f143180050ef9fb749e4577325e2acc06de3..2fa2333df8ccb2e7dcddf2a4f6cef480
  
    NetworkServiceProxyDelegate(const NetworkServiceProxyDelegate&) = delete;
    NetworkServiceProxyDelegate& operator=(const NetworkServiceProxyDelegate&) =
-@@ -93,6 +95,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyDelegate
+@@ -47,6 +50,9 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyDelegate
+ 
+   ~NetworkServiceProxyDelegate() override;
+ 
++  static std::optional<net::ProxyServer> AccountProxyForUrl(
++      const mojom::CustomProxyConfig& config, const GURL& url);
++
+   // net::ProxyDelegate implementation:
+   void OnResolveProxy(
+       const GURL& url,
+@@ -93,6 +99,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkServiceProxyDelegate
    mojom::AegisAccessPolicyPublicationMetadataPtr aegis_policy_publication_;
    std::map<std::string, uint64_t>
        aegis_selection_generation_by_proxy_group_;
 +  const AccountRouteChange account_route_change_;
-+  int account_generation_ = 1;
++  struct AccountTunnel {
++    int id;
++    net::ProxyServer proxy;
++  };
++  // IDs are never recycled, including when a host is deselected/reselected.
++  std::map<std::string, AccountTunnel> account_tunnels_;
++  int last_account_tunnel_id_ = 0;
    mojom::CustomProxyConfigPtr proxy_config_;
    mojo::Receiver<mojom::CustomProxyConfigClient> receiver_;
    mojo::Remote<mojom::CustomProxyConnectionObserver> observer_;
 diff --git a/services/network/network_service_proxy_delegate_unittest.cc b/services/network/network_service_proxy_delegate_unittest.cc
-index b9567323881c927e652c1c1fa88112321f595465..3dd3e6e6e494f3ee52af883df7879f75cca0c54d 100644
+index b9567323881c927e652c1c1fa88112321f595465..bc1301aa71e7a75be786eacb089ab2cc16753aa7 100644
 --- a/services/network/network_service_proxy_delegate_unittest.cc
 +++ b/services/network/network_service_proxy_delegate_unittest.cc
-@@ -257,6 +257,33 @@ void DoNotCallCallback(
+@@ -257,6 +257,82 @@ void DoNotCallCallback(
    NOTREACHED();
  }
  
@@ -1728,6 +1798,55 @@ index b9567323881c927e652c1c1fa88112321f595465..3dd3e6e6e494f3ee52af883df7879f75
 +                           "GET", {}, &selected);
 +  EXPECT_TRUE(selected.proxy_chain().is_aegis_account_node());
 +  EXPECT_FALSE(auth(selected.proxy_chain()));
++}
++
++TEST_F(NetworkServiceProxyDelegateTest, PendingAccountTunnelTracksItsSelectedSiteAndLease) {
++  auto config = [](std::initializer_list<const char*> sites, const char* credential = "lease-1",
++                   const char* proxy = "https://node.test") {
++    auto c = mojom::CustomProxyConfig::New();
++    c->rules.ParseFromString(proxy);
++    for (const char* site : sites) c->rules.bypass_rules.AddAegisExactSite(site);
++    c->rules.reverse_bypass = true;
++    c->connect_tunnel_headers.SetHeader(net::HttpRequestHeaders::kProxyAuthorization, credential);
++    return c;
++  };
++  auto delegate = CreateDelegate(config({"a.example"}));
++  auto resolve = [&](const char* target) {
++    net::ProxyInfo route;
++    route.UseDirect();
++    delegate->OnResolveProxy(GURL(target), {}, "GET", {}, &route);
++    return route.proxy_chain();
++  };
++  auto header = [&](const net::ProxyChain& chain) {
++    return delegate->OnBeforeTunnelRequest(chain, 0, base::BindOnce(DoNotCallCallback))
++        .value().GetHeader(net::HttpRequestHeaders::kProxyAuthorization);
++  };
++  // Hold the resolved chain across config ACKs before invoking the next
++  // stage, which constructs the CONNECT request after proxy TLS setup.
++  const auto a = resolve("https://a.example./");
++  SetConfig(config({"a.example"}));
++  EXPECT_EQ(header(a), "lease-1");
++  SetConfig(config({"a.example", "b.example"}));
++  const auto b = resolve("https://b.example/");
++  EXPECT_NE(a, b);
++  EXPECT_EQ(a, resolve("https://a.example/"));
++  EXPECT_EQ(header(a), "lease-1");
++  SetConfig(config({"a.example"}));
++  EXPECT_FALSE(header(b));
++  EXPECT_EQ(header(a), "lease-1");
++  SetConfig(config({"a.example", "b.example"}));
++  EXPECT_FALSE(header(b));
++  EXPECT_NE(b, resolve("https://b.example/"));
++  SetConfig(config({"a.example", "b.example"}, "lease-2"));
++  EXPECT_FALSE(header(a));
++  const auto renewed = resolve("https://a.example/");
++  EXPECT_EQ(header(renewed), "lease-2");
++  SetConfig(config({"a.example", "b.example"}, "lease-2", "https://node2.test"));
++  EXPECT_FALSE(header(renewed));
++  const auto moved = resolve("https://a.example/");
++  EXPECT_EQ(header(moved), "lease-2");
++  SetConfig(config({}));
++  EXPECT_FALSE(header(moved));
 +}
 +
  TEST_F(NetworkServiceProxyDelegateTest, AddsHeadersToTunnelRequest) {
