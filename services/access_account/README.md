@@ -277,7 +277,12 @@ python3 -m services.access_account.metering serve \
 
 Start the metered server with `AEGIS_XRAY_METER_SOCKET` set to that socket's
 absolute path. Use a separate Xray process/configuration for the outbound
-client. If a crash leaves the socket path behind, confirm that the owning
+client. Confirmed writes and terminal records are persisted in a private
+`<socket>.outbox` directory before reporting. The process retries unacknowledged
+records in order, including after restart, and stops a flow on reporting failure.
+Preserve that directory across restarts. A process or storage failure before a
+writer can persist its result leaves the flow open with a confirmed lower bound.
+If a crash leaves the socket path behind, confirm that the owning
 collector is stopped before removing that path.
 
 Read a consistent account and node snapshot for one period with:
@@ -317,6 +322,11 @@ and after close. A separate plaintext TCP target exercises the unpadded Vision
 writer. A direct transfer, an HTTP cache hit and a REALITY cover probe must
 leave usage unchanged.
 
+Run the collector and Xray restart regression with the same arguments using
+`python3 -m services.access_account.tests.wire.recovery`. It interrupts the
+collector while a target accepts bytes, restarts both processes, and verifies
+that the pending confirmed prefix and terminal record are recovered.
+
 ## Settle managed-node usage into an account period
 
 The operator usage command above reads one node's retained writer counters.
@@ -338,7 +348,8 @@ same-period sandbox top-ups retain consumption and cannot apply twice.
 
 For the first cutover of each **node, account and period**:
 
-1. Keep new traffic and credential issuance stopped while provisioning. Retain
+1. Stop traffic and credential issuance, drain existing writers and reconcile
+   pending outbox records before provisioning. Retain
    the account's session, permanent panel-client binding and current plan. In
    one operator transaction, provision a reconciled snapshot for this period,
    including quota, expiry, opening directional totals and their real timestamps.
@@ -356,8 +367,8 @@ For the first cutover of each **node, account and period**:
 
    The command adds its tables transactionally to the existing database and
    returns `{"ok":true}`. Repeating an existing binding is a no-op. An unknown
-   or inconsistent plan/client binding fails. If this node has already recorded
-   any positive usage for that account and period, a first bind fails with
+   or inconsistent plan/client binding fails. If the collector has already
+   recorded any positive usage for this node, account and period, a first bind fails with
    `settlement unavailable`: those bytes might already be in the baseline.
    Reconcile that cutover separately; deleting history or retrying with a zero
    baseline cannot establish which bytes were already charged.
