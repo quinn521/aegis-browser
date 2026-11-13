@@ -46,6 +46,11 @@ class MeterTest(unittest.TestCase):
         self.assertEqual(self.usage()['openFlows'], 0)
         self.flow = '2' * 32
         self.meter.accept(self.frame('abort'))
+        self.meter = m.Meter(self.db, self.config, lambda: self.now)
+        with self.assertRaises(ValueError):
+            self.meter.accept(self.frame('open', client='client-A'))
+        self.assertEqual(self.usage()['openFlows'], 0)
+        self.flow = '3' * 32
         self.meter.accept(self.frame('open', client='client-A'))
         self.meter.accept(self.sample('up', 'target_tcp', 1, 1))
         with self.assertRaises(ValueError):
