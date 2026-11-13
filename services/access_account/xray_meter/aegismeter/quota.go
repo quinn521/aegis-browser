@@ -284,6 +284,7 @@ func (f *Flow) quotaWrite(w io.Writer, p []byte, start, end int, path string) (i
 			err = io.ErrShortWrite
 		}
 	}
+	measuredAt := time.Now().UnixMilli()
 	valid := n >= 0 && n <= len(p)
 	if !valid {
 		n = 0
@@ -306,16 +307,8 @@ func (f *Flow) quotaWrite(w io.Writer, p []byte, start, end int, path string) (i
 	} else {
 		f.down += int64(actual)
 	}
-	frame := map[string]any{"op": "commit", "direction": direction, "ticket": ticket, "bytes": actual, "complete": known}
-	var ackErr error
-	if f.broken {
-		ackErr = f.retain(frame)
-		if ackErr == nil {
-			ackErr = errors.New("quota commit queued for replay")
-		}
-	} else {
-		ackErr = f.reliableSend(frame)
-	}
+	frame := map[string]any{"op": "commit", "direction": direction, "ticket": ticket, "bytes": actual, "complete": known, "measuredAt": measuredAt}
+	ackErr := f.reliableSend(frame)
 	if ackErr != nil {
 		f.broken = true
 	}

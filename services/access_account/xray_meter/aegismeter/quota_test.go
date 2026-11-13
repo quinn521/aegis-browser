@@ -9,12 +9,208 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
 type scriptedQuota struct {
 	reply func(map[string]any) map[string]any
+}
+
+type quotaWriter struct {
+	write       writeFunc
+	deadlineErr error
+}
+
+func (w quotaWriter) Write(p []byte) (int, error)      { return w.write(p) }
+func (w quotaWriter) SetWriteDeadline(time.Time) error { return w.deadlineErr }
+
+func quotaFixture(t *testing.T, reply func(map[string]any) map[string]any) *Flow {
+	t.Helper()
+	socket, server := net.Pipe()
+	inbound, remote := net.Pipe()
+	_, cancel := context.WithCancel(context.Background())
+	q := &quotaGuard{inbound: inbound, expires: time.Now().Add(time.Minute), closed: make(chan struct{}), cancel: cancel}
+	f := &Flow{id: "0123456789abcdef0123456789abcdef", conn: socket, reader: bufio.NewReader(socket), quota: q}
+	t.Cleanup(func() { q.stop(); socket.Close(); server.Close(); remote.Close() })
+	go scriptedQuota{reply: reply}.accept(t, server)
+	return f
+}
+
+func TestQuotaConfirmedPrefixes(t *testing.T) {
+	for _, test := range []struct {
+		name, path          string
+		n, start, end, size int
+		actual              int
+		complete            bool
+		deadlineErr         error
+	}{
+		{"target short write", "target_tcp", 3, 0, 8, 8, 3, true, nil},
+		{"raw short write", "vision_raw", 2, 0, 8, 8, 2, true, nil},
+		{"partial framed payload", "vision_padded", 8, 5, 10, 12, 3, false, nil},
+		{"payload before failed padding", "vision_padded", 10, 5, 10, 12, 5, true, nil},
+		{"partial plain TLS payload", "vision_plain", 4, 0, 8, 8, 4, false, nil},
+		{"deadline before write", "vision_plain", 0, 0, 8, 8, 0, true, os.ErrDeadlineExceeded},
+		{"invalid writer progress", "vision_raw", 9, 0, 8, 8, 0, false, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			seen := make(chan map[string]any, 3)
+			f := quotaFixture(t, func(m map[string]any) map[string]any {
+				seen <- m
+				return map[string]any{"ok": true, "granted": test.end - test.start, "expiresAt": time.Now().Add(time.Minute).UnixMilli()}
+			})
+			w := quotaWriter{write: func([]byte) (int, error) {
+				if test.deadlineErr != nil {
+					t.Fatal("writer called after SetWriteDeadline failed")
+				}
+				return test.n, io.ErrUnexpectedEOF
+			}, deadlineErr: test.deadlineErr}
+			before := time.Now().UnixMilli()
+			n, err := f.Write(w, make([]byte, test.size), test.start, test.end, test.path)
+			wantN := test.n
+			if wantN > test.size {
+				wantN = 0
+			}
+			if err == nil || n != wantN {
+				t.Fatal(n, err)
+			}
+			if err := f.Finish(); err != nil {
+				t.Fatal(err)
+			}
+			<-seen // reservation
+			commit, finish := <-seen, <-seen
+			direction, total := "down", "downloadedBytes"
+			if test.path == "target_tcp" {
+				direction, total = "up", "uploadedBytes"
+			}
+			stamp, ok := commit["measuredAt"].(float64)
+			if commit["op"] != "commit" || commit["direction"] != direction || commit["ticket"] != float64(1) ||
+				commit["bytes"] != float64(test.actual) || commit["complete"] != test.complete ||
+				finish[total] != float64(test.actual) || finish["complete"] != test.complete ||
+				!ok || stamp < float64(before) || stamp > float64(time.Now().UnixMilli()) {
+				t.Fatal(commit, finish)
+			}
+		})
+	}
+}
+
+func TestQuotaLostCommitAckReplaysBeforeTerminal(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "quota-replay-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	socket := filepath.Join(root, "m.sock")
+	dir, err := recoveryDirectory(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f *Flow
+	committed := make(chan map[string]any, 1)
+	f = quotaFixture(t, func(m map[string]any) map[string]any {
+		if m["op"] == "commit" {
+			committed <- m
+			f.conn.Close() // Collector stored the commit, but its ACK was lost.
+			return nil
+		}
+		return map[string]any{"ok": true, "granted": 3, "expiresAt": time.Now().Add(time.Minute).UnixMilli()}
+	})
+	f.recoveryDir = dir
+	w := quotaWriter{write: func(p []byte) (int, error) { return len(p), nil }}
+	if n, err := f.Write(w, []byte{1, 2, 3}, 0, 3, "target_tcp"); n != 3 || err == nil {
+		t.Fatal(n, err)
+	}
+	commit := <-committed
+	if err := f.Finish(); err == nil {
+		t.Fatal("lost ACK was acknowledged")
+	}
+	frames, err := pending(filepath.Join(dir, f.id+".json"))
+	if err != nil || len(frames) != 2 || frames[0]["op"] != "commit" || frames[1]["op"] != "finish" {
+		t.Fatal(frames, err)
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	seen := make(chan []observed, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var messages []observed
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			var frame observed
+			if json.Unmarshal(scanner.Bytes(), &frame) != nil {
+				return
+			}
+			messages = append(messages, frame)
+			io.WriteString(conn, "{\"ok\":true}\n")
+			if frame["op"] == "finish" {
+				break
+			}
+		}
+		seen <- messages
+	}()
+	replay(socket, dir)
+	select {
+	case messages := <-seen:
+		if len(messages) != 2 || messages[0]["op"] != "commit" || messages[0]["bytes"] != float64(3) ||
+			messages[0]["ticket"] != float64(1) || messages[0]["complete"] != true ||
+			messages[0]["measuredAt"] != commit["measuredAt"] || messages[1]["uploadedBytes"] != float64(3) || messages[1]["complete"] != true {
+			t.Fatal(messages)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("quota replay did not finish")
+	}
+	if frames, err = pending(filepath.Join(dir, f.id+".json")); err != nil || len(frames) != 0 {
+		t.Fatal(frames, err)
+	}
+}
+
+func TestQuotaTicketsStayOrderedInBothDirections(t *testing.T) {
+	tickets := map[string]float64{"up": 0, "down": 0}
+	pending := map[string]bool{}
+	f := quotaFixture(t, func(m map[string]any) map[string]any {
+		direction, _ := m["direction"].(string)
+		switch m["op"] {
+		case "reserve":
+			if pending[direction] || m["ticket"] != tickets[direction]+1 {
+				t.Error("reservation overtook its previous ticket", m)
+			}
+			tickets[direction] = m["ticket"].(float64)
+			pending[direction] = true
+		case "commit":
+			if !pending[direction] || m["ticket"] != tickets[direction] {
+				t.Error("confirmation out of ticket order", m)
+			}
+			pending[direction] = false
+		case "finish":
+			if m["uploadedBytes"] != float64(8) || m["downloadedBytes"] != float64(8) || pending["up"] || pending["down"] {
+				t.Error("unfinished direction", m)
+			}
+		}
+		return map[string]any{"ok": true, "granted": 1, "expiresAt": time.Now().Add(time.Minute).UnixMilli()}
+	})
+	var wg sync.WaitGroup
+	for range 8 {
+		for _, path := range []string{"target_tcp", "vision_raw"} {
+			wg.Go(func() {
+				w := quotaWriter{write: func(p []byte) (int, error) { return len(p), nil }}
+				if n, err := f.Write(w, []byte{1}, 0, 1, path); n != 1 || err != nil {
+					t.Error(n, err)
+				}
+			})
+		}
+	}
+	wg.Wait()
+	if err := f.Finish(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (s scriptedQuota) accept(t *testing.T, c net.Conn) {
