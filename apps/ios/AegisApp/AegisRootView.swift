@@ -476,6 +476,7 @@ struct PageLoadFailureBanner: View {
             }
             .padding(12)
             .foregroundStyle(.red)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-load-error")
         } else if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending),
                   let openAddressViaProxy {
