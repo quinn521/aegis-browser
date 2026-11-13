@@ -134,7 +134,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             host: host,
             isPrivate: tab.profile.isPrivate
         )
-        let intentOn = intents[key] == .on
+        let inherited = tab.boundHostName == host.rawValue && tab.proxyLandingParent != nil
+        let intentOn = intents[key] == .on || inherited
         let attachment = attachment(tab: tab, host: host)
         var snapshot = AccessSiteProxyToggleSnapshot()
         snapshot.hasTrustedSite = true
@@ -202,17 +203,22 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             isPrivate: tab.profile.isPrivate
         )
         let bound = tab.boundHostName.flatMap { try? AccessSiteHost($0) }
+        var intent = routeIntent(key: key, boundToTarget: bound == host, tabID: tab.instanceID.uuidString)
+        if let rawParent = tab.parentForProxyLanding(url), let parent = try? AccessSiteHost(rawParent) {
+            let source = AccessHostStoreKey(scopeID: key.scopeID, host: parent, isPrivate: key.isPrivate)
+            if intents[key] != .off, intents[source] == .on,
+               let endpoint = registry.endpoint(scopeID: key.scopeID, host: parent, isPrivate: key.isPrivate) {
+                registry.setEndpoint(endpoint, scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
+                intent = .on
+            }
+        }
         return registry.storeForTab(
             tabID: tab.instanceID.uuidString,
             scopeID: tab.browsingScopeID,
             isPrivate: tab.profile.isPrivate,
             targetHost: host,
             boundHost: bound,
-            intent: routeIntent(
-                key: key,
-                boundToTarget: bound == host,
-                tabID: tab.instanceID.uuidString
-            )
+            intent: intent
         )
     }
 
@@ -948,7 +954,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         registry.setProxyEnabled(false, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
         let bound = registry.revoke(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
         publisher.release(for: key)
-        for tab in BrowserSession.openTabs() where bound.contains(tab.instanceID.uuidString) {
+        for tab in BrowserSession.openTabs() where bound.contains(tab.instanceID.uuidString)
+            || (tab.browsingScopeID == key.scopeID && tab.profile.isPrivate == key.isPrivate
+                && tab.proxyLandingParent == key.host.rawValue) {
+            registry.unbind(tab.instanceID.uuidString)
             if executingTabs[tab.instanceID.uuidString] == key {
                 executingTabs.removeValue(forKey: tab.instanceID.uuidString)
             }

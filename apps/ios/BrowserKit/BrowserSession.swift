@@ -107,6 +107,14 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Store captured when the tab was created. Returning to the original connection uses this object.
     public let originalWebsiteDataStore: WKWebsiteDataStore
     public var websiteDataStore: WKWebsiteDataStore { configuration.websiteDataStore }
+    /// Tab-local parent of a canonical HTTPS landing page. The landing host has its own store.
+    public private(set) var proxyLandingParent: String?
+    private var proxyLandingTarget: String?
+    public func parentForProxyLanding(_ url: URL) -> String? {
+        guard url.scheme == "https", url.port == nil || url.port == 443,
+              url.host?.lowercased() == proxyLandingTarget else { return nil }
+        return proxyLandingParent
+    }
     public var boundHostName: String?
     public var browsingScopeID = "ordinary"
     var configurationFactory: ((WKWebsiteDataStore) -> WKWebViewConfiguration)?
@@ -492,6 +500,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let hostChanged = previous?.host?.lowercased() != nil
             && url.host?.lowercased() != nil
             && previous?.host?.lowercased() != url.host?.lowercased()
+        if url.scheme != "https" || (url.port != nil && url.port != 443) || url.host?.lowercased() != proxyLandingTarget {
+            proxyLandingParent = nil
+            proxyLandingTarget = nil
+        }
         let routed = hostCoordinator?.dataStoreForMainFrame(tab: self, url: url)
         let desired = routed ?? originalWebsiteDataStore
         guard hostChanged || desired !== configuration.websiteDataStore else { return }
@@ -686,6 +698,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func rebindWebsiteDataStore(_ store: WKWebsiteDataStore, host: String?) {
         guard !isDisposed else { return }
+        if host == nil {
+            proxyLandingParent = nil
+            proxyLandingTarget = nil
+        }
         guard store !== configuration.websiteDataStore else {
             boundHostName = host
             return
@@ -1003,6 +1019,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         webPreferences.preferredContentMode = (site.desktop ?? preferences.values.desktop) ? .desktop : .recommended
         webPreferences.allowsContentJavaScript = site.javaScript ?? preferences.values.javaScript
         let decision = navigationDecision(requestURL, method: navigationAction.request.httpMethod ?? "GET")
+        if decision.kind != .blocked, navigationAction.navigationType == .other,
+           let parent = boundHostName, let target = requestURL.host?.lowercased(),
+           requestedURL?.scheme == "https", requestURL.scheme == "https",
+           requestURL.port == nil || requestURL.port == 443,
+           (navigationAction.request.httpMethod ?? "GET") == "GET",
+           !BrowserMainFrameFailure.requestHasUnsafeReplaySurface(navigationAction.request),
+           RegisteredDomain.isCanonicalLandingHost(target, for: parent) {
+            proxyLandingParent = parent
+            proxyLandingTarget = target
+        }
         let storeMismatch = hostCoordinator?.dataStoreForMainFrame(tab: self, url: requestURL)
             .map { $0 !== websiteDataStore } == true
         let hostMismatch = requestedURL.map { $0.host?.lowercased() != requestURL.host?.lowercased() } ?? false
