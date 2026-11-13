@@ -274,8 +274,6 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
   ASSERT_TRUE(base::test::RunUntil([&] {
     return AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kAssigned;
   }));
-  ToggleAccountNodeSite(profile.get(), "second.example");
-  EXPECT_EQ(AccountNodeStatus::kAssigned, AccountNodeForSite(profile.get(), site));
   ASSERT_TRUE(base::DeleteFile(path));
   ASSERT_TRUE(base::test::RunUntil([&] {
     return AccountNodeForSite(profile.get(), site) == AccountNodeStatus::kUnavailable;
@@ -286,6 +284,46 @@ TEST(PaidSiteMac, ChromiumConnectThroughAssignedNode) {
   retry->Start();
   denied.RunUntilComplete();
   EXPECT_NE(net::OK, denied.request_status());
+  ASSERT_EQ(AccountNodeStatus::kUnavailable, AccountNodeForSite(profile.get(), "second.example"));
+  ToggleAccountNodeSite(profile.get(), "second.example");
+  ToggleAccountNodeSite(profile.get(), "second.example");
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kUnavailable;
+  }));
+  auto blocked = AccessNetworkContextTransport::Get(profile.get())->BuildConfigForTesting({});
+  for (const auto& host : {site, std::string("second.example")}) {
+    net::ProxyInfo info;
+    blocked->rules.Apply(GURL("https://" + host), &info);
+    ASSERT_FALSE(info.is_direct());
+    EXPECT_EQ("blocked.invalid", info.proxy_chain().First().GetHost());
+  }
+  ASSERT_TRUE(base::WriteFile(path, base::SysNSStringToUTF8(
+      [[NSString alloc] initWithData:binding encoding:NSUTF8StringEncoding])));
+  ASSERT_TRUE(base::SetPosixFilePermissions(path, 0600));
+  // Only re-enable the second site. Both share the newly issued grant.
+  ToggleAccountNodeSite(profile.get(), "second.example");
+  ToggleAccountNodeSite(profile.get(), "second.example");
+  ASSERT_EQ(AccountNodeStatus::kAcquiring, AccountNodeForSite(profile.get(), site));
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return AccountNodeForSite(profile.get(), site) == AccountNodeStatus::kAssigned &&
+        AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kAssigned;
+  }));
+  const auto replacement = AccessNetworkContextTransport::Get(profile.get())
+      ->BuildConfigForTesting({})->connect_tunnel_headers.GetHeader("Proxy-Authorization");
+  ASSERT_TRUE(replacement.has_value());
+  EXPECT_FALSE(*replacement == *authorization);
+  net::TestDelegate recovered;
+  auto restored = network->CreateRequest(url, net::DEFAULT_PRIORITY, &recovered,
+      TRAFFIC_ANNOTATION_FOR_TESTS, net::handles::kInvalidNetworkHandle);
+  // A second wire receipt must come from the node, independent of the first
+  // URLRequest's still-live HTTP cache entry.
+  restored->SetLoadFlags(net::LOAD_DISABLE_CACHE);
+  restored->Start();
+  recovered.RunUntilComplete();
+  EXPECT_EQ(net::OK, recovered.request_status());
+  EXPECT_EQ(200, restored->GetResponseCode());
+  ToggleAccountNodeSite(profile.get(), "second.example");
+  ToggleAccountNodeSite(profile.get(), site);
 }
 }  // namespace
 }  // namespace aegis::access

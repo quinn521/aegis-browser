@@ -1,6 +1,6 @@
-From 57e22d5a06662491e9c26d39e89d1217e7825d98 Mon Sep 17 00:00:00 2001
+From e906c9b405e8d8877adc72273e339bf8968986c3 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Fri, 13 Nov 2026 08:33:39 +0800
+Date: Fri, 13 Nov 2026 08:49:57 +0800
 Subject: [PATCH] feat(access): fence account-bound site dispatch through
  authenticated TLS nodes
 
@@ -11,14 +11,14 @@ Subject: [PATCH] feat(access): fence account-bound site dispatch through
  .../access_network_context_transport.cc       | 100 ++++++
  .../access/access_network_context_transport.h |  20 ++
  .../aegis/access/access_paid_site_mac.h       |  15 +
- .../aegis/access/access_paid_site_mac.mm      | 194 ++++++++++++
- .../access/access_paid_site_mac_unittest.mm   | 291 ++++++++++++++++++
+ .../aegis/access/access_paid_site_mac.mm      | 198 +++++++++++
+ .../access/access_paid_site_mac_unittest.mm   | 329 ++++++++++++++++++
  .../access_private_publication_unittest.cc    |  20 ++
  .../access_proxying_url_loader_factory.cc     |   4 +
  .../access_site_proxy_bubble_controller.cc    |  30 +-
  .../access_site_proxy_bubble_controller.h     |   4 +-
  .../access_site_proxy_product_unittest.cc     |  21 ++
- .../ui/views/toolbar/aegis_toolbar_button.cc  |  54 +++-
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  54 ++-
  content/browser/browser_context.cc            |  21 ++
  .../websockets/websocket_connector_impl.cc    |  14 +
  .../web_transport_connector_impl.cc           |  15 +-
@@ -36,11 +36,11 @@ Subject: [PATCH] feat(access): fence account-bound site dispatch through
  services/network/url_loader.cc                |   5 +
  services/network/url_loader.h                 |   3 +
  services/network/web_transport.h              |   1 +
- services/network/web_transport_unittest.cc    |  88 +++++-
+ services/network/web_transport_unittest.cc    |  88 ++++-
  services/network/websocket.h                  |   1 +
  services/network/websocket_factory.cc         |   7 +
  services/network/websocket_factory.h          |   2 +
- 35 files changed, 1179 insertions(+), 20 deletions(-)
+ 35 files changed, 1221 insertions(+), 20 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.h
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac.mm
  create mode 100644 chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
@@ -447,10 +447,10 @@ index 0000000000000000000000000000000000000000..821894a0191accaced105ffe921f01c2
 +#endif
 diff --git a/chrome/browser/aegis/access/access_paid_site_mac.mm b/chrome/browser/aegis/access/access_paid_site_mac.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..5633a20fd9a04188f4998802feccbd7c5bf9a63e
+index 0000000000000000000000000000000000000000..41fd77c8cf2960dc09fa1a88163ecbdbc0f047bb
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_paid_site_mac.mm
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,198 @@
 +// Copyright 2026 GCSA
 +#import <AppKit/AppKit.h>
 +#import "chrome/browser/aegis/access/access_account_mac.h"
@@ -523,9 +523,13 @@ index 0000000000000000000000000000000000000000..5633a20fd9a04188f4998802feccbd7c
 +      if (sites_.empty()) Reset();
 +      return;
 +    }
++    // A remaining selection does not imply a live grant after an issue or
++    // renewal failure. Revalidate the current grant before publishing it.
++    if (!auth_.empty() && (NSDate.date.timeIntervalSince1970 * 1000 >= expires_ ||
++                           (change_ && change_()))) Reset();
 +    sites_.insert(site);
 +    if (!Publish()) { sites_.erase(site); return; }
-+    if (sites_.size() > 1 || in_flight_) return;
++    if (!auth_.empty() || in_flight_) return;
 +    // An abandoned in-flight POST may arrive after a later off/on cycle. Give
 +    // the new authorization its own context so the old POST cannot rotate it.
 +    context_ = NSUUID.UUID.UUIDString.lowercaseString;
@@ -535,7 +539,7 @@ index 0000000000000000000000000000000000000000..5633a20fd9a04188f4998802feccbd7c
 +      NSDictionary* binding = AuthorizePrivate();
 +      if (!weak) return;
 +      private_binding_ = binding;
-+      if (!binding) { sites_.clear(); Publish(); Reset(); return; }
++      if (!binding) { sites_.erase(site); Publish(); Reset(); return; }
 +    }
 +    Issue();
 +  }
@@ -647,10 +651,10 @@ index 0000000000000000000000000000000000000000..5633a20fd9a04188f4998802feccbd7c
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_paid_site_mac_unittest.mm b/chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
 new file mode 100644
-index 0000000000000000000000000000000000000000..118f935485c764a05d42b8897585d79967eefcb8
+index 0000000000000000000000000000000000000000..195e117fc392200311f2633bca2b8811da94db98
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_paid_site_mac_unittest.mm
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,329 @@
 +// Copyright 2026 GCSA
 +#import <Foundation/Foundation.h>
 +
@@ -927,8 +931,6 @@ index 0000000000000000000000000000000000000000..118f935485c764a05d42b8897585d799
 +  ASSERT_TRUE(base::test::RunUntil([&] {
 +    return AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kAssigned;
 +  }));
-+  ToggleAccountNodeSite(profile.get(), "second.example");
-+  EXPECT_EQ(AccountNodeStatus::kAssigned, AccountNodeForSite(profile.get(), site));
 +  ASSERT_TRUE(base::DeleteFile(path));
 +  ASSERT_TRUE(base::test::RunUntil([&] {
 +    return AccountNodeForSite(profile.get(), site) == AccountNodeStatus::kUnavailable;
@@ -939,6 +941,46 @@ index 0000000000000000000000000000000000000000..118f935485c764a05d42b8897585d799
 +  retry->Start();
 +  denied.RunUntilComplete();
 +  EXPECT_NE(net::OK, denied.request_status());
++  ASSERT_EQ(AccountNodeStatus::kUnavailable, AccountNodeForSite(profile.get(), "second.example"));
++  ToggleAccountNodeSite(profile.get(), "second.example");
++  ToggleAccountNodeSite(profile.get(), "second.example");
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kUnavailable;
++  }));
++  auto blocked = AccessNetworkContextTransport::Get(profile.get())->BuildConfigForTesting({});
++  for (const auto& host : {site, std::string("second.example")}) {
++    net::ProxyInfo info;
++    blocked->rules.Apply(GURL("https://" + host), &info);
++    ASSERT_FALSE(info.is_direct());
++    EXPECT_EQ("blocked.invalid", info.proxy_chain().First().GetHost());
++  }
++  ASSERT_TRUE(base::WriteFile(path, base::SysNSStringToUTF8(
++      [[NSString alloc] initWithData:binding encoding:NSUTF8StringEncoding])));
++  ASSERT_TRUE(base::SetPosixFilePermissions(path, 0600));
++  // Only re-enable the second site. Both share the newly issued grant.
++  ToggleAccountNodeSite(profile.get(), "second.example");
++  ToggleAccountNodeSite(profile.get(), "second.example");
++  ASSERT_EQ(AccountNodeStatus::kAcquiring, AccountNodeForSite(profile.get(), site));
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return AccountNodeForSite(profile.get(), site) == AccountNodeStatus::kAssigned &&
++        AccountNodeForSite(profile.get(), "second.example") == AccountNodeStatus::kAssigned;
++  }));
++  const auto replacement = AccessNetworkContextTransport::Get(profile.get())
++      ->BuildConfigForTesting({})->connect_tunnel_headers.GetHeader("Proxy-Authorization");
++  ASSERT_TRUE(replacement.has_value());
++  EXPECT_FALSE(*replacement == *authorization);
++  net::TestDelegate recovered;
++  auto restored = network->CreateRequest(url, net::DEFAULT_PRIORITY, &recovered,
++      TRAFFIC_ANNOTATION_FOR_TESTS, net::handles::kInvalidNetworkHandle);
++  // A second wire receipt must come from the node, independent of the first
++  // URLRequest's still-live HTTP cache entry.
++  restored->SetLoadFlags(net::LOAD_DISABLE_CACHE);
++  restored->Start();
++  recovered.RunUntilComplete();
++  EXPECT_EQ(net::OK, recovered.request_status());
++  EXPECT_EQ(200, restored->GetResponseCode());
++  ToggleAccountNodeSite(profile.get(), "second.example");
++  ToggleAccountNodeSite(profile.get(), site);
 +}
 +}  // namespace
 +}  // namespace aegis::access

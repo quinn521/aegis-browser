@@ -70,9 +70,13 @@ class SiteLease final : public base::SupportsUserData::Data {
       if (sites_.empty()) Reset();
       return;
     }
+    // A remaining selection does not imply a live grant after an issue or
+    // renewal failure. Revalidate the current grant before publishing it.
+    if (!auth_.empty() && (NSDate.date.timeIntervalSince1970 * 1000 >= expires_ ||
+                           (change_ && change_()))) Reset();
     sites_.insert(site);
     if (!Publish()) { sites_.erase(site); return; }
-    if (sites_.size() > 1 || in_flight_) return;
+    if (!auth_.empty() || in_flight_) return;
     // An abandoned in-flight POST may arrive after a later off/on cycle. Give
     // the new authorization its own context so the old POST cannot rotate it.
     context_ = NSUUID.UUID.UUIDString.lowercaseString;
@@ -82,7 +86,7 @@ class SiteLease final : public base::SupportsUserData::Data {
       NSDictionary* binding = AuthorizePrivate();
       if (!weak) return;
       private_binding_ = binding;
-      if (!binding) { sites_.clear(); Publish(); Reset(); return; }
+      if (!binding) { sites_.erase(site); Publish(); Reset(); return; }
     }
     Issue();
   }
