@@ -57,8 +57,16 @@ class SettlementTest(CredentialFixture, unittest.TestCase):
                 self.replay(up, down, stamp)
         self.assertEqual(self.read(), before)
         self.assertEqual(self.read('token-B')['usedBytes'], '5')
-        self.sample(77)
-        self.assertEqual(self.read()['usedBytes'], '142')
+        self.meter.accept(dict(v=1, op='sample', flow=self.flow, direction='up',
+                               path='target_tcp', bytes=77, pathBytes=77, measuredAt=10030))
+        after = self.read()
+        self.assertEqual(after['usedBytes'], '142')
+        self.assertEqual((after['measuredAt'], after['receivedAt'], after['evaluatedAt']),
+                         (10030, self.now, self.now))
+        self.now += 100
+        self.replay(77, 60)
+        self.assertEqual((self.read()['measuredAt'], self.read()['receivedAt']),
+                         (10030, after['receivedAt']))
 
     def test_source_isolation_and_atomic_rollback(self):
         self.bind()

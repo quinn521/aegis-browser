@@ -280,7 +280,8 @@ absolute path. Use a separate Xray process/configuration for the outbound
 client. Confirmed writes and terminal records are persisted in a private
 `<socket>.outbox` directory before reporting. The process retries unacknowledged
 records in order, including after restart, and stops a flow on reporting failure.
-Preserve that directory across restarts. A process or storage failure before a
+Sample records preserve the writer's measurement time across delayed delivery;
+the collector's arrival time does not replace it. Preserve that directory across restarts. A process or storage failure before a
 writer can persist its result leaves the flow open with a confirmed lower bound.
 If a crash leaves the socket path behind, confirm that the owning
 collector is stopped before removing that path.
