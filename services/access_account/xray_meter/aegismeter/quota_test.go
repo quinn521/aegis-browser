@@ -119,3 +119,51 @@ func TestIdleExpiryClosesBothSockets(t *testing.T) {
 		t.Fatal("cut off before expiry")
 	}
 }
+
+func TestShortenedExpiryHasIndependentDeadline(t *testing.T) {
+	client, peer := net.Pipe()
+	target, origin := net.Pipe()
+	defer peer.Close()
+	defer origin.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	q := &quotaGuard{inbound: client, target: target, expires: time.Now().Add(time.Minute), closed: make(chan struct{}), expiryChanged: make(chan struct{}, 1), cancel: cancel}
+	defer q.stop()
+	go q.expire(ctx)
+	expiry := time.Now().Add(30 * time.Millisecond)
+	q.shorten(expiry.UnixMilli())
+	for _, conn := range []net.Conn{peer, origin} {
+		conn.SetReadDeadline(expiry.Add(100 * time.Millisecond))
+		if _, err := conn.Read(make([]byte, 1)); err != io.EOF {
+			t.Fatal("shortened expiry did not close socket", err)
+		}
+	}
+	if time.Now().Before(time.UnixMilli(expiry.UnixMilli())) {
+		t.Fatal("socket closed before shortened expiry")
+	}
+}
+
+func TestQuotaInvalidSpanNeverWrites(t *testing.T) {
+	for _, test := range []struct {
+		start, end int
+		path       string
+	}{
+		{-1, 1, "target_tcp"},
+		{0, 5, "target_tcp"},
+		{2, 1, "vision_plain"},
+		{1, 3, "vision_raw"},
+		{0, 3, "vision_padded"},
+	} {
+		client, peer := net.Pipe()
+		_, cancel := context.WithCancel(context.Background())
+		q := &quotaGuard{inbound: client, expires: time.Now().Add(time.Minute), closed: make(chan struct{}), cancel: cancel}
+		f := &Flow{quota: q}
+		w := writeFunc(func([]byte) (int, error) {
+			t.Fatal("invalid target span reached writer")
+			return 0, nil
+		})
+		if n, err := f.Write(w, make([]byte, 4), test.start, test.end, test.path); n != 0 || !errors.Is(err, errCutoff) {
+			t.Fatal(n, err)
+		}
+		peer.Close()
+	}
+}
