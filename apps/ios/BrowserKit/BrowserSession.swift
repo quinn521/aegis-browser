@@ -159,6 +159,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Only app-issued loads waiting for content rules / a window / the next turn.
     /// Policy-approved page actions already belong to WebKit and must survive cancellation here.
     private weak var provisionalNavigation: WKNavigation?
+    private var provisionalDeadlineExpired = false
     private var provisionalDeadline: Task<Void, Never>?
     private var deferredDocumentNavigationID: String?
     private var programmaticPolicyNavigationID: String?
@@ -685,13 +686,21 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private func armProvisionalDeadline(for navigation: WKNavigation, seconds: TimeInterval) {
         provisionalDeadline?.cancel()
         provisionalNavigation = navigation
+        provisionalDeadlineExpired = false
         provisionalDeadline = Task { @MainActor [weak self, weak navigation] in
             do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
-            guard !Task.isCancelled, let self, let navigation, navigation === provisionalNavigation, navigation === pendingNavigation,
-                  isCurrent(navigation), isLoading, let view = loadedWebView else { return }
-            view.stopLoading()
-            webView(view, didFailProvisionalNavigation: navigation, withError: URLError(.timedOut))
+            guard !Task.isCancelled, let self, let navigation, navigation === provisionalNavigation else { return }
+            provisionalDeadlineExpired = true
+            failExpiredProvisionalNavigation(navigation)
         }
+    }
+
+    private func failExpiredProvisionalNavigation(_ navigation: WKNavigation) {
+        guard provisionalDeadlineExpired, navigation === provisionalNavigation, navigation === pendingNavigation,
+              isCurrent(navigation), isLoading, let view = loadedWebView else { return }
+        provisionalDeadlineExpired = false
+        view.stopLoading()
+        webView(view, didFailProvisionalNavigation: navigation, withError: URLError(.timedOut))
     }
 
     private func flushPendingAttachedLoad() {
@@ -1245,6 +1254,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if isLatestAttempt(recorded) {
             attempt = recorded
             requestedURL = redirected
+            failExpiredProvisionalNavigation(navigation)
         }
     }
 
