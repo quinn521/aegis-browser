@@ -6,6 +6,14 @@
 
 软件包、历史 iOS 开发候选和源码预览各自使用独立于 App Store 的版本号。
 
+## iOS / iPadOS 1.1.0 Beta · TestFlight
+
+- Access 新增按网站启用代理的选项。遇到符合条件的网络错误时，页面会显示「通过代理重试」，并保留原有 GET 或 HEAD 请求及其请求头。
+- 接入账户服务的构建可显示已绑定 Access 账户的用量、额度与到期时间，应用在前台时会刷新这些信息。
+- 在设置中可查看、导出和清除 Access 诊断记录。
+- 构建 2 已加入 TestFlight 的 **Aegis Early access** 内测组。[上传记录](https://github.com/gcsagroup/aegis-browser/actions/runs/43523491422)
+- 构建 3 沿用同一份源码，排除内测专用节点和额度配置。已上传 TestFlight 并补齐英文、简体中文和繁体中文的测试说明。Apple 于 2026 年 11 月 14 日将该构建列入 Beta 审核队列。[打包记录](https://github.com/gcsagroup/aegis-browser/actions/runs/43558562658)
+
 ## iOS / iPadOS 1.0.1 · TestFlight
 
 - 已基于上游 main（`93ead15`）完成 Beta 构建 13 打包，并按交付回执核验签名 IPA 和 dSYM。[TestFlight 上传记录](https://github.com/gcsagroup/aegis-browser/actions/runs/41715274104)。[打包记录](https://github.com/gcsagroup/aegis-browser/actions/runs/41714005704)

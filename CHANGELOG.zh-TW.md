@@ -6,6 +6,14 @@
 
 軟體套件、歷史 iOS 開發候選及原始碼預覽各自使用獨立於 App Store 的版本號。
 
+## iOS / iPadOS 1.1.0 Beta · TestFlight
+
+- Access 新增依網站啟用代理伺服器的選項。遇到符合條件的網路錯誤時，頁面會顯示「透過代理重試」，並保留原本的 GET 或 HEAD 請求及其標頭。
+- 接入帳號服務的組建可顯示已綁定 Access 帳號的用量、配額與到期時間，App 在前景時會重新整理這些資訊。
+- 可在設定中查看、匯出及清除 Access 診斷記錄。
+- 組建 2 已加入 TestFlight 的 **Aegis Early access** 內部測試群組。[上傳紀錄](https://github.com/gcsagroup/aegis-browser/actions/runs/43523491422)
+- 組建 3 沿用相同原始碼，排除內部測試專用節點和配額設定。已上傳 TestFlight，並補齊英文、簡體中文及繁體中文的測試說明。Apple 於 2026 年 11 月 14 日將該組建排入 Beta 審核佇列。[封裝紀錄](https://github.com/gcsagroup/aegis-browser/actions/runs/43558562658)
+
 ## iOS / iPadOS 1.0.1 · TestFlight
 
 - 已基於上游 main（`93ead15`）完成 Beta 組建 13 打包，並依交付回執核驗簽名 IPA 與 dSYM。[TestFlight 上傳紀錄](https://github.com/gcsagroup/aegis-browser/actions/runs/41715274104)。[打包紀錄](https://github.com/gcsagroup/aegis-browser/actions/runs/41714005704)

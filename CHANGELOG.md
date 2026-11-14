@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 The workspace package, historical iOS development candidates and source previews use version numbers independent of the App Store version.
 
+## iOS / iPadOS 1.1.0 Beta · TestFlight
+
+- Added per-site proxy controls in Access. For eligible network errors, the page offers **Retry through proxy**. The retry preserves the original GET or HEAD request, including its headers.
+- Added quota and expiry information for bound Access accounts when the build is configured with an account service. Information refreshes while the app is in the foreground.
+- Added Access diagnostics that users can view, export, and clear from Settings.
+- Build 2 is available to the **Aegis Early access** internal TestFlight group. [Upload record](https://github.com/gcsagroup/aegis-browser/actions/runs/43523491422)
+- Build 3 uses the same source and omits the internal test node and quota configuration. It was uploaded to TestFlight with test notes in English, Simplified Chinese and Traditional Chinese. On November 14, 2026, Apple queued the build for Beta App Review. [Package record](https://github.com/gcsagroup/aegis-browser/actions/runs/43558562658)
+
 ## iOS / iPadOS 1.0.1 · TestFlight
 
 - Packaged Beta build 13 from upstream main (`93ead15`) and verified the signed IPA and dSYM against the delivery receipt. [TestFlight upload run](https://github.com/gcsagroup/aegis-browser/actions/runs/41715274104). [Packaging run](https://github.com/gcsagroup/aegis-browser/actions/runs/41714005704)
