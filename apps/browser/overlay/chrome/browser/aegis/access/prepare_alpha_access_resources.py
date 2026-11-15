@@ -29,7 +29,13 @@ if (-not [IO.Directory]::Exists($path)) {
     [IO.Directory]::CreateDirectory($path, $acl) | Out-Null
 }
 $item = Get-Item -LiteralPath $path -Force
-if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 1 }
+if (-not $item.PSIsContainer -or
+    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 1 }
+$existing = Get-Acl -LiteralPath $path
+if ($existing.GetOwner([Security.Principal.SecurityIdentifier]) -ne $user) { exit 1 }
+# Ninja precreates output parents with inherited permissions. Secure the owned
+# directory before any resource is written, including on that first build.
+Set-Acl -LiteralPath $path -AclObject $acl
 $actual = Get-Acl -LiteralPath $path
 $rules = @($actual.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
 if (-not $actual.AreAccessRulesProtected -or

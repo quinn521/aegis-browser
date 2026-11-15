@@ -1,6 +1,6 @@
-From 09868b2c98c79241b714ff3649cdb8f7136ff738 Mon Sep 17 00:00:00 2001
+From d630fea0daa9df16e33daf34637a412e93068f1e Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Sun, 15 Nov 2026 14:20:57 +0800
+Date: Sun, 15 Nov 2026 16:34:47 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
@@ -35,25 +35,28 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../access_site_proxy_bubble_controller.h     |   6 +-
  .../access_site_proxy_product_unittest.cc     |   2 +-
  chrome/browser/aegis/access/alpha_access.gni  |   4 +-
- .../access/prepare_alpha_access_resources.py  |  67 ++-
+ .../prepare_access_installer_release.py       |  40 ++
+ .../access/prepare_alpha_access_resources.py  |  73 ++-
+ .../prepare_alpha_access_resources_test.py    | 100 +++-
  chrome/browser/aegis/aegis_service.cc         |   4 +-
  chrome/browser/aegis/aegis_service.h          |  12 +-
  .../aegis/aegis_service_access_account.cc     | 165 ++++++
  .../aegis/aegis_service_access_account_mac.mm | 146 +----
  .../aegis/aegis_service_access_account_win.cc |  49 ++
  chrome/browser/aegis/aegis_service_factory.cc |   4 +-
- .../aegis/aegis_ui_handler_unittest.cc        |   4 +-
+ .../aegis/aegis_ui_handler_unittest.cc        |  26 +-
  chrome/browser/browser_process_impl.cc        |   7 +-
  .../settings/aegis_page/aegis_page.html       |   2 +-
  .../settings/aegis_page/aegis_page.ts         |  10 +-
  .../ui/views/toolbar/aegis_toolbar_button.cc  |  51 +-
  .../ui/webui/aegis/aegis_ui_handler.cc        |   6 +-
  .../browser/ui/webui/aegis/aegis_ui_handler.h |   6 +-
+ chrome/installer/mini_installer/BUILD.gn      |  36 ++
  content/browser/browser_context.cc            |   2 +-
  .../websockets/websocket_connector_impl.cc    |   2 +-
  .../web_transport_connector_impl.cc           |   2 +-
  content/public/browser/browser_context.h      |   4 +-
- 49 files changed, 2494 insertions(+), 283 deletions(-)
+ 52 files changed, 2681 insertions(+), 300 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_account_win.cc
  create mode 100644 chrome/browser/aegis/access/access_account_win.h
  create mode 100644 chrome/browser/aegis/access/access_account_win_unittest.cc
@@ -68,6 +71,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  create mode 100644 chrome/browser/aegis/access/access_paid_site_win.cc
  create mode 100644 chrome/browser/aegis/access/access_private_files_win.cc
  create mode 100644 chrome/browser/aegis/access/access_private_files_win.h
+ create mode 100644 chrome/browser/aegis/access/prepare_access_installer_release.py
  create mode 100644 chrome/browser/aegis/aegis_service_access_account.cc
  create mode 100644 chrome/browser/aegis/aegis_service_access_account_win.cc
 
@@ -3057,11 +3061,57 @@ index bd1b3a851d1f4104a4386892ce19a269852d85b5..71085a4b6f67b59aa8320bb3d50bc4a5
 -       "Private test nodes require a non-official, unbranded macOS test build.")
 +           ((is_mac || is_win) && !is_official_build && !is_chrome_branded),
 +       "Private test nodes require a non-official, unbranded macOS or Windows test build.")
+diff --git a/chrome/browser/aegis/access/prepare_access_installer_release.py b/chrome/browser/aegis/access/prepare_access_installer_release.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0d8b0be5c706ed1e316c455e5063ba739c97a9e7
+--- /dev/null
++++ b/chrome/browser/aegis/access/prepare_access_installer_release.py
+@@ -0,0 +1,40 @@
++#!/usr/bin/env python3
++"""Generate the explicitly private Windows installer's resource manifest."""
++
++import argparse
++from pathlib import Path
++
++
++def prepare(source: Path, output: Path, channel: str) -> None:
++    if channel not in ("alpha", "beta"):
++        raise ValueError("Private installer requires Alpha or Beta")
++    template = source.read_text(encoding="utf-8")
++    marker = "\n[HIDPI]\n"
++    if (template.count("[GENERAL]\n") != 1 or template.count(marker) != 1
++            or "aegisalphaaccess" in template.lower()):
++        raise ValueError("Unexpected installer manifest")
++    # DIR_ASSETS resolves to the chrome.dll directory on an installed browser.
++    # Only this generated manifest carries private resources; chrome.release
++    # remains unchanged for ordinary builds, including reused output trees.
++    resources = "\n# Explicitly enabled private Access test resources.\n"
++    for name in ("core-manifest.json", "node.json", "xray.exe"):
++        resources += f"AegisAlphaAccess\\{name}: %(VersionDir)s\\AegisAlphaAccess\\\n"
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(template.replace(marker, resources + marker), encoding="utf-8")
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--channel", required=True, choices=("alpha", "beta"))
++    parser.add_argument("--source", required=True, type=Path)
++    parser.add_argument("--output", required=True, type=Path)
++    args = parser.parse_args()
++    try:
++        prepare(args.source, args.output, args.channel)
++    except (OSError, ValueError):
++        parser.exit(1, "Cannot prepare private Access installer manifest.\n")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
 diff --git a/chrome/browser/aegis/access/prepare_alpha_access_resources.py b/chrome/browser/aegis/access/prepare_alpha_access_resources.py
-index 10a9db3b6a11930020e2de8cfda5089e02df86e7..d5e4aa1d329fc58bd4eea1c631d9c3bb892e0d6f 100644
+index 10a9db3b6a11930020e2de8cfda5089e02df86e7..55224f98899a5562750d02dbf06badff94888f8f 100644
 --- a/chrome/browser/aegis/access/prepare_alpha_access_resources.py
 +++ b/chrome/browser/aegis/access/prepare_alpha_access_resources.py
-@@ -5,20 +5,62 @@ import argparse
+@@ -5,20 +5,68 @@ import argparse
  import hashlib
  import json
  import os
@@ -3091,7 +3141,13 @@ index 10a9db3b6a11930020e2de8cfda5089e02df86e7..d5e4aa1d329fc58bd4eea1c631d9c3bb
 +    [IO.Directory]::CreateDirectory($path, $acl) | Out-Null
 +}
 +$item = Get-Item -LiteralPath $path -Force
-+if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 1 }
++if (-not $item.PSIsContainer -or
++    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 1 }
++$existing = Get-Acl -LiteralPath $path
++if ($existing.GetOwner([Security.Principal.SecurityIdentifier]) -ne $user) { exit 1 }
++# Ninja precreates output parents with inherited permissions. Secure the owned
++# directory before any resource is written, including on that first build.
++Set-Acl -LiteralPath $path -AclObject $acl
 +$actual = Get-Acl -LiteralPath $path
 +$rules = @($actual.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
 +if (-not $actual.AreAccessRulesProtected -or
@@ -3128,7 +3184,7 @@ index 10a9db3b6a11930020e2de8cfda5089e02df86e7..d5e4aa1d329fc58bd4eea1c631d9c3bb
      node_bytes = (source / "node.json").read_bytes()
      if (hashlib.sha256(binary).hexdigest() != manifest.get("binarySha256")
              or hashlib.sha256(node_bytes).hexdigest() != manifest.get("nodeConfigSha256")):
-@@ -29,17 +71,21 @@ def stage(source: Path, output: Path, channel: str) -> None:
+@@ -29,17 +77,21 @@ def stage(source: Path, output: Path, channel: str) -> None:
              or outbound.get("streamSettings", {}).get("network") != "tcp"
              or outbound.get("streamSettings", {}).get("security") != "reality"):
          raise ValueError("Unsupported private test transport")
@@ -3154,7 +3210,7 @@ index 10a9db3b6a11930020e2de8cfda5089e02df86e7..d5e4aa1d329fc58bd4eea1c631d9c3bb
                  stream.write(data)
              os.replace(temporary, output / name)
          finally:
-@@ -50,12 +96,13 @@ def stage(source: Path, output: Path, channel: str) -> None:
+@@ -50,12 +102,13 @@ def stage(source: Path, output: Path, channel: str) -> None:
  def main() -> int:
      parser = argparse.ArgumentParser(description=__doc__)
      parser.add_argument("--channel", required=True)
@@ -3170,6 +3226,180 @@ index 10a9db3b6a11930020e2de8cfda5089e02df86e7..d5e4aa1d329fc58bd4eea1c631d9c3bb
          # Private input values and exception payloads never enter build logs.
          parser.exit(1, "Cannot prepare validated private test resources.\n")
      return 0
+diff --git a/chrome/browser/aegis/access/prepare_alpha_access_resources_test.py b/chrome/browser/aegis/access/prepare_alpha_access_resources_test.py
+index dc164dcba1fe3950878c4fb279476efcd8818354..5abd02ccbfa0d969d7190511b7c889df96d06530 100644
+--- a/chrome/browser/aegis/access/prepare_alpha_access_resources_test.py
++++ b/chrome/browser/aegis/access/prepare_alpha_access_resources_test.py
+@@ -1,3 +1,4 @@
++import configparser
+ import hashlib
+ import json
+ import os
+@@ -6,6 +7,7 @@ import tempfile
+ import unittest
+ 
+ from prepare_alpha_access_resources import stage
++from prepare_access_installer_release import prepare
+ 
+ 
+ class AlphaResourcesTest(unittest.TestCase):
+@@ -16,12 +18,13 @@ class AlphaResourcesTest(unittest.TestCase):
+         self.source = self.root / "input"
+         self.source.mkdir()
+         self.binary = b"fixture executable - never run"
++        self.binary_name = "xray.exe" if os.name == "nt" else "xray"
+         self.node = json.dumps({"outbounds": [{"protocol": "vless",
+             "streamSettings": {"network": "tcp", "security": "reality"}}]}).encode()
+-        (self.source / "xray").write_bytes(self.binary)
++        (self.source / self.binary_name).write_bytes(self.binary)
+         (self.source / "node.json").write_bytes(self.node)
+         self.manifest = {"schemaVersion": 1, "channel": "alpha",
+-            "binaryRelativePath": "xray", "nodeConfigRelativePath": "node.json",
++            "binaryRelativePath": self.binary_name, "nodeConfigRelativePath": "node.json",
+             "binarySha256": hashlib.sha256(self.binary).hexdigest(),
+             "nodeConfigSha256": hashlib.sha256(self.node).hexdigest()}
+         self.write_manifest()
+@@ -29,40 +32,68 @@ class AlphaResourcesTest(unittest.TestCase):
+     def write_manifest(self):
+         (self.source / "core-manifest.json").write_text(json.dumps(self.manifest))
+ 
++    def stage(self, output, channel="alpha"):
++        stage(self.source, output, channel, self.binary_name)
++
+     def test_alpha_pins_private_modes_and_bytes(self):
+         output = self.root / "output"
+-        stage(self.source, output, "alpha")
++        self.stage(output)
++        self.assertEqual((output / "node.json").read_bytes(), self.node)
++        self.assertEqual((output / self.binary_name).read_bytes(), self.binary)
++        if os.name != "nt":
++            self.assertEqual(output.stat().st_mode & 0o777, 0o700)
++            self.assertEqual((output / "node.json").stat().st_mode & 0o777, 0o600)
++            self.assertEqual((output / self.binary_name).stat().st_mode & 0o777, 0o700)
++
++    def test_ninja_precreated_output_parent_is_secured_before_staging(self):
++        output = self.root / "ninja-parent"
++        output.mkdir()
++        self.stage(output)
+         self.assertEqual((output / "node.json").read_bytes(), self.node)
+-        self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+-        self.assertEqual((output / "node.json").stat().st_mode & 0o777, 0o600)
+-        self.assertEqual((output / "xray").stat().st_mode & 0o777, 0o700)
++        self.assertEqual((output / self.binary_name).read_bytes(), self.binary)
++
++    @unittest.skipUnless(os.name == "nt", "Windows reparse point regression")
++    def test_reparse_output_is_rejected_without_touching_its_destination(self):
++        destination = self.root / "external"
++        destination.mkdir()
++        marker = destination / "node.json"
++        marker.write_bytes(b"unrelated")
++        output = self.root / "linked-output"
++        try:
++            output.symlink_to(destination, target_is_directory=True)
++        except OSError as error:
++            self.skipTest(f"Directory symlink unavailable: {error.winerror}")
++        with self.assertRaises(ValueError):
++            self.stage(output)
++        self.assertEqual(marker.read_bytes(), b"unrelated")
++        self.assertFalse((destination / self.binary_name).exists())
+ 
+     def test_other_channels_do_not_create_resources(self):
+         for channel in ("dev", "stable", "release", ""):
+             output = self.root / ("output-" + channel)
+             with self.assertRaises(ValueError):
+-                stage(self.source, output, channel)
++                self.stage(output, channel)
+             self.assertFalse(output.exists())
+ 
+     def test_beta_requires_matching_manifest_and_preserves_bytes(self):
+         output = self.root / "output"
+         with self.assertRaises(ValueError):
+-            stage(self.source, output, "beta")
++            self.stage(output, "beta")
+         self.assertFalse(output.exists())
+         self.manifest["channel"] = "beta"
+         self.write_manifest()
+         with self.assertRaises(ValueError):
+-            stage(self.source, output, "alpha")
++            self.stage(output)
+         self.assertFalse(output.exists())
+-        stage(self.source, output, "beta")
++        self.stage(output, "beta")
+         self.assertEqual((output / "node.json").read_bytes(), self.node)
+ 
+     def test_tampered_node_or_binary_is_rejected_before_output(self):
+-        for name, original in (("node.json", self.node), ("xray", self.binary)):
++        for name, original in (("node.json", self.node), (self.binary_name, self.binary)):
+             (self.source / name).write_bytes(original + b"tamper")
+             output = self.root / "output"
+             with self.assertRaises(ValueError):
+-                stage(self.source, output, "alpha")
++                self.stage(output)
+             self.assertFalse(output.exists())
+             (self.source / name).write_bytes(original)
+ 
+@@ -70,19 +101,58 @@ class AlphaResourcesTest(unittest.TestCase):
+         self.manifest["binaryRelativePath"] = "../external"
+         self.write_manifest()
+         with self.assertRaises(ValueError):
+-            stage(self.source, self.root / "output", "alpha")
++            self.stage(self.root / "output")
+ 
+     def test_existing_immutable_candidate_inode_is_preserved(self):
+         output = self.root / "output"
+-        stage(self.source, output, "alpha")
++        self.stage(output)
+         prior = self.root / "prior-node"
+         os.link(output / "node.json", prior)
+         previous_inode = prior.stat().st_ino
+-        stage(self.source, output, "alpha")
++        self.stage(output)
+         self.assertEqual(prior.read_bytes(), self.node)
+         self.assertEqual(prior.stat().st_ino, previous_inode)
+         self.assertNotEqual((output / "node.json").stat().st_ino, previous_inode)
+ 
+ 
++class PrivateInstallerManifestTest(unittest.TestCase):
++    def setUp(self):
++        directory = tempfile.TemporaryDirectory()
++        self.addCleanup(directory.cleanup)
++        self.root = Path(directory.name)
++        self.source = self.root / "chrome.release"
++        self.output = self.root / "generated" / "private.release"
++        self.template = "[GENERAL]\nchrome.exe: %(ChromeDir)s\\\n\n[HIDPI]\n"
++        self.source.write_text(self.template)
++
++    def test_private_channels_install_exact_resources_beside_chrome_dll(self):
++        for channel in ("alpha", "beta"):
++            with self.subTest(channel=channel):
++                prepare(self.source, self.output, channel)
++                config = configparser.ConfigParser(defaults={
++                    "ChromeDir": "Chrome-bin", "VersionDir": "Chrome-bin/1.2.3.4"})
++                config.read(self.output)
++                for name in ("core-manifest.json", "node.json", "xray.exe"):
++                    self.assertEqual(config.get("GENERAL", "AegisAlphaAccess\\" + name),
++                                     "Chrome-bin/1.2.3.4\\AegisAlphaAccess\\")
++                self.assertEqual(config.get("GENERAL", "chrome.exe"), "Chrome-bin\\")
++                self.assertEqual(self.source.read_text(), self.template)
++
++    def test_ordinary_channels_cannot_generate_private_installer_entries(self):
++        for channel in ("dev", "stable", "release", ""):
++            with self.assertRaises(ValueError):
++                prepare(self.source, self.output, channel)
++            self.assertFalse(self.output.exists())
++        self.assertEqual(self.source.read_text(), self.template)
++
++    def test_unexpected_or_already_private_template_is_rejected(self):
++        for template in ("[GENERAL]\n", self.template + "\n[HIDPI]\n",
++                         self.template + "\n# AegisAlphaAccess\\node.json\n"):
++            self.source.write_text(template)
++            with self.assertRaises(ValueError):
++                prepare(self.source, self.output, "alpha")
++            self.assertFalse(self.output.exists())
++
++
+ if __name__ == "__main__":
+     unittest.main()
 diff --git a/chrome/browser/aegis/aegis_service.cc b/chrome/browser/aegis/aegis_service.cc
 index 38fe560f5e9fbeff68101df7947f639dbf654708..d45d7b6c493a988ed672b6b856a397f4fb80ce33 100644
 --- a/chrome/browser/aegis/aegis_service.cc
@@ -3671,10 +3901,21 @@ index fa7f091dfe19d17dcc82068d145d74a2ea3df26c..475737643ec08a5fcb6b520e2b299384
      access::CoreLogShareSession::RecoverAtStartup(profile->GetPath());
  #endif
 diff --git a/chrome/browser/aegis/aegis_ui_handler_unittest.cc b/chrome/browser/aegis/aegis_ui_handler_unittest.cc
-index c9ab001ef3f841380f367add929cc1a9eba866d5..6807a42db1b2433785abb622a4efe840374466c8 100644
+index c9ab001ef3f841380f367add929cc1a9eba866d5..d8de2523d9c01f80a4873f33748ec1270ba32185 100644
 --- a/chrome/browser/aegis/aegis_ui_handler_unittest.cc
 +++ b/chrome/browser/aegis/aegis_ui_handler_unittest.cc
-@@ -44,7 +44,7 @@
+@@ -18,6 +18,10 @@
+ #include "base/uuid.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_WIN)
++#include "base/win/access_token.h"
++#include "base/win/security_descriptor.h"
++#endif
+ #include "chrome/browser/aegis/agent/aegis_browser_tools.h"
+ #include "chrome/browser/aegis/aegis_service_factory.h"
+ #include "chrome/browser/aegis/metalink_download_verifier.h"
+@@ -44,7 +48,7 @@
  #include "url/origin.h"
  
  namespace aegis {
@@ -3683,15 +3924,47 @@ index c9ab001ef3f841380f367add929cc1a9eba866d5..6807a42db1b2433785abb622a4efe840
  class AccessAccountRefreshTestPeer {
   public:
    static void ActivateWithoutPlatformNotifications(AegisService& service) {
-@@ -123,7 +123,7 @@ TEST_F(AegisUIHandlerTest, KeepsCnamePreferenceSeparateFromRuntimeDependency) {
+@@ -123,7 +127,21 @@ TEST_F(AegisUIHandlerTest, KeepsCnamePreferenceSeparateFromRuntimeDependency) {
    EXPECT_TRUE(profile()->GetPrefs()->GetBoolean(prefs::kCnameUncloakEnabled));
  }
  
 -#if BUILDFLAG(IS_MAC)
 +#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
++bool SetAccountBindingPermissions(const base::FilePath& file) {
++#if BUILDFLAG(IS_WIN)
++  auto token = base::win::AccessToken::FromCurrentProcess();
++  if (!token) return false;
++  auto descriptor = base::win::SecurityDescriptor::CreateWithEmptyDacl();
++  descriptor.set_dacl_protected(true);
++  return descriptor.SetDaclEntry(*token, base::win::SecurityAccessMode::kGrant,
++                                 FILE_ALL_ACCESS, 0) &&
++         descriptor.WriteToFile(file, DACL_SECURITY_INFORMATION);
++#else
++  return base::SetPosixFilePermissions(file, 0600);
++#endif
++}
++
  class HeldAccountReplyRunner : public base::TestSimpleTaskRunner {
   public:
    bool PostDelayedTask(const base::Location& from, base::OnceClosure task,
+@@ -164,7 +182,7 @@ TEST_F(AegisUIHandlerTest, OnlyExplicitAccountReadQueriesTheCurrentProfile) {
+       .Set("generation", "d8b4c46f-c1da-4b62-bf87-2d5376f00826");
+   const auto file = profile()->GetPath().AppendASCII("AegisAccessAccount.json");
+   ASSERT_TRUE(base::WriteFile(file, base::WriteJson(binding).value()));
+-  ASSERT_TRUE(base::SetPosixFilePermissions(file, 0600));
++  ASSERT_TRUE(SetAccountBindingPermissions(file));
+   auto* service = AegisServiceFactory::GetForProfile(profile());
+   ASSERT_TRUE(service);
+   AccessAccountRefreshTestPeer::ActivateWithoutPlatformNotifications(*service);
+@@ -203,7 +221,7 @@ TEST_F(AegisUIHandlerTest, OnlyExplicitAccountReadQueriesTheCurrentProfile) {
+     next.Set("generation", base::Uuid::GenerateRandomV4().AsLowercaseString());
+     auto temp = file.AddExtensionASCII("new");
+     return base::WriteFile(temp, base::WriteJson(next).value()) &&
+-           base::SetPosixFilePermissions(temp, 0600) && base::ReplaceFile(temp, file, nullptr);
++           SetAccountBindingPermissions(temp) && base::ReplaceFile(temp, file, nullptr);
+   };
+   for (auto action : {"switch", "switch_back", "sign_out"}) {
+     SCOPED_TRACE(action);
 diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
 index e48a86e5ca2759303ebcc405ef5bda65916ab0f6..edd8e24f454d9e3e6af5626e0dae9f20dde4eb45 100644
 --- a/chrome/browser/browser_process_impl.cc
@@ -4037,6 +4310,71 @@ index 4febe4a1648f95d943097c23e8e6fb6624e58be3..f7cbe8785cd956f66bd28f0fe165783d
    base::ScopedClosureRunner access_usage_visibility_;
    base::WeakPtrFactory<AegisUIHandler> account_weak_factory_{this};
  #endif
+diff --git a/chrome/installer/mini_installer/BUILD.gn b/chrome/installer/mini_installer/BUILD.gn
+index 1b3638ada8b6b558bdce130cb6f89ec9b7bfa6b7..86958a2f5e34cd0e0f5a8a1ef79a905b7f84f2a6 100644
+--- a/chrome/installer/mini_installer/BUILD.gn
++++ b/chrome/installer/mini_installer/BUILD.gn
+@@ -6,6 +6,7 @@ import("//build/config/compiler/compiler.gni")
+ import("//build/config/python.gni")
+ import("//build/config/ui.gni")
+ import("//build/timestamp.gni")
++import("//chrome/browser/aegis/access/alpha_access.gni")
+ import("//chrome/process_version_rc_template.gni")
+ import("//third_party/dawn/scripts/dawn_features.gni")
+ import("//third_party/ffmpeg/ffmpeg_options.gni")
+@@ -159,10 +160,33 @@ if (enable_uncompressed_archive) {
+       "$target_gen_dir/mini_installer/packed_files_uncompressed.rc"
+ }
+ 
++if (aegis_private_test_node_enabled) {
++  action("aegis_private_access_installer_release") {
++    script = "//chrome/browser/aegis/access/prepare_access_installer_release.py"
++    inputs = [ "chrome.release" ]
++    outputs = [ "$target_gen_dir/aegis_private_chrome.release" ]
++    private_channel = "alpha"
++    if (aegis_beta_test_node_enabled) {
++      private_channel = "beta"
++    }
++    args = [
++      "--channel",
++      private_channel,
++      "--source",
++      rebase_path(inputs[0], root_build_dir),
++      "--output",
++      rebase_path(outputs[0], root_build_dir),
++    ]
++  }
++}
++
+ action("mini_installer_archive") {
+   script = "//chrome/tools/build/win/create_installer_archive.py"
+ 
+   release_file = "chrome.release"
++  if (aegis_private_test_node_enabled) {
++    release_file = "$target_gen_dir/aegis_private_chrome.release"
++  }
+ 
+   inputs = [
+     "$root_out_dir/chrome.dll",
+@@ -216,6 +240,18 @@ action("mini_installer_archive") {
+     "//third_party/icu:icudata",
+   ]
+ 
++  if (aegis_private_test_node_enabled) {
++    inputs += [
++      "$root_out_dir/AegisAlphaAccess/core-manifest.json",
++      "$root_out_dir/AegisAlphaAccess/node.json",
++      "$root_out_dir/AegisAlphaAccess/xray.exe",
++    ]
++    deps += [
++      ":aegis_private_access_installer_release",
++      "//chrome/browser/aegis/access:alpha_access_resource_files",
++    ]
++  }
++
+   if (enable_hidpi) {
+     args += [ "--enable_hidpi=1" ]
+   }
 diff --git a/content/browser/browser_context.cc b/content/browser/browser_context.cc
 index 6fa36fc9e58ec269f48fee6b8097ed8f1d97eb4f..bcfface8ec63a89b8d83fd3de9f2dace4c88e863 100644
 --- a/content/browser/browser_context.cc
