@@ -1,6 +1,6 @@
-From b8f0687882414c5eee544c841a3ef0c9421d96de Mon Sep 17 00:00:00 2001
+From 09868b2c98c79241b714ff3649cdb8f7136ff738 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Sun, 15 Nov 2026 14:15:22 +0800
+Date: Sun, 15 Nov 2026 14:20:57 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
@@ -12,7 +12,8 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../access/access_account_win_unittest.cc     | 115 ++++
  .../aegis/access/access_core_log_disk_win.cc  |  98 ++++
  .../access_core_log_disk_win_unittest.cc      |  56 ++
- .../aegis/access/access_core_log_share.cc     |  53 +-
+ .../aegis/access/access_core_log_share.cc     |  68 ++-
+ .../aegis/access/access_core_log_share.h      |   6 +
  .../aegis/access/access_core_log_store.cc     |  46 +-
  .../aegis/access/access_core_log_store.h      |  12 +-
  .../aegis/access/access_local_core_manager.cc |  96 +++-
@@ -21,7 +22,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../aegis/access/access_local_core_win.h      |  31 ++
  .../access_local_core_win_test_child.cc       |  71 +++
  .../access/access_local_core_win_unittest.cc  | 209 +++++++
- .../aegis/access/access_log_export_win.cc     |  78 +++
+ .../aegis/access/access_log_export_win.cc     | 106 ++++
  .../aegis/access/access_log_export_win.h      |  17 +
  .../access_network_context_transport.cc       |  10 +-
  .../access/access_network_context_transport.h |   6 +-
@@ -52,7 +53,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../websockets/websocket_connector_impl.cc    |   2 +-
  .../web_transport_connector_impl.cc           |   2 +-
  content/public/browser/browser_context.h      |   4 +-
- 48 files changed, 2445 insertions(+), 283 deletions(-)
+ 49 files changed, 2494 insertions(+), 283 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_account_win.cc
  create mode 100644 chrome/browser/aegis/access/access_account_win.h
  create mode 100644 chrome/browser/aegis/access/access_account_win_unittest.cc
@@ -1203,7 +1204,7 @@ index 0000000000000000000000000000000000000000..144e8e7fd7159801e715808dfc3258df
 +}  // namespace
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_core_log_share.cc b/chrome/browser/aegis/access/access_core_log_share.cc
-index d696afb29b231d83b82b5de64da53704e6f80970..66cfaa37f1fd8958153c2a305cf0872998283690 100644
+index d696afb29b231d83b82b5de64da53704e6f80970..93de71dcb1fa6ad1a156070c99e7324abc365289 100644
 --- a/chrome/browser/aegis/access/access_core_log_share.cc
 +++ b/chrome/browser/aegis/access/access_core_log_share.cc
 @@ -1,7 +1,14 @@
@@ -1289,7 +1290,7 @@ index d696afb29b231d83b82b5de64da53704e6f80970..66cfaa37f1fd8958153c2a305cf08729
      if (!RemoveOwnedArchive(path))
        recovered = false;
    }
-@@ -100,8 +128,11 @@ bool WriteCoreLogArchive(const base::FilePath& directory,
+@@ -100,9 +128,27 @@ bool WriteCoreLogArchive(const base::FilePath& directory,
      return false;
    base::File file(directory.AppendASCII(kCoreLogArchive),
                    base::File::FLAG_CREATE | base::File::FLAG_WRITE);
@@ -1300,10 +1301,26 @@ index d696afb29b231d83b82b5de64da53704e6f80970..66cfaa37f1fd8958153c2a305cf08729
 +  if (fchmod(file.GetPlatformFile(), 0600) != 0) return false;
 +#endif
 +  return file.WriteAtCurrentPosAndCheck(base::as_byte_span(gzip));
++}
++
++#if BUILDFLAG(IS_WIN)
++void ReadCoreLogArchiveForExport(
++    base::FilePath path, base::OnceCallback<void(std::string)> done) {
++  g_archive_runner.Get()->PostTaskAndReplyWithResult(
++      FROM_HERE, base::BindOnce([](const base::FilePath& path) {
++        std::string bytes;
++        // Gzip headers and deflate overhead fit above the 64 KiB input limit.
++        if (!base::ReadFileToStringWithMaxSize(path, &bytes, 70 * 1024)) {
++          bytes.clear();
++        }
++        return bytes;
++      }, std::move(path)), std::move(done));
  }
++#endif
  
  class CoreLogShareSession::ShutdownHandle
-@@ -183,9 +214,17 @@ class CoreLogShareSession::Writer {
+     : public std::enable_shared_from_this<ShutdownHandle> {
+@@ -183,9 +229,17 @@ class CoreLogShareSession::Writer {
        state.active = true;
        profile_ = parent;
      }
@@ -1321,6 +1338,30 @@ index d696afb29b231d83b82b5de64da53704e6f80970..66cfaa37f1fd8958153c2a305cf08729
      if (!created || !WriteCoreLogArchive(directory_.GetPath(), text))
        return {};
      return directory_.GetPath().AppendASCII(kCoreLogArchive);
+diff --git a/chrome/browser/aegis/access/access_core_log_share.h b/chrome/browser/aegis/access/access_core_log_share.h
+index 988c4bbd1dbe69e7f59a8700842310346c213daf..1f2d137665043324be58e852d77777cec37100dc 100644
+--- a/chrome/browser/aegis/access/access_core_log_share.h
++++ b/chrome/browser/aegis/access/access_core_log_share.h
+@@ -9,6 +9,7 @@
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/threading/sequence_bound.h"
++#include "build/build_config.h"
+ 
+ namespace aegis::access {
+ // Write only inside a freshly created private directory owned by the caller.
+@@ -18,6 +19,11 @@ inline constexpr char kCoreLogSharePrefix[] = "aegis-access-share-";
+ // The caller supplies the original profile directory. Never traverses links.
+ bool RecoverCoreLogArchives(const base::FilePath& profile);
+ inline constexpr char kCoreLogArchive[] = "Aegis-Access.log.gz";
++#if BUILDFLAG(IS_WIN)
++// Reads on the archive writer's sequence, ordered with session cleanup.
++void ReadCoreLogArchiveForExport(
++    base::FilePath path, base::OnceCallback<void(std::string)> done);
++#endif
+ 
+ // UI owns the operation. Its worker owns the temporary directory from the
+ // first write until cleanup; only a path, never file ownership, crosses to UI.
 diff --git a/chrome/browser/aegis/access/access_core_log_store.cc b/chrome/browser/aegis/access/access_core_log_store.cc
 index 8bf538af897c04d7785d1efec4bde4fbbaebd1c7..5d54ddb8e9dd13292e8f169b4b0436b791c28bd9 100644
 --- a/chrome/browser/aegis/access/access_core_log_store.cc
@@ -2216,10 +2257,10 @@ index 0000000000000000000000000000000000000000..4b3a4e1be9de73489c12e90ccc2d9823
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_log_export_win.cc b/chrome/browser/aegis/access/access_log_export_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..15bd790475368d24466402e0db0861e691913e8a
+index 0000000000000000000000000000000000000000..ac3b07f84a3cf4bb24c39ef967c77d86f410a17c
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_log_export_win.cc
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,106 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_log_export_win.h"
 +
@@ -2230,11 +2271,14 @@ index 0000000000000000000000000000000000000000..15bd790475368d24466402e0db0861e6
 +#include <optional>
 +#include <utility>
 +
++#include "base/containers/span.h"
++#include "base/files/file.h"
 +#include "base/files/file_path.h"
 +#include "base/functional/bind.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/task/thread_pool.h"
 +#include "base/win/scoped_co_mem.h"
++#include "chrome/browser/aegis/access/access_core_log_share.h"
 +#include "ui/views/win/hwnd_util.h"
 +
 +namespace aegis::access {
@@ -2263,6 +2307,33 @@ index 0000000000000000000000000000000000000000..15bd790475368d24466402e0db0861e6
 +  return base::FilePath(destination.get());
 +}
 +
++bool WriteDestination(const base::FilePath& destination,
++                      const std::string& bytes) {
++  base::File file(destination, base::File::FLAG_CREATE | base::File::FLAG_WRITE |
++                                  base::File::FLAG_WIN_EXCLUSIVE_READ |
++                                  base::File::FLAG_WIN_EXCLUSIVE_WRITE |
++                                  base::File::FLAG_CAN_DELETE_ON_CLOSE);
++  return file.IsValid() && file.DeleteOnClose(true) &&
++         file.WriteAtCurrentPosAndCheck(base::as_byte_span(bytes)) &&
++         file.Flush() && file.DeleteOnClose(false);
++}
++
++void OnArchiveRead(base::FilePath destination,
++                   base::RepeatingCallback<bool()> still_valid,
++                   base::OnceCallback<void(bool)> done,
++                   std::string bytes) {
++  if (bytes.empty() || !still_valid.Run()) {
++    std::move(done).Run(false);
++    return;
++  }
++  // The destination write uses bounded in-memory data. EndSession can remove
++  // the source archive without racing a file handle or waiting on this path.
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock()},
++      base::BindOnce(&WriteDestination, std::move(destination), std::move(bytes)),
++      std::move(done));
++}
++
 +}  // namespace
 +
 +void ExportAccessLogOnWindows(gfx::NativeWindow window,
@@ -2288,12 +2359,10 @@ index 0000000000000000000000000000000000000000..15bd790475368d24466402e0db0861e6
 +          std::move(done).Run(true);
 +          return;
 +        }
-+        base::ThreadPool::PostTaskAndReplyWithResult(
-+            FROM_HERE, {base::MayBlock()},
-+            base::BindOnce([](const base::FilePath& from,
-+                              const base::FilePath& to) {
-+              return ::CopyFileW(from.value().c_str(), to.value().c_str(), TRUE) != FALSE;
-+            }, std::move(archive), std::move(*destination)), std::move(done));
++        ReadCoreLogArchiveForExport(
++            std::move(archive),
++            base::BindOnce(&OnArchiveRead, std::move(*destination),
++                           std::move(still_valid), std::move(done)));
 +      }, std::move(archive), std::move(still_valid), std::move(done)));
 +}
 +

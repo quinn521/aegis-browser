@@ -8,11 +8,14 @@
 #include <optional>
 #include <utility>
 
+#include "base/containers/span.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/win/scoped_co_mem.h"
+#include "chrome/browser/aegis/access/access_core_log_share.h"
 #include "ui/views/win/hwnd_util.h"
 
 namespace aegis::access {
@@ -41,6 +44,33 @@ std::optional<base::FilePath> PickDestination(HWND owner) {
   return base::FilePath(destination.get());
 }
 
+bool WriteDestination(const base::FilePath& destination,
+                      const std::string& bytes) {
+  base::File file(destination, base::File::FLAG_CREATE | base::File::FLAG_WRITE |
+                                  base::File::FLAG_WIN_EXCLUSIVE_READ |
+                                  base::File::FLAG_WIN_EXCLUSIVE_WRITE |
+                                  base::File::FLAG_CAN_DELETE_ON_CLOSE);
+  return file.IsValid() && file.DeleteOnClose(true) &&
+         file.WriteAtCurrentPosAndCheck(base::as_byte_span(bytes)) &&
+         file.Flush() && file.DeleteOnClose(false);
+}
+
+void OnArchiveRead(base::FilePath destination,
+                   base::RepeatingCallback<bool()> still_valid,
+                   base::OnceCallback<void(bool)> done,
+                   std::string bytes) {
+  if (bytes.empty() || !still_valid.Run()) {
+    std::move(done).Run(false);
+    return;
+  }
+  // The destination write uses bounded in-memory data. EndSession can remove
+  // the source archive without racing a file handle or waiting on this path.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&WriteDestination, std::move(destination), std::move(bytes)),
+      std::move(done));
+}
+
 }  // namespace
 
 void ExportAccessLogOnWindows(gfx::NativeWindow window,
@@ -66,12 +96,10 @@ void ExportAccessLogOnWindows(gfx::NativeWindow window,
           std::move(done).Run(true);
           return;
         }
-        base::ThreadPool::PostTaskAndReplyWithResult(
-            FROM_HERE, {base::MayBlock()},
-            base::BindOnce([](const base::FilePath& from,
-                              const base::FilePath& to) {
-              return ::CopyFileW(from.value().c_str(), to.value().c_str(), TRUE) != FALSE;
-            }, std::move(archive), std::move(*destination)), std::move(done));
+        ReadCoreLogArchiveForExport(
+            std::move(archive),
+            base::BindOnce(&OnArchiveRead, std::move(*destination),
+                           std::move(still_valid), std::move(done)));
       }, std::move(archive), std::move(still_valid), std::move(done)));
 }
 

@@ -135,6 +135,21 @@ bool WriteCoreLogArchive(const base::FilePath& directory,
   return file.WriteAtCurrentPosAndCheck(base::as_byte_span(gzip));
 }
 
+#if BUILDFLAG(IS_WIN)
+void ReadCoreLogArchiveForExport(
+    base::FilePath path, base::OnceCallback<void(std::string)> done) {
+  g_archive_runner.Get()->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce([](const base::FilePath& path) {
+        std::string bytes;
+        // Gzip headers and deflate overhead fit above the 64 KiB input limit.
+        if (!base::ReadFileToStringWithMaxSize(path, &bytes, 70 * 1024)) {
+          bytes.clear();
+        }
+        return bytes;
+      }, std::move(path)), std::move(done));
+}
+#endif
+
 class CoreLogShareSession::ShutdownHandle
     : public std::enable_shared_from_this<ShutdownHandle> {
  public:
