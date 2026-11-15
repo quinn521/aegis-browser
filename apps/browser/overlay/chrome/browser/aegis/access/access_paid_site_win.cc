@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
@@ -29,57 +30,26 @@
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "ui/base/base_window.h"
 #include "ui/base/mojom/ui_base_types.mojom.h"
-#include "ui/base/ime/text_input_type.h"
-#include "ui/gfx/geometry/insets.h"
-#include "ui/views/controls/textfield/textfield.h"
-#include "ui/views/layout/box_layout.h"
+#include "components/constrained_window/constrained_window_views.h"
+#include "ui/base/interaction/element_identifier.h"
+#include "ui/base/models/dialog_model.h"
+#include "ui/views/bubble/bubble_dialog_model_host.h"
 #include "ui/views/widget/widget.h"
-#include "ui/views/window/dialog_delegate.h"
+
 
 namespace aegis::access {
 namespace {
 
 const char kLeaseKey[] = "aegis-account-node";
 
-class PrivateAuthorizationDialog : public views::DialogDelegateView {
- public:
-  using Done = base::OnceCallback<void(std::optional<PrivateAccountBinding>)>;
-  explicit PrivateAuthorizationDialog(Done done) : done_(std::move(done)) {
-    SetTitle(u"Authorize private Access session");
-    SetModalType(ui::mojom::ModalType::kWindow);
-    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Authorize");
-    SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 8));
-    origin_ = Field(u"Account service origin");
-    account_ = Field(u"Account ID");
-    token_ = Field(u"Private account session");
-    token_->SetTextInputType(ui::TEXT_INPUT_TYPE_PASSWORD);
-  }
-  ~PrivateAuthorizationDialog() override {
-    if (done_) std::move(done_).Run(std::nullopt);
-  }
-  bool Accept() override {
-    if (!done_) return true;
-    std::move(done_).Run(PrivateAccountBinding{base::UTF16ToUTF8(origin_->GetText()),
-        base::UTF16ToUTF8(account_->GetText()), base::UTF16ToUTF8(token_->GetText())});
-    return true;
-  }
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrivateOrigin);
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrivateAccount);
+DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrivateToken);
 
- private:
-  views::Textfield* Field(const std::u16string& label) {
-    auto* field = AddChildView(std::make_unique<views::Textfield>());
-    field->SetAccessibleName(label);
-    field->SetPlaceholderText(label);
-    field->SetDefaultWidthInChars(36);
-    return field;
-  }
-  Done done_;
-  raw_ptr<views::Textfield> origin_;
-  raw_ptr<views::Textfield> account_;
-  raw_ptr<views::Textfield> token_;
-};
+using PrivateAuthorizationDone =
+    base::OnceCallback<void(std::optional<PrivateAccountBinding>)>;
 
-void AuthorizePrivate(Profile* profile, PrivateAuthorizationDialog::Done done) {
+void AuthorizePrivate(Profile* profile, PrivateAuthorizationDone done) {
   auto* features = g_browser_process ? g_browser_process->GetFeatures() : nullptr;
   auto* browsers = features ? features->global_browser_collection() : nullptr;
   auto* browser = browsers ? browsers->GetLastActiveBrowser() : nullptr;
@@ -88,9 +58,32 @@ void AuthorizePrivate(Profile* profile, PrivateAuthorizationDialog::Done done) {
     std::move(done).Run(std::nullopt);
     return;
   }
-  views::DialogDelegate::CreateDialogWidget(
-      std::make_unique<PrivateAuthorizationDialog>(std::move(done)),
-      nullptr, browser->GetWindow()->GetNativeWindow())->Show();
+  ui::DialogModel::Builder builder;
+  auto completion = std::make_shared<PrivateAuthorizationDone>(std::move(done));
+  builder.SetTitle(u"Authorize private Access session")
+      .AddTextfield(kPrivateOrigin, u"Account service origin", {})
+      .AddTextfield(kPrivateAccount, u"Account ID", {})
+      .AddPasswordField(kPrivateToken, u"Private account session",
+                        u"Private account session", {})
+      .AddOkButton(base::BindOnce(
+          [](ui::DialogModel* model,
+             std::shared_ptr<PrivateAuthorizationDone> completion) {
+            if (!*completion) return;
+            std::move(*completion).Run(PrivateAccountBinding{
+                base::UTF16ToUTF8(model->GetTextfieldByUniqueId(kPrivateOrigin)->text()),
+                base::UTF16ToUTF8(model->GetTextfieldByUniqueId(kPrivateAccount)->text()),
+                base::UTF16ToUTF8(model->GetPasswordFieldByUniqueId(kPrivateToken)->text())});
+          }, base::Unretained(builder.model()), completion),
+          ui::DialogModel::Button::Params().SetLabel(u"Authorize"))
+      .AddCancelButton(base::DoNothing())
+      .SetDialogDestroyingCallback(base::BindOnce(
+          [](std::shared_ptr<PrivateAuthorizationDone> completion) {
+            if (*completion) std::move(*completion).Run(std::nullopt);
+          }, completion));
+  auto host = views::BubbleDialogModelHost::CreateModal(
+      builder.Build(), ui::mojom::ModalType::kWindow);
+  constrained_window::CreateBrowserModalDialogViews(
+      std::move(host), browser->GetWindow()->GetNativeWindow())->Show();
 }
 
 int64_t NowMs() {

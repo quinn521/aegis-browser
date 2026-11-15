@@ -29,7 +29,7 @@ base::DictValue ResolveAccountReply(AegisAccountReply resolve) {
   auto parsed = json ? base::JSONReader::ReadDict(
       std::string_view(static_cast<const char*>(json.bytes), json.length),
       base::JSON_PARSE_RFC) : std::nullopt;
-  return parsed ? std::move(*parsed) : AccountState("unavailable");
+  return parsed ? std::move(*parsed) : base::DictValue().Set("state", "unavailable");
 }
 
 GlobalBrowserCollection* Browsers() {

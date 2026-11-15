@@ -486,16 +486,20 @@ void AccessSiteProxyBubbleController::ShareCoreLogs(
 #if BUILDFLAG(IS_WIN)
         auto window = tab->GetTopLevelNativeWindow();
         if (!window) return;
-        *picker_succeeded = ExportAccessLogOnWindows(
-            window, path, base::BindRepeating(
+        ExportAccessLogOnWindows(
+            window, std::move(path), base::BindRepeating(
                 [](base::WeakPtr<content::WebContents> tab,
                    content::GlobalRenderFrameHostId frame,
                    scoped_refptr<AccessCoreLogStore> store, uint64_t version) {
                   return tab && tab->GetPrimaryMainFrame()->GetGlobalId() == frame &&
                          tab->GetVisibility() == content::Visibility::VISIBLE &&
                          store->CanShare(version);
-                }, tab, frame, std::move(store), version));
-        release.RunAndReset();
+                }, tab, frame, std::move(store), version),
+            base::BindOnce([](std::shared_ptr<bool> picker_succeeded,
+                              base::ScopedClosureRunner release, bool ok) {
+              *picker_succeeded = ok;
+              release.RunAndReset();
+            }, std::move(picker_succeeded), std::move(release)));
 #else
         tab->GetRenderWidgetHostView()->ShowSharePicker("", "", GURL(), {path.value()},
             base::BindOnce([](base::ScopedClosureRunner release, std::shared_ptr<bool> picker_succeeded,

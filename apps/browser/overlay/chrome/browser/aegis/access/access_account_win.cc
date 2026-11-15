@@ -212,7 +212,7 @@ Response Request(const Binding& binding, std::wstring_view method,
   auto headers = L"Authorization: Bearer " + base::UTF8ToWide(binding.token) + L"\r\n";
   std::string body;
   if (payload) {
-    auto json = base::JSONWriter::Write(*payload);
+    auto json = base::WriteJson(*payload);
     if (!json) return {};
     body = std::move(*json);
     headers += L"Content-Type: application/json\r\n";
@@ -298,7 +298,8 @@ std::optional<base::DictValue> ParseEntitlement(std::string_view bytes,
     if (!value || (!subscribed && !value->is_none())) return std::nullopt;
     clean.Set(key, value->Clone());
   }
-  clean.Set("entitlementAccountId", account).Set("status", status);
+  clean.Set("entitlementAccountId", account);
+  clean.Set("status", status);
   const bool panel = data->contains("quotaSource") ||
                      data->contains("panelExpiryMode") ||
                      data->contains("panelExpiresAt");
@@ -337,9 +338,9 @@ std::optional<base::DictValue> ParseEntitlement(std::string_view bytes,
         return std::nullopt;
       }
     }
-    clean.Set("quotaSource", "3xui_alpha")
-        .Set("panelExpiryMode", *data->FindString("panelExpiryMode"))
-        .Set("panelExpiresAt", panel_expiry->Clone());
+    clean.Set("quotaSource", "3xui_alpha");
+    clean.Set("panelExpiryMode", *data->FindString("panelExpiryMode"));
+    clean.Set("panelExpiresAt", panel_expiry->Clone());
   }
   const auto evaluated = Milliseconds(*data, "evaluatedAt");
   if (data->contains("evaluatedAt") && (!evaluated || *evaluated < *received)) {
@@ -398,15 +399,15 @@ AccountSnapshot Query(base::FilePath profile) {
         if (auto age = Milliseconds(*entitlement, "snapshotAgeMs")) {
           const auto measured = *Milliseconds(*entitlement, "measuredAt");
           const auto updated = std::min(kMaxTime - measured, *age + elapsed);
-          entitlement->Set("snapshotAgeMs", static_cast<double>(updated))
-                     .Set("freshness", Freshness(updated));
+          entitlement->Set("snapshotAgeMs", static_cast<double>(updated));
+          entitlement->Set("freshness", Freshness(updated));
         }
         if (now >= std::min(*Milliseconds(*entitlement, "expiresAt"),
                             *Milliseconds(*entitlement, "periodEnd"))) {
           entitlement->Set("status", "expired");
         }
-        reply.Set("queryElapsedMs", static_cast<double>(elapsed))
-             .Set("evaluatedAt", static_cast<double>(now));
+        reply.Set("queryElapsedMs", static_cast<double>(elapsed));
+        reply.Set("evaluatedAt", static_cast<double>(now));
         return reply;
       }, std::move(result), std::move(changed), started, evaluated);
 }

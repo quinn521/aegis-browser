@@ -36,7 +36,7 @@ class AccessAccountWindowsTest : public testing::Test {
   }
 
   void WriteBinding() {
-    auto bytes = base::JSONWriter::Write(base::DictValue()
+    auto bytes = base::WriteJson(base::DictValue()
         .Set("origin", server_.base_url().spec())
         .Set("accountId", "fixture-account")
         .Set("generation", base::Uuid::GenerateRandomV4().AsLowercaseString())

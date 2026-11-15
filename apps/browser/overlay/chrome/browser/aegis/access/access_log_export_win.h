@@ -9,8 +9,9 @@ namespace base {
 class FilePath;
 }
 namespace aegis::access {
-bool ExportAccessLogOnWindows(gfx::NativeWindow window,
-                              const base::FilePath& archive,
-                              const base::RepeatingCallback<bool()>& still_valid);
+void ExportAccessLogOnWindows(gfx::NativeWindow window,
+                              base::FilePath archive,
+                              base::RepeatingCallback<bool()> still_valid,
+                              base::OnceCallback<void(bool)> done);
 }
 #endif

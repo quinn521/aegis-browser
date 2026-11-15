@@ -297,6 +297,7 @@ source_set("aegis") {
     ]
     deps += [
       "//chrome/browser/aegis/access:access_private_files_win",
+      "//components/constrained_window",
       "//ui/base",
       "//ui/views",
     ]

@@ -99,7 +99,7 @@ class AccessLocalCoreWinTest : public testing::Test {
   }
 
   void WriteManifest(const std::string& pin) {
-    auto manifest = base::JSONWriter::Write(base::DictValue()
+    auto manifest = base::WriteJson(base::DictValue()
         .Set("binaryPath", binary_.AsUTF8Unsafe())
         .Set("binarySha256", pin));
     ASSERT_TRUE(manifest);

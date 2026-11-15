@@ -1,13 +1,13 @@
-From e2df4550b611eb1e028dacb0325dc56821ba02da Mon Sep 17 00:00:00 2001
+From b8f0687882414c5eee544c841a3ef0c9421d96de Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Sun, 15 Nov 2026 14:03:08 +0800
+Date: Sun, 15 Nov 2026 14:15:22 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
  chrome/browser/BUILD.gn                       |   9 +-
- chrome/browser/aegis/BUILD.gn                 |  44 +-
+ chrome/browser/aegis/BUILD.gn                 |  45 +-
  chrome/browser/aegis/access/BUILD.gn          |  87 ++-
- .../aegis/access/access_account_win.cc        | 509 ++++++++++++++++++
+ .../aegis/access/access_account_win.cc        | 510 ++++++++++++++++++
  .../browser/aegis/access/access_account_win.h |  41 ++
  .../access/access_account_win_unittest.cc     | 115 ++++
  .../aegis/access/access_core_log_disk_win.cc  |  98 ++++
@@ -21,16 +21,16 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../aegis/access/access_local_core_win.h      |  31 ++
  .../access_local_core_win_test_child.cc       |  71 +++
  .../access/access_local_core_win_unittest.cc  | 209 +++++++
- .../aegis/access/access_log_export_win.cc     |  37 ++
- .../aegis/access/access_log_export_win.h      |  16 +
+ .../aegis/access/access_log_export_win.cc     |  78 +++
+ .../aegis/access/access_log_export_win.h      |  17 +
  .../access_network_context_transport.cc       |  10 +-
  .../access/access_network_context_transport.h |   6 +-
- .../aegis/access/access_paid_site_win.cc      | 286 ++++++++++
+ .../aegis/access/access_paid_site_win.cc      | 279 ++++++++++
  .../aegis/access/access_private_files_win.cc  |  98 ++++
  .../aegis/access/access_private_files_win.h   |  19 +
  .../access_private_publication_unittest.cc    |   2 +-
  .../access_proxying_url_loader_factory.cc     |   2 +-
- .../access_site_proxy_bubble_controller.cc    |  29 +-
+ .../access_site_proxy_bubble_controller.cc    |  33 +-
  .../access_site_proxy_bubble_controller.h     |   6 +-
  .../access_site_proxy_product_unittest.cc     |   2 +-
  chrome/browser/aegis/access/alpha_access.gni  |   4 +-
@@ -38,7 +38,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  chrome/browser/aegis/aegis_service.cc         |   4 +-
  chrome/browser/aegis/aegis_service.h          |  12 +-
  .../aegis/aegis_service_access_account.cc     | 165 ++++++
- .../aegis/aegis_service_access_account_mac.mm | 144 +----
+ .../aegis/aegis_service_access_account_mac.mm | 146 +----
  .../aegis/aegis_service_access_account_win.cc |  49 ++
  chrome/browser/aegis/aegis_service_factory.cc |   4 +-
  .../aegis/aegis_ui_handler_unittest.cc        |   4 +-
@@ -52,7 +52,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../websockets/websocket_connector_impl.cc    |   2 +-
  .../web_transport_connector_impl.cc           |   2 +-
  content/public/browser/browser_context.h      |   4 +-
- 48 files changed, 2403 insertions(+), 282 deletions(-)
+ 48 files changed, 2445 insertions(+), 283 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_account_win.cc
  create mode 100644 chrome/browser/aegis/access/access_account_win.h
  create mode 100644 chrome/browser/aegis/access/access_account_win_unittest.cc
@@ -91,10 +91,10 @@ index fa2bb8fb26df3e8d053a655ccb189461a79c3664..4e9ce4e4ca947dc3d43c0a0165b3ecd4
  
    if (is_chrome_for_testing) {
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index b2f94079d7fa3e898ddecd50d8909a0d9a7c21ba..a3f67b92cfd586d6466d436ee34845087107d9e8 100644
+index b2f94079d7fa3e898ddecd50d8909a0d9a7c21ba..a92a3fe79e441e82bac93ea16cfbf1594bd7887f 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
-@@ -275,23 +275,44 @@ source_set("aegis") {
+@@ -275,23 +275,45 @@ source_set("aegis") {
    } else {
      deps += [ "//chrome/android:chrome_jni_headers" ]
    }
@@ -120,6 +120,7 @@ index b2f94079d7fa3e898ddecd50d8909a0d9a7c21ba..a3f67b92cfd586d6466d436ee3484508
 +    ]
 +    deps += [
 +      "//chrome/browser/aegis/access:access_private_files_win",
++      "//components/constrained_window",
 +      "//ui/base",
 +      "//ui/views",
 +    ]
@@ -145,7 +146,7 @@ index b2f94079d7fa3e898ddecd50d8909a0d9a7c21ba..a3f67b92cfd586d6466d436ee3484508
        "//services/network/public/mojom",
        "//chrome/services/aegis_torrent/public/mojom",
        "//sandbox/mac:seatbelt_extension",
-@@ -545,6 +566,16 @@ test("aegis_browser_unittests") {
+@@ -545,6 +567,16 @@ test("aegis_browser_unittests") {
        "//content/test:test_support",
      ]
    }
@@ -162,7 +163,7 @@ index b2f94079d7fa3e898ddecd50d8909a0d9a7c21ba..a3f67b92cfd586d6466d436ee3484508
    if (is_mac) {
      deps += [
        "//chrome/browser/aegis/access:access_network_context_transport",
-@@ -554,7 +585,6 @@ test("aegis_browser_unittests") {
+@@ -554,7 +586,6 @@ test("aegis_browser_unittests") {
        "//services/network:network_service",
      ]
      sources += [
@@ -353,10 +354,10 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
  test("access_site_proxy_bubble_unittests") {
 diff --git a/chrome/browser/aegis/access/access_account_win.cc b/chrome/browser/aegis/access/access_account_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..d6621337ecb3df3cf4bd0772cbc36512186f3317
+index 0000000000000000000000000000000000000000..cb702926b6a409ff3720f367f4e39271154ed3e4
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_win.cc
-@@ -0,0 +1,509 @@
+@@ -0,0 +1,510 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_account_win.h"
 +
@@ -571,7 +572,7 @@ index 0000000000000000000000000000000000000000..d6621337ecb3df3cf4bd0772cbc36512
 +  auto headers = L"Authorization: Bearer " + base::UTF8ToWide(binding.token) + L"\r\n";
 +  std::string body;
 +  if (payload) {
-+    auto json = base::JSONWriter::Write(*payload);
++    auto json = base::WriteJson(*payload);
 +    if (!json) return {};
 +    body = std::move(*json);
 +    headers += L"Content-Type: application/json\r\n";
@@ -657,7 +658,8 @@ index 0000000000000000000000000000000000000000..d6621337ecb3df3cf4bd0772cbc36512
 +    if (!value || (!subscribed && !value->is_none())) return std::nullopt;
 +    clean.Set(key, value->Clone());
 +  }
-+  clean.Set("entitlementAccountId", account).Set("status", status);
++  clean.Set("entitlementAccountId", account);
++  clean.Set("status", status);
 +  const bool panel = data->contains("quotaSource") ||
 +                     data->contains("panelExpiryMode") ||
 +                     data->contains("panelExpiresAt");
@@ -696,9 +698,9 @@ index 0000000000000000000000000000000000000000..d6621337ecb3df3cf4bd0772cbc36512
 +        return std::nullopt;
 +      }
 +    }
-+    clean.Set("quotaSource", "3xui_alpha")
-+        .Set("panelExpiryMode", *data->FindString("panelExpiryMode"))
-+        .Set("panelExpiresAt", panel_expiry->Clone());
++    clean.Set("quotaSource", "3xui_alpha");
++    clean.Set("panelExpiryMode", *data->FindString("panelExpiryMode"));
++    clean.Set("panelExpiresAt", panel_expiry->Clone());
 +  }
 +  const auto evaluated = Milliseconds(*data, "evaluatedAt");
 +  if (data->contains("evaluatedAt") && (!evaluated || *evaluated < *received)) {
@@ -757,15 +759,15 @@ index 0000000000000000000000000000000000000000..d6621337ecb3df3cf4bd0772cbc36512
 +        if (auto age = Milliseconds(*entitlement, "snapshotAgeMs")) {
 +          const auto measured = *Milliseconds(*entitlement, "measuredAt");
 +          const auto updated = std::min(kMaxTime - measured, *age + elapsed);
-+          entitlement->Set("snapshotAgeMs", static_cast<double>(updated))
-+                     .Set("freshness", Freshness(updated));
++          entitlement->Set("snapshotAgeMs", static_cast<double>(updated));
++          entitlement->Set("freshness", Freshness(updated));
 +        }
 +        if (now >= std::min(*Milliseconds(*entitlement, "expiresAt"),
 +                            *Milliseconds(*entitlement, "periodEnd"))) {
 +          entitlement->Set("status", "expired");
 +        }
-+        reply.Set("queryElapsedMs", static_cast<double>(elapsed))
-+             .Set("evaluatedAt", static_cast<double>(now));
++        reply.Set("queryElapsedMs", static_cast<double>(elapsed));
++        reply.Set("evaluatedAt", static_cast<double>(now));
 +        return reply;
 +      }, std::move(result), std::move(changed), started, evaluated);
 +}
@@ -915,7 +917,7 @@ index 0000000000000000000000000000000000000000..306588eab32da7af4d22a0c135a9810e
 +#endif
 diff --git a/chrome/browser/aegis/access/access_account_win_unittest.cc b/chrome/browser/aegis/access/access_account_win_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..3ab89909ca00dac62260a834804a4d65f474688b
+index 0000000000000000000000000000000000000000..c71428f30a6380d4f910e777a78a683ba7db96d4
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_win_unittest.cc
 @@ -0,0 +1,115 @@
@@ -957,7 +959,7 @@ index 0000000000000000000000000000000000000000..3ab89909ca00dac62260a834804a4d65
 +  }
 +
 +  void WriteBinding() {
-+    auto bytes = base::JSONWriter::Write(base::DictValue()
++    auto bytes = base::WriteJson(base::DictValue()
 +        .Set("origin", server_.base_url().spec())
 +        .Set("accountId", "fixture-account")
 +        .Set("generation", base::Uuid::GenerateRandomV4().AsLowercaseString())
@@ -1999,7 +2001,7 @@ index 0000000000000000000000000000000000000000..241482eca0fb1ef679f0af65f5b456ca
 +}
 diff --git a/chrome/browser/aegis/access/access_local_core_win_unittest.cc b/chrome/browser/aegis/access/access_local_core_win_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..bd958337fb81f4a204ba49c40ddc41bb52c2565f
+index 0000000000000000000000000000000000000000..4b3a4e1be9de73489c12e90ccc2d98233edb9614
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_local_core_win_unittest.cc
 @@ -0,0 +1,209 @@
@@ -2104,7 +2106,7 @@ index 0000000000000000000000000000000000000000..bd958337fb81f4a204ba49c40ddc41bb
 +  }
 +
 +  void WriteManifest(const std::string& pin) {
-+    auto manifest = base::JSONWriter::Write(base::DictValue()
++    auto manifest = base::WriteJson(base::DictValue()
 +        .Set("binaryPath", binary_.AsUTF8Unsafe())
 +        .Set("binarySha256", pin));
 +    ASSERT_TRUE(manifest);
@@ -2214,10 +2216,10 @@ index 0000000000000000000000000000000000000000..bd958337fb81f4a204ba49c40ddc41bb
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_log_export_win.cc b/chrome/browser/aegis/access/access_log_export_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..4c6cb8feb3d8c0bb9978cdcb4be72744ce7a520d
+index 0000000000000000000000000000000000000000..15bd790475368d24466402e0db0861e691913e8a
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_log_export_win.cc
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,78 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_log_export_win.h"
 +
@@ -2225,42 +2227,83 @@ index 0000000000000000000000000000000000000000..4c6cb8feb3d8c0bb9978cdcb4be72744
 +#include <shobjidl.h>
 +#include <wrl/client.h>
 +
++#include <optional>
++#include <utility>
++
 +#include "base/files/file_path.h"
-+#include "base/functional/callback.h"
++#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/task/thread_pool.h"
 +#include "base/win/scoped_co_mem.h"
 +#include "ui/views/win/hwnd_util.h"
 +
 +namespace aegis::access {
++namespace {
 +
-+bool ExportAccessLogOnWindows(gfx::NativeWindow window,
-+                              const base::FilePath& archive,
-+                              const base::RepeatingCallback<bool()>& still_valid) {
++std::optional<base::FilePath> PickDestination(HWND owner) {
++  if (!::IsWindow(owner)) return std::nullopt;
 +  Microsoft::WRL::ComPtr<IFileSaveDialog> picker;
 +  if (FAILED(::CoCreateInstance(__uuidof(FileSaveDialog), nullptr,
 +                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&picker)))) {
-+    return false;
++    return std::nullopt;
 +  }
 +  if (FAILED(picker->SetOptions(FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
-+                                FOS_DONTADDTORECENT | FOS_NOCHANGEDIR | FOS_NODEREFERENCELINKS)) ||
++                                FOS_DONTADDTORECENT | FOS_NOCHANGEDIR |
++                                FOS_NODEREFERENCELINKS)) ||
 +      FAILED(picker->SetTitle(L"Save compressed Access diagnostics")) ||
-+      FAILED(picker->SetFileName(L"Aegis-Access.log.gz"))) return false;
-+  const auto result = picker->Show(views::HWNDForNativeWindow(window));
-+  if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return true;
++      FAILED(picker->SetFileName(L"Aegis-Access.log.gz"))) return std::nullopt;
++  const auto result = picker->Show(owner);
++  if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return base::FilePath();
 +  Microsoft::WRL::ComPtr<IShellItem> selected;
 +  base::win::ScopedCoMem<wchar_t> destination;
-+  return SUCCEEDED(result) && still_valid.Run() &&
-+      SUCCEEDED(picker->GetResult(&selected)) &&
-+      SUCCEEDED(selected->GetDisplayName(SIGDN_FILESYSPATH, &destination)) &&
-+      ::CopyFileW(archive.value().c_str(), destination.get(), TRUE);
++  if (FAILED(result) || FAILED(picker->GetResult(&selected)) ||
++      FAILED(selected->GetDisplayName(SIGDN_FILESYSPATH, &destination))) {
++    return std::nullopt;
++  }
++  return base::FilePath(destination.get());
++}
++
++}  // namespace
++
++void ExportAccessLogOnWindows(gfx::NativeWindow window,
++                              base::FilePath archive,
++                              base::RepeatingCallback<bool()> still_valid,
++                              base::OnceCallback<void(bool)> done) {
++  // Keep the OS modal loop off the Browser UI sequence, where account grants
++  // and proxy readiness still need their timers and replies.
++  auto sequence = base::ThreadPool::CreateCOMSTATaskRunner(
++      {base::MayBlock(), base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
++      base::SingleThreadTaskRunnerThreadMode::DEDICATED);
++  sequence->PostTaskAndReplyWithResult(
++      FROM_HERE, base::BindOnce(&PickDestination, views::HWNDForNativeWindow(window)),
++      base::BindOnce([](base::FilePath archive,
++                        base::RepeatingCallback<bool()> still_valid,
++                        base::OnceCallback<void(bool)> done,
++                        std::optional<base::FilePath> destination) {
++        if (!destination || !still_valid.Run()) {
++          std::move(done).Run(false);
++          return;
++        }
++        if (destination->empty()) {
++          std::move(done).Run(true);
++          return;
++        }
++        base::ThreadPool::PostTaskAndReplyWithResult(
++            FROM_HERE, {base::MayBlock()},
++            base::BindOnce([](const base::FilePath& from,
++                              const base::FilePath& to) {
++              return ::CopyFileW(from.value().c_str(), to.value().c_str(), TRUE) != FALSE;
++            }, std::move(archive), std::move(*destination)), std::move(done));
++      }, std::move(archive), std::move(still_valid), std::move(done)));
 +}
 +
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_log_export_win.h b/chrome/browser/aegis/access/access_log_export_win.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..fcd5f08ba2ccd3a71e186ea743d7bdc68ca063bc
+index 0000000000000000000000000000000000000000..2615a4f45a5e07b4d79f961011c6a572efdc3884
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_log_export_win.h
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,17 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOG_EXPORT_WIN_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOG_EXPORT_WIN_H_
@@ -2272,9 +2315,10 @@ index 0000000000000000000000000000000000000000..fcd5f08ba2ccd3a71e186ea743d7bdc6
 +class FilePath;
 +}
 +namespace aegis::access {
-+bool ExportAccessLogOnWindows(gfx::NativeWindow window,
-+                              const base::FilePath& archive,
-+                              const base::RepeatingCallback<bool()>& still_valid);
++void ExportAccessLogOnWindows(gfx::NativeWindow window,
++                              base::FilePath archive,
++                              base::RepeatingCallback<bool()> still_valid,
++                              base::OnceCallback<void(bool)> done);
 +}
 +#endif
 diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
@@ -2359,10 +2403,10 @@ index e888a760f6c963c69241ce896935a668e48389ec..0ba1bf081192a725c9b5ef4ebe2a908b
    void Broadcast(PartitionState& state);
 diff --git a/chrome/browser/aegis/access/access_paid_site_win.cc b/chrome/browser/aegis/access/access_paid_site_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..82319689757d78b682d83a94decdb20e65be3b8f
+index 0000000000000000000000000000000000000000..27467a9ee60fbc9ce0034b0b8efda962287cef15
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_paid_site_win.cc
-@@ -0,0 +1,286 @@
+@@ -0,0 +1,279 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_paid_site_mac.h"
 +
@@ -2377,6 +2421,7 @@ index 0000000000000000000000000000000000000000..82319689757d78b682d83a94decdb20e
 +#include <vector>
 +
 +#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
 +#include "base/memory/raw_ptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "base/strings/utf_string_conversions.h"
@@ -2394,57 +2439,26 @@ index 0000000000000000000000000000000000000000..82319689757d78b682d83a94decdb20e
 +#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 +#include "ui/base/base_window.h"
 +#include "ui/base/mojom/ui_base_types.mojom.h"
-+#include "ui/base/ime/text_input_type.h"
-+#include "ui/gfx/geometry/insets.h"
-+#include "ui/views/controls/textfield/textfield.h"
-+#include "ui/views/layout/box_layout.h"
++#include "components/constrained_window/constrained_window_views.h"
++#include "ui/base/interaction/element_identifier.h"
++#include "ui/base/models/dialog_model.h"
++#include "ui/views/bubble/bubble_dialog_model_host.h"
 +#include "ui/views/widget/widget.h"
-+#include "ui/views/window/dialog_delegate.h"
++
 +
 +namespace aegis::access {
 +namespace {
 +
 +const char kLeaseKey[] = "aegis-account-node";
 +
-+class PrivateAuthorizationDialog : public views::DialogDelegateView {
-+ public:
-+  using Done = base::OnceCallback<void(std::optional<PrivateAccountBinding>)>;
-+  explicit PrivateAuthorizationDialog(Done done) : done_(std::move(done)) {
-+    SetTitle(u"Authorize private Access session");
-+    SetModalType(ui::mojom::ModalType::kWindow);
-+    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Authorize");
-+    SetLayoutManager(std::make_unique<views::BoxLayout>(
-+        views::BoxLayout::Orientation::kVertical, gfx::Insets(16), 8));
-+    origin_ = Field(u"Account service origin");
-+    account_ = Field(u"Account ID");
-+    token_ = Field(u"Private account session");
-+    token_->SetTextInputType(ui::TEXT_INPUT_TYPE_PASSWORD);
-+  }
-+  ~PrivateAuthorizationDialog() override {
-+    if (done_) std::move(done_).Run(std::nullopt);
-+  }
-+  bool Accept() override {
-+    if (!done_) return true;
-+    std::move(done_).Run(PrivateAccountBinding{base::UTF16ToUTF8(origin_->GetText()),
-+        base::UTF16ToUTF8(account_->GetText()), base::UTF16ToUTF8(token_->GetText())});
-+    return true;
-+  }
++DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrivateOrigin);
++DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrivateAccount);
++DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kPrivateToken);
 +
-+ private:
-+  views::Textfield* Field(const std::u16string& label) {
-+    auto* field = AddChildView(std::make_unique<views::Textfield>());
-+    field->SetAccessibleName(label);
-+    field->SetPlaceholderText(label);
-+    field->SetDefaultWidthInChars(36);
-+    return field;
-+  }
-+  Done done_;
-+  raw_ptr<views::Textfield> origin_;
-+  raw_ptr<views::Textfield> account_;
-+  raw_ptr<views::Textfield> token_;
-+};
++using PrivateAuthorizationDone =
++    base::OnceCallback<void(std::optional<PrivateAccountBinding>)>;
 +
-+void AuthorizePrivate(Profile* profile, PrivateAuthorizationDialog::Done done) {
++void AuthorizePrivate(Profile* profile, PrivateAuthorizationDone done) {
 +  auto* features = g_browser_process ? g_browser_process->GetFeatures() : nullptr;
 +  auto* browsers = features ? features->global_browser_collection() : nullptr;
 +  auto* browser = browsers ? browsers->GetLastActiveBrowser() : nullptr;
@@ -2453,9 +2467,32 @@ index 0000000000000000000000000000000000000000..82319689757d78b682d83a94decdb20e
 +    std::move(done).Run(std::nullopt);
 +    return;
 +  }
-+  views::DialogDelegate::CreateDialogWidget(
-+      std::make_unique<PrivateAuthorizationDialog>(std::move(done)),
-+      nullptr, browser->GetWindow()->GetNativeWindow())->Show();
++  ui::DialogModel::Builder builder;
++  auto completion = std::make_shared<PrivateAuthorizationDone>(std::move(done));
++  builder.SetTitle(u"Authorize private Access session")
++      .AddTextfield(kPrivateOrigin, u"Account service origin", {})
++      .AddTextfield(kPrivateAccount, u"Account ID", {})
++      .AddPasswordField(kPrivateToken, u"Private account session",
++                        u"Private account session", {})
++      .AddOkButton(base::BindOnce(
++          [](ui::DialogModel* model,
++             std::shared_ptr<PrivateAuthorizationDone> completion) {
++            if (!*completion) return;
++            std::move(*completion).Run(PrivateAccountBinding{
++                base::UTF16ToUTF8(model->GetTextfieldByUniqueId(kPrivateOrigin)->text()),
++                base::UTF16ToUTF8(model->GetTextfieldByUniqueId(kPrivateAccount)->text()),
++                base::UTF16ToUTF8(model->GetPasswordFieldByUniqueId(kPrivateToken)->text())});
++          }, base::Unretained(builder.model()), completion),
++          ui::DialogModel::Button::Params().SetLabel(u"Authorize"))
++      .AddCancelButton(base::DoNothing())
++      .SetDialogDestroyingCallback(base::BindOnce(
++          [](std::shared_ptr<PrivateAuthorizationDone> completion) {
++            if (*completion) std::move(*completion).Run(std::nullopt);
++          }, completion));
++  auto host = views::BubbleDialogModelHost::CreateModal(
++      builder.Build(), ui::mojom::ModalType::kWindow);
++  constrained_window::CreateBrowserModalDialogViews(
++      std::move(host), browser->GetWindow()->GetNativeWindow())->Show();
 +}
 +
 +int64_t NowMs() {
@@ -2805,7 +2842,7 @@ index 47312661d45023dda69bc40555bb99a8a4f74ecc..59beff1058d8babee86b34e4f914a3ee
        profile_->IsAccountProxyDispatchBlocked(request_url)) return RequestDisposition::kBlock;
  #endif
 diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
-index 77dd981455d236e0151e8d6081d396726824b1ab..afe2bec3926e231761e71cfeb61817ddc6dc2e29 100644
+index 77dd981455d236e0151e8d6081d396726824b1ab..600899de2eab6ad031a17f01c79e9e58321f5ad1 100644
 --- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 +++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 @@ -21,13 +21,17 @@
@@ -2863,23 +2900,27 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..afe2bec3926e231761e71cfeb61817dd
  void AccessSiteProxyBubbleController::ReadConfiguredNodeId(
      base::OnceCallback<void(std::string)> done) {
    auto input = ResolveAccessLocalCoreInput();
-@@ -479,12 +483,27 @@ void AccessSiteProxyBubbleController::ShareCoreLogs(
+@@ -479,12 +483,31 @@ void AccessSiteProxyBubbleController::ShareCoreLogs(
              !tab->GetRenderWidgetHostView()) {
            return;
          }
 +#if BUILDFLAG(IS_WIN)
 +        auto window = tab->GetTopLevelNativeWindow();
 +        if (!window) return;
-+        *picker_succeeded = ExportAccessLogOnWindows(
-+            window, path, base::BindRepeating(
++        ExportAccessLogOnWindows(
++            window, std::move(path), base::BindRepeating(
 +                [](base::WeakPtr<content::WebContents> tab,
 +                   content::GlobalRenderFrameHostId frame,
 +                   scoped_refptr<AccessCoreLogStore> store, uint64_t version) {
 +                  return tab && tab->GetPrimaryMainFrame()->GetGlobalId() == frame &&
 +                         tab->GetVisibility() == content::Visibility::VISIBLE &&
 +                         store->CanShare(version);
-+                }, tab, frame, std::move(store), version));
-+        release.RunAndReset();
++                }, tab, frame, std::move(store), version),
++            base::BindOnce([](std::shared_ptr<bool> picker_succeeded,
++                              base::ScopedClosureRunner release, bool ok) {
++              *picker_succeeded = ok;
++              release.RunAndReset();
++            }, std::move(picker_succeeded), std::move(release)));
 +#else
          tab->GetRenderWidgetHostView()->ShowSharePicker("", "", GURL(), {path.value()},
              base::BindOnce([](base::ScopedClosureRunner release, std::shared_ptr<bool> picker_succeeded,
@@ -3303,7 +3344,7 @@ index 0000000000000000000000000000000000000000..e9a19220d7b30e715f2a3c5502b03778
 +
 +}  // namespace aegis
 diff --git a/chrome/browser/aegis/aegis_service_access_account_mac.mm b/chrome/browser/aegis/aegis_service_access_account_mac.mm
-index 06dce7d6c4e961cc910370f733af7b908a5509c8..f85f3cd3bac16c86c466802571a1823191368c47 100644
+index 06dce7d6c4e961cc910370f733af7b908a5509c8..d2442e1227ac7b1b2fc166e7e0c9e2a53dde23bc 100644
 --- a/chrome/browser/aegis/aegis_service_access_account_mac.mm
 +++ b/chrome/browser/aegis/aegis_service_access_account_mac.mm
 @@ -22,10 +22,6 @@
@@ -3317,6 +3358,15 @@ index 06dce7d6c4e961cc910370f733af7b908a5509c8..f85f3cd3bac16c86c466802571a18231
  base::DictValue ResolveAccountReply(AegisAccountReply resolve) {
    NSData* json = [NSJSONSerialization dataWithJSONObject:resolve()
                                                  options:0
+@@ -33,7 +29,7 @@
+   auto parsed = json ? base::JSONReader::ReadDict(
+       std::string_view(static_cast<const char*>(json.bytes), json.length),
+       base::JSON_PARSE_RFC) : std::nullopt;
+-  return parsed ? std::move(*parsed) : AccountState("unavailable");
++  return parsed ? std::move(*parsed) : base::DictValue().Set("state", "unavailable");
+ }
+ 
+ GlobalBrowserCollection* Browsers() {
 @@ -88,116 +84,13 @@ void OnBrowserClosed(BrowserWindowInterface* browser) override {
    AccessAccountApplicationStateChanged();
  }
