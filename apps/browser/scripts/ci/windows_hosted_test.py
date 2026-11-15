@@ -147,7 +147,10 @@ class HostedTrialTest(unittest.TestCase):
     def test_windows_trial_test_names_match_native_sources(self):
         source = hosted.BROWSER / 'overlay/chrome/browser/aegis'
         enhancements = (source / 'enhancements/enhancement_browsertest.cc').read_text()
-        access = (source / 'access/access_local_core_win_unittest.cc').read_text()
+        access = '\n'.join((source / 'access' / file).read_text() for file in (
+            'access_core_log_disk_win_unittest.cc',
+            'access_local_core_win_unittest.cc',
+        ))
         self.assertEqual(hosted.ENHANCEMENT_CASES, {
             'EnhancementBrowserTest.' + name for name in re.findall(
                 r'IN_PROC_BROWSER_TEST_F\(EnhancementBrowserTest,\s*(\w+)\)', enhancements)

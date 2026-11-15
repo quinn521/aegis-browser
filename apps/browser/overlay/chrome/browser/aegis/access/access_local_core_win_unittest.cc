@@ -32,24 +32,35 @@
 #include "base/win/security_descriptor.h"
 #include "chrome/browser/aegis/access/access_build_channel.h"
 #include "chrome/browser/aegis/access/access_buildflags.h"
+#include "chrome/browser/aegis/access/access_private_files_win.h"
 #include "crypto/hash.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace aegis::access {
 namespace {
 
-TEST(AccessLocalCoreWinInputTest, OnlyExplicitDevBindingResolves) {
+TEST(AccessLocalCoreWinInputTest, BuildControlsLocalBinding) {
   base::test::ScopedCommandLine command;
   auto* line = command.GetProcessCommandLine();
   line->RemoveSwitch("aegis-access-dev-core-manifest");
   line->RemoveSwitch("aegis-access-dev-node-config");
+#if !BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
   EXPECT_FALSE(ResolveAccessLocalCoreInput());
+#endif
   line->AppendSwitchPath("aegis-access-dev-core-manifest",
                          base::FilePath(L"C:\\测试\\manifest.json"));
+#if !BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
   EXPECT_FALSE(ResolveAccessLocalCoreInput());
+#endif
   line->AppendSwitchPath("aegis-access-dev-node-config",
                          base::FilePath(L"C:\\测试\\node.json"));
   const auto input = ResolveAccessLocalCoreInput();
+#if BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
+  ASSERT_TRUE(input);
+  EXPECT_EQ(input->source, AccessLocalCoreSource::kPrivateTestBundle);
+  EXPECT_EQ(input->manifest.BaseName().MaybeAsASCII(), "core-manifest.json");
+  EXPECT_EQ(input->node_config.BaseName().MaybeAsASCII(), "node.json");
+#else
   const bool dev = BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED) &&
                    AccessChannelForCurrentBuild() ==
                        aegis_access::ChannelNamespace::kDev;
@@ -59,6 +70,7 @@ TEST(AccessLocalCoreWinInputTest, OnlyExplicitDevBindingResolves) {
     EXPECT_EQ(input->manifest, base::FilePath(L"C:\\测试\\manifest.json"));
     EXPECT_EQ(input->node_config, base::FilePath(L"C:\\测试\\node.json"));
   }
+#endif
 }
 
 class AccessLocalCoreWinTest : public testing::Test {
@@ -66,7 +78,7 @@ class AccessLocalCoreWinTest : public testing::Test {
   void SetUp() override {
     ASSERT_TRUE(root_.CreateUniqueTempDir());
     profile_ = root_.GetPath().AppendASCII("Local AppData");
-    ASSERT_TRUE(base::CreateDirectory(profile_));
+    ASSERT_TRUE(CreatePrivateAccessDirectory(profile_));
     profile_override_ =
         std::make_unique<base::ScopedPathOverride>(base::DIR_LOCAL_APP_DATA,
                                                    profile_);

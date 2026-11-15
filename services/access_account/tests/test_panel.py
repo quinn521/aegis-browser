@@ -184,6 +184,7 @@ class PanelEntitlementTest(unittest.TestCase):
         self.assertEqual((data["measuredAt"], data["snapshotAgeMs"], data["freshness"]),
                          (None, None, "unavailable"))
         self.assertEqual(data["status"], "active")
+        self.assertEqual(data["evaluatedAt"], NOW)
 
     def test_alpha_absolute_expiry_is_bounded_by_local_period(self):
         self.alpha()
@@ -264,7 +265,8 @@ class PanelEntitlementTest(unittest.TestCase):
         self.mock.status = 503
         self.assertEqual(self.read(), FAILURE)
         self.mock.status = 200
-        self.server.panel.token = "wrong-fixture-token"
+        # Synthetic credentials used only by the local test fixture.
+        self.server.panel.token = "wrong-fixture-token"  # nosec B105
         self.assertEqual(self.read(), FAILURE)
 
     def test_alpha_preserves_session_and_plan_recheck(self):

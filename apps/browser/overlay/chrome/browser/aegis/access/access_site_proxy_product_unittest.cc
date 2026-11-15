@@ -425,7 +425,7 @@ class AccessSiteProxyProductTest : public testing::Test {
   OwnershipKey owner_;
 };
 
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 TEST_F(AccessSiteProxyProductTest, DualSelectionReleasesPaidOnlyAfterCommittedLocalOff) {
   Enable();
   ASSERT_TRUE(transport_->SetAccountNodeSites({"news.example"}, "", 0, ""));
@@ -445,6 +445,18 @@ TEST_F(AccessSiteProxyProductTest, DualSelectionReleasesPaidOnlyAfterCommittedLo
   EXPECT_FALSE(Snapshot().toggle_on);
 }
 #endif
+
+TEST_F(AccessSiteProxyProductTest, ToolbarEnableCompletesOnlyAfterAcknowledgement) {
+  context_.hold_next = true;
+  base::test::TestFuture<void> ready;
+  ASSERT_TRUE(bubble_->RequestHostProxySession({"news.example"}, true,
+                                              ready.GetCallback()));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  EXPECT_FALSE(ready.IsReady());
+  context_.Reply(true);
+  ASSERT_TRUE(ready.Wait());
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
+}
 
 TEST_F(AccessSiteProxyProductTest, RecoveryTimesOutWhileCandidateAckIsStillHeld) {
   context_.hold_next = true;

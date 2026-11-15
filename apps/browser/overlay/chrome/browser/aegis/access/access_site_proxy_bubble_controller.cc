@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <utility>
+#include "base/task/thread_pool.h"
 #include "base/command_line.h"
 #include "chrome/browser/aegis/access/access_identity_generation_source.h"
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
@@ -20,13 +21,17 @@
 #include "chrome/browser/aegis/aegis_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "build/build_config.h"
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/aegis/access/access_core_log_share.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#if BUILDFLAG(IS_MAC)
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
+#else
+#include "chrome/browser/aegis/access/access_log_export_win.h"
+#endif
 #endif
 #include "components/aegis_access/access_proxy_route_adapter.h"
 #include "components/version_info/channel.h"
@@ -38,7 +43,7 @@ namespace {
 const void* const kAccessSiteProxyBubbleControllerKey =
     &kAccessSiteProxyBubbleControllerKey;
 
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 const void* const kLogHistoryKey = &kLogHistoryKey;
 // Keep both stores on the original profile. Reopening an incognito window
 // reuses its own private store even while the previous core is shutting down.
@@ -117,7 +122,7 @@ AccessSiteProxyBubbleController::AccessSiteProxyBubbleController(
     Profile* profile)
     : profile_(profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   if ((profile_->IsRegularProfile() || profile_->IsPrimaryOTRProfile()) &&
       profile_->GetPrefs()->FindPreference(kAccessCoreLogLevel)) {
     app_terminating_ = browser_shutdown::AddAppTerminatingCallback(
@@ -229,12 +234,12 @@ bool AccessSiteProxyBubbleController::RequestHostProxySession(
 
 bool AccessSiteProxyBubbleController::RequestHostProxySession(
     const AccessSiteHost& requested_host,
-    bool enabled, base::OnceClosure on_disabled) {
+    bool enabled, base::OnceClosure on_ready) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const auto website = CanonicalWebsiteHost(requested_host);
   if (!website.host) return false;
   const auto host = *website.host;
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   if (enabled) {
     auto* transport = AccessNetworkContextTransport::Get(profile_);
     if (transport && std::ranges::any_of(transport->AccountSites(), [&](const auto& paid) {
@@ -257,6 +262,7 @@ bool AccessSiteProxyBubbleController::RequestHostProxySession(
     verifying_host_.reset();
     ++committed_verification_attempt_;
     publication_in_flight_ = false;
+    on_enabled_.Reset();
     superseded_retry = std::move(retry_completion_);
     superseded_queue = std::move(queued_retry_);
     retry_url_ = GURL();
@@ -272,7 +278,7 @@ bool AccessSiteProxyBubbleController::RequestHostProxySession(
     // committed choice until the local transaction actually succeeds.
     host_states_[host].connection = AccessSiteConnectionState::kConnecting;
     host_states_[host].failure_reason.clear();
-    BeginDisablePublication(host, std::move(on_disabled));
+    BeginDisablePublication(host, std::move(on_ready));
     if (superseded_retry) std::move(superseded_retry).Run(false);
     if (superseded_queue) std::move(superseded_queue).Run(false);
     return true;
@@ -282,6 +288,7 @@ bool AccessSiteProxyBubbleController::RequestHostProxySession(
   host_states_[host].failure_reason.clear();
 
   publication_in_flight_ = true;
+  on_enabled_ = std::move(on_ready);
   PrepareLocalCore(host);
   return true;
 }
@@ -440,34 +447,76 @@ void AccessSiteProxyBubbleController::SetCoreLogLevel(std::string_view level) {
   core_logs_->SetLevel(level);
   ++state_revision_;
 }
-#if BUILDFLAG(IS_MAC)
-void AccessSiteProxyBubbleController::ShareCoreLogs(content::WebContents* tab, std::string preview, uint64_t version,
-    base::OnceCallback<void(bool)> done) {
-  if (!CanViewCoreLogs() || !tab ||
-      tab->GetBrowserContext() != profile_ || preview.empty() || !core_logs_->CanShare(version)) {
-    std::move(done).Run(false);
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+void AccessSiteProxyBubbleController::ReadConfiguredNodeId(
+    base::OnceCallback<void(std::string)> done) {
+  auto input = ResolveAccessLocalCoreInput();
+  if (!input) {
+    std::move(done).Run(std::string());
     return;
   }
-  log_share_.Start(std::move(preview), base::BindOnce(
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&ReadConfiguredAccessNodeId, std::move(*input)),
+      std::move(done));
+}
+
+void AccessSiteProxyBubbleController::ShareCoreLogs(
+    content::WebContents* tab,
+    std::string preview,
+    uint64_t version,
+    base::OnceCallback<void(CoreLogShareResult)> done) {
+  if (!CanViewCoreLogs() || !tab ||
+      tab->GetBrowserContext() != profile_ || preview.empty() || !core_logs_->CanShare(version)) {
+    std::move(done).Run(CoreLogShareResult::kFailed);
+    return;
+  }
+  auto picker_succeeded = std::make_shared<bool>(false);
+  log_share_.Start(profile_->GetOriginalProfile()->GetPath(), std::move(preview), base::BindOnce(
       [](base::WeakPtr<content::WebContents> tab, content::GlobalRenderFrameHostId frame,
          scoped_refptr<AccessCoreLogStore> store, uint64_t version,
-         base::OnceCallback<void(bool)> done, base::FilePath path,
+         std::shared_ptr<bool> picker_succeeded, base::FilePath path,
          base::ScopedClosureRunner release) {
         if (!tab || path.empty() || !store->CanShare(version) ||
             tab->GetPrimaryMainFrame()->GetGlobalId() != frame ||
             tab->GetVisibility() != content::Visibility::VISIBLE ||
             !tab->GetRenderWidgetHostView()) {
-          std::move(done).Run(false);
           return;
         }
+#if BUILDFLAG(IS_WIN)
+        auto window = tab->GetTopLevelNativeWindow();
+        if (!window) return;
+        *picker_succeeded = ExportAccessLogOnWindows(
+            window, path, base::BindRepeating(
+                [](base::WeakPtr<content::WebContents> tab,
+                   content::GlobalRenderFrameHostId frame,
+                   scoped_refptr<AccessCoreLogStore> store, uint64_t version) {
+                  return tab && tab->GetPrimaryMainFrame()->GetGlobalId() == frame &&
+                         tab->GetVisibility() == content::Visibility::VISIBLE &&
+                         store->CanShare(version);
+                }, tab, frame, std::move(store), version));
+        release.RunAndReset();
+#else
         tab->GetRenderWidgetHostView()->ShowSharePicker("", "", GURL(), {path.value()},
-            base::BindOnce([](base::ScopedClosureRunner release, base::OnceCallback<void(bool)> done,
+            base::BindOnce([](base::ScopedClosureRunner release, std::shared_ptr<bool> picker_succeeded,
                               blink::mojom::ShareError result) {
+              *picker_succeeded = result != blink::mojom::ShareError::INTERNAL_ERROR;
               release.RunAndReset();
-              std::move(done).Run(result != blink::mojom::ShareError::INTERNAL_ERROR);
-            }, std::move(release), std::move(done)));
+            }, std::move(release), std::move(picker_succeeded)));
+#endif
       }, tab->GetWeakPtr(), tab->GetPrimaryMainFrame()->GetGlobalId(), core_logs_,
-      version, std::move(done)));
+      version, picker_succeeded),
+      base::BindOnce([](std::shared_ptr<bool> picker_succeeded,
+                        base::OnceCallback<void(CoreLogShareResult)> done,
+                        bool cleaned) {
+        auto result = CoreLogShareResult::kFailed;
+        if (!cleaned) {
+          result = CoreLogShareResult::kCleanupFailed;
+        } else if (*picker_succeeded) {
+          result = CoreLogShareResult::kCompleted;
+        }
+        std::move(done).Run(result);
+      }, picker_succeeded, std::move(done)));
 }
 #endif
 void AccessSiteProxyBubbleController::CreateLocalCore() {
@@ -670,6 +719,7 @@ void AccessSiteProxyBubbleController::OnRestoredCoreVerified(
   FinishCoreRequests(ready);
 }
 void AccessSiteProxyBubbleController::FinishNavigationPreparation(bool ready) {
+  auto on_enabled = std::move(on_enabled_);
   auto retry = std::move(retry_completion_);
   auto next = std::move(queued_retry_);
   GURL url = std::exchange(retry_url_, GURL());
@@ -680,6 +730,7 @@ void AccessSiteProxyBubbleController::FinishNavigationPreparation(bool ready) {
   if (next && !next.IsCancelled()) {
     RequestFailedNavigationProxy(url, std::move(next));
   }
+  if (ready && on_enabled) std::move(on_enabled).Run();
 }
 
 void AccessSiteProxyBubbleController::FinishCoreRequests(bool ready) {

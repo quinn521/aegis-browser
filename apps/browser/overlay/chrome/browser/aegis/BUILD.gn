@@ -275,19 +275,44 @@ source_set("aegis") {
   } else {
     deps += [ "//chrome/android:chrome_jni_headers" ]
   }
+  if (is_mac || is_win) {
+    sources += [
+      "access/access_account_refresh.cc",
+      "access/access_account_refresh.h",
+      "access/access_paid_site_mac.h",
+      "aegis_service_access_account.cc",
+    ]
+    deps += [
+      "//chrome/browser:global_features",
+      "//chrome/browser/aegis/access:access_core_log_archive",
+      "//chrome/browser/aegis/access:access_network_context_transport",
+    ]
+  }
+  if (is_win) {
+    sources += [
+      "access/access_account_win.cc",
+      "access/access_account_win.h",
+      "access/access_paid_site_win.cc",
+      "aegis_service_access_account_win.cc",
+    ]
+    deps += [
+      "//chrome/browser/aegis/access:access_private_files_win",
+      "//ui/base",
+      "//ui/views",
+    ]
+    libs = [ "winhttp.lib" ]
+  }
   if (is_mac) {
     frameworks = [ "AppKit.framework", "Foundation.framework" ]
     sources += [
       "access/access_account_mac.h",
       "access/access_account_mac.mm",
-      "access/access_paid_site_mac.h",
       "access/access_paid_site_mac.mm",
       "aegis_service_access_account_mac.mm",
       "aegis_torrent_client.cc",
       "aegis_torrent_client.h",
     ]
     deps += [
-      "//chrome/browser/aegis/access:access_network_context_transport",
       "//services/network/public/mojom",
       "//chrome/services/aegis_torrent/public/mojom",
       "//sandbox/mac:seatbelt_extension",
@@ -541,8 +566,19 @@ test("aegis_browser_unittests") {
       "//content/test:test_support",
     ]
   }
+  if (is_mac || is_win) {
+    sources += [ "access/access_account_refresh_unittest.cc" ]
+  }
+  if (is_win) {
+    sources += [ "access/access_account_win_unittest.cc" ]
+    deps += [
+      "//chrome/browser/aegis/access:access_private_files_win",
+      "//net:test_support",
+    ]
+  }
   if (is_mac) {
     deps += [
+      "//chrome/browser/aegis/access:access_network_context_transport",
       "//chrome/browser/aegis/access:access_proxying_url_loader_factory",
       "//chrome/browser/aegis/access:access_site_proxy_bubble",
       "//net:test_support",

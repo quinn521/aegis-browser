@@ -20,7 +20,9 @@ SDK_VERSION = json.loads(Path(__file__).with_name('windows_sdk.json').read_text(
 CHROMIUM_URL = 'https://chromium.googlesource.com/chromium/src.git'
 ACCESS_CORE_TESTS = 'access_local_core_manager_unittests'
 ACCESS_CORE_CASES = frozenset([
-    'AccessLocalCoreWinInputTest.OnlyExplicitDevBindingResolves',
+    'AccessCoreLogWindowsTest.KeepsPrivateAndRegularHistorySeparate',
+    'AccessCoreLogWindowsTest.ClearFencesAlreadyQueuedPipeBytes',
+    'AccessLocalCoreWinInputTest.BuildControlsLocalBinding',
     'AccessLocalCoreWinTest.WrongPinCannotLaunchOrPublish',
     'AccessLocalCoreWinTest.StopCleansProcessTreeAndPrivateConfig',
     'AccessLocalCoreWinTest.SessionEndingCleansWithoutUiReplies',

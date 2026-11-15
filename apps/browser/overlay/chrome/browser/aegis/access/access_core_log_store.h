@@ -3,7 +3,12 @@
 #define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_CORE_LOG_STORE_H_
 
 #include "build/build_config.h"
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#include <map>
+#include <optional>
+
+#include "base/containers/span.h"
+#include "base/files/file.h"
 #include "base/functional/callback.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/aegis/access/access_core_log_disk.h"
@@ -18,7 +23,7 @@ class AccessCoreLogStore
     : public base::RefCountedThreadSafe<AccessCoreLogStore> {
  public:
   AccessCoreLogStore();
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   enum class DiskStatus { kLoading, kReady, kClearing, kError };
   static scoped_refptr<AccessCoreLogStore> Open(const base::FilePath& profile,
                                                 CoreLogProfile scope,
@@ -27,6 +32,15 @@ class AccessCoreLogStore
   // queued saves/deletions, without a reply to the blocked Browser sequence.
   static void FlushAllForSessionEnding(base::OnceClosure completion);
   DiskStatus disk_status();
+  struct PipeRead {
+    std::optional<size_t> count;
+    int error;
+    uint64_t clear_epoch;
+    std::optional<size_t> clear_prefix;
+  };
+  uint64_t RegisterPipe(base::PlatformFile fd);
+  void UnregisterPipe(base::PlatformFile fd);
+  PipeRead ReadPipe(base::File& file, base::span<char> buffer);
 #endif
   void SetLevel(std::string_view level);
   std::string Level() {
@@ -37,7 +51,13 @@ class AccessCoreLogStore
     base::AutoLock guard(lock_);
     return {std::string(log_.level()), generation_};
   }
+  uint64_t clear_epoch() {
+    base::AutoLock guard(lock_);
+    return clear_epoch_;
+  }
+  void SetProtectedValues(std::vector<std::string> values);
   void Add(uint64_t generation,
+           uint64_t clear_epoch,
            std::string_view line,
            const std::vector<std::string>& protected_values);
   std::string Snapshot() {
@@ -62,7 +82,7 @@ class AccessCoreLogStore
   friend class base::RefCountedThreadSafe<AccessCoreLogStore>;
   ~AccessCoreLogStore();
   base::Lock lock_;
-#if BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   void Restore(uint64_t epoch);
   void ScheduleSaveLocked();
   void ScheduleClearLocked();
@@ -73,9 +93,12 @@ class AccessCoreLogStore
   uint64_t disk_epoch_ GUARDED_BY(lock_) = 0;
   bool save_pending_ GUARDED_BY(lock_) = false;
   DiskStatus disk_status_ GUARDED_BY(lock_) = DiskStatus::kReady;
+  std::map<base::PlatformFile, std::optional<size_t>> pipes_ GUARDED_BY(lock_);
 #endif
   uint64_t view_version_ GUARDED_BY(lock_) = 0;
   uint64_t generation_ GUARDED_BY(lock_) = 0;
+  uint64_t clear_epoch_ GUARDED_BY(lock_) = 0;
+  std::vector<std::string> protected_values_ GUARDED_BY(lock_);
   AccessCoreLog log_ GUARDED_BY(lock_);
 };
 }  // namespace aegis::access

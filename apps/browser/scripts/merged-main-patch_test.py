@@ -3,7 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
+# Local tooling uses argument arrays with the shell disabled.
+import subprocess  # nosec B404
 import tempfile
 import unittest
 
@@ -32,13 +33,17 @@ def git_blob_hash(data):
 
 
 class MergedMainPatchTests(unittest.TestCase):
-    def test_active_controller_patches_replay_to_overlay(self):
+    def test_active_access_patches_replay_to_overlay(self):
         targets = [
             'chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc',
             'chrome/browser/aegis/access/access_site_proxy_bubble_controller.h',
+            'chrome/browser/aegis/access/access_account_mac.h',
+            'chrome/browser/aegis/access/access_account_mac.mm',
+            'chrome/browser/aegis/aegis_service_access_account_mac.mm',
         ]
         with tempfile.TemporaryDirectory(prefix='aegis-controller-patches-') as root:
-            subprocess.run(['git', 'init', '--quiet', root], check=True,
+            # Fixed local test program and fixture arguments; shell execution is disabled.
+            subprocess.run(['git', 'init', '--quiet', root], check=True,  # nosec B607, B603
                            capture_output=True, timeout=30)
             for name in entries((PATCHES / 'series').read_text()):
                 patch = PATCHES / name
@@ -46,7 +51,8 @@ class MergedMainPatchTests(unittest.TestCase):
                 if not any(f'diff --git a/{target} b/{target}\n' in text
                            for target in targets):
                     continue
-                result = subprocess.run(
+                # Fixed local test program and fixture arguments; shell execution is disabled.
+                result = subprocess.run(  # nosec B607, B603
                     ['git', '-C', root, 'apply',
                      *[f'--include={target}' for target in targets], str(patch)],
                     capture_output=True, text=True, timeout=30,

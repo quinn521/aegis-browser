@@ -7,6 +7,7 @@
 
 namespace base {
 class CommandLine;
+class File;
 class FilePath;
 class ScopedTempDir;
 }  // namespace base
@@ -19,7 +20,8 @@ bool CreatePrivateCoreDirectory(base::ScopedTempDir& directory);
 // at creation and terminates its processes if the browser exits unexpectedly.
 base::Process LaunchOwnedCore(const base::CommandLine& command,
                               const base::FilePath& directory,
-                              base::win::ScopedHandle& job);
+                              base::win::ScopedHandle& job,
+                              base::File* log_read = nullptr);
 
 // Bounds the job rundown and the retry window for deleting locked files.
 void StopOwnedCore(base::win::ScopedHandle& job, base::ScopedTempDir& directory);

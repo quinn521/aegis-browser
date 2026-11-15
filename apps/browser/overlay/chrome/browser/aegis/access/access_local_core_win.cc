@@ -9,6 +9,7 @@
 
 #include "base/base_paths_win.h"
 #include "base/command_line.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -18,67 +19,75 @@
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
-#include "base/win/access_token.h"
 #include "base/win/scoped_process_information.h"
-#include "base/win/security_descriptor.h"
 #include "base/win/startup_information.h"
+#include "chrome/browser/aegis/access/access_private_files_win.h"
 
 namespace aegis::access {
 
 bool CreatePrivateCoreDirectory(base::ScopedTempDir& directory) {
   base::FilePath root;
-  auto token = base::win::AccessToken::FromCurrentProcess();
-  if (!token || !base::PathService::Get(base::DIR_LOCAL_APP_DATA, &root)) {
-    return false;
-  }
-
-  auto descriptor = base::win::SecurityDescriptor::CreateWithEmptyDacl();
-  descriptor.set_dacl_protected(true);
-  constexpr DWORD kInheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
-  if (!descriptor.SetDaclEntry(*token, base::win::SecurityAccessMode::kGrant,
-                               FILE_ALL_ACCESS, kInheritance)) {
-    return false;
-  }
-  auto absolute = descriptor.ToAbsolute();
-  SECURITY_ATTRIBUTES attributes{sizeof(attributes), &absolute, FALSE};
+  if (!base::PathService::Get(base::DIR_LOCAL_APP_DATA, &root) ||
+      !IsOwnedAccessDirectory(root)) return false;
   const auto path = root.AppendASCII(
       "AegisAccess-" + base::Uuid::GenerateRandomV4().AsLowercaseString());
-  if (!::CreateDirectoryW(path.value().c_str(), &attributes)) {
-    return false;
-  }
-  if (!directory.Set(path)) {
-    base::DeletePathRecursively(path);
-    return false;
-  }
-  // A filesystem without persistent ACLs may ignore the creation descriptor.
-  const auto applied = base::win::SecurityDescriptor::FromFile(
-      path, DACL_SECURITY_INFORMATION);
-  return applied && applied->dacl_protected() && applied->dacl() &&
-         !applied->dacl()->is_null() && applied->dacl()->get()->AceCount == 1;
+  if (!CreatePrivateAccessDirectory(path)) return false;
+  if (directory.Set(path)) return true;
+  base::DeletePathRecursively(path);
+  return false;
 }
 
 base::Process LaunchOwnedCore(const base::CommandLine& command,
                               const base::FilePath& directory,
-                              base::win::ScopedHandle& job) {
+                              base::win::ScopedHandle& job, base::File* log_read) {
   base::win::ScopedHandle owned_job(::CreateJobObjectW(nullptr, nullptr));
   if (!owned_job.is_valid() ||
       !base::SetJobObjectLimitFlags(owned_job.get(),
                                   JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)) {
     return {};
   }
+  SECURITY_ATTRIBUTES inherited{sizeof(inherited), nullptr, TRUE};
+  base::win::ScopedHandle input(::CreateFileW(L"NUL", GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, &inherited, OPEN_EXISTING, 0, nullptr));
+  base::win::ScopedHandle output;
+  base::win::ScopedHandle pipe_read;
+  if (log_read) {
+    HANDLE reader = nullptr;
+    HANDLE writer = nullptr;
+    if (::CreatePipe(&reader, &writer, &inherited, 0)) {
+      pipe_read.Set(reader);
+      output.Set(writer);
+      if (!::SetHandleInformation(reader, HANDLE_FLAG_INHERIT, 0)) {
+        pipe_read.Close();
+        output.Close();
+      }
+    }
+  }
+  if (!output.is_valid()) {
+    output.Set(::CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ |
+        FILE_SHARE_WRITE, &inherited, OPEN_EXISTING, 0, nullptr));
+  }
+  if (!input.is_valid() || !output.is_valid()) return {};
+  HANDLE stdio[] = {input.get(), output.get()};
   HANDLE job_handle = owned_job.get();
   base::win::StartupInformation startup;
-  if (!startup.InitializeProcThreadAttributeList(1) ||
+  if (!startup.InitializeProcThreadAttributeList(2) ||
       !startup.UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_JOB_LIST,
-                                         &job_handle, sizeof(job_handle))) {
+                                         &job_handle, sizeof(job_handle)) ||
+      !startup.UpdateProcThreadAttribute(PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                         stdio, sizeof(stdio))) {
     return {};
   }
 
+  startup.startup_info()->dwFlags |= STARTF_USESTDHANDLES;
+  startup.startup_info()->hStdInput = input.get();
+  startup.startup_info()->hStdOutput = output.get();
+  startup.startup_info()->hStdError = output.get();
   PROCESS_INFORMATION child = {};
   std::wstring command_line = command.GetCommandLineString();
   wchar_t empty_environment[2] = {};
   if (!::CreateProcessW(command.GetProgram().value().c_str(), command_line.data(),
-                        nullptr, nullptr, FALSE,
+                        nullptr, nullptr, TRUE,
                         EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT |
                             CREATE_NO_WINDOW,
                         empty_environment, directory.value().c_str(),
@@ -87,6 +96,7 @@ base::Process LaunchOwnedCore(const base::CommandLine& command,
   }
   base::win::ScopedProcessInformation child_handles(child);
   job = std::move(owned_job);
+  if (pipe_read.is_valid()) *log_read = base::File(pipe_read.Take());
   return base::Process(child_handles.TakeProcessHandle());
 }
 
