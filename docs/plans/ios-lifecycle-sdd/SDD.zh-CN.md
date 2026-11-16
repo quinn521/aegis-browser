@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | A1 | 根窗口的标签、助手、资料、设置、当前网站、下载、查找、阅读库、Markdown、窗口管理只有一个展示所有者 | 一个窗口只有一个当前根 sheet；新请求以 FIFO 保留，在旧 sheet 完成消失后交接；旧回调不能清除新请求 |
 | A2 | 下载/Markdown 输入成为有身份的展示事件 | 消费事件时清除原 pending 值；下载上下文由路由值保留，关闭旧下载不清除后来输入 |
-| A3 | 快捷键服从展示状态和窗口焦点 | 所有根展示和外链确认期间不提供浏览器命令；空分组仍可新建标签；阅读库和 Markdown 期间 Cmd-W 不关闭页面 |
+| A3 | 快捷键服从展示状态和窗口焦点 | 所有根展示和外链确认期间阻止浏览器操作；原生 Cmd-W 保持可接收并明确消费；空分组仍可新建标签；受保护展示期间不关闭页面或窗口 |
 | A4 | 保留外链普通模式确认、VoiceOver、iPad/多窗口和现有 sheet 内容 | 每个 BrowserSession/根视图独立路由，无全局展示单例 |
 | B1 | 导航尝试有独立、明确的状态所有者 | 身份创建、FIFO 绑定、重定向合并、失败授权和退休由组件维护，WebKit 访问仍在 MainActor BrowserTab |
 | B2 | 保留主框架的实际方法和不安全重放面 | POST/body/stream/Authorization 不被重写为可安全 GET；重定向不能清除 unsafe 位；历史确认保留 WebKit 方法 |
@@ -63,15 +63,19 @@
 | 审查 | 最终候选的独立只读审查 | 独立提供需求/设计/原始测试；失败/不可用为 open gate |
 | CI/设备/发布 | final SHA CI、真实设备、签名、商店 | 本实现不自动视作完成；另列实际结果 |
 
-具体测试对应：`BrowserPresentationCoordinatorTests` 覆盖 FIFO、同 URL 事件、旧 dismiss、实际窗口命令与下载权限；`MainFrameNavigationStateTests` 覆盖绑定/退休及历史重定向重放面；`PageAssistantModelTests` 覆盖撤销前零发送、同 URL 新文档、凭据变化、不合作异步任务、读取中关闭和窗口隔离。`AegisUITests.testIPadCommandsDoNotCloseUnderlyingTabInReadingOrMarkdown` 通过真实窗口触发阅读库和 Markdown 交接，验证 Cmd-W 不穿透。
+具体测试对应：`BrowserPresentationCoordinatorTests` 覆盖 FIFO、同 URL 事件、旧 dismiss、实际窗口命令与下载权限；`BrowserWindowCloseCommandTests` 覆盖原生 Close 菜单、当前标签分派、根/嵌套展示、窗口身份和旧桥接清理；`MainFrameNavigationStateTests` 覆盖绑定/退休及历史重定向重放面；`PageAssistantModelTests` 覆盖撤销前零发送、同 URL 新文档、凭据变化、不合作异步任务、读取中关闭和窗口隔离。`AegisUITests.testIPadCommandsDoNotCloseUnderlyingTabInReadingOrMarkdown` 通过真实窗口触发阅读库和 Markdown 交接，验证 Cmd-W 不穿透。
 
 ## 并发设计
 
-全部新增 UI/功能模型和 WebKit 状态组件隔离在 `MainActor`。页面读取和模型流使用 `async/await`；Task 仅连接同步用户动作到异步操作，并由 `AssistantOperationLifetime` 明确拥有和取消。每次 await、流片段、最终结果和持久化前复核操作身份。没有新增 GCD、detached Task 或 unchecked Sendable。弹层交接依据 SwiftUI onDismiss，原生 alert 依据 UIKit dismiss completion，不用延时或轮询猜测关闭顺序。
+全部新增 UI/功能模型和 WebKit 状态组件隔离在 `MainActor`。页面读取和模型流使用 `async/await`；助手 Task 连接同步用户动作到异步操作，并由 `AssistantOperationLifetime` 明确拥有和取消。每次 await、流片段、最终结果和持久化前复核操作身份。窗口所有者释放仅用 MainActor Task 清理其注册 UUID，旧清理不能移除新的窗口注册。没有新增 GCD、detached Task 或 unchecked Sendable。弹层交接依据 SwiftUI onDismiss，原生 alert 依据 UIKit dismiss completion，不用延时或轮询猜测关闭顺序。
 
 窗口快捷键在执行时从其所属 `BrowserSession` 取得当前可见标签，不缓存标签对象；快速连续新建/关闭不依赖 SwiftUI 或 FocusedValues 完成刷新。执行前仍检查窗口未关闭及没有受保护展示，不能操作另一窗口。`testCachedWindowCommandsHandleRapidNewCloseWithoutAnyViewRefresh` 重用同一命令值连续新建/关闭十次，并验证另一窗口与后来打开的阅读展示保持不变。
 
-浏览页面保留原有 SwiftUI 窗口命令与 WebKit 响应链，展示状态统一限制窗口命令资格。Markdown 的 `BrowserPresentationWebView` 仅在文档展示层注册优先级原生 ⌘W key command 并消费它，防止文档原生响应链落入 iPadOS 的关闭窗口行为。根阅读库、根 Markdown 与子 Markdown 的真实键盘验收均检查应用前台状态、窗口数、底层网址、DOM 和标签数。普通页面的 T/W/L/F 验收保持原测试与时限，不引入普通页面的关闭键桥接或强制焦点交接。
+`AegisAppDelegate.buildMenu(with:)` 只替换主菜单 `.close` 的子项，保留其位置和菜单配置，提供唯一且始终启用的原生 ⌘W `UIKeyCommand`。命令带本地化标题、优先级和进程内身份；SwiftUI 不再重复注册 W，Markdown 使用普通 `WKWebView`。其他快捷键继续使用原有 SwiftUI 路径，不强制改变焦点。
+
+每个根窗口通过 `BrowserWindowCloseAttachment` 关联一个 `BrowserWindowCloseCommand`。原生 selector 的接收控制器提供实际 `UIWindow`，弱注册表只查该窗口，不回退到任意 key window。执行时复核注册、root controller、key window、前台 scene 和会话；在根路由、排队/消失交接或实际 UIKit 模态控制器存在时明确返回，消费关闭命令。空组同样消费；普通页面关闭所属窗口执行时的当前标签。桥接 UUID 和注册 UUID 保证旧拆卸不能清掉新所有者；UIKit 复制命令不会破坏分派。
+
+`BrowserWindowCloseCommandTests` 验证 `.close` 中的系统 `performClose:` 被单一启用命令替换、复制 sender 后连续十次新建/关闭、根路由与消失交接、实际嵌套 UIKit 控制器、空组以及两个原生窗口的焦点隔离。根阅读库、根 Markdown 与子 Markdown 的真实键盘验收均检查应用前台状态、窗口数、底层网址、DOM 和标签数。普通页面的 T/W/L/F 验收保持原测试与时限。应用已接收按键后仍发出场景销毁请求属于产品失败，必须与未投递到应用的模拟器输入问题分别记录。
 
 下载展示回执以事件 ID 保留，最多 32 个，超限最旧回执失效而非扩大权限。`ownsAccessDownload` 在执行时复核 window/profile/privateSessionID/tab instance/navigationEpoch/Access selection/exact host；展示冻结值不是授权。关闭旧弹层只释放自己的回执，不清除较新的 pending 下载。
 
@@ -82,6 +86,7 @@ xcodegen generate --spec apps/ios/project.yml
 xcodebuild test -project apps/ios/Aegis.xcodeproj -scheme Aegis-Debug \
   -destination 'platform=iOS Simulator,id=<SIMULATOR_UDID>' \
   -only-testing:AegisTests/BrowserPresentationCoordinatorTests \
+  -only-testing:AegisTests/BrowserWindowCloseCommandTests \
   -only-testing:AegisTests/MainFrameNavigationStateTests \
   -only-testing:AegisTests/PageAssistantModelTests \
   -only-testing:AegisTests/AccessNavigationRecoveryTests \

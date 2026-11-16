@@ -124,16 +124,6 @@ final class BrowserPresentationCoordinatorTests: XCTestCase {
         XCTAssertFalse(browser.isWindowClosed); XCTAssertFalse(other.isWindowClosed)
     }
 
-    func testPresentationWebKitInstallsEnabledPriorityCloseCommand() throws {
-        let configuration = WKWebViewConfiguration(); configuration.websiteDataStore = .nonPersistent()
-        let viewer = BrowserPresentationWebView(frame: .zero, configuration: configuration)
-        let close = try XCTUnwrap(viewer.keyCommands?.first { $0.input == "w" && $0.modifierFlags == .command })
-        let action = try XCTUnwrap(close.action)
-        XCTAssertTrue(close.wantsPriorityOverSystemBehavior)
-        XCTAssertTrue(viewer.canPerformAction(action, withSender: close))
-        XCTAssertTrue(viewer.target(forAction: action, withSender: close) as AnyObject? === viewer)
-    }
-
     func testEmptyGroupOnlyAdvertisesWorkingNewTabAction() throws {
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         defer { browser.closeWindow() }
@@ -180,6 +170,157 @@ final class BrowserPresentationCoordinatorTests: XCTestCase {
         let first = try XCTUnwrap(route.current)
         route.dismiss(first.id); route.didDismiss(first.id)
         guard case .settings = route.current?.route else { return XCTFail("Non-sensitive route was lost") }
+    }
+}
+
+@MainActor
+final class BrowserWindowCloseCommandTests: XCTestCase {
+    private func nativeWindow() throws -> (UIWindow, UIViewController) {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive })
+        let window = UIWindow(windowScene: scene), controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.loadViewIfNeeded()
+        return (window, controller)
+    }
+
+    private func command() throws -> UIKeyCommand {
+        try XCTUnwrap(BrowserWindowCloseCommand.closeMenu(replacing: nil).children.first as? UIKeyCommand)
+    }
+
+    func testCloseMenuReplacesSystemCloseWithOneEnabledPriorityCommand() throws {
+        let systemAction = NSSelectorFromString("performClose:")
+        let systemClose = UIKeyCommand(input: "w", modifierFlags: .command, action: systemAction)
+        let menu = UIMenu(title: "Close", identifier: .close, options: .displayInline, children: [systemClose])
+        let replacement = BrowserWindowCloseCommand.closeMenu(replacing: menu)
+        XCTAssertEqual(replacement.identifier, menu.identifier); XCTAssertEqual(replacement.title, menu.title)
+        XCTAssertEqual(replacement.options, menu.options); XCTAssertEqual(replacement.children.count, 1)
+        let close = try XCTUnwrap(replacement.children.first as? UIKeyCommand)
+        XCTAssertEqual(close.input, "w"); XCTAssertEqual(close.modifierFlags, .command)
+        XCTAssertNotEqual(close.action, systemAction)
+        XCTAssertTrue(close.wantsPriorityOverSystemBehavior)
+        XCTAssertFalse(close.attributes.contains(.disabled))
+        XCTAssertFalse(close.discoverabilityTitle?.isEmpty ?? true)
+    }
+
+    func testCopiedNativeCommandUsesLiveTabAndIgnoresOldBridgeTeardown() throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let route = BrowserPresentationCoordinator(), owner = BrowserWindowCloseCommand()
+        let previous = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }
+        let (window, controller) = try nativeWindow()
+        defer { owner.invalidate(); window.isHidden = true; previous?.makeKeyAndVisible(); browser.closeWindow() }
+        let firstBridge = UUID(), nextBridge = UUID()
+        owner.attach(window: window, bridgeID: firstBridge, browser: browser, presentation: route)
+        owner.attach(window: window, bridgeID: nextBridge, browser: browser, presentation: route)
+        owner.detach(bridgeID: firstBridge)
+        let copied = try XCTUnwrap(try command().copy() as? UIKeyCommand), action = try XCTUnwrap(copied.action)
+        XCTAssertTrue(controller.canPerformAction(action, withSender: copied))
+        XCTAssertTrue(controller.target(forAction: action, withSender: copied) as AnyObject? === controller)
+        let original = try XCTUnwrap(browser.activeTab), count = browser.visibleTabs.count
+        for _ in 0..<10 {
+            let created = browser.newTab()
+            _ = controller.perform(action, with: copied)
+            XCTAssertTrue(created.isDisposed); XCTAssertTrue(browser.activeTab === original)
+            XCTAssertEqual(browser.visibleTabs.count, count)
+        }
+        owner.detach(bridgeID: nextBridge)
+        let retained = browser.newTab()
+        _ = controller.perform(action, with: copied)
+        XCTAssertFalse(retained.isDisposed)
+        XCTAssertEqual(browser.visibleTabs.count, count + 1)
+    }
+
+    func testNativeCloseConsumesAllRootRoutesAndDismissalHandoff() throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let route = BrowserPresentationCoordinator(), owner = BrowserWindowCloseCommand()
+        let previous = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }
+        let (window, controller) = try nativeWindow()
+        defer { owner.invalidate(); window.isHidden = true; previous?.makeKeyAndVisible(); browser.closeWindow() }
+        owner.attach(window: window, bridgeID: UUID(), browser: browser, presentation: route)
+        let close = try command(), action = try XCTUnwrap(close.action)
+        let original = try XCTUnwrap(browser.activeTab), count = browser.visibleTabs.count
+        let routes: [BrowserPresentationCoordinator.Route] = [.reading, .markdown(MarkdownDocument(title: "Root", text: "Text")),
+            .website, .settings, .tabs, .assistant, .library, .downloads(nil, nil), .windows,
+            .find(original.id, original.instanceID), .external(URL(string: "https://example.test")!),
+            .privateBookmark(original.id, URL(string: "https://example.test")!, original.navigationEpoch),
+            .windowError(.verbatim("Fixture"))]
+        for request in routes {
+            route.request(request)
+            let current = try XCTUnwrap(route.current)
+            route.didPresent(current.id)
+            XCTAssertTrue(controller.canPerformAction(action, withSender: close), "Protection must consume the key, not disable it")
+            _ = controller.perform(action, with: close)
+            route.dismiss(current.id)
+            _ = controller.perform(action, with: close)
+            XCTAssertTrue(browser.activeTab === original); XCTAssertEqual(browser.visibleTabs.count, count)
+            route.didDismiss(current.id)
+        }
+        route.request(.reading)
+        let reading = try XCTUnwrap(route.current)
+        route.didPresent(reading.id)
+        route.request(.markdown(MarkdownDocument(title: "Next", text: "Next")))
+        route.dismiss(reading.id); route.didDismiss(reading.id)
+        _ = controller.perform(action, with: close)
+        XCTAssertTrue(browser.activeTab === original); XCTAssertEqual(browser.visibleTabs.count, count)
+        XCTAssertTrue(window.isKeyWindow); XCTAssertFalse(browser.isWindowClosed)
+    }
+
+    func testPresentedAndNestedControllersConsumeCloseWithoutRootRoute() async throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let route = BrowserPresentationCoordinator(), owner = BrowserWindowCloseCommand()
+        let previous = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }
+        let (window, controller) = try nativeWindow()
+        defer { owner.invalidate(); window.isHidden = true; previous?.makeKeyAndVisible(); browser.closeWindow() }
+        owner.attach(window: window, bridgeID: UUID(), browser: browser, presentation: route)
+        let close = try command(), action = try XCTUnwrap(close.action)
+        let original = try XCTUnwrap(browser.activeTab), count = browser.visibleTabs.count
+        let sheet = UIViewController(), nested = UIViewController()
+        await withCheckedContinuation { completion in controller.present(sheet, animated: false) { completion.resume() } }
+        await withCheckedContinuation { completion in sheet.present(nested, animated: false) { completion.resume() } }
+        XCTAssertFalse(route.blocksBrowserCommands)
+        XCTAssertTrue(nested.canPerformAction(action, withSender: close))
+        XCTAssertTrue(nested.target(forAction: action, withSender: close) as AnyObject? === nested)
+        _ = nested.perform(action, with: close)
+        XCTAssertTrue(browser.activeTab === original); XCTAssertEqual(browser.visibleTabs.count, count)
+        XCTAssertTrue(window.isKeyWindow); XCTAssertFalse(browser.isWindowClosed)
+        await withCheckedContinuation { completion in controller.dismiss(animated: false) { completion.resume() } }
+        let created = browser.newTab()
+        _ = controller.perform(action, with: close)
+        XCTAssertTrue(created.isDisposed); XCTAssertTrue(browser.activeTab === original)
+    }
+
+    func testNativeCloseUsesReceiverWindowAndEmptyGroupIsNoOp() throws {
+        let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let second = BrowserSession(dataStore: first.dataStore)
+        let firstRoute = BrowserPresentationCoordinator(), secondRoute = BrowserPresentationCoordinator()
+        let firstOwner = BrowserWindowCloseCommand(), secondOwner = BrowserWindowCloseCommand()
+        let previous = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows).first { $0.isKeyWindow }
+        let (firstWindow, firstController) = try nativeWindow(), (secondWindow, secondController) = try nativeWindow()
+        defer {
+            firstOwner.invalidate(); secondOwner.invalidate(); firstWindow.isHidden = true; secondWindow.isHidden = true
+            previous?.makeKeyAndVisible(); first.closeWindow(); second.closeWindow()
+        }
+        firstOwner.attach(window: firstWindow, bridgeID: UUID(), browser: first, presentation: firstRoute)
+        secondOwner.attach(window: secondWindow, bridgeID: UUID(), browser: second, presentation: secondRoute)
+        let close = try command(), action = try XCTUnwrap(close.action)
+        let firstTab = try XCTUnwrap(first.activeTab), secondTab = try XCTUnwrap(second.activeTab)
+        _ = firstController.perform(action, with: close) // A non-key receiver cannot close its background tab.
+        XCTAssertTrue(first.activeTab === firstTab); XCTAssertTrue(second.activeTab === secondTab)
+        let created = second.newTab()
+        _ = secondController.perform(action, with: close)
+        XCTAssertTrue(created.isDisposed); XCTAssertTrue(second.activeTab === secondTab)
+        _ = try second.createGroup(name: "Empty")
+        second.moveTab(secondTab.id, to: nil)
+        XCTAssertNil(second.activeTab)
+        let count = second.visibleTabs.count
+        _ = secondController.perform(action, with: close)
+        XCTAssertNil(second.activeTab); XCTAssertEqual(second.visibleTabs.count, count)
+        XCTAssertTrue(first.activeTab === firstTab); XCTAssertFalse(second.isWindowClosed)
+        firstWindow.makeKeyAndVisible()
+        let firstCreated = first.newTab()
+        _ = firstController.perform(action, with: close)
+        XCTAssertTrue(firstCreated.isDisposed); XCTAssertTrue(first.activeTab === firstTab)
     }
 }
 

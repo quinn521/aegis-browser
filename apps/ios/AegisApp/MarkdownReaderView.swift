@@ -53,7 +53,7 @@ private final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigatio
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
     configuration.userContentController.add(self, name: "aegisMarkdown")
-    webView = BrowserPresentationWebView(frame: .zero, configuration: configuration)
+    webView = WKWebView(frame: .zero, configuration: configuration)
     webView.navigationDelegate = self
     webView.isInspectable = false
     if let root = EnhancementAssets.directory {

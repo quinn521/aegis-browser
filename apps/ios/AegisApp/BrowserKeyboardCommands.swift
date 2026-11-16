@@ -1,6 +1,6 @@
 import BrowserKit
 import SwiftUI
-import WebKit
+import UIKit
 
 /// 按当前窗口分派快捷键，避免只在菜单展开后才能使用。
 struct BrowserKeyboardActions {
@@ -39,20 +39,139 @@ struct BrowserKeyboardActions {
     }
 }
 
-/// A document viewer owns this responder for its entire presentation. Explicitly
-/// consume Cmd-W before WebKit or iPadOS can treat it as Close Window.
+/// One enabled Close command occupies UIKit's File > Close slot for the app.
+/// Its receiver selects the owning window; protected presentations consume it
+/// without asking iPadOS to close the scene.
 @MainActor
-final class BrowserPresentationWebView: WKWebView {
-    override var keyCommands: [UIKeyCommand]? {
-        let close = UIKeyCommand(input: "w", modifierFlags: .command, action: #selector(keepPresentationOpen))
-        close.wantsPriorityOverSystemBehavior = true
-        return [close] + (super.keyCommands ?? [])
+final class BrowserWindowCloseCommand: ObservableObject {
+    private final class Registration {
+        weak var owner: BrowserWindowCloseCommand?
+        let id: UUID
+        init(_ owner: BrowserWindowCloseCommand, id: UUID) { self.owner = owner; self.id = id }
     }
-    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
-        if action == #selector(keepPresentationOpen) { return true }
-        return super.canPerformAction(action, withSender: sender)
+    private static var registrations: [ObjectIdentifier: Registration] = [:]
+    private static let menuToken = UUID().uuidString
+    private weak var window: UIWindow?
+    private weak var root: UIViewController?
+    private weak var browser: BrowserSession?
+    private weak var presentation: BrowserPresentationCoordinator?
+    private var bridgeID: UUID?
+    private var registrationKey: ObjectIdentifier?
+    private var registrationID: UUID?
+
+    static func closeMenu(replacing menu: UIMenu?) -> UIMenu {
+        let title = AegisLocalization.string("关闭当前标签")
+        let command = UIKeyCommand(title: title, action: #selector(UIViewController.aegisCloseCurrentBrowserTab(_:)),
+                                   input: "w", modifierFlags: .command, propertyList: menuToken,
+                                   discoverabilityTitle: title)
+        command.wantsPriorityOverSystemBehavior = true
+        return (menu ?? UIMenu(title: "", identifier: .close, options: .displayInline, children: []))
+            .replacingChildren([command])
     }
-    @objc private func keepPresentationOpen() { }
+
+    static func replaceCloseMenu(in builder: any UIMenuBuilder) {
+        guard builder.system === UIMenuSystem.main else { return }
+        if let menu = builder.menu(for: .close) {
+            builder.replace(menu: .close, with: closeMenu(replacing: menu))
+        } else {
+            builder.insertChild(closeMenu(replacing: nil), atEndOfMenu: .file)
+        }
+    }
+
+    func attach(window: UIWindow, bridgeID: UUID, browser: BrowserSession,
+                presentation: BrowserPresentationCoordinator) {
+        guard !browser.isWindowClosed, let root = window.rootViewController else { invalidate(); return }
+        if self.window === window, self.root === root, self.browser === browser, self.presentation === presentation {
+            self.bridgeID = bridgeID
+            return
+        }
+        invalidate()
+        let key = ObjectIdentifier(window)
+        Self.registrations[key]?.owner?.invalidate()
+        let id = UUID()
+        self.window = window; self.root = root; self.browser = browser; self.presentation = presentation
+        self.bridgeID = bridgeID; registrationKey = key; registrationID = id
+        Self.registrations[key] = Registration(self, id: id)
+    }
+
+    func detach(bridgeID: UUID) {
+        if self.bridgeID == bridgeID { invalidate() }
+    }
+
+    func invalidate() {
+        if let registrationKey, let registrationID { Self.remove(registrationKey, id: registrationID) }
+        window = nil; root = nil; browser = nil; presentation = nil; bridgeID = nil; registrationKey = nil; registrationID = nil
+    }
+
+    private static func remove(_ key: ObjectIdentifier, id: UUID) {
+        if registrations[key]?.id == id { registrations.removeValue(forKey: key) }
+    }
+
+    fileprivate static func dispatch(_ command: UIKeyCommand, receiver: UIViewController) {
+        guard command.propertyList as? String == menuToken, command.input == "w", command.modifierFlags == .command,
+              let window = receiver.viewIfLoaded?.window, let owner = registrations[ObjectIdentifier(window)]?.owner else { return }
+        owner.closeCurrentTab(in: window)
+    }
+
+    private func closeCurrentTab(in window: UIWindow) {
+        guard self.window === window, let root, window.rootViewController === root,
+              window.isKeyWindow, window.windowScene?.activationState == .foregroundActive,
+              let browser, !browser.isWindowClosed, let presentation,
+              !presentation.blocksBrowserCommands, root.presentedViewController == nil,
+              let tab = browser.activeTab, !tab.isDisposed else { return }
+        browser.close(tab.id)
+    }
+
+    deinit {
+        guard let registrationKey, let registrationID else { return }
+        Task { @MainActor in Self.remove(registrationKey, id: registrationID) }
+    }
+}
+
+extension UIViewController {
+    /// Presented controllers also receive this unique selector, so a modal does
+    /// not fall through to UIKit's default performClose: action.
+    @objc fileprivate func aegisCloseCurrentBrowserTab(_ command: UIKeyCommand) {
+        BrowserWindowCloseCommand.dispatch(command, receiver: self)
+    }
+}
+
+struct BrowserWindowCloseAttachment: UIViewRepresentable {
+    let browser: BrowserSession
+    let presentation: BrowserPresentationCoordinator
+    let owner: BrowserWindowCloseCommand
+
+    func makeUIView(context: Context) -> AttachmentView {
+        AttachmentView(owner: owner, browser: browser, presentation: presentation)
+    }
+    func updateUIView(_ view: AttachmentView, context: Context) {
+        view.update(owner: owner, browser: browser, presentation: presentation)
+    }
+    static func dismantleUIView(_ view: AttachmentView, coordinator: ()) { view.detach() }
+
+    final class AttachmentView: UIView {
+        private weak var owner: BrowserWindowCloseCommand?
+        private weak var browser: BrowserSession?
+        private weak var presentation: BrowserPresentationCoordinator?
+        private let bridgeID = UUID()
+        init(owner: BrowserWindowCloseCommand, browser: BrowserSession, presentation: BrowserPresentationCoordinator) {
+            self.owner = owner; self.browser = browser; self.presentation = presentation
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override func didMoveToWindow() { super.didMoveToWindow(); attach() }
+        func update(owner: BrowserWindowCloseCommand, browser: BrowserSession, presentation: BrowserPresentationCoordinator) {
+            if self.owner !== owner { detach() }
+            self.owner = owner; self.browser = browser; self.presentation = presentation
+            attach()
+        }
+        func attach() {
+            guard let window, let browser, let presentation else { detach(); return }
+            owner?.attach(window: window, bridgeID: bridgeID, browser: browser, presentation: presentation)
+        }
+        func detach() { owner?.detach(bridgeID: bridgeID) }
+    }
 }
 
 private struct BrowserKeyboardActionsKey: FocusedValueKey {
@@ -73,7 +192,6 @@ struct BrowserKeyboardCommands: Commands {
         let _ = language.revision
         CommandGroup(replacing: .newItem) {
             Button(AegisLocalization.string("新建")) { actions?.newTab() }.keyboardShortcut("t").disabled(actions == nil)
-            Button(AegisLocalization.string("关闭当前标签")) { actions?.closeTab() }.keyboardShortcut("w").disabled(actions?.canCloseTab != true)
         }
         CommandGroup(after: .textEditing) {
             Button(AegisLocalization.string("在页面中查找")) {

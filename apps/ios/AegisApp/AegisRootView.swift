@@ -9,6 +9,7 @@ struct AegisRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var address = ""
     @StateObject private var presentation = BrowserPresentationCoordinator()
+    @StateObject private var closeCommand = BrowserWindowCloseCommand()
 
     @Environment(\.locale) private var localizationLocale
     var body: some View {
@@ -43,6 +44,8 @@ struct AegisRootView: View {
             }
         }
         .background(Color(uiColor: .systemGroupedBackground))
+        .background(BrowserWindowCloseAttachment(browser: browser, presentation: presentation, owner: closeCommand)
+            .frame(width: 0, height: 0))
         .sheet(item: Binding(
             get: { presentation.isDismissing || presented?.route.isAlert == true ? nil : presented },
             set: { if $0 == nil, let presented { presentation.dismiss(presented.id) } }
