@@ -1783,7 +1783,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let field = app.textFields["address-field"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
         field.tap()
-        field.typeText("https://example.invalid/\n")
+        field.typeText("http://127.0.0.1:64999/missing\n")
         XCTAssertTrue(app.buttons["重试"].waitForExistence(timeout: 15))
         XCTAssertNil(recoveryButton(app), "An ordinary retry must not be a proxy action")
         app.buttons["address-location-privacy"].tap()
