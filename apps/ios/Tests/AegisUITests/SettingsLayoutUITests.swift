@@ -34,6 +34,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertEqual(icon.value as? String, "连接暂不可用")
         capture("地址栏-手动开启隐藏地理位置", app)
         app.buttons["page-protection"].tap()
+        app.buttons["site-details"].tap()
         let siteSwitch = app.switches["access-site-proxy-toggle"]
         XCTAssertTrue(siteSwitch.waitForExistence(timeout: 5))
         XCTAssertEqual(siteSwitch.value as? String, "1")
@@ -64,6 +65,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse((failedHost.value as? String ?? "").contains("127.0.0.1"))
         capture("加载失败-隐藏地理位置", app)
         app.buttons["page-protection"].tap()
+        app.buttons["site-details"].tap()
         let toggle = app.switches["access-site-proxy-toggle"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         XCTAssertEqual(toggle.label, "隐藏地理位置")
