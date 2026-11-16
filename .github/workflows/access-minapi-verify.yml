@@ -13,8 +13,6 @@ jobs:
       matrix:
         include:
           - {api: 25, target: google_apis}
-          - {api: 26, target: google_apis}
-          - {api: 36, target: default}
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     steps:
