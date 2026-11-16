@@ -483,4 +483,5 @@
 0481-align-product-display-name-and-policy-identity.patch
 0482-fix-macos-ignored-ax-button.patch
 0483-build-share-access-core-source-manifest.patch
-0484-feat-access-windows-desktop-parity.patch
+0484-fix-macos-unshown-omnibox-popup.patch
+0485-feat-access-windows-desktop-parity.patch
