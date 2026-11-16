@@ -1,4 +1,5 @@
 import UIKit
+import Combine
 import WebKit
 import XCTest
 @testable import Aegis
@@ -116,6 +117,35 @@ final class FindInPageLifecycleTests: XCTestCase {
 
 @MainActor
 final class AssistantOperationLifetimeTests: XCTestCase {
+    func testDeactivatingOneWindowPreservesOtherWindowOperationAndBusyState() async {
+        let first = AssistantOperationLifetime(applicationIsActive: { true })
+        let second = AssistantOperationLifetime(applicationIsActive: { true })
+        first.attach(sceneID: "first", isActive: true)
+        second.attach(sceneID: "second", isActive: true)
+        let firstConsent = first.generation, secondConsent = second.generation
+        var firstBusy = true, secondBusy = true
+        let firstReset = first.sceneDeactivated.sink { firstBusy = false }
+        let secondReset = second.sceneDeactivated.sink { secondBusy = false }
+        defer { firstReset.cancel(); secondReset.cancel(); first.invalidate(); second.invalidate() }
+        let firstTask = Task { _ = try? await Task.sleep(for: .seconds(60)) }
+        let secondTask = Task { _ = try? await Task.sleep(for: .seconds(60)) }
+        first.operation = firstTask; second.operation = secondTask
+        // Both observers receive the same event, but only its owner may react.
+        first.deactivateScene("first"); second.deactivateScene("first")
+        XCTAssertTrue(firstTask.isCancelled)
+        XCTAssertNil(first.operation)
+        XCTAssertFalse(first.isCurrent(firstConsent))
+        XCTAssertFalse(firstBusy)
+        XCTAssertFalse(secondTask.isCancelled)
+        XCTAssertNotNil(second.operation)
+        XCTAssertTrue(second.isCurrent(secondConsent))
+        XCTAssertTrue(secondBusy)
+        first.activateScene("first"); second.activateScene("first")
+        XCTAssertFalse(first.isCurrent(firstConsent))
+        XCTAssertTrue(first.isCurrent(first.generation))
+        XCTAssertTrue(second.isCurrent(secondConsent))
+    }
+
     func testInactiveThenImmediateForegroundRevokesConfirmationAndIgnoresUncancellableReply() async throws {
         let lifetime = AssistantOperationLifetime(applicationIsActive: { true })
         let consent = lifetime.generation

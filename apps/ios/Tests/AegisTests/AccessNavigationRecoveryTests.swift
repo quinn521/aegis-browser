@@ -977,7 +977,11 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         tab.webView.frame = window.bounds
         window.rootViewController?.view.addSubview(tab.webView)
         tab.load(url)
-        await waitUntil({ tab.committedMainFrameURL == url && tab.webView.url == url && !tab.isLoading }, timeout: 20)
+        await waitUntil({
+            let view = tab.webView
+            if view.window == nil { view.frame = window.bounds; window.rootViewController?.view.addSubview(view) }
+            return tab.committedMainFrameURL == url && view.url == url && !tab.isLoading
+        }, timeout: 20)
         XCTAssertEqual(tab.committedMainFrameURL, url)
         let ready = tab.committedMainFrameURL == url && tab.webView.url == url && !tab.isLoading
         if !ready { window.isHidden = true }
@@ -1156,11 +1160,13 @@ private final class PreservingRedirectOrigin: @unchecked Sendable {
     private let listener: NWListener
     private let status: Int
     private let finishRedirect: Bool
-    private let request = Mutex<(String, String)?>(nil)
+    private let request = Mutex<(String, String, String, Int)?>(nil)
     private let connections = Mutex<[NWConnection]>([])
     var redirectedMethod: String? { request.withLock { $0?.0 } }
 
     var redirectedBody: String? { request.withLock { $0?.1 } }
+    var redirectedTarget: String? { request.withLock { $0?.2 } }
+    var redirectedCount: Int { request.withLock { $0?.3 ?? 0 } }
 
     init(status: Int, finishRedirect: Bool = false) throws {
         self.finishRedirect = finishRedirect
@@ -1204,11 +1210,18 @@ private final class PreservingRedirectOrigin: @unchecked Sendable {
             if first[1] == "/redirect", let port = self.listener.port {
                 response = "HTTP/1.1 \(self.status) Redirect\r\nLocation: http://127.0.0.1:\(port.rawValue)/kept\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             } else {
-                if first[1] == "/kept" {
-                    self.request.withLock { $0 = (String(first[0]), body) }
+                if first[1] == "/kept" || first[1].hasPrefix("/kept?") {
+                    self.request.withLock { $0 = (String(first[0]), body, String(first[1]), ($0?.3 ?? 0) + 1) }
                     guard self.finishRedirect else { return }
                 }
-                let html = "<a href='/redirect'>link</a><form action='/redirect' method='post'><input name='item' value='one'></form>"
+                let html: String
+                if first[1] == "/opaque-parent" {
+                    html = "<iframe sandbox='allow-scripts' src='/opaque-frame'></iframe>"
+                } else if first[1] == "/opaque-frame" {
+                    html = "<script>window.webkit.messageHandlers.opaqueFrame.postMessage('ready')</script>"
+                } else {
+                    html = "<a href='/redirect'>link</a><form action='/redirect' method='post'><input name='item' value='one'></form>"
+                }
                 response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n" + html
             }
             connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
@@ -1232,10 +1245,14 @@ extension AccessNavigationRecoveryTests {
             ("http", "127.0.0.1", 8768, "http://127.0.0.1:8768"),
             ("https", "::1", 65535, "https://[::1]:65535"),
             ("http", "[::1]", 80, "http://[::1]"),
-            ("https", "食狮.com.cn", 0, "https://xn--85x722f.com.cn")
+            ("https", "食狮.com.cn", 0, "https://xn--85x722f.com.cn"),
+            ("https", "xn--85x722f.com.cn", 0, "https://xn--85x722f.com.cn")
         ] {
-            let url = try XCTUnwrap(BrowserTab.securityOriginURL(scheme: scheme, host: host, port: port))
+            let url = try XCTUnwrap(BrowserTab.securityOriginURL(scheme: scheme, host: host, port: port), "\(scheme) \(host) \(port)")
             XCTAssertEqual(BrowserPreferences.origin(url), expected)
+            let roundTrip = try XCTUnwrap(BrowserTab.securityOriginURL(
+                scheme: try XCTUnwrap(url.scheme), host: try XCTUnwrap(url.host), port: url.port ?? 0))
+            XCTAssertEqual(BrowserPreferences.origin(roundTrip), expected)
         }
         for (scheme, host, port) in [
             ("", "", 0), ("null", "", 0), ("about", "", 0), ("data", "", 0),
@@ -1254,26 +1271,21 @@ extension AccessNavigationRecoveryTests {
     func testOpaqueSandboxedFrameDialogsAndMediaDenyExactlyOnceWithoutTopLevelAttribution() async throws {
         let service = try PreservingRedirectOrigin(status: 307)
         defer { service.stop() }
-        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("opaque-parent")
         let tab = makeTab()
-        let window = try await attachPage(tab, at: page)
-        defer { window.isHidden = true }
         let view = tab.webView
         let probe = OpaqueFrameProbe()
+        // Register before either HTTP document loads; no about:srcdoc policy bypass.
         view.configuration.userContentController.add(probe, name: "opaqueFrame")
         defer { view.configuration.userContentController.removeScriptMessageHandler(forName: "opaqueFrame") }
-        _ = try await view.callAsyncJavaScript("""
-            const frame = document.createElement('iframe');
-            frame.sandbox = 'allow-scripts';
-            frame.srcdoc = html;
-            document.body.appendChild(frame);
-            return true;
-            """, arguments: ["html": "<script>window.webkit.messageHandlers.opaqueFrame.postMessage('ready')</script>"],
-            in: nil, contentWorld: .page)
+        let window = try await attachPage(tab, at: page)
+        defer { window.isHidden = true }
+        XCTAssertTrue(tab.webView === view)
         await waitUntil({ probe.frame != nil }, timeout: 20)
         let frame = try XCTUnwrap(probe.frame, "Must capture a real sandboxed WebKit frame")
         let origin = frame.securityOrigin
         XCTAssertFalse(frame.isMainFrame)
+        XCTAssertEqual(frame.request.url, page.deletingLastPathComponent().appendingPathComponent("opaque-frame"))
         XCTAssertNil(BrowserTab.securityOriginURL(scheme: origin.protocol, host: origin.host, port: origin.port))
         XCTAssertNotNil(BrowserPreferences.origin(page), "Top-level page has a concrete origin that must not be borrowed")
         // WebKit itself may suppress sandboxed modal APIs. Exercise every native
@@ -1537,6 +1549,63 @@ extension AccessNavigationRecoveryTests {
         XCTAssertFalse(child.webView.configuration.userContentController === parent.webView.configuration.userContentController)
     }
 
+    func testSafeNewWindowGetSanitizesLinksAndSelectsTheDestinationStore() async throws {
+        for switchesStore in [false, true] {
+            let service = try PreservingRedirectOrigin(status: 307, finishRedirect: true)
+            defer { service.stop() }
+            let root = try await service.redirectURL().deletingLastPathComponent()
+            let page = root.appendingPathComponent("page")
+            let suite = "aegis-safe-new-window-" + UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let preferences = BrowserPreferences(defaults: defaults)
+            var values = preferences.values; values.allowPopups = true
+            try preferences.save(values)
+            let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences)
+            defer { browser.closeWindow() }
+            let routing = NewWindowStoreCoordinator()
+            if switchesStore { browser.hostCoordinator = routing }
+            let parent = try XCTUnwrap(browser.activeTab)
+            let window = try await attachPage(parent, at: page)
+            defer { window.isHidden = true }
+            let parentStore = parent.websiteDataStore
+            var target = try XCTUnwrap(URLComponents(url: root.appendingPathComponent("kept"), resolvingAgainstBaseURL: false))
+            target.host = switchesStore ? "localhost" : "127.0.0.1"
+            target.query = switchesStore ? "keep=1" : "utm_source=fixture&keep=1"
+            let destination = try XCTUnwrap(target.url)
+            if switchesStore { XCTAssertTrue(routing.wouldSwitchStore(tab: parent, url: destination)) }
+            _ = try await parent.webView.callAsyncJavaScript("""
+                const link = document.querySelector('a');
+                link.href = destination;
+                link.target = '_blank';
+                link.click();
+                return true;
+                """, arguments: ["destination": destination.absoluteString], in: nil, contentWorld: .page)
+            await waitUntil({ browser.activeTab?.id != parent.id }, timeout: 10)
+            let child = try XCTUnwrap(browser.activeTab)
+            XCTAssertNotEqual(child.id, parent.id)
+            await waitUntil({
+                // Follow actual view replacement during destination store selection.
+                let view = child.webView
+                if view.window == nil { view.frame = window.bounds; window.rootViewController?.view.addSubview(view) }
+                return service.redirectedMethod != nil && !child.isLoading
+            }, timeout: 20)
+            XCTAssertEqual(service.redirectedMethod, "GET")
+            XCTAssertEqual(service.redirectedBody, "")
+            XCTAssertEqual(service.redirectedTarget, "/kept?keep=1")
+            XCTAssertEqual(service.redirectedCount, 1)
+            XCTAssertNil(parent.loadingError)
+            XCTAssertNil(child.loadingError)
+            XCTAssertEqual(child.profile, parent.profile)
+            XCTAssertEqual(child.groupID, parent.groupID)
+            XCTAssertTrue(parent.websiteDataStore === parentStore)
+            if switchesStore {
+                XCTAssertTrue(parentStore === routing.sourceStore)
+                XCTAssertTrue(child.websiteDataStore === routing.destinationStore)
+            }
+        }
+    }
+
     func testClearingDataDisposesRetainedTabAndUnbindsOrdinaryHostStore() async throws {
         let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         defer { session.closeWindow() }
@@ -1562,4 +1631,25 @@ private final class OpaqueFrameProbe: NSObject, WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if message.body as? String == "ready" { frame = message.frameInfo }
     }
+}
+
+@MainActor
+private final class NewWindowStoreCoordinator: BrowserHostStoreCoordinating {
+    let sourceStore = WKWebsiteDataStore.nonPersistent()
+    let destinationStore = WKWebsiteDataStore.nonPersistent()
+    func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? {
+        switch url.host {
+        case "127.0.0.1": sourceStore
+        case "localhost": destinationStore
+        default: nil
+        }
+    }
+    func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool {
+        (dataStoreForMainFrame(tab: tab, url: url) ?? tab.originalWebsiteDataStore) !== tab.websiteDataStore
+    }
+    func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError) {}
+    func pendingRecoveryInvalidated(tab: BrowserTab) {}
+    func tabClosed(_ tab: BrowserTab) {}
+    func ordinaryHostStores() -> [WKWebsiteDataStore] { [sourceStore, destinationStore] }
+    func endPrivateSession(scopeID: String) {}
 }

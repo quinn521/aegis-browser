@@ -29,9 +29,18 @@ final class WebsiteEnhancementUITests: XCTestCase {
   }
   private func tapVisible(_ button: XCUIElement, _ app: XCUIApplication) {
     for _ in 0..<6 {
-      if button.isHittable { break }
-      app.swipeUp()
+      if button.exists {
+        let frame = button.frame
+        // A restored form can expose an unrealized/offscreen cell with invalid
+        // geometry. Scroll it into the viewport before asking AX for a hit point.
+        if !frame.isEmpty, !frame.isInfinite, !frame.isNull,
+           app.frame.contains(CGPoint(x: frame.midX, y: frame.midY)), button.isHittable { break }
+      }
+      if app.collectionViews.firstMatch.exists { app.collectionViews.firstMatch.swipeUp() }
+      else if app.scrollViews.firstMatch.exists { app.scrollViews.firstMatch.swipeUp() }
+      else { app.swipeUp() }
     }
+    XCTAssertTrue(button.waitForExistence(timeout: 5))
     XCTAssertTrue(button.isHittable)
     button.tap()
   }

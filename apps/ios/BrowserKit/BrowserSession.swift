@@ -113,6 +113,11 @@ public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
     public var isPrivate: Bool { self == .privateMode }
 }
 
+enum BrowserNewWindowResult {
+    case opened(WKWebView?)
+    case declined
+}
+
 @MainActor
 public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
     public let id: UUID
@@ -330,7 +335,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private var loadGeneration = UUID()
 
     var onNavigation: ((BrowserTab) -> Void)?
-    var onNewWindow: ((WKWebViewConfiguration, URLRequest, Bool) -> WKWebView?)?
+    var onNewWindow: ((WKWebViewConfiguration, URLRequest, Bool) -> BrowserNewWindowResult)?
     private(set) var javaScriptDialog: BrowserJavaScriptDialog?
     var inheritedHardenedSecurity = false
     private var activeHardenedSecurity = false
@@ -1799,13 +1804,22 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         guard webView === loadedWebView, !isDisposed, isActive,
               navigationAction.targetFrame == nil, let url = navigationAction.request.url else { return nil }
         guard navigationAction.navigationType == .linkActivated || preferences.values.allowPopups else { return nil }
-        let decision = navigationDecision(url, method: navigationAction.request.httpMethod ?? "GET")
-        guard decision.kind == .allow else { lastPolicyIntervention = decision; return nil }
-        guard let child = onNewWindow?(configuration, navigationAction.request, activeHardenedSecurity) else {
+        var request = navigationAction.request
+        let decision = navigationDecision(url, method: request.httpMethod ?? "GET")
+        guard decision.kind != .blocked else { lastPolicyIntervention = decision; return nil }
+        if decision.kind == .sanitized {
+            lastPolicyIntervention = decision
+            guard ["GET", "HEAD"].contains((request.httpMethod ?? "GET").uppercased()),
+                  !BrowserMainFrameFailure.requestHasUnsafeReplaySurface(request),
+                  let cleaned = URL(string: decision.effectiveURL) else { return nil }
+            request.url = cleaned
+        }
+        switch onNewWindow?(configuration, request, activeHardenedSecurity) ?? .declined {
+        case .opened(let child): return child
+        case .declined:
             loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
             return nil
         }
-        return child
     }
 
     private func cancelJavaScriptDialog() {
@@ -1822,7 +1836,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let authorityHost: String
         if host.contains(":") {
             let literal = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
-            guard IPv6Address(literal) != nil else { return nil }
+            let allowed = CharacterSet(charactersIn: "0123456789abcdef:.")
+            guard literal.unicodeScalars.allSatisfy({ allowed.contains($0) }), IPv6Address(literal) != nil else { return nil }
             authorityHost = "[\(literal)]"
         } else {
             let allowed = CharacterSet.alphanumerics.union(.nonBaseCharacters).union(CharacterSet(charactersIn: "-._"))
@@ -2618,9 +2633,22 @@ public final class BrowserSession: ObservableObject {
         }
         tab.onNewWindow = { [weak self, weak tab] configuration, request, hardened in
             guard let self, let tab, !self.isWindowClosed, self.profile == profile, self.activeTab === tab,
-                  let url = request.url, configuration.websiteDataStore === tab.websiteDataStore,
-                  !(self.hostCoordinator?.requiresProxyPreparation(tab: tab, url: url) ?? false),
-                  !(self.hostCoordinator?.wouldSwitchStore(tab: tab, url: url) ?? false) else { return nil }
+                  let url = request.url, configuration.websiteDataStore === tab.websiteDataStore else { return .declined }
+            if ["GET", "HEAD"].contains((request.httpMethod ?? "GET").uppercased()),
+               !BrowserMainFrameFailure.requestHasUnsafeReplaySurface(request) {
+                // Safe requests use normal destination policy, store selection and
+                // proxy preparation. Returning nil prevents WebKit's original load.
+                let child = self.makeTab(profile: profile)
+                child.inheritedHardenedSecurity = hardened
+                child.groupID = self.selectedGroupID
+                if profile.isPrivate { self.privateTabs.append(child) } else { self.standardTabs.append(child) }
+                self.activeTabID = child.id
+                self.refreshBookmarkState(); self.persistSession()
+                child.load(request)
+                return .opened(nil)
+            }
+            guard !(self.hostCoordinator?.requiresProxyPreparation(tab: tab, url: url) ?? false),
+                  !(self.hostCoordinator?.wouldSwitchStore(tab: tab, url: url) ?? false) else { return .declined }
             let child = self.makeTab(profile: profile, suppliedConfiguration: configuration,
                                      originalStore: tab.originalWebsiteDataStore)
             child.inheritedHardenedSecurity = hardened
@@ -2630,14 +2658,14 @@ public final class BrowserSession: ObservableObject {
                   self.hostCoordinator?.requiresProxy(tab: child, url: url) != true || routed != nil,
                   child.prepareNewWindow(request, from: tab) else {
                 self.disposeTabs([child])
-                return nil
+                return .declined
             }
             let view = child.webView
             child.groupID = self.selectedGroupID
             if profile.isPrivate { self.privateTabs.append(child) } else { self.standardTabs.append(child) }
             self.activeTabID = child.id
             self.refreshBookmarkState(); self.persistSession()
-            return view
+            return .opened(view)
         }
         tab.onDownload = { [weak self, weak tab] url in
             guard let self, let tab, self.profile == profile else { return }

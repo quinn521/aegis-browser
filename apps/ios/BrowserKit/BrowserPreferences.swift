@@ -182,7 +182,9 @@ public final class BrowserPreferences: ObservableObject {
         guard let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
               let host = url.host?.lowercased(), !host.isEmpty, url.user == nil, url.password == nil else { return nil }
         var parts = URLComponents()
-        parts.scheme = scheme; parts.host = host
+        // URL.host may omit IPv6 brackets; URLComponents.host requires them.
+        let authorityHost = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        parts.scheme = scheme; parts.host = authorityHost
         if let port = url.port, port != (scheme == "https" ? 443 : 80) { parts.port = port }
         return parts.string
     }

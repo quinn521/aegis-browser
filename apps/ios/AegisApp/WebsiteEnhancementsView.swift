@@ -351,6 +351,8 @@ struct UserScriptEditor: View {
         }
       }
       .onDisappear { cancel() }
+      .background(AssistantSceneAttachment(lifetime: lifetime))
+      .onReceive(lifetime.sceneDeactivated) { _ in cancel() }
       .onChange(of: scenePhase) { _, phase in if phase != .active { cancel() } }
       .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in cancel() }
       .alert("确认发送给模型服务？", isPresented: $confirmsModel) {
