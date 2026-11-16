@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  TESTED_SHA: 42ea4feb7d0a1eab1301e17eed2f27e5f8ba2bba
+  TESTED_SHA: f40f583486bf0b93939857979e65fe7538eb5cf9
 jobs:
   verify:
     strategy:
