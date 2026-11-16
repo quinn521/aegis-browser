@@ -335,7 +335,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
            let release = registry.retainRetiringDocument(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate) {
             tab.afterCurrentDocumentBecomesInert(release)
         }
-        return registry.storeForTab(
+        let store = registry.storeForTab(
             tabID: tab.instanceID.uuidString,
             scopeID: tab.browsingScopeID,
             isPrivate: tab.profile.isPrivate,
@@ -343,6 +343,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             boundHost: bound,
             intent: intent
         )
+        if store != nil, usesDefaultRoute(key), tab.parentForProxyLanding(url) == nil,
+           registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state == .ready {
+            defaultProtectedHosts.insert(key)
+        }
+        return store
     }
 
     /// A landing store owns its entry independently of the idle redirect source.
@@ -956,9 +961,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         )
         if let pending = operation.addressNavigation,
            let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
-            if operation.automaticFirstVisit {
-                defaultProtectedHosts.insert(operation.key)
-            } else {
+            if !operation.automaticFirstVisit {
                 setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
             }
             operation.state = .sent

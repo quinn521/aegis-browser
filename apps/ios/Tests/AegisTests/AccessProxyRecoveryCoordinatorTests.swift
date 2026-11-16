@@ -49,6 +49,29 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertFalse(defaults.dictionaryRepresentation().values.contains { String(describing: $0).contains("other.example") })
     }
 
+    func testRemovingRecoveryGroupPreservesDefaultAdoptionOfAnExistingEndpoint() throws {
+        let coordinator = AccessHostStoreCoordinator(defaultLocationPrivacy: true)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let url = URL(string: "https://already-ready.example/path")!
+        let host = try AccessSiteHost("already-ready.example")
+        tab.adoptPolicyMainFrameNavigationForTests(url: url)
+        tab.commitPendingMainFrameForTests()
+        var endpoint = AccessManagedProxyEndpoint(identity: "existing", generation: 1,
+            loopbackHost: "127.0.0.1", port: 18_291, state: .ready)
+        coordinator.registry.setEndpoint(endpoint, scopeID: tab.browsingScopeID, host: host, isPrivate: false)
+        let store = try XCTUnwrap(coordinator.dataStoreForMainFrame(tab: tab, url: url))
+        tab.rebindWebsiteDataStore(store, host: host.rawValue)
+        _ = coordinator.setAutoRecoveryEnabled(true, for: tab)
+        XCTAssertTrue(coordinator.snapshot(for: tab).autoRecoveryEnabled)
+        endpoint.state = .unavailable
+        coordinator.registry.setEndpoint(endpoint, scopeID: tab.browsingScopeID, host: host, isPrivate: false)
+        XCTAssertEqual(coordinator.setAutoRecoveryEnabled(false, for: tab), .revoked)
+        XCTAssertTrue(tab.websiteDataStore === store)
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+    }
+
     func testPreparingProxyPreservesTheOriginalGetAndHeadHeaders() async throws {
         for method in ["GET", "HEAD"] {
             let clock = AccessManualPreparationClock()
