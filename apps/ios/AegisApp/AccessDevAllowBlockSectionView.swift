@@ -65,7 +65,6 @@ struct AccessDevAllowBlockSectionView: View {
                     Text("仅 DEV/Alpha 调试入口。对明确 host 提交意图；BLOCK 为本地拒绝，不是直连成功。非通用规则编辑器。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                .accessibilityIdentifier("access-site-diagnostics")
             }
         }
     }

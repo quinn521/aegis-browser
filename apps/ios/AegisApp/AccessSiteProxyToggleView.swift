@@ -157,7 +157,6 @@ struct AccessSiteProxyToggleView: View {
                     }
                 }
             }
-            .accessibilityIdentifier("access-site-connection-options")
         } header: {
             if let host = snap.host {
                 Text(verbatim: AccessSiteDisplayName.title(host.rawValue))
