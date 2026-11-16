@@ -1,10 +1,10 @@
-From e9748264c54acdd31ff9bd0e1368ac894db9ccc8 Mon Sep 17 00:00:00 2001
+From 7a35d690d3ca86227571444a51b2b22f8d204d08 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
-Date: Mon, 16 Nov 2026 11:57:40 +0800
+Date: Mon, 16 Nov 2026 12:14:11 +0800
 Subject: [PATCH] build: share Access core source manifest
 
 ---
- components/aegis_access/BUILD.gn              | 90 +++++++------------
+ components/aegis_access/BUILD.gn              | 88 +++++++------------
  .../aegis_access/access_route_planner.cc      |  3 +-
  components/aegis_access/access_route_types.h  |  3 +
  components/aegis_access/access_sources.json   | 66 ++++++++++++++
@@ -12,11 +12,11 @@ Subject: [PATCH] build: share Access core source manifest
  .../aegis_access/request_ownership_registry.h | 11 +++
  .../aegis_access/site_proxy_rule_group.cc     |  2 +
  .../aegis_access/site_proxy_rule_group.h      |  3 +
- 8 files changed, 143 insertions(+), 65 deletions(-)
+ 8 files changed, 141 insertions(+), 65 deletions(-)
  create mode 100644 components/aegis_access/access_sources.json
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
-index d02cf73589ac0f99617841698cbd73cd9abf2615..dbfbf4c248e9e7f1bc4a2aee3c82b4a3094e99d5 100644
+index d02cf73589ac0f99617841698cbd73cd9abf2615..25c683a4c4021e317876c67a1d30ecc5e7abaef0 100644
 --- a/components/aegis_access/BUILD.gn
 +++ b/components/aegis_access/BUILD.gn
 @@ -3,15 +3,20 @@
@@ -143,7 +143,7 @@ index d02cf73589ac0f99617841698cbd73cd9abf2615..dbfbf4c248e9e7f1bc4a2aee3c82b4a3
    public_deps = [
      ":aegis_access",
      ":request_dispatch_gate",
-@@ -106,17 +85,16 @@ source_set("published_request_runtime") {
+@@ -106,17 +85,14 @@ source_set("published_request_runtime") {
  
  source_set("aegis_access") {
    sources = [
@@ -162,8 +162,6 @@ index d02cf73589ac0f99617841698cbd73cd9abf2615..dbfbf4c248e9e7f1bc4a2aee3c82b4a3
 +              "access_policy_evaluator.h",
 +              "access_proxy_route_adapter.cc",
 +              "access_proxy_route_adapter.h",
-+              "access_socks5_inbound_parser.cc",
-+              "access_socks5_inbound_parser.h",
 +              "request_policy_context.cc",
 +              "request_policy_context.h",
 +            ] + access_core_sources.access_route_planner +
@@ -171,7 +169,7 @@ index d02cf73589ac0f99617841698cbd73cd9abf2615..dbfbf4c248e9e7f1bc4a2aee3c82b4a3
    public_deps = [
      ":access_route_types",
      ":request_ownership_registry",
-@@ -276,8 +254,8 @@ test("aegis_access_unittests") {
+@@ -276,8 +252,8 @@ test("aegis_access_unittests") {
  
  source_set("request_ownership_registry_test_support") {
    testonly = true

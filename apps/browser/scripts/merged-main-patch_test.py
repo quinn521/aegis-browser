@@ -85,14 +85,24 @@ class MergedMainPatchTests(unittest.TestCase):
                 for name in entries((patchdir / 'series').read_text()):
                     patch = patchdir / name
                     text = patch.read_text()
-                    if not any(f'diff --git a/{path} b/{path}\n' in text for path in targets):
+                    if f'diff --git a/{prefix}/' not in text:
                         continue
                     result = subprocess.run(  # nosec B607, B603
                         ['git', '-C', repo, 'apply',
-                         *[f'--include={path}' for path in targets], str(patch)],
+                         f'--include={prefix}/*', str(patch)],
                         capture_output=True, text=True, timeout=30,
                     )
                     self.assertEqual(result.returncode, 0, f'{name}: {result.stderr}')
+                # Check the platform's native target after replay. Android builds
+                # use their own patch series and never copy the desktop overlay.
+                component = Path(repo) / prefix
+                build = (component / 'BUILD.gn').read_text()
+                target = re.search(r'^source_set\("aegis_access"\) \{(.*?)^\}', build, re.M | re.S)
+                self.assertIsNotNone(target)
+                sources = re.search(r'sources = \[(.*?)\]', target[1], re.S)
+                self.assertIsNotNone(sources)
+                for file in re.findall(r'"([^"]+)"', sources[1]):
+                    self.assertTrue((component / file).is_file(), f'{patchdir.name}: {file}')
                 for file, path in zip(files, targets):
                     self.assertEqual(git_blob_hash((Path(repo) / path).read_bytes()),
                                      git_blob_hash((overlay / file).read_bytes()), path)
