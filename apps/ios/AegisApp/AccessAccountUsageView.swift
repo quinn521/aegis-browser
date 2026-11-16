@@ -53,8 +53,6 @@ struct AccessAccountUsageView: View {
                         case .signedOut:
                             ContentUnavailableView {
                                 Label("尚未关联账号", systemImage: "person.crop.circle")
-                            } description: {
-                                Text("关联账号后，可在这里查看已用和剩余流量。")
                             }
                             .accessibilityIdentifier("access-usage-unlinked")
                         case .loading: Text("正在查询额度…")
@@ -82,6 +80,7 @@ struct AccessAccountUsageView: View {
             }
         } header: {
             if session.lastSnapshot?.quotaSource == .threeXUIAlpha { Text("测试服务用量（共享）") }
+            else { Text("账号与用量") }
         } footer: {
             if session.lastSnapshot?.quotaSource == .threeXUIAlpha {
                 Text("共享测试用量，不代表个人套餐；重置以服务端为准。")

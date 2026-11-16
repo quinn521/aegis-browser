@@ -19,7 +19,7 @@ struct AccessUsagePage: View {
                 AccessAccountUsageView(session: account)
             }
         }
-        .localizedNavigationTitle("账号与用量")
+        .localizedNavigationTitle("隐藏地理位置服务")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("access-usage-page")
     }

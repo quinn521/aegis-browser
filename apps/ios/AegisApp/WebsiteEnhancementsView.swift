@@ -517,14 +517,6 @@ private struct CurrentWebsitePanel: View {
       AccessSiteProxyToggleView(store: accessSiteProxy, url: tab.url, tab: tab)
         .onAppear { accessSiteProxy.hostRouting = hostStores }
         .onChange(of: tab.navigationEpoch) { _, _ in accessSiteProxy.noteNavigationChanged() }
-      Section {
-        NavigationLink {
-          AccessUsagePage(isPrivate: isPrivate)
-        } label: {
-          Label("账号与用量", systemImage: "chart.bar")
-        }
-        .accessibilityIdentifier("access-usage-link")
-      }
       AccessDevAllowBlockSectionView(store: accessSiteProxy, url: tab.url)
       if let url = tab.url, ScriptMatch.origin(url) != nil {
         Section {

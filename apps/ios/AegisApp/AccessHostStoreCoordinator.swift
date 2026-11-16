@@ -17,9 +17,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private(set) var probeInvocationCount: UInt64 = 0
     private let ruleGroups = AccessSiteRuleGroupRegistry()
     private var intents: [AccessHostStoreKey: AccessProxyIntentState] = [:]
+    var offersLocationService: Bool { !(publisher is AccessFailClosedProxyEntryPublisher) }
     private let defaultLocationPrivacy: Bool
     private let locationPreferences: UserDefaults?
     private static let directSitesKey = "browser.locationPrivacy.directSites"
+    private var defaultProtectedHosts: Set<AccessHostStoreKey> = []
     private var explicitDirect: Set<AccessHostStoreKey> = []
     private var executing: Set<AccessHostStoreKey> = []
     /// Tabs that have actually entered a proxy recovery send, bound to the host
@@ -65,6 +67,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         }
         let publisher = self.publisher
         registry.onRetire = { [weak self] key in
+            self?.defaultProtectedHosts.remove(key)
             self?.publisher.release(for: key)
         }
         stateTask = Task { @MainActor [weak self] in
@@ -144,7 +147,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     /// An explicit page route has priority over optional automatic recovery.
     /// Revalidate the host shown by the control before changing any shared state.
     func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost, fromAddressBar: Bool = false) {
-        let currentHost = fromAddressBar ? addressControlHost(for: tab) : host(for: tab)
+        let currentHost = fromAddressBar ? addressControlHost(for: tab) : siteControlHost(for: tab)
         guard !tab.isDisposed, currentHost == displayedHost else { return }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: displayedHost, isPrivate: tab.profile.isPrivate)
         let affected = BrowserSession.openTabs().filter { current in
@@ -210,7 +213,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     func snapshot(for tab: BrowserTab, fromAddressBar: Bool = false) -> AccessSiteProxyToggleSnapshot {
         _ = revision
-        let displayedHost = fromAddressBar ? addressControlHost(for: tab) : host(for: tab)
+        let displayedHost = fromAddressBar ? addressControlHost(for: tab) : siteControlHost(for: tab)
         guard let host = displayedHost else {
             var snapshot = AccessSiteProxyToggleSnapshot()
             snapshot.intentStatus = .noTrustedSite
@@ -953,7 +956,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         )
         if let pending = operation.addressNavigation,
            let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
-            if !operation.automaticFirstVisit {
+            if operation.automaticFirstVisit {
+                defaultProtectedHosts.insert(operation.key)
+            } else {
                 setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
             }
             operation.state = .sent
@@ -1101,7 +1106,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             prior: group
         )
         let key = AccessHostStoreKey(scopeID: group.scopeID, host: host, isPrivate: group.isPrivate)
-        if !groupStillLists(key), intents[key] != .on {
+        if !groupStillLists(key), !hasIndependentRoute(key) {
             releaseBinding(key)
         }
         return change
@@ -1112,7 +1117,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         invalidateOperations(groupID: removed.groupID)
         for host in removed.memberHosts {
             let key = AccessHostStoreKey(scopeID: removed.scopeID, host: host, isPrivate: removed.isPrivate)
-            if !groupStillLists(key), intents[key] != .on {
+            if !groupStillLists(key), !hasIndependentRoute(key) {
                 releaseBinding(key)
             }
         }
@@ -1161,7 +1166,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             && group.isExecutable(on: releaseChannel)
     }
 
+    private func hasIndependentRoute(_ key: AccessHostStoreKey) -> Bool {
+        intents[key] == .on || (usesDefaultRoute(key) && defaultProtectedHosts.contains(key))
+    }
+
     private func releaseBinding(_ key: AccessHostStoreKey) {
+        defaultProtectedHosts.remove(key)
         executing.remove(key)
         hostRevisions[key, default: 0] += 1
         cancelOperations(for: key)
@@ -1182,7 +1192,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                let host = try? AccessSiteHost(rawHost), host != key.host {
                 tab.clearProxyLanding()
                 let landing = AccessHostStoreKey(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
-                if intents[landing] == .on || executingTabs[tab.instanceID.uuidString] == landing { continue }
+                if hasIndependentRoute(landing) || executingTabs[tab.instanceID.uuidString] == landing { continue }
                 // The child owns a different store from the parent being revoked.
                 if let release = registry.retainRetiringDocument(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate) {
                     tab.afterCurrentDocumentBecomesInert(release)
@@ -1244,6 +1254,15 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private func usesDefaultRoute(_ key: AccessHostStoreKey) -> Bool {
         defaultLocationPrivacy && intents[key] == nil && !explicitDirect.contains(key)
             && AccessLocalSite.classify(key.host.rawValue) == nil
+    }
+
+    private func siteControlHost(for tab: BrowserTab) -> AccessSiteHost? {
+        addressControlHost(for: tab) ?? host(for: tab)
+    }
+
+    func canManageRecovery(for tab: BrowserTab, displayedHost: AccessSiteHost?) -> Bool {
+        guard let displayedHost else { return false }
+        return displayedHost == host(for: tab)
     }
 
     private func addressControlHost(for tab: BrowserTab) -> AccessSiteHost? {

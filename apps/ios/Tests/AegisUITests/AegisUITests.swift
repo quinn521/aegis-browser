@@ -1368,7 +1368,8 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
     }
 
     private func readDirectQuota(_ app: XCUIApplication, name: String) throws -> [String: UInt64] {
-        app.buttons["page-protection"].tap()
+        app.buttons["browser-more"].tap()
+        app.buttons["open-browser-settings"].tap()
         let entry = app.buttons["access-usage-link"]
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         entry.tap()
@@ -1679,7 +1680,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         // the visible action again; a vanished banner is not a successful tap.
         retry = recoveryButton(app)
         if let retry {
-            let pending = retry.label == "开启并打开"
+            let pending = retry.label == "隐藏位置并打开"
             let exposedTarget = ux["target"] as? String ?? "NOT_EXPOSED"
             let observedAddress = ux["observed_address"] as? String ?? "UNREADABLE"
             receipt["recovery_target"] = exposedTarget
@@ -1760,7 +1761,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         }
     }
 
-    private let recoveryLabels = ["开启并打开", "开启并重试"]
+    private let recoveryLabels = ["隐藏位置并打开", "隐藏位置并重试"]
 
     private struct ObservedRecoveryAction {
         let label: String
@@ -1804,7 +1805,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let pending = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-host" }
         let failed = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-failed-host" }
         let status = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-status" }
-        let knownStatus = ["正在准备连接…", "正在连接此网址，可尝试隐藏地理位置。"]
+        let knownStatus = ["正在准备连接…", "正在连接…"]
         let targetNode = pending ?? failed
         let targetValue = targetNode?.value as? String
         let target = targetValue ?? targetNode?.label

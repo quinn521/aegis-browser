@@ -30,6 +30,18 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         }, message: "First visit must reach the controlled CONNECT listener")
         XCTAssertEqual(tab.boundHostName, "location.example.invalid")
         XCTAssertFalse(try XCTUnwrap(tab.websiteDataStore.proxyConfigurations.first).allowFailover)
+        tab.commitPendingMainFrameForTests()
+        _ = coordinator.setAutoRecoveryEnabled(true, for: tab)
+        XCTAssertTrue(coordinator.snapshot(for: tab).autoRecoveryEnabled)
+        let boundStore = tab.websiteDataStore
+        let host = try AccessSiteHost("location.example.invalid")
+        var endpoint = try XCTUnwrap(coordinator.registry.endpoint(scopeID: tab.browsingScopeID, host: host, isPrivate: false))
+        endpoint.state = .unavailable
+        coordinator.registry.setEndpoint(endpoint, scopeID: tab.browsingScopeID, host: host, isPrivate: false)
+        XCTAssertEqual(coordinator.setAutoRecoveryEnabled(false, for: tab), .revoked)
+        XCTAssertTrue(tab.websiteDataStore === boundStore)
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+
     }
 
     func testUnavailableDefaultResumesOnlyTheHeldNavigationUsingItsOriginalStore() async throws {
@@ -39,10 +51,29 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         browser.hostCoordinator = coordinator
         defer { browser.closeWindow() }
         let tab = try XCTUnwrap(browser.activeTab)
+        // Instrument the original store with a loopback witness. The managed service always fails.
+        let witness = AnsweringOpener(finishAfterRecording: true)
+        let listener = try await makeListener(port: 18_278, tunnels: witness)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let original = tab.originalWebsiteDataStore
+        let prior = original.proxyConfigurations
+        var observer = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: 18_278))
+        observer.allowFailover = false
+        original.proxyConfigurations = [observer]
+        defer { original.proxyConfigurations = prior }
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
         let url = URL(string: "https://default-off.invalid/page")!
         tab.loadFromAddressBar(url)
         XCTAssertNotNil(tab.heldProxyRequestForTests)
-        try await waitUntil { !tab.canTryDefaultRoute(for: url) }
+        let navigationID = tab.currentAttemptIDForTests
+        try await waitUntil(seconds: 15, {
+            self.attach(tab.webView, to: window)
+            return witness.authorities.contains("default-off.invalid:443")
+        }, message: "Cold fallback must actually send the original request")
+        XCTAssertEqual(tab.currentAttemptIDForTests, navigationID)
+        XCTAssertFalse(tab.canTryDefaultRoute(for: url))
         XCTAssertNil(tab.heldProxyRequestForTests)
         XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
         XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: url))

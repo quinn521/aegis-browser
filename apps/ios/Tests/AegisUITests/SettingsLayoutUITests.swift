@@ -56,10 +56,10 @@ final class SettingsLayoutUITests: XCTestCase {
         address.tap()
         address.typeText("http://127.0.0.1:64999/missing\n")
         let retry = app.buttons["page-load-proxy-retry"]
-        XCTAssertTrue(retry.waitForExistence(timeout: 15))
-        XCTAssertEqual(retry.label, "开启并重试")
-        XCTAssertTrue(retry.isHittable)
         let failedHost = app.staticTexts["page-load-failed-host"]
+        XCTAssertTrue(failedHost.waitForExistence(timeout: 15))
+        XCTAssertFalse(retry.exists)
+        XCTAssertTrue(app.buttons["重试"].isHittable)
         XCTAssertEqual(failedHost.label, "本机页面")
         XCTAssertFalse((failedHost.value as? String ?? "").contains("127.0.0.1"))
         capture("加载失败-隐藏地理位置", app)
@@ -93,10 +93,12 @@ final class SettingsLayoutUITests: XCTestCase {
         let entry = app.buttons["access-usage-link"]
         XCTAssertTrue(reveal(entry, app))
         assertInsideWindow(entry, app)
+        XCTAssertEqual(entry.label, language == "en" ? "IP location privacy" : "隐藏地理位置服务")
+        if language == "zh-Hans" { capture("设置-隐私保护", app) }
         entry.tap()
         let page = app.descendants(matching: .any).matching(identifier: "access-usage-page").firstMatch
         XCTAssertTrue(page.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.navigationBars[language == "en" ? "Account & usage" : "账号与用量"].exists)
+        XCTAssertTrue(app.navigationBars[language == "en" ? "IP location privacy" : "隐藏地理位置服务"].exists)
         // This build has no bundled test subscription or bound account. Unknown is not zero.
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-progress"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)

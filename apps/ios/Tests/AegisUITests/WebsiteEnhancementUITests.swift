@@ -81,7 +81,7 @@ final class WebsiteEnhancementUITests: XCTestCase {
     XCTAssertTrue(app.switches["access-site-proxy-toggle"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
     XCTAssertFalse(app.staticTexts["VLESS · TCP · REALITY · Vision"].exists)
-    tapVisible(app.buttons["access-usage-link"], app)
+    openLocationServiceFromWebsite(app)
     XCTAssertTrue(app.staticTexts["测试服务用量（共享）"].waitForExistence(timeout: 5))
     capture("已配置的共享测试服务")
   }
@@ -108,7 +108,7 @@ final class WebsiteEnhancementUITests: XCTestCase {
     }
     openFixturePageProtection(app)
     XCTAssertFalse(app.staticTexts["VLESS · TCP · REALITY · Vision"].exists)
-    tapVisible(app.buttons["access-usage-link"], app)
+    openLocationServiceFromWebsite(app)
     let style = ByteCountFormatStyle(allowedUnits: .bytes, spellsOutZero: false, locale: Locale(identifier: "zh_CN"))
     for (key, bytes) in [("quota", 10_000), ("remaining", 9_970), ("uploaded", 10), ("downloaded", 20), ("used", 30)] {
       let metric = app.descendants(matching: .any).matching(identifier: "access-usage-" + key).firstMatch
@@ -116,6 +116,13 @@ final class WebsiteEnhancementUITests: XCTestCase {
       XCTAssertEqual(metric.value as? String, style.format(Int64(bytes)), key)
     }
     capture("受控账户C额度显示")
+  }
+
+  private func openLocationServiceFromWebsite(_ app: XCUIApplication) {
+    XCTAssertFalse(app.buttons["access-usage-link"].exists)
+    app.navigationBars["当前网站"].buttons["完成"].tap()
+    open("open-browser-settings", app)
+    tapVisible(app.buttons["access-usage-link"], app)
   }
 
   private func openFixturePageProtection(_ app: XCUIApplication) {

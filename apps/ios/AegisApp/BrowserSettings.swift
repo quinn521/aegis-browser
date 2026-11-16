@@ -33,13 +33,19 @@ struct BrowserSettingsView: View {
                 Section("浏览") {
                     NavigationLink("搜索、主页与浏览方式") { BrowserGeneralSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("general-browser-settings")
+                    Button("打开系统 App 设置") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                }
+                Section("隐私保护") {
+                    NavigationLink {
+                        AccessUsagePage(isPrivate: browser.profile.isPrivate)
+                    } label: { Label("隐藏地理位置服务", systemImage: "location.slash") }
+                        .accessibilityIdentifier("access-usage-link")
                     NavigationLink("网站设置与权限") { WebsiteSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("website-settings")
                     NavigationLink("网站数据管理") { WebsiteDataSettingsView() }
                         .accessibilityIdentifier("website-data-settings")
-                    Button("打开系统 App 设置") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                    }
                 }
                 Section("Aegis 功能") {
                     NavigationLink { AegisFeatureSettingsView() } label: {
@@ -50,10 +56,6 @@ struct BrowserSettingsView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }.padding(.vertical, 5)
                     }.accessibilityIdentifier("aegis-feature-settings")
-                    NavigationLink {
-                        AccessUsagePage(isPrivate: browser.profile.isPrivate)
-                    } label: { Label("账号与用量", systemImage: "chart.bar") }
-                        .accessibilityIdentifier("access-usage-link")
                     NavigationLink("服务诊断") { AccessDiagnosticsView() }
                         .accessibilityIdentifier("access-diagnostics-settings")
                 }

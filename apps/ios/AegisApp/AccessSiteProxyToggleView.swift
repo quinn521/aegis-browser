@@ -63,6 +63,8 @@ struct AccessSiteProxyToggleView: View {
                     .accessibilityIdentifier("access-site-proxy-no-host")
             }
             DisclosureGroup("连接选项") {
+                Text("通过服务访问时，网站会看到服务的 IP 地址。设备定位权限由你单独管理。")
+                    .font(.footnote).foregroundStyle(.secondary)
                 Toggle(
                     LocalizedStringKey(AccessAutoRecoveryCopy.toggleTitle),
                     isOn: Binding(
@@ -159,13 +161,12 @@ struct AccessSiteProxyToggleView: View {
                     }
                 }
             }
+            .disabled(tab.map { store.hostRouting?.canManageRecovery(for: $0, displayedHost: snap.host) != true } ?? true)
         } header: {
             if let host = snap.host {
                 Text(verbatim: AccessSiteDisplayName.title(host.rawValue))
                     .textCase(nil).accessibilityIdentifier("access-site-proxy-host")
             }
-        } footer: {
-            Text("通过服务访问时，网站会看到服务的 IP 地址。设备定位权限由你单独管理。")
         }
     }
 }
