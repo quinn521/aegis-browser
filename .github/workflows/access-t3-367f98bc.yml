@@ -1,0 +1,89 @@
+name: Access T3 at 367f98bc
+on:
+  push:
+    branches: [feat/access-t3-run-367f98bc]
+permissions:
+  contents: read
+env:
+  TESTED_SHA: 367f98bc7f1eb813bd854688def3e18f34e50966
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 367f98bc7f1eb813bd854688def3e18f34e50966
+          persist-credentials: false
+      - name: Verify checkout and select x64 Visual Studio environment
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:TESTED_SHA -or (git status --porcelain)) { throw 'Unexpected source' }
+          git rev-parse HEAD 'HEAD^{tree}'
+          $instance = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$instance) { throw 'Visual Studio x64 tools not found' }
+          "VS_DEV_CMD=$instance\Common7\Tools\VsDevCmd.bat" >> $env:GITHUB_ENV
+      - name: Configure, build and run the contract on Windows x64
+        shell: cmd
+        working-directory: apps/browser/access-cmake
+        run: |
+          call "%VS_DEV_CMD%" -no_logo -arch=x64 -host_arch=x64 || exit /b 1
+          ver
+          echo Processor=%PROCESSOR_ARCHITECTURE% SDK=%WindowsSDKVersion% VC=%VCToolsVersion%
+          clang-cl --version || exit /b 1
+          cmake --version || exit /b 1
+          ninja --version || exit /b 1
+          python --version || exit /b 1
+          cmake --preset windows-x64 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON || exit /b 1
+          cmake --build out/windows-x64 --parallel 4 || exit /b 1
+          dumpbin /headers out\windows-x64\aegis_access_native_test.exe | findstr /i "machine" || exit /b 1
+          certutil -hashfile out\windows-x64\aegis_access_native_test.exe SHA256 || exit /b 1
+          ctest --test-dir out/windows-x64 -V --no-tests=error --output-junit junit.xml || exit /b 1
+      - name: Preserve native Windows JUnit
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: 367f98bc-windows-x64
+          path: apps/browser/access-cmake/out/windows-x64/junit.xml
+          if-no-files-found: error
+          retention-days: 14
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 367f98bc7f1eb813bd854688def3e18f34e50966
+          persist-credentials: false
+      - name: Build the API 26 arm64-v8a contract
+        working-directory: apps/browser/access-cmake
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD 'HEAD^{tree}'
+          ndk="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_NDK_HOME="$ndk"
+          cat "$ndk/source.properties"
+          "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version
+          cmake --version
+          ninja --version
+          python3 --version
+          cmake --preset android-arm64 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build out/android-arm64 --parallel 4
+          file out/android-arm64/aegis_access_native_test
+          sha256sum out/android-arm64/aegis_access_native_test
+          grep -o -- '--target=[^ ]*android[0-9]*' out/android-arm64/compile_commands.json | sort -u | grep -Fx -- '--target=aarch64-none-linux-android26'
+          grep -F '"arm64-v8a" "26"' out/android-arm64/CTestTestfile.cmake
+          mkdir -p arm64-evidence
+          cp out/android-arm64/{aegis_access_native_test,CTestTestfile.cmake,compile_commands.json} arm64-evidence/
+          cp "$ndk/source.properties" arm64-evidence/ndk.properties
+          git rev-parse HEAD > arm64-evidence/tested-sha.txt
+          (cd arm64-evidence && sha256sum aegis_access_native_test CTestTestfile.cmake compile_commands.json ndk.properties tested-sha.txt > SHA256SUMS)
+      - name: Preserve the exact arm64 executable for device CTest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: 367f98bc-android-arm64
+          path: apps/browser/access-cmake/arm64-evidence
+          if-no-files-found: error
+          retention-days: 14
