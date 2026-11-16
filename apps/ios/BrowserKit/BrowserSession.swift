@@ -1,6 +1,7 @@
 import AegisPolicyKit
 import Combine
 import Foundation
+import Network
 import UIKit
 import WebKit
 
@@ -1813,6 +1814,32 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         pending?.cancel()
     }
 
+    /// WebKit can report an empty/opaque origin. Never feed it to trapping
+    /// URLComponents setters or infer its identity from the top-level document.
+    static func securityOriginURL(scheme: String, host: String, port: Int) -> URL? {
+        let scheme = scheme.lowercased(), host = host.lowercased()
+        guard ["http", "https"].contains(scheme), !host.isEmpty, (0...65535).contains(port) else { return nil }
+        let authorityHost: String
+        if host.contains(":") {
+            let literal = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
+            guard IPv6Address(literal) != nil else { return nil }
+            authorityHost = "[\(literal)]"
+        } else {
+            let allowed = CharacterSet.alphanumerics.union(.nonBaseCharacters).union(CharacterSet(charactersIn: "-._"))
+            guard host.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+            let labels = (host.hasSuffix(".") ? String(host.dropLast()) : host).split(separator: ".", omittingEmptySubsequences: false)
+            guard labels.allSatisfy({ !$0.isEmpty }) else { return nil }
+            authorityHost = host
+        }
+        // A zero WKSecurityOrigin port denotes the scheme's default port.
+        let suffix = port == 0 ? "" : ":\(port)"
+        guard let parts = URLComponents(string: "\(scheme)://\(authorityHost)\(suffix)"),
+              parts.user == nil, parts.password == nil, parts.path.isEmpty,
+              parts.query == nil, parts.fragment == nil, let url = parts.url,
+              BrowserPreferences.origin(url) != nil else { return nil }
+        return url
+    }
+
     private func presentJavaScriptDialog(_ view: WKWebView, frame: WKFrameInfo, message: String,
                                          kind: BrowserJavaScriptDialog.Kind,
                                          completion: @escaping (Bool, String?) -> Void) {
@@ -1820,10 +1847,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
               UIApplication.shared.applicationState == .active, let window = view.window,
               window.windowScene?.activationState == .foregroundActive,
               var presenter = window.rootViewController else { completion(false, nil); return }
-        var origin = URLComponents()
-        origin.scheme = frame.securityOrigin.protocol; origin.host = frame.securityOrigin.host
-        if frame.securityOrigin.port != 0 { origin.port = frame.securityOrigin.port }
-        guard let url = origin.url, let identity = BrowserPreferences.origin(url) else { completion(false, nil); return }
+        let origin = frame.securityOrigin
+        guard let url = Self.securityOriginURL(scheme: origin.protocol, host: origin.host, port: origin.port),
+              let identity = BrowserPreferences.origin(url) else { completion(false, nil); return }
         while let presented = presenter.presentedViewController { presenter = presented }
         guard !(presenter is UIAlertController), !presenter.isBeingDismissed,
               presenter.viewIfLoaded?.window === window else { completion(false, nil); return }
@@ -1858,12 +1884,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
                         initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
                         decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
-        var originParts = URLComponents()
-        originParts.scheme = origin.protocol; originParts.host = origin.host
-        if origin.port != 0 { originParts.port = origin.port }
-        guard frame.isMainFrame, let url = frame.request.url, let originURL = originParts.url,
-              let current = self.url, BrowserPreferences.origin(url) == BrowserPreferences.origin(current),
-              BrowserPreferences.origin(originURL) == BrowserPreferences.origin(current) else { decisionHandler(.deny); return }
+        let frameOrigin = frame.securityOrigin
+        guard webView === loadedWebView, !isDisposed, isActive, frame.isMainFrame,
+              let originURL = Self.securityOriginURL(scheme: origin.protocol, host: origin.host, port: origin.port),
+              let frameOriginURL = Self.securityOriginURL(scheme: frameOrigin.protocol, host: frameOrigin.host, port: frameOrigin.port),
+              let identity = BrowserPreferences.origin(originURL),
+              let url = frame.request.url, let requestIdentity = BrowserPreferences.origin(url),
+              let current = self.url, let currentIdentity = BrowserPreferences.origin(current),
+              requestIdentity == currentIdentity, identity == currentIdentity,
+              BrowserPreferences.origin(frameOriginURL) == identity else { decisionHandler(.deny); return }
         let site = preferences.site(for: url)
         let blocked = (type != .microphone && site.camera == .deny) || (type != .camera && site.microphone == .deny)
         // “询问”交给系统与 WebKit，不授予静默或跨来源权限。

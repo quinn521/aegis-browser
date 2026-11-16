@@ -240,6 +240,11 @@ final class WebsiteEnhancementUITests: XCTestCase {
     XCTAssertTrue(app.alerts["确认发送给模型服务？"].waitForExistence(timeout: 5))
     app.alerts.buttons["取消"].tap()
     app.navigationBars["编辑用户脚本"].buttons["完成"].tap()
+    app.navigationBars["当前网站"].buttons["完成"].tap()
+    // The reader accepts raw Markdown, not the HTML article used for script editing.
+    navigate(app, "http://127.0.0.1:8768/enhancements/document.md")
+    XCTAssertTrue(app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Markdown 验收'")).firstMatch.waitForExistence(timeout: 12))
+    app.buttons["page-protection"].tap(); app.buttons["site-details"].tap()
     tapVisible(app.buttons["site-read-markdown"], app)
     let assistant = app.buttons["markdown-assistant"]
     XCTAssertTrue(assistant.waitForExistence(timeout: 10)); assistant.tap()

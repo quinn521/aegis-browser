@@ -966,6 +966,8 @@ final class AccessNavigationRecoveryTests: XCTestCase {
     }
 
     private func attachPage(_ tab: BrowserTab, at url: URL) async throws -> UIWindow {
+        // Retire the session's startup load before warming rules or attaching its view.
+        tab.stop()
         try await tab.prepareContentRulesForTests()
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)
@@ -975,9 +977,11 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         tab.webView.frame = window.bounds
         window.rootViewController?.view.addSubview(tab.webView)
         tab.load(url)
-        await waitUntil({ tab.committedMainFrameURL == url && !tab.isLoading }, timeout: 10)
+        await waitUntil({ tab.committedMainFrameURL == url && tab.webView.url == url && !tab.isLoading }, timeout: 20)
         XCTAssertEqual(tab.committedMainFrameURL, url)
-        return window
+        let ready = tab.committedMainFrameURL == url && tab.webView.url == url && !tab.isLoading
+        if !ready { window.isHidden = true }
+        return try XCTUnwrap(ready ? window : nil, "Fixture must commit before evaluating scripts: \(url); error: \(tab.loadingError ?? "none")")
     }
 
     func testLinkAndFormServerRedirectsKeepTheStartedNavigation() async throws {
@@ -1221,6 +1225,78 @@ private final class PreservingRedirectOrigin: @unchecked Sendable {
 }
 
 extension AccessNavigationRecoveryTests {
+    func testSecurityOriginValidationPreservesHostAndPortAndRejectsOpaqueOrMalformedValues() throws {
+        for (scheme, host, port, expected) in [
+            ("HTTP", "LOCALHOST", 0, "http://localhost"),
+            ("https", "example.test", 443, "https://example.test"),
+            ("http", "127.0.0.1", 8768, "http://127.0.0.1:8768"),
+            ("https", "::1", 65535, "https://[::1]:65535"),
+            ("http", "[::1]", 80, "http://[::1]"),
+            ("https", "食狮.com.cn", 0, "https://xn--85x722f.com.cn")
+        ] {
+            let url = try XCTUnwrap(BrowserTab.securityOriginURL(scheme: scheme, host: host, port: port))
+            XCTAssertEqual(BrowserPreferences.origin(url), expected)
+        }
+        for (scheme, host, port) in [
+            ("", "", 0), ("null", "", 0), ("about", "", 0), ("data", "", 0),
+            ("http:", "example.test", 0), ("ht\ntp", "example.test", 0),
+            ("https", "", 443), ("https", "example.test", -1), ("https", "example.test", 65536),
+            ("https", "good.test@evil.test", 0), ("https", "good.test/evil", 0),
+            ("https", "good.test?evil", 0), ("https", "good.test#evil", 0),
+            ("https", "good.test\\evil", 0), ("https", "good.test%2Fevil", 0),
+            ("https", " good.test", 0), ("https", "good.test:443", 0),
+            ("https", "[not-ipv6]", 0), ("https", "::1%lo0", 0), ("https", "a..test", 0)
+        ] {
+            XCTAssertNil(BrowserTab.securityOriginURL(scheme: scheme, host: host, port: port), "\(scheme) \(host) \(port)")
+        }
+    }
+
+    func testOpaqueSandboxedFrameDialogsAndMediaDenyExactlyOnceWithoutTopLevelAttribution() async throws {
+        let service = try PreservingRedirectOrigin(status: 307)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let tab = makeTab()
+        let window = try await attachPage(tab, at: page)
+        defer { window.isHidden = true }
+        let view = tab.webView
+        let probe = OpaqueFrameProbe()
+        view.configuration.userContentController.add(probe, name: "opaqueFrame")
+        defer { view.configuration.userContentController.removeScriptMessageHandler(forName: "opaqueFrame") }
+        _ = try await view.callAsyncJavaScript("""
+            const frame = document.createElement('iframe');
+            frame.sandbox = 'allow-scripts';
+            frame.srcdoc = html;
+            document.body.appendChild(frame);
+            return true;
+            """, arguments: ["html": "<script>window.webkit.messageHandlers.opaqueFrame.postMessage('ready')</script>"],
+            in: nil, contentWorld: .page)
+        await waitUntil({ probe.frame != nil }, timeout: 20)
+        let frame = try XCTUnwrap(probe.frame, "Must capture a real sandboxed WebKit frame")
+        let origin = frame.securityOrigin
+        XCTAssertFalse(frame.isMainFrame)
+        XCTAssertNil(BrowserTab.securityOriginURL(scheme: origin.protocol, host: origin.host, port: origin.port))
+        XCTAssertNotNil(BrowserPreferences.origin(page), "Top-level page has a concrete origin that must not be borrowed")
+        // WebKit itself may suppress sandboxed modal APIs. Exercise every native
+        // callback with its real opaque WKFrameInfo so that cannot mask this crash.
+        var callbacks: [String] = []
+        tab.webView(view, runJavaScriptAlertPanelWithMessage: "Opaque alert", initiatedByFrame: frame) { callbacks.append("alert") }
+        tab.webView(view, runJavaScriptConfirmPanelWithMessage: "Opaque confirm", initiatedByFrame: frame) {
+            XCTAssertFalse($0); callbacks.append("confirm")
+        }
+        tab.webView(view, runJavaScriptTextInputPanelWithPrompt: "Opaque prompt", defaultText: "unsafe", initiatedByFrame: frame) {
+            XCTAssertNil($0); callbacks.append("prompt")
+        }
+        for type in [WKMediaCaptureType.camera, .microphone, .cameraAndMicrophone] {
+            tab.webView(view, requestMediaCapturePermissionFor: origin, initiatedByFrame: frame, type: type) {
+                XCTAssertEqual($0, .deny); callbacks.append("media")
+            }
+        }
+        await Task.yield()
+        XCTAssertEqual(callbacks, ["alert", "confirm", "prompt", "media", "media", "media"])
+        XCTAssertNil(tab.javaScriptDialog)
+        XCTAssertNil(window.rootViewController?.presentedViewController)
+    }
+
     func testWebKitAlertConfirmAndPromptPresentOriginAndReturnUserChoices() async throws {
         let service = try PreservingRedirectOrigin(status: 307)
         defer { service.stop() }
@@ -1477,5 +1553,13 @@ extension AccessNavigationRecoveryTests {
         XCTAssertTrue(tab.isDisposed)
         XCTAssertTrue(coordinator.ordinaryHostStores().isEmpty)
         XCTAssertNil(tab.webView.load(URLRequest(url: URL(string: "http://127.0.0.1/late")!)))
+    }
+}
+
+@MainActor
+private final class OpaqueFrameProbe: NSObject, WKScriptMessageHandler {
+    var frame: WKFrameInfo?
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.body as? String == "ready" { frame = message.frameInfo }
     }
 }
