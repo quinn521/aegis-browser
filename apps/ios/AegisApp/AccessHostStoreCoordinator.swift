@@ -280,7 +280,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     /// Preflight body-less writes before touching the registry or releasing the live document.
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool {
-        guard let host = try? AccessSiteHost.normalize(url.host ?? "") else { return tab.boundHostName != nil }
+        guard let host = Self.httpHost(url) else { return tab.boundHostName != nil }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
         let bound = tab.boundHostName == host.rawValue
         let intent = routeIntent(key: key, boundToTarget: bound, tabID: tab.instanceID.uuidString)
@@ -293,7 +293,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? {
         guard !tab.isDisposed else { return nil }
-        guard let host = try? AccessSiteHost.normalize(url.host ?? "") else { return nil }
+        guard let host = Self.httpHost(url) else { return nil }
         let key = AccessHostStoreKey(
             scopeID: tab.browsingScopeID,
             host: host,
@@ -1225,11 +1225,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     private func addressControlHost(for tab: BrowserTab) -> AccessSiteHost? {
-        if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending) {
-            return Self.httpHost(pending.url)
-        }
-        guard let target = tab.addressBarURL.flatMap(Self.httpHost), target == host(for: tab) else { return nil }
-        return target
+        guard let url = tab.addressBarURL, let target = Self.httpHost(url) else { return nil }
+        // A user may change their choice while the visible GET/HEAD is still loading.
+        if tab.isLoading, tab.safeRouteReloadRequest?.url == url { return target }
+        return target == host(for: tab) ? target : nil
     }
 
     private func host(for tab: BrowserTab) -> AccessSiteHost? {
