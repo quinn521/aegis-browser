@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 sdk="$ANDROID_HOME"
+export PATH="$sdk/platform-tools:$PATH"
 image="system-images;android-25;google_apis;x86_64"
 "$sdk/cmdline-tools/latest/bin/sdkmanager" "emulator" "platform-tools" "$image"
 echo no | "$sdk/cmdline-tools/latest/bin/avdmanager" create avd -n access25 -k "$image" -d "Nexus 5" --force
