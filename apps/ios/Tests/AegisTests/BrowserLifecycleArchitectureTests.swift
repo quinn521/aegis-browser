@@ -310,17 +310,24 @@ final class BrowserWindowCloseCommandTests: XCTestCase {
         let created = second.newTab()
         _ = secondController.perform(action, with: close)
         XCTAssertTrue(created.isDisposed); XCTAssertTrue(second.activeTab === secondTab)
-        _ = try second.createGroup(name: "Empty")
-        second.moveTab(secondTab.id, to: nil)
-        XCTAssertNil(second.activeTab)
+        let emptyGroup = try second.createGroup(name: "Empty")
+        let seededTab = try XCTUnwrap(second.activeTab)
+        second.moveTab(seededTab.id, to: nil)
+        XCTAssertEqual(second.selectedGroupID, emptyGroup)
+        XCTAssertTrue(second.displayedTabs.isEmpty); XCTAssertNil(second.activeTab)
+        let hiddenIDs = second.visibleTabs.map(\.id)
         let count = second.visibleTabs.count
         _ = secondController.perform(action, with: close)
         XCTAssertNil(second.activeTab); XCTAssertEqual(second.visibleTabs.count, count)
+        XCTAssertEqual(second.visibleTabs.map(\.id), hiddenIDs)
+        XCTAssertTrue(second.displayedTabs.isEmpty); XCTAssertEqual(second.selectedGroupID, emptyGroup)
+        XCTAssertFalse(secondTab.isDisposed); XCTAssertFalse(seededTab.isDisposed)
         XCTAssertTrue(first.activeTab === firstTab); XCTAssertFalse(second.isWindowClosed)
         firstWindow.makeKeyAndVisible()
         let firstCreated = first.newTab()
         _ = firstController.perform(action, with: close)
         XCTAssertTrue(firstCreated.isDisposed); XCTAssertTrue(first.activeTab === firstTab)
+        XCTAssertEqual(second.visibleTabs.map(\.id), hiddenIDs); XCTAssertNil(second.activeTab)
     }
 }
 
