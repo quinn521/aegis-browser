@@ -217,6 +217,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         // Bound-but-failed auto recovery must not look idle just because manual intent is off.
         if attachment == .ready {
             snapshot.connection = .ready
+        } else if operations.values.contains(where: {
+            $0.tabID == tab.instanceID.uuidString && $0.key == key && $0.state == .preparing
+        }) {
+            snapshot.connection = .connecting
         } else if intentOn || (boundUnavailable && (autoListed || executingTabs[tab.instanceID.uuidString] == key)) {
             snapshot.connection = .unavailable
         } else {
@@ -1301,12 +1305,12 @@ enum AccessAutoRecoveryChange: Equatable {
 
 enum AccessAutoRecoveryCopy {
     static let toggleTitle = "本站打不开时自动重试"
-    static let explanation = "先用当前连接打开本站和已知登录站点。页面打不开时，自动尝试用代理加载该页及其资源。"
+    static let explanation = "先用当前连接打开网站；加载失败时尝试隐藏地理位置。"
     static let scopeWarning = "恢复后的页面及其资源会使用该页的专用存储，可能包括第三方域名。"
     static let armed = "已开启 · 当前使用原连接"
-    static let preparing = "正在准备代理"
-    static let opened = "已通过代理打开"
-    static let openedMember = "登录页已通过代理打开"
+    static let preparing = "正在准备连接"
+    static let opened = "已通过服务连接打开"
+    static let openedMember = "登录页已通过服务连接打开"
     static let unavailable = "入口暂不可用"
 }
 

@@ -259,7 +259,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertEqual(snapshot.attachment, .notAttached)
         XCTAssertEqual(
             AccessSiteProxyToggleModel.attachmentLine(for: snapshot.attachment, intent: snapshot.intent),
-            "尚未接入代理，当前页面仍使用原连接"
+            "当前页面仍使用原连接"
         )
         XCTAssertNil(snapshot.failureReason)
     }

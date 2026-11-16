@@ -50,7 +50,11 @@ struct BrowserSettingsView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }.padding(.vertical, 5)
                     }.accessibilityIdentifier("aegis-feature-settings")
-                    NavigationLink("代理诊断日志") { AccessDiagnosticsView() }
+                    NavigationLink {
+                        AccessUsagePage(isPrivate: browser.profile.isPrivate)
+                    } label: { Label("账号与用量", systemImage: "chart.bar") }
+                        .accessibilityIdentifier("access-usage-link")
+                    NavigationLink("服务诊断") { AccessDiagnosticsView() }
                         .accessibilityIdentifier("access-diagnostics-settings")
                 }
                 Section("外观") {

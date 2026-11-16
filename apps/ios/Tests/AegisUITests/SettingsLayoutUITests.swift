@@ -11,6 +11,64 @@ final class SettingsLayoutUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    func testLocationPrivacyControlsHideNodeDetailsAndKeepFailedTarget() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+        let address = app.textFields["address-field"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        address.typeText("http://127.0.0.1:64999/missing\n")
+        let retry = app.buttons["page-load-proxy-retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 15))
+        XCTAssertEqual(retry.label, "开启并重试")
+        XCTAssertTrue(retry.isHittable)
+        capture("加载失败-隐藏地理位置", app)
+        app.buttons["page-protection"].tap()
+        let toggle = app.switches["access-site-proxy-toggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertEqual(toggle.label, "隐藏地理位置")
+        XCTAssertEqual(app.staticTexts["access-site-proxy-host"].label, "127.0.0.1")
+        XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
+        XCTAssertFalse(app.staticTexts["VLESS · TCP · REALITY · Vision"].exists)
+        XCTAssertFalse(app.switches["access-site-auto-recovery-toggle"].exists)
+        XCTAssertFalse(app.buttons["access-dev-allow-block-allow"].exists)
+        assertInsideWindow(toggle, app)
+        capture("当前网站-隐藏地理位置", app)
+    }
+
+    func testAccountUsageEntryShowsHonestEmptyStateInChinese() {
+        inspectAccountUsage(language: "zh-Hans", largeText: false)
+    }
+
+    func testAccountUsageEntryIsReachableInEnglishAtLargestTextSize() {
+        inspectAccountUsage(language: "en", largeText: true)
+    }
+
+    private func inspectAccountUsage(language: String, largeText: Bool) {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(\(language))",
+            "-UIPreferredContentSizeCategoryName", largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"]
+        app.launch()
+        defer { app.terminate() }
+        let entry = app.buttons["access-usage-link"]
+        XCTAssertTrue(reveal(entry, app))
+        assertInsideWindow(entry, app)
+        entry.tap()
+        let page = app.descendants(matching: .any).matching(identifier: "access-usage-page").firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars[language == "en" ? "Account & usage" : "账号与用量"].exists)
+        // This build has no bundled test subscription or bound account. Unknown is not zero.
+        XCTAssertFalse(app.descendants(matching: .any)["access-usage-progress"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
+        let refresh = app.buttons["access-usage-refresh"]
+        XCTAssertTrue(reveal(refresh, app))
+        assertInsideWindow(refresh, app)
+        capture("账号与用量-\(language)-\(largeText ? "最大字体" : "普通字体")", app)
+    }
+
     func testSettingsPagesAtStandardSize() {
         inspectSettings(largeText: false)
     }

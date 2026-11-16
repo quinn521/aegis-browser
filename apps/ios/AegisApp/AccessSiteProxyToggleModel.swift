@@ -141,24 +141,24 @@ enum AccessSiteProxyToggleModel {
         )
     }
 
-    // MARK: - Copy (zh-Hans source keys; catalog can absorb later)
+    // MARK: - Localized copy (zh-Hans source keys)
 
     static func intentLine(for status: AccessSiteProxyIntentStatusId) -> String {
         switch status {
         case .noTrustedSite:
-            return "当前页不是可代理的网站"
+            return "此页面暂不支持"
         case .offBrowserDefault:
-            return "未使用本服务代理 / 使用浏览器原有连接"
+            return "使用浏览器原有连接"
         case .automaticConnected:
-            return "本站自动重试正在使用代理"
+            return "自动重试已连接"
         case .automaticUnavailable:
-            return "本站自动重试的代理连接不可用"
+            return "自动重试连接不可用"
         case .allowNotConnected:
-            return "本站代理已开启 · 连接尚未就绪"
+            return "已开启，等待连接"
         case .allowConnected:
-            return "本站代理已开启"
+            return "已为本站开启"
         case .blockLocalRefuse:
-            return "本站代理已本地拒绝"
+            return "已在本机停用"
         }
     }
 
@@ -179,10 +179,10 @@ enum AccessSiteProxyToggleModel {
         switch attachment {
         case .notAttached:
             guard intent == .allow else { return nil }
-            return "尚未接入代理，当前页面仍使用原连接"
+            return "当前页面仍使用原连接"
         case .attachedUnavailable:
             // Bound auto-recovery may have no manual allow intent; still explain the fault.
-            return "代理请求失败，未切回原连接"
+            return "连接失败，未切回原连接"
         case .ready:
             return nil
         }

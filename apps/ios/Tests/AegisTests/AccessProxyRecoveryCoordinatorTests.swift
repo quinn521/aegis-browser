@@ -24,6 +24,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
             request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
             tab.load(request)
             XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: tab))
+            XCTAssertEqual(coordinator.snapshot(for: tab).connectionStatus, .connecting)
             let held = try XCTUnwrap(tab.heldProxyRequestForTests)
             XCTAssertEqual(held.httpMethod, method)
             XCTAssertEqual(held.value(forHTTPHeaderField: "Range"), "bytes=100-199")
@@ -652,7 +653,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(readySnap.attachment, .notAttached)
         XCTAssertEqual(
             AccessSiteProxyToggleModel.attachmentLine(for: readySnap.attachment, intent: readySnap.intent),
-            "尚未接入代理，当前页面仍使用原连接"
+            "当前页面仍使用原连接"
         )
         coordinator.setProxyEnabled(false, for: tab)
         XCTAssertTrue(tab.websiteDataStore === original)

@@ -21,6 +21,17 @@ final class AccessAccountUsagePresentationTests: XCTestCase {
         XCTAssertEqual(Presentation.formattedBytes("9018458253809418"), "8.00 PiB")
     }
 
+    func testUsageMeterPreservesUnknownAndBoundsLargeCounters() {
+        for (used, quota): (String?, String?) in [(nil, "100"), ("0", nil), ("0", "0"),
+                                                   ("01", "10"), ("-1", "10"), ("1", "+10")] {
+            XCTAssertNil(Presentation.usedFraction(used: used, quota: quota))
+        }
+        XCTAssertEqual(Presentation.usedFraction(used: "0", quota: "100"), 0)
+        XCTAssertEqual(Presentation.usedFraction(used: "25", quota: "100"), 0.25)
+        XCTAssertEqual(Presentation.usedFraction(used: "101", quota: "100"), 1)
+        XCTAssertEqual(Presentation.usedFraction(used: "18446744073709551615", quota: "18446744073709551615"), 1)
+    }
+
     func testUnknownAndNoncanonicalBytesAreNotDisplayedAsZero() {
         for raw: String? in [nil, "", "00", "01", "+1", "-1", " 1", "1 ", "1.0", "1e3",
                             "18446744073709551616"] {

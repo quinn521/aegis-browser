@@ -1369,10 +1369,17 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
 
     private func readDirectQuota(_ app: XCUIApplication, name: String) throws -> [String: UInt64] {
         app.buttons["page-protection"].tap()
+        let entry = app.buttons["access-usage-link"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
         let refresh = app.buttons["access-usage-refresh"]
         for _ in 0..<8 where !refresh.isHittable { app.swipeUp() }
         XCTAssertTrue(refresh.waitForExistence(timeout: 10))
         if refresh.isEnabled && refresh.isHittable { refresh.tap() }
+        let transfers = app.buttons["access-usage-transfers"]
+        XCTAssertTrue(transfers.waitForExistence(timeout: 10))
+        for _ in 0..<8 where !transfers.isHittable { app.swipeDown() }
+        transfers.tap()
         var values: [String: UInt64] = [:]
         let deadline = Date(timeIntervalSinceNow: 15)
         repeat {
@@ -1392,6 +1399,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let used = try XCTUnwrap(values["used"])
         XCTAssertEqual(used, try XCTUnwrap(values["uploaded"]) + XCTUnwrap(values["downloaded"]))
         XCTAssertEqual(values["remaining"], used < 10_000_000_000 ? 10_000_000_000 - used : 0)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         app.navigationBars.buttons["完成"].tap()
         return values
     }
@@ -1672,7 +1680,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         // the visible action again; a vanished banner is not a successful tap.
         retry = recoveryButton(app)
         if let retry {
-            let pending = retry.label == "通过代理打开"
+            let pending = retry.label == "开启并打开"
             let exposedTarget = ux["target"] as? String ?? "NOT_EXPOSED"
             let observedAddress = ux["observed_address"] as? String ?? "UNREADABLE"
             receipt["recovery_target"] = exposedTarget
@@ -1753,7 +1761,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         }
     }
 
-    private let recoveryLabels = ["通过代理打开", "通过代理重试"]
+    private let recoveryLabels = ["开启并打开", "开启并重试"]
 
     private struct ObservedRecoveryAction {
         let label: String
@@ -1797,7 +1805,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let pending = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-host" }
         let failed = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-failed-host" }
         let status = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-status" }
-        let knownStatus = ["正在准备代理连接…", "正在连接此网址。你可以选择通过代理打开。"]
+        let knownStatus = ["正在准备连接…", "正在连接此网址。你可以选择开启并打开。"]
         let targetNode = pending ?? failed
         let targetValue = targetNode?.value as? String
         let target = targetValue ?? targetNode?.label
@@ -1959,10 +1967,10 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             if done.exists, done.isHittable { done.tap() }
             return ["result": "ROUTE_HOST_UNAVAILABLE", "menu_closed": !done.exists]
         }
-        let route = app.staticTexts["access-proxy-page-route"]
+        let route = app.staticTexts["access-site-proxy-connection"]
         let routeText = route.exists ? route.label : ""
         var result: [String: Any] = ["result": "OBSERVED", "host": routeHost.label.lowercased(),
-                                   "local_entry_ready": routeText == "本地代理入口已就绪；远端连接未验证",
+                                   "local_entry_ready": routeText == "连接：已就绪",
                                    "remote_connection_verified": false]
         let connection = app.staticTexts["access-site-proxy-connection"]
         result["connection_ui"] = connection.exists ? connection.label : "UNAVAILABLE"

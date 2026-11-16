@@ -4,6 +4,13 @@ import Foundation
 struct AccessAccountUsagePresentation {
     enum Freshness: Equatable { case current, delayed, unavailable }
 
+    /// Floating point is only used for the meter, never for billing or byte labels.
+    static func usedFraction(used: String?, quota: String?) -> Double? {
+        guard let used, let quota, let usedValue = UInt64(used), let quotaValue = UInt64(quota),
+              String(usedValue) == used, String(quotaValue) == quota, quotaValue > 0 else { return nil }
+        return min(Double(usedValue) / Double(quotaValue), 1)
+    }
+
     static func freshness(
         snapshot: AccessAccountEntitlement,
         // The earliest trustworthy local anchor, including request/transport time.
@@ -37,7 +44,7 @@ struct AccessAccountUsagePresentation {
     }
 
     /// Binary units, truncated to two decimal places without converting bytes to floating point.
-    /// The caller retains and separately displays the exact canonical source string.
+    /// The session retains the exact canonical source string.
     static func formattedBytes(_ raw: String?) -> String {
         guard let raw, let value = UInt64(raw), String(value) == raw else { return "—" }
         guard value >= 1_024 else { return "\(value) B" }

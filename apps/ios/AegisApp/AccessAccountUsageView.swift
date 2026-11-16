@@ -18,17 +18,20 @@ struct AccessAccountUsageView: View {
                             .accessibilityIdentifier("access-usage-status")
                         if snapshot.status != .notSubscribed {
                             amount("总额度", snapshot.quotaBytes, id: "quota")
-                            amount("已用", snapshot.usedBytes, id: "used")
+                            AccessUsageSummaryView(usedBytes: snapshot.usedBytes, quotaBytes: snapshot.quotaBytes)
+                            amount("总用量", snapshot.usedBytes, id: "used")
                             amount("剩余", snapshot.remainingBytes, id: "remaining")
-                            amount("上传", snapshot.uploadedBytes, id: "uploaded")
-                            amount("下载", snapshot.downloadedBytes, id: "downloaded")
+                            DisclosureGroup("上传与下载") {
+                                amount("上传", snapshot.uploadedBytes, id: "uploaded")
+                                amount("下载", snapshot.downloadedBytes, id: "downloaded")
+                            }.accessibilityIdentifier("access-usage-transfers")
                             if snapshot.quotaSource == .threeXUIAlpha {
-                                Text("来源：3X-UI Alpha 测试节点")
+                                Text("测试服务用量（共享）")
                                     .font(.footnote).foregroundStyle(.secondary)
                                 if case .some(.none) = snapshot.panelExpiryMode {
-                                    LabeledContent("节点到期") { Text("未设到期") }
+                                    LabeledContent("到期时间") { Text("未设到期") }
                                 } else if let panelExpires = snapshot.panelExpiresAt {
-                                    LabeledContent("节点到期") {
+                                    LabeledContent("到期时间") {
                                         timestamp(panelExpires)
                                     }
                                 }
@@ -72,12 +75,12 @@ struct AccessAccountUsageView: View {
                     if session.isRefreshing { ProgressView() }
                 }
             }
-            .disabled(session.isRefreshing || scenePhase != .active)
+            .disabled(session.isRefreshing || scenePhase != .active || session.state == .signedOut)
             .accessibilityIdentifier("access-usage-refresh")
         } header: {
-            Text("Access 账户额度")
+            Text("账号与用量")
         } footer: {
-            Text("显示额度查询账户的数据；测试节点与该账户的对应关系须由服务端确认。查询失败不会被当作耗尽，额度展示不代替服务端计量和停流。")
+            Text("用量以服务端记录为准，查询失败不代表额度耗尽。")
         }
         .onAppear { session.usageRefresh.setVisible(scenePhase == .active, owner: visibilityID) }
         .onChange(of: scenePhase) { _, phase in
@@ -90,7 +93,6 @@ struct AccessAccountUsageView: View {
         LabeledContent {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(AccessAccountUsagePresentation.formattedBytes(raw))
-                if let raw { Text(raw + " B").font(.caption.monospaced()).foregroundStyle(.secondary) }
             }
         } label: {
             Text(verbatim: AegisLocalization.string(label))

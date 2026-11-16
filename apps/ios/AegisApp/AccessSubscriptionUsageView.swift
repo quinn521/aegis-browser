@@ -12,14 +12,17 @@ struct AccessSubscriptionUsageView: View {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 VStack(alignment: .leading, spacing: 8) {
                     if let usage = session.snapshot {
-                        if !usage.enabled { Text("节点已停用") }
+                        if !usage.enabled { Text("服务已停用") }
                         if usage.remainingBytes == 0 { Text("服务端报告：额度已耗尽") }
                         amount("总额度", usage.totalByte, id: "quota")
-                        amount("上传", usage.uploadByte, id: "uploaded")
-                        amount("下载", usage.downloadByte, id: "downloaded")
-                        amount("已用", usage.usedBytes, id: "used")
+                        AccessUsageSummaryView(usedBytes: String(usage.usedBytes), quotaBytes: String(usage.totalByte))
+                        amount("总用量", usage.usedBytes, id: "used")
                         amount("剩余", usage.remainingBytes, id: "remaining")
-                        LabeledContent("节点到期") {
+                        DisclosureGroup("上传与下载") {
+                            amount("上传", usage.uploadByte, id: "uploaded")
+                            amount("下载", usage.downloadByte, id: "downloaded")
+                        }.accessibilityIdentifier("access-usage-transfers")
+                        LabeledContent("到期时间") {
                             if usage.expire == 0 { Text("未设到期") }
                             else { timestamp(Date(timeIntervalSince1970: TimeInterval(usage.expire))) }
                         }
@@ -47,9 +50,9 @@ struct AccessSubscriptionUsageView: View {
             .disabled(session.isRefreshing || scenePhase != .active)
             .accessibilityIdentifier("access-usage-refresh")
         } header: {
-            Text("3X-UI 节点额度")
+            Text("测试服务用量（共享）")
         } footer: {
-            Text("直接查询 3X-UI 测试节点；每日重置按服务器时区执行，查询失败不代表额度耗尽。")
+            Text("共享测试用量，不代表个人套餐；重置以服务端为准。")
         }
         .onAppear { session.usageRefresh.setVisible(scenePhase == .active, owner: visibilityID) }
         .onChange(of: scenePhase) { _, phase in session.usageRefresh.setVisible(phase == .active, owner: visibilityID) }
@@ -64,7 +67,6 @@ struct AccessSubscriptionUsageView: View {
         LabeledContent {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(AccessAccountUsagePresentation.formattedBytes(String(bytes)))
-                Text(String(bytes) + " B").font(.caption.monospaced())
             }
         } label: { Text(verbatim: AegisLocalization.string(label)) }
         .accessibilityElement(children: .combine)

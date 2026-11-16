@@ -1,6 +1,8 @@
 import CryptoKit
 import Foundation
 import Synchronization
+import SwiftUI
+import UIKit
 import XCTest
 @testable import Aegis
 
@@ -17,6 +19,64 @@ private func subscriptionUsage(upload: UInt64 = 10, download: UInt64 = 20) -> Ac
 
 @MainActor
 final class AccessSubscriptionUsageTests: XCTestCase {
+    func testSharedUsagePageRendersCountersAndKeepsPrivateSessionIsolated() async throws {
+        let preferences = AegisLanguagePreferenceStore.runtime
+        let previousChoice = preferences.choice
+        preferences.setFamily(.simplifiedChinese)
+        defer { preferences.setChoice(previousChoice) }
+        let session = AccessSubscriptionUsageSession(isSelected: true, configuration: subscriptionConfiguration(),
+            fetch: { _ in subscriptionUsage(upload: 750_000_000, download: 2_250_000_000) })
+        session.setActive(true)
+        await session.refresh()?.value
+        XCTAssertEqual(session.snapshot?.usedBytes, 3_000_000_000)
+        let account = AccessAccountSession.product()
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        defer { window.isHidden = true; previous?.makeKeyAndVisible(); session.setActive(false) }
+        for dark in [false, true] {
+            let view = NavigationStack { AccessUsagePage(isPrivate: false) }
+                .environmentObject(account).environmentObject(session)
+                .environment(\.locale, Locale(identifier: "zh-Hans"))
+                .preferredColorScheme(dark ? .dark : .light)
+                .tint(Color(red: 0.09, green: 0.47, blue: 0.37))
+            let host = UIHostingController(rootView: view)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(200))
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = dark ? "共享测试用量-深色-固定数据" : "共享测试用量-浅色-固定数据"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        let privateSession = AccessSubscriptionUsageSession(isSelected: true, configuration: subscriptionConfiguration(),
+            fetch: { _ in throw AccessSubscriptionQueryError.invalid })
+        var refreshRequests = 0
+        privateSession.usageRefresh = AccessAccountUsageRefreshCoordinator(refresh: {
+            refreshRequests += 1
+            return nil
+        })
+        privateSession.setActive(true)
+        // The app-wide schedule polls once on activation even with no visible owner.
+        let activationRequests = refreshRequests
+        XCTAssertEqual(activationRequests, 1)
+        let privateHost = UIHostingController(rootView: NavigationStack { AccessUsagePage(isPrivate: true) }
+            .environmentObject(account).environmentObject(privateSession)
+            .environment(\.scenePhase, .active))
+        window.rootViewController = privateHost
+        privateHost.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNil(privateSession.snapshot)
+        XCTAssertEqual(refreshRequests, activationRequests,
+                       "Opening the private page must not add a visible ordinary-usage observer")
+        privateSession.setActive(false)
+    }
+
     func testBetaSelectsBundledNodeQuotaWhileReleaseRejectsIt() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

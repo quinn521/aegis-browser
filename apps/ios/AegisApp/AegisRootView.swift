@@ -409,6 +409,10 @@ struct ProxyRetryButton: UIViewRepresentable {
         button.titleLabel?.adjustsFontForContentSizeCategory = true
         button.titleLabel?.numberOfLines = 0
         button.accessibilityIdentifier = "page-load-proxy-retry"
+        var configuration = UIButton.Configuration.tinted()
+        configuration.cornerStyle = .medium
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
+        button.configuration = configuration
         button.contentHorizontalAlignment = .leading
         button.addAction(UIAction { [weak coordinator = context.coordinator] _ in coordinator?.action() }, for: .touchUpInside)
         return button
@@ -452,30 +456,38 @@ struct PageLoadFailureBanner: View {
                         .accessibilityIdentifier("page-load-failed-host")
                         .accessibilityValue(failure.url.absoluteString)
                 }
-                Text("页面加载失败：\(error)").font(.caption)
-                Button("重试") { tab.reload() }
-                if setAutoRecovery != nil {
-                    Toggle(AccessAutoRecoveryCopy.toggleTitle, isOn: Binding(
-                        get: { autoRecoveryOn },
-                        set: { setAutoRecovery?(tab, $0) }
-                    ))
-                    .accessibilityIdentifier("page-load-auto-recovery")
-                    Text(AccessAutoRecoveryCopy.explanation).font(.caption)
-                    Text(AccessAutoRecoveryCopy.scopeWarning).font(.caption)
-                    if let autoRecoveryLine {
-                        Text(autoRecoveryLine)
-                            .font(.caption)
-                            .accessibilityIdentifier("page-load-auto-recovery-status")
-                    }
-                }
+                Label("页面暂时无法打开", systemImage: "exclamationmark.circle")
+                    .font(.headline)
                 if tab.loadingErrorAllowsProxyRetry {
-                    ProxyRetryButton(title: AegisLocalization.string("通过代理重试")) { proxyRetry(tab) }
+                    Text("隐藏地理位置可能帮助打开此网站。开启后对本站生效，访问结果取决于网站。")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    ProxyRetryButton(title: AegisLocalization.string("开启并重试")) { proxyRetry(tab) }
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
+                Button("重试") { tab.reload() }
+                    .frame(minHeight: 44)
+                if let autoRecoveryLine {
+                    Text(LocalizedStringKey(autoRecoveryLine))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("page-load-auto-recovery-status")
+                }
+                DisclosureGroup("错误详情") {
+                    Text("页面加载失败：\(error)").font(.caption).textSelection(.enabled)
+                    if setAutoRecovery != nil {
+                        Toggle(LocalizedStringKey(AccessAutoRecoveryCopy.toggleTitle), isOn: Binding(
+                            get: { autoRecoveryOn },
+                            set: { setAutoRecovery?(tab, $0) }
+                        ))
+                        .accessibilityIdentifier("page-load-auto-recovery")
+                        Text(LocalizedStringKey(AccessAutoRecoveryCopy.explanation)).font(.caption)
+                        Text(LocalizedStringKey(AccessAutoRecoveryCopy.scopeWarning)).font(.caption)
+                    }
+                }
+
             }
             .padding(12)
-            .foregroundStyle(.red)
+            .background(.background.secondary)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-load-error")
         } else if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending),
@@ -485,10 +497,10 @@ struct PageLoadFailureBanner: View {
                     .font(.callout.weight(.semibold))
                     .accessibilityIdentifier("page-load-pending-host")
                     .accessibilityValue(pending.url.absoluteString)
-                Text(AegisLocalization.string(addressProxyPreparing ? "正在准备代理连接…" : "正在连接此网址。你可以选择通过代理打开。"))
+                Text(AegisLocalization.string(addressProxyPreparing ? "正在准备连接…" : "正在连接此网址，可尝试隐藏地理位置。"))
                     .font(.caption)
                     .accessibilityIdentifier("page-load-pending-status")
-                ProxyRetryButton(title: AegisLocalization.string("通过代理打开")) { openAddressViaProxy(tab, pending) }
+                ProxyRetryButton(title: AegisLocalization.string("开启并打开")) { openAddressViaProxy(tab, pending) }
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .disabled(addressProxyPreparing)

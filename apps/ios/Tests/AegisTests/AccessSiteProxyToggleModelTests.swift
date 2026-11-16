@@ -99,7 +99,7 @@ final class AccessSiteProxyToggleModelTests: XCTestCase {
         XCTAssertEqual(after.connectionStatus, .unavailable)
         XCTAssertEqual(
             AccessSiteProxyToggleModel.intentLine(for: after.intentStatus),
-            "本站代理已开启 · 连接尚未就绪"
+            "已开启，等待连接"
         )
         XCTAssertFalse(
             AccessSiteProxyToggleModel.intentLine(for: after.intentStatus)
@@ -122,7 +122,7 @@ final class AccessSiteProxyToggleModelTests: XCTestCase {
         XCTAssertEqual(off.intentStatus, .offBrowserDefault)
         XCTAssertEqual(
             AccessSiteProxyToggleModel.intentLine(for: .offBrowserDefault),
-            "未使用本服务代理 / 使用浏览器原有连接"
+            "使用浏览器原有连接"
         )
     }
 
@@ -140,7 +140,7 @@ final class AccessSiteProxyToggleModelTests: XCTestCase {
         }
         XCTAssertEqual(
             AccessSiteProxyToggleModel.attachmentLine(for: .attachedUnavailable, intent: .off),
-            "代理请求失败，未切回原连接"
+            "连接失败，未切回原连接"
         )
     }
 
