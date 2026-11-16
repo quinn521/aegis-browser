@@ -781,6 +781,21 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertNil(retainedView.load(URLRequest(url: url)))
         XCTAssertNil(tab.webView.load(URLRequest(url: url)))
         tab.load(url)
+        // The terminal-document receipt stops new fetches; packets already sent
+        // can still arrive at the witness. Require those tails to drain within
+        // two seconds, then observe stability for several 40 ms pulse periods.
+        func retiredTraffic() -> [Int] {
+            [opener.transcript.components(separatedBy: "/pulse?terminal").count,
+             origin.transcript.components(separatedBy: "terminal").count,
+             opener.transcript.components(separatedBy: "/pulse?earlier").count,
+             origin.transcript.components(separatedBy: "earlier").count]
+        }
+        var lastTraffic = retiredTraffic(), quietSince = Date()
+        try await waitUntil(seconds: 2, {
+            let current = retiredTraffic()
+            if current != lastTraffic { lastTraffic = current; quietSince = Date() }
+            return Date().timeIntervalSince(quietSince) >= 0.2
+        }, message: "Retired documents must stop emitting pulses after in-flight packets drain")
         let closedCount = opener.transcript.components(separatedBy: "/pulse?terminal").count
         let directCount = origin.transcript.components(separatedBy: "terminal").count
         let earlierCount = opener.transcript.components(separatedBy: "/pulse?earlier").count
