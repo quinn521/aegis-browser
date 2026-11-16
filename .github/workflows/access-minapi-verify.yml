@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  TESTED_SHA: 84f17768d0c1bf176b53783434dc0d7e1acb5ea9
+  TESTED_SHA: b5edc56f500975e9dd446532cd4f1eb06bf5a73a
 jobs:
   verify:
     strategy:
@@ -13,6 +13,8 @@ jobs:
       matrix:
         include:
           - {api: 25, target: google_apis}
+          - {api: 26, target: google_apis}
+          - {api: 36, target: default}
     runs-on: ubuntu-24.04
     timeout-minutes: 18
     steps:
