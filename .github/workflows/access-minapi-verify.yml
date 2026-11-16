@@ -1,0 +1,69 @@
+name: Access Android minimum API verification
+on:
+  push:
+    branches: [feat/access-minapi-verify]
+permissions:
+  contents: read
+env:
+  TESTED_SHA: 84f17768d0c1bf176b53783434dc0d7e1acb5ea9
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {api: 25, target: google_apis}
+          - {api: 26, target: google_apis}
+          - {api: 36, target: default}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: source
+          ref: ${{ env.TESTED_SHA }}
+          persist-credentials: false
+      - name: Build and check the registered minimum against the compiler target
+        working-directory: source/apps/browser/access-cmake
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD 'HEAD^{tree}'
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cat "$ANDROID_NDK_HOME/source.properties"
+          cmake --version
+          cmake --preset android-x64 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          cmake --build out/android-x64 --parallel 4
+          sha256sum out/android-x64/aegis_access_native_test
+          grep -o -- '--target=[^ ]*android[0-9]*' out/android-x64/compile_commands.json | sort -u | grep -Fx -- '--target=x86_64-none-linux-android26'
+          grep -F '"x86_64" "26"' out/android-x64/CTestTestfile.cmake
+          cmake --preset android-arm64 -DANDROID_PLATFORM=android-30 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          grep -F '"arm64-v8a" "30"' out/android-arm64/CTestTestfile.cmake
+          grep -o -- '--target=[^ ]*android[0-9]*' out/android-arm64/compile_commands.json | sort -u | grep -Fx -- '--target=aarch64-none-linux-android30'
+      - name: Enable hosted KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify rejection on API 25 using a compatible emulator
+        if: matrix.api == 25
+        timeout-minutes: 12
+        run: bash harness/.github/access-minapi/api25.sh
+      - name: Run registered CTest on the supported emulator
+        if: matrix.api != 25
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics -camera-back none
+          script: ANDROID_SERIAL=emulator-5554 python3 harness/.github/access-minapi/check-device.py ${{ matrix.api }}

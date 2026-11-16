@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+args = sys.argv[1:]
+with open(os.environ["ADB_TRACE_FILE"], "a") as f:
+    print(json.dumps(args), file=f)
+os.execv(os.environ["REAL_ADB"], [os.environ["REAL_ADB"], *args])
