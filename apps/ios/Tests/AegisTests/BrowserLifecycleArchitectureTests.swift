@@ -378,6 +378,42 @@ final class PageAssistantModelTests: XCTestCase {
         XCTAssertEqual(fixture.tasks.records.first?.state, .completed)
     }
 
+    func testEarlierSourceNavigationRevokesBatchWhileLaterReadIgnoresCancellation() async throws {
+        let fixture = try Fixture(); defer { fixture.close() }
+        let first = try XCTUnwrap(fixture.browser.activeTab), second = fixture.browser.newTab()
+        second.adoptPolicyMainFrameNavigationForTests(url: URL(string: "https://example.test/second")!)
+        second.commitPendingMainFrameForTests(); second.stop()
+        let firstBatchWaiting = expectation(description: "First batch waits for second document")
+        let nextBatchWaiting = expectation(description: "Next batch waits for second document")
+        var replies: [(snapshot: PageSnapshot, continuation: CheckedContinuation<PageSnapshot, any Error>)] = []
+        let model = PageAssistantModel(lifetime: AssistantOperationLifetime(applicationIsActive: { true }), readPage: { tab, _ in
+            let snapshot = PageSnapshot(id: tab.id, navigationEpoch: tab.navigationEpoch, url: tab.url!,
+                                        title: "Synthetic", text: "Synthetic document", capturedAt: Date(), truncated: false)
+            guard tab === second else { return snapshot }
+            return try await withCheckedThrowingContinuation { continuation in
+                replies.append((snapshot, continuation))
+                (replies.count == 1 ? firstBatchWaiting : nextBatchWaiting).fulfill()
+            }
+        })
+        fixture.attach(model); model.select(first.id, included: true); model.readPages()
+        let staleTask = try XCTUnwrap(model.lifetime.operation)
+        await fulfillment(of: [firstBatchWaiting], timeout: 2)
+        XCTAssertTrue(first.assistantPinned); XCTAssertTrue(second.assistantPinned)
+        first.load(try XCTUnwrap(first.url)); first.stop()
+        XCTAssertFalse(model.busy); XCTAssertNil(model.lifetime.operation)
+        XCTAssertTrue(model.snapshots.isEmpty); XCTAssertNil(model.consent)
+        XCTAssertFalse(first.assistantPinned); XCTAssertFalse(second.assistantPinned)
+        model.readPages()
+        let currentTask = try XCTUnwrap(model.lifetime.operation)
+        await fulfillment(of: [nextBatchWaiting], timeout: 2)
+        replies[0].continuation.resume(returning: replies[0].snapshot); await staleTask.value
+        XCTAssertTrue(model.busy); XCTAssertTrue(model.snapshots.isEmpty)
+        XCTAssertTrue(first.assistantPinned); XCTAssertTrue(second.assistantPinned)
+        replies[1].continuation.resume(returning: replies[1].snapshot); await currentTask.value
+        XCTAssertFalse(model.busy); XCTAssertEqual(model.snapshots.count, 2)
+        model.cancel()
+    }
+
     func testSourceClosureDuringUncooperativeReadCannotRestorePreview() async throws {
         let fixture = try Fixture(); defer { fixture.close() }
         let started = expectation(description: "Reading source")

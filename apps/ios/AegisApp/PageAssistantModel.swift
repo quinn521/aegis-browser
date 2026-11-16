@@ -153,13 +153,22 @@ final class PageAssistantModel: ObservableObject {
                           let identity = SourceIdentity(tab), identity.matches(tab),
                           source.id == identity.tabID, source.url == identity.url, source.navigationEpoch == identity.epoch else { throw PageSnapshotError.changed }
                     values.append(source); captured.append(identity)
+                    // A captured source can change while the next read ignores cancellation.
+                    observeDocuments(captured)
                 }
-                guard active(token, profile: profile, lifetimeToken: lifetimeToken), sourcesMatch(captured) else { return }
+                guard active(token, profile: profile, lifetimeToken: lifetimeToken), sourcesMatch(captured) else {
+                    revokeIfCurrent(token)
+                    return
+                }
                 snapshots = values; identities = captured; busy = false; status = "等待确认发送"
                 lifetime.operation = nil
                 observeDocuments(captured)
             } catch {
-                guard active(token, profile: profile, lifetimeToken: lifetimeToken) else { return }
+                guard active(token, profile: profile, lifetimeToken: lifetimeToken) else {
+                    revokeIfCurrent(token)
+                    return
+                }
+                documentObservers.removeAll()
                 self.error = error; busy = false; status = "读取失败"; lifetime.operation = nil
                 browser.protectAssistantTabs([])
             }
