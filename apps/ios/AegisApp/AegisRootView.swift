@@ -43,7 +43,6 @@ struct AegisRootView: View {
             }
         }
         .background(Color(uiColor: .systemGroupedBackground))
-        .focusedSceneValue(\.browserProtectsWindow, presentation.blocksBrowserCommands)
         .sheet(item: Binding(
             get: { presentation.isDismissing || presented?.route.isAlert == true ? nil : presented },
             set: { if $0 == nil, let presented { presentation.dismiss(presented.id) } }
@@ -242,8 +241,9 @@ private struct BrowserPane: View {
     }
 
     private func editAddress() {
+        guard let current = browser.activeTab, !current.isDisposed else { return }
         toolbarCollapsed = false
-        address = tab.addressBarURL?.absoluteString ?? address
+        address = current.addressBarURL?.absoluteString ?? address
         addressFocused = true
         addressSelectionRequest += 1
     }

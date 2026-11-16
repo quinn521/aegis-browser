@@ -69,7 +69,9 @@
 
 全部新增 UI/功能模型和 WebKit 状态组件隔离在 `MainActor`。页面读取和模型流使用 `async/await`；Task 仅连接同步用户动作到异步操作，并由 `AssistantOperationLifetime` 明确拥有和取消。每次 await、流片段、最终结果和持久化前复核操作身份。没有新增 GCD、detached Task 或 unchecked Sendable。弹层交接依据 SwiftUI onDismiss，原生 alert 依据 UIKit dismiss completion，不用延时或轮询猜测关闭顺序。
 
-受保护根展示通过窗口级 focused scene 值保持 ⌘W 的消费路径；Markdown 的 `BrowserPresentationWebView` 注册优先级原生 key command 并在展示层消费，防止禁用浏览器关闭动作后落入 iPadOS 的关闭窗口行为。根阅读库、根 Markdown 与子 Markdown 的真实键盘验收均检查应用前台状态、窗口数、底层网址、DOM 和标签数。
+窗口快捷键在执行时从其所属 `BrowserSession` 取得当前可见标签，不缓存标签对象；快速连续新建/关闭不依赖 SwiftUI 或 FocusedValues 完成刷新。执行前仍检查窗口未关闭及没有受保护展示，不能操作另一窗口。`testCachedWindowCommandsHandleRapidNewCloseWithoutAnyViewRefresh` 重用同一命令值连续新建/关闭十次，并验证另一窗口与后来打开的阅读展示保持不变。
+
+浏览页面保留原有 SwiftUI 窗口命令与 WebKit 响应链，展示状态统一限制窗口命令资格。Markdown 的 `BrowserPresentationWebView` 仅在文档展示层注册优先级原生 ⌘W key command 并消费它，防止文档原生响应链落入 iPadOS 的关闭窗口行为。根阅读库、根 Markdown 与子 Markdown 的真实键盘验收均检查应用前台状态、窗口数、底层网址、DOM 和标签数。普通页面的 T/W/L/F 验收保持原测试与时限，不引入普通页面的关闭键桥接或强制焦点交接。
 
 下载展示回执以事件 ID 保留，最多 32 个，超限最旧回执失效而非扩大权限。`ownsAccessDownload` 在执行时复核 window/profile/privateSessionID/tab instance/navigationEpoch/Access selection/exact host；展示冻结值不是授权。关闭旧弹层只释放自己的回执，不清除较新的 pending 下载。
 

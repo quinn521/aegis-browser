@@ -17,14 +17,16 @@ struct BrowserKeyboardActions {
     @MainActor static func forWindow(_ browser: BrowserSession, presentation: BrowserPresentationCoordinator,
                                      editAddress: @escaping () -> Void = {}) -> Self? {
         guard !browser.isWindowClosed, !presentation.blocksBrowserCommands else { return nil }
-        let tab = browser.activeTab
+        let hasVisibleTab = browser.activeTab != nil
         func allowed(_ action: () -> Void) {
             guard !browser.isWindowClosed, !presentation.blocksBrowserCommands else { return }
             action()
         }
+        // FocusedValues may cache this action across a rapid new-tab command.
+        // Resolve the tab in this owning window when the key actually executes.
         func onCurrentTab(_ action: (BrowserTab) -> Void) {
             allowed {
-                guard let tab, browser.activeTab === tab, !tab.isDisposed else { return }
+                guard let tab = browser.activeTab, !tab.isDisposed else { return }
                 action(tab)
             }
         }
@@ -33,7 +35,7 @@ struct BrowserKeyboardActions {
                     editAddress: { onCurrentTab { _ in editAddress() } },
                     find: { onCurrentTab { presentation.request(.find($0.id, $0.instanceID)) } },
                     reload: { onCurrentTab { $0.reload() } }, back: { onCurrentTab { $0.goBack() } }, forward: { onCurrentTab { $0.goForward() } },
-                    canCloseTab: tab != nil, canUsePageCommands: tab != nil)
+                    canCloseTab: hasVisibleTab, canUsePageCommands: hasVisibleTab)
     }
 }
 
@@ -53,17 +55,11 @@ final class BrowserPresentationWebView: WKWebView {
     @objc private func keepPresentationOpen() { }
 }
 
-private struct BrowserProtectsWindowKey: FocusedValueKey { typealias Value = Bool }
-
 private struct BrowserKeyboardActionsKey: FocusedValueKey {
     typealias Value = BrowserKeyboardActions
 }
 
 extension FocusedValues {
-    var browserProtectsWindow: Bool? {
-        get { self[BrowserProtectsWindowKey.self] }
-        set { self[BrowserProtectsWindowKey.self] = newValue }
-    }
     var browserKeyboardActions: BrowserKeyboardActions? {
         get { self[BrowserKeyboardActionsKey.self] }
         set { self[BrowserKeyboardActionsKey.self] = newValue }
@@ -73,12 +69,11 @@ extension FocusedValues {
 struct BrowserKeyboardCommands: Commands {
     @ObservedObject var language: AppLanguageSettings
     @FocusedValue(\.browserKeyboardActions) private var actions
-    @FocusedValue(\.browserProtectsWindow) private var protectsWindow
     var body: some Commands {
         let _ = language.revision
         CommandGroup(replacing: .newItem) {
             Button(AegisLocalization.string("新建")) { actions?.newTab() }.keyboardShortcut("t").disabled(actions == nil)
-            Button(AegisLocalization.string("关闭当前标签")) { actions?.closeTab() }.keyboardShortcut("w").disabled(actions?.canCloseTab != true && protectsWindow != true)
+            Button(AegisLocalization.string("关闭当前标签")) { actions?.closeTab() }.keyboardShortcut("w").disabled(actions?.canCloseTab != true)
         }
         CommandGroup(after: .textEditing) {
             Button(AegisLocalization.string("在页面中查找")) {

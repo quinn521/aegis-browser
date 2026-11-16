@@ -90,8 +90,38 @@ final class BrowserPresentationCoordinatorTests: XCTestCase {
         let commands = try XCTUnwrap(BrowserKeyboardActions.forWindow(browser, presentation: route))
         commands.newTab()
         XCTAssertEqual(browser.visibleTabs.count, original + 1)
-        oldCommands.closeTab() // Its captured tab is no longer current.
-        XCTAssertEqual(browser.visibleTabs.count, original + 1)
+        oldCommands.closeTab() // A cached action still targets this window's current tab.
+        XCTAssertEqual(browser.visibleTabs.count, original)
+        XCTAssertTrue(browser.activeTab === tab)
+    }
+
+    func testCachedWindowCommandsHandleRapidNewCloseWithoutAnyViewRefresh() throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let other = BrowserSession(dataStore: browser.dataStore)
+        defer { browser.closeWindow(); other.closeWindow() }
+        let route = BrowserPresentationCoordinator()
+        let commands = try XCTUnwrap(BrowserKeyboardActions.forWindow(browser, presentation: route))
+        let original = try XCTUnwrap(browser.activeTab), otherTab = try XCTUnwrap(other.activeTab)
+        let originalCount = browser.visibleTabs.count, otherCount = other.visibleTabs.count
+        // Reuse the exact same action value with no awaits or SwiftUI renders.
+        for _ in 0..<10 {
+            commands.newTab()
+            let created = try XCTUnwrap(browser.activeTab)
+            XCTAssertFalse(created === original)
+            XCTAssertEqual(browser.visibleTabs.count, originalCount + 1)
+            commands.closeTab()
+            XCTAssertTrue(created.isDisposed)
+            XCTAssertTrue(browser.activeTab === original)
+            XCTAssertEqual(browser.visibleTabs.count, originalCount)
+            XCTAssertTrue(other.activeTab === otherTab)
+            XCTAssertEqual(other.visibleTabs.count, otherCount)
+        }
+        // Cached actions must still obey a presentation that appeared later.
+        route.request(.reading)
+        commands.newTab(); commands.closeTab()
+        XCTAssertTrue(browser.activeTab === original)
+        XCTAssertEqual(browser.visibleTabs.count, originalCount)
+        XCTAssertFalse(browser.isWindowClosed); XCTAssertFalse(other.isWindowClosed)
     }
 
     func testPresentationWebKitInstallsEnabledPriorityCloseCommand() throws {
