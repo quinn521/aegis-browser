@@ -11,7 +11,7 @@
 | R3、R4 | Chromium 原生测试与浏览器集成 | 分平台记录，GN 生成和编译证据分别登记 |
 | R2、R3 | Windows x64 原生编译及 CTest | `ab7a5630` 通过，生成 x64 PE，在 Windows 上执行 1/1 个测试，892 项断言通过 |
 | R2、R3 | Android NDK 编译 | `ab7a5630` 通过，`android-arm64` 和 `android-x64` 两个预设均生成 API 26 的 ELF |
-| R2、R3 | Android 模拟器 CTest | `ab7a5630` 通过，API 36 的 arm64-v8a、x86_64 模拟器各执行 1/1 个测试，各 892 项断言通过；物理真机未执行 |
+| R2、R3 | Android 模拟器 CTest | `ab7a5630` 通过：arm64-v8a 在 API 36，x86_64 在 API 26、36，各执行 1/1 个测试，均为 892 项断言通过；物理真机未执行 |
 | R2、R3 | Android 最低 API 准入 | 未通过配置核对：编译目标为 API 26，生成的 CTest 传给 adb 运行器的最低 API 为 `1`。低于 API 26 的设备拒绝行为未验证 |
 | R5 | 三端真实浏览器产品闭环 | T4–T7 |
 | R6 | 仓库检查、独立 Review、PR CI | 按最终提交和 PR merge 候选分别登记 |
@@ -28,6 +28,10 @@
 | `android-arm64` | [Android 构建](https://github.com/quinn521/aegis-browser/actions/runs/43819334510/job/133138535944)：NDK r30（30.0.16248370），Clang 21.0.0，CMake 3.31.6；macOS 上用 CTest 3.31.10 经 adb 在 API 36 arm64-v8a 模拟器执行。[JUnit 原始结果](evidence/ab7a5630-android-arm64-ctest.xml) | `2619bc01e1628afa0320befbc1ca95686d2e2ffc0ed16ddc4d77967e2a63e7aa` |
 | `android-x64` | [Android 构建和 CTest](https://github.com/quinn521/aegis-browser/actions/runs/43819334510/job/133138535944)：同一 NDK、Clang 和 CMake，在 API 36 x86_64 模拟器执行 | `d47cabef70854c293bf2f11f60c5f5a187f6fefdca6d3137edb2d78e3d44f9aa` |
 
-arm64 构建与执行分布在两台主机。执行前校验了构建制品的 SHA-256，并独立确认模拟器的 ABI 和 API。仅将生成的 CTest 注册文件中的解释器、源码和构建路径映射到执行主机；测试名、运行脚本内容、ABI、最低 API 参数和超时均保持原值。两台模拟器实际均为 API 36，故以上结果只覆盖该版本。
+arm64 构建与执行分布在两台主机。执行前校验了构建制品的 SHA-256，并独立确认模拟器的 ABI 和 API。仅将生成的 CTest 注册文件中的解释器、源码和构建路径映射到执行主机；测试名、运行脚本内容、ABI、最低 API 参数和超时均保持原值。
 
-此前在 `b3a09156` 上，Windows 因无可用主机未执行，Android 因 NDK 下载超时未编译，当时只有模拟 adb 的证据。本次执行补齐了独立核心的编译与模拟器运行；Android API 26 边界、物理真机和三端浏览器产品闭环仍未验收。
+[API 26 边界作业](https://github.com/quinn521/aegis-browser/actions/runs/43820147022/job/133141131134) 核对了编译目标 `x86_64-none-linux-android26`，并在 API 26 模拟器上复跑了与 API 36 摘要相同的 x86_64 产物。最低版本拒绝检查单列：NDK r30 下，`CMAKE_SYSTEM_VERSION` 传给测试的值为 `1`。在报告 API 25 的模拟 adb 输入下，运行器继续尝试创建设备临时目录；传入 `26` 的对照在部署前拒绝。
+
+[API 25 模拟器作业](https://github.com/quinn521/aegis-browser/actions/runs/43820147022/job/133141130940) 完成了 x86_64 编译，但 adb 等待 `sys.boot_completed` 时没有取得就绪结果，作业达到 30 分钟上限后取消。CTest 未启动，API 25 模拟器上的拒绝行为仍未验证。
+
+此前在 `b3a09156` 上，Windows 因无可用主机未执行，Android 因 NDK 下载超时未编译，当时只有模拟 adb 的证据。本次执行补齐了独立核心的编译与模拟器运行。Android 物理真机和三端浏览器产品闭环仍未验收。
