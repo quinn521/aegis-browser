@@ -7,6 +7,43 @@ import XCTest
 
 @MainActor
 final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
+    func testDefaultPrivacyHoldsFirstNavigationAndRemembersOnlyOrdinaryOptOuts() throws {
+        let name = "test.locationPrivacy." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let web = URL(string: "https://location.example/first")!
+        let other = URL(string: "https://other.example/")!
+        let host = try AccessSiteHost("location.example")
+        let coordinator = AccessHostStoreCoordinator(defaultLocationPrivacy: true, locationPreferences: defaults)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.closeWindow() }
+        browser.hostCoordinator = coordinator
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.loadFromAddressBar(web)
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: tab))
+        XCTAssertEqual(tab.heldProxyRequestForTests?.url, web)
+        XCTAssertEqual(coordinator.snapshot(for: tab, fromAddressBar: true).host, host)
+        XCTAssertTrue(coordinator.snapshot(for: tab, fromAddressBar: true).toggleOn)
+        XCTAssertEqual(coordinator.snapshot(for: tab, fromAddressBar: true).connectionStatus, .connecting)
+        coordinator.setSiteProxyEnabled(false, for: tab, displayedHost: try AccessSiteHost("old.example"), fromAddressBar: true)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: web))
+        coordinator.setSiteProxyEnabled(false, for: tab, displayedHost: host, fromAddressBar: true)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: web))
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: other))
+        let restored = AccessHostStoreCoordinator(defaultLocationPrivacy: true, locationPreferences: defaults)
+        XCTAssertFalse(restored.requiresProxy(tab: tab, url: web))
+        XCTAssertFalse(restored.requiresProxy(tab: tab, url: URL(string: "http://127.0.0.1/")!))
+        browser.switchProfile(to: .privateMode)
+        let privateTab = try XCTUnwrap(browser.activeTab)
+        XCTAssertTrue(restored.requiresProxy(tab: privateTab, url: web))
+        privateTab.hostCoordinator = restored
+        privateTab.loadFromAddressBar(other)
+        restored.setSiteProxyEnabled(false, for: privateTab, displayedHost: try AccessSiteHost("other.example"), fromAddressBar: true)
+        XCTAssertFalse(restored.requiresProxy(tab: privateTab, url: other))
+        XCTAssertTrue(restored.requiresProxy(tab: tab, url: other))
+        XCTAssertFalse(defaults.dictionaryRepresentation().values.contains { String(describing: $0).contains("other.example") })
+    }
+
     func testPreparingProxyPreservesTheOriginalGetAndHeadHeaders() async throws {
         for method in ["GET", "HEAD"] {
             let clock = AccessManualPreparationClock()

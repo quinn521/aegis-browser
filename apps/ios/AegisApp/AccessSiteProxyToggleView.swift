@@ -53,7 +53,9 @@ struct AccessSiteProxyToggleView: View {
                 Text(LocalizedStringKey(line)).font(.subheadline)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("access-site-proxy-connection")
-                if attachment == .notAttached, snap.toggleOn, snap.connectionStatus != .connecting {
+                if attachment == .notAttached, snap.toggleOn, let tab,
+                   !tab.isLoading, tab.loadingError == nil,
+                   AccessSiteProxyToggleModel.resolveTrustedHost(from: tab.committedMainFrameURL) == snap.host {
                     Text("当前页面仍使用原连接").font(.footnote).foregroundStyle(.secondary)
                 }
             } else {

@@ -155,6 +155,7 @@ struct AegisRootView: View {
 }
 
 private struct BrowserPane: View {
+    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @EnvironmentObject private var browser: BrowserSession
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -250,7 +251,7 @@ private struct BrowserPane: View {
     private var displayedAddress: String {
         guard let url = tab.addressBarURL, url.scheme != "aegis" else { return AegisLocalization.string("起始页") }
         guard let host = url.host(percentEncoded: true) else { return url.absoluteString }
-        if AccessSiteDisplayName.localLabel(for: host)?.key == "本机页面" {
+        if AccessLocalSite.classify(host) == .loopback {
             return AccessSiteDisplayName.title(host)
         }
         return host
@@ -260,6 +261,25 @@ private struct BrowserPane: View {
         if !TrackingProtection.enabled { return AegisLocalization.string("广告过滤已关闭") }
         if let url = tab.url, TrackingProtection.isExcepted(url) { return AegisLocalization.string("此网站已暂停过滤") }
         return AegisLocalization.string("广告过滤已启用")
+    }
+
+    @ViewBuilder
+    private var locationPrivacyButton: some View {
+        let snapshot = hostStores.snapshot(for: tab, fromAddressBar: true)
+        if let host = snapshot.host {
+            Button {
+                hostStores.setSiteProxyEnabled(!snapshot.toggleOn, for: tab, displayedHost: host, fromAddressBar: true)
+            } label: {
+                Image(systemName: snapshot.toggleOn ? "location.slash.fill" : "location")
+                    .foregroundStyle(snapshot.toggleOn && snapshot.attachment == .ready ? Color.accentColor : .secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("隐藏地理位置")
+            .accessibilityValue(Text(LocalizedStringKey(AccessSiteProxyToggleModel.connectionLine(for: snapshot.connectionStatus))))
+            .accessibilityAddTraits(snapshot.toggleOn ? .isSelected : [])
+            .accessibilityIdentifier("address-location-privacy")
+        }
     }
 
     private var toolbar: some View {
@@ -292,6 +312,7 @@ private struct BrowserPane: View {
                 .onChange(of: addressFocused) { _, focused in
                     if focused { toolbarCollapsed = false }
                 }
+                if !addressFocused { locationPrivacyButton }
                 if !isCollapsed && !addressFocused {
                     Button {
                         if tab.isLoading { tab.stop() } else { tab.reload() }
@@ -443,6 +464,7 @@ struct ProxyRetryButton: UIViewRepresentable {
 struct PageLoadFailureBanner: View {
     @Environment(\.locale) private var localizationLocale
     @ObservedObject var tab: BrowserTab
+    var locationPrivacyOn = false
     var autoRecoveryOn: Bool = false
     var autoRecoveryLine: String? = nil
     var setAutoRecovery: ((BrowserTab, Bool) -> Void)? = nil
@@ -462,14 +484,17 @@ struct PageLoadFailureBanner: View {
                 Label("页面暂时无法打开", systemImage: "exclamationmark.circle")
                     .font(.headline)
                 if tab.loadingErrorAllowsProxyRetry {
-                    Text("可以为这个网站开启“隐藏地理位置”，然后再试一次。")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    ProxyRetryButton(title: AegisLocalization.string("开启并重试")) { proxyRetry(tab) }
+                    if !locationPrivacyOn {
+                        Text("可以为这个网站开启“隐藏地理位置”，然后再试一次。")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    ProxyRetryButton(title: AegisLocalization.string(locationPrivacyOn ? "重试" : "开启并重试")) { proxyRetry(tab) }
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
-                Button("重试") { tab.reload() }
-                    .frame(minHeight: 44)
+                if !locationPrivacyOn || !tab.loadingErrorAllowsProxyRetry {
+                    Button("重试") { tab.reload() }.frame(minHeight: 44)
+                }
                 if let autoRecoveryLine {
                     Text(LocalizedStringKey(autoRecoveryLine))
                         .font(.caption).foregroundStyle(.secondary)
@@ -509,10 +534,11 @@ struct PageLoadFailureBanner: View {
                 Text(AegisLocalization.string(addressProxyPreparing ? "正在准备连接…" : "正在连接此网址，可尝试隐藏地理位置。"))
                     .font(.caption)
                     .accessibilityIdentifier("page-load-pending-status")
-                ProxyRetryButton(title: AegisLocalization.string("开启并打开")) { openAddressViaProxy(tab, pending) }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .disabled(addressProxyPreparing)
+                if !addressProxyPreparing {
+                    ProxyRetryButton(title: AegisLocalization.string("开启并打开")) { openAddressViaProxy(tab, pending) }
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                }
             }
             .padding(12)
             .accessibilityElement(children: .contain)
@@ -535,6 +561,7 @@ private struct ActiveTabView: View {
         VStack(spacing: 0) {
             PageLoadFailureBanner(
                 tab: tab,
+                locationPrivacyOn: hostStores.snapshot(for: tab, fromAddressBar: true).toggleOn,
                 autoRecoveryOn: hostStores.snapshot(for: tab).autoRecoveryEnabled,
                 autoRecoveryLine: hostStores.snapshot(for: tab).autoRecoveryLine,
                 setAutoRecovery: { failed, enabled in

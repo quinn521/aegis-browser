@@ -103,7 +103,9 @@ struct AegisApp: App {
         let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher()
         let hostStores = AccessHostStoreCoordinator(
             publisher: publisher,
-            channel: AccessProductChannel.resolve()
+            channel: AccessProductChannel.resolve(),
+            defaultLocationPrivacy: true,
+            locationPreferences: defaults
         )
         registry.hostRouting = hostStores
         hostStores.startForegroundSweep()

@@ -17,6 +17,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private(set) var probeInvocationCount: UInt64 = 0
     private let ruleGroups = AccessSiteRuleGroupRegistry()
     private var intents: [AccessHostStoreKey: AccessProxyIntentState] = [:]
+    private let defaultLocationPrivacy: Bool
+    private let locationPreferences: UserDefaults?
+    private static let directSitesKey = "browser.locationPrivacy.directSites"
     private var explicitDirect: Set<AccessHostStoreKey> = []
     private var executing: Set<AccessHostStoreKey> = []
     /// Tabs that have actually entered a proxy recovery send, bound to the host
@@ -44,12 +47,22 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         publisher: (any AccessProxyEntryPublishing)? = nil,
         clock: (any AccessPreparationClock)? = nil,
         channel: AccessReleaseChannel = .release,
-        probeRunner: AccessSiteProbeRunner = AccessSiteProbeRunner()
+        probeRunner: AccessSiteProbeRunner = AccessSiteProbeRunner(),
+        defaultLocationPrivacy: Bool = false,
+        locationPreferences: UserDefaults? = nil
     ) {
         self.publisher = publisher ?? AccessFailClosedProxyEntryPublisher()
         self.clock = clock ?? AccessContinuousPreparationClock()
         self.releaseChannel = channel == .unknown ? .release : channel
         self.probeRunner = probeRunner
+        self.defaultLocationPrivacy = defaultLocationPrivacy
+        self.locationPreferences = locationPreferences
+        for name in locationPreferences?.stringArray(forKey: Self.directSitesKey) ?? [] {
+            guard let host = try? AccessSiteHost(name) else { continue }
+            let key = AccessHostStoreKey(scopeID: "ordinary", host: host, isPrivate: false)
+            explicitDirect.insert(key)
+            intents[key] = .off
+        }
         let publisher = self.publisher
         registry.onRetire = { [weak self] key in
             self?.publisher.release(for: key)
@@ -97,7 +110,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             return
         }
         if enabled {
-            explicitDirect.remove(key)
+            if explicitDirect.remove(key) != nil { saveDirectSites(afterChanging: key) }
             registry.setProxyEnabled(true, scopeID: scopeID, host: host, isPrivate: isPrivate)
             revision &+= 1
             return
@@ -130,8 +143,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     /// An explicit page route has priority over optional automatic recovery.
     /// Revalidate the host shown by the control before changing any shared state.
-    func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost) {
-        guard !tab.isDisposed, host(for: tab) == displayedHost else { return }
+    func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost, fromAddressBar: Bool = false) {
+        let currentHost = fromAddressBar ? addressControlHost(for: tab) : host(for: tab)
+        guard !tab.isDisposed, currentHost == displayedHost else { return }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: displayedHost, isPrivate: tab.profile.isPrivate)
         let affected = BrowserSession.openTabs().filter { current in
             // A committed document may remain visible while a different host is
@@ -147,7 +161,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                   Self.httpHost(url) == key.host else { return nil }
             return (current, request)
         }
-        if enabled { explicitDirect.remove(key) } else { explicitDirect.insert(key) }
+        if !enabled, explicitDirect.insert(key).inserted { saveDirectSites(afterChanging: key) }
         setProxyEnabled(enabled, host: key.host, scopeID: key.scopeID, isPrivate: key.isPrivate)
         for current in affected where !reloads.contains(where: { $0.0 === current }) {
             current.pauseAfterRouteChange()
@@ -165,7 +179,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool {
         guard let host = Self.httpHost(url) else { return false }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
-        guard intents[key] == .on, !explicitDirect.contains(key) else { return false }
+        guard websitePrivacyEnabled(for: key) else { return false }
         return registry.endpoint(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)?.state != .ready
     }
 
@@ -187,9 +201,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         return .attachedUnavailable
     }
 
-    func snapshot(for tab: BrowserTab) -> AccessSiteProxyToggleSnapshot {
+    func snapshot(for tab: BrowserTab, fromAddressBar: Bool = false) -> AccessSiteProxyToggleSnapshot {
         _ = revision
-        guard let host = host(for: tab) else {
+        let displayedHost = fromAddressBar ? addressControlHost(for: tab) : host(for: tab)
+        guard let host = displayedHost else {
             var snapshot = AccessSiteProxyToggleSnapshot()
             snapshot.intentStatus = .noTrustedSite
             return snapshot
@@ -200,7 +215,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             isPrivate: tab.profile.isPrivate
         )
         let inherited = tab.boundHostName == host.rawValue && tab.proxyLandingParent != nil
-        let intentOn = intents[key] == .on || inherited
+        let intentOn = websitePrivacyEnabled(for: key) || inherited
         let attachment = attachment(tab: tab, host: host)
         var snapshot = AccessSiteProxyToggleSnapshot()
         snapshot.hasTrustedSite = true
@@ -522,7 +537,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             $0.browsingScopeID == scopeID && $0.profile.isPrivate == isPrivate &&
                 $0.boundHostName == host.rawValue && $0.proxyLandingParent != nil
         }) { return true }
-        if intents[key] == .on { return true }
+        if websitePrivacyEnabled(for: key) { return true }
         if executing.contains(key) { return true }
         if executingTabs.values.contains(key) { return true }
         return operations.values.contains {
@@ -1197,6 +1212,26 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         return AccessAutoRecoveryCopy.armed
     }
 
+    private func saveDirectSites(afterChanging key: AccessHostStoreKey) {
+        guard !key.isPrivate, key.scopeID == "ordinary", let locationPreferences else { return }
+        let names = explicitDirect.filter { !$0.isPrivate && $0.scopeID == "ordinary" }.map { $0.host.rawValue }
+        locationPreferences.set(names.sorted(), forKey: Self.directSitesKey)
+    }
+
+    private func websitePrivacyEnabled(for key: AccessHostStoreKey) -> Bool {
+        if explicitDirect.contains(key) { return false }
+        if let intent = intents[key] { return intent == .on }
+        return defaultLocationPrivacy && AccessLocalSite.classify(key.host.rawValue) == nil
+    }
+
+    private func addressControlHost(for tab: BrowserTab) -> AccessSiteHost? {
+        if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending) {
+            return Self.httpHost(pending.url)
+        }
+        guard let target = tab.addressBarURL.flatMap(Self.httpHost), target == host(for: tab) else { return nil }
+        return target
+    }
+
     private func host(for tab: BrowserTab) -> AccessSiteHost? {
         if let failure = tab.lastMainFrameFailure,
            let host = Self.httpHost(failure.url) {
@@ -1255,7 +1290,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         tabID: String
     ) -> AccessProxyIntentState {
         if explicitDirect.contains(key) { return .off }
-        if intents[key] == .on { return .on }
+        if websitePrivacyEnabled(for: key) { return .on }
         // Only the tab that recovered this exact host may keep using its host store.
         if executingTabs[tabID] == key, groupStillLists(key) || intents[key] == .on || executing.contains(key) {
             return .on

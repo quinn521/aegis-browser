@@ -10,6 +10,28 @@ import XCTest
 /// Failed page reloads through the app HTTP CONNECT listener, not a test-only proxy socket.
 @MainActor
 final class AccessHostRecoveryWebKitTests: XCTestCase {
+    func testFirstPublicNavigationUsesTheDefaultProtectedRoute() async throws {
+        let opener = AnsweringOpener(finishAfterRecording: true)
+        let listener = try await makeListener(port: 18_277, tunnels: opener)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_277), defaultLocationPrivacy: true)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        tab.loadFromAddressBar(URL(string: "https://location.example.invalid/first")!)
+        try await waitUntil(seconds: 10, {
+            self.attach(tab.webView, to: window)
+            return opener.authorities.contains("location.example.invalid:443")
+        }, message: "First visit must reach the controlled CONNECT listener")
+        XCTAssertEqual(tab.boundHostName, "location.example.invalid")
+        XCTAssertFalse(try XCTUnwrap(tab.websiteDataStore.proxyConfigurations.first).allowFailover)
+    }
+
     func testExplicitOnCannotSendToOriginWhilePreparationFails() async throws {
         let origin = OriginReceipt(port: 18_274)
         try await origin.start()

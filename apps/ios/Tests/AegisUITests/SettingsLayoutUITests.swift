@@ -11,6 +11,44 @@ final class SettingsLayoutUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    func testAddressBarLocationPrivacyDefaultsOnAndTogglesTheCurrentSite() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+        let field = app.textFields["address-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap()
+        field.typeText("https://example.invalid/\n")
+        let icon = app.buttons["address-location-privacy"]
+        XCTAssertTrue(icon.waitForExistence(timeout: 10))
+        XCTAssertTrue(icon.isSelected)
+        XCTAssertEqual(icon.label, "隐藏地理位置")
+        // The controlled build has no service. The default cannot claim a working connection.
+        let retry = app.buttons["page-load-proxy-retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 12))
+        XCTAssertEqual(retry.label, "重试")
+        XCTAssertEqual(icon.value as? String, "连接暂不可用")
+        capture("地址栏-隐藏地理位置默认开启", app)
+        icon.tap()
+        let off = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND selected == false"), object: icon)
+        XCTAssertEqual(XCTWaiter.wait(for: [off], timeout: 12), .completed)
+        icon.tap()
+        XCTAssertTrue(retry.waitForExistence(timeout: 12))
+        XCTAssertTrue(icon.isSelected)
+        app.buttons["page-protection"].tap()
+        let siteSwitch = app.switches["access-site-proxy-toggle"]
+        XCTAssertTrue(siteSwitch.waitForExistence(timeout: 5))
+        XCTAssertEqual(siteSwitch.value as? String, "1")
+        siteSwitch.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        app.navigationBars["当前网站"].buttons["完成"].tap()
+        XCTAssertTrue(icon.waitForExistence(timeout: 10))
+        XCTAssertFalse(icon.isSelected)
+        field.tap()
+        XCTAssertFalse(icon.exists)
+        XCTAssertTrue((field.value as? String ?? "").contains("example.invalid"))
+    }
+
     func testLocationPrivacyControlsHideNodeDetailsAndKeepFailedTarget() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]

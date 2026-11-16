@@ -3,33 +3,46 @@ import BrowserKit
 import Foundation
 import Darwin
 
-/// Presentation only. Routing and address editing always use the actual destination.
-enum AccessSiteDisplayName {
-    static func localLabel(for rawHost: String) -> LocalizedStringResource? {
+enum AccessLocalSite {
+    case loopback, localNetwork
+
+    /// Classify literal addresses and local names without resolving the destination.
+    static func classify(_ rawHost: String) -> Self? {
         let host = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
-        if host == "localhost" || host.hasSuffix(".localhost") { return "本机页面" }
-        if host.hasSuffix(".local") { return "局域网网站" }
+        if host == "localhost" || host.hasSuffix(".localhost") { return .loopback }
+        if host.hasSuffix(".local") || host == "home.arpa" || host.hasSuffix(".home.arpa") { return .localNetwork }
         var v4 = in_addr()
-        if inet_aton(host, &v4) == 1 { return ipv4Label(UInt32(bigEndian: v4.s_addr)) }
+        if inet_aton(host, &v4) == 1 { return ipv4Scope(UInt32(bigEndian: v4.s_addr)) }
         var v6 = in6_addr()
-        guard inet_pton(AF_INET6, host, &v6) == 1 else { return nil }
+        guard inet_pton(AF_INET6, host, &v6) == 1 else { return host.contains(".") ? nil : .localNetwork }
         return withUnsafeBytes(of: v6) { bytes in
-            if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return "本机页面" }
+            if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return .loopback }
             if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255 {
-                return ipv4Label(bytes.suffix(4).reduce(0) { ($0 << 8) | UInt32($1) })
+                return ipv4Scope(bytes.suffix(4).reduce(0) { ($0 << 8) | UInt32($1) })
             }
             if bytes[0] & 0xfe == 0xfc || (bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80) {
-                return "局域网网站"
+                return .localNetwork
             }
             return nil
         }
     }
 
-    private static func ipv4Label(_ address: UInt32) -> LocalizedStringResource? {
-        if address >> 24 == 127 { return "本机页面" }
+    private static func ipv4Scope(_ address: UInt32) -> Self? {
+        if address >> 24 == 127 { return .loopback }
         if address >> 24 == 10 || address >> 20 == 0xac1 ||
-            address >> 16 == 0xc0a8 || address >> 16 == 0xa9fe { return "局域网网站" }
+            address >> 16 == 0xc0a8 || address >> 16 == 0xa9fe { return .localNetwork }
         return nil
+    }
+
+}
+
+enum AccessSiteDisplayName {
+    static func localLabel(for rawHost: String) -> LocalizedStringResource? {
+        switch AccessLocalSite.classify(rawHost) {
+        case .loopback: return "本机页面"
+        case .localNetwork: return "局域网网站"
+        case nil: return nil
+        }
     }
 
     static func title(_ host: String?) -> String {
