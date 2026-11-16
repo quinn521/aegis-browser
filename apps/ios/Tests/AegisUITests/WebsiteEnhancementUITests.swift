@@ -67,7 +67,7 @@ final class WebsiteEnhancementUITests: XCTestCase {
     capture("私密设置没有继承")
   }
 
-  func testConfiguredNodeIsVisible() throws {
+  func testConfiguredServiceKeepsNodeDetailsPrivate() throws {
     let env = ProcessInfo.processInfo.environment
     guard let nodeConfig = env["AEGIS_UI_NODE_CONFIG"] else {
       throw XCTSkip("Supply a simulator node fixture path")
@@ -78,8 +78,12 @@ final class WebsiteEnhancementUITests: XCTestCase {
     app.launch()
     defer { app.terminate() }
     openFixturePageProtection(app)
-    XCTAssertTrue(app.staticTexts["VLESS · TCP · REALITY · Vision"].waitForExistence(timeout: 10))
-    capture("节点配置和代理状态")
+    XCTAssertTrue(app.switches["access-site-proxy-toggle"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
+    XCTAssertFalse(app.staticTexts["VLESS · TCP · REALITY · Vision"].exists)
+    tapVisible(app.buttons["access-usage-link"], app)
+    XCTAssertTrue(app.staticTexts["测试服务用量（共享）"].waitForExistence(timeout: 5))
+    capture("已配置的共享测试服务")
   }
 
   func testBoundAccountQuotaIsVisibleWithoutNodeConfiguration() throws {
@@ -104,13 +108,13 @@ final class WebsiteEnhancementUITests: XCTestCase {
     }
     openFixturePageProtection(app)
     XCTAssertFalse(app.staticTexts["VLESS · TCP · REALITY · Vision"].exists)
-    let quota = app.staticTexts["10000 B"]
-    for _ in 0..<8 {
-      if quota.exists { break }
-      app.swipeUp()
+    tapVisible(app.buttons["access-usage-link"], app)
+    let style = ByteCountFormatStyle(allowedUnits: .bytes, spellsOutZero: false, locale: Locale(identifier: "zh_CN"))
+    for (key, bytes) in [("quota", 10_000), ("remaining", 9_970), ("uploaded", 10), ("downloaded", 20), ("used", 30)] {
+      let metric = app.descendants(matching: .any).matching(identifier: "access-usage-" + key).firstMatch
+      XCTAssertTrue(metric.waitForExistence(timeout: 10), key)
+      XCTAssertEqual(metric.value as? String, style.format(Int64(bytes)), key)
     }
-    XCTAssertTrue(quota.waitForExistence(timeout: 10))
-    XCTAssertTrue(app.staticTexts["9970 B"].exists)
     capture("受控账户C额度显示")
   }
 
@@ -150,6 +154,7 @@ final class WebsiteEnhancementUITests: XCTestCase {
     navigate(app, "http://127.0.0.1:8768/enhancements/page")
     XCTAssertTrue(app.webViews.staticTexts["网站增强验收文章"].firstMatch.waitForExistence(timeout: 12))
     app.buttons["page-protection"].tap()
+    tapVisible(app.buttons["access-site-connection-options"], app)
     let recovery = app.switches["access-site-auto-recovery-toggle"]
     let download = app.switches["access-account-site-download-toggle"]
     XCTAssertTrue(download.waitForExistence(timeout: 5))

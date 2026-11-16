@@ -62,12 +62,13 @@ struct AccessSubscriptionUsageView: View {
 
     private func amount(_ label: LocalizedStringResource, _ bytes: UInt64, id: String) -> some View {
         LabeledContent {
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(AccessAccountUsagePresentation.formattedBytes(String(bytes)))
-            }
-        } label: { Text(verbatim: AegisLocalization.string(label)) }
-        .accessibilityElement(children: .combine)
-        .accessibilityValue(String(bytes))
+            Text(verbatim: AccessAccountUsagePresentation.formattedBytes(String(bytes)))
+        } label: {
+            Text(verbatim: AegisLocalization.string(label))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: AegisLocalization.string(label)))
+        .accessibilityValue(AccessAccountUsagePresentation.accessibleBytes(String(bytes), locale: locale))
         .accessibilityIdentifier("access-usage-" + id)
     }
 }

@@ -4,14 +4,15 @@ import SwiftUI
 struct AccessUsageSummaryView: View {
     let usedBytes: String?
     let quotaBytes: String?
+    @Environment(\.locale) private var locale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("总用量").font(.subheadline).foregroundStyle(.secondary)
+            Text("总用量").font(.subheadline).foregroundStyle(.secondary).accessibilityHidden(true)
             Text(verbatim: AccessAccountUsagePresentation.formattedBytes(usedBytes))
                 .font(.largeTitle.weight(.semibold)).monospacedDigit()
                 .accessibilityLabel("总用量")
-                .accessibilityValue(usedBytes ?? "—")
+                .accessibilityValue(AccessAccountUsagePresentation.accessibleBytes(usedBytes, locale: locale))
                 .accessibilityIdentifier("access-usage-used")
             if let fraction = AccessAccountUsagePresentation.usedFraction(used: usedBytes, quota: quotaBytes) {
                 ProgressView(value: fraction)
@@ -28,6 +29,7 @@ struct AccessTransferBreakdown: View {
     let uploaded: String?
     let downloaded: String?
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.locale) private var locale
 
     var body: some View {
         let layout = typeSize.isAccessibilitySize
@@ -47,8 +49,9 @@ struct AccessTransferBreakdown: View {
                 .font(.body.weight(.medium)).monospacedDigit()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(title))
         .accessibilityIdentifier("access-usage-" + id)
-        .accessibilityValue(bytes ?? "—")
+        .accessibilityValue(AccessAccountUsagePresentation.accessibleBytes(bytes, locale: locale))
     }
 }

@@ -96,12 +96,13 @@ struct AccessAccountUsageView: View {
 
     private func amount(_ label: LocalizedStringResource, _ raw: String?, id: String) -> some View {
         LabeledContent {
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(AccessAccountUsagePresentation.formattedBytes(raw))
-            }
+            Text(verbatim: AccessAccountUsagePresentation.formattedBytes(raw))
         } label: {
             Text(verbatim: AegisLocalization.string(label))
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: AegisLocalization.string(label)))
+        .accessibilityValue(AccessAccountUsagePresentation.accessibleBytes(raw, locale: locale))
         .accessibilityIdentifier("access-usage-" + id)
     }
 

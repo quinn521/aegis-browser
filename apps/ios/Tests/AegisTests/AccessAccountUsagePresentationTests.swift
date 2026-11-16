@@ -4,6 +4,17 @@ import XCTest
 final class AccessAccountUsagePresentationTests: XCTestCase {
     private typealias Presentation = AccessAccountUsagePresentation
 
+    func testAccessibleAmountsIncludeUnitsAndPreserveExactBytes() {
+        let english = Locale(identifier: "en_US")
+        XCTAssertEqual(Presentation.accessibleBytes(nil, locale: english), "—")
+        XCTAssertEqual(Presentation.accessibleBytes("01", locale: english), "—")
+        for count in ["1", "3000000000", String(UInt64.max)] {
+            let spoken = Presentation.accessibleBytes(count, locale: english)
+            XCTAssertEqual(spoken.filter(\.isNumber), count)
+            XCTAssertTrue(spoken.lowercased().contains("byte") || spoken.hasSuffix(" B"))
+        }
+    }
+
     func testByteFormattingPreservesIntegerPrecisionAndAcceptsUInt64Maximum() {
         let cases: [(String, String)] = [
             ("0", "0 B"), ("1", "1 B"), ("1023", "1023 B"),

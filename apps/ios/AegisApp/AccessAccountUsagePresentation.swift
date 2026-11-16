@@ -43,6 +43,17 @@ struct AccessAccountUsagePresentation {
         return effectiveAge > 5_000 ? .delayed : .current
     }
 
+    /// Speak exact bytes with a unit. Foundation's byte style accepts signed values
+    /// and can round large integers, so keep the full unsigned range lossless.
+    static func accessibleBytes(_ raw: String?, locale: Locale) -> String {
+        guard let raw, let value = UInt64(raw), String(value) == raw else { return "—" }
+        if value < 1 << 53 {
+            return ByteCountFormatStyle(allowedUnits: .bytes, spellsOutZero: false, locale: locale)
+                .format(Int64(value))
+        }
+        return value.formatted(.number.locale(locale)) + " B"
+    }
+
     /// Binary units, truncated to two decimal places without converting bytes to floating point.
     /// The session retains the exact canonical source string.
     static func formattedBytes(_ raw: String?) -> String {

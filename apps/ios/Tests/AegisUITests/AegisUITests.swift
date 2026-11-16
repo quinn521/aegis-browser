@@ -1383,7 +1383,10 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             values = [:]
             func visit(_ snapshot: XCUIElementSnapshot) {
                 for key in ["quota", "uploaded", "downloaded", "used", "remaining"] where snapshot.identifier == "access-usage-" + key {
-                    if let raw = snapshot.value as? String, let bytes = UInt64(raw) { values[key] = bytes }
+                    if let spoken = snapshot.value as? String,
+                       let bytes = UInt64(spoken.filter(\.isNumber)) {
+                        values[key] = bytes
+                    }
                 }
                 for child in snapshot.children { visit(child) }
             }
