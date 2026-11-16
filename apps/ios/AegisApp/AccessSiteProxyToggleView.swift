@@ -31,45 +31,34 @@ struct AccessSiteProxyToggleView: View {
         // route labels must describe the same host as the visible site switch.
         let attachment = snap.attachment
         Section {
-            if let host = snap.host {
-                Text(host.rawValue)
-                    .font(.headline)
-                    .textSelection(.enabled)
-                    .accessibilityIdentifier("access-site-proxy-host")
-            } else {
-                Label("此页面暂不支持", systemImage: "globe")
-                    .accessibilityIdentifier("access-site-proxy-no-host")
-            }
-
-            Toggle("隐藏地理位置", isOn: Binding(
+            Toggle(isOn: Binding(
                 get: { snap.toggleOn },
                 set: { enabled in
                     guard let tab, let host = snap.host else { return }
                     store.setSiteProxyEnabled(enabled, for: tab, displayedHost: host)
                 }
-            ))
+            )) {
+                Label("隐藏地理位置", systemImage: "location.slash")
+                    .font(.headline)
+            }
             .disabled(!snap.toggleEnabled || tab == nil)
             .accessibilityIdentifier("access-site-proxy-toggle")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(LocalizedStringKey(AccessSiteProxyToggleModel.intentLine(for: snap.intentStatus)))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("access-site-proxy-intent")
-                Text(LocalizedStringKey(AccessSiteProxyToggleModel.connectionLine(for: snap.connectionStatus)))
-                    .font(.footnote)
+            if snap.hasTrustedSite {
+                let line = attachment == .attachedUnavailable
+                    ? "连接失败，未切回原连接"
+                    : (snap.connectionStatus == .connecting || snap.connectionStatus == .unavailable || snap.intentStatus == .allowConnected
+                        ? AccessSiteProxyToggleModel.connectionLine(for: snap.connectionStatus)
+                        : AccessSiteProxyToggleModel.intentLine(for: snap.intentStatus))
+                Text(LocalizedStringKey(line)).font(.subheadline)
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("access-site-proxy-connection")
-                if let attachment = AccessSiteProxyToggleModel.attachmentLine(
-                    for: attachment,
-                    intent: snap.intent
-                ) {
-                    Text(LocalizedStringKey(attachment))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("access-site-proxy-attachment")
+                if attachment == .notAttached, snap.toggleOn, snap.connectionStatus != .connecting {
+                    Text("当前页面仍使用原连接").font(.footnote).foregroundStyle(.secondary)
                 }
-
+            } else {
+                Text("此页面暂不支持").font(.subheadline).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("access-site-proxy-no-host")
             }
             DisclosureGroup("连接选项") {
                 Toggle(
@@ -142,7 +131,7 @@ struct AccessSiteProxyToggleView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         ForEach(snap.debugMemberHosts, id: \.self) { member in
-                            Text(member)
+                            Text(verbatim: AccessSiteDisplayName.title(member))
                                 .font(.footnote.monospaced())
                                 .textSelection(.enabled)
                         }
@@ -170,9 +159,12 @@ struct AccessSiteProxyToggleView: View {
             }
             .accessibilityIdentifier("access-site-connection-options")
         } header: {
-            Label("隐藏地理位置", systemImage: "location.slash")
+            if let host = snap.host {
+                Text(verbatim: AccessSiteDisplayName.title(host.rawValue))
+                    .textCase(nil).accessibilityIdentifier("access-site-proxy-host")
+            }
         } footer: {
-            Text("网站通过服务连接，减少基于 IP 的位置暴露。不影响设备定位权限。")
+            Text("连接就绪后，网站会看到服务的 IP 地址。设备定位权限由你单独管理。")
         }
     }
 }

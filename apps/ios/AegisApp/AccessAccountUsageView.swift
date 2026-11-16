@@ -17,17 +17,12 @@ struct AccessAccountUsageView: View {
                         Text(verbatim: AegisLocalization.string(statusText(snapshot.status)))
                             .accessibilityIdentifier("access-usage-status")
                         if snapshot.status != .notSubscribed {
-                            amount("总额度", snapshot.quotaBytes, id: "quota")
                             AccessUsageSummaryView(usedBytes: snapshot.usedBytes, quotaBytes: snapshot.quotaBytes)
-                            amount("总用量", snapshot.usedBytes, id: "used")
+                            amount("总额度", snapshot.quotaBytes, id: "quota")
                             amount("剩余", snapshot.remainingBytes, id: "remaining")
-                            DisclosureGroup("上传与下载") {
-                                amount("上传", snapshot.uploadedBytes, id: "uploaded")
-                                amount("下载", snapshot.downloadedBytes, id: "downloaded")
-                            }.accessibilityIdentifier("access-usage-transfers")
+                            Divider()
+                            AccessTransferBreakdown(uploaded: snapshot.uploadedBytes, downloaded: snapshot.downloadedBytes)
                             if snapshot.quotaSource == .threeXUIAlpha {
-                                Text("测试服务用量（共享）")
-                                    .font(.footnote).foregroundStyle(.secondary)
                                 if case .some(.none) = snapshot.panelExpiryMode {
                                     LabeledContent("到期时间") { Text("未设到期") }
                                 } else if let panelExpires = snapshot.panelExpiresAt {
@@ -55,7 +50,7 @@ struct AccessAccountUsageView: View {
                         }
                     } else {
                         switch session.state {
-                        case .signedOut: Text("尚未绑定额度查询账户")
+                        case .signedOut: Label("尚未关联账号", systemImage: "person.crop.circle").font(.headline)
                         case .loading: Text("正在查询额度…")
                         case .unavailable: Text("额度查询不可用，不代表余额为零")
                         case .ready: Text("暂无额度数据")
@@ -78,9 +73,13 @@ struct AccessAccountUsageView: View {
             .disabled(session.isRefreshing || scenePhase != .active || session.state == .signedOut)
             .accessibilityIdentifier("access-usage-refresh")
         } header: {
-            Text("账号与用量")
+            if session.lastSnapshot?.quotaSource == .threeXUIAlpha { Text("测试服务用量（共享）") }
         } footer: {
-            Text("用量以服务端记录为准，查询失败不代表额度耗尽。")
+            if session.state == .signedOut {
+                Text("关联账号后，可在这里查看已用和剩余流量。")
+            } else if session.lastSnapshot?.quotaSource == .threeXUIAlpha {
+                Text("共享测试用量，不代表个人套餐；重置以服务端为准。")
+            }
         }
         .onAppear { session.usageRefresh.setVisible(scenePhase == .active, owner: visibilityID) }
         .onChange(of: scenePhase) { _, phase in

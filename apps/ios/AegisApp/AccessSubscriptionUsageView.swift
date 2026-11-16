@@ -14,14 +14,11 @@ struct AccessSubscriptionUsageView: View {
                     if let usage = session.snapshot {
                         if !usage.enabled { Text("服务已停用") }
                         if usage.remainingBytes == 0 { Text("服务端报告：额度已耗尽") }
-                        amount("总额度", usage.totalByte, id: "quota")
                         AccessUsageSummaryView(usedBytes: String(usage.usedBytes), quotaBytes: String(usage.totalByte))
-                        amount("总用量", usage.usedBytes, id: "used")
+                        amount("总额度", usage.totalByte, id: "quota")
                         amount("剩余", usage.remainingBytes, id: "remaining")
-                        DisclosureGroup("上传与下载") {
-                            amount("上传", usage.uploadByte, id: "uploaded")
-                            amount("下载", usage.downloadByte, id: "downloaded")
-                        }.accessibilityIdentifier("access-usage-transfers")
+                        Divider()
+                        AccessTransferBreakdown(uploaded: String(usage.uploadByte), downloaded: String(usage.downloadByte))
                         LabeledContent("到期时间") {
                             if usage.expire == 0 { Text("未设到期") }
                             else { timestamp(Date(timeIntervalSince1970: TimeInterval(usage.expire))) }

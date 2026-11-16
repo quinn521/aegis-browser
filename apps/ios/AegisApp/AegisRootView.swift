@@ -249,7 +249,11 @@ private struct BrowserPane: View {
     /// 浏览时只显示主机名；输入和辅助功能始终可取得完整网址。
     private var displayedAddress: String {
         guard let url = tab.addressBarURL, url.scheme != "aegis" else { return AegisLocalization.string("起始页") }
-        return url.host(percentEncoded: true) ?? url.absoluteString
+        guard let host = url.host(percentEncoded: true) else { return url.absoluteString }
+        if AccessSiteDisplayName.localLabel(for: host)?.key == "本机页面" {
+            return AccessSiteDisplayName.title(host)
+        }
+        return host
     }
 
     private var filterStatus: String {
@@ -451,15 +455,14 @@ struct PageLoadFailureBanner: View {
         if let error = tab.loadingError {
             VStack(alignment: .leading, spacing: 8) {
                 if let failure = tab.lastMainFrameFailure {
-                    Text(failure.url.host(percentEncoded: true) ?? failure.url.absoluteString)
+                    Text(verbatim: AccessSiteDisplayName.title(failure.url.host(percentEncoded: true)))
                         .font(.callout.weight(.semibold))
                         .accessibilityIdentifier("page-load-failed-host")
-                        .accessibilityValue(failure.url.absoluteString)
                 }
                 Label("页面暂时无法打开", systemImage: "exclamationmark.circle")
                     .font(.headline)
                 if tab.loadingErrorAllowsProxyRetry {
-                    Text("隐藏地理位置可能帮助打开此网站。开启后对本站生效，访问结果取决于网站。")
+                    Text("可以为这个网站开启“隐藏地理位置”，然后再试一次。")
                         .font(.subheadline).foregroundStyle(.secondary)
                     ProxyRetryButton(title: AegisLocalization.string("开启并重试")) { proxyRetry(tab) }
                         .fixedSize(horizontal: false, vertical: true)
@@ -473,7 +476,12 @@ struct PageLoadFailureBanner: View {
                         .accessibilityIdentifier("page-load-auto-recovery-status")
                 }
                 DisclosureGroup("错误详情") {
-                    Text("页面加载失败：\(error)").font(.caption).textSelection(.enabled)
+                    if let host = tab.lastMainFrameFailure?.url.host,
+                       AccessSiteDisplayName.localLabel(for: host) != nil {
+                        Text("请检查本地服务是否可用。").font(.caption)
+                    } else {
+                        Text("页面加载失败：\(error)").font(.caption).textSelection(.enabled)
+                    }
                     if setAutoRecovery != nil {
                         Toggle(LocalizedStringKey(AccessAutoRecoveryCopy.toggleTitle), isOn: Binding(
                             get: { autoRecoveryOn },
@@ -487,16 +495,17 @@ struct PageLoadFailureBanner: View {
 
             }
             .padding(12)
-            .background(.background.secondary)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-load-error")
         } else if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending),
                   let openAddressViaProxy {
             VStack(alignment: .leading, spacing: 8) {
-                Text(pending.url.host(percentEncoded: true) ?? pending.url.absoluteString)
+                Text(verbatim: AccessSiteDisplayName.title(pending.url.host(percentEncoded: true)))
                     .font(.callout.weight(.semibold))
                     .accessibilityIdentifier("page-load-pending-host")
-                    .accessibilityValue(pending.url.absoluteString)
                 Text(AegisLocalization.string(addressProxyPreparing ? "正在准备连接…" : "正在连接此网址，可尝试隐藏地理位置。"))
                     .font(.caption)
                     .accessibilityIdentifier("page-load-pending-status")

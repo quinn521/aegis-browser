@@ -27,7 +27,7 @@ struct AccessDevAllowBlockSectionView: View {
                 DisclosureGroup("服务诊断") {
                     Text("DEV ALLOW / BLOCK").font(.caption).foregroundStyle(.secondary)
                     if let host = snap.host {
-                        Text(host.rawValue)
+                        Text(verbatim: AccessSiteDisplayName.title(host.rawValue))
                             .font(.subheadline)
                             .textSelection(.enabled)
                             .accessibilityIdentifier("access-dev-allow-block-host")

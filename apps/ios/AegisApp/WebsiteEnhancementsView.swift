@@ -528,7 +528,7 @@ private struct CurrentWebsitePanel: View {
       AccessDevAllowBlockSectionView(store: accessSiteProxy, url: tab.url)
       if let url = tab.url, ScriptMatch.origin(url) != nil {
         Section {
-          Text(url.host ?? url.absoluteString).font(.headline).textSelection(.enabled)
+          Text(verbatim: AccessSiteDisplayName.title(url.host)).font(.headline).textSelection(.enabled)
           if isPrivate { Text("私密会话：网站规则与脚本仅保留在本次会话。").font(.footnote) }
         }
         Section("隐私保护") {

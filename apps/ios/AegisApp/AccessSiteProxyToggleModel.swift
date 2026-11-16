@@ -1,6 +1,42 @@
 import AccessKit
 import BrowserKit
 import Foundation
+import Darwin
+
+/// Presentation only. Routing and address editing always use the actual destination.
+enum AccessSiteDisplayName {
+    static func localLabel(for rawHost: String) -> LocalizedStringResource? {
+        let host = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
+        if host == "localhost" || host.hasSuffix(".localhost") { return "本机页面" }
+        if host.hasSuffix(".local") { return "局域网网站" }
+        var v4 = in_addr()
+        if inet_aton(host, &v4) == 1 { return ipv4Label(UInt32(bigEndian: v4.s_addr)) }
+        var v6 = in6_addr()
+        guard inet_pton(AF_INET6, host, &v6) == 1 else { return nil }
+        return withUnsafeBytes(of: v6) { bytes in
+            if bytes.prefix(15).allSatisfy({ $0 == 0 }), bytes[15] == 1 { return "本机页面" }
+            if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 255, bytes[11] == 255 {
+                return ipv4Label(bytes.suffix(4).reduce(0) { ($0 << 8) | UInt32($1) })
+            }
+            if bytes[0] & 0xfe == 0xfc || (bytes[0] == 0xfe && bytes[1] & 0xc0 == 0x80) {
+                return "局域网网站"
+            }
+            return nil
+        }
+    }
+
+    private static func ipv4Label(_ address: UInt32) -> LocalizedStringResource? {
+        if address >> 24 == 127 { return "本机页面" }
+        if address >> 24 == 10 || address >> 20 == 0xac1 ||
+            address >> 16 == 0xc0a8 || address >> 16 == 0xa9fe { return "局域网网站" }
+        return nil
+    }
+
+    static func title(_ host: String?) -> String {
+        guard let host, !host.isEmpty else { return AegisLocalization.string("当前网站") }
+        return localLabel(for: host).map { AegisLocalization.string($0) } ?? host
+    }
+}
 
 /// Short intent-line ids. UI localizes; never conflate with connection copy.
 enum AccessSiteProxyIntentStatusId: String, Equatable, Sendable {

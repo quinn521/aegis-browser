@@ -6,12 +6,49 @@ struct AccessUsageSummaryView: View {
     let quotaBytes: String?
 
     var body: some View {
-        if let fraction = AccessAccountUsagePresentation.usedFraction(used: usedBytes, quota: quotaBytes) {
-            ProgressView(value: fraction)
-                .tint(.accentColor)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("总用量").font(.subheadline).foregroundStyle(.secondary)
+            Text(verbatim: AccessAccountUsagePresentation.formattedBytes(usedBytes))
+                .font(.largeTitle.weight(.semibold)).monospacedDigit()
                 .accessibilityLabel("总用量")
-                .accessibilityValue(Text(fraction, format: .percent.precision(.fractionLength(0))))
-                .accessibilityIdentifier("access-usage-progress")
+                .accessibilityValue(usedBytes ?? "—")
+                .accessibilityIdentifier("access-usage-used")
+            if let fraction = AccessAccountUsagePresentation.usedFraction(used: usedBytes, quota: quotaBytes) {
+                ProgressView(value: fraction)
+                    .accessibilityLabel("总用量")
+                    .accessibilityValue(Text(fraction, format: .percent.precision(.fractionLength(0))))
+                    .accessibilityIdentifier("access-usage-progress")
+            }
         }
+        .padding(.vertical, 6)
+    }
+}
+
+struct AccessTransferBreakdown: View {
+    let uploaded: String?
+    let downloaded: String?
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+        layout {
+            metric("上传", icon: "arrow.up", bytes: uploaded, id: "uploaded")
+            metric("下载", icon: "arrow.down", bytes: downloaded, id: "downloaded")
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func metric(_ title: LocalizedStringKey, icon: String, bytes: String?, id: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon).font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: AccessAccountUsagePresentation.formattedBytes(bytes))
+                .font(.body.weight(.medium)).monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("access-usage-" + id)
+        .accessibilityValue(bytes ?? "—")
     }
 }

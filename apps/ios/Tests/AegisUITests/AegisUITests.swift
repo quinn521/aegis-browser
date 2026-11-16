@@ -1376,10 +1376,6 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         for _ in 0..<8 where !refresh.isHittable { app.swipeUp() }
         XCTAssertTrue(refresh.waitForExistence(timeout: 10))
         if refresh.isEnabled && refresh.isHittable { refresh.tap() }
-        let transfers = app.buttons["access-usage-transfers"]
-        XCTAssertTrue(transfers.waitForExistence(timeout: 10))
-        for _ in 0..<8 where !transfers.isHittable { app.swipeDown() }
-        transfers.tap()
         var values: [String: UInt64] = [:]
         let deadline = Date(timeIntervalSinceNow: 15)
         repeat {
@@ -1805,7 +1801,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let pending = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-host" }
         let failed = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-failed-host" }
         let status = nodes.first { $0.elementType == .staticText && $0.identifier == "page-load-pending-status" }
-        let knownStatus = ["正在准备连接…", "正在连接此网址。你可以选择开启并打开。"]
+        let knownStatus = ["正在准备连接…", "正在连接此网址，可尝试隐藏地理位置。"]
         let targetNode = pending ?? failed
         let targetValue = targetNode?.value as? String
         let target = targetValue ?? targetNode?.label
@@ -1970,7 +1966,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let route = app.staticTexts["access-site-proxy-connection"]
         let routeText = route.exists ? route.label : ""
         var result: [String: Any] = ["result": "OBSERVED", "host": routeHost.label.lowercased(),
-                                   "local_entry_ready": routeText == "连接：已就绪",
+                                   "local_entry_ready": ["连接：已就绪", "自动重试已连接"].contains(routeText),
                                    "remote_connection_verified": false]
         let connection = app.staticTexts["access-site-proxy-connection"]
         result["connection_ui"] = connection.exists ? connection.label : "UNAVAILABLE"

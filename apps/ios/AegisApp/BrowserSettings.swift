@@ -400,7 +400,7 @@ private struct AccessDiagnosticsView: View {
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
             }
         }
-        .localizedNavigationTitle("代理诊断日志")
+        .localizedNavigationTitle("服务诊断")
         .onChange(of: level) { _, value in
             if value == AccessLogLevel.none.rawValue { AccessDiagnosticLog.shared.disableAndClear(); log = "" }
         }

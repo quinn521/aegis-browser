@@ -24,12 +24,15 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(retry.waitForExistence(timeout: 15))
         XCTAssertEqual(retry.label, "开启并重试")
         XCTAssertTrue(retry.isHittable)
+        let failedHost = app.staticTexts["page-load-failed-host"]
+        XCTAssertEqual(failedHost.label, "本机页面")
+        XCTAssertFalse((failedHost.value as? String ?? "").contains("127.0.0.1"))
         capture("加载失败-隐藏地理位置", app)
         app.buttons["page-protection"].tap()
         let toggle = app.switches["access-site-proxy-toggle"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         XCTAssertEqual(toggle.label, "隐藏地理位置")
-        XCTAssertEqual(app.staticTexts["access-site-proxy-host"].label, "127.0.0.1")
+        XCTAssertEqual(app.staticTexts["access-site-proxy-host"].label, "本机页面")
         XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
         XCTAssertFalse(app.staticTexts["VLESS · TCP · REALITY · Vision"].exists)
         XCTAssertFalse(app.switches["access-site-auto-recovery-toggle"].exists)
