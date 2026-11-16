@@ -2662,7 +2662,11 @@ public final class BrowserSession: ObservableObject {
                 child.load(request)
                 return .opened(nil)
             }
-            guard !(self.hostCoordinator?.requiresProxyPreparation(tab: tab, url: url) ?? false),
+            // WebKit must deliver an unsafe request itself, in the existing store.
+            // Optional first-visit preparation is not a requirement to change route.
+            let needsProtectedPreparation = self.hostCoordinator?.requiresProxy(tab: tab, url: url) == true
+                && self.hostCoordinator?.requiresProxyPreparation(tab: tab, url: url) == true
+            guard !needsProtectedPreparation,
                   !(self.hostCoordinator?.wouldSwitchStore(tab: tab, url: url) ?? false) else { return .declined }
             let child = self.makeTab(profile: profile, suppliedConfiguration: configuration,
                                      originalStore: tab.originalWebsiteDataStore)

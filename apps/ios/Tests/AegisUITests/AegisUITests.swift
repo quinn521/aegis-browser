@@ -1771,6 +1771,32 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
 
     private let recoveryLabels = ["隐藏位置并打开", "隐藏位置并重试"]
 
+    private func isRecoveryAction(identifier: String, label: String) -> Bool {
+        recoveryLabels.contains(label) || (identifier == "page-load-proxy-retry" && label == "重试")
+    }
+
+    func testProtectedRetryIsRecognizedWhileOrdinaryRetryIsExcluded() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+        let field = app.textFields["address-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.tap()
+        field.typeText("https://example.invalid/\n")
+        XCTAssertTrue(app.buttons["重试"].waitForExistence(timeout: 15))
+        XCTAssertNil(recoveryButton(app), "An ordinary retry must not be a proxy action")
+        app.buttons["address-location-privacy"].tap()
+        let protectedRetry = app.buttons["page-load-proxy-retry"]
+        XCTAssertTrue(protectedRetry.waitForExistence(timeout: 12))
+        XCTAssertEqual(protectedRetry.label, "重试")
+        let action = recoveryButton(app)
+        XCTAssertNotNil(action)
+        XCTAssertEqual(action?.label, "重试")
+        action?.coordinate.tap()
+        XCTAssertTrue(protectedRetry.waitForExistence(timeout: 12))
+    }
+
     private struct ObservedRecoveryAction {
         let label: String
         let coordinate: XCUICoordinate
@@ -1780,11 +1806,10 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         guard let snapshot = try? app.snapshot() else { return nil }
         let candidates = nativeDescendants(snapshot).filter {
             $0.elementType == .button && $0.isEnabled
-                && ($0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label))
+                && isRecoveryAction(identifier: $0.identifier, label: $0.label)
                 && !$0.frame.isEmpty && $0.frame.intersects(snapshot.frame)
         }
-        guard candidates.count == 1, let candidate = candidates.first,
-              recoveryLabels.contains(candidate.label) else { return nil }
+        guard candidates.count == 1, let candidate = candidates.first else { return nil }
         // Identifier propagation must never turn a container or an unrelated
         // descendant into a tap target. Require a unique native button and label.
         // isHittable can itself raise an XCTest failure while the pending
@@ -1794,7 +1819,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         guard let current = try? app.snapshot() else { return nil }
         let currentCandidates = nativeDescendants(current).filter {
             $0.elementType == .button && $0.isEnabled
-                && ($0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label))
+                && isRecoveryAction(identifier: $0.identifier, label: $0.label)
                 && !$0.frame.isEmpty && !$0.frame.isInfinite && !$0.frame.isNull
                 && current.frame.contains(CGPoint(x: $0.frame.midX, y: $0.frame.midY))
         }
@@ -1817,14 +1842,14 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let targetNode = pending ?? failed
         let targetValue = targetNode?.value as? String
         let target = targetValue ?? targetNode?.label
-        let controls = nodes.filter { $0.identifier == "page-load-proxy-retry" || recoveryLabels.contains($0.label) }
+        let controls = nodes.filter { isRecoveryAction(identifier: $0.identifier, label: $0.label) }
         return ["result": "OBSERVED", "observed_address": sanitizedURL(address?.value as? String ?? ""),
                 "target": target.map(sanitizedURL) ?? "NOT_EXPOSED",
                 "target_source": pending != nil ? "PENDING_NATIVE_HOST" : failed != nil ? "FAILED_NATIVE_HOST" : "NOT_EXPOSED",
                 "pending_status": status.map { knownStatus.contains($0.label) ? $0.label : "UNRECOGNIZED" } ?? "NOT_EXPOSED",
                 "recovery_controls": controls.prefix(8).map { item in
                     ["type": item.elementType.rawValue, "identifier_match": item.identifier == "page-load-proxy-retry",
-                     "label": recoveryLabels.contains(item.label) ? item.label : "UNRECOGNIZED",
+                     "label": isRecoveryAction(identifier: item.identifier, label: item.label) ? item.label : "UNRECOGNIZED",
                      "enabled": item.isEnabled, "frame": String(describing: item.frame)] as [String: Any]
                 }]
     }
