@@ -70,7 +70,7 @@ class MergedMainPatchTests(unittest.TestCase):
         overlay = BROWSER / 'overlay' / prefix
         manifest = json.loads((overlay / 'access_sources.json').read_text())
         files = [file for module in manifest['core'].values() for file in module]
-        files += [manifest['test_main'], *manifest['test_support'].values()]
+        files += list(manifest['test_support'].values())
         for key in ['route_planner_vectors', 'policy_matcher_vectors']:
             files += [manifest[key]['input'], manifest[key]['script']]
         self.assertEqual(len(files), len(set(files)))

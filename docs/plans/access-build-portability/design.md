@@ -17,4 +17,4 @@ ctest --test-dir out/macos-arm64 --no-tests=error --output-on-failure
 
 Windows 使用 `windows-x64`；Android 设备使用 `android-arm64`，x86_64 模拟器使用 `android-x64`。目录名对应预设。Android 的 CTest 会通过 adb 复制并执行测试，收集退出码并清除设备上的临时文件。
 
-Android 原序列包含六个旧版核心文件。Android 补丁同步共享核心源码和独立测试入口，保留原有 Chromium 接入层。两个补丁序列的投影回放检查确保清单和共享文件逐字节一致。
+Android 原序列包含六个旧版核心文件。Android 补丁同步共享核心源码，保留原有 Chromium 接入层。独立测试从产品仓库的 overlay 构建。两个补丁序列的投影回放检查确保清单和共享文件逐字节一致。

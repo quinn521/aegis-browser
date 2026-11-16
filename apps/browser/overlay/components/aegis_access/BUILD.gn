@@ -4,6 +4,8 @@
 import("//testing/test.gni")
 
 access_sources = read_file("access_sources.json", "json")
+access_core_sources = access_sources.core
+access_test_support = access_sources.test_support
 
 declare_args() {
   # Dedicated test entry only. Ordinary targets retain Chromium's existing main.

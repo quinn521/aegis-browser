@@ -55,7 +55,8 @@ if(BUILD_TESTING)
   if(ANDROID)
     add_test(NAME aegis_access_contract
              COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/run_android_test.py"
-                     "$<TARGET_FILE:aegis_access_native_test>")
+                     "$<TARGET_FILE:aegis_access_native_test>"
+                     "${ANDROID_ABI}" "${CMAKE_SYSTEM_VERSION}")
   else()
     add_test(NAME aegis_access_contract COMMAND aegis_access_native_test)
   endif()
