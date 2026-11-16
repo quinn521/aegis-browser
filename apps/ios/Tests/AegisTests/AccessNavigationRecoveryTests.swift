@@ -967,7 +967,9 @@ final class AccessNavigationRecoveryTests: XCTestCase {
 
     private func attachPage(_ tab: BrowserTab, at url: URL) async throws -> UIWindow {
         try await tab.prepareContentRulesForTests()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
         window.rootViewController = UIViewController()
         window.makeKeyAndVisible()
         tab.webView.frame = window.bounds
@@ -1025,8 +1027,23 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         let tab = makeTab()
         let window = try await attachPage(tab, at: first)
         defer { window.isHidden = true }
+        let history = tab.webView.backForwardList
+        let firstItem = try XCTUnwrap(history.currentItem)
+        let originalPreviousItem = history.backItem
+        let originalBackList = history.backList
+        let originalCanGoBack = tab.canGoBack
+        let originalCanGoForward = tab.canGoForward
+        XCTAssertEqual(firstItem.url, first)
+        XCTAssertEqual(originalCanGoBack, originalPreviousItem != nil)
+        XCTAssertEqual(originalCanGoBack, tab.webView.canGoBack)
+        XCTAssertFalse(originalCanGoForward)
         tab.load(second)
         await waitUntil({ tab.committedMainFrameURL == second && !tab.isLoading }, timeout: 10)
+        let secondItem = try XCTUnwrap(history.currentItem)
+        XCTAssertEqual(secondItem.url, second)
+        XCTAssertTrue(history.backItem === firstItem)
+        XCTAssertEqual(history.backList, originalBackList + [firstItem])
+        XCTAssertTrue(history.forwardList.isEmpty)
         XCTAssertTrue(tab.canGoBack)
         let trace = PageNavigationTrace(tab)
         tab.webView.navigationDelegate = trace
@@ -1043,8 +1060,20 @@ final class AccessNavigationRecoveryTests: XCTestCase {
             XCTAssertFalse(tab.isLoading)
             XCTAssertEqual(tab.committedMainFrameURL, destination)
             XCTAssertEqual(tab.url, destination)
-            XCTAssertEqual(tab.canGoBack, destination == second)
-            XCTAssertEqual(tab.canGoForward, destination == first)
+            XCTAssertTrue(history.currentItem === (destination == first ? firstItem : secondItem))
+            XCTAssertEqual(history.backList, destination == first ? originalBackList : originalBackList + [firstItem])
+            XCTAssertEqual(history.forwardList, destination == first ? [secondItem] : [])
+            if destination == first {
+                XCTAssertTrue(history.backItem === originalPreviousItem)
+                XCTAssertTrue(history.forwardItem === secondItem)
+            } else {
+                XCTAssertTrue(history.backItem === firstItem)
+                XCTAssertNil(history.forwardItem)
+            }
+            XCTAssertEqual(tab.canGoBack, destination == first ? originalCanGoBack : true)
+            XCTAssertEqual(tab.canGoForward, destination == first ? true : originalCanGoForward)
+            XCTAssertEqual(tab.canGoBack, tab.webView.canGoBack)
+            XCTAssertEqual(tab.canGoForward, tab.webView.canGoForward)
         }
     }
 
@@ -1132,7 +1161,9 @@ private final class PreservingRedirectOrigin: @unchecked Sendable {
     init(status: Int, finishRedirect: Bool = false) throws {
         self.finishRedirect = finishRedirect
         self.status = status
-        listener = try NWListener(using: .tcp, on: .any)
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.start(queue: DispatchQueue(label: "aegis.tests.preserving-redirect"))
     }
@@ -1186,5 +1217,265 @@ private final class PreservingRedirectOrigin: @unchecked Sendable {
             active.forEach { $0.cancel() }
             active.removeAll()
         }
+    }
+}
+
+extension AccessNavigationRecoveryTests {
+    func testWebKitAlertConfirmAndPromptPresentOriginAndReturnUserChoices() async throws {
+        let service = try PreservingRedirectOrigin(status: 307)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let tab = makeTab()
+        let window = try await attachPage(tab, at: page)
+        defer { window.isHidden = true }
+        let result = Task { @MainActor in
+            try await tab.webView.evaluateJavaScript("alert('Synthetic alert'); JSON.stringify([confirm('Synthetic confirm'), prompt('Synthetic prompt', 'initial')])") as? String
+        }
+        defer { result.cancel() }
+        for (message, text) in [("Synthetic alert", ""), ("Synthetic confirm", ""), ("Synthetic prompt", "synthetic answer")] {
+            await waitUntil { tab.javaScriptDialog?.controller.message == message }
+            let dialog = try XCTUnwrap(tab.javaScriptDialog)
+            XCTAssertEqual(dialog.controller.title, BrowserPreferences.origin(page))
+            XCTAssertTrue(window.rootViewController?.presentedViewController === dialog.controller)
+            if message == "Synthetic prompt" { XCTAssertEqual(dialog.controller.textFields?.first?.text, "initial") }
+            dialog.finish(accept: true, text: text)
+            dialog.finish(accept: false) // Late dismissal cannot change a delivered choice.
+        }
+        let answer = try await result.value
+        XCTAssertEqual(answer, "[true,\"synthetic answer\"]")
+        XCTAssertNil(tab.javaScriptDialog)
+    }
+
+    func testWebKitDialogCancellationOnProfileDocumentBackgroundAndCloseDoesNotStall() async throws {
+        for trigger in 0..<10 {
+            let service = try PreservingRedirectOrigin(status: 307)
+            defer { service.stop() }
+            let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+            let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+            defer { browser.closeWindow() }
+            let tab = try XCTUnwrap(browser.activeTab)
+            let window = try await attachPage(tab, at: page)
+            defer { window.isHidden = true }
+            var returned = false
+            let evaluation = Task { @MainActor in
+                defer { returned = true }
+                return try? await tab.webView.evaluateJavaScript("confirm('Synthetic pending confirmation')") as? Bool
+            }
+            defer { evaluation.cancel() }
+            await waitUntil { tab.javaScriptDialog != nil }
+            let dialog = try XCTUnwrap(tab.javaScriptDialog)
+            switch trigger {
+            case 0: browser.switchProfile(to: .privateMode)
+            case 1: tab.load(page.appendingPathComponent("replacement"))
+            case 2:
+                NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: nil)
+                NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+            case 3: browser.close(tab.id)
+            case 4: window.rootViewController?.dismiss(animated: false)
+            case 5: tab.webView.removeFromSuperview()
+            case 6: window.isHidden = true
+            case 7:
+                NotificationCenter.default.post(name: UIScene.didDisconnectNotification, object: window.windowScene)
+            case 8:
+                NotificationCenter.default.post(name: UIScene.willDeactivateNotification, object: window.windowScene)
+            default: browser.closeWindow()
+            }
+            await waitUntil { returned && tab.javaScriptDialog == nil }
+            XCTAssertTrue(returned, "WebKit must be unblocked by safe cancellation")
+            if [0, 2, 4, 5, 6, 7, 8].contains(trigger) {
+                let answer = await evaluation.value
+                XCTAssertEqual(answer, false)
+            }
+            dialog.finish(accept: true) // Cannot approve after cancellation/replacement.
+            XCTAssertNil(tab.javaScriptDialog)
+        }
+    }
+
+    func testWebKitExternalDismissalOfAlertConfirmAndPromptReturnsSafeDefaults() async throws {
+        let service = try PreservingRedirectOrigin(status: 307)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let tab = makeTab()
+        let window = try await attachPage(tab, at: page)
+        defer { window.isHidden = true }
+        let evaluation = Task { @MainActor in
+            try await tab.webView.evaluateJavaScript("alert('Dismiss alert'); JSON.stringify([confirm('Dismiss confirm'), prompt('Dismiss prompt', 'initial')])") as? String
+        }
+        defer { evaluation.cancel() }
+        for message in ["Dismiss alert", "Dismiss confirm", "Dismiss prompt"] {
+            await waitUntil { tab.javaScriptDialog?.controller.message == message }
+            let dialog = try XCTUnwrap(tab.javaScriptDialog)
+            XCTAssertTrue(window.rootViewController?.presentedViewController === dialog.controller)
+            window.rootViewController?.dismiss(animated: false)
+            await waitUntil { tab.javaScriptDialog?.id != dialog.id }
+            dialog.finish(accept: true, text: "late reply")
+        }
+        let answer = try await evaluation.value
+        XCTAssertEqual(answer, "[false,null]")
+        XCTAssertNil(tab.javaScriptDialog)
+        XCTAssertNil(window.rootViewController?.presentedViewController)
+    }
+
+    func testNewWindowPostDeclinesStoreSwitchWithoutSendingGetOrBody() async throws {
+        let service = try PreservingRedirectOrigin(status: 307, finishRedirect: true)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let suite = "aegis-popup-boundary-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
+        var values = preferences.values; values.allowPopups = true
+        try preferences.save(values)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences)
+        defer { browser.closeWindow() }
+        let parent = try XCTUnwrap(browser.activeTab)
+        let window = try await attachPage(parent, at: page)
+        defer { window.isHidden = true }
+        let coordinator = AccessHostStoreCoordinator()
+        browser.hostCoordinator = coordinator
+        let destination = try AccessSiteHost("localhost")
+        coordinator.registry.setEndpoint(readyEndpoint(), scopeID: "ordinary", host: destination, isPrivate: false)
+        coordinator.setProxyEnabled(true, host: destination, scopeID: "ordinary", isPrivate: false)
+        var target = try XCTUnwrap(URLComponents(url: page, resolvingAgainstBaseURL: false))
+        target.host = "localhost"; target.path = "/kept"
+        let encoded = try JSONSerialization.data(withJSONObject: [try XCTUnwrap(target.url).absoluteString])
+        let argument = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        _ = try await parent.webView.evaluateJavaScript("const f=document.forms[0]; f.action=(\(argument))[0]; f.target='_blank'; f.requestSubmit(); true")
+        await waitUntil { parent.loadingError != nil }
+        XCTAssertEqual(browser.standardTabs.count, 1)
+        XCTAssertNil(service.redirectedMethod)
+        XCTAssertNil(service.redirectedBody)
+        XCTAssertTrue(parent.websiteDataStore === parent.originalWebsiteDataStore)
+    }
+
+    func testAutomaticWindowOpenRemainsBlockedByDefault() async throws {
+        let service = try PreservingRedirectOrigin(status: 307, finishRedirect: true)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let suite = "aegis-popup-default-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: BrowserPreferences(defaults: defaults))
+        defer { browser.closeWindow() }
+        let parent = try XCTUnwrap(browser.activeTab)
+        let window = try await attachPage(parent, at: page)
+        defer { window.isHidden = true }
+        let declined = try await parent.webView.evaluateJavaScript("window.open('/kept', '_blank') === null") as? Bool
+        XCTAssertEqual(declined, true)
+        XCTAssertEqual(browser.standardTabs.count, 1)
+        XCTAssertNil(service.redirectedMethod)
+    }
+
+    func testAllowedPrivateNewWindowPostRetainsPrivateStoreAndInheritedSecurity() async throws {
+        let service = try PreservingRedirectOrigin(status: 307, finishRedirect: true)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let suite = "aegis-private-popup-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
+        var values = preferences.values; values.allowPopups = true
+        try preferences.save(values)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences)
+        defer { browser.closeWindow() }
+        let ordinaryStore = try XCTUnwrap(browser.activeTab).websiteDataStore
+        browser.switchProfile(to: .privateMode)
+        let parent = try XCTUnwrap(browser.activeTab)
+        parent.inheritedHardenedSecurity = true
+        let window = try await attachPage(parent, at: page)
+        defer { window.isHidden = true }
+        _ = try await parent.webView.evaluateJavaScript("const f=document.forms[0]; f.action='/kept'; f.target='_blank'; f.requestSubmit(); true")
+        await waitUntil { browser.privateTabs.count == 2 }
+        let child = try XCTUnwrap(browser.activeTab)
+        child.webView.frame = window.bounds; window.rootViewController?.view.addSubview(child.webView)
+        await waitUntil { service.redirectedMethod != nil }
+        XCTAssertEqual(service.redirectedMethod, "POST")
+        XCTAssertEqual(service.redirectedBody, "item=one")
+        XCTAssertTrue(child.profile.isPrivate)
+        XCTAssertFalse(child.websiteDataStore.isPersistent)
+        XCTAssertTrue(child.websiteDataStore === parent.websiteDataStore)
+        XCTAssertFalse(child.websiteDataStore === ordinaryStore)
+        XCTAssertTrue(child.inheritedHardenedSecurity)
+        XCTAssertEqual(child.browsingScopeID, parent.browsingScopeID)
+        XCTAssertTrue(browser.dataStore.history.isEmpty)
+    }
+
+    func testDirectCrossHostHistoryPreservesBothDirectionsAndStore() async throws {
+        let service = try PreservingRedirectOrigin(status: 307)
+        defer { service.stop() }
+        let root = try await service.redirectURL().deletingLastPathComponent()
+        let first = root.appendingPathComponent("page")
+        var alternative = try XCTUnwrap(URLComponents(url: root.appendingPathComponent("next"), resolvingAgainstBaseURL: false))
+        alternative.host = "localhost"
+        let second = try XCTUnwrap(alternative.url)
+        XCTAssertNotEqual(first.host, second.host)
+        let tab = makeTab()
+        let window = try await attachPage(tab, at: first)
+        defer { window.isHidden = true }
+        tab.load(second)
+        await waitUntil({ tab.committedMainFrameURL == second && !tab.isLoading }, timeout: 15)
+        XCTAssertEqual(tab.committedMainFrameURL, second)
+        XCTAssertTrue(tab.canGoBack)
+        let store = tab.websiteDataStore
+        tab.goBack()
+        await waitUntil({ tab.committedMainFrameURL == first && !tab.isLoading }, timeout: 15)
+        XCTAssertEqual(tab.committedMainFrameURL, first)
+        XCTAssertTrue(tab.websiteDataStore === store)
+        XCTAssertTrue(tab.canGoForward)
+        XCTAssertEqual(tab.webView.backForwardList.forwardItem?.url, second)
+        tab.goForward()
+        await waitUntil({ tab.committedMainFrameURL == second && !tab.isLoading }, timeout: 15)
+        XCTAssertEqual(tab.committedMainFrameURL, second)
+        XCTAssertTrue(tab.canGoBack)
+        XCTAssertEqual(tab.webView.backForwardList.backItem?.url, first)
+        XCTAssertTrue(tab.websiteDataStore === store)
+    }
+
+    func testAllowedNewWindowFormReachesFixtureAsOriginalPost() async throws {
+        let service = try PreservingRedirectOrigin(status: 307, finishRedirect: true)
+        defer { service.stop() }
+        let page = try await service.redirectURL().deletingLastPathComponent().appendingPathComponent("page")
+        let suite = "aegis-review-popups-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
+        var values = preferences.values
+        values.allowPopups = true
+        try preferences.save(values)
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences)
+        defer { session.closeWindow() }
+        let parent = try XCTUnwrap(session.activeTab)
+        let window = try await attachPage(parent, at: page)
+        defer { window.isHidden = true }
+        _ = try await parent.webView.evaluateJavaScript("const f=document.forms[0]; f.action='/kept'; f.target='_blank'; f.requestSubmit(); true")
+        await waitUntil({ session.activeTab?.id != parent.id }, timeout: 10)
+        let child = try XCTUnwrap(session.activeTab)
+        XCTAssertNotEqual(child.id, parent.id)
+        child.webView.frame = window.bounds
+        window.rootViewController?.view.addSubview(child.webView)
+        await waitUntil({ service.redirectedMethod != nil }, timeout: 15)
+        XCTAssertEqual(service.redirectedMethod, "POST")
+        XCTAssertEqual(service.redirectedBody, "item=one")
+        XCTAssertTrue(child.webView.configuration.processPool === parent.webView.configuration.processPool)
+        XCTAssertTrue(child.websiteDataStore === parent.websiteDataStore)
+        XCTAssertFalse(child.webView.configuration.userContentController === parent.webView.configuration.userContentController)
+    }
+
+    func testClearingDataDisposesRetainedTabAndUnbindsOrdinaryHostStore() async throws {
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { session.closeWindow() }
+        let tab = try XCTUnwrap(session.activeTab)
+        let coordinator = AccessHostStoreCoordinator()
+        session.hostCoordinator = coordinator
+        let host = try AccessSiteHost("audit.example")
+        coordinator.registry.setEndpoint(readyEndpoint(), scopeID: "ordinary", host: host, isPrivate: false)
+        let store = coordinator.registry.storeForTab(tabID: tab.instanceID.uuidString, scopeID: "ordinary", isPrivate: false, targetHost: host, boundHost: nil, intent: .on)
+        XCTAssertNotNil(store)
+        await session.clearWebsiteData()
+        XCTAssertFalse(session.standardTabs.contains { $0.id == tab.id })
+        coordinator.releaseIdleResources()
+        XCTAssertTrue(tab.isDisposed)
+        XCTAssertTrue(coordinator.ordinaryHostStores().isEmpty)
+        XCTAssertNil(tab.webView.load(URLRequest(url: URL(string: "http://127.0.0.1/late")!)))
     }
 }
