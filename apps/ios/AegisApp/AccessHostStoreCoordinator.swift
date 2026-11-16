@@ -179,7 +179,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool {
         guard let host = Self.httpHost(url) else { return false }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
-        let shouldTryDefault = usesDefaultRoute(key) && (tab.boundHostName == host.rawValue || tab.canTryDefaultRoute(for: url))
+        // Canonical redirects from a protected document inherit that document's
+        // route; they must never enter the optional first-visit fallback.
+        let shouldTryDefault = usesDefaultRoute(key) && tab.parentForProxyLanding(url) == nil
+            && (tab.boundHostName == host.rawValue || tab.canTryDefaultRoute(for: url))
         guard intents[key] == .on || shouldTryDefault else { return false }
         return registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state != .ready
     }
@@ -307,7 +310,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         var intent = routeIntent(key: key, boundToTarget: bound == host, tabID: tab.instanceID.uuidString)
         if let rawParent = tab.parentForProxyLanding(url), let parent = try? AccessSiteHost(rawParent) {
             let source = AccessHostStoreKey(scopeID: key.scopeID, host: parent, isPrivate: key.isPrivate)
-            let sourceAuthorized = intents[source] == .on ||
+            let sourceAuthorized = intents[source] == .on || (usesDefaultRoute(source) && bound != nil) ||
                 (executingTabs[tab.instanceID.uuidString] == source && groupStillLists(source))
             let independentReady = intent == .on &&
                 registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state == .ready
