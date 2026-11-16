@@ -20,7 +20,7 @@ struct AccessSiteProxyToggleView: View {
     @Environment(\.locale) private var localizationLocale
 
     private var snapshot: AccessSiteProxyToggleSnapshot {
-        if let tab { return store.snapshot(for: tab) }
+        if let tab { return store.snapshot(for: tab, forLocationControl: true) }
         return store.snapshot(for: url)
     }
 

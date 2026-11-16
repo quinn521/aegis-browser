@@ -146,8 +146,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     /// An explicit page route has priority over optional automatic recovery.
     /// Revalidate the host shown by the control before changing any shared state.
-    func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost, fromAddressBar: Bool = false) {
-        let currentHost = fromAddressBar ? addressControlHost(for: tab) : siteControlHost(for: tab)
+    func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost, forLocationControl: Bool = false) {
+        let currentHost = forLocationControl ? locationControlHost(for: tab) : host(for: tab)
         guard !tab.isDisposed, currentHost == displayedHost else { return }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: displayedHost, isPrivate: tab.profile.isPrivate)
         let affected = BrowserSession.openTabs().filter { current in
@@ -211,9 +211,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         return .attachedUnavailable
     }
 
-    func snapshot(for tab: BrowserTab, fromAddressBar: Bool = false) -> AccessSiteProxyToggleSnapshot {
+    func snapshot(for tab: BrowserTab, forLocationControl: Bool = false) -> AccessSiteProxyToggleSnapshot {
         _ = revision
-        let displayedHost = fromAddressBar ? addressControlHost(for: tab) : siteControlHost(for: tab)
+        let displayedHost = forLocationControl ? locationControlHost(for: tab) : host(for: tab)
         guard let host = displayedHost else {
             var snapshot = AccessSiteProxyToggleSnapshot()
             snapshot.intentStatus = .noTrustedSite
@@ -1256,16 +1256,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             && AccessLocalSite.classify(key.host.rawValue) == nil
     }
 
-    private func siteControlHost(for tab: BrowserTab) -> AccessSiteHost? {
-        addressControlHost(for: tab) ?? host(for: tab)
-    }
-
     func canManageRecovery(for tab: BrowserTab, displayedHost: AccessSiteHost?) -> Bool {
         guard let displayedHost else { return false }
         return displayedHost == host(for: tab)
     }
 
-    private func addressControlHost(for tab: BrowserTab) -> AccessSiteHost? {
+    private func locationControlHost(for tab: BrowserTab) -> AccessSiteHost? {
         guard let url = tab.addressBarURL, let target = Self.httpHost(url) else { return nil }
         // A user may change their choice while the visible GET/HEAD is still loading.
         if tab.isLoading, tab.safeRouteReloadRequest?.url == url { return target }

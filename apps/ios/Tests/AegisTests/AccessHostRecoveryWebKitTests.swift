@@ -78,7 +78,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
         XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: url))
         XCTAssertFalse(coordinator.requiresProxyPreparation(tab: tab, url: url))
-        XCTAssertFalse(coordinator.snapshot(for: tab, fromAddressBar: true).toggleOn)
+        XCTAssertFalse(coordinator.snapshot(for: tab, forLocationControl: true).toggleOn)
         XCTAssertEqual(publisher.provisionCount, 1)
     }
 

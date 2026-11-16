@@ -265,10 +265,10 @@ private struct BrowserPane: View {
 
     @ViewBuilder
     private var locationPrivacyButton: some View {
-        let snapshot = hostStores.snapshot(for: tab, fromAddressBar: true)
+        let snapshot = hostStores.snapshot(for: tab, forLocationControl: true)
         if let host = snapshot.host {
             Button {
-                hostStores.setSiteProxyEnabled(!snapshot.toggleOn, for: tab, displayedHost: host, fromAddressBar: true)
+                hostStores.setSiteProxyEnabled(!snapshot.toggleOn, for: tab, displayedHost: host, forLocationControl: true)
             } label: {
                 Image(systemName: snapshot.toggleOn ? "location.slash.fill" : "location")
                     .foregroundStyle(snapshot.toggleOn && snapshot.attachment == .ready ? Color.accentColor : .secondary)
@@ -559,7 +559,7 @@ private struct ActiveTabView: View {
         VStack(spacing: 0) {
             PageLoadFailureBanner(
                 tab: tab,
-                locationPrivacyOn: hostStores.snapshot(for: tab, fromAddressBar: true).toggleOn,
+                locationPrivacyOn: hostStores.snapshot(for: tab, forLocationControl: true).toggleOn,
                 offersLocationService: hostStores.offersLocationService,
                 autoRecoveryOn: hostStores.snapshot(for: tab).autoRecoveryEnabled,
                 autoRecoveryLine: hostStores.snapshot(for: tab).autoRecoveryLine,
