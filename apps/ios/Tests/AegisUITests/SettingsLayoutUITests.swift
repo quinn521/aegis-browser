@@ -88,6 +88,9 @@ final class SettingsLayoutUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(\(language))",
             "-UIPreferredContentSizeCategoryName", largeText ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
+        app.launchEnvironment["AEGIS_ACCOUNT_SIM_ORIGIN"] = "http://127.0.0.1:1"
+        app.launchEnvironment["AEGIS_ACCOUNT_SIM_ACTION"] = "clear"
         app.launch()
         defer { app.terminate() }
         let entry = app.buttons["access-usage-link"]

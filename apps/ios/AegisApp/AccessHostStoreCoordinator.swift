@@ -1019,8 +1019,14 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         revision &+= 1
     }
 
-    private func cancelOperations(for key: AccessHostStoreKey) {
+    private func cancelOperations(for key: AccessHostStoreKey, preservingDefaultPreparation: Bool) {
         for (id, operation) in operations where operation.key == key && operation.state == .preparing {
+            if preservingDefaultPreparation && operation.automaticFirstVisit {
+                // Group revocation only invalidates requests authorized by that group.
+                // A held first visit keeps its own deadline and navigation identity.
+                operations[id]?.hostRevision = hostRevisions[key, default: 0]
+                continue
+            }
             var cancelled = operation
             cancelled.state = .cancelled
             operations[id] = cancelled
@@ -1110,7 +1116,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         )
         let key = AccessHostStoreKey(scopeID: group.scopeID, host: host, isPrivate: group.isPrivate)
         if !groupStillLists(key), !hasIndependentRoute(key) {
-            releaseBinding(key)
+            releaseBinding(key, preservingDefaultPreparation: true)
         }
         return change
     }
@@ -1121,7 +1127,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         for host in removed.memberHosts {
             let key = AccessHostStoreKey(scopeID: removed.scopeID, host: host, isPrivate: removed.isPrivate)
             if !groupStillLists(key), !hasIndependentRoute(key) {
-                releaseBinding(key)
+                releaseBinding(key, preservingDefaultPreparation: true)
             }
         }
     }
@@ -1173,11 +1179,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         intents[key] == .on || (usesDefaultRoute(key) && defaultProtectedHosts.contains(key))
     }
 
-    private func releaseBinding(_ key: AccessHostStoreKey) {
+    private func releaseBinding(_ key: AccessHostStoreKey, preservingDefaultPreparation: Bool = false) {
         defaultProtectedHosts.remove(key)
         executing.remove(key)
         hostRevisions[key, default: 0] += 1
-        cancelOperations(for: key)
+        cancelOperations(for: key, preservingDefaultPreparation: preservingDefaultPreparation)
         let tabs = BrowserSession.openTabs()
         for tab in tabs where tab.browsingScopeID == key.scopeID && tab.profile.isPrivate == key.isPrivate
             && tab.boundHostName == key.host.rawValue {

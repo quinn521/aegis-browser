@@ -49,6 +49,35 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertFalse(defaults.dictionaryRepresentation().values.contains { String(describing: $0).contains("other.example") })
     }
 
+    func testRevokingRecoveryKeepsAnotherTabsDefaultPreparation() async throws {
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            try await clock.sleep(until: .seconds(4))
+            return ready(generation, port: 18_291)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock, defaultLocationPrivacy: true)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let sibling = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.closeWindow(); sibling.closeWindow() }
+        browser.hostCoordinator = coordinator
+        sibling.hostCoordinator = coordinator
+        let tab = try XCTUnwrap(browser.activeTab), held = try XCTUnwrap(sibling.activeTab)
+        let url = URL(string: "https://pending.example/path")!
+        tab.adoptPolicyMainFrameNavigationForTests(url: url)
+        tab.commitPendingMainFrameForTests()
+        _ = coordinator.setAutoRecoveryEnabled(true, for: tab)
+        XCTAssertTrue(coordinator.snapshot(for: tab).autoRecoveryEnabled)
+        held.loadFromAddressBar(url)
+        await settle { publisher.provisionCount == 1 }
+        let pending = try XCTUnwrap(held.pendingAddressNavigation)
+        XCTAssertEqual(coordinator.setAutoRecoveryEnabled(false, for: tab), .revoked)
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: held))
+        XCTAssertTrue(held.matchesPendingAddressNavigation(pending))
+        clock.advance(to: .seconds(5))
+        await settle { held.recoveryLoadCount == 1 }
+        XCTAssertEqual(held.boundHostName, "pending.example")
+    }
+
     func testRemovingRecoveryGroupPreservesDefaultAdoptionOfAnExistingEndpoint() throws {
         let coordinator = AccessHostStoreCoordinator(defaultLocationPrivacy: true)
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
