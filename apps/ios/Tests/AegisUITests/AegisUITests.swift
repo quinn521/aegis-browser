@@ -1369,7 +1369,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
 
     private func readDirectQuota(_ app: XCUIApplication, name: String) throws -> [String: UInt64] {
         app.buttons["browser-more"].tap()
-        app.buttons["open-browser-settings"].tap()
+        tapMenuItem(labels: ["设置"], in: app)
         let entry = app.buttons["access-usage-link"]
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
         entry.tap()

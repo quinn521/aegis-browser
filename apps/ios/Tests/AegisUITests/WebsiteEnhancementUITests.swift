@@ -121,7 +121,8 @@ final class WebsiteEnhancementUITests: XCTestCase {
   private func openLocationServiceFromWebsite(_ app: XCUIApplication) {
     XCTAssertFalse(app.buttons["access-usage-link"].exists)
     app.navigationBars["当前网站"].buttons["完成"].tap()
-    open("open-browser-settings", app)
+    app.buttons["browser-more"].tap()
+    tapMenuItem(labels: ["设置"], in: app)
     tapVisible(app.buttons["access-usage-link"], app)
   }
 
