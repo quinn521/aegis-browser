@@ -1,0 +1,99 @@
+name: Access T3 at ab7a5630
+on:
+  push:
+    branches: [feat/access-t3-run-ab7a5630]
+permissions:
+  contents: read
+env:
+  TESTED_SHA: ab7a56307a79040d571bb4173846893aac9343e6
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ab7a56307a79040d571bb4173846893aac9343e6
+          persist-credentials: false
+      - name: Verify checkout and select x64 Visual Studio environment
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne $env:TESTED_SHA -or (git status --porcelain)) { throw 'Unexpected source' }
+          git rev-parse HEAD 'HEAD^{tree}'
+          $instance = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$instance) { throw 'Visual Studio x64 tools not found' }
+          "VS_DEV_CMD=$instance\Common7\Tools\VsDevCmd.bat" >> $env:GITHUB_ENV
+      - name: Configure, build and run the contract on Windows x64
+        shell: cmd
+        working-directory: apps/browser/access-cmake
+        run: |
+          call "%VS_DEV_CMD%" -no_logo -arch=x64 -host_arch=x64 || exit /b 1
+          ver
+          echo Processor=%PROCESSOR_ARCHITECTURE% SDK=%WindowsSDKVersion% VC=%VCToolsVersion%
+          clang-cl --version || exit /b 1
+          cmake --version || exit /b 1
+          ninja --version || exit /b 1
+          python --version || exit /b 1
+          cmake --preset windows-x64 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON || exit /b 1
+          cmake --build out/windows-x64 --parallel 4 || exit /b 1
+          dumpbin /headers out\windows-x64\aegis_access_native_test.exe | findstr /i "machine" || exit /b 1
+          certutil -hashfile out\windows-x64\aegis_access_native_test.exe SHA256 || exit /b 1
+          ctest --test-dir out/windows-x64 -V --no-tests=error --output-junit junit.xml || exit /b 1
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ab7a56307a79040d571bb4173846893aac9343e6
+          persist-credentials: false
+      - name: Build API 26 contracts for arm64-v8a and x86_64
+        working-directory: apps/browser/access-cmake
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD 'HEAD^{tree}'
+          ndk="$ANDROID_NDK_LATEST_HOME"
+          export ANDROID_NDK_HOME="$ndk"
+          cat "$ndk/source.properties"
+          "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version
+          cmake --version
+          ninja --version
+          python3 --version
+          for preset in android-arm64 android-x64; do
+            cmake --preset "$preset" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            cmake --build "out/$preset" --parallel 4
+            file "out/$preset/aegis_access_native_test"
+            sha256sum "out/$preset/aegis_access_native_test"
+          done
+          mkdir -p arm64-evidence
+          cp out/android-arm64/{aegis_access_native_test,CTestTestfile.cmake,compile_commands.json} arm64-evidence/
+          cp "$ndk/source.properties" arm64-evidence/ndk.properties
+          git rev-parse HEAD > arm64-evidence/tested-sha.txt
+          (cd arm64-evidence && sha256sum aegis_access_native_test CTestTestfile.cmake compile_commands.json ndk.properties tested-sha.txt > SHA256SUMS)
+      - name: Preserve the exact arm64 executable for device CTest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ab7a5630-android-arm64
+          path: apps/browser/access-cmake/arm64-evidence
+          if-no-files-found: error
+          retention-days: 14
+      - name: Enable KVM for the job emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run the registered x86_64 CTest on an Android API 36 emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 4096M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics -camera-back none
+          script: ctest --test-dir apps/browser/access-cmake/out/android-x64 -V --no-tests=error --output-junit junit.xml
