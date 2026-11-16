@@ -251,6 +251,34 @@ final class AccessSubscriptionUsageTests: XCTestCase {
         do { _ = try await session.connectionParameters(); XCTFail("Inactive session connected") } catch { }
     }
 
+    func testTransientInactivityKeepsRetainedEndpointReadyOnResume() async throws {
+        let fixture = SubscriptionAccountFixture()
+        let session = AccessSubscriptionUsageSession(isSelected: true, configuration: subscriptionConfiguration(),
+            managesConnections: true, nodeUserID: "550e8400-e29b-41d4-a716-446655440000",
+            fetchNodes: { _, _ in try await fixture.nodes() }, fetch: { _ in try await fixture.usage() })
+        session.setActive(true)
+        _ = try await session.connectionParameters()
+        let publisher = AccessProxyEntryPublisher(provision: { generation, _ in
+            .init(endpoint: .init(identity: "inactivity-test", generation: generation, loopbackHost: "127.0.0.1", port: 18080, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }, healthCheck: { session.permitsExistingConnection })
+        let operation = UUID()
+        let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
+        let key = AccessHostStoreKey(scopeID: "regular", host: try AccessSiteHost("site.invalid"), isPrivate: false)
+        XCTAssertTrue(publisher.retain(ready.endpoint, for: key))
+        publisher.cancel(operationID: operation)
+        session.setActive(false)
+        try await Task.sleep(for: .milliseconds(2200))
+        XCTAssertTrue(session.permitsExistingConnection)
+        XCTAssertEqual(publisher.currentEndpoint, ready.endpoint)
+        session.setActive(true)
+        await session.refresh()?.value
+        XCTAssertTrue(session.permitsExistingConnection)
+        XCTAssertEqual(publisher.currentEndpoint, ready.endpoint)
+        publisher.release(for: key)
+        session.setActive(false)
+    }
+
     func testDisabledAndExpiredSubscriptionsCannotAuthorizeConnection() {
         for value in [AccessSubscriptionUsage(sId: "fixture", emails: ["fixture"], uploadByte: 0, downloadByte: 0,
                         totalByte: 10_000_000_000, expire: 0, enabled: false),

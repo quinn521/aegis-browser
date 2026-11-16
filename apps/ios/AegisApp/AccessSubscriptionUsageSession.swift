@@ -214,8 +214,8 @@ final class AccessSubscriptionUsageSession: ObservableObject {
             generation = UUID()
             task?.cancel(); task = nil
             isRefreshing = false
-            nodes = []
-            availableConnectionCount = 0
+            // Suspending polling (including transient scene inactivity) is not revocation.
+            // Keep the last validated connection; expiry and the next active read still apply.
         }
         usageRefresh.setActive(active)
     }
