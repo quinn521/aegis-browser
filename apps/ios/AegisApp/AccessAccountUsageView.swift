@@ -50,7 +50,13 @@ struct AccessAccountUsageView: View {
                         }
                     } else {
                         switch session.state {
-                        case .signedOut: Label("尚未关联账号", systemImage: "person.crop.circle").font(.headline)
+                        case .signedOut:
+                            ContentUnavailableView {
+                                Label("尚未关联账号", systemImage: "person.crop.circle")
+                            } description: {
+                                Text("关联账号后，可在这里查看已用和剩余流量。")
+                            }
+                            .accessibilityIdentifier("access-usage-unlinked")
                         case .loading: Text("正在查询额度…")
                         case .unavailable: Text("额度查询不可用，不代表余额为零")
                         case .ready: Text("暂无额度数据")
@@ -62,22 +68,22 @@ struct AccessAccountUsageView: View {
                     }
                 }
             }
-            Button {
-                session.usageRefresh.refreshNow()
-            } label: {
-                HStack {
-                    Text("刷新额度")
-                    if session.isRefreshing { ProgressView() }
+            if session.state != .signedOut {
+                Button {
+                    session.usageRefresh.refreshNow()
+                } label: {
+                    HStack {
+                        Text("刷新额度")
+                        if session.isRefreshing { ProgressView() }
+                    }
                 }
+                .disabled(session.isRefreshing || scenePhase != .active)
+                .accessibilityIdentifier("access-usage-refresh")
             }
-            .disabled(session.isRefreshing || scenePhase != .active || session.state == .signedOut)
-            .accessibilityIdentifier("access-usage-refresh")
         } header: {
             if session.lastSnapshot?.quotaSource == .threeXUIAlpha { Text("测试服务用量（共享）") }
         } footer: {
-            if session.state == .signedOut {
-                Text("关联账号后，可在这里查看已用和剩余流量。")
-            } else if session.lastSnapshot?.quotaSource == .threeXUIAlpha {
+            if session.lastSnapshot?.quotaSource == .threeXUIAlpha {
                 Text("共享测试用量，不代表个人套餐；重置以服务端为准。")
             }
         }

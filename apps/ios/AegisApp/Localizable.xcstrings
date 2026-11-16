@@ -104394,95 +104394,6 @@
         }
       }
     },
-    "连接就绪后，网站会看到服务的 IP 地址。设备定位权限由你单独管理。": {
-      "extractionState": "manual",
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "连接就绪后，网站会看到服务的 IP 地址。设备定位权限由你单独管理。"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "When connected, this site sees the service’s IP address. You control device location permissions separately."
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "開啟並連線後，網站會看到服務的 IP 位址。裝置定位權限由你另外管理。"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bei bestehender Verbindung sieht die Website die IP-Adresse des Dienstes. Standortberechtigungen verwaltest du separat."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Al conectarse, el sitio ve la dirección IP del servicio. Los permisos de ubicación del dispositivo se gestionan por separado."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Une fois connecté, le site voit l’adresse IP du service. Les autorisations de localisation de l’appareil se gèrent séparément."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saat terhubung, situs melihat alamat IP layanan. Izin lokasi perangkat dikelola secara terpisah."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Una volta connesso, il sito vede l’indirizzo IP del servizio. Puoi gestire separatamente le autorizzazioni di posizione."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接続すると、サイトにはサービスの IP アドレスが表示されます。端末の位置情報の権限は別途管理できます。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "연결되면 사이트에 서비스의 IP 주소가 표시됩니다. 기기 위치 권한은 별도로 관리할 수 있습니다."
-          }
-        },
-        "ms": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apabila disambungkan, laman melihat alamat IP perkhidmatan. Kebenaran lokasi peranti diurus secara berasingan."
-          }
-        },
-        "pt": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Após a conexão, o site vê o endereço IP do serviço. As permissões de localização do dispositivo são gerenciadas separadamente."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "เมื่อเชื่อมต่อ เว็บไซต์จะเห็นที่อยู่ IP ของบริการ คุณจัดการสิทธิ์ตำแหน่งของอุปกรณ์ได้แยกต่างหาก"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Khi kết nối, trang web thấy địa chỉ IP của dịch vụ. Bạn quản lý quyền vị trí của thiết bị riêng."
-          }
-        }
-      }
-    },
     "可以为这个网站开启“隐藏地理位置”，然后再试一次。": {
       "extractionState": "manual",
       "localizations": {
@@ -104835,6 +104746,451 @@
           "stringUnit": {
             "state": "translated",
             "value": "Sau khi liên kết tài khoản, bạn có thể xem lưu lượng đã dùng và còn lại tại đây."
+          }
+        }
+      }
+    },
+    "服务连接已就绪": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务连接已就绪"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Service connection ready"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服務連線已就緒"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dienstverbindung bereit"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexión del servicio lista"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion au service prête"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koneksi layanan siap"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione al servizio pronta"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サービス接続の準備完了"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "서비스 연결 준비 완료"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sambungan perkhidmatan sedia"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexão do serviço pronta"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การเชื่อมต่อบริการพร้อมแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối dịch vụ đã sẵn sàng"
+          }
+        }
+      }
+    },
+    "连接暂不可用": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接暂不可用"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection temporarily unavailable"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連線暫時無法使用"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbindung vorübergehend nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexión temporalmente no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connexion temporairement indisponible"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koneksi sementara tidak tersedia"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connessione temporaneamente non disponibile"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在接続できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "일시적으로 연결할 수 없음"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sambungan tidak tersedia buat sementara waktu"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conexão temporariamente indisponível"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การเชื่อมต่อไม่พร้อมใช้งานชั่วคราว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối tạm thời không khả dụng"
+          }
+        }
+      }
+    },
+    "本站打不开时自动重试": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本站打不开时自动重试"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically retry if this site fails to load"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本站無法開啟時自動重試"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bei Ladefehlern für diese Website automatisch erneut versuchen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reintentar automáticamente si este sitio no carga"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réessayer automatiquement si ce site ne se charge pas"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coba lagi otomatis jika situs gagal dimuat"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riprova automaticamente se il sito non si carica"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサイトを読み込めないときに自動再試行"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 사이트를 열 수 없으면 자동으로 다시 시도"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cuba lagi secara automatik jika laman ini gagal dimuatkan"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentar novamente se este site não carregar"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ลองใหม่อัตโนมัติเมื่อโหลดเว็บไซต์นี้ไม่ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động thử lại khi không tải được trang này"
+          }
+        }
+      }
+    },
+    "恢复后的页面及其资源会使用该页的专用存储，可能包括第三方域名。": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复后的页面及其资源会使用该页的专用存储，可能包括第三方域名。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovered page and its resources use storage dedicated to that page. Resources may include third-party domains."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢復後的頁面及其資源會使用該頁面的專用儲存空間，可能包含第三方網域。"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die wiederhergestellte Seite und ihre Ressourcen verwenden einen eigenen Speicher. Ressourcen können von Drittanbietern stammen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La página recuperada y sus recursos usan almacenamiento exclusivo para esa página. Los recursos pueden incluir dominios de terceros."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La page rétablie et ses ressources utilisent un stockage dédié à cette page. Les ressources peuvent provenir de domaines tiers."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halaman yang dipulihkan dan sumber dayanya memakai penyimpanan khusus halaman. Sumber daya dapat berasal dari domain pihak ketiga."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La pagina ripristinata e le sue risorse usano uno spazio dedicato alla pagina. Le risorse possono includere domini di terze parti."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再試行後のページとリソースは専用ストレージを使用します。リソースには第三者のドメインが含まれることがあります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복구된 페이지와 리소스는 해당 페이지의 전용 저장 공간을 사용합니다. 리소스에는 타사 도메인이 포함될 수 있습니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halaman yang dipulihkan dan sumbernya menggunakan storan khas untuk halaman tersebut. Sumber mungkin daripada domain pihak ketiga."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A página recuperada e seus recursos usam armazenamento dedicado a essa página. Os recursos podem incluir domínios de terceiros."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "หน้าที่กู้คืนและทรัพยากรจะใช้พื้นที่เก็บข้อมูลเฉพาะของหน้านั้น โดยอาจมีทรัพยากรจากโดเมนภายนอก"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trang được khôi phục và tài nguyên của trang dùng bộ nhớ riêng của trang đó. Tài nguyên có thể thuộc tên miền của bên thứ ba."
+          }
+        }
+      }
+    },
+    "通过服务访问时，网站会看到服务的 IP 地址。设备定位权限由你单独管理。": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通过服务访问时，网站会看到服务的 IP 地址。设备定位权限由你单独管理。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When connected, this site sees the service’s IP address. You control device location permissions separately."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開啟並連線後，網站會看到服務的 IP 位址。裝置定位權限由你另外管理。"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bei bestehender Verbindung sieht die Website die IP-Adresse des Dienstes. Standortberechtigungen verwaltest du separat."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al conectarse, el sitio ve la dirección IP del servicio. Los permisos de ubicación del dispositivo se gestionan por separado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une fois connecté, le site voit l’adresse IP du service. Les autorisations de localisation de l’appareil se gèrent séparément."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saat terhubung, situs melihat alamat IP layanan. Izin lokasi perangkat dikelola secara terpisah."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una volta connesso, il sito vede l’indirizzo IP del servizio. Puoi gestire separatamente le autorizzazioni di posizione."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続すると、サイトにはサービスの IP アドレスが表示されます。端末の位置情報の権限は別途管理できます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결되면 사이트에 서비스의 IP 주소가 표시됩니다. 기기 위치 권한은 별도로 관리할 수 있습니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apabila disambungkan, laman melihat alamat IP perkhidmatan. Kebenaran lokasi peranti diurus secara berasingan."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Após a conexão, o site vê o endereço IP do serviço. As permissões de localização do dispositivo são gerenciadas separadamente."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เมื่อเชื่อมต่อ เว็บไซต์จะเห็นที่อยู่ IP ของบริการ คุณจัดการสิทธิ์ตำแหน่งของอุปกรณ์ได้แยกต่างหาก"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Khi kết nối, trang web thấy địa chỉ IP của dịch vụ. Bạn quản lý quyền vị trí của thiết bị riêng."
           }
         }
       }

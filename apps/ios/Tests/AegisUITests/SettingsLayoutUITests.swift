@@ -66,9 +66,10 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-progress"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
-        let refresh = app.buttons["access-usage-refresh"]
-        XCTAssertTrue(reveal(refresh, app))
-        assertInsideWindow(refresh, app)
+        let emptyState = app.descendants(matching: .any).matching(identifier: "access-usage-unlinked").firstMatch
+        XCTAssertTrue(emptyState.waitForExistence(timeout: 5))
+        assertInsideWindow(emptyState, app)
+        XCTAssertFalse(app.buttons["access-usage-refresh"].exists)
         capture("账号与用量-\(language)-\(largeText ? "最大字体" : "普通字体")", app)
     }
 

@@ -201,13 +201,13 @@ enum AccessSiteProxyToggleModel {
     static func connectionLine(for status: AccessSiteProxyConnectionStatusId) -> String {
         switch status {
         case .idle:
-            return "连接：空闲"
+            return "使用浏览器原有连接"
         case .connecting:
-            return "连接：正在连接"
+            return "正在准备连接"
         case .ready:
-            return "连接：已就绪"
+            return "服务连接已就绪"
         case .unavailable:
-            return "连接：不可用"
+            return "连接暂不可用"
         }
     }
 

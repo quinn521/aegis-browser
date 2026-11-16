@@ -1307,11 +1307,11 @@ enum AccessAutoRecoveryCopy {
     static let toggleTitle = "本站打不开时自动重试"
     static let explanation = "先用当前连接打开网站；加载失败时尝试隐藏地理位置。"
     static let scopeWarning = "恢复后的页面及其资源会使用该页的专用存储，可能包括第三方域名。"
-    static let armed = "已开启 · 当前使用原连接"
+    static let armed = "使用浏览器原有连接"
     static let preparing = "正在准备连接"
     static let opened = "已通过服务连接打开"
     static let openedMember = "登录页已通过服务连接打开"
-    static let unavailable = "入口暂不可用"
+    static let unavailable = "连接暂不可用"
 }
 
 /// Product channel for site-group capacity. Independent of the Firebase telemetry switch.

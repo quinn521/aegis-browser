@@ -1966,7 +1966,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         let route = app.staticTexts["access-site-proxy-connection"]
         let routeText = route.exists ? route.label : ""
         var result: [String: Any] = ["result": "OBSERVED", "host": routeHost.label.lowercased(),
-                                   "local_entry_ready": ["连接：已就绪", "自动重试已连接"].contains(routeText),
+                                   "local_entry_ready": ["服务连接已就绪", "自动重试已连接"].contains(routeText),
                                    "remote_connection_verified": false]
         let connection = app.staticTexts["access-site-proxy-connection"]
         result["connection_ui"] = connection.exists ? connection.label : "UNAVAILABLE"
