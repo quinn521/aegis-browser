@@ -1,3 +1,15 @@
+From aee6e745685ddc8c61535f5883758fbf94365f38 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Mon, 16 Nov 2026 13:54:25 +0800
+Subject: [PATCH] fix(mac): keep unshown Omnibox popup contents hidden
+
+---
+ chrome/browser/ui/views/omnibox/BUILD.gn      |  4 +
+ .../omnibox_popup_visibility_browsertest.cc   | 91 +++++++++++++++++++
+ components/omnibox/common/omnibox_features.cc |  2 +-
+ 3 files changed, 96 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
+
 diff --git a/chrome/browser/ui/views/omnibox/BUILD.gn b/chrome/browser/ui/views/omnibox/BUILD.gn
 index 8fa8ab9a1e05273acbf211a3f4d5eeebdb887a00..9577223e801f034d8177fe7e0c0120aa693c18ad 100644
 --- a/chrome/browser/ui/views/omnibox/BUILD.gn
@@ -123,3 +135,6 @@ index 9a23299ac34649da94b1cd80e60b53e99c63d50b..b68d781557da682442733ad546f87fde
  
  // When enabled, a WebUI omnibox popup destroys its widget when it is hidden
  // and builds a fresh one on the next show, so the new native window has no
+-- 
+2.54.0 (Apple Git-157)
+
