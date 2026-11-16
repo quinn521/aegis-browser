@@ -179,14 +179,18 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool {
         guard let host = Self.httpHost(url) else { return false }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
-        guard websitePrivacyEnabled(for: key) else { return false }
-        return registry.endpoint(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)?.state != .ready
+        let shouldTryDefault = usesDefaultRoute(key) && (tab.boundHostName == host.rawValue || tab.canTryDefaultRoute(for: url))
+        guard intents[key] == .on || shouldTryDefault else { return false }
+        return registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)?.state != .ready
     }
 
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool {
-        guard let url = request.url, requiresProxyPreparation(tab: tab, url: url),
+        guard let url = request.url, let host = Self.httpHost(url), requiresProxyPreparation(tab: tab, url: url),
               let pending = tab.holdForProxy(request) else { return false }
-        _ = openPendingAddressViaProxy(tab: tab, pending: pending)
+        let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
+        let optional = usesDefaultRoute(key) && tab.boundHostName != host.rawValue
+        _ = beginPrepare(for: tab, key: key, failure: nil, trigger: optional ? .automatic : .userRetry,
+                         addressNavigation: pending, automaticFirstVisit: optional)
         return true
     }
 
@@ -215,8 +219,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             isPrivate: tab.profile.isPrivate
         )
         let inherited = tab.boundHostName == host.rawValue && tab.proxyLandingParent != nil
-        let intentOn = websitePrivacyEnabled(for: key) || inherited
         let attachment = attachment(tab: tab, host: host)
+        let intentOn = websitePrivacyEnabled(for: key) || inherited || usesDefaultRoute(key) && attachment != .notAttached
         var snapshot = AccessSiteProxyToggleSnapshot()
         snapshot.hasTrustedSite = true
         snapshot.host = host
@@ -832,7 +836,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         failure: BrowserMainFrameFailure?,
         trigger: AccessNavigationRetryTrigger,
         authorization: AccessAutoRecoveryGrant? = nil,
-        addressNavigation: BrowserPendingAddressNavigation? = nil
+        addressNavigation: BrowserPendingAddressNavigation? = nil,
+        automaticFirstVisit: Bool = false
     ) -> UUID? {
         guard !tab.isDisposed else { return nil }
         let method = (failure?.method ?? "GET").uppercased()
@@ -879,7 +884,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             state: .preparing,
             ticket: ticket,
             authorization: authorization,
-            addressNavigation: addressNavigation
+            addressNavigation: addressNavigation,
+            automaticFirstVisit: automaticFirstVisit
         )
         phases[tab.instanceID.uuidString] = .preparing
         armTimeout(operationID: operationID, deadline: deadline)
@@ -944,7 +950,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         )
         if let pending = operation.addressNavigation,
            let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
-            setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
+            if !operation.automaticFirstVisit {
+                setProxyEnabled(true, host: operation.key.host, scopeID: operation.key.scopeID, isPrivate: operation.key.isPrivate)
+            }
             operation.state = .sent
             operations[operationID] = operation
             timeoutTasks.removeValue(forKey: operationID)?.cancel()
@@ -988,7 +996,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         lastRecoveryFailure = reason
         if let pending = operation.addressNavigation,
            let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
-            tab.failPendingProxyNavigation(pending)
+            if operation.automaticFirstVisit, usesDefaultRoute(operation.key),
+               tab.boundHostName != operation.key.host.rawValue {
+                tab.continueWithoutDefaultRoute(pending)
+            } else {
+                tab.failPendingProxyNavigation(pending)
+            }
         }
         publisher.cancel(operationID: operationID)
         releaseUnstoredConsumerIfUnused(operation.key)
@@ -1221,7 +1234,13 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private func websitePrivacyEnabled(for key: AccessHostStoreKey) -> Bool {
         if explicitDirect.contains(key) { return false }
         if let intent = intents[key] { return intent == .on }
-        return defaultLocationPrivacy && AccessLocalSite.classify(key.host.rawValue) == nil
+        return usesDefaultRoute(key) &&
+            registry.endpoint(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)?.state == .ready
+    }
+
+    private func usesDefaultRoute(_ key: AccessHostStoreKey) -> Bool {
+        defaultLocationPrivacy && intents[key] == nil && !explicitDirect.contains(key)
+            && AccessLocalSite.classify(key.host.rawValue) == nil
     }
 
     private func addressControlHost(for tab: BrowserTab) -> AccessSiteHost? {
@@ -1267,6 +1286,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         var ticket: AccessNavigationRetryTicket?
         var authorization: AccessAutoRecoveryGrant?
         var addressNavigation: BrowserPendingAddressNavigation? = nil
+        var automaticFirstVisit = false
     }
 
     private enum RecoveryState {
@@ -1289,7 +1309,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         tabID: String
     ) -> AccessProxyIntentState {
         if explicitDirect.contains(key) { return .off }
-        if websitePrivacyEnabled(for: key) { return .on }
+        if websitePrivacyEnabled(for: key) || (boundToTarget && usesDefaultRoute(key)) { return .on }
         // Only the tab that recovered this exact host may keep using its host store.
         if executingTabs[tabID] == key, groupStillLists(key) || intents[key] == .on || executing.contains(key) {
             return .on

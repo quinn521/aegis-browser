@@ -11,7 +11,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
-    func testAddressBarLocationPrivacyDefaultsOnAndTogglesTheCurrentSite() {
+    func testAddressBarLocationPrivacyUsesOriginalConnectionWithoutServiceAndTogglesCurrentSite() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
@@ -22,20 +22,17 @@ final class SettingsLayoutUITests: XCTestCase {
         field.typeText("https://example.invalid/\n")
         let icon = app.buttons["address-location-privacy"]
         XCTAssertTrue(icon.waitForExistence(timeout: 10))
-        XCTAssertTrue(icon.isSelected)
+        XCTAssertFalse(icon.isSelected)
         XCTAssertEqual(icon.label, "隐藏地理位置")
-        // The controlled build has no service. The default cannot claim a working connection.
+        XCTAssertEqual(icon.value as? String, "使用浏览器原有连接")
+        capture("地址栏-无服务时使用原连接", app)
+        icon.tap()
         let retry = app.buttons["page-load-proxy-retry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 12))
         XCTAssertEqual(retry.label, "重试")
-        XCTAssertEqual(icon.value as? String, "连接暂不可用")
-        capture("地址栏-隐藏地理位置默认开启", app)
-        icon.tap()
-        let off = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND selected == false"), object: icon)
-        XCTAssertEqual(XCTWaiter.wait(for: [off], timeout: 12), .completed)
-        icon.tap()
-        XCTAssertTrue(retry.waitForExistence(timeout: 12))
         XCTAssertTrue(icon.isSelected)
+        XCTAssertEqual(icon.value as? String, "连接暂不可用")
+        capture("地址栏-手动开启隐藏地理位置", app)
         app.buttons["page-protection"].tap()
         let siteSwitch = app.switches["access-site-proxy-toggle"]
         XCTAssertTrue(siteSwitch.waitForExistence(timeout: 5))

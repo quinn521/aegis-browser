@@ -194,6 +194,20 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         return lastMainFrameFailure?.url ?? url
     }
     private var pendingProxyRequest: URLRequest?
+    private var unavailableDefaultRoute: BrowserPendingAddressNavigation?
+
+    public func canTryDefaultRoute(for url: URL) -> Bool {
+        unavailableDefaultRoute != BrowserPendingAddressNavigation(navigationID: attempt.navigationID, url: url)
+    }
+
+    /// Resume only the unsent, safe request belonging to this exact automatic check.
+    public func continueWithoutDefaultRoute(_ pending: BrowserPendingAddressNavigation) {
+        guard matchesPendingAddressNavigation(pending), let request = pendingProxyRequest else { return }
+        unavailableDefaultRoute = pending
+        pendingAddressNavigation = nil
+        pendingProxyRequest = nil
+        commitPreservingMethod(request, continuesAttempt: true)
+    }
     private var terminatingProxyDocuments = 0
     private var afterProxyDocumentStops: (@MainActor () -> Void)?
     private var documentDisposalCompletion: (@MainActor () -> Void)?

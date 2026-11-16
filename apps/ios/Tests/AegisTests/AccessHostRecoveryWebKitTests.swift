@@ -32,6 +32,25 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(tab.websiteDataStore.proxyConfigurations.first).allowFailover)
     }
 
+    func testUnavailableDefaultResumesOnlyTheHeldNavigationUsingItsOriginalStore() async throws {
+        let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, defaultLocationPrivacy: true)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let url = URL(string: "https://default-off.invalid/page")!
+        tab.loadFromAddressBar(url)
+        XCTAssertNotNil(tab.heldProxyRequestForTests)
+        try await waitUntil { !tab.canTryDefaultRoute(for: url) }
+        XCTAssertNil(tab.heldProxyRequestForTests)
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: url))
+        XCTAssertFalse(coordinator.requiresProxyPreparation(tab: tab, url: url))
+        XCTAssertFalse(coordinator.snapshot(for: tab, fromAddressBar: true).toggleOn)
+        XCTAssertEqual(publisher.provisionCount, 1)
+    }
+
     func testExplicitOnCannotSendToOriginWhilePreparationFails() async throws {
         let origin = OriginReceipt(port: 18_274)
         try await origin.start()

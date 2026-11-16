@@ -104,7 +104,7 @@ struct AegisApp: App {
         let hostStores = AccessHostStoreCoordinator(
             publisher: publisher,
             channel: AccessProductChannel.resolve(),
-            defaultLocationPrivacy: true,
+            defaultLocationPrivacy: !(publisher is AccessFailClosedProxyEntryPublisher),
             locationPreferences: defaults
         )
         registry.hostRouting = hostStores
