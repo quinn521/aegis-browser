@@ -592,12 +592,12 @@ final class AegisUITests: XCTestCase {
         let app = launchApp()
         navigate(app, to: "http://127.0.0.1:8768/article")
         XCTAssertTrue(app.webViews.staticTexts["城市绿地观察"].waitForExistence(timeout: 15))
-        app.buttons["browser-more"].tap(); app.buttons["manage-browser-windows"].tap()
+        app.buttons["browser-more"].tap(); app.buttons["窗口管理"].tap()
         XCTAssertTrue(app.buttons["重命名当前窗口"].waitForExistence(timeout: 5))
         app.buttons["重命名当前窗口"].tap()
         app.alerts.textFields.firstMatch.tap(); app.alerts.textFields.firstMatch.typeText("研究窗口")
         app.alerts.buttons["保存"].tap(); app.buttons["完成"].tap()
-        app.buttons["browser-more"].tap(); app.buttons["new-browser-window"].tap()
+        app.buttons["browser-more"].tap(); app.buttons["新建窗口"].tap()
         let blank = app.textFields.matching(NSPredicate(format: "identifier == 'address-field' AND value == 'aegis://start'")).firstMatch
         XCTAssertTrue(blank.waitForExistence(timeout: 15))
         let newWindow = try XCTUnwrap(app.windows.allElementsBoundByIndex.first { window in
@@ -610,7 +610,7 @@ final class AegisUITests: XCTestCase {
         let secondWindow = try XCTUnwrap(app.windows.allElementsBoundByIndex.first { window in
             window.textFields.matching(NSPredicate(format: "identifier == 'address-field' AND value CONTAINS 'article-two'")).count > 0
         })
-        secondWindow.buttons["browser-more"].tap(); app.buttons["manage-browser-windows"].tap()
+        secondWindow.buttons["browser-more"].tap(); app.buttons["窗口管理"].tap()
         app.buttons["重命名当前窗口"].tap()
         app.alerts.textFields.firstMatch.tap(); app.alerts.textFields.firstMatch.typeText("对照窗口")
         app.alerts.buttons["保存"].tap()
@@ -630,15 +630,15 @@ final class AegisUITests: XCTestCase {
         expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: more)
         waitForExpectations(timeout: 10)
         more.tap()
-        XCTAssertTrue(app.buttons["manage-browser-windows"].waitForExistence(timeout: 5))
-        app.buttons["manage-browser-windows"].tap()
+        XCTAssertTrue(app.buttons["窗口管理"].waitForExistence(timeout: 5))
+        app.buttons["窗口管理"].tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH '对照窗口'")).firstMatch.tap()
         XCTAssertTrue(app.webViews.staticTexts["绿地改造补充说明"].waitForExistence(timeout: 15))
         attachScreenshot("iPad 关闭后重新打开原窗口页面", app)
         let reopened = try XCTUnwrap(app.windows.allElementsBoundByIndex.first { window in
             window.textFields.matching(NSPredicate(format: "identifier == 'address-field' AND value CONTAINS 'article-two'")).count > 0
         })
-        reopened.buttons["browser-more"].tap(); app.buttons["manage-browser-windows"].tap()
+        reopened.buttons["browser-more"].tap(); app.buttons["窗口管理"].tap()
         app.buttons["close-browser-window"].tap()
     }
 
