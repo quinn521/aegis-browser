@@ -24,6 +24,42 @@ final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
         }
     }
 
+    func testAccountProviderLoadsBeforeCoreStartWithoutStaticConfiguration() async throws {
+        let json = """
+        {"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}
+        """
+        let core = RecordingEmbeddedCoreForFactory()
+        var reads = 0
+        let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(lockData: Data(json.utf8), configPath: nil,
+            verifiedCore: core, parameters: {
+                reads += 1
+                return try AccessRealityVisionParameters(address: "node.invalid", port: 443,
+                    userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com",
+                    publicKey: "fixture-key", shortID: "")
+            })
+        XCTAssertEqual(reads, 0, "Do not fetch credentials during app initialization")
+        let id = UUID()
+        let result = try await publisher.prepare(.init(operationID: id, deadline: .seconds(5)))
+        XCTAssertEqual(reads, 1)
+        XCTAssertTrue(publisher.validateReady(result))
+        publisher.cancel(operationID: id)
+    }
+
+    func testAccountProviderFailureCannotFallBackToStaticNode() async throws {
+        let json = """
+        {"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}
+        """
+        let core = RecordingEmbeddedCoreForFactory()
+        let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(lockData: Data(json.utf8),
+            configPath: "/unused/static/node", verifiedCore: core, parameters: { throw URLError(.cannotConnectToHost) })
+        do {
+            _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5)))
+            XCTFail("Account failure must not reuse a static node")
+        } catch { }
+        XCTAssertFalse(core.isRunning)
+        XCTAssertNil(publisher.currentEndpoint)
+    }
+
     func testSourceCandidateStaysFailClosed() async {
         let json = """
         {"status":"source_candidate","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}

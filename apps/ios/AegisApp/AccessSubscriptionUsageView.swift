@@ -8,6 +8,19 @@ struct AccessSubscriptionUsageView: View {
 
     var body: some View {
         let _ = locale
+        if session.managesConnections {
+            Section {
+                LabeledContent("服务账户") { Text("共享测试账号") }
+                LabeledContent("可用连接") {
+                    if session.isRefreshing { ProgressView() }
+                    else if session.unavailable || session.connectionsUnavailable || session.snapshot == nil { Text("暂不可用") }
+                    else { Text(session.availableConnectionCount, format: .number) }
+                }
+                .accessibilityIdentifier("access-account-connections")
+                Text("连接由账号自动获取，无需手动配置。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
         Section {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 VStack(alignment: .leading, spacing: 8) {
