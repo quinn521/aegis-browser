@@ -279,6 +279,34 @@ final class AccessSubscriptionUsageTests: XCTestCase {
         session.setActive(false)
     }
 
+    func testCancelledAuthorizationCannotReuseOldNodesAfterReactivation() async throws {
+        let reads = SubscriptionFetchGate()
+        let fixture = SubscriptionAccountFixture()
+        let session = AccessSubscriptionUsageSession(isSelected: true, configuration: subscriptionConfiguration(),
+            managesConnections: true, nodeUserID: "550e8400-e29b-41d4-a716-446655440000",
+            fetchNodes: { _, _ in try await fixture.nodes() }, fetch: { _ in await reads.read() })
+        session.setActive(true)
+        let initial = session.refresh()
+        await waitUntil { await reads.count == 1 }
+        await reads.finish(subscriptionUsage())
+        await initial?.value
+        XCTAssertEqual(session.availableConnectionCount, 1)
+        let authorization = Task { try await session.connectionParameters() }
+        await waitUntil { await reads.count == 2 }
+        session.setActive(false)
+        session.setActive(true)
+        let current = session.refresh()
+        await waitUntil { await reads.count == 3 }
+        // The cancelled old request delivers while the replacement is still pending.
+        await reads.finish(subscriptionUsage(upload: 111))
+        do { _ = try await authorization.value; XCTFail("Cancelled query reused a prior valid node list") } catch { }
+        XCTAssertEqual(session.snapshot?.uploadByte, 10)
+        await reads.finish(subscriptionUsage(upload: 222))
+        await current?.value
+        XCTAssertEqual(session.snapshot?.uploadByte, 222)
+        session.setActive(false)
+    }
+
     func testDisabledAndExpiredSubscriptionsCannotAuthorizeConnection() {
         for value in [AccessSubscriptionUsage(sId: "fixture", emails: ["fixture"], uploadByte: 0, downloadByte: 0,
                         totalByte: 10_000_000_000, expire: 0, enabled: false),

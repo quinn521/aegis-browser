@@ -145,6 +145,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     @Published private(set) var unavailable = false
     private var active = false
     private var generation = UUID()
+    private var successfulGeneration: UUID?
     private var receivedUptime: TimeInterval?
     private var task: Task<Void, Never>?
     lazy var usageRefresh = AccessAccountUsageRefreshCoordinator(refresh: { [weak self] in self?.refresh() })
@@ -196,9 +197,12 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     /// No static-node fallback: the account's current allowance and subscription must both succeed.
     func connectionParameters() async throws -> AccessRealityVisionParameters {
         guard active, managesConnections else { throw AccessSubscriptionQueryError.unavailable }
-        await refresh()?.value
+        guard let request = refresh() else { throw AccessSubscriptionQueryError.unavailable }
+        let requestedGeneration = generation
+        await request.value
         try Task.checkCancellation()
-        guard active, !unavailable, let usage = snapshot, usage.permitsConnection,
+        guard generation == requestedGeneration, successfulGeneration == requestedGeneration,
+              active, !unavailable, let usage = snapshot, usage.permitsConnection,
               let node = nodes.first else { throw AccessSubscriptionQueryError.unavailable }
         selectedNode = node
         return node
@@ -246,6 +250,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 self.receivedAt = Date()
                 self.receivedUptime = ProcessInfo.processInfo.systemUptime
                 self.unavailable = false
+                self.successfulGeneration = token
                 self.task = nil; self.isRefreshing = false
                 self.usageRefresh.didComplete(succeeded: true)
             } catch {
