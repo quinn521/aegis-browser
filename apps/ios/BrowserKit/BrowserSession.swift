@@ -587,6 +587,18 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         guard alignStore(for: url, previous: requestedURL, method: method, body: request.httpBody) else { return }
         requestedURL = url
         isLoading = true
+        if ["http", "https"].contains(url.scheme?.lowercased() ?? ""), contentRuleList == nil || securityLists.count < 2 {
+            // This is the original app-owned, unsent request. Warm rules before
+            // WebKit can hide its body in a later policy callback.
+            guard request.httpBodyStream == nil else {
+                retireUnboundAttempt(navigationID: attempt.navigationID)
+                isLoading = false
+                explainUnreplayableRequest()
+                return
+            }
+            resumeAfterContentRules(request)
+            return
+        }
         var outgoing = request
         outgoing.httpMethod = method
         preserveExplicitHTTP(outgoing.url)
@@ -1257,8 +1269,31 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     public func reload() {
+        guard !isDisposed, let target = requestedURL ?? url else { return }
+        guard ["GET", "HEAD"].contains(attempt.method), !attempt.hasReplayableBody else {
+            explainUnreplayableRequest()
+            return
+        }
         recentTerminations = []
-        if let url = requestedURL ?? url { load(url) }
+        if !["http", "https"].contains(target.scheme?.lowercased() ?? "") {
+            load(target)
+            return
+        }
+        guard var request = safeRouteReloadRequest else { explainUnreplayableRequest(); return }
+        request.cachePolicy = .reloadRevalidatingCacheData
+        // Revoke document consent at the user's action, before a cold rule load
+        // or optional route preparation can suspend the actual HTTP request.
+        navigationEpoch &+= 1
+        loadTask?.cancel()
+        lastPolicyIntervention = nil
+        protectionIncident = nil; protectionNoticePresentation = nil; fingerprintSignals = []
+        structureTask?.cancel()
+        load(request)
+    }
+
+    private func explainUnreplayableRequest() {
+        loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
+        loadingErrorAllowsProxyRetry = false
     }
 
     func prepareForReading() async throws {
@@ -1422,12 +1457,21 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if decision.kind != .blocked, ["http", "https"].contains(requestURL.scheme ?? ""), (contentRuleList == nil || securityLists.count < 2) {
             finish(.cancel)
             guard contentRulesNavigationURL != requestURL else { return }
-            contentRulesNavigationURL = requestURL
-            if attempt.recoveryOperationID != nil {
-                resumeAfterContentRules(navigationAction.request)
-            } else {
-                load(requestURL)
+            let request = navigationAction.request
+            let unknownBody = !["GET", "HEAD"].contains(method.uppercased()) && request.httpBody == nil
+            let unknownHistory = navigationAction.navigationType == .backForward || navigationAction.navigationType == .reload
+            guard request.httpBodyStream == nil, !unknownBody, !unknownHistory else {
+                adoptMainFrameNavigation(url: requestURL, method: method, continuesExistingNavigation: false,
+                                         hasReplayableBody: true, policyType: navigationAction.navigationType)
+                retireUnboundAttempt(navigationID: attempt.navigationID)
+                isLoading = false
+                explainUnreplayableRequest()
+                return
             }
+            contentRulesNavigationURL = requestURL
+            // This action has not reached the network. Keep every exposed
+            // request field; a URL-only load would invent a different GET.
+            commitPreservingMethod(request, continuesAttempt: attempt.recoveryOperationID != nil)
             return
         }
         realignedNavigationURL = nil
