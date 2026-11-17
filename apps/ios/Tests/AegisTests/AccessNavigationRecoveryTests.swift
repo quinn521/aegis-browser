@@ -101,6 +101,39 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         XCTAssertFalse(tab.isSuspended)
     }
 
+    func testSameDocumentRouteChangesKeepOnlySafeDocumentsRefreshable() async throws {
+        for route in ["pushState", "replaceState"] {
+            for variant in ["GET", "POST", "Authorization"] {
+                let origin = try PreservingRedirectOrigin(status: 307)
+                defer { origin.stop() }
+                let root = try await origin.redirectURL().deletingLastPathComponent()
+                let source = root.appendingPathComponent("reload-spa-" + route)
+                let target = root.appendingPathComponent("reload-spa-normalized")
+                let tab = coldRequestTab(profile: .standard)
+                let window = try requestWindow(for: tab)
+                defer { window.isHidden = true; tab.stop() }
+                var request = URLRequest(url: source)
+                if variant == "POST" { request.httpMethod = "POST"; request.httpBody = Data("form=original".utf8) }
+                if variant == "Authorization" { request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization") }
+                tab.load(request)
+                await waitUntil({ !tab.isLoading && tab.webView.url == target }, timeout: 10)
+                XCTAssertEqual(tab.requestedURL, target)
+                XCTAssertEqual(origin.receivedRequests.count, 1)
+                tab.reload()
+                if variant == "GET" {
+                    await waitUntil({ !tab.isLoading && origin.receivedRequests.count == 2 }, timeout: 10)
+                    XCTAssertEqual(origin.receivedRequests.map(\.target), [source.path, target.path])
+                    XCTAssertEqual(origin.receivedRequests.map(\.method), ["GET", "GET"])
+                    XCTAssertFalse(tab.reloadRequiresResubmission)
+                } else {
+                    XCTAssertTrue(tab.reloadRequiresResubmission)
+                    XCTAssertEqual(origin.receivedRequests.count, 1)
+                }
+                XCTAssertNil(tab.loadingError)
+            }
+        }
+    }
+
     func testReloadRefusalLeavesTheAuthenticatedDocumentReadable() async throws {
         let origin = try PreservingRedirectOrigin(status: 307)
         defer { origin.stop() }
@@ -1657,7 +1690,10 @@ private final class PreservingRedirectOrigin: @unchecked Sendable {
                     guard self.finishRedirect else { return }
                 }
                 let html: String
-                if first[1] == "/opaque-parent" {
+                if first[1] == "/reload-spa-pushState" || first[1] == "/reload-spa-replaceState" {
+                    let route = first[1] == "/reload-spa-pushState" ? "pushState" : "replaceState"
+                    html = "<main>SPA source</main><script>history.\(route)({},'', '/reload-spa-normalized')</script>"
+                } else if first[1] == "/opaque-parent" {
                     html = "<iframe sandbox='allow-scripts' src='/opaque-frame'></iframe>"
                 } else if first[1] == "/opaque-frame" {
                     html = "<script>window.webkit.messageHandlers.opaqueFrame.postMessage('ready')</script>"

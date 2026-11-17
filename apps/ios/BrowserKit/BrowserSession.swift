@@ -1272,13 +1272,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         // A cancelled provisional navigation may leave a different document on
         // screen, even when the two requests used the same URL.
-        let provenance = if !isLoading, loadingErrorPresentation == nil,
-                            let committedRequest, committedRequest.url == target {
+        let displaysCommittedDocument = !isLoading && loadingErrorPresentation == nil
+            && committedRequest != nil && loadedWebView?.url == target
+        let provenance = if displaysCommittedDocument, let committedRequest {
             committedRequest
         } else {
             attempt
         }
-        guard provenance.url == target, ["GET", "HEAD"].contains(provenance.method),
+        guard displaysCommittedDocument || provenance.url == target,
+              ["GET", "HEAD"].contains(provenance.method),
               !provenance.hasReplayableBody else {
             reloadRequiresResubmission = true
             return
