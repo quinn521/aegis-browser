@@ -334,6 +334,28 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+========================================================================
+Access reference projects and acknowledgements
+Source file: scripts/licenses/access-reference-projects.txt
+
+Access reference projects and acknowledgements
+
+The Access development specification references the following projects for
+proxy configuration and Options interaction.
+
+SwitchyOmega
+Authors: The SwitchyOmega Authors
+Project: https://github.com/FelisCatus/SwitchyOmega
+License: GNU General Public License version 3 or later (GPL-3.0-or-later)
+License text: https://github.com/FelisCatus/SwitchyOmega/blob/master/COPYING
+
+ZeroOmega
+Authors: The ZeroOmega Authors and The SwitchyOmega Authors
+Project: https://github.com/zero-peak/ZeroOmega
+License: GNU General Public License version 3 or later (GPL-3.0-or-later)
+License text: https://github.com/zero-peak/ZeroOmega/blob/master/COPYING
+
+
 Chromium and its bundled dependencies: open chrome://credits in Aegis.
 The following notices supplement, and do not replace, Chromium's generated credits.
 

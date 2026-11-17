@@ -88,6 +88,14 @@ separate from production browser payloads. npm pins:
 | [MLX LM](https://github.com/ml-explore/mlx-lm) | 0.31.3, [requirements](prototypes/browser-agent-v2/requirements-mlx.txt) | [MIT](https://github.com/ml-explore/mlx-lm/blob/v0.31.3/LICENSE) |
 | [Skyvern](https://github.com/Skyvern-AI/skyvern) | 1.0.48, [requirements](prototypes/browser-agent-v2/requirements-skyvern.txt) | [AGPL-3.0](https://github.com/Skyvern-AI/skyvern/blob/v1.0.48/LICENSE) |
 
+## Access reference projects
+
+The Access development specification references these projects for proxy
+configuration and Options interaction.
+
+- **[SwitchyOmega](https://github.com/FelisCatus/SwitchyOmega)** — The SwitchyOmega Authors. [GPL-3.0-or-later](https://github.com/FelisCatus/SwitchyOmega/blob/master/COPYING).
+- **[ZeroOmega](https://github.com/zero-peak/ZeroOmega)** — The ZeroOmega Authors and The SwitchyOmega Authors. [GPL-3.0-or-later](https://github.com/zero-peak/ZeroOmega/blob/master/COPYING).
+
 ## Development and CI tools
 
 Pins: [.mise.toml](.mise.toml), [Quality workflow](.github/workflows/quality.yml)

@@ -74,6 +74,8 @@ def render(platform, root=ROOT):
     for name in JS_LICENSES:
         include(name, f"{ENHANCEMENTS}/{name}")
     if platform == "macos":
+        include("Access reference projects and acknowledgements",
+                "scripts/licenses/access-reference-projects.txt")
         sections.append("\nChromium and its bundled dependencies: open chrome://credits in Aegis.\n"
                         "The following notices supplement, and do not replace, Chromium's generated credits.\n")
         include("libtorrent-rasterbar 2.1.1 — BSD-3-Clause — https://www.libtorrent.org/",
