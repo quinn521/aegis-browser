@@ -131,7 +131,7 @@ struct AegisRootView: View {
         case let .windowError(error):
             title = AegisLocalization.string("无法新建窗口"); message = error.text
         case let .inputError(error):
-            title = AegisLocalization.string("Markdown 阅读"); message = error.text
+            title = AegisLocalization.string("无法打开内容"); message = error.text
         default: return UIAlertController()
         }
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
