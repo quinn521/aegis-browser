@@ -6,6 +6,17 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace aegis::access {
+namespace {
+bool CreateVersionOneOptions(const base::FilePath& folder) {
+  if (!base::CreateDirectory(folder)) return false;
+  sql::Database legacy("AegisAccess");
+  return legacy.Open(folder.AppendASCII("options.db")) &&
+      legacy.Execute("CREATE TABLE identity(singleton INTEGER PRIMARY KEY,version INTEGER,channel INTEGER,profile_id TEXT)") &&
+      legacy.Execute("INSERT INTO identity VALUES(1,1,1,'profile')") &&
+      legacy.Execute("CREATE TABLE configuration(singleton INTEGER PRIMARY KEY,revision INTEGER,payload TEXT)") &&
+      legacy.Execute("INSERT INTO configuration VALUES(1,7,'{}')");
+}
+}  // namespace
 TEST(AccessOptionsStoreTest, BetaCannotCreateConfiguration) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
@@ -128,5 +139,54 @@ TEST(AccessOptionsStoreTest, FailedDirectoryCreationReportsIoAndPreservesFile) {
   std::string bytes;
   ASSERT_TRUE(base::ReadFileToString(path, &bytes));
   EXPECT_EQ(bytes, "original");
+}
+TEST(AccessOptionsStoreTest, InterruptedBackupNeverPublishesPartialRecoverySource) {
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  const auto identity = aegis_access::ResolveAccessBuildIdentity(
+      aegis_access::AccessProductChannel::kAlpha,
+      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
+  const auto folder = dir.GetPath().AppendASCII("AccessOptions").AppendASCII("alpha");
+  ASSERT_TRUE(CreateVersionOneOptions(folder));
+  {
+    AccessOptionsStore interrupted(identity, dir.GetPath(), "profile", false);
+    interrupted.SetInterruptBackupForTesting(true);
+    EXPECT_EQ(interrupted.Open(), StoreStatus::kRecoveryRequired);
+  }
+  ASSERT_FALSE(base::PathExists(folder.AppendASCII("options.v1.db")));
+  EXPECT_TRUE(base::PathExists(folder.AppendASCII("options.backup-staging.db")));
+  AccessOptionsStore resumed(identity, dir.GetPath(), "profile", false);
+  ASSERT_EQ(resumed.Open(), StoreStatus::kValid);
+  ASSERT_EQ(resumed.Read().value->revision, 7u);
+  EXPECT_FALSE(base::PathExists(folder.AppendASCII("options.backup-staging.db")));
+  sql::Database original("AegisAccess");
+  ASSERT_TRUE(original.Open(folder.AppendASCII("options.v1.db")));
+  sql::Statement source(original.GetUniqueStatement("SELECT revision FROM configuration"));
+  ASSERT_TRUE(source.Step());
+  EXPECT_EQ(source.ColumnInt64(0), 7);
+}
+TEST(AccessOptionsStoreTest, MissingPrimaryDuringMigrationCannotCreateEmptyConfiguration) {
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  const auto identity = aegis_access::ResolveAccessBuildIdentity(
+      aegis_access::AccessProductChannel::kAlpha,
+      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
+  const auto folder = dir.GetPath().AppendASCII("AccessOptions").AppendASCII("alpha");
+  ASSERT_TRUE(CreateVersionOneOptions(folder));
+  {
+    AccessOptionsStore interrupted(identity, dir.GetPath(), "profile", false);
+    interrupted.SetInterruptMigrationForTesting(true);
+    ASSERT_EQ(interrupted.Open(), StoreStatus::kRecoveryRequired);
+  }
+  ASSERT_TRUE(base::DeleteFile(folder.AppendASCII("options.db")));
+  std::string backup;
+  ASSERT_TRUE(base::ReadFileToString(folder.AppendASCII("options.v1.db"), &backup));
+  AccessOptionsStore resumed(identity, dir.GetPath(), "profile", false);
+  EXPECT_EQ(resumed.Open(), StoreStatus::kRecoveryRequired);
+  EXPECT_FALSE(base::PathExists(folder.AppendASCII("options.db")));
+  EXPECT_TRUE(base::PathExists(folder.AppendASCII("migration.pending")));
+  std::string after;
+  ASSERT_TRUE(base::ReadFileToString(folder.AppendASCII("options.v1.db"), &after));
+  EXPECT_EQ(backup, after);
 }
 }  // namespace aegis::access

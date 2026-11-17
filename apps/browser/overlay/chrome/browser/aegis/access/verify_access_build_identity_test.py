@@ -20,7 +20,7 @@ class BuildIdentityTests(unittest.TestCase):
                         self.assertEqual(identity.validate_identity(product, enabled, False, {}), "unknown")
 
     def test_known_release_metadata_rejects_conflicting_identity(self):
-        for channel, metadata in (("beta", {"KSChannelID": "arm64-beta"}), ("stable", {})):
+        for channel, metadata in (("beta", {"KSProductID": "Chrome", "KSChannelID": "arm64-beta"}), ("stable", {"KSProductID": "Chrome"})):
             for product in ("unknown", "debug", "alpha", "beta", "stable"):
                 with self.subTest(channel=channel, product=product):
                     if product not in ("unknown", channel):
@@ -36,13 +36,22 @@ class BuildIdentityTests(unittest.TestCase):
                               ("dev", "dev"), ("arm64-canary", "canary"),
                               ("", "unknown"), ("future", "unknown")):
             with self.subTest(tag=tag):
-                metadata = {} if tag is None else {"KSChannelID": tag}
+                metadata = {"KSProductID": "Chrome"}
+                if tag is not None:
+                    metadata["KSChannelID"] = tag
                 self.assertEqual(identity.chromium_channel(True, metadata), expected)
                 self.assertEqual(identity.chromium_channel(False, metadata), "unknown")
 
+    def test_branded_build_without_keystone_has_unknown_channel(self):
+        for metadata in ({}, {"KSChannelID": "beta"}, {"KSChannelID": "arm64"}):
+            self.assertEqual(identity.chromium_channel(True, metadata), "unknown")
+            for product in ("debug", "alpha", "beta"):
+                self.assertEqual(identity.validate_identity(product, False, True, metadata), "unknown")
+        self.assertEqual(identity.chromium_channel(True, {"KSProductID": ""}), "stable")
+
     def test_branded_internal_dev_can_use_explicit_internal_identity(self):
         for product in ("debug", "alpha"):
-            self.assertEqual(identity.validate_identity(product, True, True, {"KSChannelID": "dev"}), "dev")
+            self.assertEqual(identity.validate_identity(product, True, True, {"KSProductID": "Chrome", "KSChannelID": "dev"}), "dev")
         with self.assertRaises(ValueError):
             identity.validate_identity("future", False, False, {})
 
@@ -51,7 +60,7 @@ class BuildIdentityTests(unittest.TestCase):
             root = Path(directory)
             info = root / "Info.plist"
             stamp = root / "verified.stamp"
-            info.write_bytes(plistlib.dumps({"KSChannelID": "beta"}))
+            info.write_bytes(plistlib.dumps({"KSProductID": "Chrome", "KSChannelID": "beta"}))
             command = [sys.executable, "-B", str(Path(identity.__file__)),
                        "--plist", str(info), "--product-channel", "alpha",
                        "--internal-options", "false", "--chrome-branded", "true",

@@ -1,40 +1,41 @@
-From 5521744501706783b743fa3bc3d8c292c88c198d Mon Sep 17 00:00:00 2001
+From 326ebcfe26afa6ee0c3326ac455c02f98909b132 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
-Date: Wed, 18 Nov 2026 00:17:07 +0800
+Date: Wed, 18 Nov 2026 01:09:38 +0800
 Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  storage
 
 ---
- chrome/browser/aegis/BUILD.gn                 |   5 +
+ chrome/browser/aegis/BUILD.gn                 |   7 +
  chrome/browser/aegis/access/BUILD.gn          |  48 +++-
  .../aegis/access/access_async_rule_store.cc   |   4 +
  .../aegis/access/access_async_rule_store.h    |   1 +
- .../aegis/access/access_build_channel.cc      |  27 ++-
+ .../aegis/access/access_build_channel.cc      |  27 +-
  .../aegis/access/access_build_channel.h       |   8 +-
- .../aegis/access/access_core_log_unittest.cc  |  14 ++
+ .../aegis/access/access_core_log_unittest.cc  |  14 +
  .../access_local_core_manager_unittest.cc     |   8 +
- .../access/access_options_browsertest.cc      |  94 ++++++++
- .../aegis/access/access_options_service.cc    |  58 +++++
+ .../access/access_options_browsertest.cc      | 103 +++++++
+ .../aegis/access/access_options_service.cc    |  58 ++++
  .../aegis/access/access_options_service.h     |  26 ++
  .../access/access_options_service_unittest.cc |  50 ++++
- .../aegis/access/access_options_store.cc      | 223 ++++++++++++++++++
- .../aegis/access/access_options_store.h       |  46 ++++
- .../access/access_options_store_unittest.cc   | 132 +++++++++++
- .../access/access_service_coordinator.cc      |  29 +++
+ .../aegis/access/access_options_store.cc      | 253 ++++++++++++++++++
+ .../aegis/access/access_options_store.h       |  48 ++++
+ .../access/access_options_store_unittest.cc   | 192 +++++++++++++
+ .../access/access_service_coordinator.cc      |  29 ++
  .../aegis/access/access_service_coordinator.h |   3 +
  .../access_site_proxy_bubble_controller.cc    |  22 +-
+ .../access_site_proxy_product_unittest.cc     |  18 +-
  chrome/browser/aegis/access/alpha_access.gni  |  13 +
- .../access/verify_access_build_identity.py    |  55 +++++
- .../verify_access_build_identity_test.py      |  70 ++++++
+ .../access/verify_access_build_identity.py    |  55 ++++
+ .../verify_access_build_identity_test.py      |  79 ++++++
  chrome/browser/ui/webui/aegis/BUILD.gn        |   5 +
  chrome/browser/ui/webui/aegis/aegis_ui.cc     |  22 ++
- .../ui/webui/aegis/aegis_ui_handler.cc        |  42 ++++
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  42 +++
  .../browser/ui/webui/aegis/aegis_ui_handler.h |   7 +
  components/aegis_access/BUILD.gn              |   5 +
- .../aegis_access/access_options_capability.h  |  87 +++++++
- .../access_options_capability_test.cc         |  70 ++++++
+ .../aegis_access/access_options_capability.h  |  87 ++++++
+ .../access_options_capability_test.cc         |  70 +++++
  components/aegis_access/access_sources.json   |   3 +
- 29 files changed, 1164 insertions(+), 13 deletions(-)
+ 30 files changed, 1288 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_options_browsertest.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.h
@@ -48,10 +49,10 @@ Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  create mode 100644 components/aegis_access/access_options_capability_test.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index 6171cf2690b9c6abdff0348745016639175b9838..af580e51aa21d7c7a423af72cf5c000ce8881e3e 100644
+index 6171cf2690b9c6abdff0348745016639175b9838..db3f4c9a493567b3d6ceacf638366022ca56dc51 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
-@@ -326,7 +326,12 @@ if (!is_android) {
+@@ -326,7 +326,14 @@ if (!is_android) {
        "enhancements/enhancement_browsertest.cc",
        "google_service_prompt_browsertest.cc",
      ]
@@ -59,6 +60,8 @@ index 6171cf2690b9c6abdff0348745016639175b9838..af580e51aa21d7c7a423af72cf5c000c
 +      sources += [ "access/access_options_browsertest.cc" ]
 +    }
      deps = [
++      "//chrome/browser/aegis/access:access_buildflags",
++      "//chrome/common:channel_info",
 +      "//chrome/browser/aegis/access:access_build_channel",
 +      "//chrome/browser/aegis/access:access_site_proxy_bubble",
        ":aegis",
@@ -302,12 +305,14 @@ index f89e3a4a93a0b594813d050920abe7a433045b54..2c255f63357b7075e4f2ef8124c069a2
    EXPECT_EQ(input->manifest, canonical_directory.AppendASCII("dev-manifest"));
 diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..d883829dac05621a18e82dfccdcdd5d55075b40d
+index 0000000000000000000000000000000000000000..bfd46b7d8e2f9f4a1ac743590f9fbebab2889d8c
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_browsertest.cc
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,103 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_build_channel.h"
++#include "chrome/browser/aegis/access/access_buildflags.h"
++#include "chrome/common/channel_info.h"
 +#include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/profiles/profile.h"
@@ -389,8 +394,15 @@ index 0000000000000000000000000000000000000000..d883829dac05621a18e82dfccdcdd5d5
 +}
 +IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest, LegacyDiagnosticPanelUsesResolvedChannel) {
 +  const auto channel = AccessChannelForCurrentBuild();
-+  const bool internal = channel == aegis_access::ChannelNamespace::kDev ||
-+                        channel == aegis_access::ChannelNamespace::kAlpha;
++  const auto identity = AccessBuildIdentityForCurrentBuild();
++  bool internal = !identity.conflict &&
++      (channel == aegis_access::ChannelNamespace::kDev ||
++       channel == aegis_access::ChannelNamespace::kAlpha);
++#if !BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
++  if (identity.product == aegis_access::AccessProductChannel::kUnknown &&
++      chrome::GetChannel() == version_info::Channel::UNKNOWN)
++    internal = false;
++#endif
 +  auto* controller = AccessSiteProxyBubbleController::GetOrCreate(browser()->GetProfile());
 +  ASSERT_TRUE(controller);
 +  EXPECT_EQ(controller->IsDevAllowBlockPanelRegistered(), internal);
@@ -554,10 +566,10 @@ index 0000000000000000000000000000000000000000..8fbe73bad7079e8566da54137ab9e78a
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_options_store.cc b/chrome/browser/aegis/access/access_options_store.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666dada0ee733
+index 0000000000000000000000000000000000000000..8505926a9977628f0f700fdeda819f6b467460fb
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_store.cc
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,253 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_options_store.h"
 +
@@ -615,6 +627,7 @@ index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666da
 +StoreStatus AccessOptionsStore::MigrateVersionOne() {
 +  const auto directory = database_path_.DirName();
 +  const auto backup = directory.AppendASCII("options.v1.db");
++  const auto backup_staging = directory.AppendASCII("options.backup-staging.db");
 +  const auto temporary = directory.AppendASCII("options.migrating.db");
 +  const auto marker = directory.AppendASCII("migration.pending");
 +  if (base::PathExists(marker)) {
@@ -635,9 +648,10 @@ index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666da
 +  const auto revision = contents.ColumnInt64(0);
 +  const auto payload = contents.ColumnString(1);
 +  contents.Clear();
-+  if (base::PathExists(backup)) {
++  auto validate_backup = [&](const base::FilePath& path) {
 +    sql::Database original("AegisAccess");
-+    if (!original.Open(backup))
++    if (!original.Open(path) || !original.DoesTableExist("identity") ||
++        !original.DoesTableExist("configuration"))
 +      return StoreStatus::kRecoveryRequired;
 +    sql::Statement check(original.GetUniqueStatement(
 +        "SELECT i.version,i.channel,i.profile_id,c.revision,c.payload "
@@ -647,11 +661,31 @@ index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666da
 +        check.ColumnString(2) != profile_id_ || check.ColumnInt64(3) != revision ||
 +        check.ColumnString(4) != payload)
 +      return StoreStatus::kConflict;
++    return StoreStatus::kValid;
++  };
++  if (base::PathExists(backup)) {
++    const auto status = validate_backup(backup);
++    if (status != StoreStatus::kValid)
++      return status;
 +  } else {
-+    sql::Statement copy(database_.GetUniqueStatement("VACUUM INTO ?"));
-+    copy.BindString(0, backup.AsUTF8Unsafe());
-+    if (!copy.Run())
++    // A crashed VACUUM may leave an incomplete destination. Only the staged
++    // name can be discarded; a published recovery source is never overwritten.
++    if (base::PathExists(backup_staging) && !base::DeleteFile(backup_staging))
 +      return StoreStatus::kIoError;
++    if (interrupt_backup_) {
++      if (!base::WriteFile(backup_staging, "interrupted-vacuum"))
++        return StoreStatus::kIoError;
++      return StoreStatus::kRecoveryRequired;
++    }
++    {
++      sql::Statement copy(database_.GetUniqueStatement("VACUUM INTO ?"));
++      copy.BindString(0, backup_staging.AsUTF8Unsafe());
++      if (!copy.Run())
++        return StoreStatus::kIoError;
++    }
++    if (validate_backup(backup_staging) != StoreStatus::kValid ||
++        !base::ReplaceFile(backup_staging, backup, nullptr))
++      return StoreStatus::kRecoveryRequired;
 +  }
 +  // The original remains intact at both paths until the upgraded temporary
 +  // database has committed and the durable recovery marker has been written.
@@ -700,6 +734,14 @@ index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666da
 +  if (database_.is_open())
 +    database_.Close();
 +  const bool existed = !private_ && base::PathExists(database_path_);
++  if (!private_ && !existed) {
++    const auto directory = database_path_.DirName();
++    if (base::PathExists(directory.AppendASCII("migration.pending")) ||
++        base::PathExists(directory.AppendASCII("options.v1.db")) ||
++        base::PathExists(directory.AppendASCII("options.backup-staging.db")) ||
++        base::PathExists(directory.AppendASCII("options.migrating.db")))
++      return StoreStatus::kRecoveryRequired;
++  }
 +  if (!(private_ ? database_.OpenInMemory() : database_.Open(database_path_)))
 +    return StoreStatus::kIoError;
 +  if (!database_.DoesTableExist("identity")) {
@@ -783,10 +825,10 @@ index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666da
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_options_store.h b/chrome/browser/aegis/access/access_options_store.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..e76a3b66b870106a425b0edc49b8b2595c9b47c5
+index 0000000000000000000000000000000000000000..6309ee921e957ec6cbbd32fd2be07d7de0a170db
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_store.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_OPTIONS_STORE_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_OPTIONS_STORE_H_
@@ -812,6 +854,7 @@ index 0000000000000000000000000000000000000000..e76a3b66b870106a425b0edc49b8b259
 +                     bool is_private);
 +  ~AccessOptionsStore();
 +  StoreStatus Open();
++  void SetInterruptBackupForTesting(bool value) { interrupt_backup_ = value; }
 +  void SetInterruptMigrationForTesting(bool value) { interrupt_migration_ = value; }
 +  StoreResult<AccessOptionsSnapshot> Read();
 +  StoreResult<AccessOptionsSnapshot> OpenAndRead();
@@ -828,6 +871,7 @@ index 0000000000000000000000000000000000000000..e76a3b66b870106a425b0edc49b8b259
 +  bool private_;
 +  bool open_ = false;
 +  bool interrupt_migration_ = false;
++  bool interrupt_backup_ = false;
 +  sql::Database database_;
 +  SEQUENCE_CHECKER(sequence_checker_);
 +};
@@ -835,10 +879,10 @@ index 0000000000000000000000000000000000000000..e76a3b66b870106a425b0edc49b8b259
 +#endif
 diff --git a/chrome/browser/aegis/access/access_options_store_unittest.cc b/chrome/browser/aegis/access/access_options_store_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..0d912423798adb7b3d802806c204dfff21ca4c5e
+index 0000000000000000000000000000000000000000..de629a8e1c6c1600ca09caf154fdf7d039391952
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_store_unittest.cc
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,192 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_options_store.h"
 +#include "base/files/file_util.h"
@@ -847,6 +891,17 @@ index 0000000000000000000000000000000000000000..0d912423798adb7b3d802806c204dfff
 +#include "testing/gtest/include/gtest/gtest.h"
 +
 +namespace aegis::access {
++namespace {
++bool CreateVersionOneOptions(const base::FilePath& folder) {
++  if (!base::CreateDirectory(folder)) return false;
++  sql::Database legacy("AegisAccess");
++  return legacy.Open(folder.AppendASCII("options.db")) &&
++      legacy.Execute("CREATE TABLE identity(singleton INTEGER PRIMARY KEY,version INTEGER,channel INTEGER,profile_id TEXT)") &&
++      legacy.Execute("INSERT INTO identity VALUES(1,1,1,'profile')") &&
++      legacy.Execute("CREATE TABLE configuration(singleton INTEGER PRIMARY KEY,revision INTEGER,payload TEXT)") &&
++      legacy.Execute("INSERT INTO configuration VALUES(1,7,'{}')");
++}
++}  // namespace
 +TEST(AccessOptionsStoreTest, BetaCannotCreateConfiguration) {
 +  base::ScopedTempDir dir;
 +  ASSERT_TRUE(dir.CreateUniqueTempDir());
@@ -969,6 +1024,55 @@ index 0000000000000000000000000000000000000000..0d912423798adb7b3d802806c204dfff
 +  std::string bytes;
 +  ASSERT_TRUE(base::ReadFileToString(path, &bytes));
 +  EXPECT_EQ(bytes, "original");
++}
++TEST(AccessOptionsStoreTest, InterruptedBackupNeverPublishesPartialRecoverySource) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const auto identity = aegis_access::ResolveAccessBuildIdentity(
++      aegis_access::AccessProductChannel::kAlpha,
++      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
++  const auto folder = dir.GetPath().AppendASCII("AccessOptions").AppendASCII("alpha");
++  ASSERT_TRUE(CreateVersionOneOptions(folder));
++  {
++    AccessOptionsStore interrupted(identity, dir.GetPath(), "profile", false);
++    interrupted.SetInterruptBackupForTesting(true);
++    EXPECT_EQ(interrupted.Open(), StoreStatus::kRecoveryRequired);
++  }
++  ASSERT_FALSE(base::PathExists(folder.AppendASCII("options.v1.db")));
++  EXPECT_TRUE(base::PathExists(folder.AppendASCII("options.backup-staging.db")));
++  AccessOptionsStore resumed(identity, dir.GetPath(), "profile", false);
++  ASSERT_EQ(resumed.Open(), StoreStatus::kValid);
++  ASSERT_EQ(resumed.Read().value->revision, 7u);
++  EXPECT_FALSE(base::PathExists(folder.AppendASCII("options.backup-staging.db")));
++  sql::Database original("AegisAccess");
++  ASSERT_TRUE(original.Open(folder.AppendASCII("options.v1.db")));
++  sql::Statement source(original.GetUniqueStatement("SELECT revision FROM configuration"));
++  ASSERT_TRUE(source.Step());
++  EXPECT_EQ(source.ColumnInt64(0), 7);
++}
++TEST(AccessOptionsStoreTest, MissingPrimaryDuringMigrationCannotCreateEmptyConfiguration) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const auto identity = aegis_access::ResolveAccessBuildIdentity(
++      aegis_access::AccessProductChannel::kAlpha,
++      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
++  const auto folder = dir.GetPath().AppendASCII("AccessOptions").AppendASCII("alpha");
++  ASSERT_TRUE(CreateVersionOneOptions(folder));
++  {
++    AccessOptionsStore interrupted(identity, dir.GetPath(), "profile", false);
++    interrupted.SetInterruptMigrationForTesting(true);
++    ASSERT_EQ(interrupted.Open(), StoreStatus::kRecoveryRequired);
++  }
++  ASSERT_TRUE(base::DeleteFile(folder.AppendASCII("options.db")));
++  std::string backup;
++  ASSERT_TRUE(base::ReadFileToString(folder.AppendASCII("options.v1.db"), &backup));
++  AccessOptionsStore resumed(identity, dir.GetPath(), "profile", false);
++  EXPECT_EQ(resumed.Open(), StoreStatus::kRecoveryRequired);
++  EXPECT_FALSE(base::PathExists(folder.AppendASCII("options.db")));
++  EXPECT_TRUE(base::PathExists(folder.AppendASCII("migration.pending")));
++  std::string after;
++  ASSERT_TRUE(base::ReadFileToString(folder.AppendASCII("options.v1.db"), &after));
++  EXPECT_EQ(backup, after);
 +}
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_service_coordinator.cc b/chrome/browser/aegis/access/access_service_coordinator.cc
@@ -1114,6 +1218,42 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
      std::move(completion).Run(false);
      return;
    }
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 91ac888befea0f68f9c2d82729fd6022a5890747..b0f1042d83c0528fa74f8e3a9276755f12b6e0c5 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -515,7 +515,9 @@ TEST_F(AccessSiteProxyProductTest, OnOffOnUsesRealCoreAndCommittedRevision) {
+ 
+ TEST_F(AccessSiteProxyProductTest,
+        DevPreviewDoesNotRewriteCommittedWebsiteIntentOrConnection) {
+-  ASSERT_TRUE(bubble_->IsDevAllowBlockPanelRegistered());
++  const bool admitted = owner_.channel == aegis_access::ChannelNamespace::kDev ||
++                        owner_.channel == aegis_access::ChannelNamespace::kAlpha;
++  EXPECT_EQ(bubble_->IsDevAllowBlockPanelRegistered(), admitted);
+   Enable();
+   const auto stored = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+   ASSERT_TRUE(stored.value);
+@@ -525,11 +527,15 @@ TEST_F(AccessSiteProxyProductTest,
+   for (const auto action : {AccessDevAllowBlockAction::kOff,
+                             AccessDevAllowBlockAction::kBlock}) {
+     ASSERT_EQ(bubble_->ApplyDevAllowBlock("news.example", action).status,
+-              AccessDevAllowBlockApplyStatus::kApplied);
+-    EXPECT_EQ(bubble_->DevAllowBlockSnapshotForCommittedUrl(
+-                  GURL("https://news.example")).intent,
+-              action == AccessDevAllowBlockAction::kOff
+-                  ? AccessSiteIntent::kOff : AccessSiteIntent::kBlock);
++              admitted ? AccessDevAllowBlockApplyStatus::kApplied
++                       : AccessDevAllowBlockApplyStatus::kChannelNotAdmitted);
++    const auto preview = bubble_->DevAllowBlockSnapshotForCommittedUrl(
++        GURL("https://news.example"));
++    EXPECT_EQ(preview.panel_registered, admitted);
++    if (admitted) {
++      EXPECT_EQ(preview.intent, action == AccessDevAllowBlockAction::kOff
++                    ? AccessSiteIntent::kOff : AccessSiteIntent::kBlock);
++    }
+     EXPECT_EQ(Snapshot().intent, AccessSiteIntent::kAllow);
+     EXPECT_TRUE(Snapshot().toggle_on);
+     EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
 diff --git a/chrome/browser/aegis/access/alpha_access.gni b/chrome/browser/aegis/access/alpha_access.gni
 index bd1b3a851d1f4104a4386892ce19a269852d85b5..41dfad030292816e08fed470eded9a692fa49276 100644
 --- a/chrome/browser/aegis/access/alpha_access.gni
@@ -1144,7 +1284,7 @@ index bd1b3a851d1f4104a4386892ce19a269852d85b5..41dfad030292816e08fed470eded9a69
 +       "Internal Options requires an explicit internal macOS product identity.")
 diff --git a/chrome/browser/aegis/access/verify_access_build_identity.py b/chrome/browser/aegis/access/verify_access_build_identity.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..aacf77bc35434ec7698a5d6217b50441d1920ba0
+index 0000000000000000000000000000000000000000..a443fe6356938d871262d3e21a7aeb97b0afedcf
 --- /dev/null
 +++ b/chrome/browser/aegis/access/verify_access_build_identity.py
 @@ -0,0 +1,55 @@
@@ -1158,7 +1298,7 @@ index 0000000000000000000000000000000000000000..aacf77bc35434ec7698a5d6217b50441
 +
 +def chromium_channel(branded, metadata):
 +    # chrome/common/channel_info_mac.mm ignores Keystone when unbranded.
-+    if not branded:
++    if not branded or metadata.get("KSProductID") is None:
 +        return "unknown"
 +    tag = metadata.get("KSChannelID")
 +    if tag is None or tag in ("arm64", "universal"):
@@ -1205,10 +1345,10 @@ index 0000000000000000000000000000000000000000..aacf77bc35434ec7698a5d6217b50441
 +    main()
 diff --git a/chrome/browser/aegis/access/verify_access_build_identity_test.py b/chrome/browser/aegis/access/verify_access_build_identity_test.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..eaa5ff6d51c7df9aebf9cf6f9c7ea9477d1101b2
+index 0000000000000000000000000000000000000000..3e4054e48a5880bf0e9a4a1b4bc762c39ee22b9c
 --- /dev/null
 +++ b/chrome/browser/aegis/access/verify_access_build_identity_test.py
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,79 @@
 +# Copyright 2026 GCSA
 +import unittest
 +import plistlib
@@ -1231,7 +1371,7 @@ index 0000000000000000000000000000000000000000..eaa5ff6d51c7df9aebf9cf6f9c7ea947
 +                        self.assertEqual(identity.validate_identity(product, enabled, False, {}), "unknown")
 +
 +    def test_known_release_metadata_rejects_conflicting_identity(self):
-+        for channel, metadata in (("beta", {"KSChannelID": "arm64-beta"}), ("stable", {})):
++        for channel, metadata in (("beta", {"KSProductID": "Chrome", "KSChannelID": "arm64-beta"}), ("stable", {"KSProductID": "Chrome"})):
 +            for product in ("unknown", "debug", "alpha", "beta", "stable"):
 +                with self.subTest(channel=channel, product=product):
 +                    if product not in ("unknown", channel):
@@ -1247,13 +1387,22 @@ index 0000000000000000000000000000000000000000..eaa5ff6d51c7df9aebf9cf6f9c7ea947
 +                              ("dev", "dev"), ("arm64-canary", "canary"),
 +                              ("", "unknown"), ("future", "unknown")):
 +            with self.subTest(tag=tag):
-+                metadata = {} if tag is None else {"KSChannelID": tag}
++                metadata = {"KSProductID": "Chrome"}
++                if tag is not None:
++                    metadata["KSChannelID"] = tag
 +                self.assertEqual(identity.chromium_channel(True, metadata), expected)
 +                self.assertEqual(identity.chromium_channel(False, metadata), "unknown")
 +
++    def test_branded_build_without_keystone_has_unknown_channel(self):
++        for metadata in ({}, {"KSChannelID": "beta"}, {"KSChannelID": "arm64"}):
++            self.assertEqual(identity.chromium_channel(True, metadata), "unknown")
++            for product in ("debug", "alpha", "beta"):
++                self.assertEqual(identity.validate_identity(product, False, True, metadata), "unknown")
++        self.assertEqual(identity.chromium_channel(True, {"KSProductID": ""}), "stable")
++
 +    def test_branded_internal_dev_can_use_explicit_internal_identity(self):
 +        for product in ("debug", "alpha"):
-+            self.assertEqual(identity.validate_identity(product, True, True, {"KSChannelID": "dev"}), "dev")
++            self.assertEqual(identity.validate_identity(product, True, True, {"KSProductID": "Chrome", "KSChannelID": "dev"}), "dev")
 +        with self.assertRaises(ValueError):
 +            identity.validate_identity("future", False, False, {})
 +
@@ -1262,7 +1411,7 @@ index 0000000000000000000000000000000000000000..eaa5ff6d51c7df9aebf9cf6f9c7ea947
 +            root = Path(directory)
 +            info = root / "Info.plist"
 +            stamp = root / "verified.stamp"
-+            info.write_bytes(plistlib.dumps({"KSChannelID": "beta"}))
++            info.write_bytes(plistlib.dumps({"KSProductID": "Chrome", "KSChannelID": "beta"}))
 +            command = [sys.executable, "-B", str(Path(identity.__file__)),
 +                       "--plist", str(info), "--product-channel", "alpha",
 +                       "--internal-options", "false", "--chrome-branded", "true",

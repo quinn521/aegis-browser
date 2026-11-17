@@ -8,7 +8,7 @@ from pathlib import Path
 
 def chromium_channel(branded, metadata):
     # chrome/common/channel_info_mac.mm ignores Keystone when unbranded.
-    if not branded:
+    if not branded or metadata.get("KSProductID") is None:
         return "unknown"
     tag = metadata.get("KSChannelID")
     if tag is None or tag in ("arm64", "universal"):

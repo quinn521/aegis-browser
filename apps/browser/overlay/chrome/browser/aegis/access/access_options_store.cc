@@ -55,6 +55,7 @@ StoreStatus AccessOptionsStore::ValidateIdentity() {
 StoreStatus AccessOptionsStore::MigrateVersionOne() {
   const auto directory = database_path_.DirName();
   const auto backup = directory.AppendASCII("options.v1.db");
+  const auto backup_staging = directory.AppendASCII("options.backup-staging.db");
   const auto temporary = directory.AppendASCII("options.migrating.db");
   const auto marker = directory.AppendASCII("migration.pending");
   if (base::PathExists(marker)) {
@@ -75,9 +76,10 @@ StoreStatus AccessOptionsStore::MigrateVersionOne() {
   const auto revision = contents.ColumnInt64(0);
   const auto payload = contents.ColumnString(1);
   contents.Clear();
-  if (base::PathExists(backup)) {
+  auto validate_backup = [&](const base::FilePath& path) {
     sql::Database original("AegisAccess");
-    if (!original.Open(backup))
+    if (!original.Open(path) || !original.DoesTableExist("identity") ||
+        !original.DoesTableExist("configuration"))
       return StoreStatus::kRecoveryRequired;
     sql::Statement check(original.GetUniqueStatement(
         "SELECT i.version,i.channel,i.profile_id,c.revision,c.payload "
@@ -87,11 +89,31 @@ StoreStatus AccessOptionsStore::MigrateVersionOne() {
         check.ColumnString(2) != profile_id_ || check.ColumnInt64(3) != revision ||
         check.ColumnString(4) != payload)
       return StoreStatus::kConflict;
+    return StoreStatus::kValid;
+  };
+  if (base::PathExists(backup)) {
+    const auto status = validate_backup(backup);
+    if (status != StoreStatus::kValid)
+      return status;
   } else {
-    sql::Statement copy(database_.GetUniqueStatement("VACUUM INTO ?"));
-    copy.BindString(0, backup.AsUTF8Unsafe());
-    if (!copy.Run())
+    // A crashed VACUUM may leave an incomplete destination. Only the staged
+    // name can be discarded; a published recovery source is never overwritten.
+    if (base::PathExists(backup_staging) && !base::DeleteFile(backup_staging))
       return StoreStatus::kIoError;
+    if (interrupt_backup_) {
+      if (!base::WriteFile(backup_staging, "interrupted-vacuum"))
+        return StoreStatus::kIoError;
+      return StoreStatus::kRecoveryRequired;
+    }
+    {
+      sql::Statement copy(database_.GetUniqueStatement("VACUUM INTO ?"));
+      copy.BindString(0, backup_staging.AsUTF8Unsafe());
+      if (!copy.Run())
+        return StoreStatus::kIoError;
+    }
+    if (validate_backup(backup_staging) != StoreStatus::kValid ||
+        !base::ReplaceFile(backup_staging, backup, nullptr))
+      return StoreStatus::kRecoveryRequired;
   }
   // The original remains intact at both paths until the upgraded temporary
   // database has committed and the durable recovery marker has been written.
@@ -140,6 +162,14 @@ StoreStatus AccessOptionsStore::Open() {
   if (database_.is_open())
     database_.Close();
   const bool existed = !private_ && base::PathExists(database_path_);
+  if (!private_ && !existed) {
+    const auto directory = database_path_.DirName();
+    if (base::PathExists(directory.AppendASCII("migration.pending")) ||
+        base::PathExists(directory.AppendASCII("options.v1.db")) ||
+        base::PathExists(directory.AppendASCII("options.backup-staging.db")) ||
+        base::PathExists(directory.AppendASCII("options.migrating.db")))
+      return StoreStatus::kRecoveryRequired;
+  }
   if (!(private_ ? database_.OpenInMemory() : database_.Open(database_path_)))
     return StoreStatus::kIoError;
   if (!database_.DoesTableExist("identity")) {

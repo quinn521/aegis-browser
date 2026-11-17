@@ -23,6 +23,7 @@ class AccessOptionsStore {
                      bool is_private);
   ~AccessOptionsStore();
   StoreStatus Open();
+  void SetInterruptBackupForTesting(bool value) { interrupt_backup_ = value; }
   void SetInterruptMigrationForTesting(bool value) { interrupt_migration_ = value; }
   StoreResult<AccessOptionsSnapshot> Read();
   StoreResult<AccessOptionsSnapshot> OpenAndRead();
@@ -39,6 +40,7 @@ class AccessOptionsStore {
   bool private_;
   bool open_ = false;
   bool interrupt_migration_ = false;
+  bool interrupt_backup_ = false;
   sql::Database database_;
   SEQUENCE_CHECKER(sequence_checker_);
 };

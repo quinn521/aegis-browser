@@ -1,5 +1,7 @@
 // Copyright 2026 GCSA
 #include "chrome/browser/aegis/access/access_build_channel.h"
+#include "chrome/browser/aegis/access/access_buildflags.h"
+#include "chrome/common/channel_info.h"
 #include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/profiles/profile.h"
@@ -81,8 +83,15 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest, PrivateReadDoesNotCreateOptions
 }
 IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest, LegacyDiagnosticPanelUsesResolvedChannel) {
   const auto channel = AccessChannelForCurrentBuild();
-  const bool internal = channel == aegis_access::ChannelNamespace::kDev ||
-                        channel == aegis_access::ChannelNamespace::kAlpha;
+  const auto identity = AccessBuildIdentityForCurrentBuild();
+  bool internal = !identity.conflict &&
+      (channel == aegis_access::ChannelNamespace::kDev ||
+       channel == aegis_access::ChannelNamespace::kAlpha);
+#if !BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
+  if (identity.product == aegis_access::AccessProductChannel::kUnknown &&
+      chrome::GetChannel() == version_info::Channel::UNKNOWN)
+    internal = false;
+#endif
   auto* controller = AccessSiteProxyBubbleController::GetOrCreate(browser()->GetProfile());
   ASSERT_TRUE(controller);
   EXPECT_EQ(controller->IsDevAllowBlockPanelRegistered(), internal);

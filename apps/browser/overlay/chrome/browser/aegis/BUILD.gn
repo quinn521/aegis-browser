@@ -330,6 +330,8 @@ if (!is_android) {
       sources += [ "access/access_options_browsertest.cc" ]
     }
     deps = [
+      "//chrome/browser/aegis/access:access_buildflags",
+      "//chrome/common:channel_info",
       "//chrome/browser/aegis/access:access_build_channel",
       "//chrome/browser/aegis/access:access_site_proxy_bubble",
       ":aegis",
