@@ -1273,7 +1273,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         // A cancelled provisional navigation may leave a different document on
         // screen, even when the two requests used the same URL.
         let displaysCommittedDocument = !isLoading && loadingErrorPresentation == nil
-            && committedRequest != nil && loadedWebView?.url == target
+            && committedRequest != nil
+            && (committedRequest?.url == target || loadedWebView?.url == target)
         let provenance = if displaysCommittedDocument, let committedRequest {
             committedRequest
         } else {
@@ -2099,6 +2100,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private func refreshState() {
         updateTitle(webView.title, url: webView.url)
         url = webView.url
+        if !isLoading, loadingErrorPresentation == nil, let url {
+            committedRequest?.url = url
+        }
         if let failure = lastMainFrameFailure { requestedURL = failure.url }
         else if let url { requestedURL = url }
         canGoBack = webView.canGoBack

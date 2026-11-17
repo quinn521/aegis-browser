@@ -73,7 +73,11 @@ final class AccessNavigationRecoveryTests: XCTestCase {
                         withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
             XCTAssertNil(tab.lastMainFrameFailure)
             XCTAssertEqual(tab.requestedURL, displayed)
+            let evicted = await tab.suspendIfSafe()
+            XCTAssertTrue(evicted)
             tab.reload()
+            tab.webView.frame = window.bounds
+            window.rootViewController?.view.addSubview(tab.webView)
             await waitUntil({ origin.receivedRequests.count >= 2 && !tab.isLoading }, timeout: 10)
             XCTAssertEqual(origin.receivedRequests.map(\.target), [displayed.path, displayed.path])
             XCTAssertEqual(origin.receivedRequests.map(\.method), ["GET", "GET"])
@@ -119,8 +123,14 @@ final class AccessNavigationRecoveryTests: XCTestCase {
                 await waitUntil({ !tab.isLoading && tab.webView.url == target }, timeout: 10)
                 XCTAssertEqual(tab.requestedURL, target)
                 XCTAssertEqual(origin.receivedRequests.count, 1)
+                if route == "replaceState" {
+                    let evicted = await tab.suspendIfSafe()
+                    XCTAssertTrue(evicted)
+                }
                 tab.reload()
                 if variant == "GET" {
+                    tab.webView.frame = window.bounds
+                    window.rootViewController?.view.addSubview(tab.webView)
                     await waitUntil({ !tab.isLoading && origin.receivedRequests.count == 2 }, timeout: 10)
                     XCTAssertEqual(origin.receivedRequests.map(\.target), [source.path, target.path])
                     XCTAssertEqual(origin.receivedRequests.map(\.method), ["GET", "GET"])
