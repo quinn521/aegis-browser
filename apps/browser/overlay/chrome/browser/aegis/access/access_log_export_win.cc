@@ -12,14 +12,30 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/win/scoped_co_mem.h"
 #include "chrome/browser/aegis/access/access_core_log_share.h"
+#include "chrome/browser/aegis/access/access_log_export_dialog_win.h"
 #include "ui/views/win/hwnd_util.h"
 
 namespace aegis::access {
 namespace {
+
+void ExplainExistingDestination(IFileDialog* dialog) {
+  dialog->SetTitle(L"Choose a new filename for Access diagnostics");
+  Microsoft::WRL::ComPtr<IOleWindow> window;
+  HWND owner = nullptr;
+  if (SUCCEEDED(dialog->QueryInterface(IID_PPV_ARGS(&window))) &&
+      SUCCEEDED(window->GetWindow(&owner)) && ::IsWindow(owner)) {
+    ::MessageBoxW(owner,
+                  L"The selected file already exists. Choose a different "
+                  L"filename to save the diagnostics. The existing file "
+                  L"will be kept.",
+                  L"Save Access diagnostics", MB_OK | MB_ICONINFORMATION);
+  }
+}
 
 std::optional<base::FilePath> PickDestination(HWND owner) {
   if (!::IsWindow(owner)) return std::nullopt;
@@ -28,11 +44,17 @@ std::optional<base::FilePath> PickDestination(HWND owner) {
                                 CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&picker)))) {
     return std::nullopt;
   }
-  if (FAILED(picker->SetOptions(FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
-                                FOS_DONTADDTORECENT | FOS_NOCHANGEDIR |
-                                FOS_NODEREFERENCELINKS)) ||
+  if (FAILED(ConfigureAccessLogExportDialog(picker.Get())) ||
       FAILED(picker->SetTitle(L"Save compressed Access diagnostics")) ||
       FAILED(picker->SetFileName(L"Aegis-Access.log.gz"))) return std::nullopt;
+  auto events = CreateAccessLogExportDialogEvents(
+      base::BindRepeating(&ExplainExistingDestination));
+  DWORD cookie = 0;
+  if (FAILED(picker->Advise(events.Get(), &cookie))) return std::nullopt;
+  base::ScopedClosureRunner unadvise(base::BindOnce(
+      [](Microsoft::WRL::ComPtr<IFileSaveDialog> dialog, DWORD cookie) {
+        dialog->Unadvise(cookie);
+      }, picker, cookie));
   const auto result = picker->Show(owner);
   if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return base::FilePath();
   Microsoft::WRL::ComPtr<IShellItem> selected;

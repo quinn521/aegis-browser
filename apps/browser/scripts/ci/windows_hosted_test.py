@@ -149,6 +149,7 @@ class HostedTrialTest(unittest.TestCase):
         enhancements = (source / 'enhancements/enhancement_browsertest.cc').read_text()
         access = '\n'.join((source / 'access' / file).read_text() for file in (
             'access_core_log_disk_win_unittest.cc',
+            'access_log_export_dialog_win_unittest.cc',
             'access_local_core_win_unittest.cc',
         ))
         self.assertEqual(hosted.ENHANCEMENT_CASES, {

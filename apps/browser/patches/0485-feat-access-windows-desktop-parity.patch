@@ -1,12 +1,12 @@
-From b892ff503d7661bd1c4a37faab94df828995d752 Mon Sep 17 00:00:00 2001
+From 578177cd7e141031c4799b3795f48e70389f4bfe Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Mon, 16 Nov 2026 12:46:10 +0800
+Date: Tue, 17 Nov 2026 17:56:22 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
  chrome/browser/BUILD.gn                       |   9 +-
  chrome/browser/aegis/BUILD.gn                 |  45 +-
- chrome/browser/aegis/access/BUILD.gn          |  87 ++-
+ chrome/browser/aegis/access/BUILD.gn          | 111 +++-
  .../aegis/access/access_account_win.cc        | 510 ++++++++++++++++++
  .../browser/aegis/access/access_account_win.h |  41 ++
  .../access/access_account_win_unittest.cc     | 115 ++++
@@ -22,7 +22,10 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../aegis/access/access_local_core_win.h      |  31 ++
  .../access_local_core_win_test_child.cc       |  71 +++
  .../access/access_local_core_win_unittest.cc  | 209 +++++++
- .../aegis/access/access_log_export_win.cc     | 106 ++++
+ .../access/access_log_export_dialog_win.cc    |  69 +++
+ .../access/access_log_export_dialog_win.h     |  20 +
+ .../access_log_export_dialog_win_unittest.cc  |  88 +++
+ .../aegis/access/access_log_export_win.cc     | 128 +++++
  .../aegis/access/access_log_export_win.h      |  17 +
  .../access_network_context_transport.cc       |  10 +-
  .../access/access_network_context_transport.h |   6 +-
@@ -56,7 +59,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../websockets/websocket_connector_impl.cc    |   2 +-
  .../web_transport_connector_impl.cc           |   2 +-
  content/public/browser/browser_context.h      |   4 +-
- 52 files changed, 2681 insertions(+), 300 deletions(-)
+ 55 files changed, 2903 insertions(+), 301 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_account_win.cc
  create mode 100644 chrome/browser/aegis/access/access_account_win.h
  create mode 100644 chrome/browser/aegis/access/access_account_win_unittest.cc
@@ -66,6 +69,9 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  create mode 100644 chrome/browser/aegis/access/access_local_core_win.h
  create mode 100644 chrome/browser/aegis/access/access_local_core_win_test_child.cc
  create mode 100644 chrome/browser/aegis/access/access_local_core_win_unittest.cc
+ create mode 100644 chrome/browser/aegis/access/access_log_export_dialog_win.cc
+ create mode 100644 chrome/browser/aegis/access/access_log_export_dialog_win.h
+ create mode 100644 chrome/browser/aegis/access/access_log_export_dialog_win_unittest.cc
  create mode 100644 chrome/browser/aegis/access/access_log_export_win.cc
  create mode 100644 chrome/browser/aegis/access/access_log_export_win.h
  create mode 100644 chrome/browser/aegis/access/access_paid_site_win.cc
@@ -177,10 +183,10 @@ index 6171cf2690b9c6abdff0348745016639175b9838..b3e71b0829ca367d5c4c03abcd597f62
        "aegis_torrent_client_unittest.cc",
        "aegis_mac_signing_unittest.cc",
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
-index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffcd452e4a4 100644
+index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..bc6ae857d5f9a262a17032a1f17cdd12b435e193 100644
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
-@@ -16,6 +16,10 @@ buildflag_header("access_buildflags") {
+@@ -16,12 +16,17 @@ buildflag_header("access_buildflags") {
  }
  
  if (aegis_private_test_node_enabled) {
@@ -191,7 +197,14 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
    private_channel = "alpha"
    private_dir = aegis_alpha_test_resources_dir
    if (aegis_beta_test_node_enabled) {
-@@ -29,16 +33,18 @@ if (aegis_private_test_node_enabled) {
+     private_channel = "beta"
+     private_dir = aegis_beta_test_resources_dir
+   }
++
+   # Both variants overwrite the same three resources. This also keeps the
+   # normal-build guard effective for output directories reused across channels.
+   action("alpha_access_resource_files") {
+@@ -29,16 +34,18 @@ if (aegis_private_test_node_enabled) {
      inputs = [
        "$private_dir/core-manifest.json",
        "$private_dir/node.json",
@@ -212,7 +225,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
        "--source-dir",
        rebase_path(private_dir, root_build_dir),
        "--output-dir",
-@@ -46,11 +52,13 @@ if (aegis_private_test_node_enabled) {
+@@ -46,11 +53,13 @@ if (aegis_private_test_node_enabled) {
      ]
    }
  
@@ -231,14 +244,14 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
    }
  } else {
    action("alpha_test_resource_guard") {
-@@ -94,6 +102,23 @@ source_set("access_core_log") {
+@@ -94,6 +103,23 @@ source_set("access_core_log") {
      ]
    }
    public_deps = [ "//base" ]
 +  if (is_win) {
 +    sources += [
-+      "access_core_log_disk_win.cc",
 +      "access_core_log_disk.h",
++      "access_core_log_disk_win.cc",
 +    ]
 +    deps = [ ":access_private_files_win" ]
 +  }
@@ -255,7 +268,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
  }
  
  source_set("access_local_core_manager") {
-@@ -101,6 +126,12 @@ source_set("access_local_core_manager") {
+@@ -101,6 +127,12 @@ source_set("access_local_core_manager") {
    public_deps = [ ":access_core_log" ]
    if (is_mac) {
      sources += [ "access_local_core_manager.cc" ]
@@ -268,7 +281,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
    } else {
      sources += [ "access_local_core_manager_unavailable.cc" ]
    }
-@@ -112,9 +143,12 @@ source_set("access_local_core_manager") {
+@@ -112,9 +144,12 @@ source_set("access_local_core_manager") {
      "//net",
      "//url",
    ]
@@ -282,7 +295,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
    if (aegis_private_test_node_enabled) {
      data_deps = [ ":alpha_access_resource_files" ]
    } else {
-@@ -145,6 +179,11 @@ test("access_local_core_manager_unittests") {
+@@ -145,6 +180,12 @@ test("access_local_core_manager_unittests") {
        "access_core_log_unittest.cc",
        "access_local_core_manager_unittest.cc",
      ]
@@ -290,21 +303,39 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
 +    sources = [
 +      "access_core_log_disk_win_unittest.cc",
 +      "access_local_core_win_unittest.cc",
++      "access_log_export_dialog_win_unittest.cc",
 +    ]
    } else {
      sources = [ "access_local_core_manager_unavailable_unittest.cc" ]
    }
-@@ -165,10 +204,21 @@ test("access_local_core_manager_unittests") {
+@@ -165,10 +206,38 @@ test("access_local_core_manager_unittests") {
        "//third_party/zlib/google:compression_utils",
      ]
      data_deps = [ ":access_local_core_test_child" ]
 +  } else if (is_win) {
-+    deps += [ ":access_private_files_win" ]
++    deps += [
++      ":access_log_export_dialog_win",
++      ":access_private_files_win",
++    ]
++    libs = [
++      "ole32.lib",
++      "shell32.lib",
++    ]
 +    data_deps = [ ":access_local_core_win_test_child" ]
    }
  }
  
 -if (is_mac) {
++if (is_win) {
++  source_set("access_log_export_dialog_win") {
++    sources = [
++      "access_log_export_dialog_win.cc",
++      "access_log_export_dialog_win.h",
++    ]
++    public_deps = [ "//base" ]
++  }
++}
++
 +if (is_win) {
 +  executable("access_local_core_win_test_child") {
 +    testonly = true
@@ -317,7 +348,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
    source_set("access_core_log_archive") {
      sources = [
        "access_core_log_share.cc",
-@@ -178,8 +228,13 @@ if (is_mac) {
+@@ -178,8 +247,13 @@ if (is_mac) {
        "//base",
        "//third_party/zlib/google:compression_utils",
      ]
@@ -331,7 +362,18 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
    executable("access_local_core_test_child") {
      testonly = true
      sources = [ "access_local_core_test_child.cc" ]
-@@ -509,13 +564,23 @@ source_set("access_site_proxy_bubble") {
+@@ -499,23 +573,36 @@ source_set("access_site_proxy_bubble") {
+     ":access_site_proxy_bubble_model",
+     ":access_site_proxy_session",
+     "//base",
++    "//chrome/browser/aegis:prefs",
+     "//chrome/browser/aegis:profile_support",
+     "//chrome/browser/profiles:profile",
+     "//chrome/common:channel_info",
+     "//components/aegis_access",
+     "//components/prefs",
+-    "//chrome/browser/aegis:prefs",
+     "//components/version_info:channel",
      "//content/public/browser",
      "//url",
    ]
@@ -351,7 +393,10 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..554867d70c427efaa24883b5fa9c7ffc
 +      "access_log_export_win.cc",
 +      "access_log_export_win.h",
 +    ]
-+    deps += [ "//ui/views" ]
++    deps += [
++      ":access_log_export_dialog_win",
++      "//ui/views",
++    ]
 +    libs = [ "ole32.lib" ]
 +  }
  }
@@ -2259,12 +2304,207 @@ index 0000000000000000000000000000000000000000..4b3a4e1be9de73489c12e90ccc2d9823
 +
 +}  // namespace
 +}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_log_export_dialog_win.cc b/chrome/browser/aegis/access/access_log_export_dialog_win.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..4715eeebd82b1afa6692815e516be343b1987491
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_log_export_dialog_win.cc
+@@ -0,0 +1,69 @@
++// Copyright 2026 GCSA
++#include "chrome/browser/aegis/access/access_log_export_dialog_win.h"
++
++#include <wrl/implements.h>
++
++#include <utility>
++
++#include "base/check.h"
++#include "base/functional/callback.h"
++
++namespace aegis::access {
++namespace {
++
++class NewDestinationEvents final
++    : public Microsoft::WRL::RuntimeClass<
++          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
++          IFileDialogEvents> {
++ public:
++  explicit NewDestinationEvents(
++      base::RepeatingCallback<void(IFileDialog*)> on_existing_destination)
++      : on_existing_destination_(std::move(on_existing_destination)) {
++    CHECK(on_existing_destination_);
++  }
++
++ private:
++  ~NewDestinationEvents() override = default;
++
++  IFACEMETHODIMP OnFileOk(IFileDialog*) override { return S_OK; }
++  IFACEMETHODIMP OnFolderChanging(IFileDialog*, IShellItem*) override {
++    return E_NOTIMPL;
++  }
++  IFACEMETHODIMP OnFolderChange(IFileDialog*) override { return E_NOTIMPL; }
++  IFACEMETHODIMP OnSelectionChange(IFileDialog*) override { return E_NOTIMPL; }
++  IFACEMETHODIMP OnTypeChange(IFileDialog*) override { return E_NOTIMPL; }
++  IFACEMETHODIMP OnShareViolation(IFileDialog*, IShellItem*,
++                                  FDE_SHAREVIOLATION_RESPONSE*) override {
++    return E_NOTIMPL;
++  }
++  IFACEMETHODIMP OnOverwrite(IFileDialog* dialog, IShellItem*,
++                             FDE_OVERWRITE_RESPONSE* response) override {
++    if (!response) return E_POINTER;
++    // FDEOR_REFUSE keeps the picker open rather than accepting a path that the
++    // exclusive-create writer cannot use. Do not truncate the existing file.
++    *response = FDEOR_REFUSE;
++    on_existing_destination_.Run(dialog);
++    return S_OK;
++  }
++
++  base::RepeatingCallback<void(IFileDialog*)> on_existing_destination_;
++};
++
++}  // namespace
++
++HRESULT ConfigureAccessLogExportDialog(IFileDialog* dialog) {
++  FILEOPENDIALOGOPTIONS options = 0;
++  const HRESULT result = dialog->GetOptions(&options);
++  if (FAILED(result)) return result;
++  return dialog->SetOptions(options | FOS_OVERWRITEPROMPT | FOS_FORCEFILESYSTEM |
++                            FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT |
++                            FOS_NOCHANGEDIR | FOS_NODEREFERENCELINKS);
++}
++
++Microsoft::WRL::ComPtr<IFileDialogEvents> CreateAccessLogExportDialogEvents(
++    base::RepeatingCallback<void(IFileDialog*)> on_existing_destination) {
++  return Microsoft::WRL::Make<NewDestinationEvents>(
++      std::move(on_existing_destination));
++}
++
++}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_log_export_dialog_win.h b/chrome/browser/aegis/access/access_log_export_dialog_win.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..a09635e82bd84c6a51af7b0696f10fa049c955cc
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_log_export_dialog_win.h
+@@ -0,0 +1,20 @@
++// Copyright 2026 GCSA
++#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOG_EXPORT_DIALOG_WIN_H_
++#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_LOG_EXPORT_DIALOG_WIN_H_
++
++#include <windows.h>
++#include <shobjidl.h>
++#include <wrl/client.h>
++
++#include "base/functional/callback_forward.h"
++
++namespace aegis::access {
++
++// Preserve the native defaults and request overwrite events, which the handler
++// refuses because diagnostic exports only create new destination files.
++HRESULT ConfigureAccessLogExportDialog(IFileDialog* dialog);
++Microsoft::WRL::ComPtr<IFileDialogEvents> CreateAccessLogExportDialogEvents(
++    base::RepeatingCallback<void(IFileDialog*)> on_existing_destination);
++
++}  // namespace aegis::access
++#endif
+diff --git a/chrome/browser/aegis/access/access_log_export_dialog_win_unittest.cc b/chrome/browser/aegis/access/access_log_export_dialog_win_unittest.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..301010970c4e54e5dc207c8a923b008a6944559a
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_log_export_dialog_win_unittest.cc
+@@ -0,0 +1,88 @@
++// Copyright 2026 GCSA
++#include "chrome/browser/aegis/access/access_log_export_dialog_win.h"
++
++#include <shlobj.h>
++
++#include <string>
++
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/functional/bind.h"
++#include "base/test/bind.h"
++#include "base/win/scoped_com_initializer.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace aegis::access {
++namespace {
++
++class AccessLogExportDialogWindowsTest : public testing::Test {
++ protected:
++  void SetUp() override {
++    ASSERT_TRUE(com_.Succeeded());
++    ASSERT_TRUE(temp_.CreateUniqueTempDir());
++    ASSERT_TRUE(SUCCEEDED(::CoCreateInstance(
++        __uuidof(FileSaveDialog), nullptr, CLSCTX_INPROC_SERVER,
++        IID_PPV_ARGS(&picker_))));
++  }
++
++  base::win::ScopedCOMInitializer com_;
++  base::ScopedTempDir temp_;
++  Microsoft::WRL::ComPtr<IFileSaveDialog> picker_;
++};
++
++TEST_F(AccessLogExportDialogWindowsTest, KeepsDefaultsAndRegistersOverwriteEvents) {
++  FILEOPENDIALOGOPTIONS defaults = 0;
++  ASSERT_TRUE(SUCCEEDED(picker_->GetOptions(&defaults)));
++  defaults |= FOS_STRICTFILETYPES;
++  ASSERT_TRUE(SUCCEEDED(picker_->SetOptions(defaults)));
++  ASSERT_TRUE(SUCCEEDED(ConfigureAccessLogExportDialog(picker_.Get())));
++  FILEOPENDIALOGOPTIONS actual = 0;
++  ASSERT_TRUE(SUCCEEDED(picker_->GetOptions(&actual)));
++  EXPECT_EQ(actual & defaults, defaults);
++  constexpr FILEOPENDIALOGOPTIONS required =
++      FOS_OVERWRITEPROMPT | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
++      FOS_DONTADDTORECENT | FOS_NOCHANGEDIR | FOS_NODEREFERENCELINKS;
++  EXPECT_EQ(actual & required, required);
++  auto events = CreateAccessLogExportDialogEvents(
++      base::BindRepeating([](IFileDialog*) {}));
++  DWORD cookie = 0;
++  ASSERT_TRUE(SUCCEEDED(picker_->Advise(events.Get(), &cookie)));
++  EXPECT_TRUE(SUCCEEDED(picker_->Unadvise(cookie)));
++}
++
++TEST_F(AccessLogExportDialogWindowsTest, RefusesExistingDestinationAndPreservesFile) {
++  const auto path = temp_.GetPath().AppendASCII("Aegis-Access.log.gz");
++  ASSERT_TRUE(base::WriteFile(path, "previous archive"));
++  Microsoft::WRL::ComPtr<IShellItem> item;
++  ASSERT_TRUE(SUCCEEDED(::SHCreateItemFromParsingName(
++      path.value().c_str(), nullptr, IID_PPV_ARGS(&item))));
++  int prompts = 0;
++  auto events = CreateAccessLogExportDialogEvents(base::BindLambdaForTesting(
++      [&](IFileDialog* dialog) {
++        EXPECT_EQ(dialog, picker_.Get());
++        ++prompts;
++      }));
++  FDE_OVERWRITE_RESPONSE response = FDEOR_DEFAULT;
++  EXPECT_EQ(events->OnOverwrite(picker_.Get(), item.Get(), &response), S_OK);
++  EXPECT_EQ(response, FDEOR_REFUSE);
++  EXPECT_EQ(prompts, 1);
++  std::string bytes;
++  ASSERT_TRUE(base::ReadFileToString(path, &bytes));
++  EXPECT_EQ(bytes, "previous archive");
++}
++
++TEST_F(AccessLogExportDialogWindowsTest, FreshSelectionCanFinishAfterRefusedOverwrite) {
++  int prompts = 0;
++  auto events = CreateAccessLogExportDialogEvents(
++      base::BindLambdaForTesting([&](IFileDialog*) { ++prompts; }));
++  FDE_OVERWRITE_RESPONSE response = FDEOR_DEFAULT;
++  ASSERT_EQ(events->OnOverwrite(picker_.Get(), nullptr, &response), S_OK);
++  ASSERT_EQ(response, FDEOR_REFUSE);
++  ASSERT_TRUE(SUCCEEDED(picker_->SetFileName(L"Aegis-Access-2.log.gz")));
++  EXPECT_EQ(events->OnFileOk(picker_.Get()), S_OK);
++  EXPECT_EQ(prompts, 1);
++  EXPECT_FALSE(base::PathExists(temp_.GetPath().AppendASCII("Aegis-Access-2.log.gz")));
++}
++
++}  // namespace
++}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_log_export_win.cc b/chrome/browser/aegis/access/access_log_export_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..ac3b07f84a3cf4bb24c39ef967c77d86f410a17c
+index 0000000000000000000000000000000000000000..f34d79a0f837c26830f099196a07ce5440e30fb6
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_log_export_win.cc
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,128 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_log_export_win.h"
 +
@@ -2279,14 +2519,30 @@ index 0000000000000000000000000000000000000000..ac3b07f84a3cf4bb24c39ef967c77d86
 +#include "base/files/file.h"
 +#include "base/files/file_path.h"
 +#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/task/thread_pool.h"
 +#include "base/win/scoped_co_mem.h"
 +#include "chrome/browser/aegis/access/access_core_log_share.h"
++#include "chrome/browser/aegis/access/access_log_export_dialog_win.h"
 +#include "ui/views/win/hwnd_util.h"
 +
 +namespace aegis::access {
 +namespace {
++
++void ExplainExistingDestination(IFileDialog* dialog) {
++  dialog->SetTitle(L"Choose a new filename for Access diagnostics");
++  Microsoft::WRL::ComPtr<IOleWindow> window;
++  HWND owner = nullptr;
++  if (SUCCEEDED(dialog->QueryInterface(IID_PPV_ARGS(&window))) &&
++      SUCCEEDED(window->GetWindow(&owner)) && ::IsWindow(owner)) {
++    ::MessageBoxW(owner,
++                  L"The selected file already exists. Choose a different "
++                  L"filename to save the diagnostics. The existing file "
++                  L"will be kept.",
++                  L"Save Access diagnostics", MB_OK | MB_ICONINFORMATION);
++  }
++}
 +
 +std::optional<base::FilePath> PickDestination(HWND owner) {
 +  if (!::IsWindow(owner)) return std::nullopt;
@@ -2295,11 +2551,17 @@ index 0000000000000000000000000000000000000000..ac3b07f84a3cf4bb24c39ef967c77d86
 +                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&picker)))) {
 +    return std::nullopt;
 +  }
-+  if (FAILED(picker->SetOptions(FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
-+                                FOS_DONTADDTORECENT | FOS_NOCHANGEDIR |
-+                                FOS_NODEREFERENCELINKS)) ||
++  if (FAILED(ConfigureAccessLogExportDialog(picker.Get())) ||
 +      FAILED(picker->SetTitle(L"Save compressed Access diagnostics")) ||
 +      FAILED(picker->SetFileName(L"Aegis-Access.log.gz"))) return std::nullopt;
++  auto events = CreateAccessLogExportDialogEvents(
++      base::BindRepeating(&ExplainExistingDestination));
++  DWORD cookie = 0;
++  if (FAILED(picker->Advise(events.Get(), &cookie))) return std::nullopt;
++  base::ScopedClosureRunner unadvise(base::BindOnce(
++      [](Microsoft::WRL::ComPtr<IFileSaveDialog> dialog, DWORD cookie) {
++        dialog->Unadvise(cookie);
++      }, picker, cookie));
 +  const auto result = picker->Show(owner);
 +  if (result == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return base::FilePath();
 +  Microsoft::WRL::ComPtr<IShellItem> selected;

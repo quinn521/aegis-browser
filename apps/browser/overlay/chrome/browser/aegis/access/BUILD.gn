@@ -26,6 +26,7 @@ if (aegis_private_test_node_enabled) {
     private_channel = "beta"
     private_dir = aegis_beta_test_resources_dir
   }
+
   # Both variants overwrite the same three resources. This also keeps the
   # normal-build guard effective for output directories reused across channels.
   action("alpha_access_resource_files") {
@@ -104,8 +105,8 @@ source_set("access_core_log") {
   public_deps = [ "//base" ]
   if (is_win) {
     sources += [
-      "access_core_log_disk_win.cc",
       "access_core_log_disk.h",
+      "access_core_log_disk_win.cc",
     ]
     deps = [ ":access_private_files_win" ]
   }
@@ -183,6 +184,7 @@ test("access_local_core_manager_unittests") {
     sources = [
       "access_core_log_disk_win_unittest.cc",
       "access_local_core_win_unittest.cc",
+      "access_log_export_dialog_win_unittest.cc",
     ]
   } else {
     sources = [ "access_local_core_manager_unavailable_unittest.cc" ]
@@ -205,8 +207,25 @@ test("access_local_core_manager_unittests") {
     ]
     data_deps = [ ":access_local_core_test_child" ]
   } else if (is_win) {
-    deps += [ ":access_private_files_win" ]
+    deps += [
+      ":access_log_export_dialog_win",
+      ":access_private_files_win",
+    ]
+    libs = [
+      "ole32.lib",
+      "shell32.lib",
+    ]
     data_deps = [ ":access_local_core_win_test_child" ]
+  }
+}
+
+if (is_win) {
+  source_set("access_log_export_dialog_win") {
+    sources = [
+      "access_log_export_dialog_win.cc",
+      "access_log_export_dialog_win.h",
+    ]
+    public_deps = [ "//base" ]
   }
 }
 
@@ -554,12 +573,12 @@ source_set("access_site_proxy_bubble") {
     ":access_site_proxy_bubble_model",
     ":access_site_proxy_session",
     "//base",
+    "//chrome/browser/aegis:prefs",
     "//chrome/browser/aegis:profile_support",
     "//chrome/browser/profiles:profile",
     "//chrome/common:channel_info",
     "//components/aegis_access",
     "//components/prefs",
-    "//chrome/browser/aegis:prefs",
     "//components/version_info:channel",
     "//content/public/browser",
     "//url",
@@ -578,7 +597,10 @@ source_set("access_site_proxy_bubble") {
       "access_log_export_win.cc",
       "access_log_export_win.h",
     ]
-    deps += [ "//ui/views" ]
+    deps += [
+      ":access_log_export_dialog_win",
+      "//ui/views",
+    ]
     libs = [ "ole32.lib" ]
   }
 }

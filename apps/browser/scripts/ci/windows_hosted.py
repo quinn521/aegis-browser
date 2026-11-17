@@ -22,6 +22,9 @@ ACCESS_CORE_TESTS = 'access_local_core_manager_unittests'
 ACCESS_CORE_CASES = frozenset([
     'AccessCoreLogWindowsTest.KeepsPrivateAndRegularHistorySeparate',
     'AccessCoreLogWindowsTest.ClearFencesAlreadyQueuedPipeBytes',
+    'AccessLogExportDialogWindowsTest.KeepsDefaultsAndRegistersOverwriteEvents',
+    'AccessLogExportDialogWindowsTest.RefusesExistingDestinationAndPreservesFile',
+    'AccessLogExportDialogWindowsTest.FreshSelectionCanFinishAfterRefusedOverwrite',
     'AccessLocalCoreWinInputTest.BuildControlsLocalBinding',
     'AccessLocalCoreWinTest.WrongPinCannotLaunchOrPublish',
     'AccessLocalCoreWinTest.StopCleansProcessTreeAndPrivateConfig',
