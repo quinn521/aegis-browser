@@ -16,9 +16,10 @@ let head = tested;
 if (event === 'pull_request') {
   const pr = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8')).pull_request;
   const parents = git('show', '-s', '--format=%P', tested).split(' ');
-  if (parents.length !== 2 || parents[1] !== sha(pr.head.sha) || parents[0] !== sha(pr.base.sha)) {
+  if (parents.length !== 2 || parents[1] !== sha(pr.head.sha)) {
     throw new Error('Merge candidate must have the exact current base/head parents');
   }
+  git('merge-base', '--is-ancestor', sha(pr.base.sha), parents[0]);
   [base, head] = parents;
 }
 // Only one verified documentation input is admitted initially. New types require

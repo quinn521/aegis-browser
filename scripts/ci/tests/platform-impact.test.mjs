@@ -16,6 +16,8 @@ test('platform routing binds real merge parents and rejects hidden product chang
   try {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Routing Test'); git('config', 'user.email', 'routing@example.invalid');
     save(doc, 'initial'); git('add', '.'); git('commit', '-m', 'base');
+    const earlierBase = git('rev-parse', 'HEAD');
+    save('base-marker.txt', 'advanced base'); git('add', '.'); git('commit', '-m', 'base advanced');
     const base = git('rev-parse', 'HEAD');
     const run = (mutate, expected) => {
       git('checkout', '-B', 'topic', base); mutate(); git('add', '-A'); git('commit', '-m', 'docs: candidate');
@@ -29,6 +31,10 @@ test('platform routing binds real merge parents and rejects hidden product chang
       assert.equal(result.status, 0, result.stderr);
       const plan = JSON.parse(result.stdout);
       assert.equal(plan.ios, expected); assert.equal(plan.base, base); assert.equal(plan.head, head); assert.equal(plan.tested, tested);
+      writeFileSync(event, JSON.stringify({pull_request: {base: {sha: earlierBase}, head: {sha: head}}}));
+      const stale = spawnSync(process.execPath, [script], {cwd: root, env, encoding: 'utf8'});
+      assert.equal(stale.status, 0, stale.stderr);
+      assert.equal(JSON.parse(stale.stdout).base, base, 'route against actual merge parent despite lagging metadata');
       writeFileSync(event, JSON.stringify({pull_request: {base: {sha: base}, head: {sha: base}}}));
       assert.notEqual(spawnSync(process.execPath, [script], {cwd: root, env}).status, 0, 'wrong head must block');
       assert.notEqual(spawnSync(process.execPath, [script], {cwd: root, env: {...env, GITHUB_SHA: base}}).status, 0, 'wrong checkout must block');

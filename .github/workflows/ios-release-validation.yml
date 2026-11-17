@@ -64,7 +64,12 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             parents="$(git show -s --format=%P HEAD)"
-            test "$parents" = "$ROUTE_BASE_SHA $ROUTE_HEAD_SHA"
+            read -r base head extra <<< "$parents"
+            test -n "$base" && test -n "$head" && test -z "$extra"
+            test "$head" = "$ROUTE_HEAD_SHA"
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            git merge-base --is-ancestor "$ROUTE_BASE_SHA" "$base"
+            ROUTE_BASE_SHA="$base"
           fi
           git diff --raw --no-abbrev --no-renames -z "$ROUTE_BASE_SHA" HEAD > "$RUNNER_TEMP/ios-complete-diff"
           mkdir -p .artifacts/ci
