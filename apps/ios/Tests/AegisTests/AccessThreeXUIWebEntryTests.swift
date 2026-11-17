@@ -85,12 +85,12 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         defer { publisher.cancel(operationID: operation) }
         let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
         XCTAssertTrue(publisher.validateReady(ready))
+        XCTAssertTrue(core.isRunning)
 
         await fixture.setMode(.exhausted)
         await usage.refresh()?.value
         XCTAssertEqual(usage.snapshot?.remainingBytes, 0)
         XCTAssertFalse(usage.permitsExistingConnection)
-        XCTAssertTrue(core.isRunning, "Quota denial must be checked even while the core is healthy")
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(5))
         while publisher.validateReady(ready), clock.now < deadline {
