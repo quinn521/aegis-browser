@@ -175,4 +175,15 @@ final class MarkdownShareInboxTests: XCTestCase {
         })
         XCTAssertEqual(result?.text, "value")
     }
+    func testExpiredCrashClaimsAreCleanedWithoutRemovingFreshClaims() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let stale = root.appendingPathComponent(".markdown-claim-crashed.json")
+        let fresh = root.appendingPathComponent(".markdown-claim-active.json")
+        try Data("private old document".utf8).write(to: stale)
+        try Data("active document".utf8).write(to: fresh)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-70)], ofItemAtPath: stale.path)
+        XCTAssertNil(try MarkdownShareInbox(root: root).consume())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
+    }
 }

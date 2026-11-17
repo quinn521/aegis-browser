@@ -353,6 +353,8 @@ struct MarkdownReaderView: View {
         MarkdownWebView(webView: model.webView).accessibilityIdentifier("markdown-webview")
           .frame(height: model.document == nil ? 0 : nil)
           .accessibilityHidden(model.document == nil)
+          .allowsHitTesting(model.rendered)
+          .overlay { if model.document != nil, !model.rendered { ProgressView() } }
       }
       .navigationTitle(model.document?.title ?? AegisLocalization.string("Markdown 阅读")).navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -363,18 +365,18 @@ struct MarkdownReaderView: View {
             Button("读取当前原始页面", systemImage: "globe") { capture() }
             if model.document != nil {
               Section("文档操作") {
-                Button("查看源码", systemImage: "chevron.left.forwardslash.chevron.right") { model.command("source-toggle") }
-                Button("复制原文", systemImage: "doc.on.doc") { model.command("copy-source") }
+                Button("查看源码", systemImage: "chevron.left.forwardslash.chevron.right") { model.command("source-toggle") }.disabled(!model.rendered)
+                Button("复制原文", systemImage: "doc.on.doc") { model.command("copy-source") }.disabled(!model.rendered)
                 Button("保存到阅读库", systemImage: "books.vertical") { confirmsSave = true }
                 Button("文档来源与预览设置", systemImage: "info.circle") { sourceInfo = true }
-                Button("打印", systemImage: "printer") { model.printDocument() }
-                Button("导出 PDF", systemImage: "square.and.arrow.up") { model.exportPDF() }
+                Button("打印", systemImage: "printer") { model.printDocument() }.disabled(!model.rendered)
+                Button("导出 PDF", systemImage: "square.and.arrow.up") { model.exportPDF() }.disabled(!model.rendered)
               }
               Section("图片权限") {
                 if model.document?.sourceURL?.isFileURL != false {
-                  Button("选择本地图片目录") { importingResources = true; importing = true }
+                  Button("选择本地图片目录") { importingResources = true; importing = true }.disabled(!model.rendered)
                 }
-                Button("加载或停用外部图片") { model.command("remote-images") }
+                Button("加载或停用外部图片") { model.command("remote-images") }.disabled(!model.rendered)
               }
             }
           } label: { Image(systemName: "ellipsis.circle") }

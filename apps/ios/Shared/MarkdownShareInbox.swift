@@ -42,6 +42,7 @@ struct MarkdownShareInbox: Sendable {
       options: [.atomic, .completeFileProtection])
   }
   func consume(now: Date = Date(), afterClaim: () throws -> Void = {}) throws -> MarkdownShareEnvelope? {
+    removeExpiredClaims(now: now)
     let source = root.appendingPathComponent("markdown-inbox-v1.json")
     // Keep this namespace distinct from link-inbox crash cleanup.
     let claimed = root.appendingPathComponent(".markdown-claim-\(UUID().uuidString).json")
@@ -65,6 +66,17 @@ struct MarkdownShareInbox: Sendable {
     let remaining = envelope.expiresAt.timeIntervalSince(now)
     guard remaining.isFinite, remaining > 0, remaining <= 60 else { throw ShareInboxError.expired }
     return envelope
+  }
+
+  private func removeExpiredClaims(now: Date) {
+    guard let files = try? FileManager.default.contentsOfDirectory(at: root,
+      includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey]) else { return }
+    for file in files where file.lastPathComponent.hasPrefix(".markdown-claim-") {
+      guard let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey, .isSymbolicLinkKey]),
+        values.isRegularFile == true, values.isSymbolicLink != true,
+        let modified = values.contentModificationDate, modified < now.addingTimeInterval(-65) else { continue }
+      try? FileManager.default.removeItem(at: file)
+    }
   }
 }
 
