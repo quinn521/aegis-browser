@@ -1430,13 +1430,13 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         for status in [307, 308, 303] {
             let origin = try PreservingRedirectOrigin(status: status)
             defer { origin.stop() }
-            let tab = makeTab()
+            // Drive the redirect from the original POST without a session startup navigation.
+            let tab = coldRequestTab(profile: .standard)
             let coordinator = AccessHostStoreCoordinator()
             tab.hostCoordinator = coordinator
             let redirect = try await origin.redirectURL()
-            let start = redirect.deletingLastPathComponent().appendingPathComponent("page")
-            let window = try await attachPage(tab, at: start)
-            defer { window.isHidden = true }
+            let window = try requestWindow(for: tab)
+            defer { window.isHidden = true; tab.stop() }
             var request = URLRequest(url: redirect)
             request.httpMethod = "POST"
             tab.load(request)
@@ -1449,7 +1449,6 @@ final class AccessNavigationRecoveryTests: XCTestCase {
             XCTAssertEqual(tab.lastMainFrameFailure?.method, "POST", "HTTP \(status)")
             XCTAssertFalse(tab.loadingErrorAllowsProxyRetry, "HTTP \(status)")
             XCTAssertEqual(tab.recoveryLoadCount, 0)
-            tab.stop()
         }
     }
 }
