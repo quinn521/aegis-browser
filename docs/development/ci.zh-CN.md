@@ -226,4 +226,4 @@ iOS release validation 的 Ready PR 扩展到 develop。Linux 合同先执行，
 
 macOS delivery 的自动 Ready PR 先在 Linux 校验 Git 身份和文档消费者，再根据可信 base 规则分配合同测试。初始规则对单份验收文档的普通内容修改、或只涉及 `apps/ios/` 的变更省去 macOS 专用交付合同。共享接口、CI、自修改路由及未知路径保守运行；混合改动取并集。旧版规则未登记 macOS 时保守运行。Draft 不分配自动合同 runner，同 PR 更新取消旧运行，push 按实际 SHA 分组。
 
-Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS 路径继续依次通过 admission、Mac 上的 Access tests、package，只有所需前置项成功才打包。Chromium 编译、GN/GTest、桌面运行、签名和公证分别验收。完整 quality 仍执行现有 macOS 路径，本批仅收敛 macOS 专用交付工作流，不代表纯文档 PR 已实现全仓零 Mac 使用。
+Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS 路径继续依次通过 admission、Mac 上的 Access tests、package，只有所需前置项成功才打包。Chromium 编译、GN/GTest、桌面运行、签名和公证分别验收。基础 quality 增加 Linux 可信影响范围门。只有已配置开发 Fork 内同仓 develop PR 的单份已验证验收文档内容修改走 Linux 文档合同，其余 PR、未知或旧规则、push 和手动事件继续完整 macOS 质量门。quality-gate 在 Linux 运行可信目标分支的汇总器，保留原检查名与 push 的 quality/quality-gate 作业身份。每个 push SHA 独立分组。全仓零 Mac 和 5 分钟有效反馈须在规则合入后的真实文档 Ready PR 实测。

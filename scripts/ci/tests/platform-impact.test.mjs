@@ -26,11 +26,13 @@ test('platform routing binds real merge parents and rejects hidden product chang
       const tested = git('rev-parse', 'HEAD');
       const event = join(root, 'event.json');
       writeFileSync(event, JSON.stringify({pull_request: {base: {sha: base}, head: {sha: head}}}));
-      const env = {...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_SHA: tested, GITHUB_EVENT_PATH: event, GITHUB_OUTPUT: ''};
+      const env = {...process.env, CI_LIGHTWEIGHT_ADMITTED: 'true', GITHUB_EVENT_NAME: 'pull_request', GITHUB_SHA: tested, GITHUB_EVENT_PATH: event, GITHUB_OUTPUT: ''};
       const result = spawnSync(process.execPath, [script], {cwd: root, env, encoding: 'utf8'});
       assert.equal(result.status, 0, result.stderr);
       const plan = JSON.parse(result.stdout);
-      assert.equal(plan.ios, expected); assert.equal(typeof plan.macos, 'boolean'); assert.equal(plan.base, base); assert.equal(plan.head, head); assert.equal(plan.tested, tested);
+      assert.equal(plan.ios, expected); assert.equal(plan.docs, !expected); assert.equal(typeof plan.macos, 'boolean'); assert.equal(plan.base, base); assert.equal(plan.head, head); assert.equal(plan.tested, tested);
+      const unadmitted = spawnSync(process.execPath, [script], {cwd: root, env: {...env, CI_LIGHTWEIGHT_ADMITTED: 'false'}, encoding: 'utf8'});
+      assert.equal(JSON.parse(unadmitted.stdout).docs, false, 'outside the trusted fork rollout retain full quality');
       writeFileSync(event, JSON.stringify({pull_request: {base: {sha: earlierBase}, head: {sha: head}}}));
       const stale = spawnSync(process.execPath, [script], {cwd: root, env, encoding: 'utf8'});
       assert.equal(stale.status, 0, stale.stderr);
@@ -89,4 +91,22 @@ test('macOS automatic contracts wait for trusted routing and exclude Draft or ma
   const run = impact.steps.find(step => step.id === 'impact').run;
   assert.match(run, /git show "\$ROUTE_BASE_SHA:scripts\/ci\/platform-impact.mjs"/u);
   assert.match(run, /grep -q '\^macos='/u);
+});
+
+
+test('quality preflight selects Linux docs and preserves full checks on all other routes', () => {
+  const workflow = YAML.parse(readFileSync('.github/workflows/quality.yml', 'utf8'));
+  const {impact, quality, 'quality-summary': summary} = workflow.jobs;
+  assert.equal(impact['runs-on'], 'ubuntu-24.04');
+  assert.equal(quality.needs, 'impact');
+  assert.match(quality['runs-on'], /needs.impact.outputs.docs == 'true' && 'ubuntu-24.04'/u);
+  assert.equal(summary['runs-on'], 'ubuntu-24.04');
+  const admission = impact.steps.find(step => step.id === 'impact').env.CI_LIGHTWEIGHT_ADMITTED;
+  for (const requirement of ["base.ref == 'develop'", 'head.repo.full_name == github.repository', 'github.repository == vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY']) assert(admission.includes(requirement));
+  const heavy = quality.steps.find(step => step.name === 'Run full quality gate');
+  const docs = quality.steps.find(step => step.name === 'Run documentation quality gate');
+  assert.equal(heavy.if, "${{ needs.impact.outputs.docs != 'true' }}");
+  assert.equal(docs.if, "${{ needs.impact.outputs.docs == 'true' }}");
+  assert.match(docs.run, /node scripts\/check-repo-contracts.mjs/u);
+  assert.match(workflow.concurrency.group, /github.ref, github.sha/u);
 });
