@@ -87,3 +87,7 @@ Android 编译目标为 `aarch64-none-linux-android26`，生成的 CTest 注册�
 | macOS USB 接口枚举 | 检查了 14 个 USB 接口，其中 ADB 接口为 0 |
 
 Android arm64-v8a 物理真机验收为**未完成**。本轮未启动 NDK 编译、部署或真机 CTest。三端完整浏览器产品验收为**未完成**。
+
+## 纯说明 CI 路由试验
+
+本节用于验证纯说明改动的仓库文档合同及零 Mac 路径。试验负例包含一个故意不存在的[内部引用](ci-route-intentionally-missing.md)，用于确认文档问题会阻断必需质量门。
