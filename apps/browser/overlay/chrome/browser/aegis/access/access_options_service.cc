@@ -1,6 +1,8 @@
 // Copyright 2026 GCSA
 #include "chrome/browser/aegis/access/access_options_service.h"
 #include "base/task/thread_pool.h"
+#include "base/functional/bind.h"
+#include "chrome/browser/aegis/access/access_service_coordinator.h"
 #include "chrome/browser/aegis/access/access_build_channel.h"
 #include "chrome/browser/aegis/aegis_profile_support.h"
 #include "chrome/browser/profiles/profile.h"
@@ -21,7 +23,7 @@ AccessOptionsService* AccessOptionsService::GetOrCreate(Profile* profile) {
   return service;
 }
 AccessOptionsService::AccessOptionsService(Profile* profile)
-    : store_(base::ThreadPool::CreateSequencedTaskRunner(
+    : profile_(profile), store_(base::ThreadPool::CreateSequencedTaskRunner(
           {base::MayBlock(), base::TaskPriority::USER_VISIBLE}),
           AccessBuildIdentityForCurrentBuild(), profile->GetPath(),
           "aegis-access-profile:" + profile->GetPath().AsUTF8Unsafe(),
@@ -35,6 +37,20 @@ void AccessOptionsService::Read(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (!Admitted(aegis_access::AccessOptionsOperation::kRead)) {
     std::move(callback).Run({StoreStatus::kConflict, std::nullopt, "channel_not_admitted"});
+    return;
+  }
+  auto* product = AccessServiceCoordinator::GetOrCreate(profile_);
+  if (!product) {
+    std::move(callback).Run({StoreStatus::kRecoveryRequired, std::nullopt, "product_store_missing"});
+    return;
+  }
+  product->CheckOptionsStoreBinding(base::BindOnce(&AccessOptionsService::OnProductStoreChecked,
+      weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+void AccessOptionsService::OnProductStoreChecked(
+    base::OnceCallback<void(StoreResult<AccessOptionsSnapshot>)> callback, StoreStatus status) {
+  if (status != StoreStatus::kValid) {
+    std::move(callback).Run({status, std::nullopt, "product_store_not_ready"});
     return;
   }
   store_.AsyncCall(&AccessOptionsStore::OpenAndRead).Then(std::move(callback));

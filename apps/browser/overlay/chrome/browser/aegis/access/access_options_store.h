@@ -35,7 +35,6 @@ class AccessOptionsStore {
   bool Admitted(aegis_access::AccessOptionsOperation operation) const;
   aegis_access::AccessBuildIdentity identity_;
   base::FilePath database_path_;
-  base::FilePath profile_path_;
   std::string profile_id_;
   bool private_;
   bool open_ = false;

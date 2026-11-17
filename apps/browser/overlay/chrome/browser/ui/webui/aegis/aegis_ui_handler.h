@@ -17,7 +17,10 @@
 #include "chrome/browser/aegis/metalink_parser.h"
 #if BUILDFLAG(IS_MAC)
 #include "chrome/services/aegis_torrent/public/mojom/aegis_torrent_service.mojom.h"
-#include "chrome/browser/aegis/access/access_options_store.h"
+namespace aegis::access {
+struct AccessOptionsSnapshot;
+template <typename T> struct StoreResult;
+}
 #endif
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/web_ui_message_handler.h"

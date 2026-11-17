@@ -319,3 +319,4 @@
 0319-fix-desktop-test-browser-client-dependency.patch
 0320-align-product-version-267.patch
 0321-build-share-access-core-source-manifest.patch
+0322-share-access-options-capability.patch

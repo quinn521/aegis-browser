@@ -24,7 +24,7 @@ AccessOptionsStore::AccessOptionsStore(aegis_access::AccessBuildIdentity identit
                                      base::FilePath profile_path,
                                      std::string profile_id,
                                      bool is_private)
-    : identity_(identity), profile_path_(profile_path), profile_id_(std::move(profile_id)),
+    : identity_(identity), profile_id_(std::move(profile_id)),
       private_(is_private), database_("AegisAccess") {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   if (!private_ && !profile_path.empty()) {
@@ -130,20 +130,11 @@ StoreStatus AccessOptionsStore::Open() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!Admitted(aegis_access::AccessOptionsOperation::kRead))
     return StoreStatus::kConflict;
-  if (!private_ && base::PathExists(profile_path_.AppendASCII("access.db"))) {
-    auto binding = TrustedAccessStoreBindingFactory::CreatePersistent(
-        identity_.channel, profile_id_, "options-storage-check", profile_path_);
-    if (!binding)
-      return StoreStatus::kInvalidArgument;
-    AccessRuleStore product(*binding);
-    const auto status = product.Open();
-    if (status != StoreStatus::kValid)
-      return status;
-  }
   if (profile_id_.empty() || profile_id_.size() > 256 ||
-      (!private_ && (!database_path_.IsAbsolute() ||
-                    !base::CreateDirectory(database_path_.DirName()))))
+      (!private_ && (!database_path_.IsAbsolute() || database_path_.ReferencesParent())))
     return StoreStatus::kInvalidArgument;
+  if (!private_ && !base::CreateDirectory(database_path_.DirName()))
+    return StoreStatus::kIoError;
   if (open_)
     return StoreStatus::kValid;
   if (database_.is_open())

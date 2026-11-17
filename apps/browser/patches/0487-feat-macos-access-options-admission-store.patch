@@ -1,44 +1,57 @@
-From 38c1865afb50e6eeeb5e60ce32e876c9bd98db74 Mon Sep 17 00:00:00 2001
+From 5521744501706783b743fa3bc3d8c292c88c198d Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
-Date: Tue, 17 Nov 2026 22:49:00 +0800
+Date: Wed, 18 Nov 2026 00:17:07 +0800
 Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  storage
 
 ---
- chrome/browser/aegis/BUILD.gn                 |   4 +
- chrome/browser/aegis/access/BUILD.gn          |  21 +-
- .../aegis/access/access_build_channel.cc      |  27 +-
+ chrome/browser/aegis/BUILD.gn                 |   5 +
+ chrome/browser/aegis/access/BUILD.gn          |  48 +++-
+ .../aegis/access/access_async_rule_store.cc   |   4 +
+ .../aegis/access/access_async_rule_store.h    |   1 +
+ .../aegis/access/access_build_channel.cc      |  27 ++-
  .../aegis/access/access_build_channel.h       |   8 +-
- .../access/access_options_browsertest.cc      |  67 +++++
- .../aegis/access/access_options_service.cc    |  42 ++++
- .../aegis/access/access_options_service.h     |  21 ++
- .../aegis/access/access_options_store.cc      | 232 ++++++++++++++++++
- .../aegis/access/access_options_store.h       |  47 ++++
- .../access/access_options_store_unittest.cc   | 125 ++++++++++
+ .../aegis/access/access_core_log_unittest.cc  |  14 ++
+ .../access_local_core_manager_unittest.cc     |   8 +
+ .../access/access_options_browsertest.cc      |  94 ++++++++
+ .../aegis/access/access_options_service.cc    |  58 +++++
+ .../aegis/access/access_options_service.h     |  26 ++
+ .../access/access_options_service_unittest.cc |  50 ++++
+ .../aegis/access/access_options_store.cc      | 223 ++++++++++++++++++
+ .../aegis/access/access_options_store.h       |  46 ++++
+ .../access/access_options_store_unittest.cc   | 132 +++++++++++
+ .../access/access_service_coordinator.cc      |  29 +++
+ .../aegis/access/access_service_coordinator.h |   3 +
+ .../access_site_proxy_bubble_controller.cc    |  22 +-
  chrome/browser/aegis/access/alpha_access.gni  |  13 +
+ .../access/verify_access_build_identity.py    |  55 +++++
+ .../verify_access_build_identity_test.py      |  70 ++++++
  chrome/browser/ui/webui/aegis/BUILD.gn        |   5 +
  chrome/browser/ui/webui/aegis/aegis_ui.cc     |  22 ++
  .../ui/webui/aegis/aegis_ui_handler.cc        |  42 ++++
- .../browser/ui/webui/aegis/aegis_ui_handler.h |   4 +
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   7 +
  components/aegis_access/BUILD.gn              |   5 +
  .../aegis_access/access_options_capability.h  |  87 +++++++
  .../access_options_capability_test.cc         |  70 ++++++
  components/aegis_access/access_sources.json   |   3 +
- 19 files changed, 834 insertions(+), 11 deletions(-)
+ 29 files changed, 1164 insertions(+), 13 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_options_browsertest.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.h
+ create mode 100644 chrome/browser/aegis/access/access_options_service_unittest.cc
  create mode 100644 chrome/browser/aegis/access/access_options_store.cc
  create mode 100644 chrome/browser/aegis/access/access_options_store.h
  create mode 100644 chrome/browser/aegis/access/access_options_store_unittest.cc
+ create mode 100644 chrome/browser/aegis/access/verify_access_build_identity.py
+ create mode 100644 chrome/browser/aegis/access/verify_access_build_identity_test.py
  create mode 100644 components/aegis_access/access_options_capability.h
  create mode 100644 components/aegis_access/access_options_capability_test.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index 6171cf2690b9c6abdff0348745016639175b9838..2784d260eacffa43a6ba7f6c1ebde41c2ae3a6e9 100644
+index 6171cf2690b9c6abdff0348745016639175b9838..af580e51aa21d7c7a423af72cf5c000ce8881e3e 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
-@@ -326,7 +326,11 @@ if (!is_android) {
+@@ -326,7 +326,12 @@ if (!is_android) {
        "enhancements/enhancement_browsertest.cc",
        "google_service_prompt_browsertest.cc",
      ]
@@ -47,11 +60,12 @@ index 6171cf2690b9c6abdff0348745016639175b9838..2784d260eacffa43a6ba7f6c1ebde41c
 +    }
      deps = [
 +      "//chrome/browser/aegis/access:access_build_channel",
++      "//chrome/browser/aegis/access:access_site_proxy_bubble",
        ":aegis",
        ":agent_model_transport",
        "//base",
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
-index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..8dafaf7ab28944533dbf88ecfc8ef6745beaf42d 100644
+index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..9a53f175e504bf53b3d9315557d45be767a95e45 100644
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
 @@ -10,6 +10,8 @@ buildflag_header("access_buildflags") {
@@ -63,16 +77,49 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..8dafaf7ab28944533dbf88ecfc8ef674
      "AEGIS_PRIVATE_TEST_NODE_ENABLED=$aegis_private_test_node_enabled",
      "AEGIS_BETA_TEST_NODE_ENABLED=$aegis_beta_test_node_enabled",
    ]
-@@ -77,7 +79,7 @@ source_set("access_build_channel") {
+@@ -67,6 +69,21 @@ if (aegis_private_test_node_enabled) {
+   }
+ }
+ 
++if (is_mac) {
++  action("verify_access_build_identity") {
++    script = "verify_access_build_identity.py"
++    deps = [ "//chrome:chrome_app_plist" ]
++    plist_dir = get_label_info("//chrome:chrome_app_plist", "target_gen_dir")
++    inputs = [ "$plist_dir/chrome_app_plist_tweaked.plist" ]
++    outputs = [ "$target_gen_dir/access_build_identity_verified.stamp" ]
++    args = [ "--plist", rebase_path(inputs[0], root_build_dir),
++             "--product-channel", aegis_access_product_channel,
++             "--internal-options", "$aegis_access_internal_options",
++             "--chrome-branded", "$is_chrome_branded",
++             "--stamp", rebase_path(outputs[0], root_build_dir) ]
++  }
++}
++
+ source_set("access_build_channel") {
+   sources = [
+     "access_build_channel.cc",
+@@ -77,7 +94,10 @@ source_set("access_build_channel") {
      "//chrome/common:channel_info",
      "//components/version_info:channel",
    ]
 -  public_deps = [ "//components/aegis_access:browser_request_metadata_seed" ]
 +  public_deps = [ "//components/aegis_access:access_options_capability" ]
++  if (is_mac) {
++    deps += [ ":verify_access_build_identity" ]
++  }
  }
  
  source_set("access_core_log") {
-@@ -730,3 +732,20 @@ test("access_async_rule_store_unittests") {
+@@ -487,6 +507,7 @@ source_set("access_site_proxy_bubble") {
+   ]
+   deps = [
+     ":access_build_channel",
++    ":access_buildflags",
+     ":access_identity_generation_source",
+     ":access_local_core_manager",
+     ":access_network_context_transport",
+@@ -730,3 +751,28 @@ test("access_async_rule_store_unittests") {
      "//testing/gtest",
    ]
  }
@@ -90,9 +137,51 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..8dafaf7ab28944533dbf88ecfc8ef674
 +source_set("access_options_service") {
 +  sources = [ "access_options_service.cc", "access_options_service.h" ]
 +  public_deps = [ ":access_options_store" ]
-+  deps = [ ":access_build_channel", "//chrome/browser/aegis:profile_support",
++  deps = [ ":access_build_channel", ":access_service_coordinator", "//chrome/browser/aegis:profile_support",
 +           "//chrome/browser/profiles:profile", "//content/public/browser" ]
 +}
++
++test("access_options_service_unittests") {
++  sources = [ "access_options_service_unittest.cc" ]
++  deps = [ ":access_options_service", ":access_service_coordinator",
++           ":access_build_channel", "//chrome/test:test_support_unit",
++           "//base/test:test_support", "//chrome/test:test_support",
++           "//content/test:test_support", "//testing/gtest" ]
++}
+diff --git a/chrome/browser/aegis/access/access_async_rule_store.cc b/chrome/browser/aegis/access/access_async_rule_store.cc
+index ae016933c5d418b30497d02392fb01c21da10026..a04895f3c8b4ba3f659882a79fe03f63be987695 100644
+--- a/chrome/browser/aegis/access/access_async_rule_store.cc
++++ b/chrome/browser/aegis/access/access_async_rule_store.cc
+@@ -7,6 +7,7 @@ namespace aegis::access {
+ class AccessAsyncRuleStore::Worker {
+  public:
+   explicit Worker(AccessStoreBinding binding) : store_(std::move(binding)) {}
++  StoreStatus CheckIdentity() { return store_.Open(); }
+   AsyncAccessStoreRestoration InitializeAndRestore(const std::string& partition) {
+     if (initialized_.contains(partition))
+       return {.status = StoreStatus::kConflict, .detail = "already_initialized"};
+@@ -93,6 +94,9 @@ AccessAsyncRuleStore::AccessAsyncRuleStore(AccessStoreBinding binding)
+           {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
+            base::TaskShutdownBehavior::BLOCK_SHUTDOWN}), std::move(binding)) {}
+ AccessAsyncRuleStore::~AccessAsyncRuleStore() = default;
++void AccessAsyncRuleStore::CheckIdentity(base::OnceCallback<void(StoreStatus)> completion) {
++  worker_.AsyncCall(&Worker::CheckIdentity).Then(std::move(completion));
++}
+ void AccessAsyncRuleStore::InitializeAndRestore(std::string partition,
+     base::OnceCallback<void(AsyncAccessStoreRestoration)> completion) {
+   worker_.AsyncCall(&Worker::InitializeAndRestore).WithArgs(std::move(partition))
+diff --git a/chrome/browser/aegis/access/access_async_rule_store.h b/chrome/browser/aegis/access/access_async_rule_store.h
+index c1214faed94e07034e8f4f2903c2f8f731991f15..774fe7282d59aa3a020984c914496110854b60d5 100644
+--- a/chrome/browser/aegis/access/access_async_rule_store.h
++++ b/chrome/browser/aegis/access/access_async_rule_store.h
+@@ -29,6 +29,7 @@ class AccessAsyncRuleStore {
+  public:
+   explicit AccessAsyncRuleStore(AccessStoreBinding binding);
+   ~AccessAsyncRuleStore();
++  void CheckIdentity(base::OnceCallback<void(StoreStatus)> completion);
+   void InitializeAndRestore(std::string partition,
+       base::OnceCallback<void(AsyncAccessStoreRestoration)> completion);
+   void Prepare(SiteGroupMutationRequest request,
 diff --git a/chrome/browser/aegis/access/access_build_channel.cc b/chrome/browser/aegis/access/access_build_channel.cc
 index aa7166af04c97434aae7d71b38be19d23d26d82f..d361d01fc5d101c26554897c7a284c4aa6efb9ac 100644
 --- a/chrome/browser/aegis/access/access_build_channel.cc
@@ -160,17 +249,70 @@ index 5fee6393e02d1e8252b3d2507cfc693d861ba085..6e4922f3b4a5414a275f9e131895aab1
  aegis_access::ChannelNamespace AccessChannelForCurrentBuild();
  aegis_access::ChannelNamespace BundledAccessTestChannel();
  const char* LocalAccessIdentityChannel(aegis_access::ChannelNamespace channel);
+diff --git a/chrome/browser/aegis/access/access_core_log_unittest.cc b/chrome/browser/aegis/access/access_core_log_unittest.cc
+index 445730efd5eeca367407778d6ee9a4516a3b2d4b..43d2fd56c1a509cda0afe643c7ba1688e1adc85f 100644
+--- a/chrome/browser/aegis/access/access_core_log_unittest.cc
++++ b/chrome/browser/aegis/access/access_core_log_unittest.cc
+@@ -11,6 +11,20 @@ constexpr char kTime[] = "2026/11/11 13:14:15.123456 ";
+ // Run with each unbranded Aegis build variant, using the actual compiled
+ // channel resolver instead of substituting a Chromium DEV enum value.
+ TEST(AccessCoreLogTest, CurrentUnbrandedBuildChoosesDiagnosticDefault) {
++  const auto identity = AccessBuildIdentityForCurrentBuild();
++  if (identity.conflict) {
++    EXPECT_EQ(DefaultCoreLogLevelForCurrentBuild(), "warning");
++    return;
++  }
++  if (identity.product != aegis_access::AccessProductChannel::kUnknown) {
++    std::string_view expected = "warning";
++    if (identity.channel == aegis_access::ChannelNamespace::kDev)
++      expected = "debug";
++    if (identity.channel == aegis_access::ChannelNamespace::kAlpha)
++      expected = "info";
++    EXPECT_EQ(DefaultCoreLogLevelForCurrentBuild(), expected);
++    return;
++  }
+ #if BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
+ #if BUILDFLAG(AEGIS_BETA_TEST_NODE_ENABLED)
+   EXPECT_EQ(DefaultCoreLogLevelForCurrentBuild(), "warning");
+diff --git a/chrome/browser/aegis/access/access_local_core_manager_unittest.cc b/chrome/browser/aegis/access/access_local_core_manager_unittest.cc
+index f89e3a4a93a0b594813d050920abe7a433045b54..2c255f63357b7075e4f2ef8124c069a241075763 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager_unittest.cc
++++ b/chrome/browser/aegis/access/access_local_core_manager_unittest.cc
+@@ -48,6 +48,10 @@ TEST(AccessLocalCoreInputTest, BuildControlsPrivateInputSource) {
+       "aegis-access-dev-node-config", canonical_directory.AppendASCII("dev-node"));
+   const auto input = ResolveAccessLocalCoreInput();
+ #if BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
++  if (AccessChannelForCurrentBuild() != BundledAccessTestChannel()) {
++    EXPECT_FALSE(input);
++    return;
++  }
+   ASSERT_TRUE(input);
+   EXPECT_EQ(input->source, AccessLocalCoreSource::kPrivateTestBundle);
+   EXPECT_EQ(AccessChannelForCurrentBuild(), BundledAccessTestChannel());
+@@ -61,6 +65,10 @@ TEST(AccessLocalCoreInputTest, BuildControlsPrivateInputSource) {
+   EXPECT_EQ(input->node_config, canonical_directory.AppendASCII(
+       "AegisAlphaAccess/node.json"));
+ #elif BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
++  if (AccessChannelForCurrentBuild() != aegis_access::ChannelNamespace::kDev) {
++    EXPECT_FALSE(input);
++    return;
++  }
+   ASSERT_TRUE(input);
+   EXPECT_EQ(input->source, AccessLocalCoreSource::kDevFiles);
+   EXPECT_EQ(input->manifest, canonical_directory.AppendASCII("dev-manifest"));
 diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..42260ba618b890755bb05f23326df9c792f4333d
+index 0000000000000000000000000000000000000000..d883829dac05621a18e82dfccdcdd5d55075b40d
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_browsertest.cc
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,94 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_build_channel.h"
++#include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
 +#include "chrome/browser/ui/browser.h"
 +#include "chrome/browser/profiles/profile.h"
 +#include "base/files/file_util.h"
++#include "base/threading/thread_restrictions.h"
 +#include "chrome/browser/ui/tabs/tab_strip_model.h"
 +#include "chrome/test/base/in_process_browser_test.h"
 +#include "chrome/test/base/ui_test_utils.h"
@@ -203,6 +345,14 @@ index 0000000000000000000000000000000000000000..42260ba618b890755bb05f23326df9c7
 +      chrome.send('getAccessOptionsCapabilities', ['capability-test']);
 +    })
 +  )JS"));
++  base::FilePath legacy;
++  if (!admitted) {
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    legacy = browser()->GetProfile()->GetPath().AppendASCII("AccessOptions")
++        .AppendASCII("alpha").AppendASCII("options.db");
++    ASSERT_TRUE(base::CreateDirectory(legacy.DirName()));
++    ASSERT_TRUE(base::WriteFile(legacy, "legacy-internal-options"));
++  }
 +  if (admitted) {
 +    EXPECT_EQ("ready", content::EvalJs(contents, R"JS(
 +      new Promise(resolve => {
@@ -217,6 +367,10 @@ index 0000000000000000000000000000000000000000..42260ba618b890755bb05f23326df9c7
 +        chrome.send('readAccessOptions', ['read-test']);
 +      })
 +    )JS"));
++    base::ScopedAllowBlockingForTesting allow_blocking;
++    std::string original;
++    ASSERT_TRUE(base::ReadFileToString(legacy, &original));
++    EXPECT_EQ(original, "legacy-internal-options");
 +  }
 +}
 +IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest, PrivateReadDoesNotCreateOptionsDatabase) {
@@ -230,18 +384,33 @@ index 0000000000000000000000000000000000000000..42260ba618b890755bb05f23326df9c7
 +      chrome.send('readAccessOptions', ['private-read-test']);
 +    })
 +  )JS"));
++  base::ScopedAllowBlockingForTesting allow_blocking;
 +  EXPECT_FALSE(base::PathExists(browser()->GetProfile()->GetPath().AppendASCII("AccessOptions")));
++}
++IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest, LegacyDiagnosticPanelUsesResolvedChannel) {
++  const auto channel = AccessChannelForCurrentBuild();
++  const bool internal = channel == aegis_access::ChannelNamespace::kDev ||
++                        channel == aegis_access::ChannelNamespace::kAlpha;
++  auto* controller = AccessSiteProxyBubbleController::GetOrCreate(browser()->GetProfile());
++  ASSERT_TRUE(controller);
++  EXPECT_EQ(controller->IsDevAllowBlockPanelRegistered(), internal);
++  const auto result = controller->ApplyDevAllowBlock("example.test", AccessDevAllowBlockAction::kBlock);
++  EXPECT_EQ(result.status, internal ? AccessDevAllowBlockApplyStatus::kApplied
++                                   : AccessDevAllowBlockApplyStatus::kChannelNotAdmitted);
++  EXPECT_EQ(controller->DevAllowBlockSnapshotForCommittedUrl(GURL("https://example.test")).panel_registered, internal);
 +}
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..65359909274ea1f4282073c3327b6f78411c5907
+index 0000000000000000000000000000000000000000..5feb3a481e2c84aa3eec9a632d0a2be2db7ed28a
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_service.cc
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,58 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_options_service.h"
 +#include "base/task/thread_pool.h"
++#include "base/functional/bind.h"
++#include "chrome/browser/aegis/access/access_service_coordinator.h"
 +#include "chrome/browser/aegis/access/access_build_channel.h"
 +#include "chrome/browser/aegis/aegis_profile_support.h"
 +#include "chrome/browser/profiles/profile.h"
@@ -262,7 +431,7 @@ index 0000000000000000000000000000000000000000..65359909274ea1f4282073c3327b6f78
 +  return service;
 +}
 +AccessOptionsService::AccessOptionsService(Profile* profile)
-+    : store_(base::ThreadPool::CreateSequencedTaskRunner(
++    : profile_(profile), store_(base::ThreadPool::CreateSequencedTaskRunner(
 +          {base::MayBlock(), base::TaskPriority::USER_VISIBLE}),
 +          AccessBuildIdentityForCurrentBuild(), profile->GetPath(),
 +          "aegis-access-profile:" + profile->GetPath().AsUTF8Unsafe(),
@@ -278,19 +447,35 @@ index 0000000000000000000000000000000000000000..65359909274ea1f4282073c3327b6f78
 +    std::move(callback).Run({StoreStatus::kConflict, std::nullopt, "channel_not_admitted"});
 +    return;
 +  }
++  auto* product = AccessServiceCoordinator::GetOrCreate(profile_);
++  if (!product) {
++    std::move(callback).Run({StoreStatus::kRecoveryRequired, std::nullopt, "product_store_missing"});
++    return;
++  }
++  product->CheckOptionsStoreBinding(base::BindOnce(&AccessOptionsService::OnProductStoreChecked,
++      weak_factory_.GetWeakPtr(), std::move(callback)));
++}
++void AccessOptionsService::OnProductStoreChecked(
++    base::OnceCallback<void(StoreResult<AccessOptionsSnapshot>)> callback, StoreStatus status) {
++  if (status != StoreStatus::kValid) {
++    std::move(callback).Run({status, std::nullopt, "product_store_not_ready"});
++    return;
++  }
 +  store_.AsyncCall(&AccessOptionsStore::OpenAndRead).Then(std::move(callback));
 +}
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..2e9182f3f33290d4fa897787578329e672271d83
+index 0000000000000000000000000000000000000000..1f70c5746a73ba6cf49ef253824c08350b235e3d
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_service.h
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,26 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_OPTIONS_SERVICE_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_OPTIONS_SERVICE_H_
 +#include "base/supports_user_data.h"
++#include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
 +#include "base/threading/sequence_bound.h"
 +#include "chrome/browser/aegis/access/access_options_store.h"
 +class Profile;
@@ -304,16 +489,75 @@ index 0000000000000000000000000000000000000000..2e9182f3f33290d4fa897787578329e6
 +  void Read(base::OnceCallback<void(StoreResult<AccessOptionsSnapshot>)> callback);
 + private:
 +  explicit AccessOptionsService(Profile* profile);
++  void OnProductStoreChecked(base::OnceCallback<void(StoreResult<AccessOptionsSnapshot>)> callback, StoreStatus status);
++  raw_ptr<Profile> profile_;
 +  base::SequenceBound<AccessOptionsStore> store_;
++  base::WeakPtrFactory<AccessOptionsService> weak_factory_{this};
 +};
 +}  // namespace aegis::access
 +#endif
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..8fbe73bad7079e8566da54137ab9e78ac3f676eb
+--- /dev/null
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -0,0 +1,50 @@
++// Copyright 2026 GCSA
++#include "chrome/browser/aegis/access/access_options_service.h"
++#include "chrome/browser/aegis/access/access_service_coordinator.h"
++#include "chrome/browser/aegis/access/access_build_channel.h"
++#include "chrome/browser/aegis/access/access_network_context_transport.h"
++#include "services/network/public/mojom/network_context.mojom.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/test/test_future.h"
++#include "chrome/test/base/testing_profile.h"
++#include "content/public/test/browser_task_environment.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace aegis::access {
++TEST(AccessOptionsServiceTest, ProductChannelConflictPreservesExistingDatabase) {
++  content::BrowserTaskEnvironment environment;
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
++  const auto other_channel = AccessChannelForCurrentBuild() == ChannelNamespace::kBeta
++      ? ChannelNamespace::kDev : ChannelNamespace::kBeta;
++  {
++    auto binding = TrustedAccessStoreBindingFactory::CreatePersistent(
++        other_channel, "aegis-access-profile:" + dir.GetPath().AsUTF8Unsafe(),
++        "previous-runtime", dir.GetPath());
++    ASSERT_TRUE(binding);
++    AccessRuleStore previous(*binding);
++    ASSERT_EQ(previous.Open(), StoreStatus::kValid);
++  }
++  std::string original;
++  ASSERT_TRUE(base::ReadFileToString(dir.GetPath().AppendASCII("access.db"), &original));
++  network::mojom::NetworkContextParams params;
++  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
++  auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile.get());
++  ASSERT_TRUE(coordinator);
++  base::test::TestFuture<StoreStatus> checked;
++  coordinator->CheckOptionsStoreBinding(checked.GetCallback());
++  EXPECT_EQ(checked.Get(), StoreStatus::kConflict);
++  if (auto* options = AccessOptionsService::GetOrCreate(profile.get())) {
++    base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> read;
++    options->Read(read.GetCallback());
++    EXPECT_EQ(read.Get().status, StoreStatus::kConflict);
++    EXPECT_FALSE(read.Get().value);
++  }
++  EXPECT_FALSE(base::PathExists(dir.GetPath().AppendASCII("AccessOptions")));
++  std::string current;
++  ASSERT_TRUE(base::ReadFileToString(dir.GetPath().AppendASCII("access.db"), &current));
++  EXPECT_EQ(current, original);
++}
++}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_options_store.cc b/chrome/browser/aegis/access/access_options_store.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..759b22c73bae85a8434cc1ea71f22355af9a1a96
+index 0000000000000000000000000000000000000000..0dbddf0a3e945ce78f652c3eec0666dada0ee733
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_store.cc
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,223 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_options_store.h"
 +
@@ -340,7 +584,7 @@ index 0000000000000000000000000000000000000000..759b22c73bae85a8434cc1ea71f22355
 +                                     base::FilePath profile_path,
 +                                     std::string profile_id,
 +                                     bool is_private)
-+    : identity_(identity), profile_path_(profile_path), profile_id_(std::move(profile_id)),
++    : identity_(identity), profile_id_(std::move(profile_id)),
 +      private_(is_private), database_("AegisAccess") {
 +  DETACH_FROM_SEQUENCE(sequence_checker_);
 +  if (!private_ && !profile_path.empty()) {
@@ -446,20 +690,11 @@ index 0000000000000000000000000000000000000000..759b22c73bae85a8434cc1ea71f22355
 +  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 +  if (!Admitted(aegis_access::AccessOptionsOperation::kRead))
 +    return StoreStatus::kConflict;
-+  if (!private_ && base::PathExists(profile_path_.AppendASCII("access.db"))) {
-+    auto binding = TrustedAccessStoreBindingFactory::CreatePersistent(
-+        identity_.channel, profile_id_, "options-storage-check", profile_path_);
-+    if (!binding)
-+      return StoreStatus::kInvalidArgument;
-+    AccessRuleStore product(*binding);
-+    const auto status = product.Open();
-+    if (status != StoreStatus::kValid)
-+      return status;
-+  }
 +  if (profile_id_.empty() || profile_id_.size() > 256 ||
-+      (!private_ && (!database_path_.IsAbsolute() ||
-+                    !base::CreateDirectory(database_path_.DirName()))))
++      (!private_ && (!database_path_.IsAbsolute() || database_path_.ReferencesParent())))
 +    return StoreStatus::kInvalidArgument;
++  if (!private_ && !base::CreateDirectory(database_path_.DirName()))
++    return StoreStatus::kIoError;
 +  if (open_)
 +    return StoreStatus::kValid;
 +  if (database_.is_open())
@@ -548,10 +783,10 @@ index 0000000000000000000000000000000000000000..759b22c73bae85a8434cc1ea71f22355
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_options_store.h b/chrome/browser/aegis/access/access_options_store.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..6f922e045084b67e4a6db06e3e1ce9f177519d50
+index 0000000000000000000000000000000000000000..e76a3b66b870106a425b0edc49b8b2595c9b47c5
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_store.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,46 @@
 +// Copyright 2026 GCSA
 +#ifndef CHROME_BROWSER_AEGIS_ACCESS_ACCESS_OPTIONS_STORE_H_
 +#define CHROME_BROWSER_AEGIS_ACCESS_ACCESS_OPTIONS_STORE_H_
@@ -589,7 +824,6 @@ index 0000000000000000000000000000000000000000..6f922e045084b67e4a6db06e3e1ce9f1
 +  bool Admitted(aegis_access::AccessOptionsOperation operation) const;
 +  aegis_access::AccessBuildIdentity identity_;
 +  base::FilePath database_path_;
-+  base::FilePath profile_path_;
 +  std::string profile_id_;
 +  bool private_;
 +  bool open_ = false;
@@ -601,10 +835,10 @@ index 0000000000000000000000000000000000000000..6f922e045084b67e4a6db06e3e1ce9f1
 +#endif
 diff --git a/chrome/browser/aegis/access/access_options_store_unittest.cc b/chrome/browser/aegis/access/access_options_store_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f2f88a4ea0d2660bb68b5682d7ddf7c98da45afe
+index 0000000000000000000000000000000000000000..0d912423798adb7b3d802806c204dfff21ca4c5e
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_options_store_unittest.cc
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,132 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_options_store.h"
 +#include "base/files/file_util.h"
@@ -613,7 +847,7 @@ index 0000000000000000000000000000000000000000..f2f88a4ea0d2660bb68b5682d7ddf7c9
 +#include "testing/gtest/include/gtest/gtest.h"
 +
 +namespace aegis::access {
-+TEST(AccessOptionsStoreTest, BetaCannotOpenOldInternalConfiguration) {
++TEST(AccessOptionsStoreTest, BetaCannotCreateConfiguration) {
 +  base::ScopedTempDir dir;
 +  ASSERT_TRUE(dir.CreateUniqueTempDir());
 +  const auto beta = aegis_access::ResolveAccessBuildIdentity(
@@ -676,28 +910,6 @@ index 0000000000000000000000000000000000000000..f2f88a4ea0d2660bb68b5682d7ddf7c9
 +  ASSERT_TRUE(query.Step());
 +  EXPECT_EQ(query.ColumnInt64(0), 7);
 +}
-+TEST(AccessOptionsStoreTest, ProductChannelConflictPreservesExistingDatabase) {
-+  base::ScopedTempDir dir;
-+  ASSERT_TRUE(dir.CreateUniqueTempDir());
-+  {
-+    auto binding = TrustedAccessStoreBindingFactory::CreatePersistent(
-+        ChannelNamespace::kBeta, "profile", "runtime", dir.GetPath());
-+    ASSERT_TRUE(binding);
-+    AccessRuleStore product(*binding);
-+    ASSERT_EQ(product.Open(), StoreStatus::kValid);
-+  }
-+  std::string original;
-+  ASSERT_TRUE(base::ReadFileToString(dir.GetPath().AppendASCII("access.db"), &original));
-+  const auto identity = aegis_access::ResolveAccessBuildIdentity(
-+      aegis_access::AccessProductChannel::kAlpha,
-+      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
-+  AccessOptionsStore options(identity, dir.GetPath(), "profile", false);
-+  EXPECT_EQ(options.Open(), StoreStatus::kConflict);
-+  EXPECT_FALSE(base::PathExists(dir.GetPath().AppendASCII("AccessOptions")));
-+  std::string current;
-+  ASSERT_TRUE(base::ReadFileToString(dir.GetPath().AppendASCII("access.db"), &current));
-+  EXPECT_EQ(current, original);
-+}
 +TEST(AccessOptionsStoreTest, WrongOwnerAndUnsupportedSchemaPreserveConfiguration) {
 +  base::ScopedTempDir dir;
 +  ASSERT_TRUE(dir.CreateUniqueTempDir());
@@ -729,7 +941,179 @@ index 0000000000000000000000000000000000000000..f2f88a4ea0d2660bb68b5682d7ddf7c9
 +  ASSERT_TRUE(base::ReadFileToString(path, &after));
 +  EXPECT_EQ(before, after);
 +}
++TEST(AccessOptionsStoreTest, NewPrivateLifetimeHasNoPreviousConfiguration) {
++  const auto identity = aegis_access::ResolveAccessBuildIdentity(
++      aegis_access::AccessProductChannel::kAlpha,
++      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
++  {
++    AccessOptionsStore previous(identity, {}, "private-session", true);
++    ASSERT_EQ(previous.Open(), StoreStatus::kValid);
++    ASSERT_EQ(previous.Write(0, "{\"theme\":\"dark\"}"), StoreStatus::kValid);
++    EXPECT_EQ(previous.Read().value->revision, 1u);
++  }
++  AccessOptionsStore next(identity, {}, "private-session", true);
++  ASSERT_EQ(next.Open(), StoreStatus::kValid);
++  EXPECT_EQ(next.Read().value->revision, 0u);
++  EXPECT_EQ(next.Read().value->configuration, "{}");
++}
++TEST(AccessOptionsStoreTest, FailedDirectoryCreationReportsIoAndPreservesFile) {
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  const auto path = dir.GetPath().AppendASCII("file");
++  ASSERT_TRUE(base::WriteFile(path, "original"));
++  const auto identity = aegis_access::ResolveAccessBuildIdentity(
++      aegis_access::AccessProductChannel::kAlpha,
++      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
++  AccessOptionsStore store(identity, path, "profile", false);
++  EXPECT_EQ(store.Open(), StoreStatus::kIoError);
++  std::string bytes;
++  ASSERT_TRUE(base::ReadFileToString(path, &bytes));
++  EXPECT_EQ(bytes, "original");
++}
 +}  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_service_coordinator.cc b/chrome/browser/aegis/access/access_service_coordinator.cc
+index 0430224ed24a9e6f1dbea26cc6c858c699a144f2..e37ac3bd1f7a6f1333042cec41239108a07792eb 100644
+--- a/chrome/browser/aegis/access/access_service_coordinator.cc
++++ b/chrome/browser/aegis/access/access_service_coordinator.cc
+@@ -131,6 +131,34 @@ bool AccessServiceCoordinator::CanDispatch(const OwnershipKey& owner) const {
+       (!async_store_ || committed_cache_.contains(owner.storage_partition_token));
+ }
+ 
++void AccessServiceCoordinator::CheckOptionsStoreBinding(
++    base::OnceCallback<void(StoreStatus)> completion) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  auto* transport = AccessNetworkContextTransport::GetOrCreate(profile_);
++  auto owner = transport ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
++                         : std::nullopt;
++  if (!owner || !transport->OwnsConfiguredPartition(*owner)) {
++    std::move(completion).Run(StoreStatus::kRecoveryRequired);
++    return;
++  }
++  // Initialize through the existing restoration path before reusing its actor.
++  // Retaining an unopened actor would bypass callers' startup assumptions.
++  InitializeForProfile(*owner, base::BindOnce(
++      &AccessServiceCoordinator::OnOptionsStoreInitialized,
++      weak_factory_.GetWeakPtr(), std::move(completion)));
++}
++void AccessServiceCoordinator::OnOptionsStoreInitialized(
++    base::OnceCallback<void(StoreStatus)> completion, bool ready) {
++  if (!ready) {
++    std::move(completion).Run(last_store_status_ == StoreStatus::kValid
++        ? StoreStatus::kRecoveryRequired : last_store_status_);
++    return;
++  }
++  // Reuse the actor which owns access.db's exclusive connection. A second
++  // connection would hide identity conflicts behind SQLITE_BUSY.
++  async_store_->CheckIdentity(std::move(completion));
++}
++
+ void AccessServiceCoordinator::InitializeForProfile(
+     const OwnershipKey& owner, base::OnceCallback<void(bool)> completion) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+@@ -165,6 +193,7 @@ void AccessServiceCoordinator::InitializeForProfile(
+ }
+ void AccessServiceCoordinator::OnStoreInitialized(
+     OwnershipKey owner, AsyncAccessStoreRestoration result) {
++  last_store_status_ = result.status;
+   auto* runtime = AccessPublishedRequestRuntime::GetOrCreate(profile_);
+   bool ready = result.status == StoreStatus::kValid && result.committed &&
+       result.publication && result.publication->owner == owner && runtime;
+diff --git a/chrome/browser/aegis/access/access_service_coordinator.h b/chrome/browser/aegis/access/access_service_coordinator.h
+index 14dbda98ada8b2d129ad37a3f6fd56c957c09da3..2b9e76626e05f8ababf7d96d2ede25f63b54bb51 100644
+--- a/chrome/browser/aegis/access/access_service_coordinator.h
++++ b/chrome/browser/aegis/access/access_service_coordinator.h
+@@ -69,6 +69,7 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
+   // Only the actor opens SQLite; ReadCommittedSnapshot is then a UI cache read.
+   void InitializeForProfile(const OwnershipKey& owner,
+                             base::OnceCallback<void(bool)> completion);
++  void CheckOptionsStoreBinding(base::OnceCallback<void(StoreStatus)> completion);
+   bool CanDispatch(const OwnershipKey& owner) const;
+   StoreResult<StoredPolicySnapshot> ReadCommittedSnapshot(
+       const std::string& storage_partition_token);
+@@ -89,6 +90,7 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
+   friend class AccessServiceCoordinatorTestPeer;
+   explicit AccessServiceCoordinator(Profile* profile);
+   struct MutationTransaction;
++  void OnOptionsStoreInitialized(base::OnceCallback<void(StoreStatus)> completion, bool ready);
+   void OnStoreInitialized(OwnershipKey owner, AsyncAccessStoreRestoration result);
+   void OnAsyncPrepared(std::unique_ptr<MutationTransaction> transaction,
+                        AsyncAccessStorePrepared result);
+@@ -131,6 +133,7 @@ class AccessServiceCoordinator : public base::SupportsUserData::Data {
+   std::unique_ptr<AccessAsyncRuleStore> async_store_;
+   std::map<std::string, StoredPolicySnapshot> committed_cache_;
+   std::map<std::string, std::vector<base::OnceCallback<void(bool)>>> initializing_;
++  StoreStatus last_store_status_ = StoreStatus::kRecoveryRequired;
+   uint64_t state_generation_ = 0;
+   bool mutation_in_flight_ = false;
+   bool recovery_required_ = false;
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b667fde84 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+@@ -2,6 +2,7 @@
+ 
+ #include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
+ #include "chrome/browser/aegis/access/access_build_channel.h"
++#include "chrome/browser/aegis/access/access_buildflags.h"
+ 
+ #include <algorithm>
+ #include <utility>
+@@ -198,6 +199,16 @@ bool AccessSiteProxyBubbleController::ApplyHostProxyToggle(
+ }
+ 
+ bool AccessSiteProxyBubbleController::IsDevAllowBlockPanelRegistered() const {
++  const auto identity = AccessBuildIdentityForCurrentBuild();
++  if (identity.conflict ||
++      (identity.channel != aegis_access::ChannelNamespace::kDev &&
++       identity.channel != aegis_access::ChannelNamespace::kAlpha))
++    return false;
++#if !BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
++  if (identity.product == aegis_access::AccessProductChannel::kUnknown &&
++      chrome::GetChannel() == version_info::Channel::UNKNOWN)
++    return false;
++#endif
+   return IsAccessDevAllowBlockPanelAdmitted(chrome::GetChannel()) &&
+          !IsGeneralAccessRuleEditorRegistered(chrome::GetChannel());
+ }
+@@ -205,6 +216,8 @@ bool AccessSiteProxyBubbleController::IsDevAllowBlockPanelRegistered() const {
+ AccessDevAllowBlockPanelSnapshot
+ AccessSiteProxyBubbleController::DevAllowBlockSnapshotForCommittedUrl(
+     const GURL& committed_url) const {
++  if (!IsDevAllowBlockPanelRegistered())
++    return {};
+   return BuildAccessDevAllowBlockPanelSnapshot(chrome::GetChannel(),
+                                                dev_intent_store_, committed_url);
+ }
+@@ -214,6 +227,8 @@ AccessSiteProxyBubbleController::ApplyDevAllowBlock(
+     std::string_view raw_host,
+     AccessDevAllowBlockAction action) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!IsDevAllowBlockPanelRegistered())
++    return {.status = AccessDevAllowBlockApplyStatus::kChannelNotAdmitted};
+   AccessDevAllowBlockApplyResult result = ApplyAccessDevAllowBlock(
+       &dev_intent_store_, chrome::GetChannel(), raw_host, action);
+   if (result.status != AccessDevAllowBlockApplyStatus::kApplied) {
+@@ -374,7 +389,8 @@ void AccessSiteProxyBubbleController::PrepareLocalCore(const AccessSiteHost& hos
+       ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), base::FilePath())
+       : std::nullopt;
+   if (!owner || !transport->OwnsConfiguredPartition(*owner) ||
+-      !IsDevAllowBlockPanelRegistered()) {
++      (!IsAccessDevAllowBlockPanelAdmitted(chrome::GetChannel()) ||
++       IsGeneralAccessRuleEditorRegistered(chrome::GetChannel()))) {
+     FailCorePreparation(host, "The test proxy is unavailable in this build.");
+     return;
+   }
+@@ -608,7 +624,9 @@ void AccessSiteProxyBubbleController::EnsureLocalCoreForRequest(
+   auto* coordinator = AccessServiceCoordinator::Get(profile_);
+   if (!expected_owner || *expected_owner != owner ||
+       !transport->OwnsConfiguredPartition(owner) || group != LocalProxyGroup(owner) ||
+-      !IsDevAllowBlockPanelRegistered() || !coordinator || !coordinator->CanDispatch(owner)) {
++      (!IsAccessDevAllowBlockPanelAdmitted(chrome::GetChannel()) ||
++       IsGeneralAccessRuleEditorRegistered(chrome::GetChannel())) ||
++      !coordinator || !coordinator->CanDispatch(owner)) {
+     std::move(completion).Run(false);
+     return;
+   }
 diff --git a/chrome/browser/aegis/access/alpha_access.gni b/chrome/browser/aegis/access/alpha_access.gni
 index bd1b3a851d1f4104a4386892ce19a269852d85b5..41dfad030292816e08fed470eded9a692fa49276 100644
 --- a/chrome/browser/aegis/access/alpha_access.gni
@@ -758,6 +1142,143 @@ index bd1b3a851d1f4104a4386892ce19a269852d85b5..41dfad030292816e08fed470eded9a69
 +           (is_mac && (aegis_access_product_channel == "debug" ||
 +                       aegis_access_product_channel == "alpha")),
 +       "Internal Options requires an explicit internal macOS product identity.")
+diff --git a/chrome/browser/aegis/access/verify_access_build_identity.py b/chrome/browser/aegis/access/verify_access_build_identity.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..aacf77bc35434ec7698a5d6217b50441d1920ba0
+--- /dev/null
++++ b/chrome/browser/aegis/access/verify_access_build_identity.py
+@@ -0,0 +1,55 @@
++#!/usr/bin/env python3
++# Copyright 2026 GCSA
++"""Validate native Access flags against the macOS app's channel metadata."""
++import argparse
++import plistlib
++from pathlib import Path
++
++
++def chromium_channel(branded, metadata):
++    # chrome/common/channel_info_mac.mm ignores Keystone when unbranded.
++    if not branded:
++        return "unknown"
++    tag = metadata.get("KSChannelID")
++    if tag is None or tag in ("arm64", "universal"):
++        return "stable"
++    if not isinstance(tag, str):
++        raise ValueError("KSChannelID must be a string")
++    for prefix in ("arm64-", "universal-"):
++        if tag.startswith(prefix):
++            tag = tag[len(prefix):]
++            break
++    if tag == "extended":
++        return "stable"
++    return tag if tag in ("beta", "dev", "canary") else "unknown"
++
++
++def validate_identity(product, internal, branded, metadata):
++    if product not in ("unknown", "debug", "alpha", "beta", "stable"):
++        raise ValueError("Unknown Access product identity")
++    if internal and product not in ("debug", "alpha"):
++        raise ValueError("Internal Options requires Debug or Alpha identity")
++    browser = chromium_channel(branded, metadata)
++    if browser in ("beta", "stable") and product not in ("unknown", browser):
++        raise ValueError("Access product identity conflicts with Chromium release channel")
++    return browser
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--plist", type=Path, required=True)
++    parser.add_argument("--product-channel", required=True)
++    parser.add_argument("--internal-options", choices=("true", "false"), required=True)
++    parser.add_argument("--chrome-branded", choices=("true", "false"), required=True)
++    parser.add_argument("--stamp", type=Path, required=True)
++    args = parser.parse_args()
++    with args.plist.open("rb") as source:
++        metadata = plistlib.load(source)
++    validate_identity(args.product_channel, args.internal_options == "true",
++                      args.chrome_branded == "true", metadata)
++    args.stamp.parent.mkdir(parents=True, exist_ok=True)
++    args.stamp.write_text("Access build identity verified\n", encoding="utf-8")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/chrome/browser/aegis/access/verify_access_build_identity_test.py b/chrome/browser/aegis/access/verify_access_build_identity_test.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..eaa5ff6d51c7df9aebf9cf6f9c7ea9477d1101b2
+--- /dev/null
++++ b/chrome/browser/aegis/access/verify_access_build_identity_test.py
+@@ -0,0 +1,70 @@
++# Copyright 2026 GCSA
++import unittest
++import plistlib
++import subprocess
++import sys
++import tempfile
++from pathlib import Path
++import verify_access_build_identity as identity
++
++
++class BuildIdentityTests(unittest.TestCase):
++    def test_internal_channels_require_explicit_capability(self):
++        for product in ("unknown", "debug", "alpha", "beta", "stable"):
++            for enabled in (False, True):
++                with self.subTest(product=product, enabled=enabled):
++                    if enabled and product not in ("debug", "alpha"):
++                        with self.assertRaises(ValueError):
++                            identity.validate_identity(product, enabled, False, {})
++                    else:
++                        self.assertEqual(identity.validate_identity(product, enabled, False, {}), "unknown")
++
++    def test_known_release_metadata_rejects_conflicting_identity(self):
++        for channel, metadata in (("beta", {"KSChannelID": "arm64-beta"}), ("stable", {})):
++            for product in ("unknown", "debug", "alpha", "beta", "stable"):
++                with self.subTest(channel=channel, product=product):
++                    if product not in ("unknown", channel):
++                        with self.assertRaises(ValueError):
++                            identity.validate_identity(product, False, True, metadata)
++                    else:
++                        self.assertEqual(identity.validate_identity(product, False, True, metadata), channel)
++
++    def test_channel_metadata_matches_chromium_mac_parsing(self):
++        for tag, expected in ((None, "stable"), ("arm64", "stable"),
++                              ("universal", "stable"), ("extended", "stable"),
++                              ("arm64-extended", "stable"), ("universal-beta", "beta"),
++                              ("dev", "dev"), ("arm64-canary", "canary"),
++                              ("", "unknown"), ("future", "unknown")):
++            with self.subTest(tag=tag):
++                metadata = {} if tag is None else {"KSChannelID": tag}
++                self.assertEqual(identity.chromium_channel(True, metadata), expected)
++                self.assertEqual(identity.chromium_channel(False, metadata), "unknown")
++
++    def test_branded_internal_dev_can_use_explicit_internal_identity(self):
++        for product in ("debug", "alpha"):
++            self.assertEqual(identity.validate_identity(product, True, True, {"KSChannelID": "dev"}), "dev")
++        with self.assertRaises(ValueError):
++            identity.validate_identity("future", False, False, {})
++
++    def test_build_action_rejects_conflict_before_writing_stamp(self):
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            info = root / "Info.plist"
++            stamp = root / "verified.stamp"
++            info.write_bytes(plistlib.dumps({"KSChannelID": "beta"}))
++            command = [sys.executable, "-B", str(Path(identity.__file__)),
++                       "--plist", str(info), "--product-channel", "alpha",
++                       "--internal-options", "false", "--chrome-branded", "true",
++                       "--stamp", str(stamp)]
++            conflict = subprocess.run(command, capture_output=True, text=True)
++            self.assertNotEqual(conflict.returncode, 0)
++            self.assertIn("conflicts", conflict.stderr)
++            self.assertFalse(stamp.exists())
++            command[command.index("alpha")] = "beta"
++            accepted = subprocess.run(command, capture_output=True, text=True)
++            self.assertEqual(accepted.returncode, 0, accepted.stderr)
++            self.assertTrue(stamp.is_file())
++
++
++if __name__ == "__main__":
++    unittest.main()
 diff --git a/chrome/browser/ui/webui/aegis/BUILD.gn b/chrome/browser/ui/webui/aegis/BUILD.gn
 index 2af2384c9831c407789fd30352d979f656dd9371..a97125486eed33102d97db0343e2110c23bfb825 100644
 --- a/chrome/browser/ui/webui/aegis/BUILD.gn
@@ -886,18 +1407,21 @@ index 83d67e9687613e597b58c9f4d77271fe43673f4e..019575626f9c40fecf8b11b0b026a2dc
    if (args.size() != 1 || !args[0].is_string()) return;
    AllowJavascript();
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
-index 4febe4a1648f95d943097c23e8e6fb6624e58be3..5428e99f45bea45d0eea48deca06f5bbd3f9d815 100644
+index 4febe4a1648f95d943097c23e8e6fb6624e58be3..1d1b2c70dd1c2368d0dac8eed521ea9874c58f03 100644
 --- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
 +++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
-@@ -17,6 +17,7 @@
+@@ -17,6 +17,10 @@
  #include "chrome/browser/aegis/metalink_parser.h"
  #if BUILDFLAG(IS_MAC)
  #include "chrome/services/aegis_torrent/public/mojom/aegis_torrent_service.mojom.h"
-+#include "chrome/browser/aegis/access/access_options_store.h"
++namespace aegis::access {
++struct AccessOptionsSnapshot;
++template <typename T> struct StoreResult;
++}
  #endif
  #include "content/public/browser/global_routing_id.h"
  #include "content/public/browser/web_ui_message_handler.h"
-@@ -96,6 +97,9 @@ class AegisUIHandler : public content::WebUIMessageHandler,
+@@ -96,6 +100,9 @@ class AegisUIHandler : public content::WebUIMessageHandler,
    void OnMetalinkParsed(std::string callback_id,
                          aegis::MetalinkParseResult result);
  #if BUILDFLAG(IS_MAC)
@@ -1103,3 +1627,6 @@ index ce3d880390db19853414eabed36c691dbb471046..35bde368d9fde9f0828c7464e04eafa4
      ]
    },
    "test_main": "access_route_planner_native_test.cc",
+-- 
+2.54.0 (Apple Git-157)
+

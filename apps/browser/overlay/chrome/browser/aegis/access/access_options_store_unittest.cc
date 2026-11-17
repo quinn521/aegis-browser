@@ -6,7 +6,7 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace aegis::access {
-TEST(AccessOptionsStoreTest, BetaCannotOpenOldInternalConfiguration) {
+TEST(AccessOptionsStoreTest, BetaCannotCreateConfiguration) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
   const auto beta = aegis_access::ResolveAccessBuildIdentity(
@@ -69,28 +69,6 @@ TEST(AccessOptionsStoreTest, InterruptedMigrationPreservesOriginalAndRecovers) {
   ASSERT_TRUE(query.Step());
   EXPECT_EQ(query.ColumnInt64(0), 7);
 }
-TEST(AccessOptionsStoreTest, ProductChannelConflictPreservesExistingDatabase) {
-  base::ScopedTempDir dir;
-  ASSERT_TRUE(dir.CreateUniqueTempDir());
-  {
-    auto binding = TrustedAccessStoreBindingFactory::CreatePersistent(
-        ChannelNamespace::kBeta, "profile", "runtime", dir.GetPath());
-    ASSERT_TRUE(binding);
-    AccessRuleStore product(*binding);
-    ASSERT_EQ(product.Open(), StoreStatus::kValid);
-  }
-  std::string original;
-  ASSERT_TRUE(base::ReadFileToString(dir.GetPath().AppendASCII("access.db"), &original));
-  const auto identity = aegis_access::ResolveAccessBuildIdentity(
-      aegis_access::AccessProductChannel::kAlpha,
-      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
-  AccessOptionsStore options(identity, dir.GetPath(), "profile", false);
-  EXPECT_EQ(options.Open(), StoreStatus::kConflict);
-  EXPECT_FALSE(base::PathExists(dir.GetPath().AppendASCII("AccessOptions")));
-  std::string current;
-  ASSERT_TRUE(base::ReadFileToString(dir.GetPath().AppendASCII("access.db"), &current));
-  EXPECT_EQ(current, original);
-}
 TEST(AccessOptionsStoreTest, WrongOwnerAndUnsupportedSchemaPreserveConfiguration) {
   base::ScopedTempDir dir;
   ASSERT_TRUE(dir.CreateUniqueTempDir());
@@ -121,5 +99,34 @@ TEST(AccessOptionsStoreTest, WrongOwnerAndUnsupportedSchemaPreserveConfiguration
   std::string after;
   ASSERT_TRUE(base::ReadFileToString(path, &after));
   EXPECT_EQ(before, after);
+}
+TEST(AccessOptionsStoreTest, NewPrivateLifetimeHasNoPreviousConfiguration) {
+  const auto identity = aegis_access::ResolveAccessBuildIdentity(
+      aegis_access::AccessProductChannel::kAlpha,
+      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
+  {
+    AccessOptionsStore previous(identity, {}, "private-session", true);
+    ASSERT_EQ(previous.Open(), StoreStatus::kValid);
+    ASSERT_EQ(previous.Write(0, "{\"theme\":\"dark\"}"), StoreStatus::kValid);
+    EXPECT_EQ(previous.Read().value->revision, 1u);
+  }
+  AccessOptionsStore next(identity, {}, "private-session", true);
+  ASSERT_EQ(next.Open(), StoreStatus::kValid);
+  EXPECT_EQ(next.Read().value->revision, 0u);
+  EXPECT_EQ(next.Read().value->configuration, "{}");
+}
+TEST(AccessOptionsStoreTest, FailedDirectoryCreationReportsIoAndPreservesFile) {
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  const auto path = dir.GetPath().AppendASCII("file");
+  ASSERT_TRUE(base::WriteFile(path, "original"));
+  const auto identity = aegis_access::ResolveAccessBuildIdentity(
+      aegis_access::AccessProductChannel::kAlpha,
+      aegis_access::BrowserReleaseChannel::kUnknown, ChannelNamespace::kInvalid, true);
+  AccessOptionsStore store(identity, path, "profile", false);
+  EXPECT_EQ(store.Open(), StoreStatus::kIoError);
+  std::string bytes;
+  ASSERT_TRUE(base::ReadFileToString(path, &bytes));
+  EXPECT_EQ(bytes, "original");
 }
 }  // namespace aegis::access

@@ -331,6 +331,7 @@ if (!is_android) {
     }
     deps = [
       "//chrome/browser/aegis/access:access_build_channel",
+      "//chrome/browser/aegis/access:access_site_proxy_bubble",
       ":aegis",
       ":agent_model_transport",
       "//base",
