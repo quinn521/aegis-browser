@@ -10,6 +10,8 @@ buildflag_header("access_buildflags") {
   allow_dev_files = !is_official_build
   flags = [
     "AEGIS_DEV_LOCAL_NODE_ALLOWED=$allow_dev_files",
+    "AEGIS_ACCESS_PRODUCT_CHANNEL=\"$aegis_access_product_channel\"",
+    "AEGIS_ACCESS_INTERNAL_OPTIONS=$aegis_access_internal_options",
     "AEGIS_PRIVATE_TEST_NODE_ENABLED=$aegis_private_test_node_enabled",
     "AEGIS_BETA_TEST_NODE_ENABLED=$aegis_beta_test_node_enabled",
   ]
@@ -77,7 +79,7 @@ source_set("access_build_channel") {
     "//chrome/common:channel_info",
     "//components/version_info:channel",
   ]
-  public_deps = [ "//components/aegis_access:browser_request_metadata_seed" ]
+  public_deps = [ "//components/aegis_access:access_options_capability" ]
 }
 
 source_set("access_core_log") {
@@ -729,4 +731,21 @@ test("access_async_rule_store_unittests") {
     "//base/test:test_support",
     "//testing/gtest",
   ]
+}
+
+source_set("access_options_store") {
+  sources = [ "access_options_store.cc", "access_options_store.h" ]
+  public_deps = [ ":access_rule_store", "//components/aegis_access:access_options_capability" ]
+}
+test("access_options_store_unittests") {
+  sources = [ "access_options_store_unittest.cc" ]
+  deps = [ ":access_options_store", "//base/test:run_all_unittests",
+           "//base/test:test_support", "//testing/gtest" ]
+}
+
+source_set("access_options_service") {
+  sources = [ "access_options_service.cc", "access_options_service.h" ]
+  public_deps = [ ":access_options_store" ]
+  deps = [ ":access_build_channel", "//chrome/browser/aegis:profile_support",
+           "//chrome/browser/profiles:profile", "//content/public/browser" ]
 }

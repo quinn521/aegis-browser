@@ -486,3 +486,4 @@
 0484-fix-macos-unshown-omnibox-popup.patch
 0485-fix-ios-markdown-render-ownership.patch
 0486-test-macos-aim-presentation-lifecycle.patch
+0487-feat-macos-access-options-admission-store.patch

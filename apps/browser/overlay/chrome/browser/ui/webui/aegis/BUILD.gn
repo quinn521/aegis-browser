@@ -28,6 +28,9 @@ source_set("aegis") {
     "//ui/base",
     "//ui/webui",
   ]
+  if (is_mac) {
+    deps += [ "//chrome/browser/aegis/access:access_options_service" ]
+  }
   if (!is_android) {
     sources += [
       "aegis_enhancement_handler.cc",
@@ -51,3 +54,5 @@ source_set("aegis") {
 
   deps += [ "//chrome/browser:browser_process" ]
 }
+
+# The native Options bridge is exclusive to the macOS product.
