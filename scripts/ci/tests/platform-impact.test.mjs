@@ -30,7 +30,7 @@ test('platform routing binds real merge parents and rejects hidden product chang
       const result = spawnSync(process.execPath, [script], {cwd: root, env, encoding: 'utf8'});
       assert.equal(result.status, 0, result.stderr);
       const plan = JSON.parse(result.stdout);
-      assert.equal(plan.ios, expected); assert.equal(plan.base, base); assert.equal(plan.head, head); assert.equal(plan.tested, tested);
+      assert.equal(plan.ios, expected); assert.equal(typeof plan.macos, 'boolean'); assert.equal(plan.base, base); assert.equal(plan.head, head); assert.equal(plan.tested, tested);
       writeFileSync(event, JSON.stringify({pull_request: {base: {sha: earlierBase}, head: {sha: head}}}));
       const stale = spawnSync(process.execPath, [script], {cwd: root, env, encoding: 'utf8'});
       assert.equal(stale.status, 0, stale.stderr);
@@ -40,11 +40,14 @@ test('platform routing binds real merge parents and rejects hidden product chang
       assert.notEqual(spawnSync(process.execPath, [script], {cwd: root, env: {...env, GITHUB_SHA: base}}).status, 0, 'wrong checkout must block');
       const push = spawnSync(process.execPath, [script], {cwd: root, env: {...env, GITHUB_EVENT_NAME: 'push'}, encoding: 'utf8'});
       assert.equal(JSON.parse(push.stdout).ios, true, 'actual push retains full platform checks');
+      assert.equal(JSON.parse(push.stdout).macos, true, 'push must retain macOS contracts');
       rmSync(event); git('reset', '--hard', base);
       return plan;
     };
     run(() => save(doc, 'updated'), false);
     run(() => {save(doc, 'updated'); save('apps/ios/Feature.swift', 'invalid');}, true);
+    const iosOnly = run(() => save('apps/ios/Feature.swift', 'feature'), true);
+    assert.equal(iosOnly.macos, false);
     run(() => save('unknown.file', 'unknown'), true);
     run(() => rmSync(join(root, doc)), true);
     run(() => git('mv', doc, 'docs/renamed.md'), true);
@@ -66,4 +69,24 @@ test('iOS archive waits for contracts and keeps failed archives out of distribut
   assert.match(diagnostics.if, /failure\(\)/u);
   assert(!diagnostics.with.path.includes('.xcarchive'));
   assert.match(workflow.concurrency.group, /github.sha/u);
+});
+
+
+test('macOS automatic contracts wait for trusted routing and exclude Draft or manual jobs', () => {
+  const workflow = YAML.parse(readFileSync('.github/workflows/macos-delivery.yml', 'utf8'));
+  const {impact, contracts, admission, package: packaging} = workflow.jobs;
+  assert.equal(contracts.needs, 'impact');
+  assert.match(contracts.if, /needs.impact.outputs.macos == 'true'/u);
+  for (const job of [impact, contracts]) {
+    assert.match(job.if, /toJSON\(github.event.pull_request.draft\) == 'false'/u);
+    assert.match(job.if, /github.event_name != 'workflow_dispatch'/u);
+  }
+  assert(workflow.on.pull_request.types.includes('converted_to_draft'));
+  assert.match(workflow.concurrency.group, /github.sha/u);
+  assert.equal(workflow.concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}");
+  assert.match(admission.if, /workflow_dispatch/u);
+  assert.deepEqual(packaging.needs, ['admission', 'access-tests']);
+  const run = impact.steps.find(step => step.id === 'impact').run;
+  assert.match(run, /git show "\$ROUTE_BASE_SHA:scripts\/ci\/platform-impact.mjs"/u);
+  assert.match(run, /grep -q '\^macos='/u);
 });
