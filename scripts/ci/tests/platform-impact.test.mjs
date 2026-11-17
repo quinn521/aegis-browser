@@ -138,3 +138,48 @@ test('archive compiler diagnostics reach Actions and retain exit status before s
     }
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
+
+test('archive package resolution inherits the existing GitHub transport policy', () => {
+  const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
+  const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
+  const root = mkdtempSync(join(tmpdir(), 'archive-git-policy-'));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  const trace = join(root, 'git-policy.txt');
+  const args = join(root, 'xcode-args.txt');
+  const config = join(root, 'gitconfig');
+  writeFileSync(config, '[http]\n proxy = http://127.0.0.1:9\n[credential]\n helper = retained-fixture-helper\n');
+  const executables = {
+    python3: '#!/bin/bash\nexit 0\n',
+    scutil: '#!/bin/bash\nexit 0\n',
+    xcodebuild: `#!/bin/bash
+printf 'proxy=%s\\n' "$(git config --get-urlmatch http.proxy https://github.com/firebase/firebase-ios-sdk.git)" > "$ARCHIVE_TEST_TRACE"
+printf 'http=%s\\n' "$(git config --get http.version)" >> "$ARCHIVE_TEST_TRACE"
+printf 'credential=%s\\n' "$(git config --get credential.helper)" >> "$ARCHIVE_TEST_TRACE"
+printf 'prompt=%s\\n' "\${GIT_TERMINAL_PROMPT-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'bypass=%s\\n' "\${NO_PROXY-}" >> "$ARCHIVE_TEST_TRACE"
+printf '%s\\n' "$*" > "$ARCHIVE_TEST_ARGS"
+exit 65
+`,
+  };
+  for (const [name, body] of Object.entries(executables)) {
+    writeFileSync(join(bin, name), body); chmodSync(join(bin, name), 0o755);
+  }
+  try {
+    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_CONFIG_')));
+    const result = spawnSync('bash', ['-e', '-c', step.run], {encoding: 'utf8', env: {
+      ...environment, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
+      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1',
+      ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
+    }});
+    assert.equal(result.status, 65, result.stderr);
+    const policy = readFileSync(trace, 'utf8');
+    assert.match(policy, /^proxy=$/mu);
+    assert.match(policy, /^http=HTTP\/1\.1$/mu);
+    assert.match(policy, /^credential=retained-fixture-helper$/mu);
+    assert.match(policy, /^prompt=0$/mu);
+    assert.match(policy, /bypass=.*github\.com/u);
+    assert.match(readFileSync(args, 'utf8'), /-scmProvider system/u);
+    assert.equal(readFileSync(config, 'utf8'), '[http]\n proxy = http://127.0.0.1:9\n[credential]\n helper = retained-fixture-helper\n');
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
