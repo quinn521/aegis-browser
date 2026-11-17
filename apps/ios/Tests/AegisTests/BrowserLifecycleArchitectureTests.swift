@@ -1068,8 +1068,9 @@ extension MarkdownInputLifecycleTests {
         cachedCommands.closeTab(); XCTAssertEqual(browser.visibleTabs.count, original)
         browser.switchProfile(to: .privateMode)
         let url = URL(string: "https://example.invalid/repeated")!
-        owner.accept(url, browser: browser, presentation: routes)
-        owner.accept(url, browser: browser, presentation: routes)
+        let deepLink = URL(string: "gcsa-aegis://open?url=https%3A%2F%2Fexample.invalid%2Frepeated")!
+        owner.accept(deepLink, browser: browser, presentation: routes)
+        owner.accept(deepLink, browser: browser, presentation: routes)
         let first = try XCTUnwrap(routes.current)
         XCTAssertNotEqual(first.id, routes.pending.first?.id)
         await Task.yield()
