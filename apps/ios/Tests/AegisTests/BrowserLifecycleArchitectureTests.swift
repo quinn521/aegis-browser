@@ -1123,3 +1123,23 @@ extension MarkdownInputLifecycleTests {
         XCTAssertFalse(message.text.isEmpty)
     }
 }
+
+extension MarkdownReaderNativeBoundaryTests {
+    func testWarmViewerAppliesPreferencesWithEachNewDocument() async throws {
+        let defaults = UserDefaults.standard, previous = UserDefaults.standard.object(forKey: "markdown.theme")
+        let model = MarkdownReaderModel()
+        defer {
+            model.close()
+            if let previous { defaults.set(previous, forKey: "markdown.theme") }
+            else { defaults.removeObject(forKey: "markdown.theme") }
+        }
+        try await waitForMarkdown { model.ready }
+        _ = try await model.webView.callAsyncJavaScript("document.body.classList.remove('embedded'); document.documentElement.style.colorScheme='light';", arguments: [:], in: nil, contentWorld: .page)
+        defaults.set("dark", forKey: "markdown.theme")
+        model.load(MarkdownDocument(title: "warm", text: "# Warm document"))
+        try await waitForMarkdown { model.rendered }
+        let actual = try await model.webView.callAsyncJavaScript("return {embedded:document.body.classList.contains('embedded'),scheme:document.documentElement.style.colorScheme};", arguments: [:], in: nil, contentWorld: .page) as? [String: Any]
+        XCTAssertEqual(actual?["embedded"] as? Bool, true)
+        XCTAssertEqual(actual?["scheme"] as? String, "dark")
+    }
+}

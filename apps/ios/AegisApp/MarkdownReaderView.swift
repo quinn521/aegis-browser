@@ -186,8 +186,7 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
       catch { if self?.current(token) == true, !Task.isCancelled { self?.errorPresentation = .error(error) } }
     }
   }
-  func configure() {
-    guard ready, !closed else { return }
+  private func viewerConfiguration() -> [String: Any] {
     let defaults = UserDefaults.standard
     let preferences: [String: Any] = [
       "font": (defaults.object(forKey: "markdown.font") as? Double ?? 17) * fontSize / 17,
@@ -195,12 +194,15 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
       "family": defaults.string(forKey: "markdown.family") ?? "sans",
       "width": defaults.object(forKey: "markdown.width") as? Int ?? 820,
       "spacing": defaults.object(forKey: "markdown.spacing") as? Int ?? 180]
-    let token = renderID, web = webView!
+    return ["embedded": true, "locale": Bundle.main.preferredLocalizations.first ?? "zh-Hans", "preferences": preferences]
+  }
+  func configure() {
+    guard ready, !closed else { return }
+    let token = renderID, web = webView!, value = viewerConfiguration()
     javascript(token: token) {
       _ = try await web.callAsyncJavaScript(
         "if(!AegisMarkdown.token() || AegisMarkdown.token() === token) AegisMarkdown.configure(value);",
-        arguments: ["token": token, "value": ["embedded": true,
-          "locale": Bundle.main.preferredLocalizations.first ?? "zh-Hans", "preferences": preferences]],
+        arguments: ["token": token, "value": value],
         in: nil, contentWorld: .page)
     }
   }
@@ -220,9 +222,11 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
     let payload: [String: Any] = ["text": document.text, "title": document.title,
       "baseURL": document.sourceURL?.absoluteString ?? "", "resources": document.resources,
       "iosToken": token, "iosRevision": revision]
+    let configuration = viewerConfiguration()
     javascript(token: token) { [weak self] in
-      let loaded = try await web.callAsyncJavaScript("return AegisMarkdown.load(payload);",
-        arguments: ["payload": payload], in: nil, contentWorld: .page)
+      let loaded = try await web.callAsyncJavaScript(
+        "const loaded = AegisMarkdown.load(payload); if(loaded) AegisMarkdown.configure(configuration); return loaded;",
+        arguments: ["payload": payload, "configuration": configuration], in: nil, contentWorld: .page)
       if self?.current(token) == true, loaded as? Bool == true { self?.rendered = true }
     }
   }
