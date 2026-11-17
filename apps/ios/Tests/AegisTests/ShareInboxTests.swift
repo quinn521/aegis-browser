@@ -187,3 +187,22 @@ final class MarkdownShareInboxTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
     }
 }
+
+extension MarkdownShareInboxTests {
+    func testCancelledActorCallCannotClaimNewShares() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        try MarkdownShareInbox(root: root).store(title: "keep", data: Data("new share".utf8))
+        let link = try ShareInbox(baseURL: root)
+        try link.store(link.makeEnvelope(from: "https://example.invalid/preserve"))
+        let io = ShareInboxIO()
+        let markdownTask = Task { try await io.markdown(root: root) }
+        let linkTask = Task { try await io.link(root: root) }
+        markdownTask.cancel(); linkTask.cancel()
+        do { _ = try await markdownTask.value; XCTFail("Cancelled actor call claimed Markdown") }
+        catch is CancellationError {} catch { XCTFail("Unexpected actor error: \(error)") }
+        do { _ = try await linkTask.value; XCTFail("Cancelled actor call claimed link") }
+        catch is CancellationError {} catch { XCTFail("Unexpected actor error: \(error)") }
+        XCTAssertEqual(try MarkdownShareInbox(root: root).consume()?.text, "new share")
+        XCTAssertEqual(try link.consume()?.url.absoluteString, "https://example.invalid/preserve")
+    }
+}

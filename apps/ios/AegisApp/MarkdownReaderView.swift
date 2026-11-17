@@ -17,13 +17,18 @@ final class MarkdownSecurityScope: Sendable {
 
 actor MarkdownIO {
   static let shared = MarkdownIO()
-  func read(_ url: URL) throws -> MarkdownDocument { try MarkdownDocument.read(url) }
+  func read(_ url: URL) throws -> MarkdownDocument {
+    try Task.checkCancellation()
+    return try MarkdownDocument.read(url)
+  }
   func resources(_ document: MarkdownDocument, directory: URL, references: [String]) throws -> MarkdownDocument {
+    try Task.checkCancellation()
     var result = document
     _ = try result.loadResources(from: directory, references: references)
     return result
   }
   func writePDF(_ data: Data) throws -> URL {
+    try Task.checkCancellation()
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("markdown-\(UUID().uuidString).pdf")
     try data.write(to: url, options: .atomic)
     return url

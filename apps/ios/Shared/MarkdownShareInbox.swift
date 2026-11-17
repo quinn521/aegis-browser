@@ -83,15 +83,21 @@ struct MarkdownShareInbox: Sendable {
 actor ShareInboxIO {
   static let shared = ShareInboxIO()
   func markdown(root: URL? = nil) throws -> MarkdownShareEnvelope? {
+    try Task.checkCancellation()
     if let root { return try MarkdownShareInbox(root: root).consume() }
     return try MarkdownShareInbox().consume()
   }
   func link(root: URL? = nil) throws -> URL? {
+    try Task.checkCancellation()
     if let root { return try ShareInbox(baseURL: root).consume()?.url }
     return try ShareInbox().consume()?.url
   }
-  func storeMarkdown(title: String, data: Data) throws { try MarkdownShareInbox().store(title: title, data: data) }
+  func storeMarkdown(title: String, data: Data) throws {
+    try Task.checkCancellation()
+    try MarkdownShareInbox().store(title: title, data: data)
+  }
   func storeLink(_ value: String) throws {
+    try Task.checkCancellation()
     let inbox = try ShareInbox()
     try inbox.store(inbox.makeEnvelope(from: value))
   }
