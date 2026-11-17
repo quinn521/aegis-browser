@@ -1,3 +1,4 @@
+import AccessKit
 import AgentKit
 import Combine
 import CryptoKit
@@ -9,6 +10,38 @@ import XCTest
 
 @MainActor
 final class BrowserPresentationCoordinatorTests: XCTestCase {
+    func testWindowReloadCommandPreservesUnsafePrivateAndProtectedRequests() throws {
+        for profile in [BrowserProfile.standard, .privateMode] {
+            for protected in [false, true] {
+                let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+                browser.switchProfile(to: profile)
+                defer { browser.closeWindow() }
+                let tab = try XCTUnwrap(browser.activeTab)
+                let coordinator = AccessHostStoreCoordinator()
+                if protected {
+                    tab.hostCoordinator = coordinator
+                    let host = try AccessSiteHost("manual-refresh.invalid")
+                    coordinator.registry.setEndpoint(AccessManagedProxyEndpoint(identity: "reload-fixture", generation: 1,
+                        loopbackHost: "127.0.0.1", port: 18081, state: .ready),
+                        scopeID: tab.browsingScopeID, host: host, isPrivate: profile.isPrivate)
+                    coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: profile.isPrivate)
+                }
+                var request = URLRequest(url: URL(string: "https://manual-refresh.invalid/submit")!)
+                request.httpMethod = "POST"; request.httpBody = Data("original=one".utf8)
+                tab.load(request)
+                let identity = tab.currentAttemptIDForTests, store = tab.websiteDataStore
+                XCTAssertNil(tab.safeRouteReloadRequest)
+                let command = try XCTUnwrap(BrowserKeyboardActions.forWindow(browser, presentation: BrowserPresentationCoordinator()))
+                command.reload() // The exact action installed for Cmd-R.
+                XCTAssertNil(tab.safeRouteReloadRequest)
+                XCTAssertEqual(tab.currentAttemptIDForTests, identity)
+                XCTAssertTrue(tab.websiteDataStore === store); XCTAssertEqual(tab.profile, profile)
+                XCTAssertNotNil(tab.loadingError); XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
+                if protected { XCTAssertFalse(store.proxyConfigurations.isEmpty) }
+            }
+        }
+    }
+
     func testFIFOIncludesDistinctSameURLInputsAndRejectsOldDismissal() throws {
         let route = BrowserPresentationCoordinator()
         route.request(.reading)
