@@ -407,6 +407,7 @@ final class MarkdownFilePreview: ObservableObject {
         let token = generation, scope = MarkdownSecurityScope(url), read = read
         let task = Task { [weak self] in
             defer { withExtendedLifetime(scope) {} }
+            guard self?.closed == false, self?.generation == token, !Task.isCancelled else { return }
             do {
                 let value = try await read(url)
                 guard let self, !self.closed, self.generation == token, !Task.isCancelled else { return }

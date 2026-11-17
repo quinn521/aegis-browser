@@ -881,6 +881,7 @@ final class MarkdownReaderLifecycleTests: XCTestCase {
         let initial = MarkdownDocument(title: "initial", text: "first")
         model.initialize(initial)
         let first = model.importFile(URL(fileURLWithPath: "/A.md"))
+        try await waitForMarkdown { await gate.count == 1 }
         let second = model.importFile(URL(fileURLWithPath: "/B.md"))
         try await waitForMarkdown { await gate.count == 2 }
         let latest = MarkdownDocument(title: "latest", text: "new document")
@@ -943,6 +944,7 @@ final class MarkdownReaderLifecycleTests: XCTestCase {
         let gate = MarkdownReadGate(), preview = MarkdownFilePreview(read: { try await gate.read($0) })
         defer { preview.close(); Task { await gate.finishAll() } }
         let first = preview.load(URL(fileURLWithPath: "/A.md"))
+        try await waitForMarkdown { await gate.count == 1 }
         let second = preview.load(URL(fileURLWithPath: "/B.md"))
         try await waitForMarkdown { await gate.count == 2 }
         await gate.finish("B.md", .success(MarkdownDocument(title: "B", text: "new"))); await second?.value
@@ -970,6 +972,7 @@ final class MarkdownReaderNativeBoundaryTests: XCTestCase {
             capture: { _ in try await gate.read(URL(fileURLWithPath: "/raw.md")) })
         defer { model.close(); browser.closeWindow(); Task { await gate.finishAll() } }
         let raw = model.capture(try XCTUnwrap(browser.activeTab))
+        try await waitForMarkdown { await gate.count == 1 }
         let file = model.importFile(URL(fileURLWithPath: "/file.md"))
         try await waitForMarkdown { await gate.count == 2 }
         await gate.finish("file.md", .success(MarkdownDocument(title: "file", text: "latest"))); await file?.value
@@ -1049,5 +1052,51 @@ final class MarkdownReaderNativeBoundaryTests: XCTestCase {
         await gate.finish("pending.md", .success(MarkdownDocument(title: "stale", text: "old"))); await task?.value
         XCTAssertFalse(model.isOpen); XCTAssertNil(model.openURL); XCTAssertEqual(opens, 0)
         XCTAssertNil(preview.document)
+    }
+}
+
+extension MarkdownInputLifecycleTests {
+    func testCancelledBeforeStartDoesNotClaimAndNewProfileInputsRemainOrdered() async throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let routes = BrowserPresentationCoordinator(), calls = MarkdownLeaseCounter()
+        let owner = BrowserInputOwner(markdown: { calls.increment(); return nil }, link: { calls.increment(); return nil })
+        defer { owner.close(); browser.closeWindow() }
+        let cachedCommands = try XCTUnwrap(BrowserKeyboardActions.forWindow(browser, presentation: routes))
+        owner.wake(browser: browser, presentation: routes)
+        XCTAssertNil(BrowserKeyboardActions.forWindow(browser, presentation: routes))
+        let original = browser.visibleTabs.count
+        cachedCommands.closeTab(); XCTAssertEqual(browser.visibleTabs.count, original)
+        browser.switchProfile(to: .privateMode)
+        let url = URL(string: "https://example.invalid/repeated")!
+        owner.accept(url, browser: browser, presentation: routes)
+        owner.accept(url, browser: browser, presentation: routes)
+        let first = try XCTUnwrap(routes.current)
+        XCTAssertNotEqual(first.id, routes.pending.first?.id)
+        await Task.yield()
+        XCTAssertEqual(calls.value, 0, "Revoked queued work must not consume a new share")
+        guard case let .external(value) = routes.current?.route else { return XCTFail("The new-profile input was invalidated") }
+        XCTAssertEqual(value, url)
+        browser.closeWindow()
+        XCTAssertNil(routes.current); XCTAssertFalse(routes.blocksBrowserCommands)
+    }
+}
+
+extension MarkdownReaderNativeBoundaryTests {
+    func testResourceIOSuccessAndFailureAfterReplacementStayWithTheirDocument() async throws {
+        for fail in [false, true] {
+            let gate = MarkdownReadGate()
+            let model = MarkdownReaderModel(resources: { _, _, _ in try await gate.read(URL(fileURLWithPath: "/images.md")) })
+            defer { model.close(); Task { await gate.finishAll() } }
+            model.load(MarkdownDocument(title: "A", text: "![image](a.png)"))
+            try await waitForMarkdown { model.rendered }
+            let task = model.loadResources(URL(fileURLWithPath: "/tmp"))
+            try await waitForMarkdown { await gate.count == 1 }
+            let next = MarkdownDocument(title: "B", text: "keep this")
+            model.load(next)
+            if fail { await gate.finish("images.md", .failure(EnhancementError.invalid("old resource error"))) }
+            else { await gate.finish("images.md", .success(MarkdownDocument(title: "A", text: "old", resources: ["a.png": "stale"]))) }
+            await task?.value
+            XCTAssertEqual(model.document?.id, next.id); XCTAssertEqual(model.document?.resources, [:]); XCTAssertTrue(model.error.isEmpty)
+        }
     }
 }

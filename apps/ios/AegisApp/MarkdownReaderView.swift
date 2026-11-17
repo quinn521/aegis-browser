@@ -130,6 +130,7 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
     let scope = makeScope(url), read = read
     let task = Task { [weak self] in
       defer { withExtendedLifetime(scope) {} }
+      guard self?.importID == id, self?.closed == false, !Task.isCancelled else { return }
       do {
         let value = try await read(url)
         guard let self, !self.closed, self.importID == id, !Task.isCancelled else { return }
@@ -147,6 +148,7 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
     guard let id = beginImport() else { return nil }
     let capturePage = capturePage
     let task = Task { [weak self] in
+      guard self?.importID == id, self?.closed == false, !Task.isCancelled else { return }
       do {
         let value = try await capturePage(tab)
         guard let self, !self.closed, self.importID == id, !Task.isCancelled else { return }
@@ -173,10 +175,10 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
   private func javascript(token: String, _ body: @escaping @MainActor () async throws -> Void) {
     let id = UUID()
     javascriptTasks[id] = Task { [weak self] in
+      defer { self?.javascriptTasks[id] = nil }
       guard self?.current(token) == true, !Task.isCancelled else { return }
       do { try await body() }
       catch { if self?.current(token) == true, !Task.isCancelled { self?.errorPresentation = .error(error) } }
-      self?.javascriptTasks[id] = nil
     }
   }
   func configure() {
@@ -268,6 +270,7 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
     let images = images, resources = resources, web = webView!
     let task = Task { [weak self] in
       defer { withExtendedLifetime(scope) {} }
+      guard self?.current(token) == true, self?.resourceID == id, !Task.isCancelled else { return }
       do {
         let references = try await images(web, token)
         guard let self, self.current(token), self.document?.id == original.id, self.resourceID == id, !Task.isCancelled else { return }

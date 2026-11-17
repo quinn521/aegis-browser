@@ -84,8 +84,6 @@ struct AegisRootView: View {
         }
         .onChange(of: browser.profile) { _, _ in
             updateAddress()
-            presentation.invalidate { $0.isProfileBound }
-            browser.pendingDownloadURL = nil
         }
         .onOpenURL { input in
             inputs.accept(input, browser: browser, presentation: presentation)
@@ -216,7 +214,11 @@ final class BrowserInputOwner: ObservableObject {
         invalidate()
         observers.removeAll()
         self.browser = browser; self.presentation = presentation
-        browser.$profile.dropFirst().sink { [weak self] _ in self?.invalidate() }.store(in: &observers)
+        browser.$profile.dropFirst().sink { [weak self, weak browser] _ in
+            self?.invalidate()
+            self?.presentation?.invalidate { $0.isProfileBound }
+            browser?.pendingDownloadURL = nil
+        }.store(in: &observers)
         browser.$isWindowClosed.sink { [weak self] value in if value { self?.close() } }.store(in: &observers)
     }
 
@@ -258,6 +260,7 @@ final class BrowserInputOwner: ObservableObject {
         let token = generation, profile = browser.profile
         let id = presentation.reserve(scope: token)
         tasks[id] = Task { [weak self] in
+            guard self?.accepts(token, profile: profile) == true, !Task.isCancelled else { return }
             let route: BrowserPresentationCoordinator.Route?
             do { route = try await operation() }
             catch { route = .inputError(.error(error)) }
@@ -269,6 +272,10 @@ final class BrowserInputOwner: ObservableObject {
         }
     }
 
+    private func accepts(_ token: UUID, profile: BrowserProfile) -> Bool {
+        !closed && generation == token && browser?.isWindowClosed == false && browser?.profile == profile
+    }
+
     private func invalidate() {
         let previous = generation; generation = UUID()
         tasks.values.forEach { $0.cancel() }; tasks.removeAll()
@@ -276,7 +283,7 @@ final class BrowserInputOwner: ObservableObject {
     }
     func close() {
         guard !closed else { return }
-        closed = true; invalidate(); observers.removeAll()
+        closed = true; presentation?.closeWindow(); invalidate(); observers.removeAll()
     }
 }
 
