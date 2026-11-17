@@ -56,6 +56,19 @@ class EnforcedMeter(metering.Meter):
 
     def accept(self, frame):
         self._validate_quota(frame)
+        if frame["op"] == "check":
+            # Healthy guards only observe a consistent snapshot. Taking the
+            # global writer lock here can time out unrelated accounts while a
+            # reservation is being committed. State changes still go through
+            # the serialized transaction below, with fresh authority checks.
+            with closing(metering._connect(self.database, "ro")) as db:
+                db.execute("BEGIN")
+                try:
+                    result = self._read_check(db, frame, self.clock_ms())
+                except Unavailable as exc:
+                    raise ValueError("quota authority unavailable") from exc
+                if result is not None:
+                    return result
         with closing(metering._connect(self.database, "rw")) as db:
             db.execute("PRAGMA synchronous=FULL")
             db.execute("BEGIN IMMEDIATE")
@@ -66,6 +79,22 @@ class EnforcedMeter(metering.Meter):
                 raise ValueError("quota authority unavailable") from exc
             db.commit()
             return result
+
+    def _read_check(self, db, frame, now):
+        key = (self.node, frame["flow"])
+        flow = db.execute("SELECT * FROM quota_flows WHERE node_id=? AND flow_id=?", key).fetchone()
+        if flow is None:
+            raise ValueError("unknown quota flow")
+        if flow["cut_at"] is not None:
+            return {"ok": False}
+        auth = settlement.authority(db, flow["account_id"], flow["period_id"], now)
+        if now >= flow["expires_at"] or auth is None or auth["expires_at"] != flow["expires_at"]:
+            return None
+        held = self._held(db, (flow["account_id"], flow["period_id"]))
+        room = auth["quota_bytes"] - auth["uploaded_bytes"] - auth["downloaded_bytes"] - held
+        if room <= 0 and not self._pending(db, key):
+            return None
+        return dict(ok=True, expiresAt=auth["expires_at"])
 
     @staticmethod
     def _validate_quota(frame):

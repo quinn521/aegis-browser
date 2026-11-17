@@ -71,6 +71,22 @@ class QuotaTest(unittest.TestCase):
         self.assertEqual(quota.inspect(self.db, "a", "p")["confirmedBytes"], 100)
         self.assertEqual(quota.inspect(self.db, "b", "p")["confirmedBytes"], 42)
 
+    def test_healthy_check_does_not_wait_for_another_accounts_writer(self):
+        pool = ThreadPoolExecutor(1)
+        try:
+            with sqlite3.connect(self.db) as writer:
+                writer.execute("BEGIN IMMEDIATE")
+                writer.execute("UPDATE snapshots SET quota_bytes=200 WHERE account_id='a'")
+                # The guard allows 250 ms for a check. A healthy B flow must be
+                # readable while A holds the database's reserved writer lock.
+                check = pool.submit(self.send, 3, "check")
+                try:
+                    self.assertEqual(check.result(timeout=0.2), {"ok": True, "expiresAt": 900})
+                finally:
+                    writer.rollback()
+        finally:
+            pool.shutdown(wait=True)
+
     def test_restart_holds_unknown_bytes_and_retains_final_receipts(self):
         self.assertEqual(self.reserve(0, "up", 80), self.reserve(0, "up", 80))
         self.meter = quota.EnforcedMeter(self.db, self.cfg, lambda: self.now)
