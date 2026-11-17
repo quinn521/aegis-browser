@@ -1429,14 +1429,11 @@ final class AccessNavigationRecoveryTests: XCTestCase {
             let tab = makeTab()
             let coordinator = AccessHostStoreCoordinator()
             tab.hostCoordinator = coordinator
-            try await tab.prepareContentRulesForTests()
-            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-            window.rootViewController = UIViewController()
-            window.makeKeyAndVisible()
+            let redirect = try await origin.redirectURL()
+            let start = redirect.deletingLastPathComponent().appendingPathComponent("page")
+            let window = try await attachPage(tab, at: start)
             defer { window.isHidden = true }
-            tab.webView.frame = window.bounds
-            window.rootViewController?.view.addSubview(tab.webView)
-            var request = URLRequest(url: try await origin.redirectURL())
+            var request = URLRequest(url: redirect)
             request.httpMethod = "POST"
             tab.load(request)
             await waitUntil({ origin.redirectedMethod != nil }, timeout: 10)
