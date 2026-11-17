@@ -11,7 +11,7 @@ native presentation in both classic and Full popup modes.
  1 file changed, 76 insertions(+)
 
 diff --git a/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc b/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
-index aee0b25256..f16830ff24 100644
+index aee0b252564684e283b94148ad78d3e7c2a0172b..f16830ff248bae22dbaf0228f22d7ce8c76a25be 100644
 --- a/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
 +++ b/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
 @@ -2,8 +2,13 @@
