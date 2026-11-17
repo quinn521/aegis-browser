@@ -110,3 +110,31 @@ test('quality preflight selects Linux docs and preserves full checks on all othe
   assert.match(docs.run, /node scripts\/check-repo-contracts.mjs/u);
   assert.match(workflow.concurrency.group, /github.ref, github.sha/u);
 });
+
+test('archive compiler diagnostics reach Actions and retain exit status before sealing', () => {
+  const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
+  const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
+  const root = mkdtempSync(join(tmpdir(), 'archive-diagnostics-'));
+  const bin = join(root, 'bin');
+  const trace = join(root, 'python-calls.txt');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'python3'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$ARCHIVE_TEST_TRACE"\n');
+  writeFileSync(join(bin, 'xcodebuild'), '#!/bin/bash\nprintf "archive-compiler-diagnostic\\n" >&2\nexit "$ARCHIVE_TEST_EXIT"\n');
+  chmodSync(join(bin, 'python3'), 0o755);
+  chmodSync(join(bin, 'xcodebuild'), 0o755);
+  try {
+    for (const exitCode of [65, 0]) {
+      writeFileSync(trace, '');
+      const result = spawnSync('bash', ['-e', '-c', step.run], {encoding: 'utf8', env: {
+        ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
+        ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_EXIT: String(exitCode),
+      }});
+      assert.equal(result.status, exitCode, result.stderr);
+      assert.match(result.stdout + result.stderr, /archive-compiler-diagnostic/u);
+      assert.match(readFileSync(join(root, 'xcodebuild.log'), 'utf8'), /archive-compiler-diagnostic/u);
+      const calls = readFileSync(trace, 'utf8');
+      assert.equal(calls.includes('verify-ios-archive.py'), exitCode === 0);
+      assert.equal(calls.includes('ios-ci-storage.py seal'), exitCode === 0);
+    }
+  } finally { rmSync(root, {recursive: true, force: true}); }
+});
