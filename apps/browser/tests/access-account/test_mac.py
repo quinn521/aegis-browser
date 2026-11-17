@@ -1,5 +1,7 @@
 """Native macOS Access transport, session isolation and late response regressions."""
+from contextlib import closing
 import hashlib
+from http.client import HTTPConnection
 import json
 from pathlib import Path
 import sqlite3
@@ -10,6 +12,7 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -28,7 +31,7 @@ class NativeQuery(unittest.TestCase):
         scratch = tempfile.TemporaryDirectory()
         cls.addClassCleanup(scratch.cleanup)
         cls.driver = Path(scratch.name) / "query"
-        subprocess.run(["xcrun", "clang++", "-std=c++20", "-fobjc-arc", "-Wall", "-Werror",
+        subprocess.run(["/usr/bin/xcrun", "clang++", "-std=c++20", "-fobjc-arc", "-Wall", "-Werror",
                         "-I", str(OVERLAY), "-framework", "Foundation", "-o", str(cls.driver),
                         str(Path(__file__).with_name("query_mac.mm")),
                         str(OVERLAY / "chrome/browser/aegis/access/access_account_mac.mm")], check=True)
@@ -87,8 +90,10 @@ class NativeQuery(unittest.TestCase):
                 token = self.headers.get("Authorization")
                 issued.append((payload, token))
                 cid = str(uuid4())
-                result = dict(payload, accountId="B" if token == "Bearer private-B" else "A",
-                              periodId="cycle", credentialId=cid, username=cid, password="test_secret",
+                # Synthetic credentials used only by the local test fixture.
+                result = dict(payload, accountId="B" if token == "Bearer private-B" else "A",  # nosec B105
+                              # Synthetic credentials used only by the local test fixture.
+                              periodId="cycle", credentialId=cid, username=cid, password="test_secret",  # nosec B106
                               host="node.example", port=443, expiresAt=int(time.time()*1000)+60000)
                 self.send_response(200); self.end_headers()
                 self.wfile.write(json.dumps(result).encode())
@@ -97,23 +102,29 @@ class NativeQuery(unittest.TestCase):
         origin = self.serve(ThreadingHTTPServer(("127.0.0.1", 0), Authority))
         self.bind(self.a, origin=origin)
         def issue(mode, binding=None):
-            return subprocess.run([self.driver, self.a, "--node-"+mode], check=True, timeout=14,
+            # Fixed local test program and fixture arguments; shell execution is disabled.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+            return subprocess.run([self.driver, self.a, "--node-"+mode], check=True, timeout=14,  # nosec B603
                                   input=json.dumps(binding).encode() if binding else b"",
                                   capture_output=True).stdout.strip()
         self.assertEqual(issue("regular"), b"assigned")
         self.assertEqual(issue("private"), b"unavailable")
-        self.assertEqual(issue("private", dict(origin=origin, accountId="B", token="private-B")), b"assigned")
-        self.assertEqual(issue("private", dict(origin=origin, accountId="B", token="test-A")), b"unavailable")
+        # Synthetic credentials used only by the local test fixture.
+        self.assertEqual(issue("private", dict(origin=origin, accountId="B", token="private-B")), b"assigned")  # nosec B106
+        # Synthetic credentials used only by the local test fixture.
+        self.assertEqual(issue("private", dict(origin=origin, accountId="B", token="test-A")), b"unavailable")  # nosec B106
         self.assertEqual([(p["mode"], t) for p,t in issued], [
             ("regular","Bearer test-A"), ("private","Bearer private-B"), ("private","Bearer test-A")])
         self.assertNotEqual(issued[0][0]["contextId"], issued[1][0]["contextId"])
+
 
     def test_service_two_profiles_signout_and_revocation(self):
         self.bind(self.a)
         self.bind(self.b, "B")
         a = self.query(self.a)["entitlement"]
         self.assertEqual((a["entitlementAccountId"], a["quotaBytes"], a["remainingBytes"],
-                          a["freshness"], a["snapshotAgeMs"]), ("A", str(QUOTA), str(QUOTA - 24), "delayed", 6000))
+                          a["freshness"]), ("A", str(QUOTA), str(QUOTA - 24), "delayed"))
+        self.assertGreaterEqual(a["snapshotAgeMs"], 6000)
         b = self.query(self.b)["entitlement"]
         self.assertEqual((b["entitlementAccountId"], b["status"], b["quotaBytes"]), ("B", "not_subscribed", None))
         self.bind(self.a, "B")
@@ -123,6 +134,80 @@ class NativeQuery(unittest.TestCase):
         self.db.execute("UPDATE sessions SET revoked_at=? WHERE account_id='B'", (NOW,))
         self.db.commit()
         self.assertEqual(self.query(self.b), {"state": "signed_out"})
+
+    def test_alpha_node_metadata_is_complete_and_validated(self):
+        self.bind(self.a)
+        payload = self.query_bound_snapshot()
+        payload.update(quotaSource="3xui_alpha", panelExpiryMode="none",
+                       panelExpiresAt=None, expiresAt=NOW + 10000,
+                       measuredAt=None, snapshotAgeMs=None, freshness="unavailable")
+
+        class AlphaResponse(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        origin = self.serve(ThreadingHTTPServer(("127.0.0.1", 0), AlphaResponse))
+        self.bind(self.a, origin=origin)
+        # Missing producer decision time cannot be inferred from panel receipt.
+        payload.pop("evaluatedAt")
+        self.assertEqual(self.query(self.a), {"state": "unavailable"})
+        payload["evaluatedAt"] = NOW
+        result = self.query(self.a)
+        self.assertEqual(result["state"], "available")
+        self.assertEqual(result["entitlement"]["panelExpiryMode"], "none")
+        self.assertEqual(result["entitlement"]["quotaSource"], "3xui_alpha")
+        payload.update(panelExpiryMode="absolute", panelExpiresAt=NOW + 5000,
+                       expiresAt=NOW + 5000)
+        self.assertEqual(self.query(self.a)["entitlement"]["panelExpiresAt"], NOW + 5000)
+        valid = dict(payload)
+        for key, value in (("panelExpiryMode", "unknown"),
+                           ("panelExpiresAt", None),
+                           ("quotaSource", "unbound"),
+                           ("expiresAt", NOW + 10000)):
+            with self.subTest(field=key):
+                payload.clear()
+                payload.update(valid)
+                payload[key] = value
+                self.assertEqual(self.query(self.a), {"state": "unavailable"})
+        payload.clear()
+        payload.update(valid)
+        payload.pop("panelExpiresAt")
+        self.assertEqual(self.query(self.a), {"state": "unavailable"})
+
+    def test_response_transit_ages_snapshot_and_expiry(self):
+        self.bind(self.a)
+        payload = self.query_bound_snapshot()
+        payload.update(evaluatedAt=NOW + 8500, measuredAt=NOW - 6000, snapshotAgeMs=14500,
+                       freshness="delayed", status="active", expiresAt=NOW + 10000)
+
+        class DelayedResponse(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                body = json.dumps(payload).encode()
+                time.sleep(1.6)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        origin = self.serve(ThreadingHTTPServer(("127.0.0.1", 0), DelayedResponse))
+        self.bind(self.a, origin=origin)
+        reply = self.query(self.a)
+        self.assertGreaterEqual(reply["queryElapsedMs"], 1500)
+        self.assertGreater(reply["entitlement"]["snapshotAgeMs"], 15000)
+        self.assertEqual(reply["entitlement"]["freshness"], "unavailable")
+        self.assertEqual(reply["entitlement"]["status"], "expired")
 
     def test_inflight_switch_back_and_signout_discard_response(self):
         entered, release = threading.Event(), threading.Event()
@@ -173,6 +258,49 @@ class NativeQuery(unittest.TestCase):
                     state = "signed_out" if action == "sign_out" else "superseded"
                     self.assertEqual(json.loads(output), {"state": state})
 
+    def test_sign_in_after_missing_binding_before_delivery(self):
+        with subprocess.Popen([self.driver, self.a, "--hold-delivery"],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE) as job:
+            self.assertEqual(job.stdout.readline(), b"queued\n")
+            self.bind(self.a)
+            output, _ = job.communicate(b"deliver\n", timeout=10)
+        self.assertEqual(json.loads(output), {"state": "superseded"})
+
+    def test_queued_reply_advances_age_and_freshness(self):
+        self.bind(self.a)
+        for age, expected in ((5000, "delayed"), (15000, "unavailable")):
+            measured = NOW - age
+            self.db.execute("UPDATE plans SET period_start=? WHERE account_id='A'", (NOW - 20000,))
+            self.db.execute("UPDATE snapshots SET measured_at=? WHERE account_id='A'", (measured,))
+            self.db.commit()
+            with subprocess.Popen([self.driver, self.a, "--hold-delivery"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE) as job:
+                self.assertEqual(job.stdout.readline(), b"queued\n")
+                time.sleep(.05)
+                output, _ = job.communicate(b"deliver\n", timeout=10)
+            reply = json.loads(output)["entitlement"]
+            self.assertEqual(reply["measuredAt"], measured)
+            self.assertGreater(reply["snapshotAgeMs"], age)
+            self.assertEqual(reply["freshness"], expected)
+
+    def test_expiry_during_delivery_with_unknown_measurement_time(self):
+        self.bind(self.a)
+        self.db.execute("UPDATE plans SET period_end=? WHERE account_id='A'", (NOW + 25,))
+        self.db.execute("UPDATE snapshots SET measured_at=NULL, received_at=? WHERE account_id='A'",
+                        (NOW - 9000,))
+        self.db.commit()
+        with subprocess.Popen([self.driver, self.a, "--hold-delivery"],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE) as job:
+            self.assertEqual(job.stdout.readline(), b"queued\n")
+            time.sleep(.08)
+            output, _ = job.communicate(b"deliver\n", timeout=10)
+        reply = json.loads(output)["entitlement"]
+        self.assertEqual(reply["status"], "expired")
+        self.assertEqual(reply["receivedAt"], NOW - 9000)
+        self.assertIsNone(reply["measuredAt"])
+        self.assertIsNone(reply["snapshotAgeMs"])
+        self.assertEqual(reply["freshness"], "unavailable")
+
     def test_redirect_modes_and_untrusted_binding(self):
         captured = []
 
@@ -219,21 +347,34 @@ class NativeQuery(unittest.TestCase):
 
         origin = self.serve(ThreadingHTTPServer(("127.0.0.1", 0), Stub))
         self.bind(self.a, origin=origin)
-        for change in ({"usedBytes": 24}, {"remainingBytes": "0"}, {"usedBytes": "024"},
+        for change in ({"evaluatedAt": NOW - 500}, {"evaluatedAt": NOW + 1},
+                       {"evaluatedAt": None}, {"usedBytes": 24}, {"remainingBytes": "0"}, {"usedBytes": "024"},
                        {"entitlementAccountId": "B"}, {"freshness": "current"},
                        {"measuredAt": None}, {"periodEnd": False}, {"status": "expired"}):
             wire[1] = {**response, **change}
             self.assertEqual(self.query(self.a), {"state": "unavailable"}, change)
         wire[1] = {**response, "transportSecret": "fixture-must-not-be-exposed"}
-        self.assertEqual(self.query(self.a)["entitlement"], response)
+        delivered = self.query(self.a)["entitlement"]
+        self.assertGreaterEqual(delivered.pop("snapshotAgeMs"), response["snapshotAgeMs"])
+        self.assertEqual(delivered, {k: v for k, v in response.items() if k not in ("snapshotAgeMs", "evaluatedAt")})
         for age, freshness in ((0, "current"), (5000, "current"), (15000, "delayed"),
                                (15001, "unavailable"), (None, "unavailable")):
             measured = NOW if age is not None else None
             wire[1] = {**response, "receivedAt": NOW, "measuredAt": measured,
                        "snapshotAgeMs": age, "freshness": freshness}
+            wire[1]["evaluatedAt"] = NOW + (age or 0)
             if age is not None and NOW + age >= wire[1]["periodEnd"]:
                 wire[1]["status"] = "expired"
-            self.assertEqual(self.query(self.a)["entitlement"], wire[1])
+            delivered = self.query(self.a)["entitlement"]
+            if age is None:
+                self.assertEqual(delivered, {k: v for k, v in wire[1].items() if k != "evaluatedAt"})
+            else:
+                actual_age = delivered["snapshotAgeMs"]
+                self.assertGreaterEqual(actual_age, age)
+                expected_freshness = "current" if actual_age <= 5000 else "delayed" if actual_age <= 15000 else "unavailable"
+                expected = {k: v for k, v in wire[1].items() if k != "evaluatedAt"}
+                self.assertEqual(delivered, {**expected, "snapshotAgeMs": actual_age,
+                                             "freshness": expected_freshness})
         wire[1] = {**response, "ignored": "x" * 65536}
         self.assertEqual(self.query(self.a), {"state": "unavailable"})
         wire[0] = 503
@@ -241,7 +382,13 @@ class NativeQuery(unittest.TestCase):
 
     def query_bound_snapshot(self):
         self.bind(self.a)
-        return self.query(self.a)["entitlement"]
+        origin = urlsplit(self.origin)
+        self.assertEqual((origin.scheme, origin.hostname), ("http", "127.0.0.1"))
+        with closing(HTTPConnection("127.0.0.1", origin.port, timeout=5)) as client:
+            client.request("GET", "/v1/me/entitlement", headers={"Authorization": "Bearer test-A"})
+            with client.getresponse() as response:
+                self.assertEqual(response.status, 200)
+                return json.load(response)
 
 
 if __name__ == "__main__":

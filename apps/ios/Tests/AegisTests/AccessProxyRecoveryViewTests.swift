@@ -7,6 +7,63 @@ import XCTest
 
 @MainActor
 final class AccessProxyRecoveryViewTests: XCTestCase {
+    func testPendingAddressBannerHasOneTargetBoundChoiceWithoutFailureCopy() async throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.standardTabs.forEach { $0.stop() } }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let target = URL(string: "https://192.0.2.1/address")!
+        tab.loadFromAddressBar(target)
+        var selected: BrowserPendingAddressNavigation?
+        let host = UIHostingController(rootView: PageLoadFailureBanner(
+            tab: tab, openAddressViaProxy: { _, pending in selected = pending },
+            proxyRetry: { _ in XCTFail("A pending choice must not fabricate a failure retry") }))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let buttons = Self.buttons(identifier: "page-load-proxy-retry", in: host.view)
+        XCTAssertEqual(buttons.count, 1)
+        XCTAssertNil(tab.loadingError)
+        // SwiftUI's synthesized host/status accessibility nodes are verified
+        // through XCUITest. Here the actual native button must capture exactly
+        // the visible pending navigation, without fabricating a failure retry.
+        let button = try XCTUnwrap(buttons.first)
+        XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+        XCTAssertLessThan(button.bounds.height, 100)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertEqual(selected?.url, target)
+        XCTAssertEqual(selected, tab.pendingAddressNavigation)
+        XCTAssertNil(tab.lastMainFrameFailure)
+    }
+
+    func testNativeProxyButtonUpdatesItsCapturedTargetWithoutRecreation() async throws {
+        var selected = ""
+        let host = UIHostingController(rootView: ProxyRetryButton(title: "First") { selected = "first" })
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let first = try XCTUnwrap(Self.find(identifier: "page-load-proxy-retry", in: host.view) as? UIButton)
+        host.rootView = ProxyRetryButton(title: "Second") { selected = "second" }
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        let updated = try XCTUnwrap(Self.find(identifier: "page-load-proxy-retry", in: host.view) as? UIButton)
+        XCTAssertTrue(first === updated)
+        XCTAssertEqual(updated.title(for: .normal), "Second")
+        updated.sendActions(for: .touchUpInside)
+        XCTAssertEqual(selected, "second")
+    }
+
     func testBannerShowsProxyRetryOnlyForRecoverableNavigation() async throws {
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         defer { browser.standardTabs.forEach { $0.stop() } }
@@ -43,6 +100,33 @@ final class AccessProxyRecoveryViewTests: XCTestCase {
         window.isHidden = true
     }
 
+    func testUnsafeOrTLSFailuresNeverOfferTheLocationRetryAction() async throws {
+        for (method, code) in [("POST", NSURLErrorCannotConnectToHost), ("GET", NSURLErrorSecureConnectionFailed)] {
+            let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+            defer { browser.standardTabs.forEach { $0.stop() } }
+            let tab = try XCTUnwrap(browser.activeTab)
+            var request = URLRequest(url: URL(string: "https://example.invalid/submit")!)
+            request.httpMethod = method
+            tab.load(request)
+            tab.webView(tab.webView, didFailProvisionalNavigation: tab.currentNavigationForTests,
+                        withError: NSError(domain: NSURLErrorDomain, code: code))
+            XCTAssertNotNil(tab.loadingError)
+            XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
+            let host = UIHostingController(rootView: PageLoadFailureBanner(tab: tab) { _ in
+                XCTFail("An unsafe navigation must not have a retry action")
+            })
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+            let previous = scene.windows.first { $0.isKeyWindow }
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+            host.view.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertTrue(Self.buttons(identifier: "page-load-proxy-retry", in: host.view).isEmpty)
+        }
+    }
+
     private static func find(identifier: String, in object: Any?) -> NSObject? {
         if let view = object as? UIView {
             if view.accessibilityIdentifier == identifier { return view }
@@ -56,5 +140,10 @@ final class AccessProxyRecoveryViewTests: XCTestCase {
             return element
         }
         return nil
+    }
+
+    private static func buttons(identifier: String, in view: UIView) -> [UIButton] {
+        let own = (view as? UIButton).flatMap { $0.accessibilityIdentifier == identifier ? $0 : nil }
+        return (own.map { [$0] } ?? []) + view.subviews.flatMap { buttons(identifier: identifier, in: $0) }
     }
 }

@@ -4,8 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import sqlite3
 import unittest
+from unittest.mock import patch
 
 from services.access_account import metering, orders, settlement, store
+from services.access_account.panel import Panel
 from services.access_account.tests.test_credentials import CredentialFixture
 
 
@@ -102,6 +104,20 @@ class SettlementTest(CredentialFixture, unittest.TestCase):
         self.assertEqual(self.read('token-B')['usedBytes'], '5')
         self.assertEqual(self.db.execute("SELECT uploaded FROM settlement_nodes "
                                          "WHERE period_id='period-A'").fetchone(), ('100',))
+
+    def test_settlement_preserves_alpha_scope_for_balances_and_credentials(self):
+        self.bind()
+        self.bind(account='B')
+        existing_b = self.issue('token-B')
+        panel = Panel('https://panel.invalid', 'fixture-only', alpha_panel_client='client-A')
+        with patch.object(panel, 'read', side_effect=AssertionError('settled usage already available')):
+            self.assertEqual(self.read(panel=panel)['usedBytes'], '5')
+            self.assertEqual(self.verify(self.issue(panel=panel), panel=panel), 'client-A')
+            for operation in (lambda: self.read('token-B', panel),
+                              lambda: self.issue('token-B', panel=panel),
+                              lambda: self.verify(existing_b, panel=panel)):
+                with self.assertRaisesRegex(store.Unavailable, 'outside Alpha scope'):
+                    operation()
 
     def test_managed_authority_reaches_issuer_and_orders_without_panel_double_count(self):
         self.bind()

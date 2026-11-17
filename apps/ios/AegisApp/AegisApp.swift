@@ -3,10 +3,16 @@ import AgentKit
 import BrowserKit
 import SwiftUI
 
-final class AegisAppDelegate: NSObject, UIApplicationDelegate {
+final class AegisAppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        _ = AccessDiagnosticArchive.hasPendingCleanup
         AegisFirebase.shared.start()
         return true
+    }
+
+    override func buildMenu(with builder: any UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        BrowserWindowCloseCommand.replaceCloseMenu(in: builder)
     }
 
     func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
@@ -32,6 +38,7 @@ struct AegisApp: App {
     @StateObject private var downloads: DownloadManager
     @StateObject private var assistantTasks: AssistantTaskStore
     @StateObject private var accountSession = AccessAccountSession.product()
+    @StateObject private var subscriptionUsage: AccessSubscriptionUsageSession
     @StateObject private var readingLibrary: ReadingLibrary
     @StateObject private var accessSiteProxyRegistry: AccessSiteProxyStoreRegistry
     @StateObject private var hostStores: AccessHostStoreCoordinator
@@ -98,10 +105,23 @@ struct AegisApp: App {
         }
         _windows = StateObject(wrappedValue: BrowserWindowStore(persistenceURL: windowsURL, legacyURLs: workspaceStore.sessionURLs))
         let registry = AccessSiteProxyStoreRegistry()
-        let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher()
+        let subscription = AccessSubscriptionUsageSession.product()
+        _subscriptionUsage = StateObject(wrappedValue: subscription)
+        let publisher: any AccessProxyEntryPublishing
+        if subscription.managesConnections {
+            publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(parameters: {
+                try await subscription.connectionParameters()
+            }, connectionAllowed: {
+                subscription.permitsExistingConnection
+            })
+        } else {
+            publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher()
+        }
         let hostStores = AccessHostStoreCoordinator(
             publisher: publisher,
-            channel: AccessProductChannel.resolve()
+            channel: AccessProductChannel.resolve(),
+            defaultLocationPrivacy: !(publisher is AccessFailClosedProxyEntryPublisher),
+            locationPreferences: defaults
         )
         registry.hostRouting = hostStores
         hostStores.startForegroundSweep()
@@ -124,8 +144,12 @@ struct AegisApp: App {
                 .environmentObject(assistantTasks)
                 .environmentObject(readingLibrary)
                 .environmentObject(accountSession)
+                .environmentObject(subscriptionUsage)
                 .environmentObject(accessSiteProxyRegistry)
                 .environmentObject(hostStores)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                    hostStores.releaseIdleResources()
+                }
                 .preferredColorScheme(settings.colorScheme)
                 .tint(Color(red: 0.09, green: 0.47, blue: 0.37))
         } defaultValue: {
@@ -134,10 +158,15 @@ struct AegisApp: App {
         .commands { BrowserKeyboardCommands(language: language) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { language.refresh(); AegisFirebase.shared.refreshOnForeground() }
+            if phase == .background {
+                hostStores.releaseIdleResources()
+                Task { try? await AccessDiagnosticLog.shared.flush() }
+            }
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .active { accountSession.refresh() }
-            else { accountSession.suspend() }
+            subscriptionUsage.setActive(phase == .active)
+            accountSession.usageRefresh.setActive(phase == .active)
+            if phase != .active { accountSession.suspend() }
         }
     }
 
