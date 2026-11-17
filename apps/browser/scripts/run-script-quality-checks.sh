@@ -33,6 +33,7 @@ run_check 'update-metadata-prototype' node --test ./scripts/update-metadata-prot
 run_check 'patch series formats' bash ./scripts/patch-series-format_test.sh
 run_check 'patch series regression fixtures' bash ./scripts/patch-series-format-regression_test.sh
 run_check 'Access native unit tests' bash ./scripts/test-aegis-access-native.sh
+run_check 'Android Access adb runner offline regressions' python3 -B ./access-cmake/run_android_test_test.py
 run_check 'fixed Chromium Access GTest runner tests' python3 -B ../../scripts/dev/chromium_access_gtests_test.py
 run_check 'bounded tracker admission unit and regression tests' python3 -I -S -B ./overlay/tools/aegis/current151_tracker/regressions.py
 run_check 'TypeSafe choice contract unit tests' bash ./scripts/typesafe-choice-contract_test.sh
@@ -81,3 +82,4 @@ run_check 'fingerprint runtime verifier self-test' node ./scripts/verify-fingerp
 run_check 'miner runtime verifier syntax' node --check ./scripts/verify-miner-runtime.mjs
 run_check 'miner runtime verifier self-test' node ./scripts/verify-miner-runtime.mjs --self-test
 run_check 'multisite runtime verifier syntax' node --check ./scripts/verify-multisite-runtime.mjs
+run_check 'Access account usage view' node --test ./scripts/access-account-usage_test.mjs
