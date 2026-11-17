@@ -1361,15 +1361,19 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         let coordinator = OptionalHistoryPreparation()
         tab.hostCoordinator = coordinator
         _ = view.goBack() // Like a gesture, this traversal belongs to WebKit rather than navigateHistory.
-        await waitUntil { history.currentItem === secondItem && !tab.isLoading }
+        await waitUntil({ history.currentItem === secondItem && !tab.isLoading }, timeout: 10)
+        XCTAssertTrue(history.currentItem === secondItem)
         XCTAssertTrue(history.forwardItem === duplicate)
         _ = try await view.evaluateJavaScript("history.back(); true")
-        await waitUntil { history.currentItem === firstItem && !tab.isLoading }
+        await waitUntil({ history.currentItem === firstItem && !tab.isLoading }, timeout: 10)
+        XCTAssertTrue(history.currentItem === firstItem)
         XCTAssertEqual(history.forwardList, [secondItem, duplicate])
         _ = try await view.evaluateJavaScript("history.forward(); true")
-        await waitUntil { history.currentItem === secondItem && !tab.isLoading }
+        await waitUntil({ history.currentItem === secondItem && !tab.isLoading }, timeout: 10)
+        XCTAssertTrue(history.currentItem === secondItem)
         _ = view.goForward()
-        await waitUntil { history.currentItem === duplicate && !tab.isLoading }
+        await waitUntil({ history.currentItem === duplicate && !tab.isLoading }, timeout: 10)
+        XCTAssertTrue(history.currentItem === duplicate)
         XCTAssertTrue(history.backItem === secondItem)
         XCTAssertTrue(coordinator.held.isEmpty, "Optional preparation cannot cancel a traversal whose exact target is private to WebKit")
         XCTAssertTrue(tab.webView === view)
