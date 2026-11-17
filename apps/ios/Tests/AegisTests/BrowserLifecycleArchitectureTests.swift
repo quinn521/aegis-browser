@@ -500,7 +500,7 @@ final class PageAssistantModelTests: XCTestCase {
             model.requestConsent(); model.send()
             let operation = try XCTUnwrap(model.lifetime.operation); await operation.value
             let lateText = try XCTUnwrap(callback), report = model.report
-            let completedStatus = AegisLocalization.string(model.status)
+            let completedStatus = Aegis.AegisLocalization.string(model.status)
             XCTAssertEqual(model.output, "Validated result [1]"); XCTAssertTrue(model.outputComplete)
             XCTAssertFalse(model.busy); XCTAssertNil(model.lifetime.operation); XCTAssertNil(model.error)
             XCTAssertEqual(fixture.tasks.records.count, profile.isPrivate ? 0 : 1)
@@ -509,17 +509,17 @@ final class PageAssistantModelTests: XCTestCase {
             // No cancellation or newer operation: returning already ended this stream.
             lateText("Late unvalidated text before save")
             XCTAssertEqual(model.output, "Validated result [1]"); XCTAssertEqual(model.report, report)
-            XCTAssertEqual(AegisLocalization.string(model.status), completedStatus)
+            XCTAssertEqual(Aegis.AegisLocalization.string(model.status), completedStatus)
             XCTAssertTrue(model.outputComplete); XCTAssertFalse(model.busy); XCTAssertNil(model.error)
             model.saveResult()
             XCTAssertEqual(fixture.tasks.records.first?.state, .completed)
             XCTAssertEqual(fixture.tasks.records.first?.savedReport, report)
             XCTAssertEqual(fixture.reloadedTasks().records.first?.savedReport, report)
 
-            let savedStatus = AegisLocalization.string(model.status)
+            let savedStatus = Aegis.AegisLocalization.string(model.status)
             lateText("Late unvalidated text after save")
             XCTAssertEqual(model.output, "Validated result [1]"); XCTAssertEqual(model.report, report)
-            XCTAssertEqual(AegisLocalization.string(model.status), savedStatus)
+            XCTAssertEqual(Aegis.AegisLocalization.string(model.status), savedStatus)
             model.saveResult()
             XCTAssertEqual(fixture.reloadedTasks().records.first?.savedReport, report)
             XCTAssertEqual(fixture.tasks.records.count, 1)
@@ -541,14 +541,14 @@ final class PageAssistantModelTests: XCTestCase {
             let failedOperation = try XCTUnwrap(model.lifetime.operation); await failedOperation.value
             let failedText = try XCTUnwrap(callbacks.first)
             let expectedDraft = failure == .incompleteResponse ? "Current draft [1]" : ""
-            let failedStatus = AegisLocalization.string(model.status)
+            let failedStatus = Aegis.AegisLocalization.string(model.status)
             XCTAssertEqual(model.output, expectedDraft); XCTAssertFalse(model.outputComplete)
             XCTAssertEqual(model.error as? ModelClientError, failure); XCTAssertFalse(model.busy)
             XCTAssertNil(model.lifetime.operation); XCTAssertEqual(fixture.tasks.records.first?.state, .failed)
 
             failedText("Rejected body revived by a late callback")
             XCTAssertEqual(model.output, expectedDraft)
-            XCTAssertEqual(AegisLocalization.string(model.status), failedStatus)
+            XCTAssertEqual(Aegis.AegisLocalization.string(model.status), failedStatus)
             XCTAssertEqual(model.error as? ModelClientError, failure)
             XCTAssertFalse(model.outputComplete); XCTAssertFalse(model.busy)
             model.saveResult()
@@ -557,11 +557,11 @@ final class PageAssistantModelTests: XCTestCase {
             // Retry still reuses the preview, with fresh consent and a fresh stream.
             model.requestConsent(); XCTAssertNotNil(model.consent); model.send()
             let retry = try XCTUnwrap(model.lifetime.operation); await retry.value
-            let retryReport = model.report, retryStatus = AegisLocalization.string(model.status)
+            let retryReport = model.report, retryStatus = Aegis.AegisLocalization.string(model.status)
             failedText("Another old failure callback")
             callbacks.last?("Late text from the completed retry")
             XCTAssertEqual(model.output, "Validated retry [1]"); XCTAssertEqual(model.report, retryReport)
-            XCTAssertEqual(AegisLocalization.string(model.status), retryStatus)
+            XCTAssertEqual(Aegis.AegisLocalization.string(model.status), retryStatus)
             XCTAssertTrue(model.outputComplete); XCTAssertFalse(model.busy); XCTAssertNil(model.error)
             model.saveResult()
             let stored = fixture.reloadedTasks().records
@@ -584,13 +584,13 @@ final class PageAssistantModelTests: XCTestCase {
         let operation = try XCTUnwrap(model.lifetime.operation)
         await fulfillment(of: [started], timeout: 2)
         model.cancel()
-        let pausedStatus = AegisLocalization.string(model.status)
+        let pausedStatus = Aegis.AegisLocalization.string(model.status)
         let lateText = try XCTUnwrap(callback)
         lateText("Late partial after cancel")
         reply?.resume(returning: "Late final after cancel [1]"); reply = nil
         await operation.value
         XCTAssertEqual(model.output, "Unfinished draft [1]"); XCTAssertFalse(model.outputComplete)
-        XCTAssertEqual(AegisLocalization.string(model.status), pausedStatus)
+        XCTAssertEqual(Aegis.AegisLocalization.string(model.status), pausedStatus)
         XCTAssertFalse(model.busy); XCTAssertNil(model.lifetime.operation); XCTAssertNil(model.taskID)
         model.saveResult()
         XCTAssertEqual(fixture.reloadedTasks().records.first?.state, .interrupted)
@@ -602,14 +602,14 @@ final class PageAssistantModelTests: XCTestCase {
             let fixture = try Fixture(); defer { fixture.close() }
             let model = model { _, _, _, _, _, _ in "Validated [1]" }
             fixture.attach(model)
-            let readyStatus = AegisLocalization.string(model.status)
+            let readyStatus = Aegis.AegisLocalization.string(model.status)
             try await read(model)
             if state != "preview" {
                 model.requestConsent(); model.send()
                 let operation = try XCTUnwrap(model.lifetime.operation); await operation.value
                 if state == "saved" { model.saveResult() }
             }
-            XCTAssertNotEqual(AegisLocalization.string(model.status), readyStatus)
+            XCTAssertNotEqual(Aegis.AegisLocalization.string(model.status), readyStatus)
             switch state {
             case "preview": model.select(try XCTUnwrap(fixture.browser.activeTab).id, included: false)
             case "completed":
@@ -619,7 +619,7 @@ final class PageAssistantModelTests: XCTestCase {
             }
             XCTAssertTrue(model.snapshots.isEmpty); XCTAssertTrue(model.output.isEmpty)
             XCTAssertNil(model.consent); XCTAssertFalse(model.outputComplete); XCTAssertFalse(model.busy)
-            XCTAssertEqual(AegisLocalization.string(model.status), readyStatus)
+            XCTAssertEqual(Aegis.AegisLocalization.string(model.status), readyStatus)
             // Source/config invalidation never mutates the earlier record's terminal state.
             if state != "preview" { XCTAssertEqual(fixture.tasks.records.first?.state, .completed) }
         }
