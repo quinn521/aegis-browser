@@ -580,6 +580,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         deferredDocumentNavigationID = attempt.navigationID
         if hostCoordinator?.prepareProxyNavigation(tab: self, request: request) == true { return }
         guard alignStore(for: url, previous: requestedURL, method: method, body: request.httpBody) else { return }
+        isSuspended = false
         requestedURL = url
         isLoading = true
         if ["http", "https"].contains(url.scheme?.lowercased() ?? ""), contentRuleList == nil || securityLists.count < 2 {

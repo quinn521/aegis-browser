@@ -81,6 +81,26 @@ final class AccessNavigationRecoveryTests: XCTestCase {
         }
     }
 
+    func testReloadRemovesTheSuspendedStateAfterWebViewEviction() async throws {
+        let origin = try PreservingRedirectOrigin(status: 307)
+        defer { origin.stop() }
+        let url = try await origin.redirectURL().deletingLastPathComponent().appendingPathComponent("reload-evicted")
+        let tab = coldRequestTab(profile: .standard)
+        let window = try await attachPage(tab, at: url)
+        defer { window.isHidden = true; tab.stop() }
+        let evicted = await tab.suspendIfSafe()
+        XCTAssertTrue(evicted)
+        XCTAssertTrue(tab.isSuspended)
+        XCTAssertFalse(tab.isResident)
+        tab.reload()
+        tab.webView.frame = window.bounds
+        window.rootViewController?.view.addSubview(tab.webView)
+        await waitUntil({ origin.receivedRequests.count >= 2 && !tab.isLoading }, timeout: 10)
+        XCTAssertEqual(origin.receivedRequests.map(\.target), [url.path, url.path])
+        XCTAssertTrue(tab.isResident)
+        XCTAssertFalse(tab.isSuspended)
+    }
+
     func testReloadRefusalLeavesTheAuthenticatedDocumentReadable() async throws {
         let origin = try PreservingRedirectOrigin(status: 307)
         defer { origin.stop() }
