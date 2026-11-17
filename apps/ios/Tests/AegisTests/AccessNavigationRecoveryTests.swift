@@ -26,16 +26,80 @@ final class AccessNavigationRecoveryTests: XCTestCase {
                 if failed { deliver(tab) }
                 else { tab.commitPendingMainFrameForTests(); tab.webView(tab.webView, didFinish: tab.currentNavigationForTests) }
                 let identity = tab.currentAttemptIDForTests, view = tab.webView, store = tab.websiteDataStore
+                let loadError = tab.loadingError
                 XCTAssertNil(tab.safeRouteReloadRequest)
                 tab.reload() // Actual toolbar, banner and Cmd-R implementation entry.
                 XCTAssertNil(tab.safeRouteReloadRequest, "\(variant), failure=\(failed)")
                 XCTAssertEqual(tab.currentAttemptIDForTests, identity, "Refusal must not create a forged GET attempt")
                 XCTAssertTrue(tab.webView === view); XCTAssertTrue(tab.websiteDataStore === store)
-                XCTAssertNotNil(tab.loadingError, "Refusal must explain how to return and resubmit")
+                XCTAssertTrue(tab.reloadRequiresResubmission)
+                XCTAssertEqual(tab.loadingError, loadError)
                 XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
                 tab.stop()
             }
         }
+    }
+
+    func testReloadOpensAStoredURLBeforeFirstActivation() async throws {
+        let origin = try PreservingRedirectOrigin(status: 307)
+        defer { origin.stop() }
+        let url = try await origin.redirectURL().deletingLastPathComponent().appendingPathComponent("reload-restored")
+        let tab = coldRequestTab(profile: .standard)
+        tab.prepareForRestore(url: url)
+        XCTAssertFalse(tab.isResident)
+        tab.reload()
+        let window = try requestWindow(for: tab)
+        defer { window.isHidden = true; tab.stop() }
+        await waitUntil({ tab.committedMainFrameURL == url && !tab.isLoading }, timeout: 10)
+        XCTAssertEqual(origin.receivedRequests.map(\.method), ["GET"])
+        XCTAssertEqual(origin.receivedRequests.map(\.target), [url.path])
+        XCTAssertEqual(tab.committedMainFrameURL, url)
+        XCTAssertFalse(tab.reloadRequiresResubmission)
+    }
+
+    func testReloadTargetsCommittedPageAfterSameHostProvisionalCancellation() async throws {
+        for provisionalMethod in ["HEAD", "POST"] {
+            let origin = try PreservingRedirectOrigin(status: 307)
+            defer { origin.stop() }
+            let root = try await origin.redirectURL().deletingLastPathComponent()
+            let displayed = root.appendingPathComponent("reload-displayed")
+            let provisional = root.appendingPathComponent("reload-cancelled")
+            let tab = coldRequestTab(profile: .standard)
+            let window = try await attachPage(tab, at: displayed)
+            defer { window.isHidden = true; tab.stop() }
+            tab.adoptPolicyMainFrameNavigationForTests(url: provisional, method: provisionalMethod,
+                                                      hasReplayableBody: provisionalMethod == "POST")
+            tab.webView(tab.webView, didFailProvisionalNavigation: nil,
+                        withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCancelled))
+            XCTAssertNil(tab.lastMainFrameFailure)
+            XCTAssertEqual(tab.requestedURL, displayed)
+            tab.reload()
+            await waitUntil({ origin.receivedRequests.count >= 2 && !tab.isLoading }, timeout: 10)
+            XCTAssertEqual(origin.receivedRequests.map(\.target), [displayed.path, displayed.path])
+            XCTAssertEqual(origin.receivedRequests.map(\.method), ["GET", "GET"])
+            XCTAssertFalse(tab.reloadRequiresResubmission)
+        }
+    }
+
+    func testReloadRefusalLeavesTheAuthenticatedDocumentReadable() async throws {
+        let origin = try PreservingRedirectOrigin(status: 307)
+        defer { origin.stop() }
+        let url = try await origin.redirectURL().deletingLastPathComponent().appendingPathComponent("reload-readable")
+        let tab = coldRequestTab(profile: .standard)
+        let window = try requestWindow(for: tab)
+        defer { window.isHidden = true; tab.stop() }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer fixture", forHTTPHeaderField: "Authorization")
+        tab.load(request)
+        await waitUntil({ tab.committedMainFrameURL == url && !tab.isLoading }, timeout: 10)
+        let prior = try await tab.snapshot()
+        tab.reload()
+        XCTAssertTrue(tab.reloadRequiresResubmission)
+        XCTAssertNil(tab.loadingError)
+        let current = try await tab.snapshot()
+        XCTAssertEqual(current.url, url)
+        XCTAssertEqual(current.text, prior.text)
+        XCTAssertEqual(origin.receivedRequests.map(\.authorization), ["Bearer fixture"])
     }
 
     func testColdExplicitHeadPostAndAuthorizationKeepTheFirstHTTPRequest() async throws {

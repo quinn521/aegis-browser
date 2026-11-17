@@ -30,13 +30,16 @@ final class BrowserPresentationCoordinatorTests: XCTestCase {
                 request.httpMethod = "POST"; request.httpBody = Data("original=one".utf8)
                 tab.load(request)
                 let identity = tab.currentAttemptIDForTests, store = tab.websiteDataStore
+                let loadError = tab.loadingError
                 XCTAssertNil(tab.safeRouteReloadRequest)
                 let command = try XCTUnwrap(BrowserKeyboardActions.forWindow(browser, presentation: BrowserPresentationCoordinator()))
                 command.reload() // The exact action installed for Cmd-R.
                 XCTAssertNil(tab.safeRouteReloadRequest)
                 XCTAssertEqual(tab.currentAttemptIDForTests, identity)
                 XCTAssertTrue(tab.websiteDataStore === store); XCTAssertEqual(tab.profile, profile)
-                XCTAssertNotNil(tab.loadingError); XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
+                XCTAssertTrue(tab.reloadRequiresResubmission)
+                XCTAssertEqual(tab.loadingError, loadError)
+                XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
                 if protected { XCTAssertFalse(store.proxyConfigurations.isEmpty) }
             }
         }

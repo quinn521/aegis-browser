@@ -158,8 +158,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public var browsingScopeID = "ordinary"
     var configurationFactory: ((WKWebsiteDataStore) -> WKWebViewConfiguration)?
     public weak var hostCoordinator: BrowserHostStoreCoordinating?
-    private var committedRequestMethod = "GET"
     private typealias MainFrameAttempt = MainFrameNavigationState.Attempt
+    private var committedRequest: MainFrameAttempt?
+    private var restoreURL: URL?
     private let navigationState = MainFrameNavigationState()
     private var attempt: MainFrameAttempt {
         get { navigationState.current }
@@ -251,17 +252,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     /// Records the pending main-frame URL as committed. Unit tests have no WebKit commit callback.
     public func commitPendingMainFrameForTests() {
-        let recorded: URL
-        if let pendingNavigation,
-           let match = navigationState.recorded(for: pendingNavigation) {
-            recorded = match.url
-        } else {
-            recorded = attempt.url
-        }
-        let scheme = recorded.scheme?.lowercased() ?? ""
+        let recorded = pendingNavigation.flatMap(navigationState.recorded(for:)) ?? attempt
+        let scheme = recorded.url.scheme?.lowercased() ?? ""
         guard ["http", "https"].contains(scheme) else { return }
-        committedMainFrameURL = recorded
-        url = recorded
+        committedRequest = recorded
+        committedMainFrameURL = recorded.url
+        url = recorded.url
         clearPendingAddressNavigation()
     }
 
@@ -350,6 +346,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     @Published public private(set) var lastPolicyIntervention: BrowserNavigationPolicyDecision?
     @Published private var loadingErrorPresentation: AegisLocalizedMessage?
     public var loadingError: String? { loadingErrorPresentation?.text }
+    @Published public private(set) var reloadRequiresResubmission = false
     @Published public private(set) var trackingProtectionReady = false
     @Published public internal(set) var groupID: UUID?
     public private(set) var requestedURL: URL?
@@ -449,6 +446,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if realignedNavigationURL != url { realignedNavigationURL = nil }
         if contentRulesNavigationURL != url { contentRulesNavigationURL = nil }
         pendingAttachedLoad = nil
+        restoreURL = nil
+        reloadRequiresResubmission = false
         loadingErrorPresentation = nil
         loadingErrorAllowsProxyRetry = false
         proxyRecoveryCommitted = false
@@ -480,17 +479,14 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     ) {
         defer { refreshPendingAddressNavigation() }
         let normalizedMethod = method.uppercased()
-        let acknowledgesProgrammaticLoad = navigationState.programmaticPolicyNavigationID == attempt.navigationID
         if navigationState.adoptPolicy(url: url, method: normalizedMethod, continues: continuesExistingNavigation,
                                        unsafeReplay: hasReplayableBody, policyType: policyType) {
-            if acknowledgesProgrammaticLoad { committedRequestMethod = normalizedMethod }
             requestedURL = url
             return
         }
         beginUserNavigation(url: url, method: normalizedMethod, hasReplayableBody: hasReplayableBody,
                             policyType: policyType)
         requestedURL = url
-        committedRequestMethod = normalizedMethod
         isLoading = true
     }
 
@@ -582,7 +578,6 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             navigationState.continueLoad(url: url, method: method, unsafeReplay: unsafeReplay)
         }
         deferredDocumentNavigationID = attempt.navigationID
-        committedRequestMethod = method
         if hostCoordinator?.prepareProxyNavigation(tab: self, request: request) == true { return }
         guard alignStore(for: url, previous: requestedURL, method: method, body: request.httpBody) else { return }
         requestedURL = url
@@ -1043,6 +1038,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     func prepareForRestore(url: URL?, title: String? = nil, scrollOffset: Double? = nil) {
+        restoreURL = url
         self.url = url; requestedURL = url
         updateTitle(title, url: url)
         savedScrollOffset = CGPoint(x: 0, y: max(0, scrollOffset ?? 0))
@@ -1174,7 +1170,6 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         requestedURL = url
         attempt.url = url
         attempt.method = "GET"
-        committedRequestMethod = "GET"
         if hostCoordinator?.prepareProxyNavigation(tab: self, request: URLRequest(url: url, timeoutInterval: 30)) == true { return }
         guard alignStore(for: url, previous: previous, method: "GET", body: nil) else { return }
         // Store replacement releases the old WebView and changes loadGeneration.
@@ -1270,8 +1265,21 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func reload() {
         guard !isDisposed, let target = requestedURL ?? url else { return }
-        guard ["GET", "HEAD"].contains(attempt.method), !attempt.hasReplayableBody else {
-            explainUnreplayableRequest()
+        if restoreURL == target {
+            load(target, preservingScroll: true)
+            return
+        }
+        // A cancelled provisional navigation may leave a different document on
+        // screen, even when the two requests used the same URL.
+        let provenance = if !isLoading, loadingErrorPresentation == nil,
+                            let committedRequest, committedRequest.url == target {
+            committedRequest
+        } else {
+            attempt
+        }
+        guard provenance.url == target, ["GET", "HEAD"].contains(provenance.method),
+              !provenance.hasReplayableBody else {
+            reloadRequiresResubmission = true
             return
         }
         recentTerminations = []
@@ -1279,8 +1287,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             load(target)
             return
         }
-        guard var request = safeRouteReloadRequest else { explainUnreplayableRequest(); return }
-        request.cachePolicy = .reloadRevalidatingCacheData
+        guard Self.safeProxyURL(target) else { reloadRequiresResubmission = true; return }
+        var request = URLRequest(url: target, cachePolicy: .reloadRevalidatingCacheData, timeoutInterval: 30)
+        request.httpMethod = provenance.method
         // Revoke document consent at the user's action, before a cold rule load
         // or optional route preparation can suspend the actual HTTP request.
         navigationEpoch &+= 1
@@ -1607,6 +1616,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         navigationState.clearRedirectConfirmation()
         if let navigation, let recorded = navigationState.recorded(for: navigation) {
             let scheme = recorded.url.scheme?.lowercased() ?? ""
+            committedRequest = recorded
             if ["http", "https"].contains(scheme) {
                 committedMainFrameURL = recorded.url
                 url = recorded.url

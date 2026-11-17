@@ -512,14 +512,7 @@ struct PageLoadFailureBanner: View {
                         Button("重试") { tab.reload() }.frame(minHeight: 44)
                             .accessibilityIdentifier("page-load-retry")
                     } else {
-                        Text(verbatim: error).font(.callout)
-                        HStack {
-                            if tab.canGoBack { Button("后退") { tab.goBack() }.frame(minHeight: 44) }
-                            if let editAddress {
-                                Button("编辑网址", action: editAddress).frame(minHeight: 44)
-                                    .accessibilityIdentifier("page-load-edit-address")
-                            }
-                        }
+                        resubmissionActions
                     }
                 }
                 if let autoRecoveryLine {
@@ -552,6 +545,13 @@ struct PageLoadFailureBanner: View {
             .padding(.vertical, 8)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-load-error")
+        } else if tab.reloadRequiresResubmission {
+            VStack(alignment: .leading, spacing: 8) {
+                resubmissionActions
+            }
+            .padding(12)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("page-reload-refused")
         } else if (offersLocationService || addressProxyPreparing), let pending = tab.pendingAddressNavigation,
                   tab.matchesPendingAddressNavigation(pending),
                   let openAddressViaProxy {
@@ -571,6 +571,19 @@ struct PageLoadFailureBanner: View {
             .padding(12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-load-pending-proxy")
+        }
+    }
+
+    private var resubmissionActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("请返回原页面重新提交。").font(.callout)
+            HStack {
+                if tab.canGoBack { Button("后退") { tab.goBack() }.frame(minHeight: 44) }
+                if let editAddress {
+                    Button("编辑网址", action: editAddress).frame(minHeight: 44)
+                        .accessibilityIdentifier("page-load-edit-address")
+                }
+            }
         }
     }
 }
