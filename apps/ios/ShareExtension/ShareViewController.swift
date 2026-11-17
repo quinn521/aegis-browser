@@ -66,7 +66,8 @@ final class ShareViewController: UIViewController {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     do {
-                        let (title, data) = try result.get(); try MarkdownShareInbox().store(title: title, data: data)
+                        let (title, data) = try result.get()
+                        try await ShareInboxIO.shared.storeMarkdown(title: title, data: data)
                         self.status = .resource("文档已交给 Aegis，请在 60 秒内打开 App。")
                         self.refreshLanguage()
                         self.activity.stopAnimating()
@@ -99,12 +100,12 @@ final class ShareViewController: UIViewController {
             }
             let errorMessage = error?.localizedDescription
             Task { @MainActor [weak self, value, errorMessage] in
-                self?.handleLoadedValue(value, errorMessage: errorMessage)
+                await self?.handleLoadedValue(value, errorMessage: errorMessage)
             }
         }
     }
 
-    private func handleLoadedValue(_ value: String?, errorMessage: String?) {
+    private func handleLoadedValue(_ value: String?, errorMessage: String?) async {
         if let errorMessage {
             finish(error: NSError(domain: "AegisShare", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
             return
@@ -114,15 +115,12 @@ final class ShareViewController: UIViewController {
             return
         }
         do {
-            let inbox = try ShareInbox()
-            let envelope = try inbox.makeEnvelope(from: value)
-            try inbox.store(envelope)
+            try await ShareInboxIO.shared.storeLink(value)
             status = .resource("已安全交给 Aegis\n60 秒内打开 App 即可接收")
             refreshLanguage()
             activity.stopAnimating()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
-                self?.extensionContext?.completeRequest(returningItems: nil)
-            }
+            try await Task.sleep(for: .milliseconds(450))
+            extensionContext?.completeRequest(returningItems: nil)
         } catch {
             finish(error: error)
         }
