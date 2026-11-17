@@ -187,7 +187,7 @@ func (f *Flow) reserve(direction, path string, size int) (ticket int64, granted 
 			f.mu.Unlock()
 			return 0, 0, errCutoff
 		}
-		ack, e := f.reserveWithRecovery(map[string]any{"op": "reserve", "ticket": ticket, "direction": direction, "path": path, "bytes": size})
+		ack, e := f.reserveWithRecovery(map[string]any{"op": "reserve", "ticket": ticket, "direction": direction, "path": path, "bytes": size}, save)
 		f.mu.Unlock()
 		if e != nil {
 			return 0, 0, e

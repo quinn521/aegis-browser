@@ -214,7 +214,7 @@ func (f *Flow) openWithReply(frame map[string]any) (response, error) {
 // reserveWithRecovery persists a promise of no target write before asking for
 // bytes. Lost ACKs replay that promise before Finish. Replay holds the same
 // lock, so it cannot cancel a reservation while its caller accepts the grant.
-func (f *Flow) reserveWithRecovery(frame map[string]any) (response, error) {
+func (f *Flow) reserveWithRecovery(frame map[string]any, clear func(string, []map[string]any) error) (response, error) {
 	if f.recoveryDir == "" {
 		return f.exchange(frame)
 	}
@@ -242,6 +242,11 @@ func (f *Flow) reserveWithRecovery(frame map[string]any) (response, error) {
 		return ack, errors.New("invalid quota grant")
 	}
 	// A valid grant or definite rejection resolves the cancellation before the
-	// caller is permitted to write. Disk failure leaves its promise recoverable.
-	return ack, save(path, nil)
+	// caller is permitted to write.
+	if err := clear(path, nil); err != nil {
+		// Removal can succeed before the following directory sync fails.
+		// Requeue the no-write promise before the caller abandons its grant.
+		return ack, errors.Join(err, f.retainLocked(cancel))
+	}
+	return ack, nil
 }

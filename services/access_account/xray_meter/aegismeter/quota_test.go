@@ -534,3 +534,41 @@ func TestLostReservationAckRetainsNoWriteCancellation(t *testing.T) {
 		t.Fatal(frames, err)
 	}
 }
+
+func TestReservationClearFailureRequeuesCancellation(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "quota-clear-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	socket := filepath.Join(root, "m.sock")
+	dir, err := recoveryDirectory(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := quotaFixture(t, func(frame map[string]any) map[string]any {
+		return map[string]any{"ok": true, "granted": 3,
+			"expiresAt": time.Now().Add(time.Minute).UnixMilli()}
+	})
+	f.recoveryDir = dir
+	failedSync := errors.New("injected parent directory sync failure")
+	clear := func(path string, frames []map[string]any) error {
+		if len(frames) != 0 {
+			t.Fatal("unexpected retained frames", frames)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		return failedSync
+	}
+	_, err = f.reserveWithRecovery(map[string]any{"op": "reserve", "ticket": int64(1),
+		"direction": "up", "path": "target_tcp", "bytes": 3}, clear)
+	if !errors.Is(err, failedSync) {
+		t.Fatal("clear failure not returned", err)
+	}
+	frames, err := pending(filepath.Join(dir, f.id+".json"))
+	if err != nil || len(frames) != 1 || frames[0]["op"] != "cancel" ||
+		frames[0]["bytes"] != json.Number("3") || frames[0]["ticket"] != json.Number("1") {
+		t.Fatal("lost no-write cancellation after unlink", frames, err)
+	}
+}
