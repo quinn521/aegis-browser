@@ -33,4 +33,3 @@ remains distinct from connectivity.
 - Five-step evidence PASS claim (P-mac-6)
 
 <!-- Temporary CI allowlist acceptance probe. -->
-[CI broken-link probe](./__ci_missing_allowlist_probe__.md)

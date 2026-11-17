@@ -43,4 +43,3 @@ Strict fingerprint limits wrap page APIs. Workers, OffscreenCanvas, cached funct
 Simulator checks establish navigation, resource blocking and UI behavior. They do not establish physical-device MTE, power consumption, real-world detection accuracy or release eligibility.
 
 <!-- Temporary CI allowlist acceptance probe. -->
-[CI broken-link probe](./__ci_missing_allowlist_probe__.md)

@@ -43,4 +43,3 @@
 模擬器可驗證導覽、資源攔截與介面，不能證明實體裝置 MTE、耗電、實際攻擊偵測率或正式發行資格。
 
 <!-- Temporary CI allowlist acceptance probe. -->
-[CI broken-link probe](./__ci_missing_allowlist_probe__.md)

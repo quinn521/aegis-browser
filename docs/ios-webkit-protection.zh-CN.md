@@ -43,4 +43,3 @@
 模拟器可验证导航、资源阻断和界面，不能证明真机 MTE、耗电、真实攻击检测率或正式发行资格。
 
 <!-- Temporary CI allowlist acceptance probe. -->
-[CI broken-link probe](./__ci_missing_allowlist_probe__.md)
