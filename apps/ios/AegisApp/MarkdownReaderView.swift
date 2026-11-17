@@ -36,6 +36,7 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
   typealias Read = @Sendable (URL) async throws -> MarkdownDocument
   typealias Resources = @Sendable (MarkdownDocument, URL, [String]) async throws -> MarkdownDocument
   typealias Images = @MainActor (WKWebView, String) async throws -> [String]
+  typealias Capture = @MainActor (BrowserTab) async throws -> MarkdownDocument
   @Published private(set) var document: MarkdownDocument?
   @Published private(set) var errorPresentation: AegisLocalizedMessage = .verbatim("")
   var error: String {
@@ -64,19 +65,21 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
   private let read: Read
   private let resources: Resources
   private let images: Images
+  private let capturePage: Capture
   private let makeScope: @Sendable (URL) -> MarkdownSecurityScope
   var fontSize: Double = 17
   private(set) var webView: WKWebView!
 
   init(read: @escaping Read = { try await MarkdownIO.shared.read($0) },
        resources: @escaping Resources = { try await MarkdownIO.shared.resources($0, directory: $1, references: $2) },
+       capture: @escaping Capture = { try await MarkdownDocument.capture($0) },
        makeScope: @escaping @Sendable (URL) -> MarkdownSecurityScope = { MarkdownSecurityScope($0) },
        images: @escaping Images = { web, token in
          try await web.callAsyncJavaScript(
            "if(AegisMarkdown.token() !== token) return []; return AegisMarkdown.images();",
            arguments: ["token": token], in: nil, contentWorld: .page) as? [String] ?? []
        }) {
-    self.read = read; self.resources = resources; self.images = images; self.makeScope = makeScope
+    self.read = read; self.resources = resources; self.images = images; self.makeScope = makeScope; self.capturePage = capture
     super.init()
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
@@ -142,9 +145,10 @@ final class MarkdownReaderModel: NSObject, ObservableObject, WKNavigationDelegat
   }
   @discardableResult func capture(_ tab: BrowserTab) -> Task<Void, Never>? {
     guard let id = beginImport() else { return nil }
+    let capturePage = capturePage
     let task = Task { [weak self] in
       do {
-        let value = try await MarkdownDocument.capture(tab)
+        let value = try await capturePage(tab)
         guard let self, !self.closed, self.importID == id, !Task.isCancelled else { return }
         self.apply(value); self.importTask = nil
       } catch {

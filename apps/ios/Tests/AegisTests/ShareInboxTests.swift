@@ -151,15 +151,19 @@ final class MarkdownShareInboxTests: XCTestCase {
     func testIndependentConsumersHaveOneWinner() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         try MarkdownShareInbox(root: root).store(title: "one", data: Data("payload".utf8))
-        let winners = await withTaskGroup(of: Int.self) { group in
+        let counts = await withTaskGroup(of: (Int, Int).self) { group in
             for _ in 0..<12 {
-                group.addTask { (try? MarkdownShareInbox(root: root).consume()) == nil ? 0 : 1 }
+                group.addTask {
+                    do { return (try MarkdownShareInbox(root: root).consume() == nil ? 0 : 1, 0) }
+                    catch { return (0, 1) }
+                }
             }
-            var count = 0
-            for await value in group { count += value }
+            var count = (0, 0)
+            for await value in group { count.0 += value.0; count.1 += value.1 }
             return count
         }
-        XCTAssertEqual(winners, 1)
+        XCTAssertEqual(counts.0, 1)
+        XCTAssertEqual(counts.1, 0)
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
     }
     func testLinkCleanupDoesNotRemoveAnActiveMarkdownClaim() throws {

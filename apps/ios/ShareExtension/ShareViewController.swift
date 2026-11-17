@@ -61,7 +61,15 @@ final class ShareViewController: UIViewController {
                     if let failure { throw failure }
                     guard let url = item as? URL, url.isFileURL, ["md", "markdown"].contains(url.pathExtension.lowercased()),
                           (try url.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? Int.max <= 2_097_152 else { throw ShareInboxError.invalidEnvelope }
-                    result = .success((url.lastPathComponent, try Data(contentsOf: url)))
+                    // A provider's temporary URL must be copied while its callback owns it.
+                    let handle = try FileHandle(forReadingFrom: url)
+                    defer { try? handle.close() }
+                    var data = Data()
+                    while data.count <= MarkdownShareInbox.maximumTextBytes,
+                          let chunk = try handle.read(upToCount: min(65_536, MarkdownShareInbox.maximumTextBytes + 1 - data.count)), !chunk.isEmpty {
+                        data.append(chunk)
+                    }
+                    result = .success((url.lastPathComponent, data))
                 } catch { result = .failure(error) }
                 Task { @MainActor [weak self] in
                     guard let self else { return }

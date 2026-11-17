@@ -961,3 +961,93 @@ private final class MarkdownLeaseCounter: Sendable {
     var value: Int { count.withLock { $0 } }
     func increment() { count.withLock { $0 += 1 } }
 }
+
+@MainActor
+final class MarkdownReaderNativeBoundaryTests: XCTestCase {
+    func testRawCaptureAndFileImportShareReceiptGeneration() async throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil)), gate = MarkdownReadGate()
+        let model = MarkdownReaderModel(read: { try await gate.read($0) },
+            capture: { _ in try await gate.read(URL(fileURLWithPath: "/raw.md")) })
+        defer { model.close(); browser.closeWindow(); Task { await gate.finishAll() } }
+        let raw = model.capture(try XCTUnwrap(browser.activeTab))
+        let file = model.importFile(URL(fileURLWithPath: "/file.md"))
+        try await waitForMarkdown { await gate.count == 2 }
+        await gate.finish("file.md", .success(MarkdownDocument(title: "file", text: "latest"))); await file?.value
+        await gate.finish("raw.md", .success(MarkdownDocument(title: "raw", text: "old"))); await raw?.value
+        XCTAssertEqual(model.document?.title, "file"); XCTAssertTrue(model.error.isEmpty)
+    }
+    func testActualJavaScriptPromiseAndStaleBridgeAreDocumentBound() async throws {
+        for reject in [false, true] {
+            let model = MarkdownReaderModel()
+            defer { model.close() }
+            model.load(MarkdownDocument(title: "old", text: "![image](image.png)"))
+            try await waitForMarkdown { model.rendered }
+            let oldToken = model.renderID
+            _ = try await model.webView.callAsyncJavaScript("""
+                const original = AegisMarkdown;
+                let first = true;
+                globalThis.AegisMarkdown = Object.freeze({...original, images: () => {
+                  if (!first) return original.images();
+                  first = false;
+                  return new Promise((resolve, reject) => { globalThis.releaseImages = resolve; globalThis.rejectImages = reject; });
+                }});
+                """, arguments: [:], in: nil, contentWorld: .page)
+            let task = model.loadResources(URL(fileURLWithPath: "/tmp"))
+            try await waitForMarkdown {
+                (try? await model.webView.callAsyncJavaScript("return typeof globalThis.releaseImages === 'function';", arguments: [:], in: nil, contentWorld: .page)) as? Bool == true
+            }
+            let next = MarkdownDocument(title: "new", text: "new document")
+            model.load(next)
+            try await waitForMarkdown { model.rendered }
+            _ = try await model.webView.callAsyncJavaScript(
+                "if(reject) rejectImages(Error('old image failure')); else releaseImages(['image.png']);",
+                arguments: ["reject": reject], in: nil, contentWorld: .page)
+            await task?.value
+            _ = try await model.webView.callAsyncJavaScript(
+                "window.webkit.messageHandlers.aegisMarkdown.postMessage({type:'relativeLink',value:'old.md',iosToken:token});",
+                arguments: ["token": oldToken], in: nil, contentWorld: .page)
+            let staleAccepted = try await model.webView.callAsyncJavaScript(
+                "return AegisMarkdown.load({text:'stale DOM',iosToken:token,iosRevision:1});",
+                arguments: ["token": oldToken], in: nil, contentWorld: .page) as? Bool
+            await Task.yield()
+            XCTAssertEqual(staleAccepted, false)
+            XCTAssertEqual(model.document?.id, next.id); XCTAssertEqual(model.document?.resources, [:])
+            XCTAssertTrue(model.error.isEmpty)
+            let text = try await model.webView.callAsyncJavaScript("return AegisMarkdown.text();", arguments: [:], in: nil, contentWorld: .page) as? String
+            XCTAssertEqual(text, next.text)
+        }
+    }
+    func testClosingDuringResourceIOHoldsLeaseUntilActualCompletion() async throws {
+        let gate = MarkdownReadGate(), released = MarkdownLeaseCounter()
+        let model = MarkdownReaderModel(resources: { _, _, _ in try await gate.read(URL(fileURLWithPath: "/resources.md")) },
+            makeScope: { MarkdownSecurityScope($0, onRelease: { released.increment() }) })
+        defer { model.close(); Task { await gate.finishAll() } }
+        model.load(MarkdownDocument(title: "old", text: "![image](image.png)"))
+        try await waitForMarkdown { model.rendered }
+        let task = model.loadResources(URL(fileURLWithPath: "/tmp"))
+        try await waitForMarkdown { await gate.count == 1 }
+        model.close()
+        XCTAssertEqual(released.value, 0)
+        await gate.finish("resources.md", .success(MarkdownDocument(title: "old", text: "ignored", resources: ["image.png": "stale"])) )
+        await task?.value
+        XCTAssertEqual(released.value, 1)
+        XCTAssertEqual(model.document?.resources, [:]); XCTAssertTrue(model.error.isEmpty)
+        XCTAssertFalse(model.ready)
+    }
+    func testProfileRoundTripClosesReaderAndDownloadPreviewImmediately() async throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil)), gate = MarkdownReadGate()
+        let model = MarkdownReaderModel(), preview = MarkdownFilePreview(read: { try await gate.read($0) })
+        var opens = 0
+        model.bind(browser: browser) { _ in opens += 1 }; preview.bind(browser)
+        defer { model.close(); preview.close(); browser.closeWindow(); Task { await gate.finishAll() } }
+        model.load(MarkdownDocument(title: "ordinary", text: "private boundary"))
+        let token = model.renderID
+        let task = preview.load(URL(fileURLWithPath: "/pending.md"))
+        try await waitForMarkdown { await gate.count == 1 }
+        browser.switchProfile(to: .privateMode); browser.switchProfile(to: .standard)
+        model.receive(type: "open", value: "https://example.invalid/old", token: token)
+        await gate.finish("pending.md", .success(MarkdownDocument(title: "stale", text: "old"))); await task?.value
+        XCTAssertFalse(model.isOpen); XCTAssertNil(model.openURL); XCTAssertEqual(opens, 0)
+        XCTAssertNil(preview.document)
+    }
+}
