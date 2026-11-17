@@ -144,6 +144,7 @@ def _observe(db, digest, clock_ms, panel, admitted_clients=None):
     if account is not None and account['plan_id'] is not None:
         if admitted_clients is not None and account['panel_client'] not in admitted_clients:
             raise Unavailable('managed node unavailable')
+        store._check_alpha_panel_scope(panel, account['panel_client'])
         if panel is not None and settlement.period(db, account['id'], account['period_id']) is None:
             observed = panel.read(account['panel_client'], clock_ms)
     return account, observed

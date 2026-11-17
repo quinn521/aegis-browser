@@ -12,6 +12,13 @@ class Unavailable(Exception):
     """No trustworthy current entitlement can be read."""
 
 
+def _check_alpha_panel_scope(panel, client):
+    """Apply the operator's client scope independently of the usage source."""
+    alpha_client = getattr(panel, "alpha_panel_client", None)
+    if alpha_client is not None and client != alpha_client:
+        raise Unavailable("panel client outside Alpha scope")
+
+
 CURRENT_ACCOUNT_SQL = """
     SELECT a.id, t.expires_at AS session_expiry, p.plan_id, p.period_id, p.period_start, p.period_end, p.panel_client,
            s.quota_bytes, s.uploaded_bytes, s.downloaded_bytes,
@@ -78,6 +85,8 @@ def read_current(database_path, token, clock_ms, *, panel=None):
             account = db.execute(CURRENT_ACCOUNT_SQL, (digest, now)).fetchone()
             if account is None:
                 return None
+            if account["plan_id"] is not None:
+                _check_alpha_panel_scope(panel, account["panel_client"])
             binding = settlement.period(db, account['id'], account['period_id'])
             if binding is not None:
                 return _response(account, settlement.reading(db, account, binding), now)
