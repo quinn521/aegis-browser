@@ -1,7 +1,7 @@
 # 现有 3X-UI 网页入口接线
 
 日期：2026-11-17。开始基线：`152bd84ec569bf59d14475d9d0c6f78a7dee34f0`。
-关联：阶段一 #98、iOS #141、用量 #159。后续审查完成后须对齐被接受的最新基线。
+关联：阶段一 #98、平台验收 #141、用量 #159。后续审查完成后须对齐被接受的最新基线。
 
 ## 当前范围
 
@@ -31,7 +31,8 @@ Go REALITY 出站、本地入口、registry 与用量刷新协调器。账户后
 PR 的最终提交与 CI 单独核对，不以旧候选、跳过或零用例证明完成。
 
 新增 `AccessThreeXUIWebEntryTests` 覆盖入口选择、同源节点与计数、额度失败/耗尽/外来
-身份拒绝，以及不依赖账户后端环境的用量页。实际 HTTPS 302 回归单独使用
+身份拒绝、已就绪入口在额度耗尽后通过既有健康检查失效，以及不依赖账户后端环境的用量页。
+测试仅注入 lock 和 core，生产入口的参数与额度闭包仍由产品代码接线。实际 HTTPS 302 回归单独使用
 `ThreeXUISubscriptionRedirectFixtureTests`：先为任务专用 Simulator 信任一个包含
 `localhost` SAN 的临时证书，再运行
 `python3 apps/ios/scripts/run-subscription-redirect-fixture.py --cert <cert> --key <key> --

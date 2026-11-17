@@ -11,18 +11,16 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
     private let userID = "550e8400-e29b-41d4-a716-446655440000"
 
     func testUnselectedOrReadOnlyUsageCannotBuildAnUnmeteredWebEntry() async throws {
-        let probe = EntryBuildProbe()
         for (selected, manages) in [(false, false), (false, true), (true, false)] {
             let usage = AccessSubscriptionUsageSession(isSelected: selected, configuration: configuration(), managesConnections: manages)
-            let publisher = AccessThreeXUIWebEntry.makePublisher(for: usage, build: { _ in
-                probe.builds += 1
-                return AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
-            })
+            let core = EntryRecordingCore()
+            let publisher = publisher(for: usage, core: core)
             XCTAssertTrue(publisher is AccessFailClosedProxyEntryPublisher)
             do { _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5))); XCTFail("Unconfigured entry became ready") }
             catch { }
+            XCTAssertFalse(core.isRunning)
+            XCTAssertNil(core.startedConfiguration)
         }
-        XCTAssertEqual(probe.builds, 0)
     }
 
     func testProductEntryLoadsNodeAndVisibleCountersFromTheSameSubscription() async throws {
@@ -33,10 +31,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         usage.setActive(true)
         defer { usage.setActive(false) }
         let core = EntryRecordingCore()
-        let publisher = AccessThreeXUIWebEntry.makePublisher(for: usage, build: { supplied in
-            XCTAssertTrue(supplied === usage)
-            return self.publisher(for: supplied, core: core)
-        })
+        let publisher = publisher(for: usage, core: core)
         let operation = UUID()
         defer { publisher.cancel(operationID: operation) }
         let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
@@ -65,7 +60,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
                 fetch: { config in try await fixture.usage(config) })
             usage.setActive(true)
             let core = EntryRecordingCore()
-            let publisher = AccessThreeXUIWebEntry.makePublisher(for: usage, build: { self.publisher(for: $0, core: core) })
+            let publisher = publisher(for: usage, core: core)
             let operation = UUID()
             do { _ = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5))); XCTFail("Rejected 3X-UI state authorized a webpage") }
             catch { }
@@ -75,6 +70,33 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
             publisher.cancel(operationID: operation)
             usage.setActive(false)
         }
+    }
+
+    func testReadyProductEntryIsRejectedAfterSubscriptionExhaustion() async throws {
+        let fixture = ThreeXUIEntryFixture(userID: userID)
+        let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+            nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+            fetch: { config in try await fixture.usage(config) })
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core)
+        let operation = UUID()
+        defer { publisher.cancel(operationID: operation) }
+        let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
+        XCTAssertTrue(publisher.validateReady(ready))
+
+        await fixture.setMode(.exhausted)
+        await usage.refresh()?.value
+        XCTAssertEqual(usage.snapshot?.remainingBytes, 0)
+        XCTAssertFalse(usage.permitsExistingConnection)
+        XCTAssertTrue(core.isRunning, "Quota denial must be checked even while the core is healthy")
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while publisher.validateReady(ready), clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(publisher.validateReady(ready), "An exhausted subscription must revoke the existing ready entry")
     }
 
     func testUnconfiguredUsagePageRendersWithoutAnAccountBackendEnvironment() async throws {
@@ -105,8 +127,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
 
     private func publisher(for usage: AccessSubscriptionUsageSession, core: EntryRecordingCore) -> any AccessProxyEntryPublishing {
         let lock = Data(#"{"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}"#.utf8)
-        return AccessEmbeddedProxyEntryFactory.makeProductPublisher(lockData: lock, configPath: nil, verifiedCore: core,
-            parameters: { try await usage.connectionParameters() }, connectionAllowed: { usage.permitsExistingConnection })
+        return AccessThreeXUIWebEntry.makePublisher(for: usage, lockData: lock, verifiedCore: core)
     }
 
     private func configuration() -> AccessSubscriptionConfiguration {
@@ -115,15 +136,13 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
     }
 }
 
-@MainActor
-private final class EntryBuildProbe { var builds = 0 }
-
 private actor ThreeXUIEntryFixture {
     enum Mode { case allowed, unavailable, exhausted, foreignNode }
     let userID: String
-    let mode: Mode
+    private var mode: Mode
     private(set) var observedSources: [String] = []
     init(userID: String, mode: Mode = .allowed) { self.userID = userID; self.mode = mode }
+    func setMode(_ mode: Mode) { self.mode = mode }
     func usage(_ configuration: AccessSubscriptionConfiguration) throws -> AccessSubscriptionUsage {
         observedSources.append(configuration.subscriptionInfoURL.absoluteString)
         if mode == .unavailable { throw AccessSubscriptionQueryError.unavailable }
