@@ -99,6 +99,33 @@ class QuotaTest(unittest.TestCase):
             self.send(0, "abort")
         self.assertEqual(quota.inspect(self.db, "a", "p")["confirmedBytes"], 3)
 
+    def test_lost_reserve_ack_releases_only_a_known_unwritten_ticket(self):
+        self.reserve(0, "up", 100)
+        self.meter = quota.EnforcedMeter(self.db, self.cfg, lambda: self.now)
+        cancel = dict(direction="up", ticket=1, path="target_tcp", bytes=100)
+        self.assertEqual(self.send(0, "cancel", **cancel), {"ok": True})
+        self.assertEqual(self.send(0, "cancel", **cancel), {"ok": True})
+        self.send(0, "finish", uploadedBytes=0, downloadedBytes=0, complete=False)
+        report = quota.inspect(self.db, "a", "p")
+        self.assertEqual((report["heldBytes"], report["confirmedBytes"], report["releasedBytes"]),
+                         (0, 0, 100))
+        self.assertTrue(self.send(7, "open", client="client-a", mode="enforce")["ok"])
+        self.assertFalse(self.reserve(0, "up", 100)["ok"])
+        self.assertTrue(self.reserve(7, "up", 100)["ok"])
+
+    def test_cancel_fences_a_late_reservation_without_erasing_prior_writes(self):
+        cancel = dict(direction="up", ticket=1, path="target_tcp", bytes=100)
+        self.send(0, "cancel", **cancel)
+        self.assertFalse(self.reserve(0, "up", 100)["ok"])
+        self.reserve(1, "up", 10)
+        self.commit(1, "up", 10)
+        with self.assertRaises(ValueError):
+            self.send(1, "cancel", **cancel)
+        self.assertEqual(quota.inspect(self.db, "a", "p")["confirmedBytes"], 10)
+        self.send(1, "cancel", direction="up", ticket=2, path="target_tcp", bytes=90)
+        self.assertFalse(self.reserve(1, "up", 90, ticket=2)["ok"])
+        self.assertEqual(quota.inspect(self.db, "a", "p")["confirmedBytes"], 10)
+
     def test_expiry_and_invalid_frames(self):
         with self.assertRaises(ValueError):
             self.send(0, "sample", direction="up", bytes=7, path="target_tcp", pathBytes=7)

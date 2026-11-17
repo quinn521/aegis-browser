@@ -210,3 +210,38 @@ func (f *Flow) openWithReply(frame map[string]any) (response, error) {
 	}
 	return ack, save(filepath.Join(f.recoveryDir, f.id+".json"), nil)
 }
+
+// reserveWithRecovery persists a promise of no target write before asking for
+// bytes. Lost ACKs replay that promise before Finish. Replay holds the same
+// lock, so it cannot cancel a reservation while its caller accepts the grant.
+func (f *Flow) reserveWithRecovery(frame map[string]any) (response, error) {
+	if f.recoveryDir == "" {
+		return f.exchange(frame)
+	}
+	recoveryMu.Lock()
+	defer recoveryMu.Unlock()
+	path := filepath.Join(f.recoveryDir, f.id+".json")
+	previous, err := pending(path)
+	if err != nil {
+		return response{}, err
+	}
+	if len(previous) != 0 {
+		return response{}, errors.New("meter recovery pending")
+	}
+	cancel := map[string]any{"op": "cancel", "ticket": frame["ticket"],
+		"direction": frame["direction"], "path": frame["path"], "bytes": frame["bytes"]}
+	if err := f.retainLocked(cancel); err != nil {
+		return response{}, err
+	}
+	ack, err := f.exchange(frame)
+	if err != nil {
+		return ack, err
+	}
+	requested, ok := frame["bytes"].(int)
+	if ack.OK && (!ok || ack.Granted <= 0 || ack.Granted > requested) {
+		return ack, errors.New("invalid quota grant")
+	}
+	// A valid grant or definite rejection resolves the cancellation before the
+	// caller is permitted to write. Disk failure leaves its promise recoverable.
+	return ack, save(path, nil)
+}

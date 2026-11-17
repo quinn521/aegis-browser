@@ -91,7 +91,7 @@ class EnforcedMeter(metering.Meter):
             return
         if op in ("check", "abort") and set(frame) == base:
             return
-        if op in ("reserve", "commit"):
+        if op in ("reserve", "commit", "cancel"):
             direction = frame.get("direction")
             if (
                 not isinstance(direction, str)
@@ -104,7 +104,7 @@ class EnforcedMeter(metering.Meter):
                 raise ValueError("invalid ticket")
             fields = base | {"direction", "ticket", "bytes"}
             if (
-                op == "reserve"
+                op in ("reserve", "cancel")
                 and set(frame) == fields | {"path"}
                 and frame["bytes"] > 0
                 and frame["path"] in metering.PATHS[direction]
@@ -168,6 +168,8 @@ class EnforcedMeter(metering.Meter):
             return {"ok": True}
         if op == "commit":
             return self._commit(db, key, frame, flow, now)
+        if op == "cancel":
+            return self._cancel(db, key, frame, flow, now)
         if flow["cut_at"] is not None:
             return {"ok": False}
         auth = settlement.authority(db, flow["account_id"], flow["period_id"], now)
@@ -259,6 +261,28 @@ class EnforcedMeter(metering.Meter):
         if granted == room:
             self._cut_empty(db, shared, now)
         return dict(ok=True, granted=granted, expiresAt=expiry)
+
+    def _cancel(self, db, key, frame, flow, now):
+        """Fence a reservation whose caller durably promises it never wrote."""
+        writer = db.execute(
+            "SELECT * FROM quota_writers WHERE node_id=? AND flow_id=? AND direction=?",
+            (*key, frame["direction"]),
+        ).fetchone()
+        ticket = frame["ticket"]
+        if writer is None:
+            if ticket != 1:
+                raise ValueError("unmatched cancellation")
+        elif ticket == writer["ticket"]:
+            if (frame["bytes"], frame["path"]) != (writer["requested"], writer["path"]):
+                raise ValueError("conflicting cancellation")
+            self._commit(db, key, dict(direction=frame["direction"], ticket=ticket,
+                                      bytes=0, complete=True), flow, now)
+        elif ticket != writer["ticket"] + 1 or writer["confirmed"] is None:
+            raise ValueError("unmatched cancellation")
+        # Cancellation may arrive before the original reserve transaction.
+        # Cut the whole flow so its late reservation can never acquire bytes.
+        self._cut(db, key, now, "cancelled")
+        return dict(ok=True)
 
     def _commit(self, db, key, frame, flow, now):
         where = (*key, frame["direction"])

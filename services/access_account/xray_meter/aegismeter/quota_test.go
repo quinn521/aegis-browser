@@ -451,3 +451,86 @@ func TestExpiredQuotaOpenFinishesZeroByteFlow(t *testing.T) {
 		t.Fatal("guard failure did not finish zero-byte flow")
 	}
 }
+
+func TestLostReservationAckRetainsNoWriteCancellation(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "quota-reserve-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	socket := filepath.Join(root, "m.sock")
+	dir, err := recoveryDirectory(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f *Flow
+	sawReserve := make(chan struct{}, 1)
+	f = quotaFixture(t, func(frame map[string]any) map[string]any {
+		frames, readErr := pending(filepath.Join(dir, f.id+".json"))
+		if readErr != nil || len(frames) != 1 || frames[0]["op"] != "cancel" ||
+			frames[0]["ticket"] != json.Number("1") || frames[0]["bytes"] != json.Number("3") {
+			t.Error("reserve sent before durable cancellation", frames, readErr)
+		}
+		sawReserve <- struct{}{}
+		f.conn.Close() // The collector may have committed, but the ACK cannot arrive.
+		return nil
+	})
+	f.recoveryDir = dir
+	calls := 0
+	writer := quotaWriter{write: func(data []byte) (int, error) {
+		calls++
+		return len(data), nil
+	}}
+	if n, err := f.Write(writer, []byte{1, 2, 3}, 0, 3, "target_tcp"); n != 0 || err == nil || calls != 0 {
+		t.Fatal(n, err, calls)
+	}
+	<-sawReserve
+	if err := f.Finish(); err == nil {
+		t.Fatal("unacknowledged cancellation reported success")
+	}
+	frames, err := pending(filepath.Join(dir, f.id+".json"))
+	if err != nil || len(frames) != 2 || frames[0]["op"] != "cancel" ||
+		frames[0]["direction"] != "up" || frames[0]["path"] != "target_tcp" ||
+		frames[1]["op"] != "finish" || frames[1]["uploadedBytes"] != json.Number("0") {
+		t.Fatal(frames, err)
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	seen := make(chan []observed, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var messages []observed
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			var message observed
+			if json.Unmarshal(scanner.Bytes(), &message) != nil {
+				return
+			}
+			messages = append(messages, message)
+			io.WriteString(conn, "{\"ok\":true}\n")
+			if message["op"] == "finish" {
+				break
+			}
+		}
+		seen <- messages
+	}()
+	replay(socket, dir)
+	select {
+	case messages := <-seen:
+		if len(messages) != 2 || messages[0]["op"] != "cancel" || messages[1]["op"] != "finish" {
+			t.Fatal(messages)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no-write cancellation was not replayed")
+	}
+	if frames, err = pending(filepath.Join(dir, f.id+".json")); err != nil || len(frames) != 0 {
+		t.Fatal(frames, err)
+	}
+}
