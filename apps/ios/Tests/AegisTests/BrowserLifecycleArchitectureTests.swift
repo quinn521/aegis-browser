@@ -1101,3 +1101,25 @@ extension MarkdownReaderNativeBoundaryTests {
         }
     }
 }
+
+extension MarkdownInputLifecycleTests {
+    func testProductionActorReadsFileAndQueuesARealReadError() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("actual.md")
+        try Data("# Actual file\nowned input".utf8).write(to: file)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil)), routes = BrowserPresentationCoordinator()
+        let owner = BrowserInputOwner()
+        defer { owner.close(); browser.closeWindow() }
+        owner.accept(file, browser: browser, presentation: routes)
+        owner.accept(root.appendingPathComponent("missing.md"), browser: browser, presentation: routes)
+        try await waitForMarkdown { routes.current != nil && routes.pending.count == 1 }
+        guard case let .markdown(document) = routes.current?.route else { return XCTFail("Actual file did not reach its window") }
+        XCTAssertEqual(document.text, "# Actual file\nowned input"); XCTAssertEqual(document.sourceURL, file)
+        let id = try XCTUnwrap(routes.current?.id)
+        routes.dismiss(id); routes.didDismiss(id)
+        guard case let .inputError(message) = routes.current?.route else { return XCTFail("Actual read failure was lost") }
+        XCTAssertFalse(message.text.isEmpty)
+    }
+}
