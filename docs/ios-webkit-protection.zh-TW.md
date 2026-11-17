@@ -41,3 +41,6 @@
 嚴格指紋限制屬於頁面 API 包裝：Worker、OffscreenCanvas、快取函式及頁面恢復原始函式可能繞過。保留 WebKit 自身隱私能力，但公開開關不能完整等同 Safari 的進階指紋保護。V8 位元組碼與完整 DNS/CNAME 檢查沒有移植到 iOS。
 
 模擬器可驗證導覽、資源攔截與介面，不能證明實體裝置 MTE、耗電、實際攻擊偵測率或正式發行資格。
+
+<!-- Temporary CI allowlist acceptance probe. -->
+[CI broken-link probe](./__ci_missing_allowlist_probe__.md)

@@ -31,3 +31,6 @@ short status with **switch state ≠ connectivity**.
 - DEV ALLOW/BLOCK panel (P-mac-4)
 - Fault fail-closed product path (P-mac-5)
 - Five-step evidence PASS claim (P-mac-6)
+
+<!-- Temporary CI allowlist acceptance probe. -->
+[CI broken-link probe](./__ci_missing_allowlist_probe__.md)

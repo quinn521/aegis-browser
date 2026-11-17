@@ -41,3 +41,6 @@ Structure checks start after loading begins. They cannot guarantee zero earlier 
 Strict fingerprint limits wrap page APIs. Workers, OffscreenCanvas, cached functions or restored originals can bypass them. Default WebKit privacy remains available, but a public toggle does not reproduce all Safari advanced fingerprint protections. V8 bytecode instrumentation and full DNS/CNAME checks are not ported.
 
 Simulator checks establish navigation, resource blocking and UI behavior. They do not establish physical-device MTE, power consumption, real-world detection accuracy or release eligibility.
+
+<!-- Temporary CI allowlist acceptance probe. -->
+[CI broken-link probe](./__ci_missing_allowlist_probe__.md)

@@ -41,3 +41,6 @@
 严格指纹限制属于页面 API 包装器：Worker、OffscreenCanvas、缓存函数及页面恢复原函数可能绕过。默认保留 WebKit 自身隐私能力，没有公开接口可以完整等同 Safari 的高级指纹保护。V8 字节码模块和完整 DNS/CNAME 检查没有移植到 iOS。
 
 模拟器可验证导航、资源阻断和界面，不能证明真机 MTE、耗电、真实攻击检测率或正式发行资格。
+
+<!-- Temporary CI allowlist acceptance probe. -->
+[CI broken-link probe](./__ci_missing_allowlist_probe__.md)
