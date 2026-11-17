@@ -333,14 +333,12 @@ struct DownloadsView: View {
     }
     private func showFile(_ item: BrowserDownload, preview: Bool) {
         let url = downloads.fileURL(item)
-        guard FileManager.default.fileExists(atPath: url.path) else { error = .error(DownloadError.missingFile); return }
+        guard markdownPreview.prepareFile(url) else { return }
         if preview, MarkdownDocument.accepts(url) {
             markdownPreview.load(url)
         } else if preview {
-            markdownPreview.reset()
             previewURL = url
         } else {
-            markdownPreview.reset()
             do {
                 exportFile = try ExportedFile(url: url)
                 savedMessage = nil
@@ -400,6 +398,16 @@ final class MarkdownFilePreview: ObservableObject {
     }
     func reset() {
         generation = UUID(); task?.cancel(); task = nil; document = nil; error = nil
+    }
+    func prepareFile(_ url: URL) -> Bool {
+        guard !closed else { return false }
+        // A newer selection owns preflight failures too, before any early return.
+        reset()
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            error = .error(DownloadError.missingFile)
+            return false
+        }
+        return true
     }
     @discardableResult func load(_ url: URL) -> Task<Void, Never>? {
         guard !closed else { return nil }

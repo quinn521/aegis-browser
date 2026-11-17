@@ -1143,3 +1143,23 @@ extension MarkdownReaderNativeBoundaryTests {
         XCTAssertEqual(actual?["scheme"] as? String, "dark")
     }
 }
+
+extension MarkdownReaderLifecycleTests {
+    func testMissingNewSelectionRevokesPendingPreviewBeforePreflightReturns() async throws {
+        let gate = MarkdownReadGate(), preview = MarkdownFilePreview(read: { try await gate.read($0) })
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { preview.close(); Task { await gate.finishAll() }; try? FileManager.default.removeItem(at: root) }
+        let firstURL = root.appendingPathComponent("A.md")
+        try Data("first".utf8).write(to: firstURL)
+        XCTAssertTrue(preview.prepareFile(firstURL))
+        let first = preview.load(firstURL)
+        try await waitForMarkdown { await gate.count == 1 }
+        XCTAssertFalse(preview.prepareFile(root.appendingPathComponent("missing-B.md")))
+        let failure = preview.error?.text
+        XCTAssertNotNil(failure)
+        await gate.finish("A.md", .success(MarkdownDocument(title: "A", text: "stale"))); await first?.value
+        XCTAssertNil(preview.document)
+        XCTAssertEqual(preview.error?.text, failure)
+    }
+}
