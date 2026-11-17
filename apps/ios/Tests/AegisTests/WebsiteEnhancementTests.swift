@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import UIKit
 import WebKit
 import XCTest
 
