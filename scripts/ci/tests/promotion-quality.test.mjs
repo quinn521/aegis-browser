@@ -113,7 +113,7 @@ test('quality verification accepts only successful jobs from the exact latest at
     if (path.startsWith('/actions/workflows/quality.yml/runs?')) return {workflow_runs: [run]};
     if (path === '/actions/runs/30') return run;
     if (path === '/actions/runs/30/attempts/3/jobs?per_page=100') {
-      return {jobs: [
+      return {total_count: 2, jobs: [
         qualityJob(run, 'quality'),
         qualityJob(run, 'quality-gate'),
       ]};
@@ -121,7 +121,7 @@ test('quality verification accepts only successful jobs from the exact latest at
     if (path.startsWith('/actions/workflows/secret-scanning.yml/runs?')) return {workflow_runs: [scan]};
     if (path === '/actions/runs/31') return scan;
     if (path === '/actions/runs/31/attempts/3/jobs?per_page=100') {
-      return {jobs: [qualityJob(scan, 'gitleaks')]};
+      return {total_count: 1, jobs: [qualityJob(scan, 'gitleaks')]};
     }
     throw new Error(`unexpected path: ${path}`);
   };
@@ -136,6 +136,7 @@ test('promotion requires gitleaks from the newest exact source push attempt', as
   const quality = qualityRun({id: 60, branch: 'develop', sha: 'candidate'});
   const scan = {...quality, id: 61, path: '.github/workflows/secret-scanning.yml', run_attempt: 2};
   const passes = [qualityJob(scan, 'gitleaks')];
+  const otherJobs = Array.from({length: 100}, (_, index) => qualityJob(scan, `other-${index}`));
   const cases = [
     ['missing', null, passes, scan, false],
     ['queued', {...scan, status: 'queued'}, passes, scan, false],
@@ -144,8 +145,11 @@ test('promotion requires gitleaks from the newest exact source push attempt', as
     ['new attempt during read', scan, passes, {...scan, run_attempt: 3, status: 'queued'}, false],
     ['missing gitleaks', scan, [], scan, /secret-scanning workflow failed/u],
     ['success', scan, passes, scan, true],
+    ['gitleaks on second page', scan, otherJobs, scan, true, passes],
+    ['duplicate across pages', scan, [...passes, ...otherJobs.slice(1)], scan, /secret-scanning workflow failed/u, passes],
+    ['incomplete second page', scan, [...passes, ...otherJobs.slice(1)], scan, /incomplete job list/u, []],
   ];
-  for (const [name, selected, jobs, finalRun, expected] of cases) {
+  for (const [name, selected, jobs, finalRun, expected, secondPage] of cases) {
     await t.test(name, async () => {
       let scanReads = 0;
       const apiFn = async (repo, path, {token}) => {
@@ -154,7 +158,7 @@ test('promotion requires gitleaks from the newest exact source push attempt', as
         if (path.startsWith('/actions/workflows/quality.yml/runs?')) return {workflow_runs: [quality]};
         if (path === '/actions/runs/60') return quality;
         if (path === '/actions/runs/60/attempts/1/jobs?per_page=100') {
-          return {jobs: ['quality', 'quality-gate'].map(name => qualityJob(quality, name))};
+          return {total_count: 2, jobs: ['quality', 'quality-gate'].map(name => qualityJob(quality, name))};
         }
         if (path.startsWith('/actions/workflows/secret-scanning.yml/runs?')) {
           assert.match(path, /branch=develop&event=push&head_sha=candidate/u);
@@ -165,7 +169,12 @@ test('promotion requires gitleaks from the newest exact source push attempt', as
           ]};
         }
         if (path === '/actions/runs/61') return scanReads++ === 0 ? selected : finalRun;
-        if (path === '/actions/runs/61/attempts/2/jobs?per_page=100') return {jobs};
+        if (path === '/actions/runs/61/attempts/2/jobs?per_page=100') {
+          return {total_count: secondPage ? 101 : jobs.length, jobs};
+        }
+        if (path === '/actions/runs/61/attempts/2/jobs?per_page=100&page=2') {
+          return {total_count: 101, jobs: secondPage};
+        }
         throw new Error(`unexpected path: ${path}`);
       };
       const verified = requireGreenQuality(promotionConfig.personalRepo, 'develop', quality.head_sha,
@@ -185,12 +194,12 @@ test('quality verification defers when a newer attempt starts after jobs are rea
     if (path.startsWith('/actions/workflows/quality.yml/runs?')) return {workflow_runs: [run]};
     if (path === '/actions/runs/40') return runReads++ === 0 ? run : rerun;
     if (path === '/actions/runs/40/attempts/1/jobs?per_page=100') {
-      return {jobs: [qualityJob(run, 'quality'), qualityJob(run, 'quality-gate')]};
+      return {total_count: 2, jobs: [qualityJob(run, 'quality'), qualityJob(run, 'quality-gate')]};
     }
     if (path.startsWith('/actions/workflows/secret-scanning.yml/runs?')) return {workflow_runs: [scan]};
     if (path === '/actions/runs/41') return scan;
     if (path === '/actions/runs/41/attempts/1/jobs?per_page=100') {
-      return {jobs: [qualityJob(scan, 'gitleaks')]};
+      return {total_count: 1, jobs: [qualityJob(scan, 'gitleaks')]};
     }
     throw new Error(`unexpected path: ${path}`);
   };
@@ -210,13 +219,13 @@ test('promotion defers if quality reruns while collecting secret scanning eviden
       return scanJobsRead ? {...quality, run_attempt: 2, status: 'queued', conclusion: null} : quality;
     }
     if (path === '/actions/runs/70/attempts/1/jobs?per_page=100') {
-      return {jobs: ['quality', 'quality-gate'].map(name => qualityJob(quality, name))};
+      return {total_count: 2, jobs: ['quality', 'quality-gate'].map(name => qualityJob(quality, name))};
     }
     if (path.startsWith('/actions/workflows/secret-scanning.yml/runs?')) return {workflow_runs: [scan]};
     if (path === '/actions/runs/71') return scan;
     if (path === '/actions/runs/71/attempts/1/jobs?per_page=100') {
       scanJobsRead = true;
-      return {jobs: [qualityJob(scan, 'gitleaks')]};
+      return {total_count: 1, jobs: [qualityJob(scan, 'gitleaks')]};
     }
     throw new Error(`unexpected path: ${path}`);
   };

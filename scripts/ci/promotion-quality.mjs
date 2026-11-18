@@ -50,6 +50,23 @@ function checkState(state, {repo, branch, sha}, workflow) {
   throw new Error(`${repo}:${branch}@${sha.slice(0, 12)} ${workflow.name} workflow failed`);
 }
 
+async function readAttemptJobs(repo, run, token, apiFn) {
+  const pageSize = 100;
+  const path = `/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=${pageSize}`;
+  const jobs = [];
+  let total;
+  for (let page = 1; ; page++) {
+    const batch = await apiFn(repo, page === 1 ? path : `${path}&page=${page}`, {token});
+    if (page === 1) total = batch?.total_count;
+    if (!Number.isSafeInteger(total) || total < 0 || batch?.total_count !== total ||
+        !Array.isArray(batch.jobs) || batch.jobs.length !== Math.min(pageSize, total - jobs.length)) {
+      throw new Error(`${repo} run ${run.id} attempt ${run.run_attempt}: incomplete job list`);
+    }
+    jobs.push(...batch.jobs);
+    if (jobs.length === total) return jobs;
+  }
+}
+
 async function readPushEvidence(expected, workflow, token, apiFn) {
   const {repo, branch, sha} = expected;
   const query = new URLSearchParams({branch, event: 'push', head_sha: sha, per_page: '100'});
@@ -63,8 +80,8 @@ async function readPushEvidence(expected, workflow, token, apiFn) {
   if (!checkState(workflowRunState(run, expected, workflow), expected, workflow)) return false;
   const attempt = run.run_attempt;
   if (!Number.isInteger(attempt) || attempt < 1) return checkState('failure', expected, workflow);
-  const evidence = await apiFn(repo, `/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {token});
-  return {run, jobs: evidence?.jobs, workflow};
+  const jobs = await readAttemptJobs(repo, run, token, apiFn);
+  return {run, jobs, workflow};
 }
 
 export async function requireGreenQuality(repo, branch, commitSha, token, apiFn = githubApi) {
