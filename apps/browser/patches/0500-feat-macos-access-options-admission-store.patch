@@ -1,6 +1,6 @@
-From 1cf4fbf2f7d0e44da0097f05aa1cd9437c362eca Mon Sep 17 00:00:00 2001
+From 10705f544ad55aef8cb2e10efdb599065be5e854 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
-Date: Wed, 18 Nov 2026 18:50:13 +0800
+Date: Wed, 18 Nov 2026 19:04:29 +0800
 Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  storage
 
@@ -27,7 +27,7 @@ Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  chrome/browser/aegis/access/alpha_access.gni  |  13 +
  .../access/verify_access_build_identity.py    |  55 ++++
  .../verify_access_build_identity_test.py      |  79 ++++++
- chrome/browser/ui/webui/aegis/BUILD.gn        |   3 +
+ chrome/browser/ui/webui/aegis/BUILD.gn        |   6 +
  chrome/browser/ui/webui/aegis/aegis_ui.cc     |  22 ++
  .../ui/webui/aegis/aegis_ui_handler.cc        |  47 ++++
  .../browser/ui/webui/aegis/aegis_ui_handler.h |   9 +
@@ -35,7 +35,7 @@ Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  .../aegis_access/access_options_capability.h  |  87 ++++++
  .../access_options_capability_test.cc         |  70 +++++
  components/aegis_access/access_sources.json   |   3 +
- 30 files changed, 1293 insertions(+), 19 deletions(-)
+ 30 files changed, 1296 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_options_browsertest.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.h
@@ -1429,18 +1429,21 @@ index 0000000000000000000000000000000000000000..3e4054e48a5880bf0e9a4a1b4bc762c3
 +if __name__ == "__main__":
 +    unittest.main()
 diff --git a/chrome/browser/ui/webui/aegis/BUILD.gn b/chrome/browser/ui/webui/aegis/BUILD.gn
-index fc6203004a34f128eddd7c13ae0ed2b700e21053..200cd2ad6d6b64db31bb66e564f142a5c38bf7bb 100644
+index fc6203004a34f128eddd7c13ae0ed2b700e21053..5e135641d58007f051776f61a4fda599042da717 100644
 --- a/chrome/browser/ui/webui/aegis/BUILD.gn
 +++ b/chrome/browser/ui/webui/aegis/BUILD.gn
-@@ -40,6 +40,7 @@ source_set("aegis") {
+@@ -40,6 +40,10 @@ source_set("aegis") {
      "//ui/webui",
    ]
    if (is_mac) {
-+    deps += [ "//chrome/browser/aegis/access:access_options_service" ]
++    deps += [
++      "//chrome/browser/aegis/access:access_build_channel",
++      "//chrome/browser/aegis/access:access_options_service",
++    ]
      sources += [ "aegis_capture_vision.mm" ]
      frameworks = [ "Vision.framework" ]
    }
-@@ -65,3 +66,5 @@ source_set("aegis") {
+@@ -65,3 +69,5 @@ source_set("aegis") {
  
    deps += [ "//chrome/browser:browser_process" ]
  }
