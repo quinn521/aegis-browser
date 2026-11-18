@@ -1,6 +1,6 @@
-From 578177cd7e141031c4799b3795f48e70389f4bfe Mon Sep 17 00:00:00 2001
+From a9b584dd3e88453f2c500cf33da7ca1e0ac12f04 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Tue, 17 Nov 2026 17:56:22 +0800
+Date: Wed, 18 Nov 2026 11:17:31 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
@@ -102,10 +102,10 @@ index fa2bb8fb26df3e8d053a655ccb189461a79c3664..4e9ce4e4ca947dc3d43c0a0165b3ecd4
  
    if (is_chrome_for_testing) {
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index 6171cf2690b9c6abdff0348745016639175b9838..b3e71b0829ca367d5c4c03abcd597f6279c0b3fb 100644
+index 4b303325d37f4524f334b970eea7a9d79e03a4f5..c02d6a94423b2e41b959365af8c2a75234e59de9 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
-@@ -275,23 +275,45 @@ source_set("aegis") {
+@@ -279,23 +279,45 @@ source_set("aegis") {
    } else {
      deps += [ "//chrome/android:chrome_jni_headers" ]
    }
@@ -157,7 +157,7 @@ index 6171cf2690b9c6abdff0348745016639175b9838..b3e71b0829ca367d5c4c03abcd597f62
        "//services/network/public/mojom",
        "//chrome/services/aegis_torrent/public/mojom",
        "//sandbox/mac:seatbelt_extension",
-@@ -549,6 +571,16 @@ test("aegis_browser_unittests") {
+@@ -553,6 +575,16 @@ test("aegis_browser_unittests") {
      # 测试进程中的媒体路由也需要安装器本地化资源。
      deps += [ "//chrome/installer/util:strings" ]
    }
@@ -174,7 +174,7 @@ index 6171cf2690b9c6abdff0348745016639175b9838..b3e71b0829ca367d5c4c03abcd597f62
    if (is_mac) {
      deps += [
        "//chrome/browser/aegis/access:access_network_context_transport",
-@@ -558,7 +590,6 @@ test("aegis_browser_unittests") {
+@@ -562,7 +594,6 @@ test("aegis_browser_unittests") {
        "//services/network:network_service",
      ]
      sources += [
@@ -4260,10 +4260,10 @@ index e48a86e5ca2759303ebcc405ef5bda65916ab0f6..edd8e24f454d9e3e6af5626e0dae9f20
    // Reap owned proxy children on their core threads within the existing bounded
    // rundown, without posting a completion back to this blocked sequence.
 diff --git a/chrome/browser/resources/settings/aegis_page/aegis_page.html b/chrome/browser/resources/settings/aegis_page/aegis_page.html
-index 76d33e152182a00039fe77a0cefc86cc890f12c4..b0152c74696894a7304690eae0ad17fb9218ae76 100644
+index 2830feda8a98c3f31513e623b0083c3e2e020253..c1908d791e7ddf870514f68011f9615527209bd4 100644
 --- a/chrome/browser/resources/settings/aegis_page/aegis_page.html
 +++ b/chrome/browser/resources/settings/aegis_page/aegis_page.html
-@@ -50,7 +50,7 @@
+@@ -51,7 +51,7 @@
    <a href="/aegisTools"><cr-icon icon="settings:build"></cr-icon><span><strong>$i18n{aegisToolsTitle}</strong><small>$i18n{aegisToolsDescription}</small></span></a>
    <a href="/aegisExperiments"><cr-icon icon="settings20:insight-spark"></cr-icon><span><strong>$i18n{aegisExperimentsTitle}</strong><small>$i18n{aegisExperimentsDescription}</small></span></a>
  </nav></template>
@@ -4273,7 +4273,7 @@ index 76d33e152182a00039fe77a0cefc86cc890f12c4..b0152c74696894a7304690eae0ad17fb
    <h2 data-usage="heading"></h2>
    <p data-usage="status" role="status"></p>
 diff --git a/chrome/browser/resources/settings/aegis_page/aegis_page.ts b/chrome/browser/resources/settings/aegis_page/aegis_page.ts
-index d0b5c054744a5b2477abc89f15a21b094dd73c7e..3a50ac93ec92eb33986804b7281e6f29696353b6 100644
+index 045d2b4e81260dbbb95d886fbeaa534ce9976f63..964db7c03cc610156a2a65b565ad87cb3e3ad287 100644
 --- a/chrome/browser/resources/settings/aegis_page/aegis_page.ts
 +++ b/chrome/browser/resources/settings/aegis_page/aegis_page.ts
 @@ -8,7 +8,7 @@ import {flush, PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/pol
@@ -4294,7 +4294,7 @@ index d0b5c054744a5b2477abc89f15a21b094dd73c7e..3a50ac93ec92eb33986804b7281e6f29
    private usageCleanup_: (() => void)|undefined;
    // </if>
    private state_: State = {};
-@@ -67,7 +67,7 @@ export class SettingsAegisPageElement extends PolymerElement {
+@@ -68,7 +68,7 @@ export class SettingsAegisPageElement extends PolymerElement {
      queueMicrotask(() => {
        if (!this.isConnected) return;
        flush();
@@ -4303,7 +4303,7 @@ index d0b5c054744a5b2477abc89f15a21b094dd73c7e..3a50ac93ec92eb33986804b7281e6f29
        const usage = this.shadowRoot?.querySelector<HTMLElement>('#access-account-usage');
        if (usage) this.usageCleanup_ = startAccessUsage(usage,
            () => sendWithPromise('getAccessAccountSnapshot'),
-@@ -82,7 +82,7 @@ export class SettingsAegisPageElement extends PolymerElement {
+@@ -83,7 +83,7 @@ export class SettingsAegisPageElement extends PolymerElement {
      });
    }
    override disconnectedCallback() {
@@ -4312,10 +4312,10 @@ index d0b5c054744a5b2477abc89f15a21b094dd73c7e..3a50ac93ec92eb33986804b7281e6f29
      this.usageCleanup_?.();
      // </if>
      if (this.statusListener_) removeWebUiListener(this.statusListener_);
-@@ -117,7 +117,7 @@ export class SettingsAegisPageElement extends PolymerElement {
-     if (typeof id !== 'string' || !/^settings-\d+$/.test(id) || typeof method !== 'string' || !Array.isArray(args)) return;
+@@ -119,7 +119,7 @@ export class SettingsAegisPageElement extends PolymerElement {
      const signatures = new Map<string, string[]>(Object.entries({
        getStatus: [], setModuleEnabled: ['string', 'boolean'],
+       getImageOcrSettings: [], saveImageOcrSettings: ['string', 'string'],
 -      // <if expr="is_macosx">
 +      // <if expr="is_macosx or is_win">
        getCurrentAccessAccount: [],
@@ -4513,10 +4513,10 @@ index 085914cc366a342e1215f461953a815a35fd3d68..114b2aba06ed954a8fda8aa13f33ba07
    raw_ptr<views::Label> quota_status_ = nullptr;
    raw_ptr<views::Label> quota_values_ = nullptr;
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
-index 83d67e9687613e597b58c9f4d77271fe43673f4e..4c91f3f731ff25808aa6241d7ea3ff0d2f8b9a7e 100644
+index 65cf364108b37874d5a6331ef5ab64e6bd7f2cee..86160e55de998ffbdf0e848b2c61ecd815099f1d 100644
 --- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
 +++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
-@@ -342,7 +342,7 @@ base::DictValue TorrentStatusToDict(const aegis::mojom::TorrentStatus& status) {
+@@ -343,7 +343,7 @@ base::DictValue TorrentStatusToDict(const aegis::mojom::TorrentStatus& status) {
  
  AegisUIHandler::AegisUIHandler() = default;
  AegisUIHandler::~AegisUIHandler() {
@@ -4525,17 +4525,17 @@ index 83d67e9687613e597b58c9f4d77271fe43673f4e..4c91f3f731ff25808aa6241d7ea3ff0d
    OnJavascriptDisallowed();
  #endif
    if (active_model_request_id_) {
-@@ -359,7 +359,7 @@ void AegisUIHandler::RegisterMessages() {
-   web_ui()->RegisterMessageCallback(
-       "getStatus", base::BindRepeating(&AegisUIHandler::HandleGetStatus,
-                                        base::Unretained(this)));
+@@ -368,7 +368,7 @@ void AegisUIHandler::RegisterMessages() {
+       "saveImageOcrSettings",
+       base::BindRepeating(&AegisUIHandler::HandleSaveImageOcrSettings,
+                           base::Unretained(this)));
 -#if BUILDFLAG(IS_MAC)
 +#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
    web_ui()->RegisterMessageCallback(
        "getAccessAccountSnapshot",
        base::BindRepeating(&AegisUIHandler::HandleGetAccessAccountSnapshot,
-@@ -583,7 +583,7 @@ void AegisUIHandler::HandleGetStatus(const base::ListValue& args) {
-   ResolveJavascriptCallback(callback_id, BuildStatus());
+@@ -626,7 +626,7 @@ void AegisUIHandler::HandleSaveImageOcrSettings(const base::ListValue& args) {
+                             aegis::ReadImageOcrSettings(*profile->GetPrefs()));
  }
  
 -#if BUILDFLAG(IS_MAC)
@@ -4544,10 +4544,10 @@ index 83d67e9687613e597b58c9f4d77271fe43673f4e..4c91f3f731ff25808aa6241d7ea3ff0d
    if (args.size() != 1 || !args[0].is_string()) return;
    AllowJavascript();
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
-index 4febe4a1648f95d943097c23e8e6fb6624e58be3..f7cbe8785cd956f66bd28f0fe165783de8f4dc07 100644
+index b41b71efbda4fea2a521d455f5b3985c461fad8b..55c16415ce684dcb8add5f5d29e0c8ca7275309f 100644
 --- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
 +++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
-@@ -95,12 +95,14 @@ class AegisUIHandler : public content::WebUIMessageHandler,
+@@ -97,12 +97,14 @@ class AegisUIHandler : public content::WebUIMessageHandler,
    void OnMetalinkStarted(std::string callback_id, bool ok, std::string error);
    void OnMetalinkParsed(std::string callback_id,
                          aegis::MetalinkParseResult result);
@@ -4563,7 +4563,7 @@ index 4febe4a1648f95d943097c23e8e6fb6624e58be3..f7cbe8785cd956f66bd28f0fe165783d
    void OnTorrentValidated(std::string callback_id,
                            std::vector<uint8_t> torrent_data,
                            std::string magnet_uri,
-@@ -152,7 +154,7 @@ class AegisUIHandler : public content::WebUIMessageHandler,
+@@ -154,7 +156,7 @@ class AegisUIHandler : public content::WebUIMessageHandler,
    base::ScopedObservation<aegis::AegisService, aegis::AegisServiceObserver>
        service_observation_{this};
  

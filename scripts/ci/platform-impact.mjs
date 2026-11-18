@@ -22,8 +22,18 @@ if (event === 'pull_request') {
   git('merge-base', '--is-ancestor', sha(pr.base.sha), parents[0]);
   [base, head] = parents;
 }
-// Only one verified documentation input is admitted initially. New types require
-// consumer tests and a reviewed expansion of this trusted rule.
+// Exact, reviewed explanation files only: their document-link consumer runs in
+// the Linux gate. Never admit a directory, suffix, generated page or test input.
+// New consumers require re-auditing their inputs before retaining this route.
+// Keep this list inline: the classifier is extracted alone from the trusted base.
+const explanationPaths = new Set([
+  'docs/plans/access-build-portability/acceptance.md',
+  'docs/ios-webkit-protection.en.md',
+  'docs/ios-webkit-protection.zh-CN.md',
+  'docs/ios-webkit-protection.zh-TW.md',
+  'docs/plans/macos-access-toolbar-bubble-NOTES.md',
+  'docs/plans/macos-access-bubble-session-NOTES.md',
+]);
 const raw = git('diff', '--raw', '--no-abbrev', '--no-renames', '-z', base, tested);
 const fields = raw ? raw.split('\0') : [];
 if (fields.at(-1) === '') fields.pop();
@@ -34,9 +44,10 @@ for (let index = 0; index < fields.length; index += 2) {
   changes.push({path: fields[index + 1], beforeMode: match[1], afterMode: match[2], status: match[5]});
 }
 const docsOnly = event === 'pull_request' && changes.length > 0 && changes.every(change =>
-  change.path === 'docs/plans/access-build-portability/acceptance.md' &&
+  explanationPaths.has(change.path) &&
   change.status === 'M' && change.beforeMode === '100644' && change.afterMode === '100644');
+const iosOnly = event === 'pull_request' && changes.length > 0 && changes.every(change => change.path.startsWith('apps/ios/'));
 const plan = {schemaVersion: 1, event, base, head, tested, rulesSha: base, changes,
-  ios: !docsOnly, reason: docsOnly ? 'verified-document-content' : 'full-platform-fallback'};
+  docs: docsOnly && process.env.CI_LIGHTWEIGHT_ADMITTED === 'true', ios: !docsOnly, macos: !docsOnly && !iosOnly, reason: docsOnly ? 'verified-document-content' : 'full-platform-fallback'};
 console.log(JSON.stringify(plan, null, 2));
-if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `ios=${plan.ios}\n`);
+if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `docs=${plan.docs}\nios=${plan.ios}\nmacos=${plan.macos}\n`);
