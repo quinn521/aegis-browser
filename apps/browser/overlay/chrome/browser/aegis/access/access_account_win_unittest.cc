@@ -1,6 +1,8 @@
 // Copyright 2026 GCSA
 #include "chrome/browser/aegis/access/access_account_win.h"
 
+#include <windows.h>
+
 #include <atomic>
 #include <memory>
 #include <utility>
@@ -12,6 +14,7 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/uuid.h"
+#include "base/win/scoped_handle.h"
 #include "chrome/browser/aegis/access/access_private_files_win.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -113,6 +116,21 @@ TEST_F(AccessAccountWindowsTest, RebindsBeforeOldSnapshotIsPolled) {
   ASSERT_TRUE(stale.FindString("state"));
   EXPECT_EQ(*stale.FindString("state"), "superseded");
   EXPECT_FALSE(stale.FindDict("entitlement"));
+}
+
+TEST_F(AccessAccountWindowsTest, PollsSnapshotWithoutReadingBindingContents) {
+  ASSERT_NO_FATAL_FAILURE(WriteBinding());
+  base::test::TestFuture<AccountSnapshot> result;
+  QueryWindowsAccessAccount(profile_, result.GetCallback());
+  auto snapshot = result.Take();
+  // Metadata queries are allowed while other readers of file data are denied.
+  base::win::ScopedHandle guard(::CreateFileW(
+      File().value().c_str(), GENERIC_READ, FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  ASSERT_TRUE(guard.is_valid());
+  auto active = snapshot.Run();
+  ASSERT_TRUE(active.FindString("state"));
+  EXPECT_EQ(*active.FindString("state"), "available");
 }
 
 TEST_F(AccessAccountWindowsTest, RejectsRedirectWithoutContactingDestination) {

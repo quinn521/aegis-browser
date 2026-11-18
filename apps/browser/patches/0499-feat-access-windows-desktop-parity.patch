@@ -1,15 +1,15 @@
-From 39000ef5fb814e71f9f13cad107a67fd2d74930e Mon Sep 17 00:00:00 2001
+From d7054a4724642882b8caff99cda24a62de62cecf Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Wed, 18 Nov 2026 17:13:21 +0800
+Date: Wed, 18 Nov 2026 17:27:39 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
  chrome/browser/BUILD.gn                       |   9 +-
  chrome/browser/aegis/BUILD.gn                 |  45 +-
  chrome/browser/aegis/access/BUILD.gn          | 112 +++-
- .../aegis/access/access_account_win.cc        | 517 ++++++++++++++++++
+ .../aegis/access/access_account_win.cc        | 533 ++++++++++++++++++
  .../browser/aegis/access/access_account_win.h |  41 ++
- .../access/access_account_win_unittest.cc     | 130 +++++
+ .../access/access_account_win_unittest.cc     | 148 +++++
  .../aegis/access/access_core_log_disk_win.cc  |  98 ++++
  .../access_core_log_disk_win_unittest.cc      |  81 +++
  .../aegis/access/access_core_log_share.cc     |  71 ++-
@@ -19,7 +19,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../aegis/access/access_local_core_manager.cc |  96 +++-
  .../aegis/access/access_local_core_manager.h  |   2 +-
  .../aegis/access/access_local_core_win.cc     | 148 +++++
- .../aegis/access/access_local_core_win.h      |  31 ++
+ .../aegis/access/access_local_core_win.h      |  31 +
  .../access_local_core_win_test_child.cc       |  71 +++
  .../access/access_local_core_win_unittest.cc  | 209 +++++++
  .../access/access_log_export_dialog_win.cc    |  69 +++
@@ -29,7 +29,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../aegis/access/access_log_export_win.h      |  17 +
  .../access_network_context_transport.cc       |  10 +-
  .../access/access_network_context_transport.h |   6 +-
- .../aegis/access/access_paid_site_win.cc      | 279 ++++++++++
+ .../aegis/access/access_paid_site_win.cc      | 279 +++++++++
  .../aegis/access/access_private_files_win.cc  |  98 ++++
  .../aegis/access/access_private_files_win.h   |  19 +
  .../access_private_publication_unittest.cc    |   2 +-
@@ -59,7 +59,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../websockets/websocket_connector_impl.cc    |   2 +-
  .../web_transport_connector_impl.cc           |   2 +-
  content/public/browser/browser_context.h      |   4 +-
- 55 files changed, 2954 insertions(+), 301 deletions(-)
+ 55 files changed, 2988 insertions(+), 301 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_account_win.cc
  create mode 100644 chrome/browser/aegis/access/access_account_win.h
  create mode 100644 chrome/browser/aegis/access/access_account_win_unittest.cc
@@ -405,10 +405,10 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..7f4f2e9ab941d1655cbf77baaa516953
  test("access_site_proxy_bubble_unittests") {
 diff --git a/chrome/browser/aegis/access/access_account_win.cc b/chrome/browser/aegis/access/access_account_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8a217d613
+index 0000000000000000000000000000000000000000..0090b28a924a9ca8656cca8008c914b829c0ec80
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_win.cc
-@@ -0,0 +1,517 @@
+@@ -0,0 +1,533 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_account_win.h"
 +
@@ -457,6 +457,7 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +  std::string account;
 +  std::string token;
 +  base::RepeatingCallback<std::string()> changed;
++  base::RepeatingCallback<std::string()> verify_on_worker;
 +};
 +
 +base::DictValue State(std::string_view state) {
@@ -480,7 +481,7 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +      !(url.SchemeIs("https") || (loopback && url.SchemeIs("http")))) {
 +    return std::nullopt;
 +  }
-+  return Binding{std::move(url), std::move(account), std::move(token), {}};
++  return Binding{std::move(url), std::move(account), std::move(token), {}, {}};
 +}
 +
 +struct FileIdentity {
@@ -506,6 +507,8 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +
 +bool SameFile(const FileIdentity& a, const FileIdentity& b) {
 +  return a.id.VolumeSerialNumber == b.id.VolumeSerialNumber &&
++         a.basic.CreationTime.QuadPart == b.basic.CreationTime.QuadPart &&
++         a.basic.LastWriteTime.QuadPart == b.basic.LastWriteTime.QuadPart &&
 +         a.basic.ChangeTime.QuadPart == b.basic.ChangeTime.QuadPart &&
 +         std::ranges::equal(a.id.FileId.Identifier, b.id.FileId.Identifier);
 +}
@@ -535,18 +538,24 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +  return base::JSONReader::ReadDict(bytes, base::JSON_PARSE_RFC);
 +}
 +
++enum class BindingCheck { kFileIdentity, kContents };
++
 +std::string CurrentBindingState(const base::FilePath& path,
 +                                const FileIdentity& original,
-+                                const std::string& generation) {
-+  auto file = OpenBinding(path, GENERIC_READ | READ_CONTROL);
++                                const std::string& generation,
++                                BindingCheck check) {
++  auto file = OpenBinding(path, check == BindingCheck::kFileIdentity
++                                    ? FILE_READ_ATTRIBUTES
++                                    : GENERIC_READ | READ_CONTROL);
 +  if (!file.is_valid()) {
 +    return Missing(::GetLastError()) ? "signed_out" : "unavailable";
 +  }
 +  auto identity = Identity(file.get());
-+  if (!identity || !SameFile(*identity, original) ||
-+      !IsPrivateAccessFile(file.get())) {
-+    return "superseded";
-+  }
++  if (!identity || !SameFile(*identity, original)) return "superseded";
++  // The UI polls the identity of the atomically provisioned binding. ACL and
++  // JSON generation checks belong to the worker handling the account request.
++  if (check == BindingCheck::kFileIdentity) return "";
++  if (!IsPrivateAccessFile(file.get())) return "superseded";
 +  auto data = ReadBindingData(file.get());
 +  const auto* current = data ? data->FindString("generation") : nullptr;
 +  return current && *current == generation ? "" : "superseded";
@@ -588,8 +597,10 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +
 +  // A live handle would leave the filename delete-pending on sign-out.
 +  // The persisted generation distinguishes new bindings even if an ID is reused.
-+  binding->changed = base::BindRepeating(&CurrentBindingState, path, *original,
-+                                         *generation);
++  auto validate = base::BindRepeating(&CurrentBindingState, path, *original,
++                                      *generation);
++  binding->changed = base::BindRepeating(validate, BindingCheck::kFileIdentity);
++  binding->verify_on_worker = base::BindRepeating(validate, BindingCheck::kContents);
 +  auto state = binding->changed.Run();
 +  if (!state.empty()) {
 +    failure = std::move(state);
@@ -793,8 +804,12 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +  if (binding) {
 +    changed = binding->changed;
 +    auto response = Request(*binding, L"GET", "/v1/me/entitlement");
-+    if (response.status == 401) result = State("signed_out");
-+    if (response.status == 200) {
++    auto current = binding->verify_on_worker.Run();
++    if (!current.empty()) {
++      result = State(current);
++    } else if (response.status == 401) {
++      result = State("signed_out");
++    } else if (response.status == 200) {
 +      auto entitlement = ParseEntitlement(response.body, binding->account, evaluated);
 +      if (entitlement) result = State("available").Set("entitlement", std::move(*entitlement));
 +    }
@@ -870,7 +885,7 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +          "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.:") != host->npos ||
 +      !port || *port < 1 || *port > 65535 || !expires ||
 +      *expires <= base::Time::Now().InMillisecondsSinceUnixEpoch() ||
-+      (binding->changed && !binding->changed.Run().empty())) {
++      (binding->verify_on_worker && !binding->verify_on_worker.Run().empty())) {
 +    std::move(revoke).Run();
 +    return std::nullopt;
 +  }
@@ -884,7 +899,7 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +            base::BindOnce([](Binding binding, std::string resource,
 +                              std::string credential, std::string period,
 +                              std::string context, std::string mode) -> int64_t {
-+              if (binding.changed && !binding.changed.Run().empty()) return 0;
++              if (binding.verify_on_worker && !binding.verify_on_worker.Run().empty()) return 0;
 +              auto body = base::DictValue().Set("mode", mode).Set("contextId", context);
 +              auto res = Request(binding, L"POST", resource + "/renew", &body);
 +              auto reply = res.status == 200
@@ -894,7 +909,8 @@ index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8
 +                  !Matches(*reply, "credentialId", credential) ||
 +                  !Matches(*reply, "periodId", period) ||
 +                  !Matches(*reply, "contextId", context) ||
-+                  !Matches(*reply, "mode", mode)) return 0;
++                  !Matches(*reply, "mode", mode) ||
++                  (binding.verify_on_worker && !binding.verify_on_worker.Run().empty())) return 0;
 +              return Milliseconds(*reply, "expiresAt").value_or(0);
 +            }, binding, resource, credential, period, context, mode),
 +            std::move(done));
@@ -975,12 +991,14 @@ index 0000000000000000000000000000000000000000..306588eab32da7af4d22a0c135a9810e
 +#endif
 diff --git a/chrome/browser/aegis/access/access_account_win_unittest.cc b/chrome/browser/aegis/access/access_account_win_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..56248656de3f311f768e9a719501e0821070a683
+index 0000000000000000000000000000000000000000..fb10e6f0415fd65e7052705c4727d4c58c0f24b9
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_win_unittest.cc
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,148 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_account_win.h"
++
++#include <windows.h>
 +
 +#include <atomic>
 +#include <memory>
@@ -993,6 +1011,7 @@ index 0000000000000000000000000000000000000000..56248656de3f311f768e9a719501e082
 +#include "base/test/task_environment.h"
 +#include "base/test/test_future.h"
 +#include "base/uuid.h"
++#include "base/win/scoped_handle.h"
 +#include "chrome/browser/aegis/access/access_private_files_win.h"
 +#include "net/test/embedded_test_server/http_response.h"
 +#include "net/test/embedded_test_server/embedded_test_server.h"
@@ -1094,6 +1113,21 @@ index 0000000000000000000000000000000000000000..56248656de3f311f768e9a719501e082
 +  ASSERT_TRUE(stale.FindString("state"));
 +  EXPECT_EQ(*stale.FindString("state"), "superseded");
 +  EXPECT_FALSE(stale.FindDict("entitlement"));
++}
++
++TEST_F(AccessAccountWindowsTest, PollsSnapshotWithoutReadingBindingContents) {
++  ASSERT_NO_FATAL_FAILURE(WriteBinding());
++  base::test::TestFuture<AccountSnapshot> result;
++  QueryWindowsAccessAccount(profile_, result.GetCallback());
++  auto snapshot = result.Take();
++  // Metadata queries are allowed while other readers of file data are denied.
++  base::win::ScopedHandle guard(::CreateFileW(
++      File().value().c_str(), GENERIC_READ, FILE_SHARE_DELETE, nullptr,
++      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
++  ASSERT_TRUE(guard.is_valid());
++  auto active = snapshot.Run();
++  ASSERT_TRUE(active.FindString("state"));
++  EXPECT_EQ(*active.FindString("state"), "available");
 +}
 +
 +TEST_F(AccessAccountWindowsTest, RejectsRedirectWithoutContactingDestination) {

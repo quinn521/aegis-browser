@@ -46,6 +46,7 @@ struct Binding {
   std::string account;
   std::string token;
   base::RepeatingCallback<std::string()> changed;
+  base::RepeatingCallback<std::string()> verify_on_worker;
 };
 
 base::DictValue State(std::string_view state) {
@@ -69,7 +70,7 @@ std::optional<Binding> MakeBinding(std::string_view origin,
       !(url.SchemeIs("https") || (loopback && url.SchemeIs("http")))) {
     return std::nullopt;
   }
-  return Binding{std::move(url), std::move(account), std::move(token), {}};
+  return Binding{std::move(url), std::move(account), std::move(token), {}, {}};
 }
 
 struct FileIdentity {
@@ -95,6 +96,8 @@ std::optional<FileIdentity> Identity(HANDLE file) {
 
 bool SameFile(const FileIdentity& a, const FileIdentity& b) {
   return a.id.VolumeSerialNumber == b.id.VolumeSerialNumber &&
+         a.basic.CreationTime.QuadPart == b.basic.CreationTime.QuadPart &&
+         a.basic.LastWriteTime.QuadPart == b.basic.LastWriteTime.QuadPart &&
          a.basic.ChangeTime.QuadPart == b.basic.ChangeTime.QuadPart &&
          std::ranges::equal(a.id.FileId.Identifier, b.id.FileId.Identifier);
 }
@@ -124,18 +127,24 @@ std::optional<base::DictValue> ReadBindingData(HANDLE file) {
   return base::JSONReader::ReadDict(bytes, base::JSON_PARSE_RFC);
 }
 
+enum class BindingCheck { kFileIdentity, kContents };
+
 std::string CurrentBindingState(const base::FilePath& path,
                                 const FileIdentity& original,
-                                const std::string& generation) {
-  auto file = OpenBinding(path, GENERIC_READ | READ_CONTROL);
+                                const std::string& generation,
+                                BindingCheck check) {
+  auto file = OpenBinding(path, check == BindingCheck::kFileIdentity
+                                    ? FILE_READ_ATTRIBUTES
+                                    : GENERIC_READ | READ_CONTROL);
   if (!file.is_valid()) {
     return Missing(::GetLastError()) ? "signed_out" : "unavailable";
   }
   auto identity = Identity(file.get());
-  if (!identity || !SameFile(*identity, original) ||
-      !IsPrivateAccessFile(file.get())) {
-    return "superseded";
-  }
+  if (!identity || !SameFile(*identity, original)) return "superseded";
+  // The UI polls the identity of the atomically provisioned binding. ACL and
+  // JSON generation checks belong to the worker handling the account request.
+  if (check == BindingCheck::kFileIdentity) return "";
+  if (!IsPrivateAccessFile(file.get())) return "superseded";
   auto data = ReadBindingData(file.get());
   const auto* current = data ? data->FindString("generation") : nullptr;
   return current && *current == generation ? "" : "superseded";
@@ -177,8 +186,10 @@ std::optional<Binding> ReadBinding(
 
   // A live handle would leave the filename delete-pending on sign-out.
   // The persisted generation distinguishes new bindings even if an ID is reused.
-  binding->changed = base::BindRepeating(&CurrentBindingState, path, *original,
-                                         *generation);
+  auto validate = base::BindRepeating(&CurrentBindingState, path, *original,
+                                      *generation);
+  binding->changed = base::BindRepeating(validate, BindingCheck::kFileIdentity);
+  binding->verify_on_worker = base::BindRepeating(validate, BindingCheck::kContents);
   auto state = binding->changed.Run();
   if (!state.empty()) {
     failure = std::move(state);
@@ -382,8 +393,12 @@ AccountSnapshot Query(base::FilePath profile) {
   if (binding) {
     changed = binding->changed;
     auto response = Request(*binding, L"GET", "/v1/me/entitlement");
-    if (response.status == 401) result = State("signed_out");
-    if (response.status == 200) {
+    auto current = binding->verify_on_worker.Run();
+    if (!current.empty()) {
+      result = State(current);
+    } else if (response.status == 401) {
+      result = State("signed_out");
+    } else if (response.status == 200) {
       auto entitlement = ParseEntitlement(response.body, binding->account, evaluated);
       if (entitlement) result = State("available").Set("entitlement", std::move(*entitlement));
     }
@@ -459,7 +474,7 @@ std::optional<AccountNodeGrant> Issue(
           "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.:") != host->npos ||
       !port || *port < 1 || *port > 65535 || !expires ||
       *expires <= base::Time::Now().InMillisecondsSinceUnixEpoch() ||
-      (binding->changed && !binding->changed.Run().empty())) {
+      (binding->verify_on_worker && !binding->verify_on_worker.Run().empty())) {
     std::move(revoke).Run();
     return std::nullopt;
   }
@@ -473,7 +488,7 @@ std::optional<AccountNodeGrant> Issue(
             base::BindOnce([](Binding binding, std::string resource,
                               std::string credential, std::string period,
                               std::string context, std::string mode) -> int64_t {
-              if (binding.changed && !binding.changed.Run().empty()) return 0;
+              if (binding.verify_on_worker && !binding.verify_on_worker.Run().empty()) return 0;
               auto body = base::DictValue().Set("mode", mode).Set("contextId", context);
               auto res = Request(binding, L"POST", resource + "/renew", &body);
               auto reply = res.status == 200
@@ -483,7 +498,8 @@ std::optional<AccountNodeGrant> Issue(
                   !Matches(*reply, "credentialId", credential) ||
                   !Matches(*reply, "periodId", period) ||
                   !Matches(*reply, "contextId", context) ||
-                  !Matches(*reply, "mode", mode)) return 0;
+                  !Matches(*reply, "mode", mode) ||
+                  (binding.verify_on_worker && !binding.verify_on_worker.Run().empty())) return 0;
               return Milliseconds(*reply, "expiresAt").value_or(0);
             }, binding, resource, credential, period, context, mode),
             std::move(done));
