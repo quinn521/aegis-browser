@@ -179,6 +179,7 @@ test('promotion requires gitleaks from the newest exact source push attempt', as
 test('quality verification defers when a newer attempt starts after jobs are read', async () => {
   const run = qualityRun({id: 40, branch: 'main', sha: 'main-sha'});
   const rerun = {...run, run_attempt: 2, status: 'queued', conclusion: null};
+  const scan = {...run, id: 41, path: '.github/workflows/secret-scanning.yml'};
   let runReads = 0;
   const apiFn = async (_repo, path) => {
     if (path.startsWith('/actions/workflows/quality.yml/runs?')) return {workflow_runs: [run]};
@@ -186,11 +187,40 @@ test('quality verification defers when a newer attempt starts after jobs are rea
     if (path === '/actions/runs/40/attempts/1/jobs?per_page=100') {
       return {jobs: [qualityJob(run, 'quality'), qualityJob(run, 'quality-gate')]};
     }
+    if (path.startsWith('/actions/workflows/secret-scanning.yml/runs?')) return {workflow_runs: [scan]};
+    if (path === '/actions/runs/41') return scan;
+    if (path === '/actions/runs/41/attempts/1/jobs?per_page=100') {
+      return {jobs: [qualityJob(scan, 'gitleaks')]};
+    }
     throw new Error(`unexpected path: ${path}`);
   };
   assert.equal(
     await requireGreenQuality(promotionConfig.personalRepo, 'main', 'main-sha', promotionConfig.readToken, apiFn),
     false,
   );
+});
+
+test('promotion defers if quality reruns while collecting secret scanning evidence', async () => {
+  const quality = qualityRun({id: 70, branch: 'develop', sha: 'candidate'});
+  const scan = {...quality, id: 71, path: '.github/workflows/secret-scanning.yml'};
+  let scanJobsRead = false;
+  const apiFn = async (_repo, path) => {
+    if (path.startsWith('/actions/workflows/quality.yml/runs?')) return {workflow_runs: [quality]};
+    if (path === '/actions/runs/70') {
+      return scanJobsRead ? {...quality, run_attempt: 2, status: 'queued', conclusion: null} : quality;
+    }
+    if (path === '/actions/runs/70/attempts/1/jobs?per_page=100') {
+      return {jobs: ['quality', 'quality-gate'].map(name => qualityJob(quality, name))};
+    }
+    if (path.startsWith('/actions/workflows/secret-scanning.yml/runs?')) return {workflow_runs: [scan]};
+    if (path === '/actions/runs/71') return scan;
+    if (path === '/actions/runs/71/attempts/1/jobs?per_page=100') {
+      scanJobsRead = true;
+      return {jobs: [qualityJob(scan, 'gitleaks')]};
+    }
+    throw new Error(`unexpected path: ${path}`);
+  };
+  assert.equal(await requireGreenQuality(promotionConfig.personalRepo, 'develop', quality.head_sha,
+    promotionConfig.readToken, apiFn), false);
 });
 

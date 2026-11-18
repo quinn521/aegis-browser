@@ -41,33 +41,7 @@ export function qualityWorkflowRunState(run, jobs, expected) {
   return workflowState(run, jobs, expected, QUALITY);
 }
 
-async function verifiedWorkflowState(run, expected, workflow, token, apiFn) {
-  const state = workflowRunState(run, expected, workflow);
-  if (state !== 'success') return state;
-  const attempt = run.run_attempt;
-  if (!Number.isInteger(attempt) || attempt < 1) return 'failure';
-  const {repo} = expected;
-  const result = await apiFn(repo, `/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {token});
-  const final = await apiFn(repo, `/actions/runs/${run.id}`, {token});
-  if (final?.id !== run.id) return 'failure';
-  if (final.run_attempt !== attempt) return 'pending';
-  return workflowState(final, result?.jobs, expected, workflow);
-}
-
-async function requireSuccessfulPush(expected, workflow, token, apiFn) {
-  const {repo, branch, sha} = expected;
-  const query = new URLSearchParams({branch, event: 'push', head_sha: sha, per_page: '100'});
-  const result = await apiFn(repo, `/actions/workflows/${workflow.name}.yml/runs?${query}`, {token});
-  const selected = (result?.workflow_runs ?? [])
-    .filter(run => matchesPush(run, expected, workflow))
-    .sort((left, right) => Number(right.id) - Number(left.id))[0];
-  let state = 'missing';
-  if (selected) {
-    const run = await apiFn(repo, `/actions/runs/${selected.id}`, {token});
-    state = run?.id === selected.id
-      ? await verifiedWorkflowState(run, expected, workflow, token, apiFn)
-      : 'failure';
-  }
+function checkState(state, {repo, branch, sha}, workflow) {
   if (state === 'success') return true;
   if (state === 'missing' || state === 'pending') {
     console.log(`Deferred: ${repo}:${branch}@${sha.slice(0, 12)} ${workflow.name} workflow is ${state}`);
@@ -76,8 +50,35 @@ async function requireSuccessfulPush(expected, workflow, token, apiFn) {
   throw new Error(`${repo}:${branch}@${sha.slice(0, 12)} ${workflow.name} workflow failed`);
 }
 
+async function readPushEvidence(expected, workflow, token, apiFn) {
+  const {repo, branch, sha} = expected;
+  const query = new URLSearchParams({branch, event: 'push', head_sha: sha, per_page: '100'});
+  const result = await apiFn(repo, `/actions/workflows/${workflow.name}.yml/runs?${query}`, {token});
+  const selected = (result?.workflow_runs ?? [])
+    .filter(run => matchesPush(run, expected, workflow))
+    .sort((left, right) => Number(right.id) - Number(left.id))[0];
+  if (!selected) return checkState('missing', expected, workflow);
+  const run = await apiFn(repo, `/actions/runs/${selected.id}`, {token});
+  if (run?.id !== selected.id) return checkState('failure', expected, workflow);
+  if (!checkState(workflowRunState(run, expected, workflow), expected, workflow)) return false;
+  const attempt = run.run_attempt;
+  if (!Number.isInteger(attempt) || attempt < 1) return checkState('failure', expected, workflow);
+  const evidence = await apiFn(repo, `/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {token});
+  return {run, jobs: evidence?.jobs, workflow};
+}
+
 export async function requireGreenQuality(repo, branch, commitSha, token, apiFn = githubApi) {
   const expected = {repo, branch, sha: commitSha};
-  return await requireSuccessfulPush(expected, QUALITY, token, apiFn) &&
-    await requireSuccessfulPush(expected, SECRET_SCANNING, token, apiFn);
+  const quality = await readPushEvidence(expected, QUALITY, token, apiFn);
+  if (!quality) return false;
+  const scan = await readPushEvidence(expected, SECRET_SCANNING, token, apiFn);
+  if (!scan) return false;
+  // Re-read both attempts after collecting both sets of jobs.
+  const results = await Promise.all([quality, scan].map(async ({run, jobs, workflow}) => {
+    const final = await apiFn(repo, `/actions/runs/${run.id}`, {token});
+    if (final?.id !== run.id) return checkState('failure', expected, workflow);
+    if (final.run_attempt !== run.run_attempt) return checkState('pending', expected, workflow);
+    return checkState(workflowState(final, jobs, expected, workflow), expected, workflow);
+  }));
+  return results.every(Boolean);
 }
