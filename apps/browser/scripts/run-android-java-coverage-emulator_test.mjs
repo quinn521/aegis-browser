@@ -9,9 +9,10 @@ const checkout = path.resolve(import.meta.dirname, '../../..');
 
 function readEmulatorPid(file) {
   if (!fs.existsSync(file)) return null;
-  const value = fs.readFileSync(file, 'utf8').trim();
-  if (!/^[1-9]\d{0,9}$/u.test(value)) return null;
-  const pid = Number(value);
+  const record = fs.readFileSync(file, 'utf8');
+  const match = /^([1-9]\d{0,9})\n$/u.exec(record);
+  if (!match || match[0] !== record) return null;
+  const pid = Number(match[1]);
   return pid > 1 && pid <= 0x7fffffff && pid !== process.pid ? pid : null;
 }
 
@@ -40,13 +41,7 @@ timeout() {
 }
 `);
 
-  t.after(() => {
-    const pid = readEmulatorPid(emulatorPid);
-    if (pid !== null) {
-      try { process.kill(pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-    }
-    fs.rmSync(root, {recursive: true, force: true});
-  });
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   fs.writeFileSync(record, '');
   const script = (file, content) => {
     fs.mkdirSync(path.dirname(file), {recursive: true});
@@ -101,7 +96,11 @@ case "$EMULATOR_MODE" in
   emulator-killed) kill -KILL "$$" ;;
   emulator-exited) exit 0 ;;
 esac
-exec /bin/sleep 120
+# Exit when the test removes its temporary files, with a bounded fallback.
+expires=$((SECONDS + 120))
+while [[ -f "$EMULATOR_PID" ]] && (( SECONDS < expires )); do
+  /bin/sleep 0.25
+done
 `);
   script(path.join(bin, 'node'), String.raw`
 if [[ "$*" == *'android-agent-ui.mjs self-test'* ]]; then
@@ -237,16 +236,17 @@ test('the emulator child keeps its signal status and an early clean exit fails',
   }
 });
 
-test('incomplete or invalid emulator PID records cannot select a process to signal', t => {
+test('only complete and valid PID records are used to check emulator liveness', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aegis-emulator-pid-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const file = path.join(root, 'emulator.pid');
   assert.equal(readEmulatorPid(file), null);
-  for (const value of ['', '0\n', '1\n', '-1\n', '1e2\n', '21x\n', '2147483648\n', String(process.pid)]) {
+  const otherPid = process.pid === 1234 ? 1235 : 1234;
+  for (const value of ['', String(otherPid), otherPid + '\n\n', ' 23\n', '23\r\n',
+    '0\n', '1\n', '-1\n', '1e2\n', '21x\n', '2147483648\n', process.pid + '\n']) {
     fs.writeFileSync(file, value);
     assert.equal(readEmulatorPid(file), null, JSON.stringify(value));
   }
-  const otherPid = process.pid === 1234 ? 1235 : 1234;
   fs.writeFileSync(file, otherPid + '\n');
   assert.equal(readEmulatorPid(file), otherPid);
 });
