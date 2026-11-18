@@ -38,14 +38,19 @@ test('Alpha archive rejects invalid inputs before invoking the release script', 
       cwd: root, encoding: 'utf8', env: {...process.env, ALPHA_VERSION: version, ALPHA_BUILD: build,
         ALPHA_TRACE: trace, ALPHA_ROOT: join(root, 'run'), GITHUB_OUTPUT: join(root, 'outputs')},
     });
-    for (const [version, build] of [['0.8', '1'], ['0.8.0', '01a'], ['0.8.0', '0'], ['0.8.0\n', '2']]) {
+    for (const [version, build] of [
+      ['0', '1'], ['0.8.0', '01a'], ['0.8.0', '0'], ['0.8.0\n', '2'], ['0.8.0', '10000000000'],
+    ]) {
       const result = invoke(version, build);
       assert.notEqual(result.status, 0, result.stdout);
       assert.throws(() => readFileSync(trace), {code: 'ENOENT'});
     }
-    const result = invoke('0.8.0', '42');
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(trace, 'utf8'), '0.8.0\n42\nalpha\n');
+    for (const [version, build] of [['0.8.0', '42'], ['0.8', '9999999999']]) {
+      const result = invoke(version, build);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(trace, 'utf8'), `${version}\n${build}\nalpha\n`);
+      rmSync(join(root, 'run'), {recursive: true});
+    }
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
