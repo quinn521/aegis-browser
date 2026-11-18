@@ -22,9 +22,7 @@ class CloudArchiveTests(unittest.TestCase):
         def isolated(_output, _evidence, **_options):
             events.append('isolate')
             yield
-        def run(*arguments, **_options):
-            if '-version' in arguments:
-                return b'Xcode 26.6\nBuild version fixture'
+        def run(*_arguments, **_options):
             events.append('archive')
             raise ValueError('stop at archive boundary')
         signing = SimpleNamespace(resolve=Mock(return_value=([], {'style': 'manual'})),
@@ -38,7 +36,8 @@ class CloudArchiveTests(unittest.TestCase):
             native = SimpleNamespace(validate_identity=Mock(), source=Mock(return_value={'sha': 'a' * 40}),
                                      run=run, stage=Mock(return_value=output / 'work'), module=module,
                                      isolated_keychain=isolated, key_access_runtime=lambda _env: native)
-            with patch.object(archive, 'engine', return_value=native), self.assertRaisesRegex(ValueError, 'archive boundary'):
+            with patch.object(archive, 'engine', return_value=native), patch('ios_sdk.verify_toolchain'), \
+                    self.assertRaisesRegex(ValueError, 'archive boundary'):
                 archive.create(output, '1.0.2', '16', 'ABCDEFGHIJ', 'beta', {})
         self.assertEqual(events, ['prepare', 'isolate', 'identity', 'probe', 'archive'])
 
@@ -80,7 +79,7 @@ class CloudArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / 'transfer'
             native = SimpleNamespace(validate_identity=Mock(), source=Mock(side_effect=[identity, dict(identity, sha='c' * 40)]),
-                                     run=Mock(return_value=b'Xcode 26.6\nBuild version 17F113'),
+                                     run=Mock(),
                                      stage=Mock(return_value=output / 'work'), isolated_keychain=isolated,
                                      key_access_runtime=lambda _env: native,
                                      module=Mock(side_effect=lambda _name, file: SimpleNamespace(
@@ -88,7 +87,7 @@ class CloudArchiveTests(unittest.TestCase):
                                          require_identity=Mock(), verify_archive=Mock()) if file == 'development_signing.py'
                                          else SimpleNamespace(prepare=Mock(return_value=None), verify=Mock(), verified_profile=Mock())))
             with patch.object(archive, 'engine', return_value=native), patch.object(archive, 'verify_development'), \
-                    self.assertRaisesRegex(ValueError, 'Source changed'):
+                    patch('ios_sdk.verify_toolchain'), self.assertRaisesRegex(ValueError, 'Source changed'):
                 archive.create(output, '1.0.0', '20', 'ABCDEFGHIJ', 'alpha', {})
             self.assertFalse((output / 'archive-manifest.json').exists())
             self.assertFalse((output / 'archive.zip').exists())

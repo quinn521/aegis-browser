@@ -84,7 +84,8 @@ module AegisRelease
                             assets.any? { |a| a['name'] == receipt['dsym'] && a['name'].end_with?('.dSYM.zip') }, 'IPA/dSYM membership differs')
       AegisRelease.command('python3', File.join(@root, 'scripts/release/verify-signed-ios.py'), ipa,
                            identity.version, identity.build, 'beta', '--signing-mode', 'cloud', '--team', receipt.fetch('team'),
-                           '--expected-verification', File.join(directory, 'signature-verification.json'), '--source-root', @root, cwd: @root)
+                           '--expected-verification', File.join(directory, 'signature-verification.json'),
+                           '--source-root', @root, '--require-ios-sdk', cwd: @root)
       [receipt, ipa]
     end
 

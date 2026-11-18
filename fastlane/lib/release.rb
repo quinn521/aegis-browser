@@ -269,9 +269,9 @@ module AegisRelease
       value
     end
 
-    def run(*argv, env: {})
-      AegisRelease.command(*argv, cwd: request.root, env: env)
-      true
+    def run(*argv, env: {}, capture: false)
+      output = AegisRelease.command(*argv, cwd: request.root, env: env)
+      capture ? output : true
     end
 
     def package
@@ -349,6 +349,7 @@ module AegisRelease
 
     def package_ios_impl(archive_args = nil)
       return package_ios_cloud(archive_args) if request.signing_mode == 'cloud'
+      toolchain = JSON.parse(run('python3', File.join(request.root, 'scripts/release/ios_sdk.py'), capture: true))
       profiles = ios_profiles
       work = File.join(request.directory, 'work')
       firebase_script = File.join(work, 'apps/ios/scripts/firebase_config.py')
@@ -380,13 +381,15 @@ module AegisRelease
       run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build, request.profile)
       certificate = required('AEGIS_IOS_CERT_SHA1')
       audience_args = private_beta ? ['--private-beta'] : []
-      run('python3', File.join(request.root, 'scripts/release/verify-signed-ios.py'), ipa, request.version, request.build, request.profile,
-          '--team', team, '--certificate-sha1', certificate, '--profiles-json', JSON.generate(profiles),
-          '--source-root', request.root, *audience_args)
+      verification = JSON.parse(run('python3', File.join(request.root, 'scripts/release/verify-signed-ios.py'),
+                                    ipa, request.version, request.build, request.profile, '--team', team,
+                                    '--certificate-sha1', certificate, '--profiles-json', JSON.generate(profiles),
+                                    '--source-root', request.root, '--require-ios-sdk', *audience_args, capture: true))
       paths = [ipa] + Dir.glob(File.join(request.directory, '*.dSYM.zip'))
       [paths, { 'signing' => 'app-store-export', 'signingMode' => 'manual', 'appleTeamId' => team, 'certificateSha1' => certificate.upcase,
                 'provisioningProfiles' => profiles, 'testflight' => 'not_uploaded', 'deviceAcceptance' => 'not_verified',
-                'testFlightInternalTestingOnly' => internal_testing_only }]
+                'testFlightInternalTestingOnly' => internal_testing_only,
+                'toolchain' => toolchain, 'deviceSDKs' => verification.fetch('deviceSDKs') }]
     end
 
     def stage_ios_package(work, firebase_script, firebase_args)
@@ -489,7 +492,8 @@ module AegisRelease
       paths << reservation
       [paths, { 'signing' => 'cloud-app-store-export', 'signingMode' => 'cloud', 'appleTeamId' => receipt.fetch('team'),
                 'cloudVerification' => 'signature-verification.json', 'cloudReservation' => 'cloud-upload-reservation.json', 'testflight' => 'not_uploaded',
-                'deviceAcceptance' => 'not_verified', 'testFlightInternalTestingOnly' => request.profile == 'alpha' }]
+                'deviceAcceptance' => 'not_verified', 'testFlightInternalTestingOnly' => request.profile == 'alpha',
+                'toolchain' => receipt.fetch('toolchain'), 'deviceSDKs' => receipt.fetch('deviceSDKs') }]
     end
 
     def upload(expected_digest = request.expected_digest)
@@ -504,7 +508,7 @@ module AegisRelease
         path = File.join(request.directory, asset.fetch('name'))
         run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), path, request.version, request.build, request.profile)
         details = receipt.fetch('details')
-        verification_args = ['--team', details.fetch('appleTeamId'), '--source-root', request.root]
+        verification_args = ['--team', details.fetch('appleTeamId'), '--source-root', request.root, '--require-ios-sdk']
         if details.fetch('signingMode', 'manual') == 'cloud'
           verification_args += ['--signing-mode', 'cloud', '--expected-verification', File.join(request.directory, details.fetch('cloudVerification'))]
         else

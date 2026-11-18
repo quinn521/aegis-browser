@@ -43,13 +43,13 @@ def create(output, version, build, team, profile, environment):
     native = engine()
     native.validate_identity(version, build, team)
     identity = native.source()
-    if native.run('xcodebuild', '-version').splitlines()[0] != b'Xcode 26.6':
-        raise ValueError('Fixed Xcode 26.6 is required')
     if any(environment.get(key) for key in environment
            if key.startswith(('AEGIS_ASC_', 'APP_STORE_CONNECT_', 'ASC_')) or 'P12' in key):
         raise ValueError('Archive job must not load ASC or distribution credentials')
-    output.mkdir(parents=True, mode=0o700)
     build_env = build_environment(environment)
+    from ios_sdk import verify_toolchain
+    toolchain = verify_toolchain(build_env)
+    output.mkdir(parents=True, mode=0o700)
     work = native.stage(output, build_env, profile)
     archive = work / 'Aegis.xcarchive'
     signing = native.module('development_signing', 'development_signing.py')
@@ -71,12 +71,14 @@ def create(output, version, build, team, profile, environment):
                    'AEGIS_ACCESS_RELEASE_CHANNEL=' + profile, env=build_env, log=output / 'archive.log', timeout=2400)
         verify_development(archive, team, native.run)
         signing.verify_archive(archive, signing_evidence, native.run)
-    native.module('archive_structure', 'verify-ios-archive.py').verify(archive, version, build)
+    verification = native.module('archive_structure', 'verify-ios-archive.py').verify(
+        archive, version, build, require_ios_sdk=True)
     if native.source() != identity:
         raise ValueError('Source changed during Development archive construction')
     manifest = {'schema': 'aegis-development-archive-v2', 'source': identity, 'version': version,
                 'build': build, 'team': team, 'profile': profile, 'files': native.archive_files(archive),
-                'keychainRestored': evidence['keychainRestored'], 'developmentSigning': signing_evidence}
+                'keychainRestored': evidence['keychainRestored'], 'developmentSigning': signing_evidence,
+                'toolchain': toolchain, 'deviceSDKs': verification['deviceSDKs']}
     archive_zip = output / 'archive.zip'
     with zipfile.ZipFile(archive_zip, 'x', compression=zipfile.ZIP_DEFLATED) as transfer:
         for path in sorted(archive.rglob('*')):

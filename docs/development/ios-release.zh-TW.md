@@ -6,7 +6,9 @@ Alpha 固定僅供內部測試，原生匯出開啟 `testFlightInternalTestingOn
 
 ## cloud 預設與明確 manual 回退
 
-CLI、Fastlane、Simple/Full Actions 和 candidate tag 建立的新 iOS 套件預設使用 `cloud`。雲端簽章在獲准的 GitHub-hosted macOS runner 使用 Xcode 26.6 和具 cloud-managed Distribution 權限的 ASC key，執行新的 archive→export，不匯入分發 P12。
+CLI、Fastlane、Simple/Full Actions 和 candidate tag 建立的新 iOS 套件預設使用 `cloud`。打包使用獲准的 macOS runner、Xcode 27.2 和 iPhoneOS SDK 27.2。雲端簽章使用具 cloud-managed Distribution 權限的 ASC key，執行新的 archive→export，不匯入分發 P12。
+
+在 **iOS Release Validation** 選擇 **hosted-contracts**，可以在 GitHub 託管的 Xcode 27 映像執行無憑證封存。作業記錄 Xcode 和 SDK 版本，並檢查主 App、Safari 擴充功能及分享擴充功能的每個可執行切片都使用 iOS 裝置 SDK 27 或更新版本。正式匯出及向 Apple 傳輸之前也會檢查可執行檔。
 
 需要回退時明確選擇：CLI 使用 `--signing-mode manual`，Fastlane 使用 `signing_mode:manual`，Actions 將 **Signing mode** 選為 **manual**。本機打包使用此明確回退。cloud 失敗會停止當次嘗試；核對回執與遠端狀態後，以未占用 build 與新 run ID 發起 manual 打包，不自動重傳。
 

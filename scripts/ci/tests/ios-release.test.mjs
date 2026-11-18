@@ -139,12 +139,14 @@ test('iOS workflow credentials and permissions stay in their protected stage', (
 test('unsigned archive isolates fork PRs and tolerates missing runner labels', () => {
   const workflow = parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
   const route = workflow.jobs['ios-archive']['runs-on'];
+  const hostedExercise = route.indexOf("inputs.exercise != 'hosted-contracts'");
   const configured = route.indexOf("vars.AEGIS_IOS_RUNNER_LABEL != ''");
   const trusted = route.indexOf("github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository");
   const selfHosted = route.indexOf('fromJSON(');
+  assert(hostedExercise >= 0 && hostedExercise < selfHosted, 'hosted contracts must bypass self-hosted routing');
   assert(configured >= 0 && configured < selfHosted, 'empty labels must select the hosted fallback');
   assert(trusted >= 0 && trusted < selfHosted, 'fork PRs must select the hosted fallback');
-  assert(route.endsWith("|| 'macos-26' }}"), 'unsigned validation uses the standard hosted Mac fallback');
+  assert(route.endsWith("|| 'xcode-27' }}"), 'unsigned validation uses the standard hosted Mac fallback');
   assert(!workflow.jobs['ios-archive'].environment, 'unsigned validation must not require a protected signing environment');
   const goSetup = workflow.jobs['ios-archive'].steps.find(s => String(s.uses ?? '').startsWith('actions/setup-go@'));
   assert.equal(goSetup?.with?.['go-version'], '1.27.3', 'hosted archive must install lock Go before prepare');
@@ -412,7 +414,7 @@ test('hosted signing loads only environment secrets after source admission and c
   const job = doc.jobs['ios-package'];
   assert.equal(job['runs-on'], "${{ fromJSON(format('[\"self-hosted\",\"macOS\",\"ARM64\",\"{0}\"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}");
   assert.equal(job.environment, 'aegis-ios-signing');
-  assert.equal(job.env.DEVELOPER_DIR, '/Applications/Xcode_26.6.app/Contents/Developer');
+  assert.equal(job.env.DEVELOPER_DIR, '/Applications/Xcode_27.2.app/Contents/Developer');
   const ruby = job.steps.findIndex(s => s.uses === './.github/actions/ensure-ios-ruby');
   assert(ruby >= 0);
   assert(!job.steps.some(s => s.uses?.startsWith('ruby/setup-ruby@')),

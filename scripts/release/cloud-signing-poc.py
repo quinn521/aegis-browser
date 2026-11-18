@@ -380,9 +380,10 @@ def experiment(options, environment):
             raise ValueError('Remove inherited P12 configuration for this experiment')
         archive_transfer = module('cloud_archive_transfer', 'cloud-archive.py')
         archive_environment = archive_transfer.build_environment(environment)
-        evidence['xcode'] = run('xcodebuild', '-version').decode().strip()
-        if evidence['xcode'].splitlines()[0] != 'Xcode 26.6':
-            raise ValueError('Xcode 26.6 is required')
+        from ios_sdk import verify_toolchain
+        toolchain = verify_toolchain(archive_environment)
+        evidence['toolchain'] = toolchain
+        evidence['xcode'] = f"Xcode {toolchain['xcode']}\nBuild version {toolchain['xcodeBuild']}"
         if options.runtime in ('github-hosted', 'self-hosted'):
             evidence.update(runId=environment['GITHUB_RUN_ID'], runAttempt=environment['GITHUB_RUN_ATTEMPT'])
         if options.runtime == 'github-hosted':
@@ -422,6 +423,9 @@ def experiment(options, environment):
                                      archive_transfer, inline_selection)
                 snapshot_archive(directory, identity)
                 evidence['archiveManifestSha256'] = hashlib.sha256((directory / 'archive-provenance.json').read_bytes()).hexdigest()
+            archive_verification = module('archive_structure', 'verify-ios-archive.py').verify(
+                archive, options.version, options.build, require_ios_sdk=True)
+            evidence['archiveDeviceSDKs'] = archive_verification['deviceSDKs']
             no_distribution_identity()
             evidence['distributionIdentityAbsentBeforeExport'] = True
             environment, temporary_key = prepare_credentials(directory, options, environment)
@@ -447,7 +451,9 @@ def experiment(options, environment):
         run(sys.executable, str(work / 'apps/ios/scripts/firebase_config.py'), 'verify-ipa',
             '--root', str(work / 'apps/ios/Firebase'), '--channel', options.profile, '--artifact', str(ipa))
         verifier = module('cloud_verifier', 'verify-signed-ios.py')
-        verification = verifier.verify(ipa, options.version, options.build, options.profile, options.team, None, None, ROOT, cloud_poc=True)
+        verification = verifier.verify(ipa, options.version, options.build, options.profile, options.team, None, None, ROOT,
+                                       cloud_poc=True, require_ios_sdk=True)
+        evidence['deviceSDKs'] = verification['deviceSDKs']
         write(directory / 'signature-verification.json', verification)
         symbols = module('dsym_verifier', 'verify-ios-dsyms.py')
         symbol_verification = symbols.verify(archive, options.version, options.build)

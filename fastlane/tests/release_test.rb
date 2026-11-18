@@ -584,8 +584,16 @@ class ReleaseTest < ReleaseFixture
     def admit_source!
       true # Unit builder boundary; public package admission has a separate negative test.
     end
-    def run(*_args, **_options)
-      true # The separately executed Python suite tests actual IPA parsing.
+    def run(*args, capture: false, **_options)
+      return true unless capture # The Python suite tests actual IPA parsing.
+      case File.basename(args.fetch(1))
+      when 'ios_sdk.py'
+        { 'xcode' => '27.2', 'xcodeBuild' => '27B52', 'iphoneosSdk' => '27.2' }.to_json
+      when 'verify-signed-ios.py'
+        { 'deviceSDKs' => AegisRelease::IOS_TARGETS.values.to_h { |id| [id, { 'arm64' => '27.2' }] } }.to_json
+      else
+        raise 'Unexpected captured command in test'
+      end
     end
   end
 
@@ -689,6 +697,7 @@ class ReleaseTest < ReleaseFixture
     flow.define_singleton_method(:store) { store }
     capture_io { flow.upload(sha) }
     verification = commands.find { |args| args[1].end_with?('/verify-signed-ios.py') }
+    assert_includes verification, '--require-ios-sdk'
     assert_includes verification, '--certificate-sha1'
     assert_includes verification, 'A'*40
     refute_includes verification, '--signing-mode'

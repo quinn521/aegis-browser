@@ -134,7 +134,7 @@ def validate_central_entitlements(signed, requested, identifier, team, profile_e
 
 
 def verify(ipa, version, build, profile, team, certificate_sha1, profiles, source_root, *,
-           cloud_poc=False, private_beta=False, strict_entitlements=False):
+           cloud_poc=False, private_beta=False, strict_entitlements=False, require_ios_sdk=False):
     if private_beta and (profile != 'beta' or cloud_poc):
         raise ValueError('Private Beta verification requires the manual Beta profile')
     internal_testing_only = profile == 'alpha' or private_beta
@@ -180,8 +180,12 @@ def verify(ipa, version, build, profile, team, certificate_sha1, profiles, sourc
                 raise ValueError("No committed shared resources were verified")
             command("codesign", "--verify", "--deep", "--strict", str(app))
             checked = []
+            device_sdks = {}
             for identifier, relative in TARGETS.items():
                 bundle = app / relative
+                if require_ios_sdk:
+                    from ios_sdk import verify_bundle_sdk
+                    device_sdks[identifier] = verify_bundle_sdk(bundle, plistlib.loads((bundle / "Info.plist").read_bytes()))
                 provision = (verified_profile((bundle / 'embedded.mobileprovision').read_bytes()) if cloud_poc else
                              plistlib.loads(command("security", "cms", "-D", "-i", str(bundle / "embedded.mobileprovision"))))
                 entitlements = provision.get("Entitlements", {})
@@ -221,6 +225,8 @@ def verify(ipa, version, build, profile, team, certificate_sha1, profiles, sourc
             "testFlightInternalTestingOnly": internal_testing_only, "sharedResourcesVerified": shared_count,
             "usesNonExemptEncryption": declaration,
             "bundles": checked, "deviceAcceptance": "not_verified"}
+    if require_ios_sdk:
+        result["deviceSDKs"] = device_sdks
     if cloud_poc:
         result.update(profileCmsTrustVerified=True, distributionSignerTeamVerified=True)
     return result
@@ -237,6 +243,7 @@ def main():
     parser.add_argument("--expected-verification", type=Path)
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--private-beta", action="store_true")
+    parser.add_argument("--require-ios-sdk", action="store_true")
     options = parser.parse_args()
     try:
         if options.signing_mode == 'manual' and (not options.certificate_sha1 or not options.profiles_json):
@@ -245,7 +252,8 @@ def main():
             raise ValueError('Cloud re-verification requires the source-bound expected verification receipt')
         result = verify(options.ipa, options.version, options.build, options.profile, options.team,
                         options.certificate_sha1, json.loads(options.profiles_json) if options.profiles_json else None,
-                        options.source_root, cloud_poc=options.signing_mode == 'cloud', private_beta=options.private_beta)
+                        options.source_root, cloud_poc=options.signing_mode == 'cloud', private_beta=options.private_beta,
+                        require_ios_sdk=options.require_ios_sdk)
         if options.signing_mode == 'cloud':
             expected = json.loads(options.expected_verification.read_text())
             if any(result[key] != expected[key] for key in ['ipaSha256', 'version', 'build', 'profile', 'bundles']):

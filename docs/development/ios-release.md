@@ -5,10 +5,16 @@ One package has one immutable profile. Alpha is exported with native TestFlight 
 ## Cloud default and explicit manual fallback
 
 New iOS packages default to `cloud` in the CLI, Fastlane, Simple/Full Actions
-and candidate-tag deliveries. Cloud packaging uses an admitted GitHub-hosted
-macOS runner with Xcode 26.6 and an ASC key allowed to use cloud-managed
-Distribution certificates. Each run creates a fresh archive and exports without
-importing a Distribution P12.
+and candidate-tag deliveries. Packaging requires Xcode 27.2 and iPhoneOS SDK
+27.2 on an admitted macOS runner. Cloud export uses an ASC key allowed to use
+cloud-managed Distribution certificates. Each run creates a fresh archive and
+exports without importing a Distribution P12.
+
+Run **iOS Release Validation** with **hosted-contracts** to exercise the unsigned
+archive on the GitHub-hosted Xcode 27 image. The build records the Xcode and
+SDK versions and checks the main app, Safari extension and Share extension for
+an iOS device SDK of at least 27 in every executable slice. The same executable
+check applies to production export and before Apple transport.
 
 Select `manual` explicitly for the existing Distribution key/profile flow:
 `--signing-mode manual` in the CLI, `signing_mode:manual` in Fastlane, or

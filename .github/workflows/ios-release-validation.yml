@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       exercise:
-        description: "Existing contracts or frozen cloud signing PoC"
+        description: "Validate contracts and archive, or run the frozen cloud signing PoC"
         type: choice
-        options: [contracts, cloud-poc]
+        options: [contracts, hosted-contracts, cloud-poc]
         default: contracts
       source_sha:
         description: "Full frozen candidate SHA (cloud PoC only)"
@@ -117,8 +117,10 @@ jobs:
     needs: contracts
     if: ${{ inputs.exercise != 'cloud-poc' && needs.contracts.outputs.ios == 'true' && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
     runs-on: >-
-      ${{ vars.AEGIS_IOS_RUNNER_LABEL != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) || 'macos-26' }}
+      ${{ inputs.exercise != 'hosted-contracts' && vars.AEGIS_IOS_RUNNER_LABEL != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) || 'xcode-27' }}
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -140,7 +142,13 @@ jobs:
           CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           CI_RUNNER_NAME: ${{ runner.name }}
         run: python3 -I -B scripts/ci/ios-ci-storage.py prepare --runner-environment "$CI_RUNNER_ENVIRONMENT" --runner-name "$CI_RUNNER_NAME"
-      # Fork PRs land on macos-26 without mise Go; pin the lock's toolchain for both hosted and self-hosted.
+      - name: Verify Xcode and the iPhoneOS SDK
+        env:
+          IOS_CI_ROOT: ${{ steps.storage.outputs.root }}
+        run: |
+          python3 -B scripts/release/ios_sdk.py > "$IOS_CI_ROOT/toolchain.json"
+          cat "$IOS_CI_ROOT/toolchain.json"
+      # Pin the same Go version on both hosted and self-hosted runners.
       - name: Install Go for EmbeddedCore prepare
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
@@ -184,7 +192,7 @@ jobs:
           python3 -B scripts/release/ios_embedded_core.py verify --root "$PWD" \
             --source-lock apps/ios/EmbeddedCore/embedded-core-lock.json --products "$IOS_CI_ROOT/EmbeddedCore"
           xcodebuild -scmProvider system -onlyUsePackageVersionsFromResolvedFile -project apps/ios/Aegis.xcodeproj -scheme Aegis -configuration Release -destination 'generic/platform=iOS' -archivePath "$IOS_CI_ROOT/Aegis.xcarchive" -derivedDataPath "$IOS_CI_ROOT/DerivedData" -clonedSourcePackagesDirPath "$IOS_CI_ROOT/SourcePackages" -packageCachePath "$IOS_CI_ROOT/PackageCache" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO MARKETING_VERSION=1.0.0 CURRENT_PROJECT_VERSION=1 AEGIS_EMBEDDED_CORE_PRODUCTS="$IOS_CI_ROOT/EmbeddedCore" archive 2>&1 | tee "$IOS_CI_ROOT/xcodebuild.log"
-          python3 scripts/release/verify-ios-archive.py "$IOS_CI_ROOT/Aegis.xcarchive" 1.0.0 1
+          python3 -B scripts/release/verify-ios-archive.py "$IOS_CI_ROOT/Aegis.xcarchive" 1.0.0 1 --require-ios-sdk | tee "$IOS_CI_ROOT/archive-verification.json"
           python3 -B scripts/release/test_ios_linked_bundle.py "$IOS_CI_ROOT/Aegis.xcarchive/Products/Applications/Aegis.app" "$IOS_CI_ROOT/EmbeddedCore" "$IOS_CI_ROOT/DerivedData" device
           python3 -I -B scripts/ci/ios-ci-storage.py seal --root "$IOS_CI_ROOT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -194,6 +202,8 @@ jobs:
           path: |
             ${{ steps.storage.outputs.root }}/xcodebuild.log
             ${{ steps.storage.outputs.root }}/storage-receipt.json
+            ${{ steps.storage.outputs.root }}/toolchain.json
+            ${{ steps.storage.outputs.root }}/archive-verification.json
             ${{ steps.storage.outputs.root }}/Aegis.xcarchive.zip
             ${{ steps.storage.outputs.root }}/unsigned-artifact.json
             ${{ steps.storage.outputs.root }}/EmbeddedCore/build-manifest.json
@@ -208,6 +218,8 @@ jobs:
           path: |
             ${{ steps.storage.outputs.root }}/xcodebuild.log
             ${{ steps.storage.outputs.root }}/storage-receipt.json
+            ${{ steps.storage.outputs.root }}/toolchain.json
+            ${{ steps.storage.outputs.root }}/archive-verification.json
           if-no-files-found: warn
           retention-days: 14
   cloud-poc:
@@ -219,7 +231,7 @@ jobs:
       group: aegis-ios-cloud-poc
       cancel-in-progress: false
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       AEGIS_IOS_CLOUD_POC_SOURCE_SHA: ${{ vars.AEGIS_IOS_CLOUD_POC_SOURCE_SHA }}
       AEGIS_APPLE_TEAM_ID: ${{ vars.AEGIS_APPLE_TEAM_ID }}
       POC_SOURCE_SHA: ${{ inputs.source_sha }}

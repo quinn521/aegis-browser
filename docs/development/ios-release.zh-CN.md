@@ -6,7 +6,9 @@ Alpha 固定仅内测，原生导出开启 `testFlightInternalTestingOnly`，上
 
 ## cloud 默认与显式 manual 回退
 
-CLI、Fastlane、Simple/Full Actions 和 candidate tag 创建的新 iOS 包默认使用 `cloud`。云签名在获准的 GitHub-hosted macOS runner 上使用 Xcode 26.6 和有 cloud-managed Distribution 权限的 ASC key，执行新的 archive→export，不导入分发 P12。
+CLI、Fastlane、Simple/Full Actions 和 candidate tag 创建的新 iOS 包默认使用 `cloud`。打包使用获准的 macOS runner、Xcode 27.2 和 iPhoneOS SDK 27.2。云签名使用有 cloud-managed Distribution 权限的 ASC key，执行新的 archive→export，不导入分发 P12。
+
+在 **iOS Release Validation** 选择 **hosted-contracts**，可以在 GitHub 托管的 Xcode 27 镜像运行无凭据归档。作业记录 Xcode 和 SDK 版本，并检查主 App、Safari 扩展和分享扩展的每个可执行切片都使用 iOS 设备 SDK 27 或更高版本。正式导出和向 Apple 传输之前也会检查可执行文件。
 
 需要回退时显式选择：CLI 使用 `--signing-mode manual`，Fastlane 使用 `signing_mode:manual`，Actions 将 **Signing mode** 选为 **manual**。本机打包使用此显式回退。cloud 失败会停止当前尝试；核对回执和远端状态后，使用未占用 build 与新 run ID 发起 manual 打包，不自动重试上传。
 

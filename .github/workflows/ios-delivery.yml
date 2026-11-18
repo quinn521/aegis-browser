@@ -178,7 +178,7 @@ jobs:
       RELEASE_VERSION: ${{ needs.admission.outputs.version }}
       RELEASE_BUILD: ${{ needs.admission.outputs.build }}
       AEGIS_APPLE_TEAM_ID: ${{ needs.archive-settings.outputs.team }}
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -250,7 +250,7 @@ jobs:
       RELEASE_MANIFEST_SHA256: ${{ needs.admission.outputs.manifest_sha256 }}
       RELEASE_GROUPS: ${{ needs.admission.outputs.groups }}
       RELEASE_INPUT: ${{ needs.admission.outputs.stage_input }}
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       AEGIS_APPLE_TEAM_ID: ${{ vars.AEGIS_APPLE_TEAM_ID }}
       AEGIS_IOS_CERT_SHA1: ${{ vars.AEGIS_IOS_CERT_SHA1 }}
       AEGIS_IOS_PROFILES: ${{ vars.AEGIS_IOS_PROFILES }}
@@ -268,7 +268,7 @@ jobs:
         run: |
           node scripts/ci/ios-release-preflight.mjs --sha "$GITHUB_SHA"
           bundle check
-          xcodebuild -version
+          python3 -B scripts/release/ios_sdk.py
       - name: Import the successful Development archive
         if: ${{ needs.admission.outputs.signing_mode == 'cloud' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093

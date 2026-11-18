@@ -4,6 +4,7 @@ import plistlib
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("archive_check", Path(__file__).with_name("verify-ios-archive.py"))
 archive_check = importlib.util.module_from_spec(spec)
@@ -33,6 +34,32 @@ class ArchiveVerificationTests(unittest.TestCase):
         self.assertFalse(result["IPA"])
         self.assertFalse(result["TestFlight"])
         self.assertFalse(result["releaseReady"])
+
+    def write_executables(self):
+        for info_path in self.app.rglob("Info.plist"):
+            bundle = info_path.parent
+            info = plistlib.loads(info_path.read_bytes())
+            info["CFBundleExecutable"] = bundle.stem
+            info_path.write_bytes(plistlib.dumps(info))
+            (bundle / bundle.stem).write_bytes(b"fixture executable")
+
+    def test_sdk_receipt_covers_main_app_and_both_extensions(self):
+        self.write_executables()
+        output = "Load command 9\n cmd LC_BUILD_VERSION\n platform IOS\n minos 18.4\n sdk 27.2\n"
+        with patch("subprocess.check_output", side_effect=["arm64", output] * 3):
+            result = archive_check.verify(self.archive, "0.8.0", "1", require_ios_sdk=True)
+        self.assertEqual(result["deviceSDKs"], {
+            "com.gcsa.aegis": {"arm64": "27.2"},
+            "com.gcsa.aegis.safari": {"arm64": "27.2"},
+            "com.gcsa.aegis.share": {"arm64": "27.2"},
+        })
+
+    def test_sdk_gate_rejects_a_stale_slice_in_the_safari_extension(self):
+        self.write_executables()
+        output = "Load command 9\n cmd LC_BUILD_VERSION\n platform IOS\n minos 18.4\n sdk 27.2\n"
+        with patch("subprocess.check_output", side_effect=["arm64", output, "arm64 arm64e", output, output.replace("27.2", "26.5")]):
+            with self.assertRaisesRegex(ValueError, "SafariWebExtension.appex.*arm64e.*26.5"):
+                archive_check.verify(self.archive, "0.8.0", "1", require_ios_sdk=True)
 
     def test_wrong_app_id_version_or_build_fails(self):
         path = self.app / "PlugIns/ShareExtension.appex/Info.plist"
