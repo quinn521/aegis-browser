@@ -196,6 +196,13 @@ def validate_project(locales):
     objects = project["objects"]
     validate_project_regions(project, locales)
     require(objects[project["rootObject"]]["developmentRegion"] == "zh-Hans", 'Guard failed: objects[project["rootObject"]]["developmentRegion"] == "zh-Hans"')
+    main_group = objects[objects[project["rootObject"]]["mainGroup"]]
+    app_group = next(objects[key] for key in main_group["children"]
+                     if objects[key].get("path") == "AegisApp" and objects[key]["isa"] == "PBXGroup")
+    shared_catalog_refs = {key for key in app_group["children"]
+                           if objects[key].get("path") == "Localizable.xcstrings"
+                           and objects[key].get("sourceTree") == "<group>"}
+    require(len(shared_catalog_refs) == 1, "Expected one AegisApp/Localizable.xcstrings reference")
     for target, folder in [("Aegis", "AegisApp"), ("ShareExtension", "ShareExtension"), ("SafariWebExtension", "SafariWebExtension")]:
         target_object = next(v for v in objects.values() if v["isa"] == "PBXNativeTarget" and v["name"] == target)
         phase = next(objects[key] for key in target_object["buildPhases"] if objects[key]["isa"] == "PBXResourcesBuildPhase")
@@ -207,7 +214,9 @@ def validate_project(locales):
         for key in objects[variant_id]["children"]:
             require((ROOT / folder / objects[key]["path"]).is_file(), 'Guard failed: (ROOT / folder / objects[key]["path"]).is_file()')
         if target in {"Aegis", "ShareExtension"}:
-            require(any(objects[key].get("path") == "Localizable.xcstrings" for key in refs), 'Guard failed: any(objects[key].get("path") == "Localizable.xcstrings" for key in refs)')
+            catalog_refs = {key for key in refs
+                            if pathlib.PurePosixPath(objects[key].get("path", "")).name == "Localizable.xcstrings"}
+            require(catalog_refs == shared_catalog_refs, f"{target} must bundle AegisApp/Localizable.xcstrings")
         notice_refs = [key for key in refs if objects[key].get("path") == "ThirdPartyNotices.txt"]
         require(len(notice_refs) == (1 if target == "Aegis" else 0), f"Acknowledgements must belong to the main App: {target}")
         if target == "Aegis":
@@ -251,9 +260,6 @@ def exercise_bundles(work, contract, catalog):
     info = {"CFBundleIdentifier": "test.aegis.localizations", "CFBundleDevelopmentRegion": "zh-Hans",
             "CFBundleExecutable": "bundle-probe", "CFBundlePackageType": "APPL"}
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
-    subprocess.run(["/usr/bin/xcrun", "xcstringstool", "compile", str(ROOT / "AegisApp/Localizable.xcstrings"),
-                    "--output-directory", str(resources)], check=True, shell=False)
-    require({p.stem for p in resources.glob("*.lproj")} == set(contract["resourceLocales"]), 'Guard failed: {p.stem for p in resources.glob("*.lproj")} == set(contract["resourceLocales"])')
     for target in ["AegisApp", "ShareExtension", "SafariWebExtension"]:
         bundle = work / f"{target}.bundle"
         bundle.mkdir()
@@ -263,6 +269,13 @@ def exercise_bundles(work, contract, catalog):
         (bundle / "Info.plist").write_bytes(plistlib.dumps(system_info))
         for path in (ROOT / target).glob("*.lproj"):
             shutil.copytree(path, bundle / path.name)
+    share = work / "ShareExtension.bundle"
+    catalog_path = ROOT / "AegisApp/Localizable.xcstrings"
+    for output in (resources, share):
+        subprocess.run(["/usr/bin/xcrun", "xcstringstool", "compile", str(catalog_path),
+                        "--output-directory", str(output)], check=True, shell=False)
+        tables = {p.parent.stem for p in output.glob("*.lproj/Localizable.strings")}
+        require(tables == set(contract["resourceLocales"]), f"Unexpected catalog locales in {output}")
     hostile = work / "Hostile.bundle"
     hostile.mkdir()
     (hostile / "Info.plist").write_bytes(plistlib.dumps(info))
@@ -270,10 +283,17 @@ def exercise_bundles(work, contract, catalog):
         directory = hostile / f"{locale}.lproj"
         directory.mkdir()
         (directory / "Localizable.strings").write_bytes(plistlib.dumps({"安心浏览，清楚掌控。": '<script> & " \''}))
+    expected_tables = {
+        locale: {key: entry["localizations"][locale]["stringUnit"]["value"]
+                 for key, entry in catalog["strings"].items()}
+        for locale in contract["resourceLocales"]
+    }
+    for locale, table in expected_tables.items():
+        compiled = plist(share / f"{locale}.lproj/Localizable.strings")
+        require(compiled == table, f"ShareExtension/{locale}: compiled catalog differs from source")
+        print(f"PASS ShareExtension/{locale}: {len(table)} compiled entries match source", flush=True)
     expected = work / "expected.json"
-    expected.write_text(json.dumps({locale: {key: entry["localizations"][locale]["stringUnit"]["value"]
-                                            for key, entry in catalog["strings"].items()}
-                                    for locale in contract["resourceLocales"]}, ensure_ascii=False))
+    expected.write_text(json.dumps(expected_tables, ensure_ascii=False))
     executable = app / "Contents/MacOS/bundle-probe"
     executable.parent.mkdir()
     subprocess.run(["/usr/bin/xcrun", "swiftc", "-swift-version", "6", "-D", "DEBUG",
