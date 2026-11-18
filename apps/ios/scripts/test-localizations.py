@@ -271,11 +271,14 @@ def exercise_bundles(work, contract, catalog):
             shutil.copytree(path, bundle / path.name)
     share = work / "ShareExtension.bundle"
     catalog_path = ROOT / "AegisApp/Localizable.xcstrings"
+    expected_locales = set(contract["resourceLocales"])
     for output in (resources, share):
         subprocess.run(["/usr/bin/xcrun", "xcstringstool", "compile", str(catalog_path),
                         "--output-directory", str(output)], check=True, shell=False)
+        directories = {p.stem for p in output.glob("*.lproj")}
+        require(directories == expected_locales, f"Unexpected localization directories in {output}")
         tables = {p.parent.stem for p in output.glob("*.lproj/Localizable.strings")}
-        require(tables == set(contract["resourceLocales"]), f"Unexpected catalog locales in {output}")
+        require(tables == expected_locales, f"Unexpected catalog locales in {output}")
     hostile = work / "Hostile.bundle"
     hostile.mkdir()
     (hostile / "Info.plist").write_bytes(plistlib.dumps(info))
