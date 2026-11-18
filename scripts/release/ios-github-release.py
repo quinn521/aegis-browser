@@ -112,6 +112,7 @@ def download_status_artifact(status_run_id, artifact_id, destination):
         archive = Path(temp) / 'status-artifact.zip'
         _download_actions_artifact_zip(artifact_id, archive)
         extract_verified_status_archive(archive, destination, artifact['digest'].removeprefix('sha256:'))
+    return artifact
 
 
 def is_id(value):
@@ -168,7 +169,8 @@ def _package_jobs(run, run_id, sha):
 
 
 def _exact_artifact(value, artifact_id, name, digest):
-    return (value.get('id') == artifact_id and value.get('name') == name
+    return (is_id(artifact_id) and isinstance(digest, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', digest) is not None
+            and value.get('id') == artifact_id and value.get('name') == name
             and value.get('expired') is False and value.get('digest') == digest)
 
 
@@ -278,8 +280,7 @@ def validate_delivery_evidence(evidence, release_type, *, preview=False):
             and is_sha(remote.get('buildIdentitySha256'), 64)
             and remote.get('expired') is False
             and isinstance(remote.get('uploadState'), str)
-            and 'NOT_FOUND' not in remote.get('uploadState', '').split(',')
-            and 'FAILED' not in remote.get('uploadState', '').split(','),
+            and set(remote['uploadState'].split(',')) <= {'PROCESSING', 'COMPLETE'},
             'Apple must report this exact uploaded build VALID and unexpired')
     _require_fresh_observation(remote.get('observedAt'))
     return {
@@ -288,7 +289,8 @@ def validate_delivery_evidence(evidence, release_type, *, preview=False):
         'packageRunId': package_id, 'packageAttempt': 1, 'statusRunId': status_id,
         'appleBuildIdentitySha256': remote['buildIdentitySha256'], 'appleObservedAt': remote['observedAt'], 'artifactId': package_record['artifact_id'],
         'artifactDigest': package_record['artifact_digest'], 'artifactName': package_record['artifact_name'],
-        'statusArtifactId': status_artifact['id'], 'manifest': manifest,
+        'statusArtifactId': status_artifact['id'], 'statusArtifactDigest': status_artifact['digest'],
+        'manifest': manifest,
     }
 
 
@@ -322,10 +324,15 @@ def build_release_plan(candidate):
         'appleBuildIdentitySha256': candidate['appleBuildIdentitySha256'], 'assets': dict(sorted(asset_hashes.items())),
         'prerelease': channel == 'beta', 'makeLatest': channel == 'stable',
     }
-    plan_sha = hashlib.sha256(json.dumps(core, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
     release_identity = {key: value for key, value in core.items() if key not in {'statusRunId', 'appleObservedAt'}}
     release_identity_sha = hashlib.sha256(json.dumps(
         release_identity, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+    # Recovery matches the existing public bytes. Approval also binds the exact Actions archives read this time.
+    core['evidenceArtifacts'] = {
+        'package': {'id': candidate['artifactId'], 'digest': candidate['artifactDigest']},
+        'status': {'id': candidate['statusArtifactId'], 'digest': candidate['statusArtifactDigest']},
+    }
+    plan_sha = hashlib.sha256(json.dumps(core, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
     body = ('Aegis iOS public release\n\n'
             f"Channel: {'Beta' if channel == 'beta' else 'Stable'}\n"
             f"Source: {candidate['source']['sha']}\n"
@@ -438,7 +445,8 @@ def _get_artifact(run_id, artifact_id, name):
     found = [row for row in rows if row.get('id') == artifact_id and row.get('name') == name]
     require(len(found) == 1, 'Exact immutable workflow artifact is missing or ambiguous: ' + name)
     row = found[0]
-    require(row.get('expired') is False and is_sha(row.get('digest', '').removeprefix('sha256:'), 64),
+    require(row.get('expired') is False and isinstance(row.get('digest'), str)
+            and re.fullmatch(r'sha256:[0-9a-f]{64}', row['digest']),
             'Workflow artifact is expired or has no verified digest: ' + name)
     return {**row, 'run_id': run_id}
 
@@ -529,7 +537,7 @@ def _verify_packaged_ipa(ipa, version, build, profile, producer_sha, producer_tr
                         Path(ipa).resolve(), version, build, profile], check=True)
 
 
-def _collect_evidence(version, build, release_type, status_run_id, package_dir, status_path, *, preview=False):
+def _collect_evidence(version, build, release_type, status_run_id, package_dir, status_artifact_id, *, preview=False):
     repo, current_sha, current_tree = _current_repository()
     package_locator = locate_package(version, build, release_type)
     package_run = _get_run(package_locator['package_run_id'])
@@ -550,18 +558,12 @@ def _collect_evidence(version, build, release_type, status_run_id, package_dir, 
     package_artifact = _get_artifact(package_locator['package_run_id'],
                                      package_locator['package_artifact_id'],
                                      package_locator['package_artifact_name'])
-    status_artifact_name = f'ios-release-status-{status_run_id}-1'
-    status_rows = _api_items(f'actions/runs/{status_run_id}/artifacts?per_page=100', 'artifacts')
-    status_matches = [row for row in status_rows if row.get('name') == status_artifact_name]
-    require(len(status_matches) == 1 and is_id(status_matches[0].get('id')),
-            'Exact Apple status artifact is missing or ambiguous')
-    status_artifact = _get_artifact(status_run_id, status_matches[0]['id'], status_artifact_name)
-
+    with tempfile.TemporaryDirectory(prefix='aegis-release-evidence-') as temp:
+        status_path = Path(temp) / 'status.json'
+        status_artifact = download_status_artifact(status_run_id, status_artifact_id, status_path)
+        status = json.loads(status_path.read_text())
     package_dir = Path(package_dir)
-    status_path = Path(status_path)
-    require(package_dir.is_dir() and not package_dir.is_symlink()
-            and status_path.is_file() and not status_path.is_symlink(),
-            'Downloaded package/status evidence is missing')
+    require(package_dir.is_dir() and not package_dir.is_symlink(), 'Downloaded package evidence is missing')
     origin = json.loads((package_dir / 'package-origin.json').read_text())
     require(origin == package_record.get('origin'), 'Downloaded package origin differs from permanent record')
     manifest_path = package_dir / 'ios-manifest.json'
@@ -572,7 +574,6 @@ def _collect_evidence(version, build, release_type, status_run_id, package_dir, 
     transport.verify_package(package_dir, origin['sourceSha'], origin['sourceTree'], manifest_digest)
     transport.reject_private_resources(package_dir, manifest)
     ipa = next(asset['name'] for asset in manifest['assets'] if asset['name'].endswith('.ipa'))
-    status = json.loads(status_path.read_text())
     evidence = {
         'repository': repo, 'current_sha': current_sha, 'current_tree': current_tree,
         'requested_profile': PROFILE_FOR[release_type], 'version': version, 'build': build,
@@ -844,13 +845,13 @@ def _upload_asset_once(release_id, asset):
             connection.close()
 
 
-def publish_release(plan, assets, stable=False):
+def publish_release(plan, assets):
     require((plan.get('version'), plan.get('build')) != PREVIEW_ONLY,
             'The current 1.1.0 (8) package is preview-only')
     require(plan.get('planSha256') == os.environ.get('EXPECTED_PLAN_SHA256'),
             'Post-approval evidence differs from the reviewed release plan')
     _verify_tag_ruleset()
-    if stable:
+    if plan['channel'] == 'stable':
         _check_approval(plan, os.environ['GITHUB_RUN_ID'])
     _assert_current_release_source(plan)
     release = _release_by_tag(plan['tag'])
@@ -879,7 +880,7 @@ def publish_release(plan, assets, stable=False):
                 if (len(match) != 1 or match[0].get('state') != 'uploaded'
                         or match[0].get('digest') != 'sha256:' + asset['sha256']):
                     raise ValueError('Asset upload outcome unknown; reconcile draft before retrying: ' + asset['name']) from error
-        if stable:
+        if plan['channel'] == 'stable':
             _check_approval(plan, os.environ['GITHUB_RUN_ID'])
         _assert_current_release_source(plan)
         _verify_release_tag(plan, plan['tag'])
@@ -927,7 +928,7 @@ def main():
     parser.add_argument('--package-artifact-id', type=int)
     parser.add_argument('--package-directory', type=Path, default=Path('.artifacts/package'))
     parser.add_argument('--package-archive', type=Path, default=Path('.artifacts/package/package.zip'))
-    parser.add_argument('--status-file', type=Path, default=Path('.artifacts/status/status.json'))
+    parser.add_argument('--status-file', type=Path, help='output file for download-status')
     parser.add_argument('--plan-file', type=Path, default=Path('ios-release-plan.json'))
     args = parser.parse_args()
     if args.operation == 'locate':
@@ -955,15 +956,18 @@ def main():
         return
     if args.operation == 'download-status':
         require(args.status_artifact_id is not None, 'Exact Apple status artifact ID is required')
-        download_status_artifact(int(args.status_run_id), args.status_artifact_id, args.status_file)
-        print(json.dumps({'state': 'apple-status-artifact-downloaded-and-verified', 'file': str(args.status_file)}))
+        download_status_artifact(int(args.status_run_id), args.status_artifact_id,
+                                 args.status_file or Path('.artifacts/status/status.json'))
+        print(json.dumps({'state': 'apple-status-artifact-downloaded-and-verified', 'file': str(args.status_file or Path('.artifacts/status/status.json'))}))
         return
+    require(is_id(args.status_artifact_id) and args.status_file is None,
+            'Preview and publication require an exact status artifact ID from the locator')
     candidate, assets = _collect_evidence(args.version, args.build, args.release_type,
-                                           args.status_run_id, args.package_directory, args.status_file,
+                                           args.status_run_id, args.package_directory, args.status_artifact_id,
                                            preview=args.operation == 'preview')
     plan = _write_plan(candidate, assets, args.plan_file)
     if args.operation == 'publish':
-        publish_release(plan, assets, stable=args.release_type == 'stable')
+        publish_release(plan, assets)
     else:
         observation = preview_release(plan)
         print(json.dumps({'state': 'preview-ready', 'tag': plan['tag'], 'draftStatus': observation['draftStatus'],

@@ -464,9 +464,9 @@ test('public release workflow limits write permission to the serialized publishe
     assert(!packageDownload.run.includes('${{'));
     const extract = job.steps.find(step => step.run?.includes('ios-github-release.py extract'));
     assert(extract?.run.includes('--status-run-id "$STATUS_RUN_ID"'));
-    const statusDownload = job.steps.find(step => step.run?.includes('ios-github-release.py download-status'));
-    assert.equal(statusDownload.env.STATUS_ARTIFACT_ID, '${{ steps.locate.outputs.status_artifact_id }}');
-    assert(statusDownload.run.includes('--status-artifact-id "$STATUS_ARTIFACT_ID"'));
-    assert(!statusDownload.run.includes('${{'));
+    const planStep = job.steps.find(step => /ios-github-release\.py (?:preview|publish) /u.test(step.run));
+    assert.equal(planStep.env.STATUS_ARTIFACT_ID, '${{ steps.locate.outputs.status_artifact_id }}');
+    assert(planStep.run.includes('--status-artifact-id "$STATUS_ARTIFACT_ID"'));
+    assert(!planStep.run.includes('${{'));
   }
 });

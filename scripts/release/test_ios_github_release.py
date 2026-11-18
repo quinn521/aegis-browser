@@ -145,6 +145,32 @@ class CandidateEvidenceTests(unittest.TestCase):
         self.assertIn(SHA, plan['body'])
         self.assertRegex(plan['planSha256'], r'^[0-9a-f]{64}$')
 
+    def test_approval_digest_binds_both_exact_actions_artifacts(self):
+        evidence = valid_evidence('release', '1.2.0', '9')
+        def plan(raw):
+            return release.build_release_plan(release.validate_delivery_evidence(raw, 'stable'))
+        original = plan(evidence)
+        for artifact in ('package_artifact', 'status_artifact'):
+            for key, value in (('id', 8000), ('digest', 'sha256:' + 'f' * 64)):
+                with self.subTest(artifact=artifact, key=key):
+                    updated = copy.deepcopy(evidence)
+                    updated[artifact][key] = value
+                    if artifact == 'package_artifact':
+                        record_key = 'artifact_id' if key == 'id' else 'artifact_digest'
+                        updated['package_record'][record_key] = value
+                    revised = plan(updated)
+                    self.assertNotEqual(original['planSha256'], revised['planSha256'])
+                    self.assertEqual(original['releaseIdentitySha256'], revised['releaseIdentitySha256'])
+
+    def test_release_receipt_requires_a_recognized_apple_upload_state(self):
+        evidence = valid_evidence()
+        for state in ('', 'UNKNOWN', 'PROCESSING,', 'COMPLETE,UNKNOWN'):
+            with self.subTest(state=state), self.assertRaises(ValueError):
+                evidence['status']['remote']['uploadState'] = state
+                release.validate_delivery_evidence(evidence, 'beta', preview=True)
+        evidence['status']['remote']['uploadState'] = 'PROCESSING'
+        release.validate_delivery_evidence(evidence, 'beta', preview=True)
+
     def test_stable_release_rejects_a_beta_package(self):
         with self.assertRaisesRegex(ValueError, 'profile'):
             release.validate_delivery_evidence(valid_evidence('beta'), 'stable')
@@ -179,6 +205,31 @@ class CandidateEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'artifact digest'):
                 release.extract_verified_status_archive(archive, destination, '0' * 64)
             self.assertFalse(destination.exists())
+
+    def test_download_returns_metadata_for_the_verified_status_receipt(self):
+        receipt = valid_evidence()['status']
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            archive = directory / 'envelope.zip'
+            with zipfile.ZipFile(archive, 'w') as out:
+                out.writestr('status.json', json.dumps(receipt))
+            raw = archive.read_bytes()
+            artifact = {'id': 4101, 'name': f'ios-release-status-{STATUS_RUN}-1', 'expired': False,
+                        'digest': 'sha256:' + hashlib.sha256(raw).hexdigest()}
+            inventory = {'total_count': 1, 'artifacts': [artifact]}
+            def download(artifact_id, destination):
+                self.assertEqual(artifact_id, artifact['id'])
+                destination.write_bytes(raw)
+            path = directory / 'receipt.json'
+            with patch.object(release, '_api', return_value=inventory), \
+                 patch.object(release, '_download_actions_artifact_zip', side_effect=download) as fetch:
+                metadata = release.download_status_artifact(STATUS_RUN, 4101, path)
+                self.assertEqual(metadata, {**artifact, 'run_id': STATUS_RUN})
+                self.assertEqual(json.loads(path.read_text()), receipt)
+                inventory['artifacts'] = [{**artifact, 'id': 4102}]
+                with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+                    release.download_status_artifact(STATUS_RUN, 4101, directory / 'second.json')
+                fetch.assert_called_once()
 
     def test_downloaded_package_envelope_must_match_immutable_artifact_digest(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -228,7 +279,7 @@ class CandidateEvidenceTests(unittest.TestCase):
         plan = release.build_release_plan(release.validate_delivery_evidence(valid_evidence(), 'beta'))
         with patch.dict('os.environ', {'EXPECTED_PLAN_SHA256': plan['planSha256']}):
             with self.assertRaisesRegex(ValueError, 'preview-only'):
-                release.publish_release(plan, [], stable=False)
+                release.publish_release(plan, [])
 
     def test_public_inventory_excludes_private_signing_and_delivery_proofs(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -392,7 +443,7 @@ class PublicReleaseMutationTests(unittest.TestCase):
              patch.object(release, '_api') as api, patch.dict('os.environ', {
                  'EXPECTED_PLAN_SHA256': plan['planSha256'], 'GITHUB_RUN_ID': '444'}):
             with self.assertRaisesRegex(ValueError, 'no longer current main'):
-                release.publish_release(plan, [], stable=True)
+                release.publish_release(plan, [])
         approval.assert_called_once()
         api.assert_not_called()
 
@@ -444,7 +495,7 @@ class PublicReleaseMutationTests(unittest.TestCase):
                     with patch.object(release, '_require_fresh_observation',
                                       side_effect=verify_fresh):
                         with self.assertRaisesRegex(ValueError, 'stale|metadata conflicts|main moved'):
-                            release.publish_release(plan, assets, stable=True)
+                            release.publish_release(plan, assets)
                 self.assertEqual(checks, 2)
                 self.assertTrue(state.release['draft'])
                 self.assertEqual(len(state.release['assets']), 4)
@@ -659,7 +710,7 @@ class PublicReleaseMutationTests(unittest.TestCase):
              patch.object(release, '_assert_current_release_source'), patch.object(release, '_upload_asset_once', side_effect=upload), patch.dict('os.environ', {
                 'EXPECTED_PLAN_SHA256': plan['planSha256'], 'GITHUB_RUN_ID': '444',
                 'AEGIS_IOS_GITHUB_RELEASE_ADMIN_IDS': '2', 'CONTROLLER_ADMIN_IDS': '1'}):
-            release.publish_release(plan, assets, stable=True)
+            release.publish_release(plan, assets)
 
         payload = next(payload for path, payload in state.create_calls if path == 'releases')
         self.assertIs(payload['prerelease'], False)
