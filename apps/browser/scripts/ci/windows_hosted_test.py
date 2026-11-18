@@ -162,6 +162,19 @@ class HostedTrialTest(unittest.TestCase):
         })
         self.assertIn(hosted.ACCESS_CORE_TESTS, hosted.TARGETS)
 
+    def test_windows_routing_regressions_are_in_the_execution_plan(self):
+        source = hosted.BROWSER / 'overlay/chrome/browser/aegis/access'
+        files = {
+            'access_service_coordinator_unittests': 'access_site_proxy_product_unittest.cc',
+            'access_network_context_transport_unittests': 'access_private_publication_unittest.cc',
+        }
+        for target, filename in files.items():
+            case = re.search(r'#if BUILDFLAG\(IS_MAC\) \|\| BUILDFLAG\(IS_WIN\)\s+'
+                             r'TEST_F\((\w+),\s*(\w+)\)', (source / filename).read_text())
+            self.assertIsNotNone(case, filename)
+            self.assertEqual(hosted.ROUTING_CASES[target], '.'.join(case.groups()))
+            self.assertIn(target, hosted.TARGETS)
+
     def test_patch_replay_and_dirty_source_boundary(self):
         source = self.root / 'src'
         source.mkdir()

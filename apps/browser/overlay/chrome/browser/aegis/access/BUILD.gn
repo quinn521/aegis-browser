@@ -208,6 +208,7 @@ test("access_local_core_manager_unittests") {
     data_deps = [ ":access_local_core_test_child" ]
   } else if (is_win) {
     deps += [
+      ":access_core_log_archive",
       ":access_log_export_dialog_win",
       ":access_private_files_win",
     ]

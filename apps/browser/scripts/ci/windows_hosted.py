@@ -22,6 +22,7 @@ ACCESS_CORE_TESTS = 'access_local_core_manager_unittests'
 ACCESS_CORE_CASES = frozenset([
     'AccessCoreLogWindowsTest.KeepsPrivateAndRegularHistorySeparate',
     'AccessCoreLogWindowsTest.ClearFencesAlreadyQueuedPipeBytes',
+    'AccessCoreLogWindowsTest.FirstExportFromCleanProfileCreatesArchive',
     'AccessLogExportDialogWindowsTest.KeepsDefaultsAndRegistersOverwriteEvents',
     'AccessLogExportDialogWindowsTest.RefusesExistingDestinationAndPreservesFile',
     'AccessLogExportDialogWindowsTest.FreshSelectionCanFinishAfterRefusedOverwrite',
@@ -39,8 +40,14 @@ ENHANCEMENT_CASES = frozenset('EnhancementBrowserTest.' + name for name in [
     'MarkdownFirstFileDropRendersWithoutReload',
     'MarkdownUntrustedFrameRendersAndBlocksExecutableHTML',
 ])
+ROUTING_CASES = {
+    'access_service_coordinator_unittests':
+        'AccessSiteProxyProductTest.DualSelectionReleasesPaidOnlyAfterCommittedLocalOff',
+    'access_network_context_transport_unittests':
+        'AccessPrivatePublicationTest.AccountSitesCoexistWithPrivateLocalSelection',
+}
 TARGETS = ['chrome', 'mini_installer', 'aegis_browser_unittests',
-           ACCESS_CORE_TESTS, 'browser_tests']
+           ACCESS_CORE_TESTS, *ROUTING_CASES, 'browser_tests']
 
 
 class Runner:
@@ -406,11 +413,15 @@ def build(work, evidence):
         runner.run('gn', [source / 'buildtools/win/gn.exe', 'gen', out, '--check'], source, env)
         runner.run('build', [source / 'third_party/ninja/ninja.exe', '-C', out, '-j', '28', *TARGETS], source, env)
         result['build'] = 'passed'
-        for target, expected_cases, extra in [
+        suites = [
             ('aegis_browser_unittests', None, []),
             (ACCESS_CORE_TESTS, ACCESS_CORE_CASES, []),
             ('browser_tests', ENHANCEMENT_CASES,
-             ['--gtest_filter=EnhancementBrowserTest.*'])]:
+             ['--gtest_filter=EnhancementBrowserTest.*']),
+        ]
+        for target, case in ROUTING_CASES.items():
+            suites.append((target, {case}, ['--gtest_filter=' + case]))
+        for target, expected_cases, extra in suites:
             summary = evidence / (target + '.json')
             runner.run(target, [out / (target + '.exe'), '--test-launcher-jobs=4',
                        '--test-launcher-retry-limit=0', '--test-launcher-print-test-stdio=always',

@@ -1,18 +1,18 @@
-From a9b584dd3e88453f2c500cf33da7ca1e0ac12f04 Mon Sep 17 00:00:00 2001
+From 39000ef5fb814e71f9f13cad107a67fd2d74930e Mon Sep 17 00:00:00 2001
 From: Aegis Browser <aegis@users.noreply.github.com>
-Date: Wed, 18 Nov 2026 11:17:31 +0800
+Date: Wed, 18 Nov 2026 17:13:21 +0800
 Subject: [PATCH] feat(access): align Windows with macOS Access
 
 ---
  chrome/browser/BUILD.gn                       |   9 +-
  chrome/browser/aegis/BUILD.gn                 |  45 +-
- chrome/browser/aegis/access/BUILD.gn          | 111 +++-
- .../aegis/access/access_account_win.cc        | 510 ++++++++++++++++++
+ chrome/browser/aegis/access/BUILD.gn          | 112 +++-
+ .../aegis/access/access_account_win.cc        | 517 ++++++++++++++++++
  .../browser/aegis/access/access_account_win.h |  41 ++
- .../access/access_account_win_unittest.cc     | 115 ++++
+ .../access/access_account_win_unittest.cc     | 130 +++++
  .../aegis/access/access_core_log_disk_win.cc  |  98 ++++
- .../access_core_log_disk_win_unittest.cc      |  56 ++
- .../aegis/access/access_core_log_share.cc     |  68 ++-
+ .../access_core_log_disk_win_unittest.cc      |  81 +++
+ .../aegis/access/access_core_log_share.cc     |  71 ++-
  .../aegis/access/access_core_log_share.h      |   6 +
  .../aegis/access/access_core_log_store.cc     |  46 +-
  .../aegis/access/access_core_log_store.h      |  12 +-
@@ -59,7 +59,7 @@ Subject: [PATCH] feat(access): align Windows with macOS Access
  .../websockets/websocket_connector_impl.cc    |   2 +-
  .../web_transport_connector_impl.cc           |   2 +-
  content/public/browser/browser_context.h      |   4 +-
- 55 files changed, 2903 insertions(+), 301 deletions(-)
+ 55 files changed, 2954 insertions(+), 301 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_account_win.cc
  create mode 100644 chrome/browser/aegis/access/access_account_win.h
  create mode 100644 chrome/browser/aegis/access/access_account_win_unittest.cc
@@ -183,7 +183,7 @@ index 4b303325d37f4524f334b970eea7a9d79e03a4f5..c02d6a94423b2e41b959365af8c2a752
        "aegis_torrent_client_unittest.cc",
        "aegis_mac_signing_unittest.cc",
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
-index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..bc6ae857d5f9a262a17032a1f17cdd12b435e193 100644
+index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..7f4f2e9ab941d1655cbf77baaa51695311cfa811 100644
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
 @@ -16,12 +16,17 @@ buildflag_header("access_buildflags") {
@@ -308,12 +308,13 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..bc6ae857d5f9a262a17032a1f17cdd12
    } else {
      sources = [ "access_local_core_manager_unavailable_unittest.cc" ]
    }
-@@ -165,10 +206,38 @@ test("access_local_core_manager_unittests") {
+@@ -165,10 +206,39 @@ test("access_local_core_manager_unittests") {
        "//third_party/zlib/google:compression_utils",
      ]
      data_deps = [ ":access_local_core_test_child" ]
 +  } else if (is_win) {
 +    deps += [
++      ":access_core_log_archive",
 +      ":access_log_export_dialog_win",
 +      ":access_private_files_win",
 +    ]
@@ -348,7 +349,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..bc6ae857d5f9a262a17032a1f17cdd12
    source_set("access_core_log_archive") {
      sources = [
        "access_core_log_share.cc",
-@@ -178,8 +247,13 @@ if (is_mac) {
+@@ -178,8 +248,13 @@ if (is_mac) {
        "//base",
        "//third_party/zlib/google:compression_utils",
      ]
@@ -362,7 +363,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..bc6ae857d5f9a262a17032a1f17cdd12
    executable("access_local_core_test_child") {
      testonly = true
      sources = [ "access_local_core_test_child.cc" ]
-@@ -499,23 +573,36 @@ source_set("access_site_proxy_bubble") {
+@@ -499,23 +574,36 @@ source_set("access_site_proxy_bubble") {
      ":access_site_proxy_bubble_model",
      ":access_site_proxy_session",
      "//base",
@@ -404,10 +405,10 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..bc6ae857d5f9a262a17032a1f17cdd12
  test("access_site_proxy_bubble_unittests") {
 diff --git a/chrome/browser/aegis/access/access_account_win.cc b/chrome/browser/aegis/access/access_account_win.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..cb702926b6a409ff3720f367f4e39271154ed3e4
+index 0000000000000000000000000000000000000000..7c3524e83e5bf61e3a7f076d95be72e8a217d613
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_win.cc
-@@ -0,0 +1,510 @@
+@@ -0,0 +1,517 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_account_win.h"
 +
@@ -475,7 +476,7 @@ index 0000000000000000000000000000000000000000..cb702926b6a409ff3720f367f4e39271
 +  const bool loopback = host == "127.0.0.1" || host == "[::1]";
 +  if (!url.is_valid() || !url.has_host() || url.has_username() ||
 +      url.has_password() || url.has_query() || url.has_ref() ||
-+      url.path_piece() != "/" || account.empty() || !Token(token) ||
++      url.path() != "/" || account.empty() || !Token(token) ||
 +      !(url.SchemeIs("https") || (loopback && url.SchemeIs("http")))) {
 +    return std::nullopt;
 +  }
@@ -519,6 +520,38 @@ index 0000000000000000000000000000000000000000..cb702926b6a409ff3720f367f4e39271
 +  return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 +}
 +
++std::optional<base::DictValue> ReadBindingData(HANDLE file) {
++  LARGE_INTEGER length{};
++  if (!::GetFileSizeEx(file, &length) || length.QuadPart <= 0 ||
++      length.QuadPart > kMaxBinding) {
++    return std::nullopt;
++  }
++  std::string bytes(static_cast<size_t>(length.QuadPart), '\0');
++  DWORD count = 0;
++  if (!::ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()),
++                  &count, nullptr) || count != bytes.size()) {
++    return std::nullopt;
++  }
++  return base::JSONReader::ReadDict(bytes, base::JSON_PARSE_RFC);
++}
++
++std::string CurrentBindingState(const base::FilePath& path,
++                                const FileIdentity& original,
++                                const std::string& generation) {
++  auto file = OpenBinding(path, GENERIC_READ | READ_CONTROL);
++  if (!file.is_valid()) {
++    return Missing(::GetLastError()) ? "signed_out" : "unavailable";
++  }
++  auto identity = Identity(file.get());
++  if (!identity || !SameFile(*identity, original) ||
++      !IsPrivateAccessFile(file.get())) {
++    return "superseded";
++  }
++  auto data = ReadBindingData(file.get());
++  const auto* current = data ? data->FindString("generation") : nullptr;
++  return current && *current == generation ? "" : "superseded";
++}
++
 +std::optional<Binding> ReadBinding(
 +    const base::FilePath& profile,
 +    std::string& failure,
@@ -540,18 +573,7 @@ index 0000000000000000000000000000000000000000..cb702926b6a409ff3720f367f4e39271
 +  }
 +  const auto original = Identity(file.get());
 +  if (!original || !IsPrivateAccessFile(file.get())) return std::nullopt;
-+  LARGE_INTEGER length{};
-+  if (!::GetFileSizeEx(file.get(), &length) || length.QuadPart <= 0 ||
-+      length.QuadPart > kMaxBinding) {
-+    return std::nullopt;
-+  }
-+  std::string bytes(static_cast<size_t>(length.QuadPart), '\0');
-+  DWORD count = 0;
-+  if (!::ReadFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()),
-+                   &count, nullptr) || count != static_cast<DWORD>(bytes.size())) {
-+    return std::nullopt;
-+  }
-+  auto json = base::JSONReader::ReadDict(bytes, base::JSON_PARSE_RFC);
++  auto json = ReadBindingData(file.get());
 +  if (!json) return std::nullopt;
 +  const auto* origin = json->FindString("origin");
 +  const auto* account = json->FindString("accountId");
@@ -564,29 +586,15 @@ index 0000000000000000000000000000000000000000..cb702926b6a409ff3720f367f4e39271
 +  auto binding = MakeBinding(*origin, *account, *token);
 +  if (!binding) return std::nullopt;
 +
-+  // Release the write exclusion after the bounded read; retain the identity
-+  // handle so a replaced file cannot acquire its ID. The path is opened again
-+  // at delivery and at each use, including for an atomic A → B → A switch.
-+  base::win::ScopedHandle retained(::CreateFileW(
-+      path.value().c_str(), FILE_READ_ATTRIBUTES,
-+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-+  const auto retained_id = retained.is_valid() ? Identity(retained.get())
-+                                               : std::nullopt;
-+  if (!retained_id || !SameFile(*retained_id, *original)) {
-+    failure = "superseded";
++  // A live handle would leave the filename delete-pending on sign-out.
++  // The persisted generation distinguishes new bindings even if an ID is reused.
++  binding->changed = base::BindRepeating(&CurrentBindingState, path, *original,
++                                         *generation);
++  auto state = binding->changed.Run();
++  if (!state.empty()) {
++    failure = std::move(state);
 +    return std::nullopt;
 +  }
-+  binding->changed = base::BindRepeating(
-+      [](const base::FilePath& path, FileIdentity original,
-+         const base::win::ScopedHandle& retained) -> std::string {
-+        auto current = OpenBinding(path, FILE_READ_ATTRIBUTES);
-+        const DWORD error = ::GetLastError();
-+        if (!current.is_valid()) return Missing(error) ? "signed_out" : "unavailable";
-+        const auto id = Identity(current.get());
-+        return retained.is_valid() && id && SameFile(*id, original) ? ""
-+                                                                   : "superseded";
-+      }, path, *original, std::move(retained));
 +  return binding;
 +}
 +
@@ -967,10 +975,10 @@ index 0000000000000000000000000000000000000000..306588eab32da7af4d22a0c135a9810e
 +#endif
 diff --git a/chrome/browser/aegis/access/access_account_win_unittest.cc b/chrome/browser/aegis/access/access_account_win_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..c71428f30a6380d4f910e777a78a683ba7db96d4
+index 0000000000000000000000000000000000000000..56248656de3f311f768e9a719501e0821070a683
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_account_win_unittest.cc
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,130 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_account_win.h"
 +
@@ -1062,7 +1070,9 @@ index 0000000000000000000000000000000000000000..c71428f30a6380d4f910e777a78a683b
 +  const auto* remaining = active.FindDict("entitlement")->FindString("remainingBytes");
 +  ASSERT_TRUE(remaining);
 +  EXPECT_EQ(*remaining, "7");
++  // Signing out must release the filename even while the UI holds a snapshot.
 +  ASSERT_TRUE(base::DeleteFile(File()));
++  EXPECT_FALSE(base::PathExists(File()));
 +  auto removed = snapshot.Run();
 +  ASSERT_TRUE(removed.FindString("state"));
 +  EXPECT_EQ(*removed.FindString("state"), "signed_out");
@@ -1071,6 +1081,19 @@ index 0000000000000000000000000000000000000000..c71428f30a6380d4f910e777a78a683b
 +  auto replaced = snapshot.Run();
 +  ASSERT_TRUE(replaced.FindString("state"));
 +  EXPECT_EQ(*replaced.FindString("state"), "superseded");
++}
++
++TEST_F(AccessAccountWindowsTest, RebindsBeforeOldSnapshotIsPolled) {
++  ASSERT_NO_FATAL_FAILURE(WriteBinding());
++  base::test::TestFuture<AccountSnapshot> result;
++  QueryWindowsAccessAccount(profile_, result.GetCallback());
++  auto previous = result.Take();
++  ASSERT_TRUE(base::DeleteFile(File()));
++  ASSERT_NO_FATAL_FAILURE(WriteBinding());
++  auto stale = previous.Run();
++  ASSERT_TRUE(stale.FindString("state"));
++  EXPECT_EQ(*stale.FindString("state"), "superseded");
++  EXPECT_FALSE(stale.FindDict("entitlement"));
 +}
 +
 +TEST_F(AccessAccountWindowsTest, RejectsRedirectWithoutContactingDestination) {
@@ -1192,10 +1215,10 @@ index 0000000000000000000000000000000000000000..147ef72095fa0427d6e6afd35746ed58
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_core_log_disk_win_unittest.cc b/chrome/browser/aegis/access/access_core_log_disk_win_unittest.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..144e8e7fd7159801e715808dfc3258dfe3059499
+index 0000000000000000000000000000000000000000..773152e134cca8b75c8c6b7b76742409e577dc99
 --- /dev/null
 +++ b/chrome/browser/aegis/access/access_core_log_disk_win_unittest.cc
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,81 @@
 +// Copyright 2026 GCSA
 +#include "chrome/browser/aegis/access/access_core_log_disk.h"
 +
@@ -1209,6 +1232,9 @@ index 0000000000000000000000000000000000000000..144e8e7fd7159801e715808dfc3258df
 +#include "base/files/file.h"
 +#include "base/files/file_util.h"
 +#include "base/files/scoped_temp_dir.h"
++#include "base/test/task_environment.h"
++#include "base/test/test_future.h"
++#include "chrome/browser/aegis/access/access_core_log_share.h"
 +#include "chrome/browser/aegis/access/access_core_log_store.h"
 +#include "chrome/browser/aegis/access/access_private_files_win.h"
 +#include "testing/gtest/include/gtest/gtest.h"
@@ -1229,6 +1255,28 @@ index 0000000000000000000000000000000000000000..144e8e7fd7159801e715808dfc3258df
 +  EXPECT_TRUE(history.empty());
 +  ASSERT_TRUE(ReadCoreLogHistory(profile, CoreLogProfile::kRegular, &history));
 +  EXPECT_EQ(history, "regular");
++}
++
++TEST(AccessCoreLogWindowsTest, FirstExportFromCleanProfileCreatesArchive) {
++  base::test::TaskEnvironment environment;
++  base::ScopedTempDir temp;
++  ASSERT_TRUE(temp.CreateUniqueTempDir());
++  const auto profile = temp.GetPath().AppendASCII("profile");
++  ASSERT_TRUE(CreatePrivateAccessDirectory(profile));
++  const auto preferences = profile.AppendASCII("Preferences");
++  ASSERT_TRUE(base::WriteFile(preferences, "{}"));
++
++  CoreLogShareSession session;
++  base::test::TestFuture<base::FilePath, base::ScopedClosureRunner> ready;
++  base::test::TestFuture<bool> cleaned;
++  session.Start(profile, "first export", ready.GetCallback(), cleaned.GetCallback());
++  auto [archive, release] = ready.Take();
++  ASSERT_FALSE(archive.empty());
++  EXPECT_TRUE(base::PathExists(archive));
++  release.RunAndReset();
++  EXPECT_TRUE(cleaned.Get());
++  EXPECT_FALSE(base::PathExists(archive));
++  EXPECT_TRUE(base::PathExists(preferences));
 +}
 +
 +TEST(AccessCoreLogWindowsTest, ClearFencesAlreadyQueuedPipeBytes) {
@@ -1253,7 +1301,7 @@ index 0000000000000000000000000000000000000000..144e8e7fd7159801e715808dfc3258df
 +}  // namespace
 +}  // namespace aegis::access
 diff --git a/chrome/browser/aegis/access/access_core_log_share.cc b/chrome/browser/aegis/access/access_core_log_share.cc
-index d696afb29b231d83b82b5de64da53704e6f80970..93de71dcb1fa6ad1a156070c99e7324abc365289 100644
+index d696afb29b231d83b82b5de64da53704e6f80970..0178dd44a48fe838500ef00ce4ffb4ac34cc70a8 100644
 --- a/chrome/browser/aegis/access/access_core_log_share.cc
 +++ b/chrome/browser/aegis/access/access_core_log_share.cc
 @@ -1,7 +1,14 @@
@@ -1297,17 +1345,20 @@ index d696afb29b231d83b82b5de64da53704e6f80970..93de71dcb1fa6ad1a156070c99e7324a
  }
  
  // Accessed only on g_archive_runner. There is one active archive per
-@@ -68,23 +83,36 @@ ArchiveState& StateForProfile(const base::FilePath& profile) {
+@@ -68,23 +83,39 @@ ArchiveState& StateForProfile(const base::FilePath& profile) {
  bool RecoverCoreLogArchives(const base::FilePath& profile) {
    if (!IsOwnedDirectory(profile))
      return false;
 +#if BUILDFLAG(IS_WIN)
 +  constexpr size_t kSuffixLength = 36;
++  // Windows treats a glob with zero matches as a failed enumeration. Inspect
++  // immediate entries and select only our archive names below.
++  const base::FilePath glob;
 +#else
 +  constexpr size_t kSuffixLength = 6;
-+#endif
 +  const base::FilePath glob = base::FilePath().AppendASCII(
 +      std::string(kCoreLogSharePrefix) + std::string(kSuffixLength, '?'));
++#endif
    base::FileEnumerator files(
        profile, false, base::FileEnumerator::FILES |
 -                          base::FileEnumerator::DIRECTORIES |
@@ -1339,7 +1390,7 @@ index d696afb29b231d83b82b5de64da53704e6f80970..93de71dcb1fa6ad1a156070c99e7324a
      if (!RemoveOwnedArchive(path))
        recovered = false;
    }
-@@ -100,9 +128,27 @@ bool WriteCoreLogArchive(const base::FilePath& directory,
+@@ -100,9 +131,27 @@ bool WriteCoreLogArchive(const base::FilePath& directory,
      return false;
    base::File file(directory.AppendASCII(kCoreLogArchive),
                    base::File::FLAG_CREATE | base::File::FLAG_WRITE);
@@ -1369,7 +1420,7 @@ index d696afb29b231d83b82b5de64da53704e6f80970..93de71dcb1fa6ad1a156070c99e7324a
  
  class CoreLogShareSession::ShutdownHandle
      : public std::enable_shared_from_this<ShutdownHandle> {
-@@ -183,9 +229,17 @@ class CoreLogShareSession::Writer {
+@@ -183,9 +232,17 @@ class CoreLogShareSession::Writer {
        state.active = true;
        profile_ = parent;
      }

@@ -11,6 +11,9 @@
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/test/task_environment.h"
+#include "base/test/test_future.h"
+#include "chrome/browser/aegis/access/access_core_log_share.h"
 #include "chrome/browser/aegis/access/access_core_log_store.h"
 #include "chrome/browser/aegis/access/access_private_files_win.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -31,6 +34,28 @@ TEST(AccessCoreLogWindowsTest, KeepsPrivateAndRegularHistorySeparate) {
   EXPECT_TRUE(history.empty());
   ASSERT_TRUE(ReadCoreLogHistory(profile, CoreLogProfile::kRegular, &history));
   EXPECT_EQ(history, "regular");
+}
+
+TEST(AccessCoreLogWindowsTest, FirstExportFromCleanProfileCreatesArchive) {
+  base::test::TaskEnvironment environment;
+  base::ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+  const auto profile = temp.GetPath().AppendASCII("profile");
+  ASSERT_TRUE(CreatePrivateAccessDirectory(profile));
+  const auto preferences = profile.AppendASCII("Preferences");
+  ASSERT_TRUE(base::WriteFile(preferences, "{}"));
+
+  CoreLogShareSession session;
+  base::test::TestFuture<base::FilePath, base::ScopedClosureRunner> ready;
+  base::test::TestFuture<bool> cleaned;
+  session.Start(profile, "first export", ready.GetCallback(), cleaned.GetCallback());
+  auto [archive, release] = ready.Take();
+  ASSERT_FALSE(archive.empty());
+  EXPECT_TRUE(base::PathExists(archive));
+  release.RunAndReset();
+  EXPECT_TRUE(cleaned.Get());
+  EXPECT_FALSE(base::PathExists(archive));
+  EXPECT_TRUE(base::PathExists(preferences));
 }
 
 TEST(AccessCoreLogWindowsTest, ClearFencesAlreadyQueuedPipeBytes) {

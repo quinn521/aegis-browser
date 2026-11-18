@@ -89,7 +89,9 @@ TEST_F(AccessAccountWindowsTest, ValidatesAccountAndRetiresRemovedBinding) {
   const auto* remaining = active.FindDict("entitlement")->FindString("remainingBytes");
   ASSERT_TRUE(remaining);
   EXPECT_EQ(*remaining, "7");
+  // Signing out must release the filename even while the UI holds a snapshot.
   ASSERT_TRUE(base::DeleteFile(File()));
+  EXPECT_FALSE(base::PathExists(File()));
   auto removed = snapshot.Run();
   ASSERT_TRUE(removed.FindString("state"));
   EXPECT_EQ(*removed.FindString("state"), "signed_out");
@@ -98,6 +100,19 @@ TEST_F(AccessAccountWindowsTest, ValidatesAccountAndRetiresRemovedBinding) {
   auto replaced = snapshot.Run();
   ASSERT_TRUE(replaced.FindString("state"));
   EXPECT_EQ(*replaced.FindString("state"), "superseded");
+}
+
+TEST_F(AccessAccountWindowsTest, RebindsBeforeOldSnapshotIsPolled) {
+  ASSERT_NO_FATAL_FAILURE(WriteBinding());
+  base::test::TestFuture<AccountSnapshot> result;
+  QueryWindowsAccessAccount(profile_, result.GetCallback());
+  auto previous = result.Take();
+  ASSERT_TRUE(base::DeleteFile(File()));
+  ASSERT_NO_FATAL_FAILURE(WriteBinding());
+  auto stale = previous.Run();
+  ASSERT_TRUE(stale.FindString("state"));
+  EXPECT_EQ(*stale.FindString("state"), "superseded");
+  EXPECT_FALSE(stale.FindDict("entitlement"));
 }
 
 TEST_F(AccessAccountWindowsTest, RejectsRedirectWithoutContactingDestination) {

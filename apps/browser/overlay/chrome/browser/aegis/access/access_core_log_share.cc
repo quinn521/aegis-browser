@@ -85,11 +85,14 @@ bool RecoverCoreLogArchives(const base::FilePath& profile) {
     return false;
 #if BUILDFLAG(IS_WIN)
   constexpr size_t kSuffixLength = 36;
+  // Windows treats a glob with zero matches as a failed enumeration. Inspect
+  // immediate entries and select only our archive names below.
+  const base::FilePath glob;
 #else
   constexpr size_t kSuffixLength = 6;
-#endif
   const base::FilePath glob = base::FilePath().AppendASCII(
       std::string(kCoreLogSharePrefix) + std::string(kSuffixLength, '?'));
+#endif
   base::FileEnumerator files(
       profile, false, base::FileEnumerator::FILES |
                           base::FileEnumerator::DIRECTORIES

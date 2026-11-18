@@ -65,7 +65,7 @@ std::optional<Binding> MakeBinding(std::string_view origin,
   const bool loopback = host == "127.0.0.1" || host == "[::1]";
   if (!url.is_valid() || !url.has_host() || url.has_username() ||
       url.has_password() || url.has_query() || url.has_ref() ||
-      url.path_piece() != "/" || account.empty() || !Token(token) ||
+      url.path() != "/" || account.empty() || !Token(token) ||
       !(url.SchemeIs("https") || (loopback && url.SchemeIs("http")))) {
     return std::nullopt;
   }
@@ -109,6 +109,38 @@ bool Missing(DWORD error) {
   return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
 }
 
+std::optional<base::DictValue> ReadBindingData(HANDLE file) {
+  LARGE_INTEGER length{};
+  if (!::GetFileSizeEx(file, &length) || length.QuadPart <= 0 ||
+      length.QuadPart > kMaxBinding) {
+    return std::nullopt;
+  }
+  std::string bytes(static_cast<size_t>(length.QuadPart), '\0');
+  DWORD count = 0;
+  if (!::ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()),
+                  &count, nullptr) || count != bytes.size()) {
+    return std::nullopt;
+  }
+  return base::JSONReader::ReadDict(bytes, base::JSON_PARSE_RFC);
+}
+
+std::string CurrentBindingState(const base::FilePath& path,
+                                const FileIdentity& original,
+                                const std::string& generation) {
+  auto file = OpenBinding(path, GENERIC_READ | READ_CONTROL);
+  if (!file.is_valid()) {
+    return Missing(::GetLastError()) ? "signed_out" : "unavailable";
+  }
+  auto identity = Identity(file.get());
+  if (!identity || !SameFile(*identity, original) ||
+      !IsPrivateAccessFile(file.get())) {
+    return "superseded";
+  }
+  auto data = ReadBindingData(file.get());
+  const auto* current = data ? data->FindString("generation") : nullptr;
+  return current && *current == generation ? "" : "superseded";
+}
+
 std::optional<Binding> ReadBinding(
     const base::FilePath& profile,
     std::string& failure,
@@ -130,18 +162,7 @@ std::optional<Binding> ReadBinding(
   }
   const auto original = Identity(file.get());
   if (!original || !IsPrivateAccessFile(file.get())) return std::nullopt;
-  LARGE_INTEGER length{};
-  if (!::GetFileSizeEx(file.get(), &length) || length.QuadPart <= 0 ||
-      length.QuadPart > kMaxBinding) {
-    return std::nullopt;
-  }
-  std::string bytes(static_cast<size_t>(length.QuadPart), '\0');
-  DWORD count = 0;
-  if (!::ReadFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()),
-                   &count, nullptr) || count != static_cast<DWORD>(bytes.size())) {
-    return std::nullopt;
-  }
-  auto json = base::JSONReader::ReadDict(bytes, base::JSON_PARSE_RFC);
+  auto json = ReadBindingData(file.get());
   if (!json) return std::nullopt;
   const auto* origin = json->FindString("origin");
   const auto* account = json->FindString("accountId");
@@ -154,29 +175,15 @@ std::optional<Binding> ReadBinding(
   auto binding = MakeBinding(*origin, *account, *token);
   if (!binding) return std::nullopt;
 
-  // Release the write exclusion after the bounded read; retain the identity
-  // handle so a replaced file cannot acquire its ID. The path is opened again
-  // at delivery and at each use, including for an atomic A → B → A switch.
-  base::win::ScopedHandle retained(::CreateFileW(
-      path.value().c_str(), FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
-  const auto retained_id = retained.is_valid() ? Identity(retained.get())
-                                               : std::nullopt;
-  if (!retained_id || !SameFile(*retained_id, *original)) {
-    failure = "superseded";
+  // A live handle would leave the filename delete-pending on sign-out.
+  // The persisted generation distinguishes new bindings even if an ID is reused.
+  binding->changed = base::BindRepeating(&CurrentBindingState, path, *original,
+                                         *generation);
+  auto state = binding->changed.Run();
+  if (!state.empty()) {
+    failure = std::move(state);
     return std::nullopt;
   }
-  binding->changed = base::BindRepeating(
-      [](const base::FilePath& path, FileIdentity original,
-         const base::win::ScopedHandle& retained) -> std::string {
-        auto current = OpenBinding(path, FILE_READ_ATTRIBUTES);
-        const DWORD error = ::GetLastError();
-        if (!current.is_valid()) return Missing(error) ? "signed_out" : "unavailable";
-        const auto id = Identity(current.get());
-        return retained.is_valid() && id && SameFile(*id, original) ? ""
-                                                                   : "superseded";
-      }, path, *original, std::move(retained));
   return binding;
 }
 
