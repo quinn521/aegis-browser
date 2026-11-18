@@ -1,6 +1,6 @@
-From 326ebcfe26afa6ee0c3326ac455c02f98909b132 Mon Sep 17 00:00:00 2001
+From 1cf4fbf2f7d0e44da0097f05aa1cd9437c362eca Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
-Date: Wed, 18 Nov 2026 01:09:38 +0800
+Date: Wed, 18 Nov 2026 18:50:13 +0800
 Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  storage
 
@@ -27,15 +27,15 @@ Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  chrome/browser/aegis/access/alpha_access.gni  |  13 +
  .../access/verify_access_build_identity.py    |  55 ++++
  .../verify_access_build_identity_test.py      |  79 ++++++
- chrome/browser/ui/webui/aegis/BUILD.gn        |   5 +
+ chrome/browser/ui/webui/aegis/BUILD.gn        |   3 +
  chrome/browser/ui/webui/aegis/aegis_ui.cc     |  22 ++
- .../ui/webui/aegis/aegis_ui_handler.cc        |  42 +++
- .../browser/ui/webui/aegis/aegis_ui_handler.h |   7 +
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  47 ++++
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   9 +
  components/aegis_access/BUILD.gn              |   5 +
  .../aegis_access/access_options_capability.h  |  87 ++++++
  .../access_options_capability_test.cc         |  70 +++++
  components/aegis_access/access_sources.json   |   3 +
- 30 files changed, 1288 insertions(+), 19 deletions(-)
+ 30 files changed, 1293 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/aegis/access/access_options_browsertest.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.cc
  create mode 100644 chrome/browser/aegis/access/access_options_service.h
@@ -49,10 +49,10 @@ Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  create mode 100644 components/aegis_access/access_options_capability_test.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
-index 6171cf2690b9c6abdff0348745016639175b9838..db3f4c9a493567b3d6ceacf638366022ca56dc51 100644
+index c02d6a94423b2e41b959365af8c2a75234e59de9..a0037e5211136b61d10247b10805f8678c42e5e7 100644
 --- a/chrome/browser/aegis/BUILD.gn
 +++ b/chrome/browser/aegis/BUILD.gn
-@@ -326,7 +326,14 @@ if (!is_android) {
+@@ -352,7 +352,14 @@ if (!is_android) {
        "enhancements/enhancement_browsertest.cc",
        "google_service_prompt_browsertest.cc",
      ]
@@ -68,7 +68,7 @@ index 6171cf2690b9c6abdff0348745016639175b9838..db3f4c9a493567b3d6ceacf638366022
        ":agent_model_transport",
        "//base",
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
-index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..9a53f175e504bf53b3d9315557d45be767a95e45 100644
+index 7f4f2e9ab941d1655cbf77baaa51695311cfa811..53f07510d4f31d54f592c4dee7db6190a0841be1 100644
 --- a/chrome/browser/aegis/access/BUILD.gn
 +++ b/chrome/browser/aegis/access/BUILD.gn
 @@ -10,6 +10,8 @@ buildflag_header("access_buildflags") {
@@ -80,7 +80,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..9a53f175e504bf53b3d9315557d45be7
      "AEGIS_PRIVATE_TEST_NODE_ENABLED=$aegis_private_test_node_enabled",
      "AEGIS_BETA_TEST_NODE_ENABLED=$aegis_beta_test_node_enabled",
    ]
-@@ -67,6 +69,21 @@ if (aegis_private_test_node_enabled) {
+@@ -76,6 +78,21 @@ if (aegis_private_test_node_enabled) {
    }
  }
  
@@ -102,7 +102,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..9a53f175e504bf53b3d9315557d45be7
  source_set("access_build_channel") {
    sources = [
      "access_build_channel.cc",
-@@ -77,7 +94,10 @@ source_set("access_build_channel") {
+@@ -86,7 +103,10 @@ source_set("access_build_channel") {
      "//chrome/common:channel_info",
      "//components/version_info:channel",
    ]
@@ -114,7 +114,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..9a53f175e504bf53b3d9315557d45be7
  }
  
  source_set("access_core_log") {
-@@ -487,6 +507,7 @@ source_set("access_site_proxy_bubble") {
+@@ -562,6 +582,7 @@ source_set("access_site_proxy_bubble") {
    ]
    deps = [
      ":access_build_channel",
@@ -122,7 +122,7 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..9a53f175e504bf53b3d9315557d45be7
      ":access_identity_generation_source",
      ":access_local_core_manager",
      ":access_network_context_transport",
-@@ -730,3 +751,28 @@ test("access_async_rule_store_unittests") {
+@@ -818,3 +839,28 @@ test("access_async_rule_store_unittests") {
      "//testing/gtest",
    ]
  }
@@ -1151,7 +1151,7 @@ index 14dbda98ada8b2d129ad37a3f6fd56c957c09da3..2b9e76626e05f8ababf7d96d2ede25f6
    bool mutation_in_flight_ = false;
    bool recovery_required_ = false;
 diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
-index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b667fde84 100644
+index 600899de2eab6ad031a17f01c79e9e58321f5ad1..114c8d26754cdc3397a66665e76b7be9b3a116f3 100644
 --- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 +++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 @@ -2,6 +2,7 @@
@@ -1162,7 +1162,7 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
  
  #include <algorithm>
  #include <utility>
-@@ -198,6 +199,16 @@ bool AccessSiteProxyBubbleController::ApplyHostProxyToggle(
+@@ -202,6 +203,16 @@ bool AccessSiteProxyBubbleController::ApplyHostProxyToggle(
  }
  
  bool AccessSiteProxyBubbleController::IsDevAllowBlockPanelRegistered() const {
@@ -1179,7 +1179,7 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
    return IsAccessDevAllowBlockPanelAdmitted(chrome::GetChannel()) &&
           !IsGeneralAccessRuleEditorRegistered(chrome::GetChannel());
  }
-@@ -205,6 +216,8 @@ bool AccessSiteProxyBubbleController::IsDevAllowBlockPanelRegistered() const {
+@@ -209,6 +220,8 @@ bool AccessSiteProxyBubbleController::IsDevAllowBlockPanelRegistered() const {
  AccessDevAllowBlockPanelSnapshot
  AccessSiteProxyBubbleController::DevAllowBlockSnapshotForCommittedUrl(
      const GURL& committed_url) const {
@@ -1188,7 +1188,7 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
    return BuildAccessDevAllowBlockPanelSnapshot(chrome::GetChannel(),
                                                 dev_intent_store_, committed_url);
  }
-@@ -214,6 +227,8 @@ AccessSiteProxyBubbleController::ApplyDevAllowBlock(
+@@ -218,6 +231,8 @@ AccessSiteProxyBubbleController::ApplyDevAllowBlock(
      std::string_view raw_host,
      AccessDevAllowBlockAction action) {
    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -1197,7 +1197,7 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
    AccessDevAllowBlockApplyResult result = ApplyAccessDevAllowBlock(
        &dev_intent_store_, chrome::GetChannel(), raw_host, action);
    if (result.status != AccessDevAllowBlockApplyStatus::kApplied) {
-@@ -374,7 +389,8 @@ void AccessSiteProxyBubbleController::PrepareLocalCore(const AccessSiteHost& hos
+@@ -378,7 +393,8 @@ void AccessSiteProxyBubbleController::PrepareLocalCore(const AccessSiteHost& hos
        ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), base::FilePath())
        : std::nullopt;
    if (!owner || !transport->OwnsConfiguredPartition(*owner) ||
@@ -1207,7 +1207,7 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
      FailCorePreparation(host, "The test proxy is unavailable in this build.");
      return;
    }
-@@ -608,7 +624,9 @@ void AccessSiteProxyBubbleController::EnsureLocalCoreForRequest(
+@@ -631,7 +647,9 @@ void AccessSiteProxyBubbleController::EnsureLocalCoreForRequest(
    auto* coordinator = AccessServiceCoordinator::Get(profile_);
    if (!expected_owner || *expected_owner != owner ||
        !transport->OwnsConfiguredPartition(owner) || group != LocalProxyGroup(owner) ||
@@ -1219,7 +1219,7 @@ index 77dd981455d236e0151e8d6081d396726824b1ab..a15ff7b90fa4747826a7d75aaa2d9f1b
      return;
    }
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
-index 91ac888befea0f68f9c2d82729fd6022a5890747..b0f1042d83c0528fa74f8e3a9276755f12b6e0c5 100644
+index fbe5c7b04d65541dcbb7c3f3897848ec1bb53019..5f231534600256e9e1e1337ed530dfe317be49f0 100644
 --- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 +++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 @@ -515,7 +515,9 @@ TEST_F(AccessSiteProxyProductTest, OnOffOnUsesRealCoreAndCommittedRevision) {
@@ -1255,7 +1255,7 @@ index 91ac888befea0f68f9c2d82729fd6022a5890747..b0f1042d83c0528fa74f8e3a9276755f
      EXPECT_TRUE(Snapshot().toggle_on);
      EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
 diff --git a/chrome/browser/aegis/access/alpha_access.gni b/chrome/browser/aegis/access/alpha_access.gni
-index bd1b3a851d1f4104a4386892ce19a269852d85b5..41dfad030292816e08fed470eded9a692fa49276 100644
+index 71085a4b6f67b59aa8320bb3d50bc4a5944e0dc8..e1c1c089ad449039a890b4cc647715ab4fd46fbc 100644
 --- a/chrome/browser/aegis/access/alpha_access.gni
 +++ b/chrome/browser/aegis/access/alpha_access.gni
 @@ -3,6 +3,8 @@
@@ -1269,8 +1269,8 @@ index bd1b3a851d1f4104a4386892ce19a269852d85b5..41dfad030292816e08fed470eded9a69
    aegis_beta_test_node_enabled = false
 @@ -21,3 +23,14 @@ aegis_private_test_node_enabled =
  assert(!aegis_private_test_node_enabled ||
-            (is_mac && !is_official_build && !is_chrome_branded),
-        "Private test nodes require a non-official, unbranded macOS test build.")
+            ((is_mac || is_win) && !is_official_build && !is_chrome_branded),
+        "Private test nodes require a non-official, unbranded macOS or Windows test build.")
 +
 +assert(aegis_access_product_channel == "unknown" ||
 +           aegis_access_product_channel == "debug" ||
@@ -1429,27 +1429,25 @@ index 0000000000000000000000000000000000000000..3e4054e48a5880bf0e9a4a1b4bc762c3
 +if __name__ == "__main__":
 +    unittest.main()
 diff --git a/chrome/browser/ui/webui/aegis/BUILD.gn b/chrome/browser/ui/webui/aegis/BUILD.gn
-index 2af2384c9831c407789fd30352d979f656dd9371..a97125486eed33102d97db0343e2110c23bfb825 100644
+index fc6203004a34f128eddd7c13ae0ed2b700e21053..200cd2ad6d6b64db31bb66e564f142a5c38bf7bb 100644
 --- a/chrome/browser/ui/webui/aegis/BUILD.gn
 +++ b/chrome/browser/ui/webui/aegis/BUILD.gn
-@@ -28,6 +28,9 @@ source_set("aegis") {
-     "//ui/base",
+@@ -40,6 +40,7 @@ source_set("aegis") {
      "//ui/webui",
    ]
-+  if (is_mac) {
+   if (is_mac) {
 +    deps += [ "//chrome/browser/aegis/access:access_options_service" ]
-+  }
-   if (!is_android) {
-     sources += [
-       "aegis_enhancement_handler.cc",
-@@ -51,3 +54,5 @@ source_set("aegis") {
+     sources += [ "aegis_capture_vision.mm" ]
+     frameworks = [ "Vision.framework" ]
+   }
+@@ -65,3 +66,5 @@ source_set("aegis") {
  
    deps += [ "//chrome/browser:browser_process" ]
  }
 +
 +# The native Options bridge is exclusive to the macOS product.
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui.cc b/chrome/browser/ui/webui/aegis/aegis_ui.cc
-index 3d9f857bebc4edb95bfa038541d23170330da71e..3cc2dffd1a44e49ada999370fc341f8dd07d7ae6 100644
+index d1b74e95589c181a763d691cc484ed1b9077d642..bd43980248e36c59a9a1cf7553526560727e1c3e 100644
 --- a/chrome/browser/ui/webui/aegis/aegis_ui.cc
 +++ b/chrome/browser/ui/webui/aegis/aegis_ui.cc
 @@ -6,6 +6,11 @@
@@ -1464,7 +1462,7 @@ index 3d9f857bebc4edb95bfa038541d23170330da71e..3cc2dffd1a44e49ada999370fc341f8d
  #if !BUILDFLAG(IS_ANDROID)
  #include "chrome/browser/ui/webui/aegis/aegis_gesture_handler.h"
  #include "chrome/browser/ui/webui/aegis/aegis_enhancement_handler.h"
-@@ -684,6 +689,23 @@ AegisUI::AegisUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
+@@ -686,6 +691,23 @@ AegisUI::AegisUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
    source->AddString("aiControlLabel", strings.ai_control_label);
    source->AddString("aiControlHint", strings.ai_control_hint);
    source->AddString("aiControlStatus", strings.ai_control_status);
@@ -1489,7 +1487,7 @@ index 3d9f857bebc4edb95bfa038541d23170330da71e..3cc2dffd1a44e49ada999370fc341f8d
    source->AddString("aiControlLimit", strings.ai_control_limit);
    source->AddString("note", strings.note);
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
-index 83d67e9687613e597b58c9f4d77271fe43673f4e..019575626f9c40fecf8b11b0b026a2dc8b47da88 100644
+index 86160e55de998ffbdf0e848b2c61ecd815099f1d..d8b5beb4d4fcdb5e677c412ddbd7c0f15a4068c5 100644
 --- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
 +++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
 @@ -22,6 +22,8 @@
@@ -1501,21 +1499,25 @@ index 83d67e9687613e597b58c9f4d77271fe43673f4e..019575626f9c40fecf8b11b0b026a2dc
  #include "chrome/browser/aegis/aegis_torrent_client.h"
  #endif
  #include "chrome/browser/aegis/agent/aegis_agent_service.h"
-@@ -360,6 +362,10 @@ void AegisUIHandler::RegisterMessages() {
+@@ -360,6 +362,13 @@ void AegisUIHandler::RegisterMessages() {
+   web_ui()->RegisterMessageCallback(
        "getStatus", base::BindRepeating(&AegisUIHandler::HandleGetStatus,
                                         base::Unretained(this)));
- #if BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_MAC)
 +  web_ui()->RegisterMessageCallback("getAccessOptionsCapabilities",
 +      base::BindRepeating(&AegisUIHandler::HandleGetAccessOptionsCapabilities, base::Unretained(this)));
 +  web_ui()->RegisterMessageCallback("readAccessOptions",
 +      base::BindRepeating(&AegisUIHandler::HandleReadAccessOptions, base::Unretained(this)));
++#endif
++
    web_ui()->RegisterMessageCallback(
-       "getAccessAccountSnapshot",
-       base::BindRepeating(&AegisUIHandler::HandleGetAccessAccountSnapshot,
-@@ -584,6 +590,42 @@ void AegisUIHandler::HandleGetStatus(const base::ListValue& args) {
+       "getImageOcrSettings",
+       base::BindRepeating(&AegisUIHandler::HandleGetImageOcrSettings,
+@@ -592,6 +601,44 @@ void AegisUIHandler::HandleGetStatus(const base::ListValue& args) {
+   ResolveJavascriptCallback(callback_id, BuildStatus());
  }
  
- #if BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_MAC)
 +void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& args) {
 +  if (args.size() != 1 || !args[0].is_string()) return;
 +  AllowJavascript();
@@ -1551,12 +1553,13 @@ index 83d67e9687613e597b58c9f4d77271fe43673f4e..019575626f9c40fecf8b11b0b026a2dc
 +  }
 +  ResolveJavascriptCallback(base::Value(callback_id), response);
 +}
++#endif
 +
- void AegisUIHandler::HandleGetCurrentAccessAccount(const base::ListValue& args) {
-   if (args.size() != 1 || !args[0].is_string()) return;
-   AllowJavascript();
+ void AegisUIHandler::HandleGetImageOcrSettings(const base::ListValue& args) {
+   if (args.size() != 1 || !args[0].is_string()) {
+     return;
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
-index 4febe4a1648f95d943097c23e8e6fb6624e58be3..1d1b2c70dd1c2368d0dac8eed521ea9874c58f03 100644
+index 55c16415ce684dcb8add5f5d29e0c8ca7275309f..aa7945d11cbda464243a259a2d3e003179338ab3 100644
 --- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
 +++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
 @@ -17,6 +17,10 @@
@@ -1570,16 +1573,18 @@ index 4febe4a1648f95d943097c23e8e6fb6624e58be3..1d1b2c70dd1c2368d0dac8eed521ea98
  #endif
  #include "content/public/browser/global_routing_id.h"
  #include "content/public/browser/web_ui_message_handler.h"
-@@ -96,6 +100,9 @@ class AegisUIHandler : public content::WebUIMessageHandler,
+@@ -97,6 +101,11 @@ class AegisUIHandler : public content::WebUIMessageHandler,
+   void OnMetalinkStarted(std::string callback_id, bool ok, std::string error);
    void OnMetalinkParsed(std::string callback_id,
                          aegis::MetalinkParseResult result);
- #if BUILDFLAG(IS_MAC)
++#if BUILDFLAG(IS_MAC)
 +  void HandleGetAccessOptionsCapabilities(const base::ListValue& args);
 +  void HandleReadAccessOptions(const base::ListValue& args);
 +  void OnAccessOptionsRead(std::string callback_id, aegis::access::StoreResult<aegis::access::AccessOptionsSnapshot> result);
++#endif
+ #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
    void HandleGetCurrentAccessAccount(const base::ListValue& args);
    void HandleGetAccessAccountSnapshot(const base::ListValue& args);
-   void HandleSetAccessAccountUsageVisible(const base::ListValue& args);
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index cd66e78c53b7ebe66afd73f62bbb76a10ffc046d..2cf778aecf6aa51935fa986aebbb894d9029fa52 100644
 --- a/components/aegis_access/BUILD.gn
@@ -1776,6 +1781,3 @@ index ce3d880390db19853414eabed36c691dbb471046..35bde368d9fde9f0828c7464e04eafa4
      ]
    },
    "test_main": "access_route_planner_native_test.cc",
--- 
-2.54.0 (Apple Git-157)
-

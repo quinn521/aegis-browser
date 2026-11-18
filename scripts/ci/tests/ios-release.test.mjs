@@ -186,17 +186,42 @@ test('candidate Draft survives its skipped upload-only ancestor while requiring 
   assert(draft.if.includes("outputs.destination == 'github-draft'"));
 });
 
+test('Bot controller keeps App key access behind canonical main and administrator admission', () => {
+  const doc = parse(readFileSync('.github/workflows/ios-delivery-bot.yml', 'utf8'));
+  assert.deepEqual(Object.keys(doc.on), ['workflow_dispatch']);
+  assert.deepEqual(doc.permissions, {contents: 'read', actions: 'read'});
+  const job = doc.jobs.controller;
+  assert.equal(job.environment, 'aegis-ios-bot');
+  for (const condition of ["github.repository == 'gcsagroup/aegis-browser'", "github.ref == 'refs/heads/main'",
+    "github.event_name == 'workflow_dispatch'", 'github.run_attempt == 1']) assert(job.if.includes(condition));
+  const guard = job.steps.findIndex(step => step.run === 'node scripts/ci/ios-operator.mjs --context controller');
+  const keyStep = job.steps.findIndex(step => step.env?.AEGIS_IOS_BOT_PRIVATE_KEY);
+  assert(guard >= 0 && keyStep > guard);
+  assert.equal(job.steps[keyStep].run, 'bash scripts/ci/run-ios-delivery-bot.sh');
+  assert.equal(job.steps[keyStep].env.BOT_INPUTS, '${{ toJSON(inputs) }}');
+  assert(!JSON.stringify(doc).includes('AEGIS_ASC_'));
+  assert.equal(doc.on.workflow_dispatch.inputs.operation.default, 'Status');
+  assert.deepEqual(doc.on.workflow_dispatch.inputs.operation.options, [
+    'Status', 'Wait', 'Package', 'Package and upload', 'Draft',
+    'Preview GitHub release', 'Publish Beta release', 'Publish stable release',
+  ]);
+});
+
+test('Bot summary confinement and failure receipts execute through the real shell adapter', () => {
+  execFileSync('python3', ['-B', '-m', 'unittest', 'discover', '-s', 'scripts/release', '-p', 'test_ios_delivery_bot_summary.py'], {stdio: 'pipe'});
+});
+
 test('Simple and Full expose bounded English forms and share the same exact-source engine', () => {
   const workflow = name => parse(readFileSync(`.github/workflows/${name}.yml`, 'utf8'));
   const simple = workflow('ios-delivery');
   const full = workflow('ios-delivery-full');
   const inputs = simple.on.workflow_dispatch.inputs;
-  assert.deepEqual(Object.keys(inputs), ['operation', 'version', 'build', 'product', 'signing_mode', 'private_beta']);
+  assert.deepEqual(Object.keys(inputs), ['operation', 'version', 'build', 'product', 'signing_mode', 'private_beta', 'approved_source_sha']);
   assert.equal(inputs.signing_mode.default, 'cloud');
   assert.deepEqual(inputs.signing_mode.options, ['cloud', 'manual']);
   assert.equal(simple.name, 'iOS Delivery · Simple');
   assert.equal(full.name, 'iOS Delivery · Full');
-  assert.deepEqual(inputs.operation.options, ['Package', 'Package and upload', 'Status', 'Wait']);
+  assert.deepEqual(inputs.operation.options, ['Package', 'Package and upload', 'Status', 'Wait', 'Release Wait']);
   assert.deepEqual(inputs.product.options, ['Alpha', 'Beta', 'Release']);
   assert.equal(inputs.product.default, 'Alpha');
   const fullInputs = full.on.workflow_dispatch.inputs;
@@ -211,7 +236,7 @@ test('Simple and Full expose bounded English forms and share the same exact-sour
   assert.equal(inputs.version.required, true);
   assert.equal(inputs.build.required, true);
   assert(!inputs.source && !inputs.advanced);
-  assert.deepEqual(Object.keys(full.on.workflow_dispatch.inputs), ['operation', 'version', 'build', 'product', 'source', 'signing_mode', 'private_beta', 'package_entrypoint', 'groups', 'stage_input']);
+  assert.deepEqual(Object.keys(full.on.workflow_dispatch.inputs), ['operation', 'version', 'build', 'product', 'source', 'signing_mode', 'private_beta', 'package_entrypoint', 'groups', 'stage_input', 'approved_source_sha']);
   assert.deepEqual(Object.keys(full.jobs), ['delivery']);
   assert.equal(full.jobs.delivery.uses, './.github/workflows/ios-delivery.yml');
   assert.equal(full.jobs.delivery.with.delivery_mode, 'full');
@@ -405,4 +430,43 @@ test('hosted signing loads only environment secrets after source admission and c
   assert.equal(Object.keys(job.steps[setup].env).length, 5);
   assert(Object.values(job.steps[setup].env).every(v => v.startsWith('${{ secrets.AEGIS_IOS_')));
   assert(!JSON.stringify(doc.jobs.admission).includes('secrets.'));
+});
+
+test('public release workflow limits write permission to the serialized publisher', () => {
+  const doc = parse(readFileSync('.github/workflows/ios-github-release.yml', 'utf8'));
+  assert.deepEqual(Object.keys(doc.on), ['workflow_dispatch']);
+  assert.deepEqual(doc.permissions, {actions: 'read', contents: 'read'});
+  assert.deepEqual(doc.jobs.preview.permissions, {actions: 'read', contents: 'read'});
+  assert.deepEqual(doc.jobs.publish.permissions, {actions: 'read', contents: 'write'});
+  assert.deepEqual(doc.jobs.publish.needs, ['preview', 'stable-approval']);
+  assert(doc.jobs.publish.if.includes("inputs.operation == 'Publish Beta'"));
+  assert(doc.jobs.publish.if.includes("needs.stable-approval.result == 'success'"));
+  assert(doc.jobs.publish.if.includes("vars.AEGIS_IOS_GITHUB_RELEASE_ENABLED == 'true'"));
+  assert.equal(doc.jobs.publish.environment, undefined);
+  assert.equal(doc.jobs['stable-approval'].environment, 'aegis-ios-github-production');
+  assert.deepEqual(doc.jobs['stable-approval'].permissions, {});
+  assert.equal(doc.jobs['stable-approval'].concurrency, undefined);
+  assert.equal(doc.concurrency, undefined);
+  assert.equal(doc.jobs.preview.concurrency, undefined);
+  assert.equal(doc.jobs.publish.concurrency.queue, 'max');
+  assert.equal(doc.jobs.publish.concurrency['cancel-in-progress'], undefined);
+  const controller = parse(readFileSync('.github/workflows/ios-delivery-bot.yml', 'utf8'));
+  assert.match(controller.concurrency.group, /Preview GitHub release.*release-preview/u);
+  assert(!JSON.stringify(doc).includes('administration:'));
+  for (const job of Object.values(doc.jobs)) assert(!JSON.stringify(job).includes('secrets.'));
+  assert.equal(doc.jobs.preview.env.AEGIS_IOS_GITHUB_RELEASE_ADMIN_IDS, '${{ vars.AEGIS_IOS_GITHUB_RELEASE_ADMIN_IDS }}');
+  for (const job of [doc.jobs.preview, doc.jobs.publish]) {
+    const artifactDownloads = job.steps.filter(step => step.uses?.startsWith('actions/download-artifact@'));
+    assert.equal(artifactDownloads.length, 0, 'artifact bytes are checked before extracting their payload');
+    const packageDownload = job.steps.find(step => step.run?.includes('ios-github-release.py download-package'));
+    assert.equal(packageDownload.env.PACKAGE_ARTIFACT_ID, '${{ steps.locate.outputs.package_artifact_id }}');
+    assert(packageDownload.run.includes('--package-artifact-id "$PACKAGE_ARTIFACT_ID"'));
+    assert(!packageDownload.run.includes('${{'));
+    const extract = job.steps.find(step => step.run?.includes('ios-github-release.py extract'));
+    assert(extract?.run.includes('--status-run-id "$STATUS_RUN_ID"'));
+    const planStep = job.steps.find(step => /ios-github-release\.py (?:preview|publish) /u.test(step.run));
+    assert.equal(planStep.env.STATUS_ARTIFACT_ID, '${{ steps.locate.outputs.status_artifact_id }}');
+    assert(planStep.run.includes('--status-artifact-id "$STATUS_ARTIFACT_ID"'));
+    assert(!planStep.run.includes('${{'));
+  }
 });
