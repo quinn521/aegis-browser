@@ -387,7 +387,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
         try append(["event":"network", "interface":network])
         var preparationFailures = 0
+        let control = file.deletingLastPathComponent().appendingPathComponent("ios208-campaign-control")
         for host in hosts where !reserved.contains(host) {
+            if (try? String(contentsOf: control, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "stop" {
+                try append(["event":"checkpoint", "reservedCount":reserved.count])
+                return
+            }
             let attempt = UUID().uuidString
             try append(["event":"reserved", "host":host, "attempt":attempt])
             reserved.insert(host)
@@ -400,12 +405,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(100))
             }
             let timedOut = page.status == "正在加载"
-            let content = try? await page.webView?.evaluateJavaScript("document.documentElement.innerHTML") as? String
-            let bodyDigest = content.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() } ?? ""
+            let documentDigest = !timedOut && page.status == "已连接"
+                ? await Self.documentPrefixDigest(page.webView) : ""
             try append(["event":"result", "host":host, "attempt":attempt,
                         "state":timedOut ? "timeout" : page.status,
                         "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
-                        "httpStatus":page.httpStatus ?? 0, "bodySHA256":bodyDigest,
+                        "httpStatus":page.httpStatus ?? 0, "documentPrefixSHA256":documentDigest,
                         "endpoint":page.endpoint?.identity ?? "", "generation":page.endpoint?.generation ?? 0,
                         "actualProtocol":"http"])
             preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
@@ -418,6 +423,33 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
 #endif
 
+    }
+
+    /// Observation must not hold up the next checkpoint when WebContent stops responding.
+    private static func documentPrefixDigest(_ view: WKWebView?) async -> String {
+        guard let view else { return "" }
+        return await withCheckedContinuation { continuation in
+            let result = DocumentDigestResult(continuation)
+            view.evaluateJavaScript("document.documentElement.outerHTML.slice(0, 65536)") { value, _ in
+                let text = value as? String
+                Task { @MainActor in result.finish(text) }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                result.finish(nil)
+            }
+        }
+    }
+
+    private final class DocumentDigestResult {
+        var continuation: CheckedContinuation<String, Never>?
+        init(_ continuation: CheckedContinuation<String, Never>) { self.continuation = continuation }
+        func finish(_ text: String?) {
+            guard let continuation else { return }
+            self.continuation = nil
+            continuation.resume(returning: text.map { SHA256.hash(data: Data($0.utf8))
+                .map { String(format: "%02x", $0) }.joined() } ?? "")
+        }
     }
 
     /// Explicit operator-supplied inputs only. Never uses any member of the domain campaign as a probe.
@@ -494,7 +526,6 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         config["inbounds"] = [["listen": "127.0.0.1", "port": 10806, "protocol": "socks",
                               "settings": ["auth": "noauth", "udp": false]]]
         let core = try AccessGoEmbeddedCore(isolated: true)
-        try await core.start(configData: JSONSerialization.data(withJSONObject: config))
         var result: [String: Any] = ["device": "ios-device-2d62695fc7", "model": model,
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
             "sourceSHA": env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
@@ -506,6 +537,14 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             if let bytes = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
                 try? bytes.write(to: file, options: .atomic)
             }
+        }
+        do { try await core.start(configData: JSONSerialization.data(withJSONObject: config)) }
+        catch {
+            result["errorDomain"] = (error as NSError).domain
+            result["errorCode"] = (error as NSError).code
+            await core.stop()
+            XCTFail("SOCKS fixture core could not start; no OS conclusion")
+            return
         }
         do {
             try await Self.nativeSOCKSConnect(host: host, port: 443)
