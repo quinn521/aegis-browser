@@ -845,7 +845,8 @@ IN_PROC_BROWSER_TEST_F(AegisAgentBrowserTest,
       const ocr = main.shadowRoot.querySelector(
           'settings-aegis-page[mode="ocr"]');
       if (!ocr || previous.isConnected ||
-          main.shadowRoot.querySelectorAll('settings-aegis-page').length !== 1) {
+          main.shadowRoot.querySelectorAll(
+              'settings-aegis-page:not([mode="home"])').length !== 1) {
         throw new Error('Changing category retained an inactive Aegis page');
       }
       Router.getInstance().navigateTo(routes.AEGIS_READING);

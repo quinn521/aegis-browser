@@ -1,4 +1,4 @@
-From 6e06bcdf94f95440651185c1211e321d7202ad25 Mon Sep 17 00:00:00 2001
+From 773216cbe5647e754d971128905878e6970038ef Mon Sep 17 00:00:00 2001
 From: Aegis integration <aegis@users.noreply.github.com>
 Date: Fri, 20 Nov 2026 14:28:23 +0800
 Subject: [PATCH] build: adapt Chromium 158 APIs and settings lifecycle for
@@ -9,7 +9,7 @@ Subject: [PATCH] build: adapt Chromium 158 APIs and settings lifecycle for
  ...proxying_url_loader_factory_browsertest.cc |   2 +-
  .../aegis/aegis_ui_handler_unittest.cc        |   2 +-
  .../browser/aegis/agent/aegis_actor_bridge.cc |  52 +++++----
- .../aegis/agent/aegis_agent_browsertest.cc    | 107 ++++++++++++++++++
+ .../aegis/agent/aegis_agent_browsertest.cc    | 108 ++++++++++++++++++
  .../enhancements/enhancement_browsertest.cc   |   4 +-
  .../gestures/gesture_interactive_uitest.cc    |   2 +-
  .../protocol/devtools_protocol_browsertest.cc |   2 +-
@@ -17,7 +17,7 @@ Subject: [PATCH] build: adapt Chromium 158 APIs and settings lifecycle for
  .../settings/settings_main/settings_main.ts   |   7 ++
  .../ui/views/toolbar/aegis_toolbar_button.cc  |   8 +-
  .../ui/webui/help/aegis_github_update.h       |   4 +-
- 12 files changed, 168 insertions(+), 44 deletions(-)
+ 12 files changed, 169 insertions(+), 44 deletions(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index bc3075a08f903cee09c0e4aa8b970a58751eae1a..b645672b26ee85aef098782531ec376a814e1efc 100644
@@ -240,7 +240,7 @@ index 87a46a313c6ff7150f71619a363e5b074483cc2c..97fc42392052644479b97c2eae176897
      std::move(callback).Run(ErrorResult(call.action_id,
                                          AgentErrorCode::kToolUnavailable,
 diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
-index 791d29a6608e282830af0abc6281b88ceeb4877f..2407b4399dfb5ea4c34a16b8419a1162f1005fff 100644
+index 791d29a6608e282830af0abc6281b88ceeb4877f..d153b21c4aa8b9048c79b5244ea5eb514b541a48 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 +++ b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 @@ -49,6 +49,9 @@
@@ -253,7 +253,7 @@ index 791d29a6608e282830af0abc6281b88ceeb4877f..2407b4399dfb5ea4c34a16b8419a1162
  #include "chrome/browser/aegis/aegis_ai_control.h"
  #include "chrome/browser/aegis/aegis_phish_blocking_page.h"
  #include "chrome/browser/aegis/aegis_service.h"
-@@ -750,6 +753,110 @@ class AegisAgentBrowserTest : public InProcessBrowserTest {
+@@ -750,6 +753,111 @@ class AegisAgentBrowserTest : public InProcessBrowserTest {
    base::test::ScopedFeatureList features_;
  };
  
@@ -349,7 +349,8 @@ index 791d29a6608e282830af0abc6281b88ceeb4877f..2407b4399dfb5ea4c34a16b8419a1162
 +      const ocr = main.shadowRoot.querySelector(
 +          'settings-aegis-page[mode="ocr"]');
 +      if (!ocr || previous.isConnected ||
-+          main.shadowRoot.querySelectorAll('settings-aegis-page').length !== 1) {
++          main.shadowRoot.querySelectorAll(
++              'settings-aegis-page:not([mode="home"])').length !== 1) {
 +        throw new Error('Changing category retained an inactive Aegis page');
 +      }
 +      Router.getInstance().navigateTo(routes.AEGIS_READING);
