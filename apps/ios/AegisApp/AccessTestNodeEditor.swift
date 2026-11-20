@@ -380,6 +380,11 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
     private(set) var httpStatus: Int?
+    /// WebKit does not expose a redirect's HTTP status through its redirect callback.
+    /// Keep the initial response unknown when it was not delivered to the response delegate.
+    private(set) var initialHTTPStatus: Int?
+    private(set) var serverRedirectCount = 0
+    private var observedMainFrameResponse = false
     private let singleNavigation: Bool
     private let transportPreference: AccessTestNodeTransport
     private let socksAdmitted: Bool
@@ -519,6 +524,10 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         if !retiring { status = "已连接" }
     }
 
+    func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+        if !retiring { serverRedirectCount += 1 }
+    }
+
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         if !retiring {
             failureDomain = (error as NSError).domain
@@ -537,7 +546,11 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
-        if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
+        if response.isForMainFrame, !retiring {
+            httpStatus = (response.response as? HTTPURLResponse)?.statusCode
+            if !observedMainFrameResponse, serverRedirectCount == 0 { initialHTTPStatus = httpStatus }
+            observedMainFrameResponse = true
+        }
         decisionHandler(response.canShowMIMEType ? .allow : .cancel)
     }
 

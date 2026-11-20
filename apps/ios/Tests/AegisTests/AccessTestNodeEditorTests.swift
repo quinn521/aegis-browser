@@ -456,6 +456,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "state":timedOut ? "timeout" : page.status,
                         "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
                         "httpStatus":page.httpStatus ?? 0, "documentPrefixSHA256":documentDigest,
+                        "initialHTTPStatus":page.initialHTTPStatus ?? 0,
+                        "initialResponseObserved":page.initialHTTPStatus != nil,
+                        "serverRedirectCount":page.serverRedirectCount,
+                        "navigationPolicy":page.failureDomain == "AdditionalTopLevelNavigation" ? "subsequent-top-level-blocked" : "not-blocked",
                         "endpoint":page.initialBinding?.identity ?? "", "generation":page.initialBinding?.generation ?? 0,
                         "port":page.initialBinding?.port ?? 0,
                         "phase":page.initialBinding == nil ? "preparation" : "navigation",
@@ -527,7 +531,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
         let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
         let core = try AccessGoEmbeddedCore(isolated: true)
+        let singleNavigation = environment["AEGIS_TEST_SINGLE_NAVIGATION"] == "1"
+        let expectPolicyBlock = environment["AEGIS_TEST_EXPECT_POLICY_BLOCK"] == "1"
         let page = AccessTestNodePage(repository: repository, testingCore: core,
+                                     singleNavigation: singleNavigation,
                                      transport: preference, socksAdmitted: capabilityOverride)
         var receipt: [String: Any] = ["sourceSHA": environment["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
             "device": "ios-device-2d62695fc7", "protocol": expectedTransport == .socks5 ? "socks5" : "http",
@@ -551,15 +558,28 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         while page.status == "正在加载", Date() < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
-        XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
-        XCTAssertNotNil(page.endpoint)
+        if singleNavigation { try await Task.sleep(for: .seconds(1)) }
+        receipt["singleNavigation"] = singleNavigation
+        receipt["state"] = page.status
+        receipt["failureDomain"] = page.failureDomain ?? ""
+        receipt["initialHTTPStatus"] = page.initialHTTPStatus ?? 0
+        receipt["initialResponseObserved"] = page.initialHTTPStatus != nil
+        receipt["serverRedirectCount"] = page.serverRedirectCount
+        if expectPolicyBlock {
+            XCTAssertEqual(page.failureDomain, "AdditionalTopLevelNavigation")
+            XCTAssertEqual(page.status, "连接暂不可用")
+        } else {
+            XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
+            XCTAssertNotNil(page.endpoint)
+        }
+        XCTAssertNotNil(page.initialBinding)
         XCTAssertEqual(page.selectedTransport, expectedTransport)
         receipt["port"] = page.initialBinding?.port
         receipt["endpoint"] = page.initialBinding?.identity
         receipt["generation"] = page.initialBinding?.generation
         receipt["httpStatus"] = page.httpStatus
-        XCTAssertNotEqual(page.endpoint?.port, 0)
-        if expectedTransport == .socks5 { XCTAssertNotEqual(page.endpoint?.port, 1080) }
+        XCTAssertNotEqual(page.initialBinding?.port, 0)
+        if expectedTransport == .socks5 { XCTAssertNotEqual(page.initialBinding?.port, 1080) }
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
         if let target = environment["AEGIS_TEST_REVOKED_URL"] {
