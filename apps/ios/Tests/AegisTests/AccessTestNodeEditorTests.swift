@@ -6,6 +6,7 @@ import CryptoKit
 import Network
 import Security
 import Synchronization
+import Darwin
 import XCTest
 @testable import Aegis
 
@@ -636,10 +637,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
     /// Never retry the target or release anything to make a deadline appear green.
     private static func observeRetirement(
         _ page: AccessTestNodePage,
+        afterClose: () async throws -> Void = {},
         checkpoint: (Bool, Bool, TimeInterval, [String]) throws -> Void
     ) async throws -> Bool {
         let started = Date()
         page.close()
+        try await afterClose()
         for (index, limit) in [5.0, 10.0].enumerated() {
             while page.endpoint != nil, Date().timeIntervalSince(started) < limit {
                 try await Task.sleep(for: .milliseconds(50))
@@ -769,7 +772,30 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         if expectedTransport == .socks5 { XCTAssertNotEqual(page.initialBinding?.port, 1080) }
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
-        if let target = environment["AEGIS_TEST_REVOKED_URL"] {
+        let normalCloseProbe = environment["AEGIS_TEST_NORMAL_CLOSE_PROBE"] == "1"
+        var closeSession: URLSession?
+        var oldFlow: LocalProxyPeer?
+        if normalCloseProbe {
+            let config = URLSessionConfiguration.ephemeral
+            config.proxyConfigurations = webView.configuration.websiteDataStore.proxyConfigurations
+            config.urlCache = nil
+            config.requestCachePolicy = .reloadIgnoringLocalCacheData
+            config.waitsForConnectivity = false
+            config.timeoutIntervalForRequest = 3
+            let session = URLSession(configuration: config)
+            closeSession = session
+            let (data, response) = try await session.data(from: url)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(receipt["nonce"] as? String ?? "missing"))
+            let peer = LocalProxyPeer(port: try XCTUnwrap(page.initialBinding?.port))
+            try await peer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
+            oldFlow = peer
+            receipt["normalCloseProbe"] = true
+            receipt["coreRunningBeforeProductClose"] = core.isRunning
+            XCTAssertTrue(core.isRunning)
+        }
+        defer { closeSession?.invalidateAndCancel(); oldFlow?.cancel() }
+        if let target = environment["AEGIS_TEST_REVOKED_URL"], !normalCloseProbe {
             await core.stop()
             receipt["coreStopped"] = !core.isRunning
             do {
@@ -793,7 +819,33 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
         defer { if probeBusyContent { webView.configuration.userContentController.removeScriptMessageHandler(forName: "aegisRetirementSignal") } }
         var observations: [[String: Any]] = []
-        let retired = try await Self.observeRetirement(page) { supplement, confirmed, elapsed, events in
+        let retired = try await Self.observeRetirement(page, afterClose: {
+            if normalCloseProbe {
+                let port = try XCTUnwrap(page.initialBinding?.port)
+                receipt["endpointHeldDuringCloseFence"] = page.endpoint != nil
+                receipt["portHeldDuringCloseFence"] = Self.portIsOwned(port)
+                XCTAssertNotNil(page.endpoint)
+                XCTAssertTrue(Self.portIsOwned(port))
+                let oldClosed = await oldFlow?.waitForClose() == true
+                receipt["oldAcceptedFlowClosed"] = oldClosed
+                XCTAssertTrue(oldClosed)
+                let newcomer = LocalProxyPeer(port: port)
+                defer { newcomer.cancel() }
+                var admitted = false
+                do { try await newcomer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport); admitted = true }
+                catch { }
+                receipt["newProxyCONNECTAdmitted"] = admitted
+                XCTAssertFalse(admitted)
+                if let target = environment["AEGIS_TEST_REVOKED_URL"], let targetURL = URL(string: target), let session = closeSession {
+                    var received = false
+                    do { _ = try await session.data(from: targetURL); received = true } catch { }
+                    receipt["normalCloseMarkedRequestReceived"] = received
+                    XCTAssertFalse(received)
+                } else { XCTFail("Normal-close probe requires its independent negative marker") }
+                receipt["coreStoppedByProductClose"] = !core.isRunning
+                XCTAssertFalse(core.isRunning)
+            }
+        }) { supplement, confirmed, elapsed, events in
             observations.append(["supplement":supplement, "confirmed":confirmed,
                                  "observationSeconds":elapsed, "events":events])
         }
@@ -805,6 +857,83 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         XCTAssertTrue(retired, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = retired
         XCTAssertNotNil(page.initialBinding)
+    }
+
+    private static func portIsOwned(_ port: UInt16) -> Bool {
+        let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { Darwin.close(fd) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let result = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result != 0 && errno == EADDRINUSE
+    }
+
+    /// App-native connection probes supplement the real WebKit page; they do not
+    /// replace its publisher/DataStore or navigate any corpus member.
+    private final class LocalProxyPeer: @unchecked Sendable {
+        let connection: NWConnection
+        init(port: UInt16) {
+            connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+            connection.start(queue: DispatchQueue(label: "ios208-owned-proxy-probe"))
+        }
+        func cancel() { connection.cancel() }
+        func send(_ data: Data) async throws {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                connection.send(content: data, completion: .contentProcessed { error in
+                    if let error { c.resume(throwing: error) } else { c.resume() }
+                })
+            }
+        }
+        func receive(_ count: Int) async throws -> Data {
+            try await withCheckedThrowingContinuation { c in
+                connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                    if let error { c.resume(throwing: error) }
+                    else if let data, data.count == count { c.resume(returning: data) }
+                    else { c.resume(throwing: URLError(.networkConnectionLost)) }
+                }
+            }
+        }
+        func connect(host: String, transport: AccessInboundTransport) async throws {
+            let timeout = Task { try? await Task.sleep(for: .seconds(2)); if !Task.isCancelled { connection.cancel() } }
+            defer { timeout.cancel() }
+            if transport == .socks5 {
+                try await send(Data([5, 1, 0]))
+                guard try await receive(2) == Data([5, 0]), host.utf8.count < 256 else { throw URLError(.badServerResponse) }
+                var request = Data([5, 1, 0, 3, UInt8(host.utf8.count)])
+                request.append(contentsOf: host.utf8); request.append(contentsOf: [1, 187])
+                try await send(request)
+                let reply = try await receive(10)
+                guard reply[0] == 5, reply[1] == 0 else { throw URLError(.cannotConnectToHost) }
+            } else {
+                try await send(Data("CONNECT \(host):443 HTTP/1.1\r\nHost: \(host):443\r\n\r\n".utf8))
+                var header = Data()
+                while header.count < 4096, !header.suffix(4).elementsEqual([13, 10, 13, 10]) {
+                    header.append(try await receive(1))
+                }
+                guard String(decoding: header, as: UTF8.self).hasPrefix("HTTP/1.1 200 ") else { throw URLError(.cannotConnectToHost) }
+            }
+        }
+        func waitForClose() async -> Bool {
+            let timedOut = Mutex(false)
+            let timeout = Task {
+                try? await Task.sleep(for: .seconds(2))
+                if !Task.isCancelled { timedOut.withLock { $0 = true }; connection.cancel() }
+            }
+            defer { timeout.cancel() }
+            return await withCheckedContinuation { c in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { data, _, complete, error in
+                    c.resume(returning: !timedOut.withLock { $0 } && (complete || error != nil) && (data?.isEmpty ?? true))
+                }
+            }
+        }
     }
 
     private final class RetirementSignal: NSObject, WKScriptMessageHandler {
