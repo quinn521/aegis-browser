@@ -348,3 +348,4 @@
 0348-adapt-chromium-158-api-candidate-341.patch
 0349-fix-chromium-158-build-dependencies.patch
 0350-fix-access-bind-storage-partition-type.patch
+0351-align-chromium-158-product-version-342.patch

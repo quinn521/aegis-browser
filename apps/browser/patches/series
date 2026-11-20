@@ -525,3 +525,4 @@
 0525-fix-windows-access-empty-process.patch
 0526-fix-access-bind-storage-partition-type.patch
 0527-fix-windows-access-network-environment.patch
+0528-align-chromium-158-product-version-342.patch
