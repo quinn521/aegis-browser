@@ -177,6 +177,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let image = try XCTUnwrap(generator.outputImage).transformed(by: CGAffineTransform(scaleX: 5, y: 5))
         let bitmap = try XCTUnwrap(CIContext().createCGImage(image, from: image.extent))
         let request = VNDetectBarcodesRequest()
+        request.usesCPUOnly = true
         request.symbologies = [.qr]
         try VNImageRequestHandler(cgImage: bitmap).perform([request])
         let payloads = try XCTUnwrap(request.results).map(\.payloadStringValue)
