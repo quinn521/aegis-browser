@@ -432,6 +432,30 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
     }
 
+    func testCompetingLocalNavigationCannotStrandTheRetirementReplacement() async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
+        let page = AccessTestNodePage(repository: repository, testingCore: PageCore())
+        await page.open(URL(string: "https://example.invalid/pending")!)
+        let view = try XCTUnwrap(page.webView)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.addSubview(view); view.frame = window.bounds; window.makeKeyAndVisible()
+        defer { view.removeFromSuperview(); window.isHidden = true }
+        page.close()
+        // A real second WebKit action overtakes the pending inert load. This is
+        // local about:blank, never a second request to the original target.
+        _ = view.load(URLRequest(url: URL(string: "about:blank")!))
+        XCTAssertNotNil(page.endpoint)
+        let deadline = Date().addingTimeInterval(10)
+        while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNil(page.endpoint)
+        XCTAssertTrue(page.retirementEvents.contains("denied-about-main"))
+        XCTAssertEqual(page.retirementEvents.filter { $0 == "replacement-retry-scheduled" }.count, 1)
+        XCTAssertTrue(page.retirementEvents.contains("replacement-committed"))
+        XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
+    }
+
     private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
         let running = Mutex(false)
         var isRunning: Bool { running.withLock { $0 } }
