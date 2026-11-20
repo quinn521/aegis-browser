@@ -171,7 +171,8 @@ test('every protected delivery route depends on Admin admission and normalized o
       const guard = job.steps.findIndex(s => s.run?.includes('ios-operator.mjs --context') || s.run?.includes('ios-cloud-poc-admission.mjs'));
       assert(guard >= 0, name+' requires manual Admin guard');
       if (name === 'ios-release-validation' && job.environment !== 'aegis-ios-cloud-poc') assert.equal(job.steps[guard].if, "${{ github.event_name == 'workflow_dispatch' }}");
-      const expensive = job.steps.findIndex(s => s.run?.includes('bundle exec') || s.run?.includes('xcodebuild ') || s.run?.includes('run-simulator-tests.sh'));
+      const expensive = job.steps.findIndex(s => s.run?.includes('bundle exec') || s.run?.includes('xcodebuild ') ||
+        s.run?.includes('run-ios-unsigned-archive.sh') || s.run?.includes('run-simulator-tests.sh'));
       assert(guard < expensive, name+' must authorize before expensive work');
     }
   }
