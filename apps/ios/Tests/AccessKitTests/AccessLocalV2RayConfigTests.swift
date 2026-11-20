@@ -85,6 +85,29 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseShareURI(uri.replacingOccurrences(of: "&sid=", with: "")))
     }
 
+    func testOfficialRealityShareHintPreservesNativeParameters() throws {
+        let uri = sampleShareURI.replacingOccurrences(of: "sid=abcd1234",
+            with: "sid=&spx=%2Fsynthetic-path&support-x25519mlkem768=true")
+        let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(uri)
+        XCTAssertEqual(parameters.shortID, "")
+        XCTAssertEqual(parameters.spiderX, "/synthetic-path")
+        let config = try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters)
+        let outbounds = try XCTUnwrap(config.jsonObject["outbounds"] as? [[String: Any]])
+        let stream = try XCTUnwrap(outbounds.first?["streamSettings"] as? [String: Any])
+        let reality = try XCTUnwrap(stream["realitySettings"] as? [String: Any])
+        XCTAssertEqual(reality["shortId"] as? String, "")
+        XCTAssertEqual(reality["spiderX"] as? String, "/synthetic-path")
+        XCTAssertNil(reality["support-x25519mlkem768"])
+        for value in ["false", "", "1", "TRUE"] {
+            XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(
+                uri.replacingOccurrences(of: "support-x25519mlkem768=true",
+                                         with: "support-x25519mlkem768=" + value)))
+        }
+        XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(
+            uri.replacingOccurrences(of: "#", with: "&support-x25519mlkem768=true#")))
+        XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(uri + "\n" + uri))
+    }
+
     func testParsesShareURIWithEmptyEncryptionQuery() throws {
         let uri =
             "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"

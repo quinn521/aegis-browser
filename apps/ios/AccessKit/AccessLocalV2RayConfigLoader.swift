@@ -115,7 +115,7 @@ public enum AccessLocalV2RayConfigLoader {
         let acceptedKeys: Set<String> = [
             "type", "security", "flow", "encryption", "headerType", "spx", "pcks",
             "sni", "serverName", "server_name", "pbk", "publicKey", "public_key",
-            "sid", "shortId", "short_id", "fp", "fingerprint"
+            "sid", "shortId", "short_id", "fp", "fingerprint", "support-x25519mlkem768"
         ]
         let aliasGroups = [
             ["sni", "serverName", "server_name"], ["pbk", "publicKey", "public_key"],
@@ -126,9 +126,13 @@ public enum AccessLocalV2RayConfigLoader {
               names.isSubset(of: acceptedKeys),
               aliasGroups.allSatisfy({ names.intersection($0).count <= 1 }),
               items.allSatisfy({ $0.value != nil && ($0.name != "headerType" || $0.value == "none")
-                  && ($0.name != "pcks" || $0.value == "") }) else {
+                  && ($0.name != "pcks" || $0.value == "")
+                  && ($0.name != "support-x25519mlkem768" || $0.value == "true") }) else {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
+        // 3X-UI's REALITY share capability hint is implemented by the pinned
+        // native core/fingerprint, not an additional Xray JSON setting. Only
+        // its affirmative form is admitted; never silently promise an override.
         // The fragment is untrusted and can itself contain credentials.
         components.fragment = nil
         guard let uri = components.string else { throw AccessLocalV2RayConfigError.invalidJSON }

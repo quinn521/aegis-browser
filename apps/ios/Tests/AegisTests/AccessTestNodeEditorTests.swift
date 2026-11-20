@@ -111,6 +111,47 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(storage.writes, 1)
     }
 
+    func testOfficialRealityShareWorksForTextAndScanAndRestoresNativeParameters() throws {
+        let uri = link.replacingOccurrences(of: "sid=abcd1234",
+            with: "sid=&spx=%2Fsynthetic-path&support-x25519mlkem768=true")
+        for scanned in [false, true] {
+            let storage = Storage()
+            let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
+            let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+            editor.openProfile()
+            if scanned {
+                editor.finishScan(try XCTUnwrap(editor.beginScan()), result: .success(uri))
+            } else { editor.preview(uri) }
+            XCTAssertTrue(editor.canApply)
+            XCTAssertEqual(storage.writes, 0)
+            editor.apply()
+            XCTAssertEqual(storage.writes, 1)
+            let restored = try AccessTestNodeRepository(channel: .dev, storage: storage).savedNode().parameters()
+            XCTAssertEqual(restored, try AccessLocalV2RayConfigLoader.parseSingleShareURI(uri))
+            XCTAssertEqual(restored.shortID, "")
+            XCTAssertEqual(restored.spiderX, "/synthetic-path")
+        }
+    }
+
+    func testCampaignReorderingRequiresAnExactPermutationAndSafeIndependentIdentity() throws {
+        let canonical = ["one.example", "two.example", "three.example"]
+        let reordered = Data("three.example\none.example\ntwo.example\n".utf8)
+        let digest = SHA256.hash(data: reordered).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(try AccessDomainCampaignInput.order(reordered, canonical: canonical, digest: digest),
+                       ["three.example", "one.example", "two.example"])
+        for invalid in ["one.example\none.example\nthree.example\n", "one.example\ntwo.example\n",
+                        "one.example\ntwo.example\noutside.example\n", "one.example\ntwo.example\nTHREE.example\n"] {
+            let bytes = Data(invalid.utf8)
+            let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            XCTAssertThrowsError(try AccessDomainCampaignInput.order(bytes, canonical: canonical, digest: hash))
+        }
+        XCTAssertThrowsError(try AccessDomainCampaignInput.order(reordered, canonical: canonical, digest: "wrong"))
+        XCTAssertTrue(AccessDomainCampaignInput.validID("popularity-20261121-test01-v1"))
+        for invalid in ["", "../old", "a/b", "UPPER", String(repeating: "a", count: 65)] {
+            XCTAssertFalse(AccessDomainCampaignInput.validID(invalid))
+        }
+    }
+
     func testTwoWindowsCompareSavedRevisionAndFailedStoragePreservesDraft() {
         let storage = Storage()
         let repository = AccessTestNodeRepository(channel: .alpha, storage: storage)
@@ -374,6 +415,25 @@ final class AccessTestNodeEditorTests: XCTestCase {
     }
 }
 
+enum AccessDomainCampaignInput {
+    static func validID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 64 && value.utf8.allSatisfy {
+            (97...122).contains($0) || (48...57).contains($0) || $0 == 45
+        }
+    }
+
+    static func order(_ data: Data, canonical: [String], digest: String) throws -> [String] {
+        let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard actual == digest, let text = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let hosts = text.split(separator: "\n").map(String.init)
+        guard hosts.count == canonical.count, Set(hosts).count == hosts.count,
+              Set(hosts) == Set(canonical) else { throw CocoaError(.fileReadCorruptFile) }
+        return hosts
+    }
+}
+
 #if DEBUG
 @MainActor
 final class AccessTestNodeDeviceTests: XCTestCase {
@@ -398,16 +458,34 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         guard digest == "84a004adf2537fde3befb724fe77512cf3a4acb1df8ec350cd898a6cf8428374" else {
             XCTFail("Campaign input digest differs"); return
         }
-        let hosts = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        var hosts = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
         guard hosts.count == 4372, Set(hosts).count == hosts.count else { XCTFail("Campaign input is incomplete"); return }
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let runID = env["AEGIS_TEST_CAMPAIGN_RUN_ID"]
+        let orderDigest = env["AEGIS_TEST_CAMPAIGN_ORDER_SHA256"]
+        if let runID {
+            guard AccessDomainCampaignInput.validID(runID), let orderDigest else {
+                XCTFail("Independent campaign identity or order digest missing"); return
+            }
+            let ordered = try Data(contentsOf: documents.appendingPathComponent("ios208-" + runID + ".domains.txt"))
+            hosts = try AccessDomainCampaignInput.order(ordered, canonical: hosts, digest: orderDigest)
+        } else if orderDigest != nil { XCTFail("Order requires an independent campaign identity"); return }
+        let limit: Int
+        if let value = env["AEGIS_TEST_CAMPAIGN_LIMIT"] {
+            guard let count = Int(value), (1...hosts.count).contains(count) else {
+                XCTFail("Invalid campaign phase limit"); return
+            }
+            limit = count
+        } else { limit = hosts.count }
+        let validHosts = Set(hosts)
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else { XCTFail("Native admission denied"); return }
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
         if (try? repository.savedNode().parameters()) != parameters {
             _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
-        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ios208-domain-dispatch.jsonl")
+        let file = documents.appendingPathComponent(runID.map { "ios208-" + $0 + "-dispatch.jsonl" }
+            ?? "ios208-domain-dispatch.jsonl")
         if !FileManager.default.fileExists(atPath: file.path) {
             try Data().write(to: file, options: .atomic)
         }
@@ -415,8 +493,15 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         var reserved = Set<String>()
         for line in String(decoding: prior, as: UTF8.self).split(separator: "\n") {
             guard let json = line.data(using: .utf8), let record = try JSONSerialization.jsonObject(with: json) as? [String: Any],
-                  record["dataset"] as? String == digest else { XCTFail("Dispatch ledger is damaged"); return }
-            if record["event"] as? String == "reserved", let host = record["host"] as? String { reserved.insert(host) }
+                  record["dataset"] as? String == digest,
+                  record["device"] as? String == "ios-device-2d62695fc7",
+                  record["bundle"] as? String == Bundle.main.bundleIdentifier,
+                  record["campaignID"] as? String == runID,
+                  record["orderSHA256"] as? String == orderDigest else { XCTFail("Dispatch ledger is damaged"); return }
+            if record["event"] as? String == "reserved" {
+                guard let host = record["host"] as? String, validHosts.contains(host),
+                      reserved.insert(host).inserted else { XCTFail("Duplicate or foreign dispatch key"); return }
+            }
         }
         let output = try FileHandle(forWritingTo: file)
         defer { try? output.close() }
@@ -427,6 +512,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             record["device"] = "ios-device-2d62695fc7"
             record["bundle"] = Bundle.main.bundleIdentifier
             record["sourceSHA"] = env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown"
+            record["campaignID"] = runID
+            record["orderSHA256"] = orderDigest
+            record["nodeInputSHA256"] = SHA256.hash(data: Data(node.utf8)).map { String(format: "%02x", $0) }.joined()
             record["os"] = ProcessInfo.processInfo.operatingSystemVersionString
             record["time"] = Date().timeIntervalSince1970
             var bytes = try JSONSerialization.data(withJSONObject: record, options: .sortedKeys)
@@ -459,7 +547,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         var preparationFailures = 0
         var consecutiveNetworkFailures = 0
         let control = file.deletingLastPathComponent().appendingPathComponent("ios208-campaign-control")
-        for host in hosts where !reserved.contains(host) {
+        for host in hosts.prefix(limit) where !reserved.contains(host) {
             if (try? String(contentsOf: control, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "stop" {
                 try append(["event":"checkpoint", "reservedCount":reserved.count])
                 return
@@ -503,6 +591,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             let stopDeadline = Date().addingTimeInterval(5)
             while page.endpoint != nil, Date() < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
             page.webView?.removeFromSuperview()
+            try append(["event":"retirement", "host":host, "attempt":attempt, "retired":page.endpoint == nil])
             guard page.endpoint == nil else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
             guard preparationFailures < 3 else { XCTFail("Repeated preparation failures; campaign stopped"); return }
             if consecutiveNetworkFailures >= 10 {
@@ -510,6 +599,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 return
             }
         }
+        try append(["event":"checkpoint", "reason":"phase-complete", "phaseLimit":limit, "reservedCount":reserved.count])
 #endif
 
     }
@@ -562,7 +652,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let preference = AccessTestNodeTransport(rawValue: environment["AEGIS_TEST_LOCAL_TRANSPORT"] ?? "http") ?? .http
         let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
         let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
-        let core = try AccessGoEmbeddedCore(isolated: true)
+        let core = try ObservedCore(mainHost: url.host ?? "")
         let singleNavigation = environment["AEGIS_TEST_SINGLE_NAVIGATION"] == "1"
         let expectPolicyBlock = environment["AEGIS_TEST_EXPECT_POLICY_BLOCK"] == "1"
         let page = AccessTestNodePage(repository: repository, testingCore: core,
@@ -572,6 +662,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             "device": "ios-device-2d62695fc7", "protocol": expectedTransport == .socks5 ? "socks5" : "http",
             "nonce": URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "nonce" })?.value ?? ""]
         defer {
+            receipt["dnsObservation"] = core.observation
             if let bytes = try? JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted]) {
                 let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("ios208-controlled-path.json")
@@ -651,6 +742,37 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = page.endpoint == nil
         XCTAssertNotNil(page.initialBinding)
+    }
+
+    /// Observes arguments delivered by the real WebKit inbound to the real core.
+    /// Does not resolve names, alter configuration or persist target names.
+    private final class ObservedCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
+        let base: AccessGoEmbeddedCore
+        let mainHost: String
+        let state = Mutex((domains: 0, ips: 0, mainName: false, dnsOverride: false))
+        init(mainHost: String) throws {
+            self.mainHost = mainHost
+            base = try AccessGoEmbeddedCore(isolated: true)
+        }
+        var isRunning: Bool { base.isRunning }
+        func start(configData: Data) async throws {
+            let config = try JSONSerialization.jsonObject(with: configData) as? [String: Any]
+            state.withLock { $0.dnsOverride = config?["dns"] != nil }
+            try await base.start(configData: configData)
+        }
+        func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+            state.withLock {
+                if IPv4Address(host) != nil || IPv6Address(host) != nil { $0.ips += 1 }
+                else { $0.domains += 1 }
+                if host == mainHost { $0.mainName = true }
+            }
+            return try await base.dial(host: host, port: port)
+        }
+        func stop() async { await base.stop() }
+        var observation: [String: Any] {
+            state.withLock { ["domainTargets": $0.domains, "ipTargets": $0.ips,
+                             "controlledMainNameForwarded": $0.mainName, "clientDNSOverride": $0.dnsOverride] }
+        }
     }
 }
 #endif
