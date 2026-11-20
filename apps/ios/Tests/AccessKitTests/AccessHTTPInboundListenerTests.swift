@@ -50,6 +50,31 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         add(attachment)
     }
 
+    func testSuspensionKeepsPortOwnedAndRejectsNewTraffic() async throws {
+        let registration = try makeRegistration(port: 18_096)
+        let listener = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        listener.suspend()
+        XCTAssertTrue(listener.isListening)
+        let rival = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
+        do {
+            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try? rival.stop()
+            XCTFail("A suspended listener must retain its port until document retirement")
+        } catch { }
+        let finished = expectation(description: "suspended connection closes")
+        let client = NWConnection(host: "127.0.0.1", port: 18_096, using: .tcp)
+        client.stateUpdateHandler = { [weak client] state in
+            guard case .ready = state, let client else { return }
+            client.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in finished.fulfill() }
+        }
+        client.start(queue: .global())
+        await fulfillment(of: [finished], timeout: 3)
+        client.cancel()
+        XCTAssertEqual(listener.acceptedConnectionCount, 0)
+    }
+
     private func physicalFootprint() throws -> UInt64 {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)

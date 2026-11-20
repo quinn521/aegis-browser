@@ -130,7 +130,7 @@ final class SettingsLayoutUITests: XCTestCase {
         apply.tap()
         let saved = app.staticTexts["access-test-node-saved"]
         XCTAssertTrue(reveal(saved, app))
-        XCTAssertEqual(saved.label, "Node saved. Web connection is currently unavailable.")
+        XCTAssertEqual(saved.label, "Node saved.")
         XCTAssertFalse(apply.isEnabled)
         let remove = app.buttons["access-test-node-remove"]
         XCTAssertTrue(reveal(remove, app))

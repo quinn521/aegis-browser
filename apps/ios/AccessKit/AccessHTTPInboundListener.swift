@@ -25,6 +25,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         var listener: NWListener?
         /// Set when NWListener reports `.failed` after the initial ready handshake.
         var listenerFailed = false
+        var suspended = false
         var acceptedConnections: UInt64 = 0
         var establishedConnects: UInt64 = 0
         var openConnections: [NWConnection] = []
@@ -89,7 +90,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         }
 
         let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
+        parameters.allowLocalEndpointReuse = false
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host),
             port: nwPort
@@ -144,6 +145,21 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         }
     }
 
+    /// Revoke traffic while retaining ownership of the port until old documents retire.
+    public func suspend() {
+        let snapshot = gate.withLock { state in
+            state.suspended = true
+            let connections = state.openConnections
+            let bridges = Array(state.bridges.values)
+            state.openConnections.removeAll()
+            state.sessions.removeAll()
+            state.bridges.removeAll()
+            return (connections, bridges)
+        }
+        snapshot.1.forEach { $0.stop() }
+        snapshot.0.forEach { $0.cancel() }
+    }
+
     /// Stops accepting and cancels open connections.
     public func stop() throws {
         let snapshot: (NWListener, [NWConnection], [AccessHTTPTunnelBridge])? = gate.withLock { state in
@@ -171,7 +187,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection, from listener: NWListener) {
         let admitted = gate.withLock { state in
-            guard state.listener === listener, !state.listenerFailed,
+            guard state.listener === listener, !state.listenerFailed, !state.suspended,
                   state.openConnections.count < maximumConnections else { return false }
             state.acceptedConnections &+= 1
             state.openConnections.append(connection)

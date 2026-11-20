@@ -1,6 +1,6 @@
 # iOS 内部测试节点编辑器 · 首个实施切片
 
-本切片实现 [#208 的 S1](https://github.com/gcsagroup/aegis-browser/issues/208#issuecomment-7039980352) 中可独立交付的普通测试 Profile 编辑流程。设计采用 fork main `c5b4257a` 与 [精确 SDD `26e8bc97`](https://github.com/quinn521/aegis-browser/blob/26e8bc9793787e23c5d310c15d28dbbadc907d43/docs/plans/access-service-v1.0/ios-app-inbound-sdd.zh-CN.md)。完整 O1–O6 继续开放。
+本切片实现原生编辑及隔离测试页，覆盖 [#208 的 S1 及 S3/S4 子集](https://github.com/gcsagroup/aegis-browser/issues/208#issuecomment-7039980352) 中可独立交付的普通测试 Profile 编辑流程。设计采用 fork main `c5b4257a` 与 [精确 SDD `26e8bc97`](https://github.com/quinn521/aegis-browser/blob/26e8bc9793787e23c5d310c15d28dbbadc907d43/docs/plans/access-service-v1.0/ios-app-inbound-sdd.zh-CN.md)。完整 O1–O6 继续开放。
 
 ## 用户流程
 
@@ -8,7 +8,7 @@
 
 预览只创建当前窗口草稿。Apply 比较打开编辑器时的安全存储版本，再保存规范化节点；Discard 不写入；移除已保存节点需要确认。两窗口同时编辑时后提交者得到冲突。相机拒绝、不可用或取消仍可继续文本输入。离开 Profile、取消或开启新扫描使旧回调失效，新扫描清除旧待应用草稿。
 
-首片只有一个普通固定测试 Profile。界面明确提示“节点已保存，网页连接暂不可用”。本片不把保存操作接入 publisher、DataStore 或订阅，既有网页及用量仍由 `AccessThreeXUIWebEntry` 和 `AccessSubscriptionUsageSession` 负责。
+首片只有一个普通固定测试 Profile。界面分别呈现保存状态和该测试网页的实际连接状态。保存后可显式打开 HTTPS 测试网页，使用独立核心、publisher 和专用非持久 DataStore。每次打开持有一个不可变节点版本，后台、关闭或版本撤销时阻断连接，待旧文档退役后释放监听。既有网页及用量仍由 `AccessThreeXUIWebEntry` 和 `AccessSubscriptionUsageSession` 负责。
 
 ## 边界与实现
 
@@ -31,10 +31,10 @@
 
 首次 `fda9ab1c` 运行的 iPhone 26 通过/1 失败、iPad 1/1，以及较早候选的质量门失败原地保留。WebKit 用例失败于首次路由收件等待；未改源码的定向复跑通过。本片为该用例补齐已有同类测试的内容规则预热，使路由等待不包含无关冷编译。仓库 `blind-protocol.test.ts` 的首次超时和子进程状态失败同样保留，不放宽断言或超时以取得绿灯。最终候选结果另记，不覆盖 FIRST。
 
-合成 QR 解码不证明实体相机，模拟器的相机不可用不证明系统授权拒绝。真机扫码、VoiceOver 实际使用、iPad 真双窗与受限发行包矩阵仍待验。网络 publisher、核心 owner 隔离、规则仓储事务、DataStore 绑定/文档退役、HTTP O3、SOCKS OS 准入、O6 真机和托管服务均不在本片的完成声明中。
+合成 QR 解码不证明实体相机，模拟器的相机不可用不证明系统授权拒绝。真机扫码、VoiceOver 实际使用、iPad 真双窗与受限发行包矩阵仍待验。独立测试页的 publisher、核心实例和 DataStore 接线纳入本片。完整规则仓储事务、主浏览器标签迁移、HTTP O3 双侧真实出口、SOCKS OS 准入、O6 真机和托管服务继续按工单验收。
 
 ## 后续与回滚
 
-按 S2→S3→S4→S5 的依赖接入稳定 Profile/规则事务、上游所有权、真实端点及文档退役，再完成固定 HTTP 的 O3。当前进程全局核心不因新增 Swift publisher 自动获得隔离；S3 之前不消费此安全存储激活手动节点。SOCKS 与 HTTP 均无本地认证、仅绑定前协议能力 fallback、上游独立授权及默认未准入约束继续适用。托管账户/套餐/额度等服务端同事交付接口与环境。
+本片为显式测试页增加独立 Go Runtime，保留既有包级 API 的默认实例。实例各自持有核心、stream 表和停止信号，测试 Profile 不共享订阅的全局核心。后续按 S2→S3→S4→S5 完成完整规则事务与主浏览器标签集成，并以真实双侧出口回执关闭 O3。SOCKS 与 HTTP 均无本地认证、仅绑定前协议能力 fallback、上游独立授权及默认未准入约束继续适用。托管账户/套餐/额度等服务端同事交付接口与环境。
 
-撤回本片可通过普通代码 revert 或关闭内部能力。已保存 Keychain 项不会自行激活，不进入受限渠道；重新开放时仍需可信能力和完整版本校验。移除只针对该渠道的手动测试记录，不修改签入订阅、产品网站意图或用量。后续迁移不能把仅 host/port 或旧版本记录当成有效运行登记。
+撤回本片可通过普通代码 revert 或关闭内部能力。已保存 Keychain 项须显式打开测试网页才激活，受限渠道仍拒绝读取；重新开放时仍需可信能力和完整版本校验。移除只针对该渠道的手动测试记录，不修改签入订阅、产品网站意图或用量。后续迁移不能把仅 host/port 或旧版本记录当成有效运行登记。

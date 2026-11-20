@@ -18,7 +18,8 @@ public enum AccessEmbeddedProxyEntryFactory {
         configPath: String? = AccessLocalV2RayConfigLoader.productPath(),
         verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
         parameters: (@MainActor () async throws -> AccessRealityVisionParameters)? = nil,
-        connectionAllowed: (@MainActor () -> Bool)? = nil
+        connectionAllowed: (@MainActor () -> Bool)? = nil,
+        retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil
     ) -> any AccessProxyEntryPublishing {
         do {
             let data = try lockData ?? loadBundledLockData()
@@ -38,7 +39,7 @@ public enum AccessEmbeddedProxyEntryFactory {
             }
             let session: AccessEmbeddedProxyEntrySession
             if let parameters {
-                session = AccessEmbeddedProxyEntrySession(core: core, parameters: parameters)
+                session = AccessEmbeddedProxyEntrySession(core: core, parameters: parameters, retireDocuments: retireDocuments)
             } else {
                 guard let configPath else { return AccessFailClosedProxyEntryPublisher() }
                 let local = try AccessLocalV2RayConfigLoader.load(path: configPath)
@@ -47,7 +48,11 @@ public enum AccessEmbeddedProxyEntryFactory {
             }
             return AccessProxyEntryPublisher(
                 provision: { generation, deadline in
-                    try await session.provision(generation: generation, deadline: deadline)
+                    do { return try await session.provision(generation: generation, deadline: deadline) }
+                    catch {
+                        await session.stopUnpublished()
+                        throw error
+                    }
                 },
                 shutdown: { identity in
                     session.shutdown(identity: identity)
@@ -84,6 +89,7 @@ final class AccessEmbeddedProxyEntrySession {
     private var startedCore = false
     private var pendingStop: Task<Void, Never>?
     private var logCapture: AccessDiagnosticLog.Capture?
+    private var retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
 
     init(core: any AccessEmbeddedCoreControlling, outbound: AccessRealityVisionOutboundConfig) {
         self.core = core
@@ -91,9 +97,11 @@ final class AccessEmbeddedProxyEntrySession {
     }
 
     init(core: any AccessEmbeddedCoreControlling,
-         parameters: @escaping @MainActor () async throws -> AccessRealityVisionParameters) {
+         parameters: @escaping @MainActor () async throws -> AccessRealityVisionParameters,
+         retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil) {
         self.core = core
         self.loadOutbound = { try AccessRealityVisionOutboundConfigBuilder.build(parameters: await parameters()) }
+        self.retireDocuments = retireDocuments
     }
 
     func provision(generation: UInt64, deadline: Duration) async throws -> AccessProxyEntryPublisher.Provision {
@@ -224,6 +232,14 @@ final class AccessEmbeddedProxyEntrySession {
         }
     }
 
+    func stopUnpublished() async {
+        guard identity == nil, startedCore else { return }
+        startedCore = false
+        await core.stop()
+        if let logCapture { AccessDiagnosticLog.shared.stop(capture: logCapture) }
+        logCapture = nil
+    }
+
     var isRuntimeHealthy: Bool {
         guard let listener, identity != nil else { return false }
         return listener.isListening && core.isRunning
@@ -232,7 +248,12 @@ final class AccessEmbeddedProxyEntrySession {
     func shutdown(identity: String) {
         guard self.identity == identity else { return }
         if let listener {
-            try? listener.stop()
+            if let retireDocuments {
+                listener.suspend()
+                retireDocuments { try? listener.stop() }
+            } else {
+                try? listener.stop()
+            }
         }
         listener = nil
         self.identity = nil

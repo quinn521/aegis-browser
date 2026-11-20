@@ -57,10 +57,10 @@ func TestAsyncIOBeyondDispatchCapacity(t *testing.T) {
 	ids := make([]int64, 0, count)
 	for i := 0; i < count; i++ {
 		a, b := net.Pipe()
-		id := nextID.Add(1)
-		mu.Lock()
-		streams[id] = &streamHandle{conn: observedReadConn{a, entered}, cancel: func() {}}
-		mu.Unlock()
+		id := legacy.nextID.Add(1)
+		legacy.mu.Lock()
+		legacy.streams[id] = &streamHandle{conn: observedReadConn{a, entered}, cancel: func() {}}
+		legacy.mu.Unlock()
 		peers = append(peers, b)
 		ids = append(ids, id)
 		ReadAsync(id, 1, resultReceiver{reads})
@@ -158,10 +158,10 @@ func TestAsyncWriteOwnsBorrowedArgument(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	id := nextID.Add(1)
-	mu.Lock()
-	streams[id] = &streamHandle{conn: a, cancel: func() {}}
-	mu.Unlock()
+	id := legacy.nextID.Add(1)
+	legacy.mu.Lock()
+	legacy.streams[id] = &streamHandle{conn: a, cancel: func() {}}
+	legacy.mu.Unlock()
 	defer CloseStream(id)
 	written := make(chan asyncResult, 1)
 	input := []byte("original")
@@ -177,5 +177,33 @@ func TestAsyncWriteOwnsBorrowedArgument(t *testing.T) {
 	}
 	if r := awaitResult(t, written); r.failure != "" {
 		t.Fatal(r.failure)
+	}
+}
+
+func TestRuntimeOwnershipSeparatesStreamsAndStop(t *testing.T) {
+	first, second := NewRuntime(), NewRuntime()
+	if err := first.Start(freedomConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Start(freedomConfig); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+	defer second.Stop()
+	a, b := net.Pipe()
+	defer b.Close()
+	first.streams[1] = &streamHandle{conn: a, cancel: func() {}}
+	if _, err := second.Read(1, 1); err == nil {
+		t.Fatal("another runtime must not read an owned stream")
+	}
+	second.CloseStream(1)
+	if _, err := first.lookup(1); err != nil {
+		t.Fatal("another runtime closed an owned stream")
+	}
+	if err := second.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !first.IsRunning() {
+		t.Fatal("another runtime stopped first runtime")
 	}
 }

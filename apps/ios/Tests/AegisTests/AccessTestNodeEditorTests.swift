@@ -2,6 +2,7 @@ import AccessKit
 import CoreImage
 import Vision
 import Security
+import Synchronization
 import XCTest
 @testable import Aegis
 
@@ -212,6 +213,43 @@ final class AccessTestNodeEditorTests: XCTestCase {
             json["version"] = version
             XCTAssertThrowsError(try JSONDecoder().decode(AccessTestNodeRecord.self,
                 from: JSONSerialization.data(withJSONObject: json)))
+        }
+    }
+
+    func testPageBindsOneHTTPStoreFromExplicitSavedProfileAndRefusesRestrictedRestore() async throws {
+        let storage = Storage()
+        let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
+                                 expectedRevision: nil, isPrivate: false)
+        let core = PageCore()
+        let page = AccessTestNodePage(repository: repository, testingCore: core)
+        await page.open(URL(string: "https://example.invalid/single")!)
+        XCTAssertTrue(core.isRunning)
+        XCTAssertNotNil(page.endpoint)
+        XCTAssertEqual(page.webView?.configuration.websiteDataStore.proxyConfigurations.count, 1)
+        XCTAssertEqual(page.webView?.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
+        let original = page.webView
+        await page.open(URL(string: "https://second.invalid/")!)
+        XCTAssertTrue(original === page.webView)
+        page.close()
+        XCTAssertEqual(page.status, "连接暂不可用")
+
+        let deniedCore = PageCore()
+        let denied = AccessTestNodePage(repository: AccessTestNodeRepository(channel: nil, storage: storage),
+                                       testingCore: deniedCore)
+        await denied.open(URL(string: "https://example.invalid/")!)
+        XCTAssertFalse(deniedCore.isRunning)
+        XCTAssertNil(denied.webView)
+        XCTAssertNil(denied.endpoint)
+    }
+
+    private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
+        let running = Mutex(false)
+        var isRunning: Bool { running.withLock { $0 } }
+        func start(configData: Data) async throws { running.withLock { $0 = true } }
+        func stop() async { running.withLock { $0 = false } }
+        func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+            throw URLError(.cannotConnectToHost)
         }
     }
 

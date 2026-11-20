@@ -1,6 +1,9 @@
 import AVFoundation
+import BrowserKit
 import SwiftUI
 import VisionKit
+
+extension AccessTestNodePage: Identifiable {}
 
 struct AccessTestNodeOptionsLink: View {
     let isPrivate: Bool
@@ -47,6 +50,8 @@ private struct AccessTestNodeDetailView: View {
     @State private var presentedScan: AccessTestNodeEditor.Scan?
     @State private var authorization: Task<Void, Never>?
     @State private var confirmsRemoval = false
+    @State private var targetURL = ""
+    @State private var page: AccessTestNodePage?
     @FocusState private var textFocused: Bool
 
     init(isPrivate: Bool) {
@@ -91,8 +96,22 @@ private struct AccessTestNodeDetailView: View {
                 }
             }
             if editor.hasSavedNode {
-                Text("节点已保存，网页连接暂不可用。", tableName: "AccessTestNode")
+                Text("节点已保存。", tableName: "AccessTestNode")
                     .accessibilityIdentifier("access-test-node-saved")
+                TextField(text: $targetURL) { Text("测试网页 HTTPS URL", tableName: "AccessTestNode") }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityIdentifier("access-test-page-url")
+                Button {
+                    guard let url = URL(string: targetURL), url.scheme == "https" else { return }
+                    let session = AccessTestNodePage()
+                    page = session
+                    Task { await session.open(url) }
+                } label: {
+                    Text("打开测试网页", tableName: "AccessTestNode")
+                }
+                .disabled(URL(string: targetURL)?.scheme != "https")
+                .accessibilityIdentifier("access-test-page-open")
                 Button(role: .destructive) {
                     confirmsRemoval = true
                 } label: {
@@ -149,6 +168,15 @@ private struct AccessTestNodeDetailView: View {
                 cancelScan()
                 input = ""
             }
+        }
+        .sheet(item: $page, onDismiss: { page?.close(); page = nil }) { session in
+            NavigationStack {
+                AccessTestNodePageView(session: session)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { session.close(); page = nil }
+                    } }
+            }
+            .interactiveDismissDisabled()
         }
         .sheet(item: $presentedScan) { scan in
             NavigationStack {
@@ -276,5 +304,22 @@ private struct AccessTestNodeScanner: UIViewControllerRepresentable {
             scanner.stopScanning()
             callback?(result)
         }
+    }
+}
+
+private struct AccessTestNodePageView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    let session: AccessTestNodePage
+    var body: some View {
+        VStack {
+            Text(LocalizedStringKey(session.status), tableName: "AccessTestNode")
+                .accessibilityIdentifier("access-test-page-status")
+            if let endpoint = session.endpoint {
+                Text("HTTP · \(endpoint.port)").font(.caption)
+            }
+            if let view = session.webView { BrowserWebView(webView: view) }
+        }
+        .onDisappear { session.close() }
+        .onChange(of: scenePhase) { _, phase in if phase == .background { session.close() } }
     }
 }

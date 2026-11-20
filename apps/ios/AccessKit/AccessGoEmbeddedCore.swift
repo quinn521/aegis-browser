@@ -16,9 +16,14 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
 
     private let native: any AccessGoNativeCore
 
-    public init() throws {
+    public init(isolated: Bool = false) throws {
         #if canImport(AegisEmbeddedCore)
-        native = AccessGomobileCore()
+        if isolated {
+            guard let runtime = EmbeddedcoreNewRuntime() else { throw LinkError.frameworkNotLinked }
+            native = AccessGomobileCore(runtime: runtime)
+        } else {
+            native = AccessGomobileCore(runtime: nil)
+        }
         #else
         throw LinkError.frameworkNotLinked
         #endif
@@ -101,23 +106,44 @@ private final class AccessGoEmbeddedStream: AccessRealityPathStream, @unchecked 
 }
 
 #if canImport(AegisEmbeddedCore)
-private struct AccessGomobileCore: AccessGoNativeCore {
-    var isRunning: Bool { EmbeddedcoreIsRunning() }
+private struct AccessGomobileCore: AccessGoNativeCore, @unchecked Sendable {
+    let runtime: EmbeddedcoreRuntime?
+    var isRunning: Bool { runtime?.isRunning() ?? EmbeddedcoreIsRunning() }
 
     func start(_ json: String) async throws {
-        _ = try await result { EmbeddedcoreStartAsync(json, $0) }
+        _ = try await result { callback in
+            if let runtime { runtime.startAsync(json, c: callback) }
+            else { EmbeddedcoreStartAsync(json, callback) }
+        }
     }
     func dial(host: String, port: UInt16) async throws -> Int64 {
-        try await result { EmbeddedcoreDialAsync(host, Int(port), $0) }.id
+        try await result { callback in
+            if let runtime { runtime.dialAsync(host, port: Int(port), c: callback) }
+            else { EmbeddedcoreDialAsync(host, Int(port), callback) }
+        }.id
     }
     func read(_ id: Int64, maxBytes: Int) async throws -> Data? {
-        try await result { EmbeddedcoreReadAsync(id, maxBytes, $0) }.data
+        try await result { callback in
+            if let runtime { runtime.readAsync(id, maxBytes: maxBytes, c: callback) }
+            else { EmbeddedcoreReadAsync(id, maxBytes, callback) }
+        }.data
     }
     func write(_ id: Int64, data: Data) async throws {
-        _ = try await result { EmbeddedcoreWriteAsync(id, data, $0) }
+        _ = try await result { callback in
+            if let runtime { runtime.writeAsync(id, data: data, c: callback) }
+            else { EmbeddedcoreWriteAsync(id, data, callback) }
+        }
     }
-    func close(_ id: Int64) { EmbeddedcoreCloseStreamAsync(id) }
-    func stop() async { _ = try? await result { EmbeddedcoreStopAsync($0) } }
+    func close(_ id: Int64) {
+        if let runtime { runtime.closeStreamAsync(id) }
+        else { EmbeddedcoreCloseStreamAsync(id) }
+    }
+    func stop() async {
+        _ = try? await result { callback in
+            if let runtime { runtime.stopAsync(callback) }
+            else { EmbeddedcoreStopAsync(callback) }
+        }
+    }
 
     private struct NativeResult: Sendable {
         let id: Int64
