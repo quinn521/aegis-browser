@@ -767,7 +767,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let probeBusyContent = environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"] == "1"
         if probeBusyContent {
             webView.configuration.userContentController.add(busy, name: "aegisRetirementSignal")
-            webView.evaluateJavaScript("window.webkit.messageHandlers.aegisRetirementSignal.postMessage('started'); const until = performance.now()+8000; while(performance.now()<until){}; window.webkit.messageHandlers.aegisRetirementSignal.postMessage('ended');")
+            webView.evaluateJavaScript("window.webkit.messageHandlers.aegisRetirementSignal.postMessage('started'); const until = performance.now()+8000; while(performance.now()<until){}; window.webkit.messageHandlers.aegisRetirementSignal.postMessage('ended');", completionHandler: nil)
             await fulfillment(of: [busyStarted], timeout: 2)
         }
         defer { if probeBusyContent { webView.configuration.userContentController.removeScriptMessageHandler(forName: "aegisRetirementSignal") } }
