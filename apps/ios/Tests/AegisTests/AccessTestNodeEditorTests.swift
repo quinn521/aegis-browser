@@ -1,6 +1,8 @@
 import AccessKit
 import CoreImage
 import Vision
+import WebKit
+import UIKit
 import Security
 import Synchronization
 import XCTest
@@ -277,3 +279,42 @@ final class AccessTestNodeEditorTests: XCTestCase {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+final class AccessTestNodeDeviceTests: XCTestCase {
+    /// Explicit operator-supplied inputs only. Never uses any member of the domain campaign as a probe.
+    func testAuthorizedAppPath() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let share = environment["AEGIS_TEST_AUTHORIZED_NODE"],
+              let rawURL = environment["AEGIS_TEST_CONTROLLED_URL"], let url = URL(string: rawURL) else {
+            throw XCTSkip("Explicit authorized node and independent controlled URL are required")
+        }
+        let repository = AccessTestNodeRepository.shared
+        guard repository.allowsEditing(isPrivate: false) else {
+            XCTFail("Native internal channel admission rejected this package")
+            return
+        }
+        let old = try repository.revision(isPrivate: false)
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(share),
+                                 expectedRevision: old, isPrivate: false)
+        let page = AccessTestNodePage(repository: repository)
+        await page.open(url)
+        guard let webView = page.webView else { XCTFail("Authorized publisher did not bind a DataStore"); return }
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.addSubview(webView)
+        webView.frame = window.bounds
+        window.makeKeyAndVisible()
+        defer { page.close(); window.isHidden = true }
+        let deadline = Date().addingTimeInterval(30)
+        while page.status == "正在加载", Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
+        XCTAssertNotNil(page.endpoint)
+        XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
+        XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
+    }
+}
+#endif
