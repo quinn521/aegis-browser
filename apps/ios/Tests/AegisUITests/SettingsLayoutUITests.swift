@@ -102,7 +102,8 @@ final class SettingsLayoutUITests: XCTestCase {
         field.tap()
         let syntheticLink = "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
             + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
-            + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic-node"
+            + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=&spx=%2Fsynthetic"
+            + "&support-x25519mlkem768=true#synthetic-node"
         field.typeText(syntheticLink)
         let preview = app.buttons["access-test-node-preview"]
         XCTAssertTrue(reveal(preview, app))
@@ -119,6 +120,9 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(reveal(discard, app))
         discard.tap()
         XCTAssertFalse(redacted.exists)
+        // Removing the draft section can reset this virtualized Form's scroll
+        // position, especially with a saved node and accessibility text sizes.
+        XCTAssertTrue(reveal(apply, app))
         XCTAssertFalse(apply.isEnabled)
 
         XCTAssertTrue(reveal(field, app, scrollDown: true))
