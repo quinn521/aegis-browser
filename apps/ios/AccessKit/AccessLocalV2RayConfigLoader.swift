@@ -112,8 +112,20 @@ public enum AccessLocalV2RayConfigLoader {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
         let items = components.queryItems ?? []
-        guard Set(items.map(\.name)).count == items.count,
-              items.allSatisfy({ $0.name != "headerType" || $0.value == "none" }) else {
+        let acceptedKeys: Set<String> = [
+            "type", "security", "flow", "encryption", "headerType", "spx",
+            "sni", "serverName", "server_name", "pbk", "publicKey", "public_key",
+            "sid", "shortId", "short_id", "fp", "fingerprint"
+        ]
+        let aliasGroups = [
+            ["sni", "serverName", "server_name"], ["pbk", "publicKey", "public_key"],
+            ["sid", "shortId", "short_id"], ["fp", "fingerprint"]
+        ]
+        let names = Set(items.map(\.name))
+        guard names.count == items.count,
+              names.isSubset(of: acceptedKeys),
+              aliasGroups.allSatisfy({ names.intersection($0).count <= 1 }),
+              items.allSatisfy({ $0.value != nil && ($0.name != "headerType" || $0.value == "none") }) else {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
         // The fragment is untrusted and can itself contain credentials.

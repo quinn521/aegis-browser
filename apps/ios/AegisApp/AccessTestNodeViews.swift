@@ -258,12 +258,11 @@ private struct AccessTestNodeScanner: UIViewControllerRepresentable {
 
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem],
                          allItems: [RecognizedItem]) {
-            guard allItems.count == 1, case let .barcode(barcode)? = allItems.first,
-                  let payload = barcode.payloadStringValue else {
-                complete(dataScanner, with: .failure(.invalidLink))
-                return
+            let payloads = allItems.map { item -> String? in
+                guard case let .barcode(barcode) = item else { return nil }
+                return barcode.payloadStringValue
             }
-            complete(dataScanner, with: .success(payload))
+            complete(dataScanner, with: AccessTestNodeQRCode.payload(from: payloads))
         }
 
         func dataScanner(_ dataScanner: DataScannerViewController,

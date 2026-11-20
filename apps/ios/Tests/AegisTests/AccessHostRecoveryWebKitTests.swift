@@ -489,6 +489,8 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { browser.standardTabs.forEach { $0.stop() } }
         let tab = try XCTUnwrap(browser.activeTab)
         tab.hostCoordinator = coordinator
+        // This receipt measures routing, so finish the unrelated cold rule compile first.
+        try await tab.prepareContentRulesForTests()
         let window = show(tab.webView)
         defer { window.isHidden = true }
         let sink = NavigationSink()

@@ -232,6 +232,8 @@ final class AccessTestNodeEditor {
     func beginScan() -> Scan? {
         guard loaded, scan == nil else { return nil }
         let request = Scan()
+        // A new input attempt cannot leave an older candidate ready to Apply.
+        draft = nil
         scan = request
         error = nil
         return request
@@ -274,5 +276,13 @@ final class AccessTestNodeEditor {
         } catch {
             self.error = .storageUnavailable
         }
+    }
+}
+
+/// VisionKit and offline QR fixtures use the same whole-capture admission.
+enum AccessTestNodeQRCode {
+    static func payload(from items: [String?]) -> Result<String, AccessTestNodeError> {
+        guard items.count == 1, let payload = items.first ?? nil else { return .failure(.invalidLink) }
+        return .success(payload)
     }
 }

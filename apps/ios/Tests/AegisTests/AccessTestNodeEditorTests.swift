@@ -1,4 +1,6 @@
 import AccessKit
+import CoreImage
+import Vision
 import Security
 import XCTest
 @testable import Aegis
@@ -162,6 +164,55 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(try reopened.revision(isPrivate: false), revision)
         try reopened.remove(expectedRevision: revision, isPrivate: false)
         XCTAssertNil(try reopened.revision(isPrivate: false))
+    }
+
+    func testDecodedSyntheticQRCodeMatchesTextAndRejectsMultiplePayloads() throws {
+        let generator = try XCTUnwrap(CIFilter(name: "CIQRCodeGenerator"))
+        generator.setValue(Data(link.utf8), forKey: "inputMessage")
+        let image = try XCTUnwrap(generator.outputImage).transformed(by: CGAffineTransform(scaleX: 5, y: 5))
+        let bitmap = try XCTUnwrap(CIContext().createCGImage(image, from: image.extent))
+        let request = VNDetectBarcodesRequest()
+        request.symbologies = [.qr]
+        try VNImageRequestHandler(cgImage: bitmap).perform([request])
+        let payloads = try XCTUnwrap(request.results).map(\.payloadStringValue)
+        let decoded = try AccessTestNodeQRCode.payload(from: payloads).get()
+        XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI(decoded),
+                       try AccessLocalV2RayConfigLoader.parseSingleShareURI(link))
+        let storage = Storage()
+        let editor = AccessTestNodeEditor(isPrivate: false,
+            repository: AccessTestNodeRepository(channel: .dev, storage: storage))
+        editor.openProfile()
+        let scan = try XCTUnwrap(editor.beginScan())
+        editor.finishScan(scan, result: AccessTestNodeQRCode.payload(from: payloads))
+        XCTAssertTrue(editor.canApply)
+        XCTAssertEqual(storage.writes, 0)
+        editor.apply()
+        XCTAssertEqual(storage.writes, 1)
+        XCTAssertThrowsError(try AccessTestNodeQRCode.payload(from: [link, link]).get())
+        XCTAssertThrowsError(try AccessTestNodeQRCode.payload(from: []).get())
+        XCTAssertThrowsError(try AccessTestNodeQRCode.payload(from: [nil]).get())
+    }
+
+    func testNewScanInvalidatesOldDraftAndCorruptRestoreCannotApply() throws {
+        let storage = Storage()
+        let editor = AccessTestNodeEditor(isPrivate: false,
+            repository: AccessTestNodeRepository(channel: .dev, storage: storage))
+        editor.openProfile()
+        editor.preview(link)
+        XCTAssertTrue(editor.canApply)
+        let scan = try XCTUnwrap(editor.beginScan())
+        editor.finishScan(scan, result: AccessTestNodeQRCode.payload(from: [nil]))
+        XCTAssertFalse(editor.canApply)
+        editor.apply()
+        XCTAssertEqual(storage.writes, 0)
+
+        let record = AccessTestNodeRecord(try AccessLocalV2RayConfigLoader.parseSingleShareURI(link))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(record)) as? [String: Any])
+        for version: Int? in [nil, 0, 2] {
+            json["version"] = version
+            XCTAssertThrowsError(try JSONDecoder().decode(AccessTestNodeRecord.self,
+                from: JSONSerialization.data(withJSONObject: json)))
+        }
     }
 
     private final class Storage: AccessTestNodeStoring {

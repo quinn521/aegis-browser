@@ -100,9 +100,10 @@ final class SettingsLayoutUITests: XCTestCase {
         let field = app.secureTextFields["access-test-node-link"]
         XCTAssertTrue(reveal(field, app, scrollDown: true))
         field.tap()
-        field.typeText("vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
-                       + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
-                       + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic-node")
+        let syntheticLink = "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+            + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
+            + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic-node"
+        field.typeText(syntheticLink)
         let preview = app.buttons["access-test-node-preview"]
         XCTAssertTrue(reveal(preview, app))
         preview.tap()
@@ -119,6 +120,25 @@ final class SettingsLayoutUITests: XCTestCase {
         discard.tap()
         XCTAssertFalse(redacted.exists)
         XCTAssertFalse(apply.isEnabled)
+
+        XCTAssertTrue(reveal(field, app, scrollDown: true))
+        field.tap()
+        field.typeText(syntheticLink)
+        XCTAssertTrue(reveal(preview, app))
+        preview.tap()
+        XCTAssertTrue(reveal(apply, app))
+        apply.tap()
+        let saved = app.staticTexts["access-test-node-saved"]
+        XCTAssertTrue(reveal(saved, app))
+        XCTAssertEqual(saved.label, "Node saved. Web connection is currently unavailable.")
+        XCTAssertFalse(apply.isEnabled)
+        let remove = app.buttons["access-test-node-remove"]
+        XCTAssertTrue(reveal(remove, app))
+        remove.tap()
+        let confirm = app.buttons["access-test-node-confirm-remove"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(saved.waitForNonExistence(timeout: 5))
     }
 
     func testAccountUsageEntryShowsHonestEmptyStateInChinese() {
