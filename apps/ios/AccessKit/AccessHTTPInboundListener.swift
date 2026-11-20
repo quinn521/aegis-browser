@@ -19,10 +19,12 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
     private let gate = Mutex(State())
     private let tunnels: any AccessHTTPTunnelOpening
     private let maximumConnections: Int
+    private let preparedSocket: NWListener?
 
     private struct State {
         var admissionSummary = ""
         var listener: NWListener?
+        var starting = false
         /// Set when NWListener reports `.failed` after the initial ready handshake.
         var listenerFailed = false
         var suspended = false
@@ -33,13 +35,22 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         var bridges: [ObjectIdentifier: AccessHTTPTunnelBridge] = [:]
     }
 
-    public init(registration: AccessRegistration, tunnels: any AccessHTTPTunnelOpening, maximumConnections: Int = 128) throws {
+    public convenience init(registration: AccessRegistration, tunnels: any AccessHTTPTunnelOpening, maximumConnections: Int = 128) throws {
+        try self.init(registration: registration, tunnels: tunnels, maximumConnections: maximumConnections, preparedSocket: nil)
+    }
+
+    convenience init(registration: AccessRegistration, preparedSocket: NWListener, tunnels: any AccessHTTPTunnelOpening, maximumConnections: Int = 128) throws {
+        try self.init(registration: registration, tunnels: tunnels, maximumConnections: maximumConnections, preparedSocket: preparedSocket)
+    }
+
+    private init(registration: AccessRegistration, tunnels: any AccessHTTPTunnelOpening, maximumConnections: Int, preparedSocket: NWListener?) throws {
         guard registration.transport == .http else {
             throw AccessHTTPInboundError.transportNotHTTP(registration.transport)
         }
         self.registration = registration
         self.tunnels = tunnels
         self.maximumConnections = max(1, maximumConnections)
+        self.preparedSocket = preparedSocket
         self.queue = DispatchQueue(label: "accesskit.http.inbound.\(registration.id.rawValue)")
     }
 
@@ -54,6 +65,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
     }
 
     public var boundPort: UInt16? { gate.withLock { $0.listener?.port?.rawValue } }
+    var boundSocketForTests: NWListener? { gate.withLock { $0.listener } }
 
     public var acceptedConnectionCount: UInt64 {
         gate.withLock { $0.acceptedConnections }
@@ -79,9 +91,15 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         guard registration.isActive(at: now, observedGeneration: registration.generation) else {
             throw AccessHTTPInboundError.leaseInactive
         }
-        if gate.withLock({ $0.listener != nil }) {
+        let mayStart = gate.withLock { state in
+            guard state.listener == nil, !state.starting else { return false }
+            state.starting = true
+            return true
+        }
+        guard mayStart else {
             throw AccessHTTPInboundError.alreadyListening
         }
+        defer { gate.withLock { $0.starting = false } }
 
         let host = registration.endpoint.host
         guard AccessEndpoint.isLoopbackHost(host) else {
@@ -99,10 +117,14 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         )
 
         let nwListener: NWListener
-        do {
-            nwListener = try NWListener(using: parameters)
-        } catch {
-            throw AccessHTTPInboundError.bindFailed(String(describing: error))
+        if let preparedSocket { nwListener = preparedSocket }
+        else {
+            do { nwListener = try NWListener(using: parameters) }
+            catch { throw AccessHTTPInboundError.bindFailed(String(describing: error)) }
+        }
+        if preparedSocket != nil, nwListener.port?.rawValue != registration.endpoint.port {
+            nwListener.cancel()
+            throw AccessHTTPInboundError.bindFailed("prepared port differs from registration")
         }
 
         nwListener.newConnectionHandler = { [weak self, weak nwListener] connection in
@@ -121,7 +143,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
             throw AccessHTTPInboundError.alreadyListening
         }
         do {
-            try await AccessNWListenerBootstrap.awaitReady(nwListener, on: queue) { [weak self, weak nwListener] state in
+            try await AccessNWListenerBootstrap.awaitReady(nwListener, on: queue, alreadyStarted: preparedSocket != nil) { [weak self, weak nwListener] state in
                 guard let self, let nwListener else { return }
                 self.gate.withLock { current in
                     guard current.listener === nwListener else { return }
@@ -144,6 +166,11 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
                 throw AccessHTTPInboundError.bindFailed(message)
             }
             throw AccessHTTPInboundError.bindFailed("listener start cancelled")
+        }
+        guard nwListener.port?.rawValue == registration.endpoint.port else {
+            gate.withLock { if $0.listener === nwListener { $0.listener = nil } }
+            nwListener.cancel()
+            throw AccessHTTPInboundError.bindFailed("listener port differs from admitted registration")
         }
     }
 

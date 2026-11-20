@@ -12,9 +12,18 @@ enum AccessNWListenerBootstrap {
     static func awaitReady(
         _ listener: NWListener,
         on queue: DispatchQueue,
+        alreadyStarted: Bool = false,
         timeout: Duration = .seconds(2),
         observeState: @escaping @Sendable (NWListener.State) -> Void = { _ in }
     ) async throws {
+        if alreadyStarted {
+            try Task.checkCancellation()
+            listener.stateUpdateHandler = observeState
+            let state = listener.state
+            observeState(state)
+            guard case .ready = state else { throw Failure.failed("prepared listener is no longer ready") }
+            return
+        }
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 try await withTaskCancellationHandler {

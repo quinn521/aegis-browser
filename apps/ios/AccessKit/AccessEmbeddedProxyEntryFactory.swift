@@ -160,13 +160,20 @@ final class AccessEmbeddedProxyEntrySession {
             throw AccessSiteSessionError.runtimeNotReady
         }
 
-        let port: UInt16
+        let boundSocket: NWListener
         do {
-            port = try await Self.reserveLoopbackPort()
+            boundSocket = try await Self.reserveLoopbackSocket()
         } catch let error as AccessSiteSessionError {
             throw error
         } catch {
             throw AccessSiteSessionError.prepareFailed("port.reserve: \(error)")
+        }
+        var transferredSocket = false
+        defer { if !transferredSocket { boundSocket.cancel() } }
+        try Task.checkCancellation()
+        guard let port = boundSocket.port?.rawValue, port != 0,
+              transport != .socks5 || port != 1080 else {
+            throw AccessSiteSessionError.runtimeNotReady
         }
 
         let registration: AccessRegistration
@@ -190,8 +197,8 @@ final class AccessEmbeddedProxyEntrySession {
         let next: AccessEmbeddedInboundListener
         do {
             switch transport {
-            case .http: next = .http(try AccessHTTPInboundListener(registration: registration, tunnels: opener))
-            case .socks5: next = .socks5(try AccessSOCKS5InboundListener(registration: registration, tunnels: opener))
+            case .http: next = .http(try AccessHTTPInboundListener(registration: registration, preparedSocket: boundSocket, tunnels: opener))
+            case .socks5: next = .socks5(try AccessSOCKS5InboundListener(registration: registration, preparedSocket: boundSocket, tunnels: opener))
             case .https: throw AccessSiteSessionError.runtimeNotReady
             }
             try await next.start(at: Date())
@@ -203,7 +210,9 @@ final class AccessEmbeddedProxyEntrySession {
             try? next.stop()
             throw AccessSiteSessionError.runtimeNotReady
         }
+        try Task.checkCancellation()
         let entryIdentity = "embedded-\(transport.rawValue)-\(registration.id.rawValue)"
+        transferredSocket = true
         listener = next
         identity = entryIdentity
         return AccessProxyEntryPublisher.Provision(
@@ -290,39 +299,39 @@ final class AccessEmbeddedProxyEntrySession {
         }
     }
 
-    /// Reserves an ephemeral loopback port via NWListener, then cancels it.
-    /// Uses async continuation + task-group timeout — no semaphore / NSLock.
-    private static func reserveLoopbackPort() async throws -> UInt16 {
-        try await withThrowingTaskGroup(of: UInt16.self) { group in
+    /// The ready socket is transferred intact to the selected protocol listener.
+    /// A port number obtained from a cancelled reservation is never published.
+    static func reserveLoopbackSocket() async throws -> NWListener {
+        try await withThrowingTaskGroup(of: NWListener.self) { group in
             group.addTask {
-                try await Self.awaitEphemeralLoopbackPort()
+                try await Self.awaitEphemeralLoopbackSocket()
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(2))
                 throw AccessSiteSessionError.prepareFailed("port reserve timed out")
             }
-            guard let port = try await group.next() else {
+            guard let socket = try await group.next() else {
                 throw AccessSiteSessionError.prepareFailed("port reserve returned no value")
             }
             group.cancelAll()
-            return port
+            return socket
         }
     }
 
-    private static func awaitEphemeralLoopbackPort() async throws -> UInt16 {
-        // Prefer `NWListener(using:on:)` for ephemeral bind. Setting
-        // `requiredLocalEndpoint` to `port: .any` with reuse can return EINVAL
-        // on some simulator runtimes.
+    private static func awaitEphemeralLoopbackSocket() async throws -> NWListener {
         let nwListener: NWListener
         do {
-            nwListener = try NWListener(using: .tcp, on: .any)
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = false
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+            nwListener = try NWListener(using: parameters, on: .any)
         } catch {
             throw AccessSiteSessionError.prepareFailed(String(describing: error))
         }
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let resume = OncePortResume(continuation)
+                let resume = OnceSocketResume(continuation)
                 // Required before start on current Network.framework — missing handler
                 // surfaces as POSIX EINVAL on some simulator runtimes.
                 nwListener.newConnectionHandler = { connection in
@@ -332,16 +341,18 @@ final class AccessEmbeddedProxyEntrySession {
                     switch state {
                     case .ready:
                         if let port = nwListener.port?.rawValue, port > 0 {
-                            resume.finish(returning: port)
+                            nwListener.stateUpdateHandler = nil
+                            resume.finish(returning: nwListener)
                         } else {
                             resume.finish(
                                 throwing: AccessSiteSessionError.prepareFailed(
                                     "port.reserve: listener ready without port"
                                 )
                             )
+                            nwListener.cancel()
                         }
-                        nwListener.cancel()
                     case .failed(let error):
+                        nwListener.stateUpdateHandler = nil
                         resume.finish(
                             throwing: AccessSiteSessionError.prepareFailed(
                                 "port.reserve: \(error)"
@@ -349,7 +360,7 @@ final class AccessEmbeddedProxyEntrySession {
                         )
                         nwListener.cancel()
                     case .cancelled:
-                        // Success path also cancels; OncePortResume ignores the second finish.
+                        nwListener.stateUpdateHandler = nil
                         resume.finish(throwing: CancellationError())
                     default:
                         break
@@ -367,22 +378,22 @@ final class AccessEmbeddedProxyEntrySession {
 ///
 /// `Mutex` is preferred over `NSLock` on iOS 18+/Swift 6; kept as a class so the
 /// non-Copyable mutex can own the continuation.
-private final class OncePortResume: Sendable {
-    private let state: Mutex<CheckedContinuation<UInt16, Error>?>
+private final class OnceSocketResume: Sendable {
+    private let state: Mutex<CheckedContinuation<NWListener, Error>?>
 
-    init(_ continuation: CheckedContinuation<UInt16, Error>) {
+    init(_ continuation: CheckedContinuation<NWListener, Error>) {
         state = Mutex(continuation)
     }
 
-    func finish(returning port: UInt16) {
-        take()?.resume(returning: port)
+    func finish(returning listener: NWListener) {
+        take()?.resume(returning: listener)
     }
 
     func finish(throwing error: Error) {
         take()?.resume(throwing: error)
     }
 
-    private func take() -> CheckedContinuation<UInt16, Error>? {
+    private func take() -> CheckedContinuation<NWListener, Error>? {
         state.withLock { pending in
             let value = pending
             pending = nil

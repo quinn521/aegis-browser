@@ -6,6 +6,25 @@ import os
 @testable import AccessKit
 
 final class AccessHTTPInboundListenerTests: XCTestCase {
+    func testPreparedLoopbackSocketIsRetainedAcrossHTTPAdoption() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let registration = try makeRegistration(port: port)
+        let rival = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
+        do {
+            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try? rival.stop()
+            XCTFail("The assigned socket must hold its port before protocol adoption")
+        } catch { }
+        let listener = try AccessHTTPInboundListener(registration: registration, preparedSocket: socket, tunnels: HoldingTunnel())
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        XCTAssertTrue(listener.boundSocketForTests === socket)
+        XCTAssertEqual(listener.boundPort, port)
+        XCTAssertTrue(listener.isListening)
+    }
+
     func testRepeatedConnectsReleaseConnectionsSessionsAndBridges() async throws {
         let listener = try AccessHTTPInboundListener(registration: makeRegistration(port: 18_088), tunnels: HoldingTunnel())
         let references = OSAllocatedUnfairLock(initialState: [WeakConnection]())

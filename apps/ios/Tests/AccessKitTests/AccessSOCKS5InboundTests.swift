@@ -5,6 +5,48 @@ import Synchronization
 @testable import AccessKit
 
 final class AccessSOCKS5InboundTests: XCTestCase {
+    func testTwoPreparedSOCKSSocketsStayDistinctAndServeAfterAdoption() async throws {
+        let first = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        let second = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { first.cancel(); second.cancel() }
+        let firstPort = try XCTUnwrap(first.port?.rawValue)
+        let secondPort = try XCTUnwrap(second.port?.rawValue)
+        XCTAssertNotEqual(firstPort, secondPort)
+        for port in [firstPort, secondPort] { XCTAssertNotEqual(port, 0); XCTAssertNotEqual(port, 1080) }
+        let rival = try AccessSOCKS5InboundListener(registration: makeRegistration(port: firstPort))
+        do {
+            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try? rival.stop()
+            XCTFail("The assigned SOCKS port must remain held before adoption")
+        } catch { }
+        for (socket, port) in [(first, firstPort), (second, secondPort)] {
+            let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: port), preparedSocket: socket)
+            try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            XCTAssertTrue(listener.boundSocketForTests === socket)
+            let client = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+            client.start(queue: .global())
+            try await Self.send(Data([5, 1, 0]), to: client)
+            let reply = try await Self.receive(2, from: client)
+            XCTAssertEqual(reply, Data([5, 0]))
+            client.cancel()
+            try listener.stop()
+        }
+    }
+
+    func testPreparedSOCKSSocketRejectsMismatchedRegistration() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let listener = try AccessSOCKS5InboundListener(
+            registration: makeRegistration(port: port == 65535 ? 65534 : port + 1), preparedSocket: socket)
+        do {
+            try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            XCTFail("A prepared socket cannot be relabelled with another endpoint")
+        } catch { }
+        XCTAssertNil(listener.boundSocketForTests)
+        XCTAssertEqual(listener.acceptedConnectionCount, 0)
+    }
+
     func testProductionTunnelWaitsForUpstreamAndPreservesPipelinedBytes() async throws {
         let tunnel = GatedTunnel()
         let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806), tunnels: tunnel)

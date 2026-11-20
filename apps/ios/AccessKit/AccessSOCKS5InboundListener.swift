@@ -11,10 +11,12 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
     private let gate = Mutex(State())
     private let tunnels: (any AccessHTTPTunnelOpening)?
     private let maximumConnections: Int
+    private let preparedSocket: NWListener?
 
     private struct State {
         var admissionSummary = ""
         var listener: NWListener?
+        var starting = false
         /// Set when NWListener reports `.failed` after the initial ready handshake.
         var listenerFailed = false
         var suspended = false
@@ -25,7 +27,15 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         var bridges: [ObjectIdentifier: AccessHTTPTunnelBridge] = [:]
     }
 
-    public init(registration: AccessRegistration, tunnels: (any AccessHTTPTunnelOpening)? = nil, maximumConnections: Int = 128) throws {
+    public convenience init(registration: AccessRegistration, tunnels: (any AccessHTTPTunnelOpening)? = nil, maximumConnections: Int = 128) throws {
+        try self.init(registration: registration, tunnels: tunnels, maximumConnections: maximumConnections, preparedSocket: nil)
+    }
+
+    convenience init(registration: AccessRegistration, preparedSocket: NWListener, tunnels: (any AccessHTTPTunnelOpening)? = nil, maximumConnections: Int = 128) throws {
+        try self.init(registration: registration, tunnels: tunnels, maximumConnections: maximumConnections, preparedSocket: preparedSocket)
+    }
+
+    private init(registration: AccessRegistration, tunnels: (any AccessHTTPTunnelOpening)?, maximumConnections: Int, preparedSocket: NWListener?) throws {
         guard registration.transport == .socks5 else {
             throw AccessSOCKS5InboundError.transportNotSOCKS5(registration.transport)
         }
@@ -35,6 +45,7 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         self.registration = registration
         self.tunnels = tunnels
         self.maximumConnections = max(1, maximumConnections)
+        self.preparedSocket = preparedSocket
         self.queue = DispatchQueue(label: "accesskit.socks5.inbound.\(registration.id.rawValue)")
     }
 
@@ -49,6 +60,7 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
     }
 
     public var boundPort: UInt16? { gate.withLock { $0.listener?.port?.rawValue } }
+    var boundSocketForTests: NWListener? { gate.withLock { $0.listener } }
 
     public var acceptedConnectionCount: UInt64 {
         gate.withLock { $0.acceptedConnections }
@@ -74,9 +86,15 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         guard registration.isActive(at: now, observedGeneration: registration.generation) else {
             throw AccessSOCKS5InboundError.leaseInactive
         }
-        if gate.withLock({ $0.listener != nil }) {
+        let mayStart = gate.withLock { state in
+            guard state.listener == nil, !state.starting else { return false }
+            state.starting = true
+            return true
+        }
+        guard mayStart else {
             throw AccessSOCKS5InboundError.alreadyListening
         }
+        defer { gate.withLock { $0.starting = false } }
 
         let host = registration.endpoint.host
         guard host == "127.0.0.1" || host == "::1" else {
@@ -94,10 +112,14 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         )
 
         let nwListener: NWListener
-        do {
-            nwListener = try NWListener(using: parameters)
-        } catch {
-            throw AccessSOCKS5InboundError.bindFailed(String(describing: error))
+        if let preparedSocket { nwListener = preparedSocket }
+        else {
+            do { nwListener = try NWListener(using: parameters) }
+            catch { throw AccessSOCKS5InboundError.bindFailed(String(describing: error)) }
+        }
+        if preparedSocket != nil, nwListener.port?.rawValue != registration.endpoint.port {
+            nwListener.cancel()
+            throw AccessSOCKS5InboundError.bindFailed("prepared port differs from registration")
         }
 
         nwListener.newConnectionHandler = { [weak self, weak nwListener] connection in
@@ -116,7 +138,7 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
             throw AccessSOCKS5InboundError.alreadyListening
         }
         do {
-            try await AccessNWListenerBootstrap.awaitReady(nwListener, on: queue) { [weak self, weak nwListener] state in
+            try await AccessNWListenerBootstrap.awaitReady(nwListener, on: queue, alreadyStarted: preparedSocket != nil) { [weak self, weak nwListener] state in
                 guard let self, let nwListener else { return }
                 self.gate.withLock { current in
                     guard current.listener === nwListener else { return }
