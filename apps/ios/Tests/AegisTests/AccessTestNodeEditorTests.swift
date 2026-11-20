@@ -516,8 +516,22 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let old = try repository.revision(isPrivate: false)
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(share),
                                  expectedRevision: old, isPrivate: false)
-        let preference: AccessTestNodeTransport = environment["AEGIS_TEST_LOCAL_TRANSPORT"] == "socks5" ? .socks5 : .http
-        let page = AccessTestNodePage(repository: repository, transport: preference)
+        let preference = AccessTestNodeTransport(rawValue: environment["AEGIS_TEST_LOCAL_TRANSPORT"] ?? "http") ?? .http
+        let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
+        let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
+        let core = try AccessGoEmbeddedCore(isolated: true)
+        let page = AccessTestNodePage(repository: repository, testingCore: core,
+                                     transport: preference, socksAdmitted: capabilityOverride)
+        var receipt: [String: Any] = ["sourceSHA": environment["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
+            "device": "ios-device-2d62695fc7", "protocol": expectedTransport == .socks5 ? "socks5" : "http",
+            "nonce": URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "nonce" })?.value ?? ""]
+        defer {
+            if let bytes = try? JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted]) {
+                let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("ios208-controlled-path.json")
+                try? bytes.write(to: file, options: .atomic)
+            }
+        }
         await page.open(url)
         guard let webView = page.webView else { XCTFail("Authorized publisher did not bind a DataStore"); return }
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -532,15 +546,32 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
         XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
         XCTAssertNotNil(page.endpoint)
-        XCTAssertEqual(page.selectedTransport, preference == .socks5 ? .socks5 : .http)
+        XCTAssertEqual(page.selectedTransport, expectedTransport)
+        receipt["port"] = page.endpoint?.port
+        receipt["httpStatus"] = page.httpStatus
         XCTAssertNotEqual(page.endpoint?.port, 0)
-        if preference == .socks5 { XCTAssertNotEqual(page.endpoint?.port, 1080) }
+        if expectedTransport == .socks5 { XCTAssertNotEqual(page.endpoint?.port, 1080) }
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
+        if let target = environment["AEGIS_TEST_REVOKED_URL"] {
+            await core.stop()
+            receipt["coreStopped"] = !core.isRunning
+            do {
+                let result = try await webView.callAsyncJavaScript(
+                    "return await Promise.race([fetch(target, {cache: 'no-store'}).then(() => 'received').catch(() => 'blocked'), new Promise(resolve => setTimeout(() => resolve('timeout'), 3000))]);",
+                    arguments: ["target": target], in: nil, contentWorld: .page)
+                receipt["revokedFetch"] = result as? String ?? "unknown"
+                XCTAssertEqual(result as? String, "blocked", "Stopped protection must not fall back to direct networking")
+            } catch {
+                receipt["revokedFetch"] = "document-retired"
+                XCTAssertEqual(page.status, "连接暂不可用", "A script failure counts only after protection retired the document")
+            }
+        }
         page.close()
         let retirementDeadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
+        receipt["retired"] = page.endpoint == nil
     }
 }
 #endif
