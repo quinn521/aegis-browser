@@ -792,8 +792,6 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             try await peer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
             oldFlow = peer
             receipt["normalCloseProbe"] = true
-            receipt["coreRunningBeforeProductClose"] = core.isRunning
-            XCTAssertTrue(core.isRunning)
         }
         defer { closeSession?.invalidateAndCancel(); oldFlow?.cancel() }
         if let target = environment["AEGIS_TEST_REVOKED_URL"], !normalCloseProbe {
@@ -819,6 +817,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             await fulfillment(of: [busyStarted], timeout: 2)
         }
         defer { if probeBusyContent { webView.configuration.userContentController.removeScriptMessageHandler(forName: "aegisRetirementSignal") } }
+        if normalCloseProbe {
+            receipt["coreRunningBeforeProductClose"] = core.isRunning
+            XCTAssertTrue(core.isRunning)
+        }
         var observations: [[String: Any]] = []
         let retired = try await Self.observeRetirement(page, afterClose: {
             if normalCloseProbe {
