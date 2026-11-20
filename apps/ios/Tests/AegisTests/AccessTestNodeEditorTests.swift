@@ -900,6 +900,11 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 } else { XCTFail("Normal-close probe requires its independent negative marker") }
                 receipt["coreRunningDuringCloseFence"] = core.isRunning
             }
+            if environment["AEGIS_TEST_RETIREMENT_INTERFERENCE"] == "1" {
+                XCTAssertTrue(normalCloseProbe)
+                receipt["retirementInterferenceProbe"] = true
+                _ = webView.load(URLRequest(url: URL(string: "about:blank")!))
+            }
         }) { supplement, confirmed, elapsed, events in
             var observation: [String: Any] = ["supplement":supplement, "confirmed":confirmed,
                                              "observationSeconds":elapsed, "events":events]
@@ -915,6 +920,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         receipt["retirementWithinFirst5Seconds"] = observations.first?["confirmed"]
         receipt["retirementObservationSeconds"] = observations.last?["observationSeconds"]
         receipt["retirementEvents"] = page.retirementEvents
+        if environment["AEGIS_TEST_RETIREMENT_INTERFERENCE"] == "1" {
+            XCTAssertTrue(page.retirementEvents.contains("denied-about-main"))
+            XCTAssertEqual(page.retirementEvents.filter { $0 == "replacement-retry-scheduled" }.count, 1)
+        }
         receipt["busyContentProbe"] = probeBusyContent
         if normalCloseProbe {
             receipt["coreStoppedByProductClose"] = !core.isRunning
