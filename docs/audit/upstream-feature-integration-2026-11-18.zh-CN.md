@@ -29,3 +29,11 @@ GitHub CLI 的既有身份已具备仓库写权限，可读取 runner；连接�
 - 新增 `ActionsAndLegacy/WebpageCaptureCommandBrowserTest.*`，在两种命令分发模式下验证菜单截图生成真实 PNG、菜单创建后禁止截图策略生效，以及内部页面不可截图；纳入 `//chrome/browser/aegis:browser_tests`。
 
 两份修复补丁已在精确文件前序上通过 `git am --3way` 及 ordered exact lineage v2 检查；这是定向源码回放，不是完整 Chromium 回放或构建。四套补丁格式和邮件回归检查、仓库合同及 ShellCheck 通过。新增原生浏览器测试尚未编译、运行，完整 Chromium 157 GN/构建、平台设备、签名和发行验收继续保持未完成；不得以脚本结果替代这些门槛。
+
+## 2026-11-20：主线冲突整合与 158 目标确认
+
+以审查修复提交 `f2f68aed43231607a7523a4d3ee8ee1b3db46c67` 整合主线 `8f3a2576515fcc613e0e08cdd557352c0332f8f8`，保留两个父提交。用户确认继续升级到本 PR 已登记的桌面 158.0.8127.37、Android 158.0.8127.42；本段记录的主线整合仍以当前 157 pin 为过渡基线，不表示 158 已完成。
+
+主线新增的桌面 0496–0501 按候选前序树重新生成 0516–0521，Android 0330 重新生成 0347；原邮件补丁保存在各平台 `archive/main-before-pr174-integration-20261120/`。桌面活动序列为 521 项，Android 为 347 项。157 的 omnibox GN 列表和 feature 邻接上下文已适配；Access BUILD.gn 通过可核对的旧 blob 三方合并，保留截图测试与平台依赖。其余主线实现、iOS 与 CI 改动保留。
+
+新增 6/1 项补丁在各自精确文件前序树上通过邮件回放和 ordered exact lineage v2；两套完整活动序列的相邻 blob 身份及 overlay 对照无不一致。这些是定向源码验证；完整 Chromium 回放、GN/编译、原生浏览器测试、最终提交质量门与独立复查另行登记，尚不构成发行验收。原生 runner 缺少齐备的受信平台路由，不降低现有准入门槛。

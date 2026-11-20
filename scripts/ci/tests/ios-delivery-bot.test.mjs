@@ -6,27 +6,36 @@ const repository = 'gcsagroup/aegis-browser';
 const sha = 'a'.repeat(40);
 const policy = {appId: 40, slug: 'aegis-delivery', actorId: 50};
 const environment = {GITHUB_REPOSITORY: repository, GITHUB_SHA: sha,
+  GITHUB_RUN_ID: '100', GITHUB_ACTOR_ID: '99', GITHUB_ACTOR: 'admin',
+  AEGIS_IOS_GITHUB_RELEASE_ENABLED: 'true', AEGIS_IOS_RELEASE_ENABLED: 'true',
   AEGIS_IOS_DELIVERY_BOT: JSON.stringify(policy), BOT_INPUTS: JSON.stringify({operation: 'Package and upload', version: '1.1.0', build: '4', product: 'Beta', signing_mode: 'manual'})};
 const load = () => import('../ios-delivery-bot.mjs');
 function fixture({failure, mutate = value => value, mutateJobs = value => value, dispatchError = false} = {}) {
   const requests = [];
   const runs = new Map();
+  const operations = new Map();
   let next = 200;
   const api = async (path, options = {}) => {
     if (path === '/repos/'+repository) return {id: 1348409663, full_name: repository, default_branch: 'main'};
     if (path.endsWith('/git/ref/heads/main')) return {object: {sha}};
     const inventory = path.match(/\/actions\/runs\/(\d+)\/attempts\/1\/jobs\?per_page=100$/u);
     if (inventory) {
-      const jobs = ['ios-package', 'seal-package', 'upload-new'].map((name, index) => ({id: 300+index,
+      const names = ['Wait', 'Release Wait'].includes(operations.get(Number(inventory[1]))) ? ['status-query'] : ['ios-package', 'seal-package', 'upload-new'];
+      const jobs = names.map((name, index) => ({id: 300+index,
         name, run_id: Number(inventory[1]), run_attempt: 1, head_sha: sha, status: 'completed', conclusion: 'success'}));
       return mutateJobs({total_count: jobs.length, jobs});
     }
+    if (path.endsWith('/pending_deployments')) return [{environment: {name: 'aegis-ios-github-production'}}];
     if (options.method === 'POST') {
       requests.push({path, body: options.body});
       if (dispatchError) throw new Error('secret response');
       const id = next++;
-      const workflow = path.includes('ios-delivery-full') ? 'ios-delivery-full' : 'ios-delivery';
-      runs.set(id, mutate({id, run_attempt: 1, status: 'completed', conclusion: failure || 'success',
+      const release = path.includes('ios-github-release.yml');
+      const operation = options.body.inputs.operation;
+      operations.set(id, operation);
+      const workflow = release ? 'ios-github-release' : path.includes('ios-delivery-full') ? 'ios-delivery-full' : 'ios-delivery';
+      const waiting = release && operation === 'Promote stable';
+      runs.set(id, mutate({id, run_attempt: 1, status: waiting ? 'waiting' : 'completed', conclusion: waiting ? null : failure || 'success',
         head_sha: sha, head_branch: 'main', path: '.github/workflows/'+workflow+'.yml', event: 'workflow_dispatch',
         repository: {id: 1348409663, full_name: repository}, head_repository: {id: 1348409663, full_name: repository},
         actor: {id: 50, login: 'aegis-delivery[bot]', type: 'Bot'}, triggering_actor: {id: 50, login: 'aegis-delivery[bot]', type: 'Bot'}}));
@@ -42,7 +51,7 @@ test('Beta upload dispatches the exact approved source then waits for that coord
   const value = await driveDelivery(f);
   assert.deepEqual(value.runs.map(run => run.id), [200, 201]);
   assert.equal(value.runs[1].operation, 'Wait');
-  assert.deepEqual(f.requests[0].body, {ref: 'main', inputs: {operation: 'Package and upload', version: '1.1.0', build: '4', product: 'Beta', signing_mode: 'manual', private_beta: 'no', approved_source_sha: sha}});
+  assert.deepEqual(f.requests[0].body, {ref: 'main', inputs: {operation: 'Package and upload', version: '1.1.0', build: '4', product: 'Beta', signing_mode: 'manual', archive_signing: 'development', private_beta: 'no', approved_source_sha: sha}});
   assert.equal(f.requests[1].body.inputs.build, '4');
 });
 test('failed producer and ambiguous dispatch stop without a second mutation', async () => {
@@ -145,6 +154,52 @@ test('a later Wait failure retains the successful producer and both exact run re
   assert.deepEqual(retained.map(value => [value.id, value.state]), [[200, 'dispatched'], [200, 'completed'], [201, 'dispatched']]);
   assert.equal(retained[1].conclusion, 'success');
   assert.equal(retained[1].approvedSourceSha, sha);
+});
+test('GitHub release preview waits for Apple VALID and dispatches only the exact release evidence', async () => {
+  const {driveDelivery} = await load();
+  const f = fixture();
+  const inputs = {...JSON.parse(environment.BOT_INPUTS), operation: 'Preview GitHub release',
+    version: '1.2.0', build: '9', product: 'Release'};
+  const value = await driveDelivery({...f, environment: {...environment, BOT_INPUTS: JSON.stringify(inputs)}});
+  assert.deepEqual(value.runs.map(row => row.id), [200, 201]);
+  assert.equal(f.requests[0].body.inputs.operation, 'Release Wait');
+  assert.equal(f.requests[1].path, '/repos/'+repository+'/actions/workflows/ios-github-release.yml/dispatches');
+  assert.deepEqual(f.requests[1].body.inputs, {operation: 'Preview', release_type: 'stable', version: '1.2.0', build: '9',
+    status_run_id: '200', controller_run_id: '100', controller_actor_id: '99', controller_actor_login: 'admin',
+    approved_source_sha: sha});
+});
+test('prerelease and promotion controllers seal the exact child dispatch', async () => {
+  const {driveDelivery} = await load();
+  for (const [operation, child] of [['Publish prerelease', 'Publish prerelease'], ['Promote to stable', 'Promote stable']]) {
+    const f = fixture();
+    const receipts = [];
+    const inputs = {...JSON.parse(environment.BOT_INPUTS), operation,
+      version: '1.2.0', build: '9', product: 'Release'};
+    const value = await driveDelivery({...f, recordReleaseDispatch: receipt => receipts.push(receipt),
+      environment: {...environment, BOT_INPUTS: JSON.stringify(inputs)}});
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[1].body.inputs.operation, child);
+    assert.equal(f.requests[1].body.inputs.release_type, 'stable');
+    assert.equal(value.runs[1].state, 'dispatched');
+    assert.deepEqual(receipts, [{childRunId: 201, inputs: f.requests[1].body.inputs}]);
+  }
+});
+test('the current TestFlight build can only be previewed and release settings are required before dispatch', async () => {
+  const {driveDelivery} = await load();
+  const f = fixture();
+  const publish = {...JSON.parse(environment.BOT_INPUTS), operation: 'Publish prerelease', product: 'Release', version: '1.1.0', build: '8'};
+  await assert.rejects(driveDelivery({...f, environment: {...environment, BOT_INPUTS: JSON.stringify(publish)}}), /preview-only/iu);
+  const promote = {...publish, operation: 'Promote to stable'};
+  await assert.rejects(driveDelivery({...f, environment: {...environment, BOT_INPUTS: JSON.stringify(promote)}}), /preview-only/iu);
+  const beta = {...publish, operation: 'Publish Beta release', product: 'Beta', version: '1.2.0', build: '9'};
+  await assert.rejects(driveDelivery({...f, environment: {...environment, BOT_INPUTS: JSON.stringify(beta)}}), /Invalid Bot operation/iu);
+  const previewBeta = {...beta, operation: 'Preview GitHub release'};
+  await assert.rejects(driveDelivery({...f, environment: {...environment, BOT_INPUTS: JSON.stringify(previewBeta)}}), /Release product/iu);
+  assert.equal(f.requests.length, 0);
+  const preview = {...publish, operation: 'Preview GitHub release'};
+  await assert.rejects(driveDelivery({...f, environment: {...environment, AEGIS_IOS_GITHUB_RELEASE_ENABLED: 'false',
+    BOT_INPUTS: JSON.stringify(preview)}}), /disabled|configured/iu);
+  assert.equal(f.requests.length, 0);
 });
 test('App authentication signs a short JWT and limits the installation token to this repository', async () => {
   const {installationClient} = await load();

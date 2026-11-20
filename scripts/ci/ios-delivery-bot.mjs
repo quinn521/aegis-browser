@@ -1,3 +1,4 @@
+import {writeFileSync} from 'node:fs';
 import {sign} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {requireGreenQuality} from './promotion-quality.mjs';
@@ -5,7 +6,8 @@ import {requireGreenQuality} from './promotion-quality.mjs';
 const REPOSITORY = 'gcsagroup/aegis-browser';
 const REPOSITORY_ID = 1348409663;
 const PREFIX = '/repos/'+REPOSITORY;
-const OPERATIONS = ['Package', 'Package and upload', 'Draft', 'Status', 'Wait'];
+const OPERATIONS = ['Package', 'Package and upload', 'Draft', 'Status', 'Wait',
+  'Preview GitHub release', 'Publish prerelease', 'Promote to stable'];
 const requireValue = (value, message) => { if (!value) throw new Error(message); };
 const positiveId = value => Number.isSafeInteger(value) && value > 0;
 
@@ -53,18 +55,25 @@ function requestInputs(environment) {
   requireValue(raw.length <= 10000, 'Bot inputs exceed limit');
   const value = JSON.parse(raw);
   requireValue(value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).every(key => ['operation', 'version', 'build', 'product', 'signing_mode'].includes(key)) &&
+    Object.keys(value).every(key => ['operation', 'version', 'build', 'product', 'signing_mode', 'archive_signing'].includes(key)) &&
     Object.values(value).every(item => typeof item === 'string'), 'Unknown Bot inputs');
-  const {operation = 'Status', version, build, product = 'Beta', signing_mode = 'cloud'} = value;
+  const {operation = 'Status', version, build, product = 'Beta', signing_mode = 'cloud', archive_signing = 'development'} = value;
   const parts = (version || '').split('.');
   const validVersion = [2, 3].includes(parts.length) && parts.every(part => part.length > 0 && part.length <= 10 && !/[^0-9]/u.test(part));
   requireValue(OPERATIONS.includes(operation) && ['Alpha', 'Beta', 'Release'].includes(product) &&
-    ['cloud', 'manual'].includes(signing_mode) && validVersion &&
+    ['cloud', 'manual'].includes(signing_mode) && ['development', 'ad-hoc', 'unsigned'].includes(archive_signing) &&
+    (signing_mode === 'cloud' || archive_signing === 'development') && validVersion &&
     /^[1-9][0-9]{0,9}$/u.test(build || ''), 'Invalid Bot operation or package coordinate');
-  return {operation, version, build, product, signing_mode, private_beta: 'no', approved_source_sha: environment.GITHUB_SHA};
+  if (operation === 'Preview GitHub release' || operation === 'Publish prerelease' || operation === 'Promote to stable') {
+    requireValue(product === 'Release', 'GitHub release accepts only the Release product');
+  }
+  if (operation === 'Publish prerelease' || operation === 'Promote to stable') {
+    requireValue(!(version === '1.1.0' && build === '8'), 'The current 1.1.0 (8) package is preview-only');
+  }
+  return {operation, version, build, product, signing_mode, archive_signing, private_beta: 'no', approved_source_sha: environment.GITHUB_SHA};
 }
 
-export async function driveDelivery({environment = process.env, api, quality, recordRun = () => {}, sleep = ms => new Promise(resolve => globalThis.setTimeout(resolve, ms)), maxPolls = 240, pollMs = 15000}) {
+export async function driveDelivery({environment = process.env, api, quality, recordRun = () => {}, recordReleaseDispatch = () => {}, sleep = ms => new Promise(resolve => globalThis.setTimeout(resolve, ms)), maxPolls = 240, pollMs = 15000}) {
   requireValue(environment.GITHUB_REPOSITORY === REPOSITORY && /^[0-9a-f]{40}$/u.test(environment.GITHUB_SHA || ''), 'Canonical source required');
   const inputs = requestInputs(environment);
   const policy = JSON.parse(environment.AEGIS_IOS_DELIVERY_BOT || 'null');
@@ -113,11 +122,12 @@ export async function driveDelivery({environment = process.env, api, quality, re
       'Child run identity/source/context differs: '+url);
       if (run.status === 'completed') {
         requireValue(run.conclusion === 'success', 'Child delivery failed; reconcile '+url);
-        if (operation === 'Package and upload') {
+        if (operation === 'Package and upload' || operation === 'Wait' || operation === 'Release Wait') {
           const inventory = await api(PREFIX+'/actions/runs/'+id+'/attempts/1/jobs?per_page=100');
           requireValue(Array.isArray(inventory?.jobs) && inventory.jobs.length <= 100 &&
             inventory.total_count === inventory.jobs.length, 'Incomplete upload jobs inventory; reconcile '+url);
-          for (const name of ['ios-package', 'seal-package', 'upload-new']) {
+          const required = operation === 'Package and upload' ? ['ios-package', 'seal-package', 'upload-new'] : ['status-query'];
+          for (const name of required) {
             const jobs = inventory.jobs.filter(job => job.name === name);
             requireValue(jobs.length === 1 && positiveId(jobs[0].id) && jobs[0].run_id === id && jobs[0].run_attempt === 1 &&
               jobs[0].head_sha === environment.GITHUB_SHA && jobs[0].status === 'completed' && jobs[0].conclusion === 'success',
@@ -131,6 +141,42 @@ export async function driveDelivery({environment = process.env, api, quality, re
     }
     throw new Error('Child run still pending; retain and reconcile '+url);
   };
+  const releaseOperation = {
+    'Preview GitHub release': 'Preview',
+    'Publish prerelease': 'Publish prerelease',
+    'Promote to stable': 'Promote stable',
+  };
+  if (Object.hasOwn(releaseOperation, inputs.operation)) {
+    requireValue(environment.AEGIS_IOS_GITHUB_RELEASE_ENABLED === 'true' && environment.AEGIS_IOS_RELEASE_ENABLED === 'true',
+      'GitHub release is disabled until the repository release gates are configured');
+    const statusRun = await dispatch('Release Wait');
+    runs.push(statusRun);
+    const operation = releaseOperation[inputs.operation];
+    await assertSource();
+    const controllerId = Number(environment.GITHUB_RUN_ID);
+    const controllerActorId = Number(environment.GITHUB_ACTOR_ID);
+    requireValue(positiveId(controllerId) && positiveId(controllerActorId), 'Human Admin controller identity required');
+    const releaseInputs = {
+      operation, release_type: 'stable', version: inputs.version, build: inputs.build,
+      status_run_id: String(statusRun.id), controller_run_id: String(controllerId),
+      controller_actor_id: String(controllerActorId), controller_actor_login: environment.GITHUB_ACTOR,
+      approved_source_sha: environment.GITHUB_SHA,
+    };
+    let receipt;
+    try {
+      receipt = await api(PREFIX+'/actions/workflows/ios-github-release.yml/dispatches',
+        {method: 'POST', body: {ref: 'main', inputs: releaseInputs}});
+    } catch { throw new Error('Release workflow dispatch outcome unknown; reconcile before another request'); }
+    requireValue(positiveId(receipt?.workflow_run_id), 'Release workflow run identity unknown; reconcile without redispatch');
+    const id = receipt.workflow_run_id;
+    const url = 'https://github.com/'+REPOSITORY+'/actions/runs/'+id;
+    const retained = {id, attempt: 1, operation, url, approvedSourceSha: environment.GITHUB_SHA,
+      version: inputs.version, build: inputs.build, state: 'dispatched'};
+    recordRun(retained);
+    recordReleaseDispatch({childRunId: id, inputs: releaseInputs});
+    runs.push(retained);
+    return {sourceSha: environment.GITHUB_SHA, version: inputs.version, build: inputs.build, runs};
+  }
   runs.push(await dispatch(inputs.operation));
   if (inputs.operation === 'Package and upload') runs.push(await dispatch('Wait'));
   return {sourceSha: environment.GITHUB_SHA, version: inputs.version, build: inputs.build, runs};
@@ -146,7 +192,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         ' · approved `'+receipt.approvedSourceSha+'`: [run '+receipt.id+']('+receipt.url+')');
       console.log(JSON.stringify({type: 'ios-delivery-bot-receipt', ...receipt}));
     };
-    const result = await driveDelivery({api, recordRun});
+    const result = await driveDelivery({api, recordRun, recordReleaseDispatch: receipt => {
+      const path = process.env.RELEASE_DISPATCH_RECEIPT;
+      requireValue(path, 'Controller dispatch receipt path is required');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- The protected controller sets the receipt path in runner.temp and creates it exclusively.
+      writeFileSync(path, JSON.stringify(receipt), {flag: 'wx', mode: 0o600});
+    }});
     console.log(JSON.stringify(result));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

@@ -513,3 +513,9 @@
 0513-align-mobile-settings-overlay.patch
 0514-handle-ocr-lookup-and-errors.patch
 0515-fix-full-page-capture-action-dispatch.patch
+0516-fix-macos-unshown-omnibox-popup.patch
+0517-fix-ios-markdown-render-ownership.patch
+0518-test-macos-aim-presentation-lifecycle.patch
+0519-feat-access-windows-desktop-parity.patch
+0520-feat-macos-access-options-admission-store.patch
+0521-fix-access-private-staging-tool-and-review-findings.patch
