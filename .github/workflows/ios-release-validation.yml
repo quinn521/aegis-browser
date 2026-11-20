@@ -180,7 +180,8 @@ jobs:
         env:
           IOS_CI_ROOT: ${{ steps.storage.outputs.root }}
           IOS_CI_SOURCE: ${{ steps.storage.outputs.source }}
-        run: bash scripts/ci/run-ios-unsigned-archive.sh
+        # exec so cancellation signals the archive wrapper directly.
+        run: exec bash scripts/ci/run-ios-unsigned-archive.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: ${{ success() && steps.storage.outcome == 'success' }}
         with:

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Compile the uncredentialed iOS archive from the job-private Source tree.
-# Runner cancellation sends SIGINT then SIGTERM to this entry process. Reap the
-# xcodebuild process group before exiting so the next job can check out safely.
+# Runner cancellation signals this entry process, then kills its process tree.
+# Keep xcodebuild in the same process group and reap by PID before exiting so a
+# cancelled archive cannot outlive the step or race the next checkout.
 set -euo pipefail
 
 : "${IOS_CI_ROOT:?IOS_CI_ROOT is required}"
@@ -30,21 +31,71 @@ python3 -B "$REPO_ROOT/scripts/release/ios_embedded_core.py" verify --root "$SOU
   --products "$IOS_CI_ROOT/EmbeddedCore"
 
 archive_status=0
-archive_pgid=""
+archive_pid=""
+tee_pid=""
+
+signal_pid() {
+  local pid=$1 signal=$2
+  [[ -n "$pid" ]] || return 0
+  kill "-$signal" "$pid" 2>/dev/null || true
+}
+
+wait_pid() {
+  local pid=$1
+  [[ -n "$pid" ]] || return 0
+  local _
+  for _ in $(seq 1 8); do
+    kill -0 "$pid" 2>/dev/null || return 0
+    sleep 0.25
+  done
+}
+
+job_root_pids() {
+  [[ -n "$IOS_CI_ROOT" && "$IOS_CI_ROOT" == /* ]] || return 0
+  # ps is the portable enumerator; pgrep is preferred when the host allows it.
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f "$IOS_CI_ROOT" 2>/dev/null || true
+  fi
+  ps -axo pid=,command= 2>/dev/null | while IFS= read -r line; do
+    case "$line" in
+      *"$IOS_CI_ROOT"*)
+        # shellcheck disable=SC2086
+        set -- $line
+        printf '%s\n' "$1"
+        ;;
+    esac
+  done
+}
+
+reap_job_root() {
+  local signal=$1 pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" && "$pid" != "$$" ]] || continue
+    kill "-$signal" "$pid" 2>/dev/null || true
+  done < <(job_root_pids | sort -u)
+}
 
 reap_archive() {
-  local target="${archive_pgid:-}"
-  [[ -n "$target" ]] || return 0
-  if kill -0 -"$target" 2>/dev/null; then
-    kill -TERM -"$target" 2>/dev/null || true
-    local _
-    for _ in $(seq 1 20); do
-      kill -0 -"$target" 2>/dev/null || return 0
-      sleep 0.25
-    done
-    kill -KILL -"$target" 2>/dev/null || true
+  # Kill the pipeline subshell, its children, then any worker still bound to this
+  # job root. Do not create a separate process group: Actions tree-kill must see
+  # xcodebuild as part of the entry process tree.
+  if [[ -n "$archive_pid" ]]; then
+    pkill -TERM -P "$archive_pid" 2>/dev/null || true
   fi
+  signal_pid "$archive_pid" TERM
+  signal_pid "$tee_pid" TERM
+  reap_job_root TERM
+  wait_pid "$archive_pid"
+  wait_pid "$tee_pid"
+  if [[ -n "$archive_pid" ]]; then
+    pkill -KILL -P "$archive_pid" 2>/dev/null || true
+  fi
+  signal_pid "$archive_pid" KILL
+  signal_pid "$tee_pid" KILL
+  reap_job_root KILL
   wait 2>/dev/null || true
+  archive_pid=""
+  tee_pid=""
 }
 
 on_signal() {
@@ -58,14 +109,12 @@ trap 'on_signal 143' TERM
 trap 'on_signal 130' INT
 trap 'status=$?; trap - EXIT; reap_archive; exit "$status"' EXIT
 
-set -m
+# Stay in the runner entry process group so Actions tree-kill reaches xcodebuild.
+# Capture status without set -e aborting before PIPESTATUS is read.
+set +e
 (
-  # Keep set -e off inside the job group so a failed xcodebuild cannot skip
-  # PIPESTATUS capture; the entry process still fails closed on that status.
   set +e
   cd "$SOURCE"
-  # Keep Actions live output and the retained job log without orphaning xcodebuild
-  # when the entry shell exits on cancellation.
   xcodebuild -scmProvider system -onlyUsePackageVersionsFromResolvedFile \
     -project apps/ios/Aegis.xcodeproj -scheme Aegis -configuration Release \
     -destination 'generic/platform=iOS' \
@@ -79,14 +128,16 @@ set -m
     archive 2>&1 | tee "$IOS_CI_ROOT/xcodebuild.log"
   exit "${PIPESTATUS[0]}"
 ) &
-archive_pgid=$!
-set +m
+archive_pid=$!
+# tee is the only durable sibling once xcodebuild is running; locate it by log path.
+sleep 0.1
+tee_pid=$(pgrep -f "tee ${IOS_CI_ROOT}/xcodebuild.log" | head -n 1 || true)
 
-set +e
-wait "$archive_pgid"
+wait "$archive_pid"
 archive_status=$?
 set -e
-archive_pgid=""
+archive_pid=""
+tee_pid=""
 trap - EXIT INT TERM
 
 if (( archive_status != 0 )); then

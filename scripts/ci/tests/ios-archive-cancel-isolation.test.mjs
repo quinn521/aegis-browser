@@ -94,7 +94,7 @@ done
 
 test('workflow keeps unsigned archive compilation behind the cancel-safe wrapper', () => {
   const workflow = readFileSync('.github/workflows/ios-release-validation.yml', 'utf8');
-  assert.match(workflow, /run-ios-unsigned-archive\.sh/u);
+  assert.match(workflow, /exec bash scripts\/ci\/run-ios-unsigned-archive\.sh/u);
   assert.match(workflow, /steps\.storage\.outputs\.source/u);
   assert.doesNotMatch(workflow, /xcodebuild .*\| tee/u);
   const probe = spawnSync('bash', ['-n', archiveScript], {encoding: 'utf8'});
