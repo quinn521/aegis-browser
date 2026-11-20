@@ -106,7 +106,9 @@ func (r *Runtime) Stop() error {
 		defer lifecycleMu.Unlock()
 		for i, live := range liveInstances {
 			if live == inst {
-				liveInstances = append(liveInstances[:i], liveInstances[i+1:]...)
+				copy(liveInstances[i:], liveInstances[i+1:])
+				liveInstances[len(liveInstances)-1] = nil
+				liveInstances = liveInstances[:len(liveInstances)-1]
 				break
 			}
 		}
