@@ -149,6 +149,20 @@ final class AccessTestNodeRepository {
     static let shared = AccessTestNodeRepository()
     private let channel: AccessInternalOptions?
     private let storage: any AccessTestNodeStoring
+    private var revocations: [UUID: @MainActor () -> Void] = [:]
+
+    func observeRevocation(_ callback: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
+        revocations[id] = callback
+        return id
+    }
+
+    func removeObserver(_ id: UUID) { revocations[id] = nil }
+
+    private func revokeOpenPages() {
+        let callbacks = Array(revocations.values)
+        callbacks.forEach { $0() }
+    }
 
     init(channel: AccessInternalOptions? = AccessInternalOptions.installed,
          storage: any AccessTestNodeStoring = AccessTestNodeKeychain()) {
@@ -176,6 +190,7 @@ final class AccessTestNodeRepository {
         guard try revision(isPrivate: isPrivate) == expectedRevision else { throw AccessTestNodeError.conflict }
         let record = AccessTestNodeRecord(draft)
         try storage.write(record, channel: channel)
+        revokeOpenPages()
         return record.revision
     }
 
@@ -183,6 +198,7 @@ final class AccessTestNodeRepository {
         guard let channel, !isPrivate else { throw AccessTestNodeError.unavailable }
         guard try revision(isPrivate: isPrivate) == expectedRevision else { throw AccessTestNodeError.conflict }
         try storage.remove(channel: channel)
+        revokeOpenPages()
     }
 }
 
@@ -318,6 +334,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var publisher: (any AccessProxyEntryPublishing)?
     private var key: AccessHostStoreKey?
     private var operationID: UUID?
+    private var observerID: UUID?
     private var deadlineTask: Task<Void, Never>?
     private var retirement: (() -> Void)?
     private var retirementNavigation: WKNavigation?
@@ -348,6 +365,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         do {
             let record = try repository.savedNode()
             let revision = record.revision
+            observerID = repository.observeRevocation { [weak self] in self?.close() }
             let core = try testingCore ?? AccessGoEmbeddedCore(isolated: true)
             let newPublisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(
                 configPath: nil, verifiedCore: core,
@@ -408,6 +426,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     func close() {
         guard !closed else { return }
         closed = true
+        if let observerID { repository.removeObserver(observerID) }
+        observerID = nil
         status = "连接暂不可用"
         deadlineTask?.cancel()
         if let operationID { publisher?.cancel(operationID: operationID) }

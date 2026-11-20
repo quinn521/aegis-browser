@@ -235,8 +235,9 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let original = page.webView
         await page.open(URL(string: "https://second.invalid/")!)
         XCTAssertTrue(original === page.webView)
-        page.close()
-        XCTAssertEqual(page.status, "连接暂不可用")
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
+                                 expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
+        XCTAssertEqual(page.status, "连接暂不可用", "Apply revokes old pages before returning")
 
         let deniedCore = PageCore()
         let denied = AccessTestNodePage(repository: AccessTestNodeRepository(channel: nil, storage: storage),
