@@ -9,19 +9,22 @@ public struct AccessManagedProxyEndpoint: Sendable, Equatable {
     public var loopbackHost: String
     public var port: UInt16
     public var state: AccessProxyEndpointState
+    public var transport: AccessInboundTransport
 
     public init(
         identity: String,
         generation: UInt64,
         loopbackHost: String,
         port: UInt16,
-        state: AccessProxyEndpointState
+        state: AccessProxyEndpointState,
+        transport: AccessInboundTransport = .http
     ) {
         self.identity = identity
         self.generation = generation
         self.loopbackHost = loopbackHost
         self.port = port
         self.state = state
+        self.transport = transport
     }
 }
 
@@ -308,12 +311,16 @@ public final class AccessHostDataStoreRegistry {
     private func apply(_ endpoint: AccessManagedProxyEndpoint, to store: WKWebsiteDataStore) {
         guard endpoint.state == .ready,
               endpoint.port != 0,
+              endpoint.transport != .socks5 || endpoint.port != 1080,
               let port = NWEndpoint.Port(rawValue: endpoint.port)
         else { return }
-        var configuration = ProxyConfiguration(httpCONNECTProxy: .hostPort(
-            host: NWEndpoint.Host(endpoint.loopbackHost),
-            port: port
-        ))
+        let address = NWEndpoint.hostPort(host: NWEndpoint.Host(endpoint.loopbackHost), port: port)
+        var configuration: ProxyConfiguration
+        switch endpoint.transport {
+        case .http: configuration = ProxyConfiguration(httpCONNECTProxy: address)
+        case .https: configuration = ProxyConfiguration(httpCONNECTProxy: address, tlsOptions: NWProtocolTLS.Options())
+        case .socks5: configuration = ProxyConfiguration(socksv5Proxy: address)
+        }
         configuration.allowFailover = false
         store.proxyConfigurations = [configuration]
     }

@@ -1,9 +1,89 @@
 import Foundation
 import Network
 import XCTest
+import Synchronization
 @testable import AccessKit
 
 final class AccessSOCKS5InboundTests: XCTestCase {
+    func testProductionTunnelWaitsForUpstreamAndPreservesPipelinedBytes() async throws {
+        let tunnel = GatedTunnel()
+        let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806), tunnels: tunnel)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        let connection = NWConnection(host: "127.0.0.1", port: 10806, using: .tcp)
+        connection.start(queue: .global())
+        let deadline = Task { try? await Task.sleep(for: .seconds(5)); connection.cancel() }
+        defer { deadline.cancel(); tunnel.release(); connection.cancel(); try? listener.stop() }
+        try await Self.send(Data([5, 1, 0]), to: connection)
+        let method = try await Self.receive(2, from: connection)
+        XCTAssertEqual(method, Data([5, 0]))
+        var request = Data([5, 1, 0, 3, 11])
+        request.append(contentsOf: "example.com".utf8)
+        request.append(contentsOf: [1, 187])
+        request.append(Data("first-bytes".utf8))
+        try await Self.send(request, to: connection)
+        let replied = Mutex(false)
+        let response = Task { () throws -> Data in
+            let data = try await Self.receive(10, from: connection)
+            replied.withLock { $0 = true }
+            return data
+        }
+        let wait = Date().addingTimeInterval(2)
+        while !tunnel.isWaiting, Date() < wait { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(tunnel.isWaiting)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(replied.withLock { $0 }, "SOCKS success cannot precede the authorized upstream")
+        tunnel.release()
+        let success = try await response.value
+        XCTAssertEqual(success, AccessSOCKS5InboundParser.successReply())
+        let writeDeadline = Date().addingTimeInterval(2)
+        while tunnel.stream.writtenSnapshot.isEmpty, Date() < writeDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(tunnel.stream.writtenSnapshot, Data("first-bytes".utf8))
+        tunnel.stream.push(Data("reply".utf8))
+        let responseBytes = try await Self.receive(5, from: connection)
+        XCTAssertEqual(responseBytes, Data("reply".utf8))
+        listener.suspend()
+        let closeDeadline = Date().addingTimeInterval(2)
+        while tunnel.stream.isOpen, Date() < closeDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertTrue(listener.isListening, "Suspension retains the bound port until document retirement")
+        let rival = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806))
+        do { try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000)); try? rival.stop(); XCTFail("Port was released too early") }
+        catch { }
+    }
+
+    private static func send(_ data: Data, to connection: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.send(content: data, completion: .contentProcessed { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            })
+        }
+    }
+
+    private static func receive(_ count: Int, from connection: NWConnection) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let data, data.count == count { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: URLError(.badServerResponse)) }
+            }
+        }
+    }
+
+    private final class GatedTunnel: AccessHTTPTunnelOpening, @unchecked Sendable {
+        let stream = AccessMemoryRealityStream()
+        let waiter = Mutex<CheckedContinuation<Void, Never>?>(nil)
+        var isWaiting: Bool { waiter.withLock { $0 != nil } }
+        func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+            await withCheckedContinuation { continuation in waiter.withLock { $0 = continuation } }
+            try Task.checkCancellation()
+            return stream
+        }
+        func release() {
+            let pending = waiter.withLock { value in let current = value; value = nil; return current }
+            pending?.resume()
+        }
+    }
+
     private func makeRegistration(
         transport: AccessInboundTransport = .socks5,
         port: UInt16 = 18_805

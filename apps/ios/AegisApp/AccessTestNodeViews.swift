@@ -51,6 +51,7 @@ private struct AccessTestNodeDetailView: View {
     @State private var authorization: Task<Void, Never>?
     @State private var confirmsRemoval = false
     @State private var targetURL = ""
+    @State private var transport: AccessTestNodeTransport = .automatic
     @State private var page: AccessTestNodePage?
     @FocusState private var textFocused: Bool
 
@@ -98,13 +99,22 @@ private struct AccessTestNodeDetailView: View {
             if editor.hasSavedNode {
                 Text("节点已保存。", tableName: "AccessTestNode")
                     .accessibilityIdentifier("access-test-node-saved")
+                Picker(selection: $transport) {
+                    Text("自动", tableName: "AccessTestNode").tag(AccessTestNodeTransport.automatic)
+                    Text(verbatim: "HTTP CONNECT").tag(AccessTestNodeTransport.http)
+                    Text(verbatim: "SOCKS5").tag(AccessTestNodeTransport.socks5)
+                        .disabled(!AccessInternalSOCKSAdmission.current)
+                } label: {
+                    Text("本地入站", tableName: "AccessTestNode")
+                }
+                .accessibilityIdentifier("access-test-node-transport")
                 TextField(text: $targetURL) { Text("测试网页 HTTPS URL", tableName: "AccessTestNode") }
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .accessibilityIdentifier("access-test-page-url")
                 Button {
                     guard let url = URL(string: targetURL), url.scheme == "https" else { return }
-                    let session = AccessTestNodePage()
+                    let session = AccessTestNodePage(transport: transport)
                     page = session
                     Task { await session.open(url) }
                 } label: {
@@ -315,7 +325,7 @@ private struct AccessTestNodePageView: View {
             Text(LocalizedStringKey(session.status), tableName: "AccessTestNode")
                 .accessibilityIdentifier("access-test-page-status")
             if let endpoint = session.endpoint {
-                Text("HTTP · \(endpoint.port)").font(.caption)
+                Text(verbatim: "\(endpoint.transport == .socks5 ? "SOCKS5" : "HTTP") · \(endpoint.port)").font(.caption)
             }
             if let view = session.webView { BrowserWebView(webView: view) }
         }

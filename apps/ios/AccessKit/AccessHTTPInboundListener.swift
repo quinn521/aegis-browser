@@ -53,6 +53,8 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         gate.withLock { $0.listener?.stateUpdateHandler }
     }
 
+    public var boundPort: UInt16? { gate.withLock { $0.listener?.port?.rawValue } }
+
     public var acceptedConnectionCount: UInt64 {
         gate.withLock { $0.acceptedConnections }
     }
@@ -214,7 +216,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         }
         connection.start(queue: queue)
 
-        let session = AccessHTTPConnectSession(connection: connection, queue: queue) { [weak self, weak connection, weak listener] outcome in
+        let session = AccessHTTPConnectSession(connection: connection, queue: queue, defersSuccessReply: true) { [weak self, weak connection, weak listener] outcome in
             guard let self, let connection, let listener else { return }
             guard case let .established(request, remainder) = outcome else {
                 self.gate.withLock { $0.admissionSummary = "rejected" }
@@ -223,14 +225,16 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
             let bridge = AccessHTTPTunnelBridge(client: connection, queue: self.queue, opener: self.tunnels)
             let installed = self.gate.withLock { state in
                 guard state.listener === listener, state.openConnections.contains(where: { $0 === connection }) else { return false }
-                state.admissionSummary = "established \(request.authority) remainder \(remainder.count)"
+                state.admissionSummary = "admitted \(request.authority) remainder \(remainder.count)"
                 state.sessions.removeValue(forKey: ObjectIdentifier(connection))
-                state.establishedConnects &+= 1
                 state.bridges[ObjectIdentifier(connection)] = bridge
                 return true
             }
             guard installed else { bridge.stop(); return }
-            bridge.start(host: request.host, port: request.port, prelude: remainder)
+            bridge.start(host: request.host, port: request.port, prelude: remainder,
+                         successResponse: AccessHTTPConnectParser.successResponse(httpVersion: request.httpVersion)) { [weak self] in
+                self?.gate.withLock { $0.establishedConnects &+= 1 }
+            }
         }
         let installed = gate.withLock { state in
             guard state.listener === listener, state.openConnections.contains(where: { $0 === connection }) else { return false }

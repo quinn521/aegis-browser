@@ -15,6 +15,19 @@ final class AccessTestNodeEditorTests: XCTestCase {
         + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
         + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic-node"
 
+    func testTransportAdmissionAndBindingTimeSelection() throws {
+        XCTAssertEqual(try AccessTestNodeTransport.automatic.select(socksAdmitted: true), .socks5)
+        XCTAssertEqual(try AccessTestNodeTransport.automatic.select(socksAdmitted: false), .http)
+        XCTAssertEqual(try AccessTestNodeTransport.http.select(socksAdmitted: true), .http)
+        XCTAssertThrowsError(try AccessTestNodeTransport.socks5.select(socksAdmitted: false))
+        XCTAssertTrue(AccessInternalSOCKSAdmission.admitted(major: 26, minor: 6, patch: 1, build: "23G83", phone: true, simulator: false))
+        for values in [(26, 6, 1, "23G84", true, false), (26, 6, 1, "23G83", false, false),
+                       (26, 6, 1, "23G83", true, true), (27, 0, 0, "24A1", true, false)] {
+            XCTAssertFalse(AccessInternalSOCKSAdmission.admitted(major: values.0, minor: values.1, patch: values.2,
+                build: values.3, phone: values.4, simulator: values.5))
+        }
+    }
+
     func testNativeAdmissionRejectsMixedOrRestrictedIdentitiesEvenWithCapabilityEnabled() {
         let normal = "com.gcsa.aegis"
         let alpha = "com.gcsa.aegis.alpha.internal"
@@ -246,6 +259,26 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNil(denied.endpoint)
     }
 
+    func testExplicitSOCKSRequiresAdmissionAndPublishesItsActualTransport() async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
+        let rejectedCore = PageCore()
+        let rejected = AccessTestNodePage(repository: repository, testingCore: rejectedCore,
+                                         transport: .socks5, socksAdmitted: false)
+        await rejected.open(URL(string: "https://example.invalid/")!)
+        XCTAssertFalse(rejectedCore.isRunning)
+        XCTAssertNil(rejected.webView)
+        let admitted = AccessTestNodePage(repository: repository, testingCore: PageCore(),
+                                         transport: .socks5, socksAdmitted: true)
+        await admitted.open(URL(string: "https://example.invalid/")!)
+        XCTAssertEqual(admitted.endpoint?.transport, .socks5)
+        XCTAssertNotEqual(admitted.endpoint?.port, 0)
+        XCTAssertNotEqual(admitted.endpoint?.port, 1080)
+        XCTAssertEqual(admitted.webView?.configuration.websiteDataStore.proxyConfigurations.count, 1)
+        XCTAssertEqual(admitted.webView?.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
+        admitted.close()
+    }
+
     func testPageExposesBothWebKitPolicySelectors() {
         let page = AccessTestNodePage()
         XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationAction:decisionHandler:")))
@@ -423,7 +456,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
                         "httpStatus":page.httpStatus ?? 0, "documentPrefixSHA256":documentDigest,
                         "endpoint":page.endpoint?.identity ?? "", "generation":page.endpoint?.generation ?? 0,
-                        "actualProtocol":"http", "network":network.0])
+                        "actualProtocol":page.selectedTransport == .socks5 ? "socks5" : "http", "network":network.0])
             consecutiveNetworkFailures = timedOut || page.failureDomain == NSURLErrorDomain ? consecutiveNetworkFailures + 1 : 0
             preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
             page.close()
@@ -483,7 +516,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let old = try repository.revision(isPrivate: false)
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(share),
                                  expectedRevision: old, isPrivate: false)
-        let page = AccessTestNodePage(repository: repository)
+        let preference: AccessTestNodeTransport = environment["AEGIS_TEST_LOCAL_TRANSPORT"] == "socks5" ? .socks5 : .http
+        let page = AccessTestNodePage(repository: repository, transport: preference)
         await page.open(url)
         guard let webView = page.webView else { XCTFail("Authorized publisher did not bind a DataStore"); return }
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -498,6 +532,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
         XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
         XCTAssertNotNil(page.endpoint)
+        XCTAssertEqual(page.selectedTransport, preference == .socks5 ? .socks5 : .http)
+        XCTAssertNotEqual(page.endpoint?.port, 0)
+        if preference == .socks5 { XCTAssertNotEqual(page.endpoint?.port, 1080) }
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
         page.close()

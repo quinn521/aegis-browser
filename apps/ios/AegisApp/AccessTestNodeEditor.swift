@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import Security
 import WebKit
+import UIKit
 
 /// Package metadata is resolved by native code. Firebase is independent of Access admission.
 enum AccessInternalOptions: String {
@@ -32,6 +33,40 @@ enum AccessInternalOptions: String {
         case ("com.gcsa.aegis", "dev") where debug: return .dev
         case ("com.gcsa.aegis.alpha.internal", "alpha"): return .alpha
         default: return nil
+        }
+    }
+}
+
+/// Admission is limited to the physical iPhone OS build actually verified for this internal path.
+enum AccessInternalSOCKSAdmission {
+    static func admitted(major: Int, minor: Int, patch: Int, build: String,
+                         phone: Bool, simulator: Bool) -> Bool {
+        !simulator && phone && major == 26 && minor == 6 && patch == 1 && (build == "23G83" || build.hasSuffix("(Build 23G83)"))
+    }
+
+    @MainActor static var current: Bool {
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+#if targetEnvironment(simulator)
+        let simulator = true
+#else
+        let simulator = false
+#endif
+        return admitted(major: os.majorVersion, minor: os.minorVersion, patch: os.patchVersion,
+                        build: ProcessInfo.processInfo.operatingSystemVersionString,
+                        phone: UIDevice.current.userInterfaceIdiom == .phone, simulator: simulator)
+    }
+}
+
+enum AccessTestNodeTransport: String {
+    case automatic, http, socks5
+
+    func select(socksAdmitted: Bool) throws -> AccessInboundTransport {
+        switch self {
+        case .automatic: return socksAdmitted ? .socks5 : .http
+        case .http: return .http
+        case .socks5:
+            guard socksAdmitted else { throw AccessTestNodeError.unavailable }
+            return .socks5
         }
     }
 }
@@ -344,12 +379,18 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private(set) var failureCode: Int?
     private(set) var httpStatus: Int?
     private let singleNavigation: Bool
+    private let transportPreference: AccessTestNodeTransport
+    private let socksAdmitted: Bool
+    private(set) var selectedTransport: AccessInboundTransport?
     private var sentMainFrame = false
     private var closed = false
     private var retiring = false
 
     init(repository: AccessTestNodeRepository = .shared, testingCore: (any AccessEmbeddedCoreControlling)? = nil,
-         singleNavigation: Bool = false) {
+         singleNavigation: Bool = false, transport: AccessTestNodeTransport = .automatic,
+         socksAdmitted: Bool? = nil) {
+        self.transportPreference = transport
+        self.socksAdmitted = socksAdmitted ?? AccessInternalSOCKSAdmission.current
         self.repository = repository
         self.testingCore = testingCore
         self.singleNavigation = singleNavigation
@@ -364,6 +405,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             return
         }
         do {
+            let transport = try transportPreference.select(socksAdmitted: socksAdmitted)
+            selectedTransport = transport
             let record = try repository.savedNode()
             let revision = record.revision
             observerID = repository.observeRevocation { [weak self] in self?.close() }
@@ -382,7 +425,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                 retireDocuments: { [weak self] finish in
                     guard let self else { finish(); return }
                     self.retire(finish)
-                })
+                }, transport: transport)
             publisher = newPublisher
             let operation = UUID()
             operationID = operation
