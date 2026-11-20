@@ -377,6 +377,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var retirementNavigation: WKNavigation?
     private let retirementURL = URL(string: "https://aegis.invalid/retired/" + UUID().uuidString)!
     private var retiringOwner: AccessTestNodePage?
+    /// Bounded, secret-free lifecycle evidence; no URL or document content.
+    private(set) var retirementEvents: [String] = []
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
     private(set) var localPolicyRejection: String?
@@ -500,6 +502,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private func retire(_ finish: @escaping () -> Void) {
         status = "连接暂不可用"
         retiring = true
+        recordRetirement("requested")
         guard let view = webView else { finish(); release(); return }
         retirement = finish
         // Retain the suspended listener and old document until their exact stop acknowledgement.
@@ -509,6 +512,12 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         // Give the local replacement a host-bearing identity under the proxied store.
         // loadHTMLString does not fetch this synthetic HTTPS URL.
         retirementNavigation = view.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">", baseURL: retirementURL)
+        recordRetirement(retirementNavigation == nil ? "replacement-not-created" : "replacement-created")
+    }
+
+    private func recordRetirement(_ event: String) {
+        if retirementEvents.count == 32 { retirementEvents.removeFirst() }
+        retirementEvents.append(event)
     }
 
     private func release() {
@@ -519,6 +528,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        if retiring { recordRetirement(navigation === retirementNavigation ? "replacement-committed" : "other-commit") }
         if retiring, let navigation, navigation === retirementNavigation {
             let finish = retirement
             retirement = nil
@@ -531,6 +541,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if retiring { recordRetirement(navigation === retirementNavigation ? "replacement-started" : "other-start") }
         guard !retiring, let navigation else { return }
         currentNavigation = navigation
         committedMainFrame = false
@@ -538,6 +549,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if retiring { recordRetirement(navigation === retirementNavigation ? "replacement-finished" : "other-finish") }
         if !retiring, let navigation, navigation === currentNavigation { status = "已连接" }
     }
 
@@ -546,6 +558,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if retiring { recordRetirement("provisional-failure-" + String((error as NSError).code)) }
         if ownsFailure(navigation, error: error) {
             failureDomain = (error as NSError).domain
             failureCode = (error as NSError).code
@@ -554,6 +567,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if retiring { recordRetirement("navigation-failure-" + String((error as NSError).code)) }
         if ownsFailure(navigation, error: error) {
             failureDomain = (error as NSError).domain
             failureCode = (error as NSError).code
@@ -566,6 +580,18 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         guard !retiring, !(failure.domain == NSURLErrorDomain && failure.code == NSURLErrorCancelled),
               let navigation else { return false }
         return navigation === currentNavigation
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard webView === self.webView else { return }
+        recordRetirement("web-content-process-terminated")
+        // Termination is an error, never a successful document-retirement ack.
+        // A fresh inert replacement must still commit before the port is freed.
+        if !retiring {
+            failureDomain = WKError.errorDomain
+            failureCode = WKError.webContentProcessTerminated.rawValue
+            close()
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
@@ -582,6 +608,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         if retiring {
+            recordRetirement(action.request.url == retirementURL ? "replacement-policy-allowed" : "other-policy-denied")
             decisionHandler(action.request.url == retirementURL ? .allow : .cancel)
         } else {
             if singleNavigation, action.targetFrame?.isMainFrame == true {

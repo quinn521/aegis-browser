@@ -380,6 +380,32 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
     }
 
+    func testContentProcessTerminationRequiresInertCommitInsteadOfReplayingTarget() async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
+        let core = PageCore()
+        let page = AccessTestNodePage(repository: repository, testingCore: core)
+        await page.open(URL(string: "https://example.invalid/pending")!)
+        let view = try XCTUnwrap(page.webView)
+        let binding = page.initialBinding
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.addSubview(view); view.frame = window.bounds; window.makeKeyAndVisible()
+        defer { view.removeFromSuperview(); window.isHidden = true }
+        page.webViewWebContentProcessDidTerminate(WKWebView())
+        XCTAssertNotNil(page.endpoint, "Another view cannot revoke this binding")
+        page.webViewWebContentProcessDidTerminate(view)
+        XCTAssertEqual(page.failureDomain, WKError.errorDomain)
+        XCTAssertEqual(page.failureCode, WKError.webContentProcessTerminated.rawValue)
+        XCTAssertNotNil(page.endpoint, "Process notification alone cannot release the port")
+        let deadline = Date().addingTimeInterval(10)
+        while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNil(page.endpoint)
+        XCTAssertEqual(page.initialBinding, binding)
+        XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
+        XCTAssertTrue(page.retirementEvents.contains("replacement-committed"))
+    }
+
     private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
         let running = Mutex(false)
         var isRunning: Bool { running.withLock { $0 } }
@@ -736,17 +762,35 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertEqual(page.status, "连接暂不可用", "A script failure counts only after protection retired the document")
             }
         }
+        let busyStarted = expectation(description: "controlled WebContent busy loop started")
+        let busy = RetirementSignal { busyStarted.fulfill() }
+        let probeBusyContent = environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"] == "1"
+        if probeBusyContent {
+            webView.configuration.userContentController.add(busy, name: "aegisRetirementSignal")
+            webView.evaluateJavaScript("window.webkit.messageHandlers.aegisRetirementSignal.postMessage('started'); const until = performance.now()+8000; while(performance.now()<until){}; window.webkit.messageHandlers.aegisRetirementSignal.postMessage('ended');")
+            await fulfillment(of: [busyStarted], timeout: 2)
+        }
+        defer { if probeBusyContent { webView.configuration.userContentController.removeScriptMessageHandler(forName: "aegisRetirementSignal") } }
         let retirementStarted = Date()
         page.close()
         let retirementDeadline = Date().addingTimeInterval(10)
-        var firstWindowObserved = false
         while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
-        firstWindowObserved = Date().timeIntervalSince(retirementStarted) <= 5 && page.endpoint == nil
+        let firstWindowObserved = Date().timeIntervalSince(retirementStarted) <= 5 && page.endpoint == nil
         receipt["retirementWithinFirst5Seconds"] = firstWindowObserved
         receipt["retirementObservationSeconds"] = Date().timeIntervalSince(retirementStarted)
+        receipt["retirementEvents"] = page.retirementEvents
+        receipt["busyContentProbe"] = probeBusyContent
         XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = page.endpoint == nil
         XCTAssertNotNil(page.initialBinding)
+    }
+
+    private final class RetirementSignal: NSObject, WKScriptMessageHandler {
+        let started: () -> Void
+        init(started: @escaping () -> Void) { self.started = started }
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.body as? String == "started" { started() }
+        }
     }
 
     /// Observes arguments delivered by the real WebKit inbound to the real core.
