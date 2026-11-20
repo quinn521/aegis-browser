@@ -13,7 +13,10 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
     func testOptionsParserRequiresTheEntireInputToBeOneShareLink() throws {
         let expected = try AccessLocalV2RayConfigLoader.parseShareURI(sampleShareURI)
         XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI("  " + sampleShareURI + "\n"), expected)
+        XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI(
+            sampleShareURI.replacingOccurrences(of: "#", with: "&pcks=#")), expected)
         for invalid in [
+            sampleShareURI.replacingOccurrences(of: "#", with: "&pcks=unsupported#"),
             sampleShareURI + "\n" + sampleShareURI,
             sampleShareURI + sampleShareURI,
             sampleShareURI + " extra",
