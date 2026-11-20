@@ -1,9 +1,16 @@
 package embeddedcore
 
 import (
+	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	clog "github.com/xtls/xray-core/common/log"
 )
 
 const freedomConfig = `{
@@ -206,4 +213,67 @@ func TestRuntimeOwnershipSeparatesStreamsAndStop(t *testing.T) {
 	if !first.IsRunning() {
 		t.Fatal("another runtime stopped first runtime")
 	}
+}
+
+func TestConcurrentRuntimeInitialization(t *testing.T) {
+	const count = 12
+	gate := make(chan struct{})
+	results := make(chan error, count)
+	runtimes := make([]*Runtime, count)
+	for i := range runtimes {
+		runtimes[i] = NewRuntime()
+		go func(runtime *Runtime) {
+			<-gate
+			results <- runtime.Start(freedomConfig)
+		}(runtimes[i])
+	}
+	close(gate)
+	for range count {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stopped sync.WaitGroup
+	for _, runtime := range runtimes {
+		stopped.Go(func() { _ = runtime.Stop() })
+	}
+	stopped.Wait()
+}
+
+func TestStoppingNewestRuntimeRestoresLiveLogger(t *testing.T) {
+	directory := t.TempDir()
+	config := func(name string) string {
+		var value map[string]any
+		if err := json.Unmarshal([]byte(freedomConfig), &value); err != nil {
+			t.Fatal(err)
+		}
+		value["log"] = map[string]any{"loglevel": "info", "access": "none", "error": filepath.Join(directory, name)}
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	first, second := NewRuntime(), NewRuntime()
+	if err := first.Start(config("first.log")); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+	if err := second.Start(config("second.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	const marker = "surviving-runtime-marker"
+	clog.Record(&clog.GeneralMessage{Severity: clog.Severity_Info, Content: marker})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(filepath.Join(directory, "first.log"))
+		if strings.Contains(string(data), marker) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("stopping another runtime stranded the surviving logger")
 }

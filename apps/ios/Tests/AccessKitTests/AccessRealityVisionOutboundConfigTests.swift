@@ -162,6 +162,26 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertTrue(restored.snapshot().contains("final.example:443"))
     }
 
+    func testSharedDiagnosticsKeepTheSurvivingCoreReaderAndAllSecretFilters() throws {
+        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
+        defer { log.stop() }
+        let first = try XCTUnwrap(log.acquireShared(level: .info, secrets: ["first-secret"]))
+        let second = try XCTUnwrap(log.acquireShared(level: .debug, secrets: ["second-secret"]))
+        XCTAssertEqual(first.path, second.path)
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertEqual(second.level, first.level)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: first.path))
+        defer { try? writer.close() }
+        XCTAssertTrue(log.stop(capture: second))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //surviving.example:443/path?token=first-secret&token=second-secret\n".utf8))
+        XCTAssertTrue(log.stop(capture: first))
+        XCTAssertTrue(log.snapshot().contains("surviving.example:443"))
+        XCTAssertFalse(log.snapshot().contains("first-secret"))
+        XCTAssertFalse(log.snapshot().contains("second-secret"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+    }
+
     func testStopDrainPreservesClearAndNoneDiscardBoundaries() throws {
         for disable in [false, true] {
             let log = AccessDiagnosticLog(pollInterval: .seconds(60))

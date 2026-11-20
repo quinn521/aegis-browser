@@ -1,6 +1,6 @@
 # iOS 内部测试节点编辑器 · 首个实施切片
 
-本切片实现原生编辑及隔离测试页，覆盖 [#208 的 S1 及 S3/S4 子集](https://github.com/gcsagroup/aegis-browser/issues/208#issuecomment-7039980352) 中可独立交付的普通测试 Profile 编辑流程。设计采用 fork main `c5b4257a` 与 [精确 SDD `26e8bc97`](https://github.com/quinn521/aegis-browser/blob/26e8bc9793787e23c5d310c15d28dbbadc907d43/docs/plans/access-service-v1.0/ios-app-inbound-sdd.zh-CN.md)。完整 O1–O6 继续开放。
+本切片实现原生编辑及隔离测试页，覆盖 [#208 的 S1 及 S3/S4 子集](https://github.com/gcsagroup/aegis-browser/issues/208#issuecomment-7039980352) 中可独立交付的普通测试 Profile 编辑流程。设计从 fork main `c5b4257a` 与原计划的精确 SDD `26e8bc97` 接续，并核对 [文档 PR 最终提交 `cbec7e63`](https://github.com/quinn521/aegis-browser/blob/cbec7e63dc67133d0bb3725227659f319e22b970/docs/plans/access-service-v1.0/ios-app-inbound-sdd.zh-CN.md) 的端口补充。完整 O1–O6 继续开放。
 
 ## 用户流程
 
@@ -62,3 +62,7 @@ SOCKS5 端口补充：应用内发布端口不得为 `0` 或 `1080`；产品采�
 清单观测分别记录实际观察到的初始 HTTP 响应、最后观察到的主文档状态、服务器重定向回调以及后续顶层导航是否被本地策略拒绝。WebKit 的重定向回调不提供该次响应状态码，未取得初始响应时保留未知（`initialResponseObserved=false`），不从最终 200 或本地拒绝倒推初始状态。清单每项仍只调用一次顶层加载；重定向和脚本跳转的行为用清单外受控页面单独核对，早期记录不补猜。
 
 受控 301/302 与跨站 Location 复现了早期单次导航限制误挡服务器重定向：它们在重定向回调前进入 `.other` 策略检查。修正仅允许首次文档提交前的初始 HTTPS 导航继续；首份文档提交后，脚本和其他新增顶层导航仍阻断。每个清单域名只启动一次独立加载，重定向不触发客户端重试或协议回退。修正前已派发的本地策略拒绝项保持原始记录，不复测，也不据此判断远端不可达。
+
+多核心启动通过进程级生命周期锁串行进入固定 Xray 的初始化入口，流和停止信号继续归属各自实例。普通测试页与既有订阅共享有引用计数的脱敏诊断 FIFO；新增核心合并秘密过滤集，结束一个引用不关闭其他核心的读取，停止最新核心前恢复仍存活核心的日志处理器。新增并发启动、剩余日志处理器及双引用 FIFO 回归。本片继续只生成已准入的单节点 VLESS 配置，不扩展为任意 Xray DNS 或 dialerProxy 配置入口。
+
+普通测试页按 `WKNavigation` 身份接收完成和失败回调，忽略被替换导航及取消回调。核心并发与日志测试不替代最终 SDD 的两个完整 Profile、各自 Options 实际端口及固定 `10806` 竞争矩阵，该行仍在后续完整 Profile 切片验收。

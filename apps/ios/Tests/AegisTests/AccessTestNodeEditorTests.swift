@@ -285,6 +285,24 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")))
     }
 
+    func testSupersededNavigationFailuresCannotCloseTheReplacement() {
+        let page = AccessTestNodePage()
+        let view = WKWebView()
+        let first = WKNavigation()
+        let replacement = WKNavigation()
+        page.webView(view, didStartProvisionalNavigation: first)
+        page.webView(view, didStartProvisionalNavigation: replacement)
+        for error in [URLError(.cancelled), URLError(.cannotConnectToHost)] {
+            page.webView(view, didFailProvisionalNavigation: first, withError: error)
+            XCTAssertEqual(page.status, "正在加载")
+        }
+        page.webView(view, didFinish: replacement)
+        page.webView(view, didFail: first, withError: URLError(.serverCertificateUntrusted))
+        XCTAssertEqual(page.status, "已连接")
+        page.webView(view, didFail: replacement, withError: URLError(.cannotConnectToHost))
+        XCTAssertEqual(page.status, "连接暂不可用")
+    }
+
     func testClosingPendingPageCommitsInertDocumentAndReleasesEndpoint() async throws {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),

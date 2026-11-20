@@ -391,6 +391,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private(set) var selectedTransport: AccessInboundTransport?
     private var sentMainFrame = false
     private var committedMainFrame = false
+    private var currentNavigation: WKNavigation?
+    private var sawMainFrameAction = false
     private var closed = false
     private var retiring = false
 
@@ -468,7 +470,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             webView = view
             initialBinding = result.endpoint
             status = "正在加载"
-            view.load(URLRequest(url: url))
+            currentNavigation = view.load(URLRequest(url: url))
         } catch {
             failureDomain = (error as NSError).domain
             failureCode = (error as NSError).code
@@ -519,19 +521,26 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             retiringOwner = nil
             return
         }
-        if !retiring { committedMainFrame = true }
+        if !retiring, let navigation, navigation === currentNavigation { committedMainFrame = true }
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard !retiring, let navigation else { return }
+        currentNavigation = navigation
+        committedMainFrame = false
+        status = "正在加载"
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if !retiring { status = "已连接" }
+        if !retiring, let navigation, navigation === currentNavigation { status = "已连接" }
     }
 
     func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
-        if !retiring { serverRedirectCount += 1 }
+        if !retiring, let navigation, navigation === currentNavigation { serverRedirectCount += 1 }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if !retiring {
+        if ownsFailure(navigation, error: error) {
             failureDomain = (error as NSError).domain
             failureCode = (error as NSError).code
             close()
@@ -539,11 +548,18 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if !retiring {
+        if ownsFailure(navigation, error: error) {
             failureDomain = (error as NSError).domain
             failureCode = (error as NSError).code
             close()
         }
+    }
+
+    private func ownsFailure(_ navigation: WKNavigation?, error: Error) -> Bool {
+        let failure = error as NSError
+        guard !retiring, !(failure.domain == NSURLErrorDomain && failure.code == NSURLErrorCancelled),
+              let navigation else { return false }
+        return navigation === currentNavigation
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
@@ -577,7 +593,18 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                 sentMainFrame = true
             }
             let scheme = action.request.url?.scheme
-            decisionHandler(scheme == "https" && !action.shouldPerformDownload ? .allow : .cancel)
+            let allowed = scheme == "https" && !action.shouldPerformDownload
+            if allowed, action.targetFrame?.isMainFrame == true {
+                let continuesProvisional = !committedMainFrame && action.navigationType == .other
+                if sawMainFrameAction && !continuesProvisional {
+                    // Policy precedes didStart. Ignore the old navigation even if
+                    // its cancellation is delivered before the new didStart.
+                    currentNavigation = nil
+                    committedMainFrame = false
+                }
+                sawMainFrameAction = true
+            }
+            decisionHandler(allowed ? .allow : .cancel)
         }
     }
 }

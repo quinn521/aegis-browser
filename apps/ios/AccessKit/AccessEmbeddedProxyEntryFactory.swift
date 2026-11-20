@@ -230,13 +230,13 @@ final class AccessEmbeddedProxyEntrySession {
         level: AccessLogLevel
     ) async throws -> AccessDiagnosticLog.Capture? {
         let parameters = outbound.parameters
-        let capture = try? diagnostics.start(
+        let capture = try? diagnostics.acquireShared(
             level: level, secrets: [parameters.userID, parameters.publicKey, parameters.shortID]
         )
         if level != .none && capture == nil { diagnostics.markUnavailable() }
         do {
             let config = try outbound.embeddedInstanceJSONData(
-                logLevel: capture == nil ? .none : level,
+                logLevel: capture?.level ?? .none,
                 errorLogPath: capture?.path, includeAccessLog: true
             )
             try await core.start(configData: config)

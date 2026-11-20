@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	xraylog "github.com/xtls/xray-core/app/log"
+	clog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/main/distro/all"
@@ -33,6 +35,25 @@ func NewRuntime() *Runtime { return &Runtime{streams: map[int64]*streamHandle{}}
 
 var legacy = NewRuntime()
 
+// Xray initialization and the selected logger are process-wide even though
+// instance routing and stream tables are independent.
+var lifecycleMu sync.Mutex
+var liveInstances []*core.Instance
+
+type discardedLog struct{}
+
+func (discardedLog) Handle(clog.Message) {}
+
+func selectLiveLogger() {
+	for i := len(liveInstances) - 1; i >= 0; i-- {
+		if handler, ok := liveInstances[i].GetFeature((*xraylog.Instance)(nil).Type()).(clog.Handler); ok {
+			clog.RegisterHandler(handler)
+			return
+		}
+	}
+	clog.RegisterHandler(discardedLog{})
+}
+
 var (
 	errNotRunning     = errors.New("embedded core is not running")
 	errAlreadyRunning = errors.New("embedded core is already running")
@@ -46,18 +67,22 @@ type streamHandle struct {
 }
 
 // Start boots one Xray instance from JSON config bytes (UTF-8).
-// A stopped instance cannot be restarted; call Start again after Stop.
+// Calling Start after Stop creates a fresh instance rather than reusing it.
 func (r *Runtime) Start(configJSON string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.instance != nil {
 		return errAlreadyRunning
 	}
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 	inst, err := core.StartInstance("json", []byte(configJSON))
 	if err != nil {
+		selectLiveLogger()
 		return err
 	}
 	r.instance = inst
+	liveInstances = append(liveInstances, inst)
 	r.instanceContext, r.instanceCancel = context.WithCancel(context.Background())
 	return nil
 }
@@ -77,7 +102,22 @@ func (r *Runtime) Stop() error {
 		_ = handle.conn.Close()
 	}
 	if inst != nil {
-		return inst.Close()
+		lifecycleMu.Lock()
+		defer lifecycleMu.Unlock()
+		for i, live := range liveInstances {
+			if live == inst {
+				liveInstances = append(liveInstances[:i], liveInstances[i+1:]...)
+				break
+			}
+		}
+		if len(liveInstances) > 0 {
+			selectLiveLogger()
+		}
+		err := inst.Close()
+		if len(liveInstances) == 0 {
+			selectLiveLogger()
+		}
+		return err
 	}
 	return nil
 }
