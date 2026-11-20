@@ -390,6 +390,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private let socksAdmitted: Bool
     private(set) var selectedTransport: AccessInboundTransport?
     private var sentMainFrame = false
+    private var committedMainFrame = false
     private var closed = false
     private var retiring = false
 
@@ -518,6 +519,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             retiringOwner = nil
             return
         }
+        if !retiring { committedMainFrame = true }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -560,7 +562,12 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             decisionHandler(action.request.url == retirementURL ? .allow : .cancel)
         } else {
             if singleNavigation, action.targetFrame?.isMainFrame == true {
-                guard !sentMainFrame else {
+                // HTTP redirects are presented as .other before WebKit reports the
+                // redirect callback. Let the initial provisional load continue;
+                // document scripts cannot execute until its first commit. Once it
+                // commits, all further top-level actions are separate navigations.
+                let initialRedirect = !committedMainFrame && action.navigationType == .other
+                guard !sentMainFrame || initialRedirect else {
                     decisionHandler(.cancel)
                     failureDomain = "AdditionalTopLevelNavigation"
                     failureCode = 1
