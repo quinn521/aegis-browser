@@ -347,6 +347,19 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
+        let network: String = await withCheckedContinuation { continuation in
+            let monitor = NWPathMonitor()
+            monitor.pathUpdateHandler = { path in
+                monitor.pathUpdateHandler = nil
+                monitor.cancel()
+                let label = path.usesInterfaceType(.wifi) ? "wifi" :
+                    path.usesInterfaceType(.cellular) ? "cellular" :
+                    path.usesInterfaceType(.wiredEthernet) ? "wired" : "other"
+                continuation.resume(returning: label)
+            }
+            monitor.start(queue: DispatchQueue(label: "ios208-campaign-network"))
+        }
+        try append(["event":"network", "interface":network])
         var preparationFailures = 0
         for host in hosts where !reserved.contains(host) {
             let attempt = UUID().uuidString
