@@ -98,6 +98,30 @@ public enum AccessLocalV2RayConfigLoader {
         return try parameters(fromFlat: root)
     }
 
+    /// Options accepts one whole share link. Keep the file and subscription parsers' existing contracts.
+    public static func parseSingleShareURI(_ input: String) throws -> AccessRealityVisionParameters {
+        let link = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forbidden = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        guard input.utf8.count <= 8_192,
+              link.lowercased().hasPrefix("vless://"),
+              link.unicodeScalars.allSatisfy({ !forbidden.contains($0) }),
+              !link.dropFirst("vless://".count).contains("://"),
+              var components = URLComponents(string: link),
+              components.password == nil,
+              components.path.isEmpty || components.path == "/" else {
+            throw AccessLocalV2RayConfigError.invalidJSON
+        }
+        let items = components.queryItems ?? []
+        guard Set(items.map(\.name)).count == items.count,
+              items.allSatisfy({ $0.name != "headerType" || $0.value == "none" }) else {
+            throw AccessLocalV2RayConfigError.invalidJSON
+        }
+        // The fragment is untrusted and can itself contain credentials.
+        components.fragment = nil
+        guard let uri = components.string else { throw AccessLocalV2RayConfigError.invalidJSON }
+        return try parseShareURI(uri)
+    }
+
     // MARK: - vless:// share URI
 
     /// `vless://<uuid>@<host>:<port>?flow=...&security=reality&...#name`

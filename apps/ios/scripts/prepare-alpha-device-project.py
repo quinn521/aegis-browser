@@ -120,6 +120,7 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
                 AEGIS_EMBEDDED_CORE_PRODUCTS=str(products))
     for config in spec["settings"]["configs"].values():
         config["AEGIS_ACCESS_RELEASE_CHANNEL"] = "alpha"
+        config["AEGIS_ACCESS_INTERNAL_OPTIONS"] = "YES"
     spec["options"]["bundleIdPrefix"] = APP
     # Sources intentionally live outside this generated project. Intermediate
     # parent groups for absolute paths can make XcodeGen traverse toward '/'.

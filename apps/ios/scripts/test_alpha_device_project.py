@@ -52,6 +52,11 @@ class AlphaDeviceProjectTest(unittest.TestCase):
         self.assertEqual(spec["packages"], self.spec["packages"])
         self.assertEqual(spec["schemes"], self.spec["schemes"])
         self.assertFalse(spec["options"]["createIntermediateGroups"])
+        alpha_configs = spec["settings"]["configs"]
+        for name, flags in alpha_configs.items():
+            self.assertEqual(flags["AEGIS_ACCESS_RELEASE_CHANNEL"], "alpha", name)
+            self.assertEqual(flags["AEGIS_ACCESS_INTERNAL_OPTIONS"], "YES", name)
+        self.assertEqual(self.spec["settings"]["configs"]["Release"]["AEGIS_ACCESS_INTERNAL_OPTIONS"], "NO")
         for name, target in spec["targets"].items():
             original = self.spec["targets"][name]
             settings = target["settings"]["base"]

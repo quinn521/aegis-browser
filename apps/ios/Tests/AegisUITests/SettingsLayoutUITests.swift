@@ -78,6 +78,49 @@ final class SettingsLayoutUITests: XCTestCase {
         capture("当前网站-隐藏地理位置", app)
     }
 
+    func testInternalNodeEditorKeepsTextEntryAvailableAfterCameraUnavailable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(en)",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        defer { app.terminate() }
+        let entry = app.buttons["access-test-node-options"]
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        let profile = app.buttons["access-test-profile"]
+        XCTAssertTrue(reveal(profile, app))
+        profile.tap()
+        let scan = app.buttons["access-test-node-scan"]
+        XCTAssertTrue(reveal(scan, app))
+        scan.tap()
+        let cameraError = app.staticTexts["access-test-node-error"]
+        XCTAssertTrue(reveal(cameraError, app))
+        XCTAssertEqual(cameraError.label, "Camera scanning is unavailable. You can still enter a node link.")
+
+        let field = app.secureTextFields["access-test-node-link"]
+        XCTAssertTrue(reveal(field, app, scrollDown: true))
+        field.tap()
+        field.typeText("vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+                       + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
+                       + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic-node")
+        let preview = app.buttons["access-test-node-preview"]
+        XCTAssertTrue(reveal(preview, app))
+        preview.tap()
+        let redacted = app.staticTexts["access-test-node-redacted-preview"]
+        XCTAssertTrue(reveal(redacted, app))
+        XCTAssertEqual(redacted.label, "3X-UI test node")
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "synthetic-node")).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "198.51.100.10")).firstMatch.exists)
+        let apply = app.buttons["access-test-node-apply"]
+        XCTAssertTrue(reveal(apply, app))
+        XCTAssertTrue(apply.isEnabled)
+        let discard = app.buttons["access-test-node-discard"]
+        XCTAssertTrue(reveal(discard, app))
+        discard.tap()
+        XCTAssertFalse(redacted.exists)
+        XCTAssertFalse(apply.isEnabled)
+    }
+
     func testAccountUsageEntryShowsHonestEmptyStateInChinese() {
         inspectAccountUsage(language: "zh-Hans", largeText: false)
     }

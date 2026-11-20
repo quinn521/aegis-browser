@@ -10,6 +10,24 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234"
         + "&headerType=none#demo-reality-vision"
 
+    func testOptionsParserRequiresTheEntireInputToBeOneShareLink() throws {
+        let expected = try AccessLocalV2RayConfigLoader.parseShareURI(sampleShareURI)
+        XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI("  " + sampleShareURI + "\n"), expected)
+        for invalid in [
+            sampleShareURI + "\n" + sampleShareURI,
+            sampleShareURI + sampleShareURI,
+            sampleShareURI + " extra",
+            sampleShareURI.replacingOccurrences(of: "&type=tcp", with: "&type=tcp&type=tcp"),
+            sampleShareURI.replacingOccurrences(of: "headerType=none", with: "headerType=http"),
+            sampleShareURI.replacingOccurrences(of: "type=tcp", with: "type=ws"),
+            "https://example.com/subscription", "{\"address\":\"www.example.com\"}"
+        ] {
+            XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(invalid))
+        }
+        // Legacy file/subscription consumers still receive their original selection contract.
+        XCTAssertEqual(try AccessLocalV2RayConfigLoader.parse(text: sampleShareURI + "\n" + sampleShareURI), expected)
+    }
+
     func testProductPathInEachAppChannelWithAStaleResource() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
