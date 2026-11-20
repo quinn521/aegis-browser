@@ -24,6 +24,8 @@ Android 产品目标是完整 Chromium 浏览器。自己的 [pin](../../../apps
 
 **原生接线。** Fragment 捕获实际浏览器 Profile/无痕作用域，用受信 native 接口读写版本化草稿、提交并订阅发布状态。协议选择自动、固定 SOCKS5、固定 HTTP，端口选择自动或指定。UI 从 native ACK 读取实际端点；配置文件、Intent、深链和 Java 层传入的渠道值均不能授予高级权限。执行能力不可用的内部构建可以保存允许的偏好并提示未准入；受限构建拒绝加载或激活内部设置。Android 的 0330 提供共享能力判定基础，产品 Fragment/JNI、存储与请求级安装需要本端接线。[共享能力补丁](../../../apps/browser/patches-android/0330-share-access-options-capability.patch)
 
+**3X-UI 测试节点。** DEV / 内部 Alpha 的普通 Profile 详情提供文本输入和“扫描节点二维码”。只在用户点击扫码时请求相机权限。拒绝或取消后返回同一草稿，可继续输入文本。设备本地解码，Fragment 把文本和扫描结果交给同一个受信校验入口。旋转后只将结果交回仍存活的原编辑操作。离开页面、切换 Profile 或进程死亡后丢弃失效结果，显式 Apply 前只保留草稿。用实际内部 APK 验证两种输入等价和失效阻断，用 Beta / Release 包验证 Intent、恢复状态和 JNI 调用均无法导入或激活手动节点。托管账户联调等待服务端同事交付。[测试节点与阶段交接](app-access-options-sdd.zh-CN.md)
+
 **状态与系统交互。** 普通 Profile 持久保存已提交配置，按原合同校验导入的版本与字段。系统返回遇到脏草稿时提供保留编辑或放弃选择。旋转或窗口重建恢复当前编辑草稿与 operationID；进程死亡后以已提交版本和操作结果重新读取，丢失的未提交草稿不自动 Apply。无痕关闭后销毁本作用域的草稿、引用和诊断。TalkBack 读出当前偏好、实际协议和失败原因，大字号、横屏和分屏下均可触达 Apply/Discard。
 
 **验收。** 先用可识别的测试状态验证入口、渠道、表单、版本竞争、文件、旋转和系统返回，再在同一产品 APK 从原生 Options 点 Apply，对照 native 发布状态和受控源站。验证网络切换、无痕结束、指定端口冲突和杀进程恢复不会重放业务请求。UI、模拟器及 arm64 真机分别登记。[Android Options 执行工单 #210](https://github.com/gcsagroup/aegis-browser/issues/210)

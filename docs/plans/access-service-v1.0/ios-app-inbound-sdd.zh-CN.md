@@ -19,6 +19,8 @@
 
 在原生“设置 → 隐私保护”提供 Access Options 入口，并从内部构建的当前网站面板进入所选 Profile。现有“隐藏地理位置服务”继续呈现订阅用量。iPhone 采用列表到详情的导航，iPad 的窗口各持一份草稿。Profile 详情提供本地协议选择器、端口模式、按需显示的指定端口输入、只读本次连接和 Apply/Discard。站点页面按精确顶层入口展示规则，打开单独顶层页时重新读取自己的规则。[原生设置入口](../../../apps/ios/AegisApp/BrowserSettings.swift) · [三端 Options 合同](app-access-options-sdd.zh-CN.md)
 
+DEV / 内部 Alpha 在普通 Profile 的“测试节点”提供文本输入和“扫描节点二维码”。用户主动打开相机后才请求权限，返回页面显示脱敏草稿。拒绝授权或取消可继续用文本输入。文本与扫码复用分享链接校验，显式 Apply 后由网页发布器按该测试 Profile 的身份准备 DataStore。iPhone/iPad 验收同一合成节点的两种输入、取消时旧文档继续使用原绑定、换 Profile 后迟到的扫码结果被丢弃。Beta / Release 对深链、恢复的旧引用和直接命令均拒绝手动节点激活。托管账户联调等待服务端同事交付。[分享链接实现](../../../apps/ios/AccessKit/AccessLocalV2RayConfigLoader.swift) · [签入构建订阅的网页入口](../../../apps/ios/AegisApp/AccessThreeXUIWebEntry.swift)
+
 Apply 在更换活动文档的 DataStore 前显示受影响标签和表单状态，让用户确认。取消或 Discard 不退役文档。普通与私密的草稿、显示状态、备份各有作用域。私密 v1 沿用已有文件导入/导出限制。两窗同时提交时只有一个 baseRevision 可以生效。冷启动和恢复导航均显示已提交选择及真实绑定结果。[完整 Options 合同与执行工单](https://github.com/gcsagroup/aegis-browser/issues/208)
 
 验收从真实设置入口开始，分别覆盖 iPhone、iPad 两窗、VoiceOver 和最大字体。验证直接命令、导入文件、恢复旧内部配置在受限包均无法激活。模拟器上的控件选中和已保存文本只验设置行为；协议成功需 O3 的两路收件和 O6 的适用真机记录。
