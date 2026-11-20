@@ -776,6 +776,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         var closeSession: URLSession?
         var oldFlow: LocalProxyPeer?
         if normalCloseProbe {
+            XCTAssertEqual(environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"], "1")
             let config = URLSessionConfiguration.ephemeral
             config.proxyConfigurations = webView.configuration.websiteDataStore.proxyConfigurations
             config.urlCache = nil
@@ -846,8 +847,15 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertFalse(core.isRunning)
             }
         }) { supplement, confirmed, elapsed, events in
-            observations.append(["supplement":supplement, "confirmed":confirmed,
-                                 "observationSeconds":elapsed, "events":events])
+            var observation: [String: Any] = ["supplement":supplement, "confirmed":confirmed,
+                                             "observationSeconds":elapsed, "events":events]
+            if normalCloseProbe, !confirmed, let port = page.initialBinding?.port {
+                observation["portStillOwned"] = Self.portIsOwned(port)
+                observation["sameEndpointStillHeld"] = page.endpoint == page.initialBinding
+                XCTAssertTrue(Self.portIsOwned(port))
+                XCTAssertEqual(page.endpoint, page.initialBinding)
+            }
+            observations.append(observation)
         }
         receipt["retirementObservations"] = observations
         receipt["retirementWithinFirst5Seconds"] = observations.first?["confirmed"]
