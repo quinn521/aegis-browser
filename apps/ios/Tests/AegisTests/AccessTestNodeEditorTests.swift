@@ -736,9 +736,14 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertEqual(page.status, "连接暂不可用", "A script failure counts only after protection retired the document")
             }
         }
+        let retirementStarted = Date()
         page.close()
         let retirementDeadline = Date().addingTimeInterval(10)
+        var firstWindowObserved = false
         while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
+        firstWindowObserved = Date().timeIntervalSince(retirementStarted) <= 5 && page.endpoint == nil
+        receipt["retirementWithinFirst5Seconds"] = firstWindowObserved
+        receipt["retirementObservationSeconds"] = Date().timeIntervalSince(retirementStarted)
         XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = page.endpoint == nil
         XCTAssertNotNil(page.initialBinding)
