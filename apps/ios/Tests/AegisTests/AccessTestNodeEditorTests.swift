@@ -752,7 +752,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         } else {
             XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
             XCTAssertNotNil(page.endpoint)
-            XCTAssertEqual(page.httpStatus, 200)
+            let expectedStatus = Int(environment["AEGIS_TEST_EXPECT_HTTP_STATUS"] ?? "200") ?? 200
+            XCTAssertEqual(page.httpStatus, expectedStatus)
             if let expectedPath { XCTAssertEqual(webView.url?.path, expectedPath) }
             let nonce = try XCTUnwrap(receipt["nonce"] as? String)
             XCTAssertFalse(nonce.isEmpty)
@@ -813,7 +814,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let probeBusyContent = environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"] == "1"
         if probeBusyContent {
             webView.configuration.userContentController.add(busy, name: "aegisRetirementSignal")
-            webView.evaluateJavaScript("window.webkit.messageHandlers.aegisRetirementSignal.postMessage('started'); const until = performance.now()+8000; while(performance.now()<until){}; window.webkit.messageHandlers.aegisRetirementSignal.postMessage('ended');", completionHandler: nil)
+            let pendingNavigation = environment["AEGIS_TEST_RETIREMENT_RACE"] == "1"
+                ? "window.location.replace('about:blank');" : ""
+            webView.evaluateJavaScript("window.webkit.messageHandlers.aegisRetirementSignal.postMessage('started'); const until = performance.now()+8000; while(performance.now()<until){}; " + pendingNavigation + " window.webkit.messageHandlers.aegisRetirementSignal.postMessage('ended');", completionHandler: nil)
+            receipt["retirementPendingNavigationProbe"] = !pendingNavigation.isEmpty
             await fulfillment(of: [busyStarted], timeout: 2)
         }
         defer { if probeBusyContent { webView.configuration.userContentController.removeScriptMessageHandler(forName: "aegisRetirementSignal") } }

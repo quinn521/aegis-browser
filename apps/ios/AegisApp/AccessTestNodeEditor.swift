@@ -609,6 +609,12 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         if retiring {
             recordRetirement(action.request.url == retirementURL ? "replacement-policy-allowed" : "other-policy-denied")
+            if action.request.url != retirementURL {
+                let kind = action.request.url?.scheme == "about" ? "about" :
+                    action.request.url?.scheme == "https" ? "https" : "other"
+                let frame = action.targetFrame?.isMainFrame == true ? "main" : "sub-or-new"
+                recordRetirement("denied-" + kind + "-" + frame)
+            }
             decisionHandler(action.request.url == retirementURL ? .allow : .cancel)
         } else {
             if singleNavigation, action.targetFrame?.isMainFrame == true {
