@@ -200,7 +200,7 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
 
 @MainActor
 final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
-    func testTwoNativeRuntimesKeepSurvivingDiagnosticsAndTraffic() async throws {
+    func testTwoNativeRuntimesKeepTrafficAndSharedCaptureOpen() async throws {
         let listener = try NWListener(using: .tcp, on: .any)
         let connections = Mutex<[NWConnection]>([])
         listener.newConnectionHandler = { connection in
@@ -240,11 +240,17 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         try await stream.write(Data("surviving-core".utf8))
         let echoed = try await stream.read(maxBytes: 1024)
         XCTAssertEqual(echoed, Data("surviving-core".utf8))
+        // Core.Dial's local freedom fixture has no inbound access message.
+        // The Go regression verifies native logger selection; this controlled
+        // record verifies the surviving Swift reader without inventing one.
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: firstCapture.path))
+        try writer.write(contentsOf: Data("2026/11/20 00:00:00 from local accepted //surviving-native.example:443\n".utf8))
+        try writer.close()
         let deadline = Date().addingTimeInterval(3)
-        while !diagnostics.snapshot().contains("127.0.0.1:\(port)"), Date() < deadline {
+        while !diagnostics.snapshot().contains("surviving-native.example:443"), Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        XCTAssertTrue(diagnostics.snapshot().contains("127.0.0.1:\(port)"))
+        XCTAssertTrue(diagnostics.snapshot().contains("surviving-native.example:443"))
         await first.stop()
         XCTAssertTrue(diagnostics.stop(capture: firstCapture))
     }

@@ -285,11 +285,11 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")))
     }
 
-    func testSupersededNavigationFailuresCannotCloseTheReplacement() {
+    func testSupersededNavigationFailuresCannotCloseTheReplacement() throws {
         let page = AccessTestNodePage()
         let view = WKWebView()
-        let first = WKNavigation()
-        let replacement = WKNavigation()
+        let first = try XCTUnwrap(view.loadHTMLString("<p>first</p>", baseURL: URL(string: "https://aegis.invalid/first")))
+        let replacement = try XCTUnwrap(view.loadHTMLString("<p>replacement</p>", baseURL: URL(string: "https://aegis.invalid/replacement")))
         page.webView(view, didStartProvisionalNavigation: first)
         page.webView(view, didStartProvisionalNavigation: replacement)
         for error in [URLError(.cancelled), URLError(.cannotConnectToHost)] {
@@ -589,6 +589,14 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         } else {
             XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
             XCTAssertNotNil(page.endpoint)
+            XCTAssertEqual(page.httpStatus, 200)
+            let nonce = try XCTUnwrap(receipt["nonce"] as? String)
+            XCTAssertFalse(nonce.isEmpty)
+            let containsNonce = try await webView.callAsyncJavaScript(
+                "return document.documentElement.textContent.includes(nonce);",
+                arguments: ["nonce": nonce], in: nil, contentWorld: .page) as? Bool
+            receipt["documentContainsNonce"] = containsNonce == true
+            XCTAssertEqual(containsNonce, true)
         }
         XCTAssertNotNil(page.initialBinding)
         XCTAssertEqual(page.selectedTransport, expectedTransport)

@@ -165,8 +165,8 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
     func testSharedDiagnosticsKeepTheSurvivingCoreReaderAndAllSecretFilters() throws {
         let log = AccessDiagnosticLog(pollInterval: .seconds(60))
         defer { log.stop() }
-        let first = try XCTUnwrap(log.acquireShared(level: .info, secrets: ["first-secret"]))
-        let second = try XCTUnwrap(log.acquireShared(level: .debug, secrets: ["second-secret"]))
+        let first = try XCTUnwrap(log.acquireShared(level: .info, secrets: ["first-secret.example"]))
+        let second = try XCTUnwrap(log.acquireShared(level: .debug, secrets: ["second-secret.example"]))
         XCTAssertEqual(first.path, second.path)
         XCTAssertNotEqual(first.id, second.id)
         XCTAssertEqual(second.level, first.level)
@@ -174,11 +174,14 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         defer { try? writer.close() }
         XCTAssertTrue(log.stop(capture: second))
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
-        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //surviving.example:443/path?token=first-secret&token=second-secret\n".utf8))
+        try writer.write(contentsOf: Data((
+            "2026/11/11 00:00:00 from local accepted //first-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //second-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //surviving.example:443\n").utf8))
         XCTAssertTrue(log.stop(capture: first))
         XCTAssertTrue(log.snapshot().contains("surviving.example:443"))
-        XCTAssertFalse(log.snapshot().contains("first-secret"))
-        XCTAssertFalse(log.snapshot().contains("second-secret"))
+        XCTAssertFalse(log.snapshot().contains("first-secret.example"))
+        XCTAssertFalse(log.snapshot().contains("second-secret.example"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
     }
 
