@@ -11,6 +11,7 @@
 
 | 阅读目的 | 文档 |
 |---|---|
+| 评审 2026-11-20 应用级回环入站决策与冻结修订差异 | [双无认证合同](app-inbound-contract.zh-CN.md) · [iOS SDD](ios-app-inbound-sdd.zh-CN.md) · [macOS SDD](macos-app-inbound-sdd.zh-CN.md) · [Android 评估](android-app-inbound-assessment.zh-CN.md) |
 | 了解产品、架构、实施与商用边界 | 本文 |
 | 查看请求级路由、计量实验及首阶段部署技术决策 | [2026-09-22 架构复核与实施方案](architecture-review-20260922.zh-CN.md) |
 | 从当前主线继续开发、看依赖与验收顺序 | [当前开发计划](development-plan.zh-CN.md) |
