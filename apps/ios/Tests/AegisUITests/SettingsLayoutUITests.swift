@@ -133,7 +133,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(reveal(apply, app))
         apply.tap()
         let saved = app.staticTexts["access-test-node-saved"]
-        XCTAssertTrue(reveal(saved, app))
+        XCTAssertTrue(reveal(saved, app, scrollDown: true))
         XCTAssertEqual(saved.label, "Node saved.")
         XCTAssertTrue(reveal(apply, app))
         XCTAssertFalse(apply.isEnabled)
