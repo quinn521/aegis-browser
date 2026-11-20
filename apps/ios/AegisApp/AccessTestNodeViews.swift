@@ -192,7 +192,7 @@ private struct AccessTestNodeDetailView: View {
             NavigationStack {
                 AccessTestNodeScanner { result in
                     guard presentedScan == scan else { return }
-                    editor.finishScan(scan, result: result)
+                    editor.finishScan(scan, result: result, pendingText: &input)
                     presentedScan = nil
                 }
                 .ignoresSafeArea(edges: .bottom)

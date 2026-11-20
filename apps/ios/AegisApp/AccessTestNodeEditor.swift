@@ -305,14 +305,23 @@ final class AccessTestNodeEditor {
         return request
     }
 
-    func finishScan(_ request: Scan, result: Result<String, AccessTestNodeError>?) {
-        guard scan == request else { return }
+    @discardableResult
+    func finishScan(_ request: Scan, result: Result<String, AccessTestNodeError>?) -> Bool {
+        guard scan == request else { return false }
         scan = nil
         switch result {
-        case .success(let input): preview(input)
+        case .success(let input):
+            preview(input)
+            return hasDraft && error == nil
         case .failure(let error): self.error = error
         case nil: break
         }
+        return false
+    }
+
+    func finishScan(_ request: Scan, result: Result<String, AccessTestNodeError>?,
+                    pendingText: inout String) {
+        if finishScan(request, result: result) { pendingText = "" }
     }
 
     func apply() {

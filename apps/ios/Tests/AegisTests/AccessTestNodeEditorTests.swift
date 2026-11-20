@@ -112,6 +112,51 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(storage.writes, 1)
     }
 
+    func testValidScanSupersedesUnpreviewedTextAndStillRequiresExplicitApply() throws {
+        let storage = Storage()
+        let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        editor.openProfile()
+        var pendingText = link
+        let scanned = link.replacingOccurrences(of: "sid=abcd1234", with: "sid=ef")
+        editor.finishScan(try XCTUnwrap(editor.beginScan()), result: .success(scanned), pendingText: &pendingText)
+        XCTAssertTrue(pendingText.isEmpty, "The valid QR draft must not remain blocked by superseded text")
+        XCTAssertTrue(editor.canApply)
+        XCTAssertEqual(storage.writes, 0)
+        editor.apply()
+        XCTAssertEqual(storage.writes, 1)
+        XCTAssertEqual(try repository.savedNode().parameters(),
+                       try AccessLocalV2RayConfigLoader.parseSingleShareURI(scanned))
+    }
+
+    func testRejectedCancelledOrStaleScanPreservesPendingText() throws {
+        let results: [Result<String, AccessTestNodeError>?] = [nil, .failure(.cameraDenied),
+            .success("invalid"), .success(link + "\n" + link)]
+        for result in results {
+            let storage = Storage()
+            let editor = AccessTestNodeEditor(isPrivate: false,
+                repository: AccessTestNodeRepository(channel: .dev, storage: storage))
+            editor.openProfile()
+            var pendingText = link
+            editor.finishScan(try XCTUnwrap(editor.beginScan()), result: result, pendingText: &pendingText)
+            XCTAssertEqual(pendingText, link)
+            XCTAssertFalse(editor.canApply)
+            XCTAssertEqual(storage.writes, 0)
+        }
+        let editor = AccessTestNodeEditor(isPrivate: false,
+            repository: AccessTestNodeRepository(channel: .dev, storage: Storage()))
+        editor.openProfile()
+        let oldScan = try XCTUnwrap(editor.beginScan())
+        editor.closeProfile()
+        editor.openProfile()
+        let active = try XCTUnwrap(editor.beginScan())
+        var pendingText = "new text in the current profile"
+        editor.finishScan(oldScan, result: .success(link), pendingText: &pendingText)
+        XCTAssertEqual(pendingText, "new text in the current profile")
+        XCTAssertEqual(editor.scan, active)
+        XCTAssertFalse(editor.hasDraft)
+    }
+
     func testOfficialRealityShareWorksForTextAndScanAndRestoresNativeParameters() throws {
         let uri = link.replacingOccurrences(of: "sid=abcd1234",
             with: "sid=&spx=%2Fsynthetic-path&support-x25519mlkem768=true")
