@@ -513,9 +513,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTFail("Native internal channel admission rejected this package")
             return
         }
-        let old = try repository.revision(isPrivate: false)
-        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(share),
-                                 expectedRevision: old, isPrivate: false)
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        editor.openProfile()
+        editor.preview(share)
+        guard editor.canApply else { XCTFail("Authorized node did not produce a valid native draft"); return }
+        editor.apply()
+        guard editor.error == nil, editor.hasSavedNode else { XCTFail("Native Apply did not save the authorized node"); return }
         let preference = AccessTestNodeTransport(rawValue: environment["AEGIS_TEST_LOCAL_TRANSPORT"] ?? "http") ?? .http
         let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
         let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
