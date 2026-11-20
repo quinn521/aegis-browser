@@ -494,8 +494,15 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let window = show(tab.webView)
         defer { window.isHidden = true }
         let sink = NavigationSink()
+        let priorNavigation = tab.currentNavigationForTests
         tab.load(URLRequest(url: URL(string: "http://example.invalid/kept")!))
         tab.webView.navigationDelegate = sink
+        // Failure ownership starts when the deferred load has its WKNavigation,
+        // not merely when load() has queued the next MainActor turn.
+        try await waitUntil({
+            guard let navigation = tab.currentNavigationForTests else { return false }
+            return navigation !== priorNavigation
+        }, message: "The requested main-frame navigation must exist before failure injection")
         tab.webView.stopLoading()
         deliverFailure(tab)
         XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
