@@ -373,28 +373,39 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
+        let pathState = Mutex((label: "unknown", reachable: false, reported: false))
+        let monitor = NWPathMonitor()
         let network: String = await withCheckedContinuation { continuation in
-            let monitor = NWPathMonitor()
             monitor.pathUpdateHandler = { path in
-                monitor.pathUpdateHandler = nil
-                monitor.cancel()
                 let label = path.usesInterfaceType(.wifi) ? "wifi" :
                     path.usesInterfaceType(.cellular) ? "cellular" :
                     path.usesInterfaceType(.wiredEthernet) ? "wired" : "other"
-                continuation.resume(returning: label)
+                let first = pathState.withLock { state in
+                    let first = !state.reported
+                    state = (label, path.status == .satisfied, true)
+                    return first
+                }
+                if first { continuation.resume(returning: label) }
             }
             monitor.start(queue: DispatchQueue(label: "ios208-campaign-network"))
         }
+        defer { monitor.cancel() }
         try append(["event":"network", "interface":network])
         var preparationFailures = 0
+        var consecutiveNetworkFailures = 0
         let control = file.deletingLastPathComponent().appendingPathComponent("ios208-campaign-control")
         for host in hosts where !reserved.contains(host) {
             if (try? String(contentsOf: control, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "stop" {
                 try append(["event":"checkpoint", "reservedCount":reserved.count])
                 return
             }
+            let network = pathState.withLock { ($0.label, $0.reachable) }
+            guard network.1 else {
+                try append(["event":"checkpoint", "reason":"network-unavailable", "reservedCount":reserved.count])
+                return
+            }
             let attempt = UUID().uuidString
-            try append(["event":"reserved", "host":host, "attempt":attempt])
+            try append(["event":"reserved", "host":host, "attempt":attempt, "network":network.0])
             reserved.insert(host)
             guard let url = URL(string: "https://" + host + "/") else { XCTFail("Invalid fixed hostname"); return }
             let page = AccessTestNodePage(singleNavigation: true)
@@ -412,7 +423,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
                         "httpStatus":page.httpStatus ?? 0, "documentPrefixSHA256":documentDigest,
                         "endpoint":page.endpoint?.identity ?? "", "generation":page.endpoint?.generation ?? 0,
-                        "actualProtocol":"http"])
+                        "actualProtocol":"http", "network":network.0])
+            consecutiveNetworkFailures = timedOut || page.failureDomain == NSURLErrorDomain ? consecutiveNetworkFailures + 1 : 0
             preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
             page.close()
             let stopDeadline = Date().addingTimeInterval(5)
@@ -420,6 +432,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             page.webView?.removeFromSuperview()
             guard page.endpoint == nil else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
             guard preparationFailures < 3 else { XCTFail("Repeated preparation failures; campaign stopped"); return }
+            if consecutiveNetworkFailures >= 10 {
+                try append(["event":"checkpoint", "reason":"consecutive-network-failures", "reservedCount":reserved.count])
+                return
+            }
         }
 #endif
 
