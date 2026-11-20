@@ -528,7 +528,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if retiring { recordRetirement(navigation === retirementNavigation ? "replacement-committed" : "other-commit") }
+        if retiring { recordRetirement(navigation != nil && navigation === retirementNavigation ? "replacement-committed" : "other-commit") }
         if retiring, let navigation, navigation === retirementNavigation {
             let finish = retirement
             retirement = nil
@@ -541,7 +541,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        if retiring { recordRetirement(navigation === retirementNavigation ? "replacement-started" : "other-start") }
+        if retiring { recordRetirement(navigation != nil && navigation === retirementNavigation ? "replacement-started" : "other-start") }
         guard !retiring, let navigation else { return }
         currentNavigation = navigation
         committedMainFrame = false
@@ -549,7 +549,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if retiring { recordRetirement(navigation === retirementNavigation ? "replacement-finished" : "other-finish") }
+        if retiring { recordRetirement(navigation != nil && navigation === retirementNavigation ? "replacement-finished" : "other-finish") }
         if !retiring, let navigation, navigation === currentNavigation { status = "已连接" }
     }
 
@@ -589,7 +589,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         // A fresh inert replacement must still commit before the port is freed.
         if !retiring {
             failureDomain = WKError.errorDomain
-            failureCode = WKError.webContentProcessTerminated.rawValue
+            failureCode = WKError.Code.webContentProcessTerminated.rawValue
             close()
         }
     }

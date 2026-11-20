@@ -396,7 +396,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNotNil(page.endpoint, "Another view cannot revoke this binding")
         page.webViewWebContentProcessDidTerminate(view)
         XCTAssertEqual(page.failureDomain, WKError.errorDomain)
-        XCTAssertEqual(page.failureCode, WKError.webContentProcessTerminated.rawValue)
+        XCTAssertEqual(page.failureCode, WKError.Code.webContentProcessTerminated.rawValue)
         XCTAssertNotNil(page.endpoint, "Process notification alone cannot release the port")
         let deadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
