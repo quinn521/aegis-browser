@@ -1,6 +1,5 @@
 import AccessKit
 import CoreImage
-import Vision
 import WebKit
 import UIKit
 import CryptoKit
@@ -175,12 +174,10 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let generator = try XCTUnwrap(CIFilter(name: "CIQRCodeGenerator"))
         generator.setValue(Data(link.utf8), forKey: "inputMessage")
         let image = try XCTUnwrap(generator.outputImage).transformed(by: CGAffineTransform(scaleX: 5, y: 5))
-        let bitmap = try XCTUnwrap(CIContext().createCGImage(image, from: image.extent))
-        let request = VNDetectBarcodesRequest()
-        request.usesCPUOnly = true
-        request.symbologies = [.qr]
-        try VNImageRequestHandler(cgImage: bitmap).perform([request])
-        let payloads = try XCTUnwrap(request.results).map(\.payloadStringValue)
+        let context = CIContext(options: [.useSoftwareRenderer: true])
+        let detector = try XCTUnwrap(CIDetector(ofType: CIDetectorTypeQRCode, context: context,
+                                               options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]))
+        let payloads = detector.features(in: image).map { ($0 as? CIQRCodeFeature)?.messageString }
         let decoded = try AccessTestNodeQRCode.payload(from: payloads).get()
         XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI(decoded),
                        try AccessLocalV2RayConfigLoader.parseSingleShareURI(link))

@@ -23,7 +23,7 @@
 | 检查 | 可证明的范围 |
 | --- | --- |
 | `AccessLocalV2RayConfigTests` | 整串单节点、字段/别名拒绝、旧文件及渠道资源兼容性 |
-| `AccessTestNodeEditorTests` | 渠道与普通/私密仓储拒绝、Apply/Discard、双编辑器冲突、真实 Keychain 往返、扫码取消/迟到回调、损坏版本、合成二维码图像经 Vision 本地解码与文本等价 |
+| `AccessTestNodeEditorTests` | 渠道与普通/私密仓储拒绝、Apply/Discard、双编辑器冲突、真实 Keychain 往返、扫码取消/迟到回调、损坏版本、合成二维码图像经 Core Image 本地解码与文本等价 |
 | `SettingsLayoutUITests/testInternalNodeEditorKeepsTextEntryAvailableAfterCameraUnavailable` | iPhone/iPad Simulator 原生设置、最大字体、不可用相机后文本预览、脱敏、Discard、Apply 保存与确认移除 |
 | `AccessThreeXUIWebEntryTests`、订阅用量定向回归 | 既有签入订阅授权、额度与失效阻断语义；不计为手动节点实际出站 |
 | `AccessHostRecoveryWebKitTests/testFailedEndpointKeepsTheProxyAndDisallowsDirectFailover` | 现有真实 WebKit HTTP 回环路径保留失败端点及禁止直连 failover |
