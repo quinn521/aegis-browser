@@ -153,6 +153,8 @@ test('unsigned archive isolates fork PRs and tolerates missing runner labels', (
   assert.equal(goSetup?.with?.cache, false, 'archive Go install must not rely on module cache restoration');
   const prepare = workflow.jobs['ios-archive'].steps.find(s => s.name === 'Prepare locked EmbeddedCore XCFramework');
   assert(String(prepare?.run ?? '').includes('expected go1.27.3'), 'prepare must refuse a mismatched Go toolchain');
+  assert.equal(prepare?.env?.IOS_CI_SOURCE, '${{ steps.storage.outputs.source }}');
+  assert(String(prepare?.run ?? '').includes('"$IOS_CI_SOURCE"'), 'EmbeddedCore must record Xcode inputs from job-private Source');
 });
 test('every protected delivery route depends on Admin admission and normalized operation', () => {
   const workflow = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
@@ -171,7 +173,8 @@ test('every protected delivery route depends on Admin admission and normalized o
       const guard = job.steps.findIndex(s => s.run?.includes('ios-operator.mjs --context') || s.run?.includes('ios-cloud-poc-admission.mjs'));
       assert(guard >= 0, name+' requires manual Admin guard');
       if (name === 'ios-release-validation' && job.environment !== 'aegis-ios-cloud-poc') assert.equal(job.steps[guard].if, "${{ github.event_name == 'workflow_dispatch' }}");
-      const expensive = job.steps.findIndex(s => s.run?.includes('bundle exec') || s.run?.includes('xcodebuild ') || s.run?.includes('run-simulator-tests.sh'));
+      const expensive = job.steps.findIndex(s => s.run?.includes('bundle exec') || s.run?.includes('xcodebuild ') ||
+        s.run?.includes('run-ios-unsigned-archive.sh') || s.run?.includes('run-simulator-tests.sh'));
       assert(guard < expensive, name+' must authorize before expensive work');
     }
   }
