@@ -303,6 +303,19 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(page.status, "连接暂不可用")
     }
 
+    func testPolicyInterruptionAttributionRemainsUnknownWithoutAnObservedDecision() throws {
+        let page = AccessTestNodePage()
+        XCTAssertEqual(page.navigationPolicyObservation, "no-local-rejection-observed")
+        let view = WKWebView()
+        let navigation = try XCTUnwrap(view.loadHTMLString("<p>policy</p>", baseURL: URL(string: "https://aegis.invalid/policy")))
+        page.webView(view, didStartProvisionalNavigation: navigation)
+        page.webView(view, didFailProvisionalNavigation: navigation,
+                     withError: NSError(domain: "WebKitErrorDomain", code: 102))
+        XCTAssertNil(page.localPolicyRejection)
+        XCTAssertEqual(page.navigationPolicyObservation, "policy-interruption-unattributed")
+        XCTAssertEqual(page.status, "连接暂不可用")
+    }
+
     func testClosingPendingPageCommitsInertDocumentAndReleasesEndpoint() async throws {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
@@ -477,7 +490,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "initialHTTPStatus":page.initialHTTPStatus ?? 0,
                         "initialResponseObserved":page.initialHTTPStatus != nil,
                         "serverRedirectCount":page.serverRedirectCount,
-                        "navigationPolicy":page.failureDomain == "AdditionalTopLevelNavigation" ? "subsequent-top-level-blocked" : "not-blocked",
+                        "navigationPolicy":page.navigationPolicyObservation,
+                        "localPolicyRejection":page.localPolicyRejection ?? "",
                         "endpoint":page.initialBinding?.identity ?? "", "generation":page.initialBinding?.generation ?? 0,
                         "port":page.initialBinding?.port ?? 0,
                         "phase":page.initialBinding == nil ? "preparation" : "navigation",
@@ -581,11 +595,18 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         receipt["singleNavigation"] = singleNavigation
         receipt["state"] = page.status
         receipt["failureDomain"] = page.failureDomain ?? ""
+        receipt["navigationPolicy"] = page.navigationPolicyObservation
+        receipt["localPolicyRejection"] = page.localPolicyRejection ?? ""
         receipt["initialHTTPStatus"] = page.initialHTTPStatus ?? 0
         receipt["initialResponseObserved"] = page.initialHTTPStatus != nil
         receipt["serverRedirectCount"] = page.serverRedirectCount
         if expectPolicyBlock {
-            XCTAssertEqual(page.failureDomain, "AdditionalTopLevelNavigation")
+            let expectedPolicy = environment["AEGIS_TEST_EXPECT_POLICY_REASON"] ?? "additional-top-level-navigation"
+            XCTAssertEqual(page.localPolicyRejection, expectedPolicy)
+            XCTAssertEqual(page.navigationPolicyObservation, expectedPolicy)
+            if expectedPolicy == "additional-top-level-navigation" {
+                XCTAssertEqual(page.failureDomain, "AdditionalTopLevelNavigation")
+            }
             XCTAssertEqual(page.status, "连接暂不可用")
         } else {
             XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")

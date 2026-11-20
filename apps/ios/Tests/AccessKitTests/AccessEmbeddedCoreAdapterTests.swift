@@ -219,8 +219,6 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         let diagnostics = AccessDiagnosticLog()
         defer { diagnostics.stop() }
         let firstCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
-        let secondCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
-        XCTAssertEqual(firstCapture.path, secondCapture.path)
         let config = try JSONSerialization.data(withJSONObject: [
             "log": ["loglevel": "info", "access": firstCapture.path, "error": firstCapture.path],
             "inbounds": [], "outbounds": [["protocol": "freedom"]]
@@ -228,10 +226,12 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         // Test-only local transport: no external target or product DIRECT fallback.
         let first = try AccessGoEmbeddedCore(isolated: true)
         let second = try AccessGoEmbeddedCore(isolated: true)
-        async let startFirst: Void = first.start(configData: config)
-        async let startSecond: Void = second.start(configData: config)
-        _ = try await (startFirst, startSecond)
         addTeardownBlock { await first.stop(); await second.stop() }
+        try await first.start(configData: config)
+        diagnostics.disableAndClear()
+        let secondCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
+        XCTAssertEqual(firstCapture.path, secondCapture.path)
+        try await second.start(configData: config)
         await second.stop()
         XCTAssertTrue(diagnostics.stop(capture: secondCapture))
         XCTAssertTrue(first.isRunning)

@@ -379,6 +379,12 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var retiringOwner: AccessTestNodePage?
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
+    private(set) var localPolicyRejection: String?
+    var navigationPolicyObservation: String {
+        if let localPolicyRejection { return localPolicyRejection }
+        if failureDomain == "WebKitErrorDomain", failureCode == 102 { return "policy-interruption-unattributed" }
+        return "no-local-rejection-observed"
+    }
     private(set) var httpStatus: Int?
     /// WebKit does not expose a redirect's HTTP status through its redirect callback.
     /// Keep the initial response unknown when it was not delivered to the response delegate.
@@ -568,6 +574,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             httpStatus = (response.response as? HTTPURLResponse)?.statusCode
             if !observedMainFrameResponse, serverRedirectCount == 0 { initialHTTPStatus = httpStatus }
             observedMainFrameResponse = true
+            if !response.canShowMIMEType { localPolicyRejection = "unsupported-mime-type" }
         }
         decisionHandler(response.canShowMIMEType ? .allow : .cancel)
     }
@@ -584,6 +591,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                 // commits, all further top-level actions are separate navigations.
                 let initialRedirect = !committedMainFrame && action.navigationType == .other
                 guard !sentMainFrame || initialRedirect else {
+                    localPolicyRejection = "additional-top-level-navigation"
                     decisionHandler(.cancel)
                     failureDomain = "AdditionalTopLevelNavigation"
                     failureCode = 1
@@ -594,6 +602,9 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             }
             let scheme = action.request.url?.scheme
             let allowed = scheme == "https" && !action.shouldPerformDownload
+            if !allowed, action.targetFrame?.isMainFrame == true {
+                localPolicyRejection = action.shouldPerformDownload ? "download-navigation" : "non-https-navigation"
+            }
             if allowed, action.targetFrame?.isMainFrame == true {
                 let continuesProvisional = !committedMainFrame && action.navigationType == .other
                 if sawMainFrameAction && !continuesProvisional {

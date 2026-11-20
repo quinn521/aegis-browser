@@ -208,11 +208,21 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         if let capture = sharedCapture,
-           queue.sync(execute: { captureID == capture.id && enabled }) {
+           queue.sync(execute: { captureID == capture.id && readerFD != nil }) {
             queue.sync {
                 self.secrets = Array(Set(self.secrets + secrets.filter { !$0.isEmpty }))
                 let safe = lines.compactMap(restoredLine)
                 if safe != lines { lines = safe; trimLocked(); dirty = true; scheduleSaveLocked() }
+                // Disabling ingestion does not release live cores' FIFO leases.
+                // Re-enable the same reader only after discarding bytes queued
+                // while logging was off; their old writers still own this path.
+                if level == .none {
+                    clearLocked(disable: true, completion: nil)
+                } else if !enabled && !failed {
+                    clearLocked(disable: false, completion: nil)
+                    minimumRank = Self.rank(level)
+                    enabled = true
+                }
             }
             let owner = Capture(id: UUID(), path: capture.path, level: capture.level)
             sharedOwners.insert(owner.id)
