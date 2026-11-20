@@ -2,7 +2,7 @@
 
 2026-11-20 · iOS、macOS 的设计决定。源码基线为 [fork main `c5b4257a`](https://github.com/quinn521/aegis-browser/tree/c5b4257a221b7d4434a113d2c13d870139b8d6fa)。本页给出下一次冻结修订的具体替换内容。修订 4 仍是当前机器检查采用的基线，产品准入和运行回执分别登记。
 
-[查看 iOS SDD](ios-app-inbound-sdd.zh-CN.md) · [查看 macOS SDD](macos-app-inbound-sdd.zh-CN.md) · [查看 Android 可行性评估](android-app-inbound-assessment.zh-CN.md)
+[查看三端 Options](app-access-options-sdd.zh-CN.md) · [查看 iOS SDD](ios-app-inbound-sdd.zh-CN.md) · [查看 macOS SDD](macos-app-inbound-sdd.zh-CN.md) · [查看 Android Options 与可行性评估](android-app-inbound-options-sdd.zh-CN.md)
 
 ## 路由范围与信任边界
 

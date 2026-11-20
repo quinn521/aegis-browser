@@ -15,6 +15,14 @@
 
 独立候选 `043e5651` 曾在模拟器完成真实内核和转发 5/5，包含两种入站的 HTTP/HTTPS 页面及带标记的跨源响应。该候选默认使用应用级 10808 端口。复审记录了 5 项 P1、8 项 P2、2 项 P3，其中包括旧文档结束前的端口所有权。历史回执保留其候选身份。当前 SDD 采用持有有效监听并完成退役的规则，多作用域并发不能以固定端口作为身份。[流量回执](https://github.com/gcsagroup/aegis-browser/issues/138#issuecomment-6968029114) · [复审与恢复记录](https://github.com/gcsagroup/aegis-browser/issues/183#issuecomment-6968024379)
 
+## iOS 原生 Options
+
+在原生“设置 → 隐私保护”提供 Access Options 入口，并从内部构建的当前网站面板进入所选 Profile。现有“隐藏地理位置服务”继续呈现订阅用量。iPhone 采用列表到详情的导航，iPad 的窗口各持一份草稿。Profile 详情提供本地协议选择器、端口模式、按需显示的指定端口输入、只读本次连接和 Apply/Discard。站点页面按精确顶层入口展示规则，打开单独顶层页时重新读取自己的规则。[原生设置入口](../../../apps/ios/AegisApp/BrowserSettings.swift) · [三端 Options 合同](app-access-options-sdd.zh-CN.md)
+
+Apply 在更换活动文档的 DataStore 前显示受影响标签和表单状态，让用户确认。取消或 Discard 不退役文档。普通与私密的草稿、显示状态、备份各有作用域。私密 v1 沿用已有文件导入/导出限制。两窗同时提交时只有一个 baseRevision 可以生效。冷启动和恢复导航均显示已提交选择及真实绑定结果。[完整 Options 合同与执行工单](https://github.com/gcsagroup/aegis-browser/issues/208)
+
+验收从真实设置入口开始，分别覆盖 iPhone、iPad 两窗、VoiceOver 和最大字体。验证直接命令、导入文件、恢复旧内部配置在受限包均无法激活。模拟器上的控件选中和已保存文本只验设置行为；协议成功需 O3 的两路收件和 O6 的适用真机记录。
+
 ## 绑定与退役
 
 1. 协调器冻结 tab、导航、顶层 host、普通/私密 scope、Profile 版本和授权 epoch，持有原操作时限。publisher 仅针对该快照准备候选。SOCKS 专属的不兼容可在绑定前触发独立 HTTP 准备。取消、授权失效和过期回调使操作作废。

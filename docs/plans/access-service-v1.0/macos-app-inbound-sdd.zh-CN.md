@@ -13,6 +13,14 @@
 | [登记与 BuildConfig](../../../apps/browser/overlay/chrome/browser/aegis/access/access_network_context_transport.cc)、[私有发布客户端](../../../apps/browser/overlay/chrome/browser/aegis/access/access_private_context_client.cc) | RegisterPreparedProxy 要求 HTTP 与非空本地凭据，私有发布也只编码 HTTP。BuildConfig 有独立的 account_config 及 private_routing 分支 | 登记按实际 transport、owner、partition、route group、registration、监听实例与代次校验。私有发布按同一字段编码。账户专用远端代理的 TLS、代理头和授权继续由账户路径持有 |
 | [Mojo 快照](../../../apps/browser/overlay/services/network/public/mojom/aegis_access_route_types.mojom)、[wire 解码](../../../apps/browser/overlay/services/network/aegis/access_route_wire.cc)、[登记表](../../../apps/browser/overlay/services/network/aegis/access_route_registry.cc) | wire 端点名为 AegisAccessHttpEndpoint，解码固定生成 HTTP scheme | 发布带明确协议和监听实例的受信端点，只认可目标合同的回环端点，未知版本/枚举拒绝。替换原本依赖本地凭据的复用判断，将协议与监听实例纳入不可变登记和连接隔离。renderer 不能自报路由所有者 |
 
+## macOS Access Options
+
+沿用内部 Debug/Alpha 的当前网站工具栏入口与受信页面 `chrome://aegis/access-options`。在“Profile → 本地入站”增加协议和端口偏好；常规、主题、Profile/自动切换、导入导出、日志及账号页面沿用 M5–M10。当前网站面板显示使用该规则的实际 Profile 和运输，Options 同时显示草稿、提交版本和当前发布状态。[既有 WebUI 与渠道设计](macos-access-options-sdd.zh-CN.md) · [三端 Options 合同](app-access-options-sdd.zh-CN.md)
+
+WebUI 消息携带草稿版本和操作 ID，Browser 侧的 Profile 服务逐操作检查 page/read/write/import/activate 权限，并将提交结果写回当前窗口。界面不能直接创建监听或恢复旧 endpoint。受限渠道通过直接 URL、消息或导入调用也必须遵循原生能力门。一个窗口 Apply 后另一个窗口的旧版本提交须显示冲突；重新打开可读取新版本，失败提交不得显示成功。[Profile 服务](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_service.cc) · [版本化存储](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_store.cc) · [已知冲突回执问题 #195](https://github.com/gcsagroup/aegis-browser/issues/195)
+
+验收从真实工具栏和直接 WebUI 两个入口进入，使用键盘及 VoiceOver 操作。分别验证自动、固定 HTTP、固定 SOCKS、指定端口被占用、Discard、重新打开及两窗口竞争。Apply 的实际成功同时关联浏览器选路和源站标记，配置已保存但端点不可用时显示具体原因。[平台 Options 执行工单 #209](https://github.com/gcsagroup/aegis-browser/issues/209)
+
 ## 发布、并发与失败
 
 1. Browser 捕获 Profile、StoragePartition、组、规则/身份/选路代次及 NetworkContext 实例。准备期按共同合同选择协议。监听所有权和授权状态无法确认时结束准备，保护意图继续生效。
