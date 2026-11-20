@@ -156,6 +156,26 @@ source_set("prefs") {
   ]
 }
 
+source_set("webpage_capture") {
+  sources = [
+    "webpage_capture.cc",
+    "webpage_capture.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/common:constants",
+    "//chrome/common:mojo_bindings",
+    "//components/lens:lens_mojo",
+    "//components/prefs",
+    "//content/public/browser",
+    "//mojo/public/cpp/bindings",
+    "//third_party/blink/public/common",
+    "//ui/gfx/geometry",
+    "//url",
+  ]
+}
+
 source_set("aegis") {
   sources = [
     "aegis_ai_control.cc",
@@ -192,13 +212,12 @@ source_set("aegis") {
     "summary_policy.h",
     "threat_feed_updater.cc",
     "threat_feed_updater.h",
-    "webpage_capture.cc",
-    "webpage_capture.h",
   ]
   public_deps = [
     ":download_prefs",
     ":prefs",
     ":profile_support",
+    ":webpage_capture",
   ]
   deps = [
     ":model_provider_policy",

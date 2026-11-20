@@ -346,3 +346,4 @@
 0346-handle-ocr-lookup-and-errors.patch
 0347-share-access-options-capability.patch
 0348-adapt-chromium-158-api-candidate-341.patch
+0349-fix-chromium-158-build-dependencies.patch

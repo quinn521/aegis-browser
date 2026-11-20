@@ -1,0 +1,97 @@
+From 89bbf1b7d5d23d70ed001db655685a128d00d396 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Fri, 20 Nov 2026 16:04:37 +0800
+Subject: [PATCH] Fix Chromium 158 WebUI and screenshot build dependencies
+
+---
+ chrome/browser/aegis/BUILD.gn                | 23 ++++++++++++++++++--
+ chrome/browser/ui/BUILD.gn                   |  1 +
+ chrome/browser/ui/toolbar/BUILD.gn           |  1 +
+ chrome/browser/ui/webui/aegis_agent/BUILD.gn |  2 +-
+ 4 files changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index a6fb6a98f32c7fe357c2208b25cb062a2612d0df..7e6b542401f425f602ffcd8de176aa3a8ed31d0e 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -155,6 +155,26 @@ source_set("prefs") {
+   ]
+ }
+ 
++source_set("webpage_capture") {
++  sources = [
++    "webpage_capture.cc",
++    "webpage_capture.h",
++  ]
++  deps = [
++    "//base",
++    "//chrome/browser/profiles:profile",
++    "//chrome/common:constants",
++    "//chrome/common:mojo_bindings",
++    "//components/lens:lens_mojo",
++    "//components/prefs",
++    "//content/public/browser",
++    "//mojo/public/cpp/bindings",
++    "//third_party/blink/public/common",
++    "//ui/gfx/geometry",
++    "//url",
++  ]
++}
++
+ source_set("aegis") {
+   sources = [
+     "aegis_ai_control.cc",
+@@ -191,13 +211,12 @@ source_set("aegis") {
+     "summary_policy.h",
+     "threat_feed_updater.cc",
+     "threat_feed_updater.h",
+-    "webpage_capture.cc",
+-    "webpage_capture.h",
+   ]
+   public_deps = [
+     ":download_prefs",
+     ":prefs",
+     ":profile_support",
++    ":webpage_capture",
+   ]
+   deps = [
+     ":model_provider_policy",
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+index 110b872cd42c33613c04f30b7b45f1937c8afbfc..a3bed8251f2c4fde8036277f2b5f354d594db255 100644
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -705,6 +705,7 @@ if (!is_android) {
+       "//chrome/browser:browser_process",
+       "//chrome/browser/actor/ui:actor_overlay",
+       "//chrome/browser/actor/ui:actor_overlay_web_view",
++      "//chrome/browser/aegis:webpage_capture",
+       "//chrome/browser/apps/app_service",
+       "//chrome/browser/bookmarks",
+       "//chrome/browser/browsing_data",
+diff --git a/chrome/browser/ui/toolbar/BUILD.gn b/chrome/browser/ui/toolbar/BUILD.gn
+index 8bea7e2766932ae657c8f7fd87e0eeb28795d150..82a5cedda3f1880827d3bb76ecff876c20711ce0 100644
+--- a/chrome/browser/ui/toolbar/BUILD.gn
++++ b/chrome/browser/ui/toolbar/BUILD.gn
+@@ -136,6 +136,7 @@ source_set("impl") {
+       "//chrome/browser:browser_process",
+       "//chrome/browser:defaults",
+       "//chrome/browser:global_features",
++      "//chrome/browser/aegis:webpage_capture",
+       "//chrome/browser/favicon",
+       "//chrome/browser/feedback",
+       "//chrome/browser/feedback:feedback_impl",
+diff --git a/chrome/browser/ui/webui/aegis_agent/BUILD.gn b/chrome/browser/ui/webui/aegis_agent/BUILD.gn
+index 895049e02e92417492042eacdaadc755006ec57d..a6d3b83fdd364a8a10635540fb05fc13eeb2c63b 100644
+--- a/chrome/browser/ui/webui/aegis_agent/BUILD.gn
++++ b/chrome/browser/ui/webui/aegis_agent/BUILD.gn
+@@ -35,9 +35,9 @@ source_set("impl") {
+     "reading_workspace.cc",
+     "reading_workspace.h",
+   ]
+-  public_deps = [ "//chrome/browser:browser_public_dependencies" ]
+   deps = [
+     ":aegis_agent",
++    "//chrome/browser:browser_process",
+     "//chrome/browser/aegis",
+     "//chrome/browser/aegis:agent_core",
+     "//chrome/browser/aegis:model_provider_policy",

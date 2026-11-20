@@ -47,3 +47,9 @@ GitHub CLI 的既有身份已具备仓库写权限，可读取 runner；连接�
 适配保留 158 的 Actor surface 身份、预取校验、CORS 预检句柄生命周期、DevTools 同文档权限重验和当前 GN 目标结构；移除的 tab_helpers 入口不恢复，现有防护、手势及页面增强在 TabFeatures 的初始化和页面重建入口保留。Actor 请求通过官方转换接口从授权标签取得 surface，并增加两种 ID 模式下的真实导航回归。设置页入口迁移到 Lit，同时保留 Aegis 分类卸载时清理监听器和子页的行为，新增分类切换回归；新版 Gin 绑定与窗口打开枚举一并适配。
 
 完整产品版本准备为 `7.4.0.341` / `Ver 7.4 (341)`，Android versionCode 为 `2007000341`，与打包默认值和两套补丁版本头保持一致。完整补丁 lineage、最终产品质量门、Mac GN/编译、浏览器与功能回归、最终独立复查和最终 SHA 的 CI 结果按后续收据登记；本段不宣称这些门槛已经通过。未执行签名、公证、安装、tag 或 Release。源码回退应通过保留的 157 基线和原邮件历史形成可审查的新候选，不直接覆盖用户安装或改写主线。
+
+### 本机 GN 适配补充
+
+首次真实 GN 检查发现 Agent WebUI 仍引用已移除的 `browser_public_dependencies`，两处截图入口缺少直接依赖，以及 Access Options 测试引用了 158 已限制可见性的 `Browser` 头文件。新增桌面 0523、Android 0349：WebUI 明确依赖 `browser_process`，截图实现拆为独立目标供入口引用；桌面测试使用 `BrowserWindowInterface`。现行 Chromium 序列为 523/349 项，原有补丁和失败记录保留。
+
+修复后的 macOS `gn gen --check` 已通过，生成 37,510 个目标；该诊断绑定原生前序 `773216cbe5647e754d971128905878e6970038ef` 与完整改动，随后提交为 `b4fc62e58db0ec4f7fabde1d87aa387bbafba59a`。编译和运行测试尚未开始；新候选的完整 lineage、质量门、独立复查及最终 SHA 的 CI 仍须另行核对。Android 本轮仅同步共用源码修复，不宣称 Android 编译或设备验收。

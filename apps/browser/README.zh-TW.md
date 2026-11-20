@@ -1,4 +1,4 @@
-> **2026-11-20 · Chromium 158 原始碼候選**：桌面 `158.0.8127.37`、Android `158.0.8127.42`，產品準備為 Ver 7.4 (341)。獨立 Chromium 序列為 522/348 項，兩套 V8 各 3 項；原始碼重播完成，原生建置、功能測試與最終複查仍待完成。見[整合記錄](../../docs/audit/upstream-feature-integration-2026-11-18.zh-CN.md)。
+> **2026-11-20 · Chromium 158 原始碼候選**：桌面 `158.0.8127.37`、Android `158.0.8127.42`，產品準備為 Ver 7.4 (341)。獨立 Chromium 序列為 523/349 項，兩套 V8 各 3 項；原始碼重播完成，原生建置、功能測試與最終複查仍待完成。見[整合記錄](../../docs/audit/upstream-feature-integration-2026-11-18.zh-CN.md)。
 
 [English](./README.md) | [简体中文](./README.zh-CN.md) | [**繁體中文**](./README.zh-TW.md)
 

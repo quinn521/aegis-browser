@@ -1,4 +1,4 @@
-> **2026-11-20 · Chromium 158 source candidate** — Desktop `158.0.8127.37`, Android `158.0.8127.42`, product Ver 7.4 (341). The independent Chromium series contain 522/348 patches, with three V8 patches each. Source replay is complete; native build, feature tests and final review remain pending. See the [integration record](../../docs/audit/upstream-feature-integration-2026-11-18.zh-CN.md).
+> **2026-11-20 · Chromium 158 source candidate** — Desktop `158.0.8127.37`, Android `158.0.8127.42`, product Ver 7.4 (341). The independent Chromium series contain 523/349 patches, with three V8 patches each. Source replay is complete; native build, feature tests and final review remain pending. See the [integration record](../../docs/audit/upstream-feature-integration-2026-11-18.zh-CN.md).
 
 > **2026-11-15 · 主线额度功能整合候选**　准备 Ver 7.1 (314)，桌面 `157.0.8103.79`、Android `157.0.8103.78`。保留既有功能，并纳入已合入主线的额度显示、刷新和代理开启后重载。当前只完成源码准备，完整构建、原生验收及正式发行仍待完成。详见[本轮说明](../../docs/audit/upstream-quota-integration-2026-11-15.zh-CN.md)。
 
