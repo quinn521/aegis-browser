@@ -21,6 +21,24 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         )
     }
 
+    func testLocalSOCKSPort1080CannotRestoreRotateOrStart() throws {
+        let legacy = try makeRegistration(port: 1080)
+        XCTAssertFalse(legacy.isActive(at: Date(timeIntervalSince1970: 1_700_000_000), observedGeneration: 1))
+        XCTAssertThrowsError(try AccessSOCKS5InboundListener(registration: legacy))
+        XCTAssertThrowsError(try JSONDecoder().decode(AccessRegistration.self, from: JSONEncoder().encode(legacy)))
+        XCTAssertThrowsError(try AccessProxyRegistrationFixture(registrationId: "legacy", dataStoreKind: .ordinary,
+            transport: .socks5, loopbackHost: "127.0.0.1", port: 1080, isActive: true))
+        let admitted = try makeRegistration(port: 10806)
+        XCTAssertTrue(admitted.hasAdmittedEndpoint)
+        XCTAssertNoThrow(try JSONDecoder().decode(AccessRegistration.self, from: JSONEncoder().encode(admitted)))
+        XCTAssertThrowsError(try admitted.rotated(id: AccessRegistrationID("next"),
+            endpoint: AccessEndpoint(host: "127.0.0.1", port: 1080),
+            credentialSlot: admitted.credentialSlot,
+            lease: AccessLease(generation: 2, expiresAt: Date(timeIntervalSince1970: 1_700_000_120))))
+        XCTAssertTrue(try makeRegistration(transport: .http, port: 1080).hasAdmittedEndpoint)
+        XCTAssertNoThrow(try AccessSOCKS5ConnectRequest(address: .domain("example.com"), port: 1080))
+    }
+
     func testParserNoAuthGreetingAndConnect() throws {
         let greeting = Data([0x05, 0x01, 0x00])
         let methodReply = try XCTUnwrap(try AccessSOCKS5InboundParser.parseGreeting(buffer: greeting))

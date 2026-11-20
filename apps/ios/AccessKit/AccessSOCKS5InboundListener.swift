@@ -28,6 +28,9 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         guard registration.transport == .socks5 else {
             throw AccessSOCKS5InboundError.transportNotSOCKS5(registration.transport)
         }
+        guard registration.hasAdmittedEndpoint else {
+            throw AccessSOCKS5InboundError.bindFailed("inadmissible local SOCKS5 port")
+        }
         self.registration = registration
         self.queue = DispatchQueue(label: "accesskit.socks5.inbound.\(registration.id.rawValue)")
     }
@@ -61,7 +64,7 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         }
 
         let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
+        parameters.allowLocalEndpointReuse = false
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host),
             port: nwPort
@@ -89,6 +92,12 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         } catch is CancellationError {
             nwListener.cancel()
             throw AccessSOCKS5InboundError.bindFailed("listener start cancelled")
+        }
+
+        guard let actualPort = nwListener.port?.rawValue,
+              actualPort == registration.endpoint.port, actualPort != 0, actualPort != 1080 else {
+            nwListener.cancel()
+            throw AccessSOCKS5InboundError.bindFailed("listener port differs from admitted registration")
         }
 
         let installed = gate.withLock { state -> Bool in
