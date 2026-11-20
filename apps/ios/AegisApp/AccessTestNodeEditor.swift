@@ -324,6 +324,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var retiringOwner: AccessTestNodePage?
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
+    private(set) var httpStatus: Int?
     private let singleNavigation: Bool
     private var sentMainFrame = false
     private var closed = false
@@ -467,6 +468,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         decisionHandler(response.canShowMIMEType ? .allow : .cancel)
     }
 

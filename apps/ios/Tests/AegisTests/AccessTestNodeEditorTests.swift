@@ -334,6 +334,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             record["dataset"] = digest
             record["device"] = "ios-device-2d62695fc7"
             record["bundle"] = Bundle.main.bundleIdentifier
+            record["sourceSHA"] = env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown"
+            record["os"] = ProcessInfo.processInfo.operatingSystemVersionString
             record["time"] = Date().timeIntervalSince1970
             var bytes = try JSONSerialization.data(withJSONObject: record, options: .sortedKeys)
             bytes.append(10)
@@ -344,6 +346,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
+        var preparationFailures = 0
         for host in hosts where !reserved.contains(host) {
             let attempt = UUID().uuidString
             try append(["event":"reserved", "host":host, "attempt":attempt])
@@ -356,15 +359,22 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             while page.status == "正在加载", Date() < deadline {
                 try await Task.sleep(for: .milliseconds(100))
             }
+            let timedOut = page.status == "正在加载"
+            let content = try? await page.webView?.evaluateJavaScript("document.documentElement.innerHTML") as? String
+            let bodyDigest = content.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() } ?? ""
             try append(["event":"result", "host":host, "attempt":attempt,
-                        "state":page.status, "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
+                        "state":timedOut ? "timeout" : page.status,
+                        "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
+                        "httpStatus":page.httpStatus ?? 0, "bodySHA256":bodyDigest,
                         "endpoint":page.endpoint?.identity ?? "", "generation":page.endpoint?.generation ?? 0,
                         "actualProtocol":"http"])
+            preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
             page.close()
             let stopDeadline = Date().addingTimeInterval(5)
             while page.endpoint != nil, Date() < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
             page.webView?.removeFromSuperview()
             guard page.endpoint == nil else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
+            guard preparationFailures < 3 else { XCTFail("Repeated preparation failures; campaign stopped"); return }
         }
 #endif
     }
