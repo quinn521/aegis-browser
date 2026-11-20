@@ -573,7 +573,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { page.close(); window.isHidden = true }
         let deadline = Date().addingTimeInterval(30)
-        while page.status == "正在加载", Date() < deadline {
+        let expectedPath = environment["AEGIS_TEST_EXPECT_FINAL_PATH"]
+        while (page.status == "正在加载" || expectedPath.map { webView.url?.path != $0 } == true), Date() < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
         if singleNavigation { try await Task.sleep(for: .seconds(1)) }
@@ -590,6 +591,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
             XCTAssertNotNil(page.endpoint)
             XCTAssertEqual(page.httpStatus, 200)
+            if let expectedPath { XCTAssertEqual(webView.url?.path, expectedPath) }
             let nonce = try XCTUnwrap(receipt["nonce"] as? String)
             XCTAssertFalse(nonce.isEmpty)
             let containsNonce = try await webView.callAsyncJavaScript(
