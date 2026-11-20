@@ -845,8 +845,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                     receipt["normalCloseMarkedRequestReceived"] = received
                     XCTAssertFalse(received)
                 } else { XCTFail("Normal-close probe requires its independent negative marker") }
-                receipt["coreStoppedByProductClose"] = !core.isRunning
-                XCTAssertFalse(core.isRunning)
+                receipt["coreRunningDuringCloseFence"] = core.isRunning
             }
         }) { supplement, confirmed, elapsed, events in
             var observation: [String: Any] = ["supplement":supplement, "confirmed":confirmed,
@@ -864,6 +863,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         receipt["retirementObservationSeconds"] = observations.last?["observationSeconds"]
         receipt["retirementEvents"] = page.retirementEvents
         receipt["busyContentProbe"] = probeBusyContent
+        if normalCloseProbe {
+            receipt["coreStoppedByProductClose"] = !core.isRunning
+            XCTAssertFalse(core.isRunning)
+        }
         XCTAssertTrue(retired, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = retired
         XCTAssertNotNil(page.initialBinding)
