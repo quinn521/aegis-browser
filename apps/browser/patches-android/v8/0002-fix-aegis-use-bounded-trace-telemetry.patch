@@ -1,4 +1,4 @@
-From ca4646f2e45f3f06f7b7a937cd73396fcd2cae66 Mon Sep 17 00:00:00 2001
+From 410b927d2a6773eaf21faefcf85e8398f3e500b1 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Wed, 7 Oct 2026 02:06:28 +0800
 Subject: [PATCH] =?UTF-8?q?=E9=80=82=E9=85=8D=20Chromium=20155=EF=BC=9A000?=
@@ -81,7 +81,7 @@ index d42637ce3a94129e4166a17db69daa4ead71df9b..103e690a65cf109bcf034e199a104f8a
  
  }  // namespace interpreter
 diff --git a/src/tracing/trace-categories.h b/src/tracing/trace-categories.h
-index 26a89e5675537ac4b678e8592a8508d604bd1a68..3730c228feea94e79e42ce015ce98313700060b6 100644
+index 20334836ad5d06cf11ff17867b90ea55e439d4da..35c6d99378288cf2624b2bd236aa1b8113543cb4 100644
 --- a/src/tracing/trace-categories.h
 +++ b/src/tracing/trace-categories.h
 @@ -34,6 +34,9 @@ PERFETTO_DEFINE_CATEGORIES_IN_NAMESPACE_WITH_ATTRS(
@@ -95,5 +95,5 @@ index 26a89e5675537ac4b678e8592a8508d604bd1a68..3730c228feea94e79e42ce015ce98313
      perfetto::Category(TRACE_DISABLED_BY_DEFAULT("v8.cpu_profiler"))
          .SetTags("slow"),
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

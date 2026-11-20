@@ -1,4 +1,4 @@
-From bce3f0cf28db99765c05d557a69dbf4f29cf5c64 Mon Sep 17 00:00:00 2001
+From abf5bec46a6db2f1757d71efc6dfa9472df11ad0 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Wed, 2 Sep 2026 21:40:45 +0800
 Subject: [PATCH] fix(aegis): reject redundant entry navigation
@@ -123,5 +123,5 @@ index f82cfc187055fcd84015d2d40d12ad92132d3863..27af268719d0b31b0b19b31eab614cb7
    ASSERT_TRUE(catalog);
    ASSERT_EQ(catalog->size(), 3u);
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

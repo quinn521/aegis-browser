@@ -1,4 +1,4 @@
-From 9dea626143407c58d72fcc0fcd83e989f5ac0251 Mon Sep 17 00:00:00 2001
+From f670a1f3ce0c71f576210b6430fbd1fd05f33b67 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sat, 29 Aug 2026 16:34:59 +0800
 Subject: [PATCH] feat(aegis): open task pages automatically
@@ -437,5 +437,5 @@ index 0da7b17209cc8f797a49c67a1b9efa451b07b2e0..0b03d6a49e229f4c82076bc908e182f8
    add("provider", "Model", "模型", "模型");
    add("budget", "Budget", "预算", "預算");
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From e04d22334194759ba5752f896542400c24ef6f9b Mon Sep 17 00:00:00 2001
+From 29ddb7ff40220392bec62900d5054ff5b882b4bf Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 3 Sep 2026 00:15:29 +0800
 Subject: [PATCH] fix(aegis): use product logo in agent UI
@@ -111,5 +111,5 @@ index 0000000000000000000000000000000000000000..4bb68d7322f63c4e274ca3dd8833663f
 +  </g>
 +</svg>
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

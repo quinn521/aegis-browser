@@ -1,4 +1,4 @@
-From ba30d244c1512bd241c3cdc97701656f78cddbca Mon Sep 17 00:00:00 2001
+From e251b4e67e6fb40506ab83947adaccc619df0800 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Wed, 16 Sep 2026 16:20:45 +0800
 Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=EF=BC=9A=E4=B8=8B=E8=BD=BD?=
@@ -109,5 +109,5 @@ index 090751bd070c652eb2d80a1ca6b7acccd8573195..aabc99beb11ffc89377708d1e044a79e
        AgentCompletionHasRequiredPageEvidence("compare", scope, evidence));
    evidence.back().result.value.Set("url", "https://outside.example/");
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

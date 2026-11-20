@@ -1,4 +1,4 @@
-From 7ab96e434e24211f5bacdd4c8e80dc25501f6dea Mon Sep 17 00:00:00 2001
+From 473977719f881c7cbe6e603d591737fcf7ebad3b Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Mon, 24 Aug 2026 21:11:56 +0800
 Subject: [PATCH] fix: preserve initial blank ownership across hash navigation
@@ -10,10 +10,10 @@ Subject: [PATCH] fix: preserve initial blank ownership across hash navigation
  3 files changed, 13 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index 81da5856e4d426af3404410a3573e37ca8fd20fd..1a4889291a6e143a0f2bb7e6e1469c3bb26bf71b 100644
+index d412acb1498949fb0ab7234ccb09bccbf411863b..b57ceafc34ac524b0ab2fb49053e675fd4a50fbb 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-@@ -784,6 +784,17 @@ IN_PROC_BROWSER_TEST_F(AegisRemoteDevToolsProtocolTest,
+@@ -793,6 +793,17 @@ IN_PROC_BROWSER_TEST_F(AegisRemoteDevToolsProtocolTest,
    const std::string* target_id = create_result->FindString("targetId");
    ASSERT_TRUE(target_id);
  
@@ -45,10 +45,10 @@ index fd5cbd9a9987dc44771a68b1d8d4559fe73ef9ea..f8a34c5276c328609f798834f1b20320
           target->GetType() == DevToolsAgentHost::kTypeTab);
      const WeakDocumentPtr target_document =
 diff --git a/content/browser/devtools/render_frame_devtools_agent_host.cc b/content/browser/devtools/render_frame_devtools_agent_host.cc
-index 6ead35ff839ad76f01c0ed5342b47e7c8f9dd2f8..130fe6c2401ec711081530ee1cc7ebe45fa898a6 100644
+index ca387ba37550ad03626769231d3b281ed545d492..f1dccd6c3e604e10dac52eecadf74bf068018826 100644
 --- a/content/browser/devtools/render_frame_devtools_agent_host.cc
 +++ b/content/browser/devtools/render_frame_devtools_agent_host.cc
-@@ -1191,8 +1191,7 @@ bool RenderFrameDevToolsAgentHost::ShouldAllowSession(
+@@ -1223,8 +1223,7 @@ bool RenderFrameDevToolsAgentHost::ShouldAllowSession(
      return true;
    }
    const bool is_initial_blank_target =
@@ -59,5 +59,5 @@ index 6ead35ff839ad76f01c0ed5342b47e7c8f9dd2f8..130fe6c2401ec711081530ee1cc7ebe4
         agent_host->GetType() == DevToolsAgentHost::kTypeTab);
    if (is_initial_blank_target &&
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

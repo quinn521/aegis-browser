@@ -1,9 +1,20 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From b9a0ba8876d7a3c511b6dde62daa234785a1ad0a Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 03:30:00 +0800
-Subject: [PATCH] 在本地文件成功载入后自动预览 Markdown，修复首次拖放
+Subject: [PATCH] =?UTF-8?q?=E5=9C=A8=E6=9C=AC=E5=9C=B0=E6=96=87=E4=BB=B6?=
+ =?UTF-8?q?=E6=88=90=E5=8A=9F=E8=BD=BD=E5=85=A5=E5=90=8E=E8=87=AA=E5=8A=A8?=
+ =?UTF-8?q?=E9=A2=84=E8=A7=88=20Markdown=EF=BC=8C=E4=BF=AE=E5=A4=8D?=
+ =?UTF-8?q?=E9=A6=96=E6=AC=A1=E6=8B=96=E6=94=BE?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 ---
+ .../enhancements/enhancement_browsertest.cc   | 78 +++++++++++++++++++
+ .../enhancements/enhancement_tab_helper.cc    | 25 +++---
+ .../ui/webui/help/aegis_github_update.h       |  4 +-
+ 3 files changed, 95 insertions(+), 12 deletions(-)
+
 diff --git a/chrome/browser/aegis/enhancements/enhancement_browsertest.cc b/chrome/browser/aegis/enhancements/enhancement_browsertest.cc
 index 4835f62798288b31ef212182c2dd1c1c70445c1d..4d3aa2342e310c53f048c200f412a1c4e02bd00a 100644
 --- a/chrome/browser/aegis/enhancements/enhancement_browsertest.cc
@@ -187,3 +198,6 @@ index 892b5f0e24c38374aabf5a59802607327cdf8492..0fb42c8fed1b6a23e339a43f251db3e2
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

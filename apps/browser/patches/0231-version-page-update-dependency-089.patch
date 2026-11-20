@@ -1,4 +1,4 @@
-From 27f8d2b244e2375b96fd27b2fbc07a7d27347dc4 Mon Sep 17 00:00:00 2001
+From 17e2173f424ac497d86f32fabe9ac1a2b6985a35 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Wed, 30 Sep 2026 19:29:47 +0800
 Subject: [PATCH] =?UTF-8?q?=E8=A1=A5=E9=BD=90=E7=89=88=E6=9C=AC=E9=A1=B5?=
@@ -29,7 +29,7 @@ index 20dadd0051e3c1774a0f3f85faafc9d8e4098d2c..83d7fe74523d6efeb37fd1f2e3b23e0e
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 diff --git a/chrome/browser/ui/webui/version/BUILD.gn b/chrome/browser/ui/webui/version/BUILD.gn
-index 8c207f69b19c3c55ce8163d1271f28ab16959669..7fa96369f554919e6db3c13fbdd7da7f3fe9e944 100644
+index f1524d17dbfa4c065ffc9c79ad80a9fe2fea97fa..cf812108ad9dff2891242d94d46566bc34b23921 100644
 --- a/chrome/browser/ui/webui/version/BUILD.gn
 +++ b/chrome/browser/ui/webui/version/BUILD.gn
 @@ -34,6 +34,10 @@ source_set("version") {
@@ -44,5 +44,5 @@ index 8c207f69b19c3c55ce8163d1271f28ab16959669..7fa96369f554919e6db3c13fbdd7da7f
      if (use_lld) {
        defines = [ "CHROMIUM_LINKER_NAME=\"lld\"" ]
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

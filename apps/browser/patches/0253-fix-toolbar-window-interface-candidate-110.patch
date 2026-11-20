@@ -1,4 +1,4 @@
-From 93cbfbc124b84c2519c2ccf7c6ffc3b5e81ffe67 Mon Sep 17 00:00:00 2001
+From 6b2664f60075977326ec6768b5b384a4d18419a7 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 6 Oct 2026 16:46:30 +0800
 Subject: [PATCH] =?UTF-8?q?=E9=80=82=E9=85=8D=20Chromium=20154=20=E5=B7=A5?=
@@ -182,5 +182,5 @@ index cf6aa3125d18310669e1d11a6d4c2829c195dde8..b2c99912fd9640351280afd88d701862
    base::WeakPtr<content::WebContents> web_contents_;
    raw_ptr<aegis::AegisService> observed_service_ = nullptr;
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

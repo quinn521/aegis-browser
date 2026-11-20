@@ -1,4 +1,4 @@
-From dd4fa6e1109b211f59bac8b199debaa3f5309ad4 Mon Sep 17 00:00:00 2001
+From e6f4fe4c780c339923333d00c5327380937c4973 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 15 Sep 2026 07:29:15 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=9B=B4=E6=96=B0V8=E8=B7=A8=E9=85=8D=E7=BD=AE?=
@@ -31,12 +31,12 @@ index f818303294cdfc4346630e167ae0141547670a4c..105d73ab36b63944514ffa3dbcc1010a
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 diff --git a/v8 b/v8
-index 29666f90c3856a29ef669953d1325806e0f3d0b8..3b06172148cb194ea13bacd999adf6ed86ea2212 160000
+index 4a52f0b0f2ccad7b488acba664894fc75fafc5a7..2d7b7dddb842f110f63370a4cce89f27d43a8035 160000
 --- a/v8
 +++ b/v8
 @@ -1 +1 @@
--Subproject commit 29666f90c3856a29ef669953d1325806e0f3d0b8
-+Subproject commit 3b06172148cb194ea13bacd999adf6ed86ea2212
+-Subproject commit 4a52f0b0f2ccad7b488acba664894fc75fafc5a7
++Subproject commit 2d7b7dddb842f110f63370a4cce89f27d43a8035
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

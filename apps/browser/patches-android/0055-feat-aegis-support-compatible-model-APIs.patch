@@ -1,4 +1,4 @@
-From 2d99dacc05ece2b569d1f370005673617e3b3f2b Mon Sep 17 00:00:00 2001
+From 5d7cbc4a2618fd0f70bc74fc621dbf44f8795861 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 27 Aug 2026 18:46:48 +0800
 Subject: [PATCH] feat(aegis): support compatible model APIs
@@ -4602,5 +4602,5 @@ index e402c6b71d4623d09a241cb5e8b7076095452731..5a3e39c56783ea48cc148953746da182
  inline constexpr char kOllamaModel[] = "aegis.ollama_model";
  inline constexpr char kAiControlEnabled[] = "aegis.ai_control_enabled";
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

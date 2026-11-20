@@ -1,0 +1,33 @@
+From 991840808cce9a6dc0e596a91052411309530a25 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 21:03:00 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E6=AD=A3=20Android=20=E5=8E=9F?=
+ =?UTF-8?q?=E7=94=9F=E6=B5=8B=E8=AF=95=E6=94=AF=E6=8C=81=E7=9B=AE=E6=A0=87?=
+ =?UTF-8?q?=E7=9A=84=E5=8F=AF=E8=A7=81=E6=80=A7?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Android 测试模板会在同一构建文件生成共享库、JNI、APK 和依赖校验目标。
+仅在 Android 中允许本文件的目标访问，继续由 testonly 禁止产品代码依赖。
+---
+ components/aegis_access/BUILD.gn | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
+index 01b0f6a6f2e3e96f867b981f96ef2f043c322c1f..05cc690b6d5301b79ffc9c1ce11c10e5ee269b38 100644
+--- a/components/aegis_access/BUILD.gn
++++ b/components/aegis_access/BUILD.gn
+@@ -273,4 +273,9 @@ source_set("request_ownership_registry_test_support") {
+     ":request_dispatch_gate_unittests",
+     ":request_ownership_registry_unittests",
+   ]
++  if (is_android) {
++    # Android 测试模板在本文件生成多层内部目标；testonly
++    # 继续禁止产品依赖。
++    visibility += [ ":*" ]
++  }
+ }
+-- 
+2.54.0 (Apple Git-157)
+

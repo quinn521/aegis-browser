@@ -1,4 +1,4 @@
-From cbb134d98be1decf5dd068ff1c8cdf0e40e20122 Mon Sep 17 00:00:00 2001
+From 3a87081bae16d226005bc27a5d042735545ae0d3 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 6 Oct 2026 17:43:08 +0800
 Subject: [PATCH] =?UTF-8?q?test:=20=E9=80=82=E9=85=8D=E8=BF=9C=E7=A8=8B?=
@@ -56,10 +56,10 @@ index 1d4a929ca49e3b431abfa932b6dd19fcefcedab1..ba932cbb41eea8a4f515173375295260
    SidePanelUI* side_panel = browser()->GetFeatures().side_panel_ui();
    ASSERT_TRUE(side_panel);
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index cf461026822509cd23325090aee49c562bc6f126..ae3d3cc97e28b2731052f49d73fffd1de0c598fa 100644
+index 36fc355478e0242d65739a42ad10f1c7cb95a568..e066d80f2748f29475301935c7e6eb0154ba482e 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-@@ -485,7 +485,7 @@ class AegisOtherRemoteDevToolsProtocolClient
+@@ -494,7 +494,7 @@ class AegisOtherRemoteDevToolsProtocolClient
  
  IN_PROC_BROWSER_TEST_F(AegisRemoteDevToolsProtocolTest,
                         AegisRemoteCreationCanClaimUncommittedInitialDocument) {
@@ -68,7 +68,7 @@ index cf461026822509cd23325090aee49c562bc6f126..ae3d3cc97e28b2731052f49d73fffd1d
    create_params.desired_renderer_state =
        content::WebContents::CreateParams::kInitializeAndWarmupRendererProcess;
    auto created_contents_owner = content::WebContents::Create(create_params);
-@@ -544,7 +544,7 @@ IN_PROC_BROWSER_TEST_F(AegisRemoteDevToolsProtocolTest,
+@@ -553,7 +553,7 @@ IN_PROC_BROWSER_TEST_F(AegisRemoteDevToolsProtocolTest,
    EXPECT_TRUE(found_http_target);
    EXPECT_FALSE(found_internal_target);
  
@@ -78,5 +78,5 @@ index cf461026822509cd23325090aee49c562bc6f126..ae3d3cc97e28b2731052f49d73fffd1d
                                 base::DictValue().Set("windowId", window_id)));
    ASSERT_TRUE(error());
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

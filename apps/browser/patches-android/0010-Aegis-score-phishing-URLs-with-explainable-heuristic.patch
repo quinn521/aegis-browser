@@ -1,4 +1,4 @@
-From 5afb74eae91e14cf215c99056545a85381ca039d Mon Sep 17 00:00:00 2001
+From 3aa65a3bacc1a9dda87d29a9145ee1895f4b09f8 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Thu, 13 Aug 2026 05:25:25 +0800
 Subject: [PATCH] Aegis: score phishing URLs with explainable heuristics
@@ -525,5 +525,5 @@ index 0000000000000000000000000000000000000000..c4d97a08ac714807e62c8caf941a906a
 +
 +#endif  // CHROME_COMMON_AEGIS_PHISH_SCORE_H_
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

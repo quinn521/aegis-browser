@@ -1,4 +1,4 @@
-From 91669119daee13c129e48a0f75306b97111d12a5 Mon Sep 17 00:00:00 2001
+From 0514f0c339e16bff5314b9854c34981b77824b82 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sat, 5 Sep 2026 03:45:16 +0800
 Subject: [PATCH] fix(agent): wait for native download verification
@@ -275,5 +275,5 @@ index 42f248dbe325b82e2d39aafdfe606cb5d80f232e..cb7f58424225845ffcfe6bfbe9976237
    if (name == "download.open") {
      return "Hand a verified Agent-owned download to the user to open.";
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

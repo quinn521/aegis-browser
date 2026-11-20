@@ -1,0 +1,52 @@
+From 59ca7e327fd30ff55c04770755097ae483b003a6 Mon Sep 17 00:00:00 2001
+From: Aegis Upstream <aegis-upstream@example.invalid>
+Date: Mon, 9 Nov 2026 16:20:10 +0800
+Subject: [PATCH] =?UTF-8?q?=E6=8E=A5=E9=80=9A=E5=8F=8C=E8=B7=B3TLS?=
+ =?UTF-8?q?=E5=8E=9F=E7=94=9F=E5=9B=9E=E5=BD=92=E5=85=A5=E5=8F=A3=E5=B9=B6?=
+ =?UTF-8?q?=E9=80=92=E5=A2=9E308?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ chrome/browser/aegis/BUILD.gn                      | 8 ++++++++
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index b4dfe72b6cde081c2f1bb3026ec67ec6220791ca..17efd0d17d274fe8e84dfbabeb06a02e9171c369 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -4,6 +4,14 @@
+ import("//testing/libfuzzer/fuzzer_test.gni")
+ import("//testing/test.gni")
+ 
++if (is_mac) {
++  # 将独立的传输回归纳入默认构建图，固定输出可直接构建并运行它。
++  group("transport_unittests") {
++    testonly = true
++    deps = [ "proxy:p01_transport_unittests" ]
++  }
++}
++
+ source_set("model_provider_policy") {
+   sources = [
+     "model_provider_policy.cc",
+diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
+index 1dc400c6361dcbd0827510468865c6775a7c3be7..7c65aa78aa6b1c801017fcd358a7394f7c2ae1c0 100644
+--- a/chrome/browser/ui/webui/help/aegis_github_update.h
++++ b/chrome/browser/ui/webui/help/aegis_github_update.h
+@@ -21,8 +21,8 @@ class SimpleURLLoader;
+ 
+ namespace aegis {
+ // 产品版本独立于 Chromium 内核版本；发布 tag 使用对应产品版本。
+-inline constexpr char kProductVersion[] = "6.1.0.307";
+-inline constexpr char kProductVersionLabel[] = "Ver 6.1 (307)";
++inline constexpr char kProductVersion[] = "6.1.0.308";
++inline constexpr char kProductVersionLabel[] = "Ver 6.1 (308)";
+ inline constexpr char kReleaseAPI[] =
+     "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
+ inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

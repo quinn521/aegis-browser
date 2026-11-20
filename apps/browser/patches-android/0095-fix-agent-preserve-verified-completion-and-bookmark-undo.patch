@@ -1,4 +1,4 @@
-From df4efda340bb541df275f07a19680801e16011f4 Mon Sep 17 00:00:00 2001
+From ca26bc018416909e3e3ca22d744dfe409e9f5b7f Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Fri, 4 Sep 2026 02:55:19 +0800
 Subject: [PATCH] fix(agent): preserve verified completion and bookmark undo
@@ -288,5 +288,5 @@ index 89ce65e2a746ae15d456da92259107672d1a9463..1665b1fe93b81103291423243cfa95fd
    AgentToolRegistry registry;
    std::string error;
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

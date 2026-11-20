@@ -1,4 +1,4 @@
-From 4fb1239cf0935e8b312bb5aeac4d073750f9047e Mon Sep 17 00:00:00 2001
+From 57e1c1cf1023ebfef4b885f640e867871fffb280 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Fri, 28 Aug 2026 18:30:22 +0800
 Subject: [PATCH] feat(aegis): add policy-brokered browser agent core
@@ -16812,5 +16812,5 @@ index 5a3e39c56783ea48cc148953746da1822bfb5820..a3e7fba5b34257449b5b39ffd4b692da
  inline constexpr char kAwarenessIntroShown[] = "aegis.awareness_intro_shown";
  inline constexpr char kTorrentDisclosureAcknowledged[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

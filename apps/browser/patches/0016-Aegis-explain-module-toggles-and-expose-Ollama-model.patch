@@ -1,4 +1,4 @@
-From 01bf422edbfcb7c3abe87a3224b878d5ed683a88 Mon Sep 17 00:00:00 2001
+From 6a66d90e66dcb75b114d0e83f633fc6b4d031829 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Thu, 13 Aug 2026 18:46:02 +0800
 Subject: [PATCH] Aegis: explain module toggles and expose Ollama model
@@ -921,5 +921,5 @@ index a18deb434dc573ad3dd49bb92dc441772354124b..a9668fbb2a85f46b1cb9a6c5cb04e6fe
    base::WeakPtrFactory<AegisUIHandler> weak_factory_{this};
  };
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

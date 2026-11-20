@@ -1,4 +1,4 @@
-From b09c82ca0a7f4263495a0fa1501aaf950fc894c6 Mon Sep 17 00:00:00 2001
+From e9f5cdfd5320b6b00409588df306dd3ebcee6159 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Wed, 2 Sep 2026 16:56:03 +0800
 Subject: [PATCH] fix(aegis): harden current-page Qwen planning
@@ -217,5 +217,5 @@ index 738f2448dbb3e53e24ea3578b3eb43d0e056143d..5daa9c00688fc12921c19827502e7592
  }
  
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From 0fb00c8e955c3e8e8522a8a43c4c30a90812324b Mon Sep 17 00:00:00 2001
+From 23c83626d261ebd5ebc3c3a10b684daccba0f554 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Sun, 11 Oct 2026 07:01:00 +0800
 Subject: [PATCH] fix(mac): validate pinned GCSA distribution signing category
@@ -151,5 +151,5 @@ index c03153f92c21bb44fc32865f34419fd59c89b9a2..0e132eddd9b0cff64c3a0833516f78a4
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

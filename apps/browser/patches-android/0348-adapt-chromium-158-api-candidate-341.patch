@@ -1,0 +1,396 @@
+From 4661388fceeb4caad219add9236cbd31b17abcd7 Mon Sep 17 00:00:00 2001
+From: Aegis integration <aegis@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 14:21:06 +0800
+Subject: [PATCH] build: adapt Chromium 158 actor APIs and prepare candidate
+ 341
+
+---
+ chrome/browser/aegis/BUILD.gn                 |  2 +
+ ...proxying_url_loader_factory_browsertest.cc |  2 +-
+ .../aegis/aegis_ui_handler_unittest.cc        |  2 +-
+ .../browser/aegis/agent/aegis_actor_bridge.cc | 52 +++++++------
+ .../aegis/agent/aegis_agent_browsertest.cc    | 74 +++++++++++++++++++
+ .../gestures/gesture_interactive_uitest.cc    |  2 +-
+ .../protocol/devtools_protocol_browsertest.cc |  2 +-
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  4 +-
+ .../ui/webui/help/aegis_github_update.h       |  4 +-
+ 9 files changed, 114 insertions(+), 30 deletions(-)
+
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index bdff2c60c21c97f710c98c092f65ad0e597eaf88..a6fb6a98f32c7fe357c2208b25cb062a2612d0df 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -322,6 +322,7 @@ if (!is_android) {
+       "//base/test:test_support",
+       "//build:chromeos_buildflags",
+       "//chrome/browser:browser_process",
++      "//chrome/browser/actor",
+       "//chrome/browser/aegis/access:access_browser_request_adapter",
+       "//chrome/browser/aegis/access:access_identity_generation_source",
+       "//chrome/browser/aegis/access:access_network_context_transport",
+@@ -351,6 +352,7 @@ if (!is_android) {
+       "//chrome/common/aegis",
+       "//chrome/test:test_support",
+       "//chrome/test:test_support_ui",
++      "//components/actor/core",
+       "//components/aegis_access",
+       "//components/aegis_access:access_identity_generation_state",
+       "//components/aegis_access:access_proxy_selection_generation_state",
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+index 8612ef233fca03edf1f2d4a48df3bf3601bc604e..ed1407fce0c5d245bb40ea6908653fd2e00f3ffa 100644
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
+@@ -1445,7 +1445,7 @@ IN_PROC_BROWSER_TEST_F(AccessProxyingURLLoaderFactoryBrowserTest,
+                        PendingDocumentFactoryClosesWhenTabIsDestroyed) {
+   ASSERT_NE(ui_test_utils::NavigateToURLWithDisposition(
+                 browser(), worker_page_url(),
+-                WindowOpenDisposition::NEW_FOREGROUND_TAB,
++                WindowOpenDisposition::kNewForegroundTab,
+                 ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP),
+             nullptr);
+   const size_t healthy_origin_before =
+diff --git a/chrome/browser/aegis/aegis_ui_handler_unittest.cc b/chrome/browser/aegis/aegis_ui_handler_unittest.cc
+index 1c4d50278b8659e90a13187e04106b0afb280cbf..074c3c2d4a2c311d1c4cb5e52156a73d6a264ea8 100644
+--- a/chrome/browser/aegis/aegis_ui_handler_unittest.cc
++++ b/chrome/browser/aegis/aegis_ui_handler_unittest.cc
+@@ -62,7 +62,7 @@ class AegisUIHandlerTest : public BrowserWithTestWindowTest {
+     // 保留旧辅助方法的真实导航和索引语义，不用模拟列表替代工作区。
+     NavigateParams params(target, url, ui::PAGE_TRANSITION_TYPED);
+     params.tabstrip_index = 0;
+-    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    params.disposition = WindowOpenDisposition::kNewForegroundTab;
+     Navigate(&params);
+     CommitPendingLoad(&params.navigated_or_inserted_contents->GetController());
+   }
+diff --git a/chrome/browser/aegis/agent/aegis_actor_bridge.cc b/chrome/browser/aegis/agent/aegis_actor_bridge.cc
+index 87a46a313c6ff7150f71619a363e5b074483cc2c..97fc42392052644479b97c2eae17689754793542 100644
+--- a/chrome/browser/aegis/agent/aegis_actor_bridge.cc
++++ b/chrome/browser/aegis/agent/aegis_actor_bridge.cc
+@@ -22,13 +22,14 @@
+ #include "base/time/time.h"
+ #include "base/unguessable_token.h"
+ #include "chrome/browser/actor/actor_keyed_service.h"
++#include "chrome/browser/actor/actor_surface_handle.h"
+ #include "chrome/browser/actor/actor_proto_conversion.h"
+ #include "chrome/browser/actor/actor_task.h"
+ #include "chrome/browser/actor/actor_task_metadata.h"
+ #include "chrome/browser/actor/enterprise_policy_checker.h"
+-#include "chrome/browser/actor/tools/attempt_form_filling_tool_request.h"
+-#include "chrome/browser/actor/tools/attempt_login_tool_request.h"
+-#include "chrome/browser/actor/tools/attempt_otp_filling_tool_request.h"
++#include "chrome/browser/actor/tools/autofill/attempt_form_filling/attempt_form_filling_tool_request.h"
++#include "chrome/browser/actor/tools/password_manager/attempt_login/attempt_login_tool_request.h"
++#include "chrome/browser/actor/tools/one_time_token/attempt_otp_filling_tool_request.h"
+ #include "chrome/browser/actor/tools/click_tool_request.h"
+ #include "chrome/browser/actor/tools/drag_and_release_tool_request.h"
+ #include "chrome/browser/actor/tools/history_tool_request.h"
+@@ -430,12 +431,11 @@ std::string SafeObservationUrl(std::string_view value) {
+ }
+ 
+ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+-    tabs::TabInterface& tab,
++    actor::ActorSurfaceHandle surface_handle,
+     const AgentToolCall& call) {
+-  const tabs::TabHandle tab_handle = tab.GetHandle();
+   if (call.tool_name == "page.navigate") {
+     const std::string* url = call.arguments.FindString("url");
+-    return url ? std::make_unique<actor::NavigateToolRequest>(tab_handle,
++    return url ? std::make_unique<actor::NavigateToolRequest>(surface_handle,
+                                                               GURL(*url))
+                : nullptr;
+   }
+@@ -455,7 +455,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       click_type = actor::mojom::ClickType::kRight;
+     }
+     return std::make_unique<actor::ClickToolRequest>(
+-        tab_handle, actor::PageTarget(actor::DomNode{*node_id, document_token}),
++        surface_handle, actor::PageTarget(actor::DomNode{*node_id, document_token}),
+         click_type, actor::mojom::ClickCount::kSingle);
+   }
+   if (call.tool_name == "page.type") {
+@@ -466,7 +466,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+     }
+     const bool replace = call.arguments.FindBool("replace").value_or(true);
+     return std::make_unique<actor::TypeToolRequest>(
+-        tab_handle, actor::PageTarget(actor::DomNode{*node_id, document_token}),
++        surface_handle, actor::PageTarget(actor::DomNode{*node_id, document_token}),
+         *text, false,
+         replace ? actor::TypeToolRequest::Mode::kReplace
+                 : actor::TypeToolRequest::Mode::kAppend);
+@@ -478,7 +478,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       return nullptr;
+     }
+     return std::make_unique<actor::SelectToolRequest>(
+-        tab_handle, actor::PageTarget(actor::DomNode{*node_id, document_token}),
++        surface_handle, actor::PageTarget(actor::DomNode{*node_id, document_token}),
+         *value);
+   }
+   if (call.tool_name == "page.scroll") {
+@@ -497,7 +497,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       actor_direction = actor::ScrollToolRequest::Direction::kRight;
+     }
+     return std::make_unique<actor::ScrollToolRequest>(
+-        tab_handle,
++        surface_handle,
+         actor::PageTarget(
+             actor::DomNode{actor::kRootElementDomNodeId, document_token}),
+         actor_direction, static_cast<float>(*amount));
+@@ -509,7 +509,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       return nullptr;
+     }
+     return std::make_unique<actor::DragAndReleaseToolRequest>(
+-        tab_handle,
++        surface_handle,
+         actor::PageTarget(actor::DomNode{*from_node_id, document_token}),
+         actor::PageTarget(actor::DomNode{*to_node_id, document_token}));
+   }
+@@ -519,7 +519,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       return nullptr;
+     }
+     return std::make_unique<actor::WaitToolRequest>(
+-        base::Milliseconds(*timeout_ms), tab_handle);
++        base::Milliseconds(*timeout_ms), surface_handle);
+   }
+   if (call.tool_name == "page.history") {
+     const std::string* direction = call.arguments.FindString("direction");
+@@ -527,9 +527,9 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       return nullptr;
+     }
+     if (*direction == "back") {
+-      return std::make_unique<actor::HistoryBackToolRequest>(tab_handle);
++      return std::make_unique<actor::HistoryBackToolRequest>(surface_handle);
+     }
+-    return std::make_unique<actor::HistoryForwardToolRequest>(tab_handle);
++    return std::make_unique<actor::HistoryForwardToolRequest>(surface_handle);
+   }
+   if (call.tool_name == "page.media") {
+     const std::string* action = call.arguments.FindString("action");
+@@ -537,14 +537,14 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       return nullptr;
+     }
+     if (*action == "play") {
+-      return std::make_unique<actor::PlayMediaToolRequest>(tab_handle);
++      return std::make_unique<actor::PlayMediaToolRequest>(surface_handle);
+     }
+     if (*action == "pause") {
+-      return std::make_unique<actor::PauseMediaToolRequest>(tab_handle);
++      return std::make_unique<actor::PauseMediaToolRequest>(surface_handle);
+     }
+     std::optional<int> position_ms = call.arguments.FindInt("position_ms");
+     return position_ms ? std::make_unique<actor::SeekMediaToolRequest>(
+-                             tab_handle, base::Milliseconds(*position_ms))
++                             surface_handle, base::Milliseconds(*position_ms))
+                        : nullptr;
+   }
+   if (call.tool_name == "page.webmcp.invoke") {
+@@ -553,7 +553,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+     std::optional<base::UnguessableToken> token =
+         base::UnguessableToken::DeserializeFromString(document_token);
+     return name && input_json && token
+-               ? std::make_unique<actor::ScriptToolRequest>(tab_handle, *token,
++               ? std::make_unique<actor::ScriptToolRequest>(surface_handle, *token,
+                                                             *name, *input_json)
+                : nullptr;
+   }
+@@ -565,7 +565,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+           actor::PageTarget(actor::DomNode{*node_id, document_token});
+     }
+     return std::make_unique<actor::AttemptLoginToolRequest>(
+-        tab_handle, std::move(password_button), std::nullopt);
++        surface_handle, std::move(password_button), std::nullopt);
+   }
+   if (call.tool_name == "auth.fill_otp") {
+     const base::ListValue* node_ids = call.arguments.FindList("field_node_ids");
+@@ -577,7 +577,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+       targets.emplace_back(actor::DomNode{node_id.GetInt(), document_token});
+     }
+     return std::make_unique<actor::AttemptOtpFillingToolRequest>(
+-        tab_handle, std::move(targets),
++        surface_handle, std::move(targets),
+         call.arguments.FindBool("for_signin").value_or(false));
+   }
+   if (call.tool_name == "form.fill") {
+@@ -616,7 +616,7 @@ std::unique_ptr<actor::ToolRequest> BuildActorRequest(
+     requests.push_back(std::move(request));
+     // 当前只请求地址和联系信息，不传入预选信用卡令牌。
+     return std::make_unique<actor::AttemptFormFillingToolRequest>(
+-        tab_handle, std::move(requests), /*credit_card_opaque_token=*/"");
++        surface_handle, std::move(requests), /*credit_card_opaque_token=*/"");
+   }
+   return nullptr;
+ }
+@@ -1050,7 +1050,15 @@ void AegisActorBridge::ExecutePageTool(const std::string& agent_task_id,
+         task_fingerprints->second.at(*tab_id), std::move(callback));
+   }
+ 
+-  std::unique_ptr<actor::ToolRequest> request = BuildActorRequest(*tab, call);
++  const auto surface = actor::ActorSurfaceHandle::From(tab->GetHandle());
++  if (surface.is_null() || !surface.Get()) {
++    std::move(callback).Run(ErrorResult(
++        call.action_id, AgentErrorCode::kStaleDocument,
++        "tab is no longer available for page actions"));
++    return;
++  }
++  std::unique_ptr<actor::ToolRequest> request =
++      BuildActorRequest(surface, call);
+   if (!request) {
+     std::move(callback).Run(ErrorResult(call.action_id,
+                                         AgentErrorCode::kToolUnavailable,
+diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
+index 5e69530a2daab37b0aa39e177af4f4dc96239517..d8fac2d168996e89b1ddd31ee5383b389ddfb5d7 100644
+--- a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
++++ b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
+@@ -32,6 +32,9 @@
+ #include "base/timer/timer.h"
+ #include "build/build_config.h"
+ #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/actor/actor_surface_handle.h"
++#include "chrome/browser/aegis/agent/aegis_actor_bridge.h"
++#include "components/actor/core/actor_features.h"
+ #include "chrome/browser/aegis/aegis_ai_control.h"
+ #include "chrome/browser/aegis/aegis_phish_blocking_page.h"
+ #include "chrome/browser/aegis/aegis_service.h"
+@@ -727,6 +730,77 @@ class AegisAgentBrowserTest : public InProcessBrowserTest {
+   base::test::ScopedFeatureList features_;
+ };
+ 
++class AegisAgentActorSurfaceBrowserTest
++    : public AegisAgentBrowserTest,
++      public testing::WithParamInterface<bool> {
++ public:
++  AegisAgentActorSurfaceBrowserTest() {
++    actor_features_.InitWithFeatureState(
++        actor::kUseTabHandleAsSurfaceHandle, GetParam());
++  }
++
++ private:
++  base::test::ScopedFeatureList actor_features_;
++};
++
++IN_PROC_BROWSER_TEST_P(AegisAgentActorSurfaceBrowserTest,
++                       NavigationUsesTheAuthorizedTabsActorSurface) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  const GURL initial = embedded_test_server()->GetURL("/title1.html");
++  const GURL destination = embedded_test_server()->GetURL("/title2.html");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial));
++  content::WebContents* untouched =
++      browser()->GetTabStripModel()->GetActiveWebContents();
++
++  // Make the independent surface ID space diverge before creating the target
++  // tab, so interpreting a tab's raw ID as a surface ID cannot pass this test.
++  for (int i = 0; i < 16; ++i) {
++    actor::ActorSurfaceHandle::CreateForTesting();
++  }
++  chrome::AddTabAt(browser(), initial, -1, true);
++  auto* tab = browser()->GetTabStripModel()->GetActiveTab();
++  ASSERT_TRUE(tab);
++  ASSERT_TRUE(content::WaitForLoadStop(tab->GetContents()));
++  const auto surface = actor::ActorSurfaceHandle::From(tab->GetHandle());
++  ASSERT_FALSE(surface.is_null());
++  if (GetParam()) {
++    EXPECT_EQ(surface.raw_value(), tab->GetHandle().raw_value());
++  } else {
++    ASSERT_NE(surface.raw_value(), tab->GetHandle().raw_value());
++  }
++
++  AgentTaskScope scope;
++  scope.allowed_origins = {url::Origin::Create(initial)};
++  scope.allowed_tab_ids = {tab->GetHandle().raw_value()};
++  scope.allowed_tools = {"page.navigate", "page.observe"};
++  scope.allowed_data_classes = {AgentDataClass::kPublicPage};
++  scope.model_destination.kind = AgentModelDestination::Kind::kLoopback;
++  scope.model_destination.provider = "openai";
++  scope.model_destination.endpoint = "http://127.0.0.1:8000/v1";
++  scope.model_destination.model = "fixture-model";
++  AegisActorBridge bridge(browser()->GetProfile());
++  const std::string task_id = "surface-navigation";
++  ASSERT_TRUE(bridge.StartTask(task_id, scope));
++
++  AgentToolCall call;
++  call.action_id = "navigate-authorized-surface";
++  call.tool_name = "page.navigate";
++  call.arguments.Set("tab_id", tab->GetHandle().raw_value());
++  call.arguments.Set("url", destination.spec());
++  call.committed_url = initial;
++  base::test::TestFuture<AgentToolResult> completed;
++  bridge.ExecutePageTool(task_id, call, completed.GetCallback());
++  ASSERT_TRUE(completed.Get().ok) << completed.Get().message;
++  EXPECT_EQ(tab->GetURL(), destination);
++  EXPECT_EQ(untouched->GetLastCommittedURL(), initial);
++  EXPECT_TRUE(bridge.StopTask(task_id, /*completed=*/true));
++}
++
++INSTANTIATE_TEST_SUITE_P(TabAndSurfaceIds,
++                        AegisAgentActorSurfaceBrowserTest,
++                        testing::Bool());
++
++
+ class AegisAgentUrlMonitorBrowserTest : public AegisAgentBrowserTest {
+  public:
+   void SetUpOnMainThread() override {
+diff --git a/chrome/browser/aegis/gestures/gesture_interactive_uitest.cc b/chrome/browser/aegis/gestures/gesture_interactive_uitest.cc
+index ad3e77e61eddd4b186ab59e9cf516626642af764..950ff1f67afd930b5ef6fa7dde72d966bfd06a22 100644
+--- a/chrome/browser/aegis/gestures/gesture_interactive_uitest.cc
++++ b/chrome/browser/aegis/gestures/gesture_interactive_uitest.cc
+@@ -193,7 +193,7 @@ IN_PROC_BROWSER_TEST_F(AegisGestureBrowserTest, ScrollReloadAndTabActions) {
+   }));
+   ui_test_utils::NavigateToURLWithDisposition(
+       browser(), embedded_test_server()->GetURL("/title2.html"),
+-      WindowOpenDisposition::NEW_FOREGROUND_TAB,
++      WindowOpenDisposition::kNewForegroundTab,
+       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+   ASSERT_EQ(2, browser()->GetTabStripModel()->count());
+   Gesture(host(), "UL");
+diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
+index f8a4f57692dc04ff16d957fde84403b501ad513d..1ad2966a9dd330cd16917679f39845c9d1c88a5d 100644
+--- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
++++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
+@@ -527,7 +527,7 @@ IN_PROC_BROWSER_TEST_F(AegisRemoteDevToolsProtocolTest,
+ 
+   ui_test_utils::NavigateToURLWithDisposition(
+       browser(), GURL(chrome::kChromeUIAegisURL),
+-      WindowOpenDisposition::NEW_BACKGROUND_TAB,
++      WindowOpenDisposition::kNewBackgroundTab,
+       ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
+   content::WebContents* internal_contents =
+       browser()->tab_strip_model()->GetWebContentsAt(1);
+diff --git a/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc b/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
+index 6e6a70d349122c40079db4185d22e37a9bf89a52..896c23a892ee8cbf2af12783b679181a73e4b3fc 100644
+--- a/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
++++ b/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
+@@ -399,7 +399,7 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+     if (GetWidget()) {
+       GetWidget()->Close();
+     }
+-    chrome::Reload(browser_, WindowOpenDisposition::CURRENT_TAB);
++    chrome::Reload(browser_, WindowOpenDisposition::kCurrentTab);
+   }
+ 
+   bool CanSummarizeCurrentPage() const {
+@@ -562,7 +562,7 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+   void OpenSettings() {
+     browser_->OpenURL(content::OpenURLParams(
+                           GURL(chrome::kChromeUIAegisURL), content::Referrer(),
+-                          WindowOpenDisposition::NEW_FOREGROUND_TAB,
++                          WindowOpenDisposition::kNewForegroundTab,
+                           ui::PAGE_TRANSITION_LINK, false),
+                       /*navigation_handle_callback=*/{});
+     if (GetWidget()) {
+diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
+index 83918a9001b3d3f9a4c47ac73c8d9c2866f7ff43..88c911b106b280fc64ae8b1da82f993c87b8a66c 100644
+--- a/chrome/browser/ui/webui/help/aegis_github_update.h
++++ b/chrome/browser/ui/webui/help/aegis_github_update.h
+@@ -21,8 +21,8 @@ class SimpleURLLoader;
+ 
+ namespace aegis {
+ // 产品版本独立于 Chromium 内核版本；发布 tag 使用对应产品版本。
+-inline constexpr char kProductVersion[] = "7.4.0.340";
+-inline constexpr char kProductVersionLabel[] = "Ver 7.4 (340)";
++inline constexpr char kProductVersion[] = "7.4.0.341";
++inline constexpr char kProductVersionLabel[] = "Ver 7.4 (341)";
+ inline constexpr char kReleaseAPI[] =
+     "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
+ inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

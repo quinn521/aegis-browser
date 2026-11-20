@@ -1,4 +1,4 @@
-From dac1674430ca0c2e08d6b2f212826dd19ad98b51 Mon Sep 17 00:00:00 2001
+From f91d900fa7c28bea72ba52368ee9c244cf1c93ee Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Wed, 12 Aug 2026 18:23:06 +0800
 Subject: [PATCH] Aegis: bundle packages/core policy snapshot into the tree
@@ -466,5 +466,5 @@ index 0000000000000000000000000000000000000000..f0ff867c3445f94d9db64eb894e1ecd9
 +  ]
 +}
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

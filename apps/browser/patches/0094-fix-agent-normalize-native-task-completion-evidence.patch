@@ -1,4 +1,4 @@
-From 1d7fa36a593aaa582be737bea04df1b14da294c5 Mon Sep 17 00:00:00 2001
+From a0247c4f77b0c9a317b58f173a086f63c229312e Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 3 Sep 2026 21:54:16 +0800
 Subject: [PATCH] fix(agent): normalize native-task completion evidence
@@ -246,5 +246,5 @@ index 8ae6c04086f3beaaf9012ad2f8c8e0f3f6a2078b..2de867a0d3762842de8e677fb13a407c
    add("resultSources", "Sources", "来源", "來源");
    add("unfinishedItems", "Not finished", "未完成事项", "未完成事項");
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

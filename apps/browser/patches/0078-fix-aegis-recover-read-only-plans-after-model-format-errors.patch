@@ -1,4 +1,4 @@
-From 0f5b1459b0ab5c40d6a3ccf2567ef6793bd107ff Mon Sep 17 00:00:00 2001
+From b00422c0a3d9f48ccaef969754173be6d3bed03f Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Wed, 2 Sep 2026 05:12:10 +0800
 Subject: [PATCH] fix(aegis): recover read-only plans after model format errors
@@ -358,5 +358,5 @@ index 7b1737acd12f7b4cc3df16f1a6b1782e57fbacde..c4c62a5cc963cd855f92c4b3aae93c35
  }  // namespace
  }  // namespace aegis::agent
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

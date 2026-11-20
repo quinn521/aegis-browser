@@ -1,4 +1,4 @@
-From cc50669e5898f2a6bb2c777cdcdc66f6a8b3b492 Mon Sep 17 00:00:00 2001
+From 92d12184d96c982da882628381f73b5acc20345b Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sun, 30 Aug 2026 12:59:08 +0800
 Subject: [PATCH] feat(aegis): add v2 native hybrid runtime spike
@@ -537,5 +537,5 @@ index 0000000000000000000000000000000000000000..818cb5ab434a9cc8e3cfeccb1fe8ab98
 +}  // namespace
 +}  // namespace aegis::agent
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

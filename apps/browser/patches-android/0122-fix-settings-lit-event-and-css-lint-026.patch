@@ -1,4 +1,4 @@
-From 9a959056a698822b5ff4b1213b7dce61f235289f Mon Sep 17 00:00:00 2001
+From a5533ed30577dab934d52c6492c9f086d6966b7f Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 15 Sep 2026 01:03:28 +0800
 Subject: [PATCH] fix(settings): align Lit event handlers and CSS with M153
@@ -150,5 +150,5 @@ index 4c5965f2f18f9771ec5a2b7d2a3131631b0725e0..9de22790626297464aad394f90c9cd9f
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

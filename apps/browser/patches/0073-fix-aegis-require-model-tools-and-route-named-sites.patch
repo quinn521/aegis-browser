@@ -1,4 +1,4 @@
-From 9df88998b28df1091e0a5c2bdef36b3290f431ee Mon Sep 17 00:00:00 2001
+From f5e0cbd9360cd951e1d00d2c22a51f8d41d5443c Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Mon, 31 Aug 2026 09:10:23 +0800
 Subject: [PATCH] fix(aegis): require model tools and route named sites
@@ -306,5 +306,5 @@ index 053858df2c5126e9a730a2f98f9f93051c45d972..d9b854fefe20c5b6a892460bd69744c9
        "A browser action still failed after retrying",
        "浏览器操作重试后仍未成功", "瀏覽器操作重試後仍未成功");
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

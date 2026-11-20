@@ -1,4 +1,4 @@
-From 6c42e2b09d5e87fa2bbc38dfc7a9060be2cfb59b Mon Sep 17 00:00:00 2001
+From cb7bba595913c7b485f8dda0fe726ad60b66fadf Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sun, 30 Aug 2026 20:15:21 +0800
 Subject: [PATCH] feat(aegis): harden v2 autonomous runtime spike
@@ -388,5 +388,5 @@ index 818cb5ab434a9cc8e3cfeccb1fe8ab986698b025..8e5b6a1ff29f6cdad49fb320b9d8e3fb
  
  TEST(AegisV2RuntimeSpikeTest, NativeBookmarksRejectUnexpectedDestination) {
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

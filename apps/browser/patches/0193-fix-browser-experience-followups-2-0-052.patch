@@ -1,4 +1,4 @@
-From 84f7cb453792987378eb0d27ac9531114efb5758 Mon Sep 17 00:00:00 2001
+From 42ede46bec49df652fb6635547b6ff928deadb21 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Sun, 20 Sep 2026 21:40:19 +0800
 Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=EF=BC=9A=E8=A1=94=E6=8E=A5?=
@@ -818,5 +818,5 @@ index 1d7b37b59a8767c2ff3470a52cb0d7e01e71ba57..784c40a60fc54dfd147c1985d74d4dc0
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

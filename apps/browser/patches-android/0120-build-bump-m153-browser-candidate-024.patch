@@ -1,4 +1,4 @@
-From cc3cb517b2aaf19be947ee60bc5cbcb1fb7ab922 Mon Sep 17 00:00:00 2001
+From 3d40aa6c103c82957a19bd13aae76b1fc3e253eb Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Mon, 14 Sep 2026 21:24:46 +0800
 Subject: [PATCH] build: bump M153 browser candidate to 024 after Rollup hook
@@ -25,5 +25,5 @@ index f1c39ce3bc21f9597e1152e1912d95a5b4e0f4d1..017f17f4da1708a5fbc4fc0d385dc5e9
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

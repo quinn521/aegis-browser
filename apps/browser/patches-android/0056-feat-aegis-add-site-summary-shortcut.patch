@@ -1,4 +1,4 @@
-From 712214b6c2538d82a3b26fe36908f7ad5c85f311 Mon Sep 17 00:00:00 2001
+From 76c1cd17ac30b36c33e9dba48e095c504f001814 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 27 Aug 2026 22:17:13 +0800
 Subject: [PATCH] feat(aegis): add site summary shortcut
@@ -2866,5 +2866,5 @@ index a7eaeed5f7a9309fbf6ded53963670c3e83c2462..50a99e097d4b30170c9f9c3ae2976222
    std::optional<PendingTorrent> pending_torrent_;
    base::ScopedObservation<aegis::AegisService, aegis::AegisServiceObserver>
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From b9bc3ff8c0a5d7d20b4a9f34b7875eda44440882 Mon Sep 17 00:00:00 2001
+From 9c750ed3713856178cbfceca04e637fce650d14b Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Wed, 16 Sep 2026 01:49:48 +0800
 Subject: [PATCH] =?UTF-8?q?feat:=20=E6=8C=89=E4=BB=BB=E5=8A=A1=E8=A3=81?=
@@ -812,5 +812,5 @@ index edb92f0af0b6a368f08938af852cfa7552e6bad0..eed6c5e07fcbf5e3fe6798ec21da5c8b
    EXPECT_EQ(Parse(Release("1.0.0.999")).state, ReleaseState::kLocalNewer);
    EXPECT_EQ(Parse(Release("151.0.7922")).state, ReleaseState::kInvalid);
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

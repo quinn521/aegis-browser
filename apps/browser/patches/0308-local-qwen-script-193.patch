@@ -1,9 +1,21 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From f063b15c0f8848465ee95994b813cfd17d921f85 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 05:35:44 +0800
-Subject: [PATCH] 限定本机 Qwen 脚本生成关闭思考，候选 193
+Subject: [PATCH] =?UTF-8?q?=E9=99=90=E5=AE=9A=E6=9C=AC=E6=9C=BA=20Qwen=20?=
+ =?UTF-8?q?=E8=84=9A=E6=9C=AC=E7=94=9F=E6=88=90=E5=85=B3=E9=97=AD=E6=80=9D?=
+ =?UTF-8?q?=E8=80=83=EF=BC=8C=E5=80=99=E9=80=89=20193?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/browser/aegis/model_provider_client.cc | 17 +++++-
+ chrome/browser/aegis/model_provider_client.h  |  3 +-
+ .../aegis/model_provider_client_unittest.cc   | 57 +++++++++++++++++++
+ .../webui/aegis/aegis_enhancement_handler.cc  |  3 +-
+ .../ui/webui/help/aegis_github_update.h       |  4 +-
+ 5 files changed, 77 insertions(+), 7 deletions(-)
+
 diff --git a/chrome/browser/aegis/model_provider_client.cc b/chrome/browser/aegis/model_provider_client.cc
 index 2034d4300a7c0802bd22d7a8500aeb5e51821e87..b1070034ac1c13f72cd155b3dd45d0945b802262 100644
 --- a/chrome/browser/aegis/model_provider_client.cc
@@ -171,3 +183,6 @@ index 693088b37cd12e0871c3b72cffd695e2e549dd60..080d0e1733b66d16bc6d87a28c1948ba
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

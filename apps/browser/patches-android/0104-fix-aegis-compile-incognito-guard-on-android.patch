@@ -1,4 +1,4 @@
-From 5f8efc00c269a99f14fa65fb0937cde572940cb2 Mon Sep 17 00:00:00 2001
+From a005cd5a7f6f152098d2e1bd01e948706389250d Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sat, 5 Sep 2026 04:13:26 +0800
 Subject: [PATCH] fix(aegis): compile incognito guard on Android
@@ -33,5 +33,5 @@ index 90ff87fbfcac364598c25785171bae3439891f65..36f242ed25ad17304e75e48c272f7b34
    if (!IsEnabled()) {
      VLOG(1) << "Aegis product disabled; Incognito guard remains active";
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From f545b5b8f1cd9ef8c4d0cdfc0aa27de0627c79a2 Mon Sep 17 00:00:00 2001
+From a064b4674aba657e27b815970b21de852a59fdad Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Mon, 31 Aug 2026 17:04:01 +0800
 Subject: [PATCH] fix(aegis): bind implicit current-page tasks
@@ -256,5 +256,5 @@ index d9b854fefe20c5b6a892460bd69744c97b4fe2f6..a4f18d61703ddfb00701670416e3da98
        "The AI could not determine a safe browser entry. Nothing was opened. Please clarify the goal and try again.",
        "AI 没有判断出可靠的浏览器入口，本次没有打开网页。请把目标说得更具体后重试。",
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

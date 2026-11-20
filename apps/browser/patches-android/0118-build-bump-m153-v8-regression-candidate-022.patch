@@ -1,4 +1,4 @@
-From 1625e3a6215ace85b4f1882f731470ec515a4063 Mon Sep 17 00:00:00 2001
+From c87b53c74e2d64a440d52009305cefc369107a6b Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Mon, 14 Sep 2026 17:30:11 +0800
 Subject: [PATCH] build: bump M153 V8 regression candidate to 022
@@ -25,5 +25,5 @@ index 08264057b69968a70c3f4fbbf25283ed4a1bf1d0..c05778eed867665a0a72d0af99f8b188
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

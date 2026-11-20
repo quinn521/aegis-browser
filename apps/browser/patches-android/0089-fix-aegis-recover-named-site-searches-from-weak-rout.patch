@@ -1,4 +1,4 @@
-From 0c8e7eb91d05d43f0d804bef4aef913520081807 Mon Sep 17 00:00:00 2001
+From 3de17394076787e9572793bb93c481d5e2326b22 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 3 Sep 2026 00:46:40 +0800
 Subject: [PATCH] fix(aegis): recover named-site searches from weak routing
@@ -57,5 +57,5 @@ index b795469f1b39952ee5f4b08c86f07722ee401ee7..1189d48036d0898cc9b00ba86f826ea5
    purchase.workflow = AgentWorkflowKind::kShopping;
    purchase.entry_kind = AgentGoalEntryKind::kOpenUrl;
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

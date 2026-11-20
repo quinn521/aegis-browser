@@ -1,4 +1,4 @@
-From e656dc83d70ce72d3b19763073328bcbc747c78b Mon Sep 17 00:00:00 2001
+From 5e2b00b303837fba42181d71b060b4a5a2355f17 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Fri, 4 Sep 2026 17:44:13 +0800
 Subject: [PATCH] fix(agent): move task storage off the UI sequence
@@ -874,5 +874,5 @@ index c9c28c46d79c577d6821afe3be63476ceb431b9f..750dea9505911ea5ff8b4134880cd2cd
    static int64_t SerializeTime(base::Time time);
    static base::Time DeserializeTime(int64_t value);
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

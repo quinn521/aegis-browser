@@ -1,4 +1,4 @@
-From ddc51d5902da68c47441bc349c0210ecfe21a21b Mon Sep 17 00:00:00 2001
+From 98d65187db924596b910339cc42d5317946bb8cf Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 3 Sep 2026 04:13:24 +0800
 Subject: [PATCH] fix(aegis): validate bookmark goal coverage
@@ -366,5 +366,5 @@ index b333c7d74465e5a9248328f5d1694facb639ad63..135ac52779be917ac3d62ddc4439414a
  }
  
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

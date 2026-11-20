@@ -1,4 +1,4 @@
-From bfe3baf3e7f7dda66870e886f77b8bb3848d86c4 Mon Sep 17 00:00:00 2001
+From d8836ddad2733de683167e2c5123a753b35dccd4 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Sun, 11 Oct 2026 07:02:48 +0800
 Subject: [PATCH] test(mac): use public signature requirement APIs
@@ -122,5 +122,5 @@ index 0e132eddd9b0cff64c3a0833516f78a46c432757..ba31c776d7f7e8fe5f5df47d91daa597
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From 3d285a9a07d26cc13d67bf9c4d4181562bccd90f Mon Sep 17 00:00:00 2001
+From 75cc0db249cb7b292cfbd538b6b0facbafdb7186 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Thu, 13 Aug 2026 05:01:50 +0800
 Subject: [PATCH] Aegis: strip tracking query params and reject tracker cookies
@@ -516,10 +516,10 @@ index ca83ce18824cf67b3bceb7662628a0b13d7cadb1..bcc72edff8768622556baaa0b4ac1797
  
  }  // namespace aegis
 diff --git a/chrome/browser/chrome_content_browser_client_navigation_throttles.cc b/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
-index 9887304d76b3b9325e0561d86ed48c81c5d560b2..d138e14c70a10956a85eb5c573349feeebf5f982 100644
+index 44d9e15932af277a5522aed4c92847b5418ca66a..96b634dcf670f46b7cf86099f780ee9744c29259 100644
 --- a/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
 +++ b/chrome/browser/chrome_content_browser_client_navigation_throttles.cc
-@@ -22,6 +22,7 @@
+@@ -24,6 +24,7 @@
  #include "chrome/browser/interstitials/enterprise_util.h"
  #include "chrome/browser/lookalikes/lookalike_url_navigation_throttle.h"
  #include "chrome/browser/aegis/aegis_phish_navigation_throttle.h"
@@ -527,7 +527,7 @@ index 9887304d76b3b9325e0561d86ed48c81c5d560b2..d138e14c70a10956a85eb5c573349fee
  #include "chrome/browser/omnibox/geolocation_navigation_throttle.h"
  #include "chrome/browser/plugins/pdf_iframe_navigation_throttle.h"
  #include "chrome/browser/policy/chrome_policy_blocklist_service_factory.h"
-@@ -411,6 +412,7 @@ void CreateAndAddChromeThrottlesForNavigation(
+@@ -414,6 +415,7 @@ void CreateAndAddChromeThrottlesForNavigation(
  
    LookalikeUrlNavigationThrottle::MaybeCreateAndAdd(registry);
    aegis::AegisPhishNavigationThrottle::MaybeCreateAndAdd(registry);
@@ -989,5 +989,5 @@ index ae66c7f38cb1057135bc794d9ce60b66a20fc031..cd27c9ac0d2462189b7da471ab0904ea
  
  #endif  // CHROME_COMMON_AEGIS_TRACKING_QUERY_PARAMS_H_
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

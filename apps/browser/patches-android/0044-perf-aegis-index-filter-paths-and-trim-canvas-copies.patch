@@ -1,4 +1,4 @@
-From 1b78c0266fec316843207e10f8d9caaa9bda2a12 Mon Sep 17 00:00:00 2001
+From c2d9797a406e494357f6b3e615d5ddc52e981a99 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Tue, 25 Aug 2026 16:52:48 +0800
 Subject: [PATCH] perf(aegis): index filter paths and trim canvas copies
@@ -296,5 +296,5 @@ index 4bf5bfe3b325361962e96252a92ff3c0d53f0e10..edaa9e6ae7ca96d1c4a0227b307c4a56
    return UnacceleratedStaticBitmapImage::Create(
        SkImages::RasterFromBitmap(bitmap), image->Orientation());
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

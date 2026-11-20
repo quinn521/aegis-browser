@@ -1,4 +1,4 @@
-From b6bc514afae1867604ff86cad6a804af4ed851e3 Mon Sep 17 00:00:00 2001
+From 2ac764bc94bb564273d69149587408d9707f00f1 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Wed, 2 Sep 2026 23:55:49 +0800
 Subject: [PATCH] fix(aegis): repair evidence-bound model turns
@@ -388,5 +388,5 @@ index a82bfcb225338446a6a4eb61b0b18e88e3e7f8d8..e1a3f59569c485984a6c4ace78c28f9c
    EXPECT_FALSE(ValidateTaskPlanForMode(scheduled, AgentMode::kAct, &error));
    EXPECT_EQ(error, "monitor.create requires a scheduled automation task");
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

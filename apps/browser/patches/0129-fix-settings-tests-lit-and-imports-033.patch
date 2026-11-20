@@ -1,4 +1,4 @@
-From 046e2d10f00ba57253129e9dc5a9af4f5684d2cc Mon Sep 17 00:00:00 2001
+From 4ca4866a08fd4c78fe61e0da3936ef004c12911c Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 15 Sep 2026 05:15:22 +0800
 Subject: [PATCH] =?UTF-8?q?=E9=80=82=E9=85=8D=E8=AE=BE=E7=BD=AE=E9=A1=B5?=
@@ -46,7 +46,7 @@ index 0a469f77da5c2072cee79b91ae7e39db7d6faad9..910c9d3ffe6371b6f7cffadd094e5b6b
      assertTrue(page.shadowRoot.querySelector<HTMLButtonElement>('#aegisCheckUpdate')!.disabled);
      assertTrue(page.$.updateStatusMessage.textContent.includes('请退出浏览器后安装'));
 diff --git a/chrome/test/data/webui/settings/settings_menu_interactive_ui_test.ts b/chrome/test/data/webui/settings/settings_menu_interactive_ui_test.ts
-index f06e4eb92cf10c6e81377ce6dffc9ed9f27fe4e0..f82c584ab5c90f84da5a32de73b80f4fd5e9003d 100644
+index 11dfdfe887e062903a7956d8511f1f32a7acc28d..6e49c995c3fb1bb32d7de941476a57db6f74ee92 100644
 --- a/chrome/test/data/webui/settings/settings_menu_interactive_ui_test.ts
 +++ b/chrome/test/data/webui/settings/settings_menu_interactive_ui_test.ts
 @@ -3,7 +3,7 @@
@@ -59,5 +59,5 @@ index f06e4eb92cf10c6e81377ce6dffc9ed9f27fe4e0..f82c584ab5c90f84da5a32de73b80f4f
  
  suite('SettingsMenuInteractiveUITest', () => {
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

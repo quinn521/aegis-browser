@@ -1,4 +1,4 @@
-From f1807f28885644ba9cbd96fe035bb3246f04cb95 Mon Sep 17 00:00:00 2001
+From 976f54963efa33ae0a62323b9470c800f55a5eef Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Fri, 9 Oct 2026 04:07:44 +0800
 Subject: [PATCH] =?UTF-8?q?fix:=20=E5=B0=86=20Quinn=20Agent=20=E4=BF=AE?=
@@ -1177,3 +1177,6 @@ index 97feebf5d76d82bf75f4a5570e77e6d0618749b4..360fa87e5dd834e37999c0a199f58173
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

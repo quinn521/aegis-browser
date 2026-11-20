@@ -1,4 +1,4 @@
-From 91faf9fe15d0a843f3c2d16fca7a9f3c8f706dbc Mon Sep 17 00:00:00 2001
+From d7e9d0c941a5a25ca0a78c7ef7613abc759fe496 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 14 Aug 2026 17:47:47 +0800
 Subject: [PATCH] Aegis: probe Canvas, WebGL, Audio, and WebGPU on
@@ -234,5 +234,5 @@ index 8e10165872ec3b88a21565c08898c62991fd37b6..a52a292dfeedd2ca0d5e976e125c8123
        .filter_list_auto_update = "Auto-update filter lists",
        .filter_list_auto_update_hint =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

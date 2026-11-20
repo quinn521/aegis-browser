@@ -1,13 +1,24 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 0e5947b4a4feb7514f42f350aaa57e336f052617 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Tue, 13 Oct 2026 04:13:10 +0800
-Subject: [PATCH] 改善本机翻译分句并提示数字与单位疑点 190
+Subject: [PATCH] =?UTF-8?q?=E6=94=B9=E5=96=84=E6=9C=AC=E6=9C=BA=E7=BF=BB?=
+ =?UTF-8?q?=E8=AF=91=E5=88=86=E5=8F=A5=E5=B9=B6=E6=8F=90=E7=A4=BA=E6=95=B0?=
+ =?UTF-8?q?=E5=AD=97=E4=B8=8E=E5=8D=95=E4=BD=8D=E7=96=91=E7=82=B9=20190?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 未提交工作区补丁，接续 0305。零值标记表示尚无对应提交。
 ---
+ .../aegis/agent/aegis_agent_browsertest.cc    | 17 ++++++-
+ .../browser/resources/aegis_agent/agent.css   |  6 +++
+ .../aegis_agent/local_ai/asset_manifest.json  |  4 +-
+ .../resources/aegis_agent/local_ai/worker.js  | 29 ++++++++----
+ .../aegis_agent/reading_workspace.ts          | 45 ++++++++++++++++++-
+ .../ui/webui/aegis_agent/aegis_agent_ui.cc    |  4 ++
+ .../ui/webui/help/aegis_github_update.h       |  4 +-
+ 7 files changed, 93 insertions(+), 16 deletions(-)
+
 diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 index 522dfe89f62045f5da4baada17bb711c992ddf05..f2565336cdb2a7f489904a573ae5961daaf7b0e9 100644
 --- a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
@@ -225,3 +236,6 @@ index 1113d4ed2ef35db7000378a4410baaa94faa0799..693088b37cd12e0871c3b72cffd695e2
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

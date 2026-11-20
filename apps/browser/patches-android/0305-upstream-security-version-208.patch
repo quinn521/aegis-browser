@@ -1,15 +1,21 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 23c9c49ef066e32c1e3b0d38a7897379df796998 Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Wed, 14 Oct 2026 09:07:40 +0800
-Subject: [PATCH] 更新安全候选产品版本至 208
+Subject: [PATCH] =?UTF-8?q?=E6=9B=B4=E6=96=B0=E5=AE=89=E5=85=A8=E5=80=99?=
+ =?UTF-8?q?=E9=80=89=E4=BA=A7=E5=93=81=E7=89=88=E6=9C=AC=E8=87=B3=20208?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index 5ec7e6d8c5a8bf00edfebf2bc8ed3bc82aad7011..a6a38aebbd745e95a86c8ecff18906f159eba582 100644
 --- a/chrome/browser/ui/webui/help/aegis_github_update.h
 +++ b/chrome/browser/ui/webui/help/aegis_github_update.h
-@@ -20,9 +20,9 @@
+@@ -20,9 +20,9 @@ class SimpleURLLoader;
  } // namespace network
  
  namespace aegis {
@@ -22,3 +28,6 @@ index 5ec7e6d8c5a8bf00edfebf2bc8ed3bc82aad7011..a6a38aebbd745e95a86c8ecff18906f1
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

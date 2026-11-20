@@ -1,4 +1,4 @@
-From 084bf28d7aa97fe462f4f87dda52713643d5c56c Mon Sep 17 00:00:00 2001
+From 8b8c7aef4bcdef0e37c68a93bc91145c21a10286 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Mon, 14 Sep 2026 21:21:45 +0800
 Subject: [PATCH] build: bump M153 full browser candidate to 023
@@ -25,5 +25,5 @@ index c05778eed867665a0a72d0af99f8b18843a6ab55..f1c39ce3bc21f9597e1152e1912d95a5
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

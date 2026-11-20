@@ -1,4 +1,4 @@
-From 6fea3ab6271ae4e989b54dddc89d779bf760c351 Mon Sep 17 00:00:00 2001
+From 5f19813c82f523e2b254bfc124cdc5a61f24cbc2 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 14 Aug 2026 00:37:31 +0800
 Subject: [PATCH] Aegis: refresh EasyList cache with conditional GET
@@ -597,5 +597,5 @@ index 78be0b3a4d1b6ec31b15b995eacca3d68ce6bc8b..94972c1f14296a68944083a4a7a8395a
  inline constexpr char kCookieJanitorEnabled[] = "aegis.cookie_janitor_enabled";
  inline constexpr char kCnameUncloakEnabled[] = "aegis.cname_uncloak_enabled";
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

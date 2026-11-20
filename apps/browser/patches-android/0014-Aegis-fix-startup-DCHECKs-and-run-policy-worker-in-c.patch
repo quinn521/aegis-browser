@@ -1,4 +1,4 @@
-From 655d3920c82812bcd3caec317addc40c02b09dd2 Mon Sep 17 00:00:00 2001
+From 5b39c8f3ed4b6277ad399fc8fb74ce00c27a6dce Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Thu, 13 Aug 2026 17:03:00 +0800
 Subject: [PATCH] Aegis: fix startup DCHECKs and run policy worker in
@@ -544,5 +544,5 @@ index 7e2f2aedbc7e511df38004c4e6f42236d3d915f2..a18deb434dc573ad3dd49bb92dc44177
  
    base::WeakPtrFactory<AegisUIHandler> weak_factory_{this};
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

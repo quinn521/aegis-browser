@@ -1,4 +1,4 @@
-From 1e7997d286eeb0d3c20add7e96f92945005c1115 Mon Sep 17 00:00:00 2001
+From 36aa0160c39ebf1934145fd42bf0926588181cca Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 3 Sep 2026 17:41:40 +0800
 Subject: [PATCH] fix(agent): support explicit local fixture URL checks
@@ -292,5 +292,5 @@ index 8a1bb5a17a658807795692d6e344b8a551ef9d40..8ae6c04086f3beaaf9012ad2f8c8e0f3
        "The AI could not determine a safe browser entry. Nothing was opened. "
        "Please clarify the goal and try again.",
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

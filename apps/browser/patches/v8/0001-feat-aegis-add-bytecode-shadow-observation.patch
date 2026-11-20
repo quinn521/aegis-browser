@@ -1,4 +1,4 @@
-From 4ef07cafff863d2f9b8a6ea51b2a61cd03374b38 Mon Sep 17 00:00:00 2001
+From 8234a00fcbd7c21aa19ccd5de3bee8f1ac6ee0d2 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Wed, 7 Oct 2026 02:06:28 +0800
 Subject: [PATCH] =?UTF-8?q?=E9=80=82=E9=85=8D=20Chromium=20155=EF=BC=9A000?=
@@ -21,10 +21,10 @@ Content-Transfer-Encoding: 8bit
  create mode 100644 test/unittests/interpreter/aegis-bytecode-shadow-unittest.cc
 
 diff --git a/BUILD.gn b/BUILD.gn
-index c6132807ff6c488543b4df1f3ba8793d9dea98d5..f8163829f3df1151257c6b8e13301876065d3235 100644
+index d0531ca88958cabd830c45dd8ee4248c7d3ffbac..a82bbba55ad0bf0d95552b6072ad5d224f01030f 100644
 --- a/BUILD.gn
 +++ b/BUILD.gn
-@@ -4528,6 +4528,7 @@ v8_header_set("v8_internal_headers") {
+@@ -4766,6 +4766,7 @@ v8_header_set("v8_internal_headers") {
      "src/init/setup-isolate.h",
      "src/init/startup-data-util.h",
      "src/init/v8.h",
@@ -32,7 +32,7 @@ index c6132807ff6c488543b4df1f3ba8793d9dea98d5..f8163829f3df1151257c6b8e13301876
      "src/interpreter/block-coverage-builder.h",
      "src/interpreter/bytecode-array-builder.h",
      "src/interpreter/bytecode-array-iterator.h",
-@@ -6399,6 +6400,7 @@ v8_cluster_source_set("v8_base_without_compiler") {
+@@ -6665,6 +6666,7 @@ v8_cluster_source_set("v8_base_without_compiler") {
      "src/init/isolate-group.cc",
      "src/init/startup-data-util.cc",
      "src/init/v8.cc",
@@ -41,10 +41,10 @@ index c6132807ff6c488543b4df1f3ba8793d9dea98d5..f8163829f3df1151257c6b8e13301876
      "src/interpreter/bytecode-array-iterator.cc",
      "src/interpreter/bytecode-array-random-iterator.cc",
 diff --git a/src/flags/flag-definitions.h b/src/flags/flag-definitions.h
-index a64f1b5e7b397190030598f39b0d27c6613c27b0..066460e72226ff44cb808977007dac16b7122a7b 100644
+index 100223f13fece8da39a9a58d57d48f6a092807cf..5902738aadde59b8808f727535646f8bceeaca26 100644
 --- a/src/flags/flag-definitions.h
 +++ b/src/flags/flag-definitions.h
-@@ -1132,6 +1132,13 @@ DEFINE_BOOL(lazy_feedback_allocation, true, "Allocate feedback vectors lazily")
+@@ -1204,6 +1204,13 @@ DEFINE_BOOL(lazy_feedback_allocation, true, "Allocate feedback vectors lazily")
  DEFINE_BOOL(stress_ic, false, "exercise interesting paths in ICs more often")
  
  // Flags for Ignition.
@@ -223,7 +223,7 @@ index 0000000000000000000000000000000000000000..d42637ce3a94129e4166a17db69daa4e
 +
 +#endif  // V8_INTERPRETER_AEGIS_BYTECODE_SHADOW_H_
 diff --git a/src/interpreter/interpreter.cc b/src/interpreter/interpreter.cc
-index 3c3bcbaacada8ee140bc1f40d8966feddd85be69..12619f0577ba058df5671005637d798961deb453 100644
+index fab55a744c511350b65f4915f229cdd6079e06a6..2706b08485e6a1d226e4bc92a538e4bb6f1db116 100644
 --- a/src/interpreter/interpreter.cc
 +++ b/src/interpreter/interpreter.cc
 @@ -16,6 +16,7 @@
@@ -234,7 +234,7 @@ index 3c3bcbaacada8ee140bc1f40d8966feddd85be69..12619f0577ba058df5671005637d7989
  #include "src/interpreter/bytecode-generator.h"
  #include "src/interpreter/bytecodes.h"
  #include "src/logging/runtime-call-stats-scope.h"
-@@ -272,6 +273,8 @@ InterpreterCompilationJob::Status InterpreterCompilationJob::DoFinalizeJobImpl(
+@@ -271,6 +272,8 @@ InterpreterCompilationJob::Status InterpreterCompilationJob::DoFinalizeJobImpl(
      bytecodes->set_source_position_table(*source_position_table, kReleaseStore);
    }
  
@@ -244,12 +244,12 @@ index 3c3bcbaacada8ee140bc1f40d8966feddd85be69..12619f0577ba058df5671005637d7989
      StdoutStream os;
      std::unique_ptr<char[]> name =
 diff --git a/test/unittests/BUILD.gn b/test/unittests/BUILD.gn
-index 06428824029565445641d0f22ed48086e3a537b2..2aec3605c9d41c5a1f27790d16de4d1d7309edff 100644
+index 27ae1d5c174be15aa70666f0cf3c208bac6b860a..b293c9717c37a5af25c026717f63d3b55aeb287f 100644
 --- a/test/unittests/BUILD.gn
 +++ b/test/unittests/BUILD.gn
-@@ -413,6 +413,7 @@ v8_cluster_source_set("v8_unittests_sources") {
-     "heap/spaces-unittest.cc",
+@@ -422,6 +422,7 @@ v8_cluster_source_set("v8_unittests_sources") {
      "heap/strong-root-allocator-unittest.cc",
+     "heap/weak-references-unittest.cc",
      "heap/write-barrier-unittest.cc",
 +    "interpreter/aegis-bytecode-shadow-unittest.cc",
      "interpreter/bytecode-array-builder-unittest.cc",
@@ -303,5 +303,5 @@ index 0000000000000000000000000000000000000000..1fa1cbf893327e6a6c77194f61a1450b
 +}  // namespace internal
 +}  // namespace v8
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From d688d96d89d15c82201cf07c42556a26e078e7be Mon Sep 17 00:00:00 2001
+From 6abec33264dfd29cd70909c3c01db2a9a939d495 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Sun, 11 Oct 2026 07:36:32 +0800
 Subject: [PATCH] chore: bump 158 for signed upgrade acceptance
@@ -23,5 +23,5 @@ index 4273f922960b1a46351b0411f85ac8c702f3b112..23448226782854b8e16f06a4661b9519
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

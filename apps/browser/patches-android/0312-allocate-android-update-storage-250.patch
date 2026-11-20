@@ -1,0 +1,78 @@
+From 9f2cb04ded3f05a99e389df347c56e2cf9e3ba91 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@users.noreply.github.com>
+Date: Fri, 23 Oct 2026 17:10:00 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=B8=8B=E8=BD=BD=E5=89=8D=E7=94=B3=E8=AF=B7?=
+ =?UTF-8?q?=20Android=20=E5=AD=98=E5=82=A8=E7=A9=BA=E9=97=B4=E5=B9=B6?=
+ =?UTF-8?q?=E9=80=92=E5=A2=9E=E5=80=99=E9=80=89=E7=89=88=E6=9C=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+采用系统可分配空间接口，保留 128 MiB 余量及下载前失败行为。
+严格 Lint 检查继续启用；候选递增至 Ver 6.0 (250)。
+---
+ .../browser/about_settings/AegisAndroidUpdate.java | 14 +++++++++++---
+ chrome/browser/ui/webui/help/aegis_github_update.h |  4 ++--
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java
+index f666cb1d6d75994d80f4a5ec9ea1a78aae3397ac..b2d6dfb30b3191b51c32e5dbb7b3613dacd1525a 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java
+@@ -9,6 +9,7 @@ import android.content.pm.PackageInfo;
+ import android.content.pm.PackageManager;
+ import android.content.pm.Signature;
+ import android.os.Build;
++import android.os.storage.StorageManager;
+ 
+ import org.json.JSONArray;
+ import org.json.JSONObject;
+@@ -32,6 +33,7 @@ import java.util.List;
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.Set;
++import java.util.UUID;
+ 
+ import javax.net.ssl.HttpsURLConnection;
+ 
+@@ -113,13 +115,19 @@ final class AegisAndroidUpdate {
+     }
+ 
+     static File download(Context context, AegisUpdatePolicy.Update update) throws Exception {
++        StorageManager storage = context.getSystemService(StorageManager.class);
++        if (storage == null) throw new IOException("无法获取存储服务，未开始下载");
++        UUID volume = storage.getUuidForPath(context.getCacheDir());
++        long requiredBytes = update.asset.size + 128L * 1024 * 1024;
++        if (storage.getAllocatableBytes(volume) < requiredBytes) {
++            throw new IOException("存储空间不足，未开始下载");
++        }
++        // 在后台申请空间，计入系统允许回收的缓存并保留原有余量。
++        storage.allocateBytes(volume, requiredBytes);
+         File directory = new File(context.getCacheDir(), "aegis-updates");
+         if (!directory.isDirectory() && !directory.mkdirs()) {
+             throw new IOException("无法创建安装包目录");
+         }
+-        if (directory.getUsableSpace() < update.asset.size + 128L * 1024 * 1024) {
+-            throw new IOException("存储空间不足，未开始下载");
+-        }
+         File output = File.createTempFile("aegis-", ".apk", directory);
+         boolean verified = false;
+         try {
+diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
+index f1a551fd7a3ab665c6fb74e36340cbbb1e18b0c8..374c6c3235d65c732746cdcbd50b406786ac7cb8 100644
+--- a/chrome/browser/ui/webui/help/aegis_github_update.h
++++ b/chrome/browser/ui/webui/help/aegis_github_update.h
+@@ -21,8 +21,8 @@ class SimpleURLLoader;
+ 
+ namespace aegis {
+ // 产品版本独立于 Chromium 内核版本；发布 tag 使用对应产品版本。
+-inline constexpr char kProductVersion[] = "6.0.0.249";
+-inline constexpr char kProductVersionLabel[] = "Ver 6.0 (249)";
++inline constexpr char kProductVersion[] = "6.0.0.250";
++inline constexpr char kProductVersionLabel[] = "Ver 6.0 (250)";
+ inline constexpr char kReleaseAPI[] =
+     "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
+ inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

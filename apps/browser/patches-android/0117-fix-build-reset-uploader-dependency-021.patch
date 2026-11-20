@@ -1,4 +1,4 @@
-From b1dc9a4b578769324b81001058b40581fa8d3f01 Mon Sep 17 00:00:00 2001
+From f4d922d1619eb844fed9260851263f9fc53e242e Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Mon, 14 Sep 2026 08:02:07 +0800
 Subject: [PATCH] fix(build): declare reset uploader network dependency for
@@ -26,5 +26,5 @@ index c38e45656c873352909b1e6519d903586be81e2a..08264057b69968a70c3f4fbbf25283ed
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From 336adb5c7ed384f04d4eb5c5553eccd3934e9d34 Mon Sep 17 00:00:00 2001
+From 17bf1aa9a1fd2bbde43ae70388687a020b3c1b55 Mon Sep 17 00:00:00 2001
 From: Aegis local development <aegis-local@invalid>
 Date: Tue, 8 Sep 2026 05:05:00 +0800
 Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E5=B7=B2=E5=90=AF=E7=94=A8?=
@@ -52,7 +52,7 @@ index 3ee9e06d11164ae8123b92176f32cf4c1b883641..766b206aa7ef4c613750a94a95b9d067
    static AegisAgentService* GetForProfileIfExists(Profile* profile);
  
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
-index 7dea82967848d32503025c4a6886715a0964a3d1..8997cd4259c7d3583c90ecf604f3e29d67eb3cb0 100644
+index ff507a332f668698af1c2f1062182193464b5de1..5982c5f9064fc87d5847edd889d4744185abc810 100644
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
 @@ -31,6 +31,7 @@
@@ -63,7 +63,7 @@ index 7dea82967848d32503025c4a6886715a0964a3d1..8997cd4259c7d3583c90ecf604f3e29d
  #include "chrome/browser/after_startup_task_utils.h"
  #include "chrome/browser/browser_features.h"
  #include "chrome/browser/browser_process.h"
-@@ -1635,6 +1636,9 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
+@@ -1626,6 +1627,9 @@ void ChromeBrowserMainParts::PostProfileInit(Profile* profile,
    // renderer request would leave newly loaded Profiles temporarily unguarded.
    aegis::AegisServiceFactory::EnsureIncognitoGuardForProfile(profile);
  
@@ -74,5 +74,5 @@ index 7dea82967848d32503025c4a6886715a0964a3d1..8997cd4259c7d3583c90ecf604f3e29d
    // Verify that the profile is not on a network share and if so prepare to show
    // notification to the user.
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

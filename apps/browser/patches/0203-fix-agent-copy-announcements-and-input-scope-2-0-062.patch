@@ -1,4 +1,4 @@
-From 78ddf783b26d5e8a500bd1a808d3689be449a5de Mon Sep 17 00:00:00 2001
+From 631b6d1adc99ae5d8f9e4f1ce0bef8c88bd8a14f Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 22 Sep 2026 19:57:29 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=B8=85=E7=90=86=E4=BB=BB=E5=8A=A1=E6=96=87?=
@@ -5188,5 +5188,5 @@ index 7887b9e75a30f8754942ee689261190864257ce3..9c40db91d6ff245d5dfe392c811ff9c7
 +} // namespace aegis
 +#endif // CHROME_BROWSER_UI_WEBUI_HELP_AEGIS_GITHUB_UPDATE_H_
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

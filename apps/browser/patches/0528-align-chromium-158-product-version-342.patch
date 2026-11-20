@@ -1,0 +1,24 @@
+From 207a7e45e541ea37d2a41fdb71bdb1508a6658df Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Fri, 20 Nov 2026 16:37:30 +0800
+Subject: [PATCH] Align Chromium 158 product metadata with candidate 342
+
+---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
+index 88c911b106b280fc64ae8b1da82f993c87b8a66c..dbe4023627ff6ab9bc81e207b3937bb241681838 100644
+--- a/chrome/browser/ui/webui/help/aegis_github_update.h
++++ b/chrome/browser/ui/webui/help/aegis_github_update.h
+@@ -21,8 +21,8 @@ class SimpleURLLoader;
+ 
+ namespace aegis {
+ // 产品版本独立于 Chromium 内核版本；发布 tag 使用对应产品版本。
+-inline constexpr char kProductVersion[] = "7.4.0.341";
+-inline constexpr char kProductVersionLabel[] = "Ver 7.4 (341)";
++inline constexpr char kProductVersion[] = "7.5.0.342";
++inline constexpr char kProductVersionLabel[] = "Ver 7.5 (342)";
+ inline constexpr char kReleaseAPI[] =
+     "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
+ inline constexpr char kReleasePage[] =

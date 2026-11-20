@@ -1,4 +1,4 @@
-From 145f788a349de6ff821f13354f964ab2d515a999 Mon Sep 17 00:00:00 2001
+From bb5290b05a0988925f58b48dd6775f52e18eee99 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Mon, 12 Oct 2026 01:39:14 +0800
 Subject: [PATCH] =?UTF-8?q?test:=20=E9=80=82=E9=85=8D=E4=B8=8B=E8=BD=BD?=
@@ -40,5 +40,5 @@ index e529bae06cfa767969a73dadd9450f84f7049364..a6da87faad751bb91705e75df93934a8
          // 长度正确但内容损坏；浏览器不得把这个文件标记为已安装。
          content::URLLoaderInterceptor::WriteResponse("HTTP/1.1 200 OK\nContent-Type: application/octet-stream\n\n",
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

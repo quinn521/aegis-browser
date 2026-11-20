@@ -1,4 +1,4 @@
-From 75ac37ce2fbbe54fb04e1323911eb7ec75396cbb Mon Sep 17 00:00:00 2001
+From fa6906987e0a10713e8e342bbdfb65c2925ae708 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Thu, 3 Sep 2026 00:21:32 +0800
 Subject: [PATCH] fix(aegis): brand Android agent entry
@@ -30,5 +30,5 @@ index d7a01e28863eb4d9a57b3d2419015450d81f43bb..f6638194c798096553db415f96d2de10
          <LinearLayout
              android:layout_width="0dp"
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

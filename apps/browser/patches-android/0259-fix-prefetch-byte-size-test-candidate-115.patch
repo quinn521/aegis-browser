@@ -1,4 +1,4 @@
-From 826b333b519c5b6b14992831cd0927603192a586 Mon Sep 17 00:00:00 2001
+From 6480d8afecbb4f442cd30ae481e68875e110ab7a Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 6 Oct 2026 19:05:41 +0800
 Subject: [PATCH] =?UTF-8?q?test:=20=E9=80=82=E9=85=8D=E9=A2=84=E5=8F=96?=
@@ -29,7 +29,7 @@ index a426ff959efcf6b0c73b553f36a1c7de7a201467..d436f5cb736949b0d12a75336fe32acc
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 diff --git a/content/browser/loader/prefetch_browsertest.cc b/content/browser/loader/prefetch_browsertest.cc
-index 3049711cd1611fcd0ded5d8b9b813ccd6b9e95f8..b38b75d1a854f2e1fb7b9eefd9b532082a8371b7 100644
+index 7dbb76f4bd886662d1d888ee118524e844c30587..423ce6806e78316f7e613bdb5cc582e5609064c1 100644
 --- a/content/browser/loader/prefetch_browsertest.cc
 +++ b/content/browser/loader/prefetch_browsertest.cc
 @@ -6,6 +6,7 @@
@@ -51,5 +51,5 @@ index 3049711cd1611fcd0ded5d8b9b813ccd6b9e95f8..b38b75d1a854f2e1fb7b9eefd9b53208
  
    mojo::Remote<network::mojom::URLLoaderFactory> cancelled_factory;
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

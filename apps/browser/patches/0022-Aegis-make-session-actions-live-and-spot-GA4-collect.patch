@@ -1,4 +1,4 @@
-From 44437ec4f6bd5591facf2b44493a2f010920a1ab Mon Sep 17 00:00:00 2001
+From af30be12ef3b3f82048c99fc8f85f39e9ae3ac99 Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 14 Aug 2026 16:09:16 +0800
 Subject: [PATCH] Aegis: make session actions live and spot GA4 collect
@@ -411,5 +411,5 @@ index 397444673f8857b8d4f34622ac711671f142a634..797ade05d57835ddca6d18abea099fc0
    "phishHosts": [
      "testsafebrowsing.appspot.com/s/phishing",
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

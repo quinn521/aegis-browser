@@ -1,4 +1,4 @@
-From f1b0a340c4c6ed4c1b58a2f6e5d3278c98348177 Mon Sep 17 00:00:00 2001
+From d99cafa63988f0f417aa98429dcb3fce190d7e92 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Wed, 30 Sep 2026 21:45:22 +0800
 Subject: [PATCH] =?UTF-8?q?=E5=BD=92=E4=B8=80=E5=8C=96=20Windows=20?=
@@ -66,5 +66,5 @@ index 9f98bcb40923019c032d2d5e0d792e23df0da589..540158361a61840dc91eb9dc08484154
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

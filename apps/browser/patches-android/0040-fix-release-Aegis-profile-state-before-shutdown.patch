@@ -1,4 +1,4 @@
-From 86d57ee1018af283b7aff6303b6626cccaf2c5fd Mon Sep 17 00:00:00 2001
+From 248ec18e8ec1b4f0904d13259cf6498ca6b1799f Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Tue, 25 Aug 2026 00:30:07 +0800
 Subject: [PATCH] fix: release Aegis profile state before shutdown
@@ -145,5 +145,5 @@ index 5d71c55a85c768a404c7f2d0d1928bd91fffd3b4..2ccc9fc511924d7e3ec64476a2d9675f
                       std::string system,
                       std::string user,
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

@@ -1,4 +1,4 @@
-From f6894af4358e0a579807bcc821d6dc0d374f94df Mon Sep 17 00:00:00 2001
+From e51530fff86b0a3ea4ad854122cef0f9384d262a Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 14 Aug 2026 00:56:23 +0800
 Subject: [PATCH] Aegis: make phish, AI, and cleanup actions visible
@@ -694,5 +694,5 @@ index 05d0aac23cef494add2ea6597dbe73c205bf5aab..0e89a6783cc9750e8a2b06978fb1ff66
  
  #endif  // CHROME_COMMON_AEGIS_COOKIE_CLASSIFY_H_
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

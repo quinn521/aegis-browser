@@ -1,4 +1,4 @@
-From bbe48e4ff1cab0d17d75f16031f1321297acff86 Mon Sep 17 00:00:00 2001
+From f22505ed31fe69e9ad82e890873eb2cf6e1080ec Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Fri, 14 Aug 2026 00:18:01 +0800
 Subject: [PATCH] Aegis: reuse compiled EasyList cache on startup
@@ -259,5 +259,5 @@ index 0f77dd29d82e5ea664e6144f9479342a9b283061..bed097884f8d577acde8f7b7caf4cac4
  }
  
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

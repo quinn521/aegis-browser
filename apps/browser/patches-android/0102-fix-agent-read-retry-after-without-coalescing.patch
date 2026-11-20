@@ -1,4 +1,4 @@
-From 2ca98bd54c892ffe96c193eb5e145a8303b87a3a Mon Sep 17 00:00:00 2001
+From 9bc912e39af10ee793abe7e396a04eaa4069940b Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sat, 5 Sep 2026 01:50:11 +0800
 Subject: [PATCH] fix(agent): read retry-after without coalescing
@@ -29,5 +29,5 @@ index 63aaf8b3c2c92d8892ce51410acdba6eac5d4c84..d57992b418750e94cd14ef689fc8a4d9
        }
      }
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

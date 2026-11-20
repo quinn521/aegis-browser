@@ -1,4 +1,4 @@
-From f886e43671d6aa4389db5193a6cd804cfb2fadcd Mon Sep 17 00:00:00 2001
+From dd5d41ac0088c89d5382af76e30537694af7878f Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 13 Oct 2026 05:25:52 +0800
 Subject: [PATCH] =?UTF-8?q?=E5=85=AC=E5=BC=80=E6=9E=84=E5=BB=BA=E4=B8=8D?=
@@ -150,5 +150,5 @@ index 60ea07dac150c25188f88e630df4c5e8e63bde13..459a52ded0d0383af24645ddb96eeba0
    add("readingResearchUnflagged", "not flagged; not a safety guarantee", "实验模型未提示，不代表安全", "實驗模型未提示，不代表安全");
    add("readingResearchWindows", "windows", "个窗口", "個視窗");
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 
