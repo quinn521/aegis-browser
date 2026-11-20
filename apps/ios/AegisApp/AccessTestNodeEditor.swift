@@ -338,6 +338,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var deadlineTask: Task<Void, Never>?
     private var retirement: (() -> Void)?
     private var retirementNavigation: WKNavigation?
+    private let retirementURL = URL(string: "https://aegis.invalid/retired/" + UUID().uuidString)!
     private var retiringOwner: AccessTestNodePage?
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
@@ -445,7 +446,9 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         retiringOwner = self
         view.stopLoading()
         view.configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        retirementNavigation = view.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">", baseURL: URL(string: "about:blank"))
+        // Give the local replacement a host-bearing identity under the proxied store.
+        // loadHTMLString does not fetch this synthetic HTTPS URL.
+        retirementNavigation = view.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">", baseURL: retirementURL)
     }
 
     private func release() {
@@ -495,7 +498,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if retiring {
-            decisionHandler(action.request.url?.absoluteString == "about:blank" ? .allow : .cancel)
+            decisionHandler(action.request.url == retirementURL ? .allow : .cancel)
         } else {
             if singleNavigation, action.targetFrame?.isMainFrame == true {
                 guard !sentMainFrame else {

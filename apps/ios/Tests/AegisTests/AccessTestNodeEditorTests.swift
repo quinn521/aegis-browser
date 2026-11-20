@@ -246,6 +246,28 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNil(denied.endpoint)
     }
 
+    func testClosingPendingPageCommitsInertDocumentAndReleasesEndpoint() async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
+                                 expectedRevision: nil, isPrivate: false)
+        let page = AccessTestNodePage(repository: repository, testingCore: PageCore())
+        await page.open(URL(string: "https://example.invalid/pending")!)
+        let view = try XCTUnwrap(page.webView)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.addSubview(view)
+        view.frame = window.bounds
+        window.makeKeyAndVisible()
+        defer { view.removeFromSuperview(); window.isHidden = true }
+        XCTAssertNotNil(page.endpoint)
+        page.close()
+        let deadline = Date().addingTimeInterval(10)
+        while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNil(page.endpoint, "A proxy-bound pending document must retire before its port is released")
+        XCTAssertEqual(view.url?.host, "aegis.invalid")
+        XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
+    }
+
     private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
         let running = Mutex(false)
         var isRunning: Bool { running.withLock { $0 } }
@@ -423,6 +445,10 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         XCTAssertNotNil(page.endpoint)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
+        page.close()
+        let retirementDeadline = Date().addingTimeInterval(10)
+        while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
     }
 }
 #endif
