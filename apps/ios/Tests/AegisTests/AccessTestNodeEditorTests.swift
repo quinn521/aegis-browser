@@ -613,12 +613,13 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "network":network.0])
             consecutiveNetworkFailures = timedOut || page.failureDomain == NSURLErrorDomain ? consecutiveNetworkFailures + 1 : 0
             preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
-            page.close()
-            let stopDeadline = Date().addingTimeInterval(5)
-            while page.endpoint != nil, Date() < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
+            let retired = try await Self.observeRetirement(page) { supplement, confirmed, elapsed, events in
+                try append(["event":supplement ? "retirement-supplement" : "retirement",
+                            "host":host, "attempt":attempt, "retired":confirmed,
+                            "observationSeconds":elapsed, "events":events])
+            }
+            guard retired else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
             page.webView?.removeFromSuperview()
-            try append(["event":"retirement", "host":host, "attempt":attempt, "retired":page.endpoint == nil])
-            guard page.endpoint == nil else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
             guard preparationFailures < 3 else { XCTFail("Repeated preparation failures; campaign stopped"); return }
             if consecutiveNetworkFailures >= 10 {
                 try append(["event":"checkpoint", "reason":"consecutive-network-failures", "reservedCount":reserved.count])
@@ -628,6 +629,26 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         try append(["event":"checkpoint", "reason":"phase-complete", "phaseLimit":limit, "reservedCount":reserved.count])
 #endif
 
+    }
+
+    /// The initial observation and eventual acknowledgement are separate facts.
+    /// Keep the old view mounted and its port owned until the exact inert commit.
+    /// Never retry the target or release anything to make a deadline appear green.
+    private static func observeRetirement(
+        _ page: AccessTestNodePage,
+        checkpoint: (Bool, Bool, TimeInterval, [String]) throws -> Void
+    ) async throws -> Bool {
+        let started = Date()
+        page.close()
+        for (index, limit) in [5.0, 10.0].enumerated() {
+            while page.endpoint != nil, Date().timeIntervalSince(started) < limit {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let confirmed = page.endpoint == nil
+            try checkpoint(index > 0, confirmed, Date().timeIntervalSince(started), page.retirementEvents)
+            if confirmed { return true }
+        }
+        return false
     }
 
     /// Observation must not hold up the next checkpoint when WebContent stops responding.
@@ -762,7 +783,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertEqual(page.status, "连接暂不可用", "A script failure counts only after protection retired the document")
             }
         }
-        let busyStarted = expectation(description: "controlled WebContent busy loop started")
+        let busyStarted = XCTestExpectation(description: "controlled WebContent busy loop started")
         let busy = RetirementSignal { busyStarted.fulfill() }
         let probeBusyContent = environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"] == "1"
         if probeBusyContent {
@@ -771,17 +792,18 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             await fulfillment(of: [busyStarted], timeout: 2)
         }
         defer { if probeBusyContent { webView.configuration.userContentController.removeScriptMessageHandler(forName: "aegisRetirementSignal") } }
-        let retirementStarted = Date()
-        page.close()
-        let retirementDeadline = Date().addingTimeInterval(10)
-        while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
-        let firstWindowObserved = Date().timeIntervalSince(retirementStarted) <= 5 && page.endpoint == nil
-        receipt["retirementWithinFirst5Seconds"] = firstWindowObserved
-        receipt["retirementObservationSeconds"] = Date().timeIntervalSince(retirementStarted)
+        var observations: [[String: Any]] = []
+        let retired = try await Self.observeRetirement(page) { supplement, confirmed, elapsed, events in
+            observations.append(["supplement":supplement, "confirmed":confirmed,
+                                 "observationSeconds":elapsed, "events":events])
+        }
+        receipt["retirementObservations"] = observations
+        receipt["retirementWithinFirst5Seconds"] = observations.first?["confirmed"]
+        receipt["retirementObservationSeconds"] = observations.last?["observationSeconds"]
         receipt["retirementEvents"] = page.retirementEvents
         receipt["busyContentProbe"] = probeBusyContent
-        XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
-        receipt["retired"] = page.endpoint == nil
+        XCTAssertTrue(retired, "The real proxy-bound document must commit its inert replacement")
+        receipt["retired"] = retired
         XCTAssertNotNil(page.initialBinding)
     }
 
