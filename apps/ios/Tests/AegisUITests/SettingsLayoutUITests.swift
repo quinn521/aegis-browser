@@ -135,10 +135,12 @@ final class SettingsLayoutUITests: XCTestCase {
         let saved = app.staticTexts["access-test-node-saved"]
         XCTAssertTrue(reveal(saved, app, scrollDown: true))
         XCTAssertEqual(saved.label, "Node saved.")
-        XCTAssertTrue(reveal(apply, app))
+        // The saved section includes a URL TextField. Start below-viewport
+        // scrolling in the form gutter so text interaction cannot absorb it.
+        XCTAssertTrue(reveal(apply, app, dragOffsetX: 0.96))
         XCTAssertFalse(apply.isEnabled)
         let remove = app.buttons["access-test-node-remove"]
-        XCTAssertTrue(reveal(remove, app))
+        XCTAssertTrue(reveal(remove, app, dragOffsetX: 0.96))
         remove.tap()
         // UIKit may expose both a popup wrapper and its button with this identifier.
         let confirm = app.sheets.buttons.matching(identifier: "access-test-node-confirm-remove").firstMatch
