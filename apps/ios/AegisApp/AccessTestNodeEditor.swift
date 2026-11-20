@@ -322,12 +322,18 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var retirement: (() -> Void)?
     private var retirementNavigation: WKNavigation?
     private var retiringOwner: AccessTestNodePage?
+    private(set) var failureDomain: String?
+    private(set) var failureCode: Int?
+    private let singleNavigation: Bool
+    private var sentMainFrame = false
     private var closed = false
     private var retiring = false
 
-    init(repository: AccessTestNodeRepository = .shared, testingCore: (any AccessEmbeddedCoreControlling)? = nil) {
+    init(repository: AccessTestNodeRepository = .shared, testingCore: (any AccessEmbeddedCoreControlling)? = nil,
+         singleNavigation: Bool = false) {
         self.repository = repository
         self.testingCore = testingCore
+        self.singleNavigation = singleNavigation
         super.init()
     }
 
@@ -364,6 +370,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             deadlineTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(15))
                 guard !Task.isCancelled, let self, self.endpoint == nil else { return }
+                self.failureDomain = NSURLErrorDomain
+                self.failureCode = NSURLErrorTimedOut
                 self.close()
             }
             let result = try await newPublisher.prepare(.init(operationID: operation, deadline: .seconds(15)))
@@ -390,6 +398,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             status = "正在加载"
             view.load(URLRequest(url: url))
         } catch {
+            failureDomain = (error as NSError).domain
+            failureCode = (error as NSError).code
             close()
         }
     }
@@ -440,11 +450,19 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        close()
+        if !retiring {
+            failureDomain = (error as NSError).domain
+            failureCode = (error as NSError).code
+            close()
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        close()
+        if !retiring {
+            failureDomain = (error as NSError).domain
+            failureCode = (error as NSError).code
+            close()
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
@@ -457,6 +475,16 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         if retiring {
             decisionHandler(action.request.url?.absoluteString == "about:blank" ? .allow : .cancel)
         } else {
+            if singleNavigation, action.targetFrame?.isMainFrame == true {
+                guard !sentMainFrame else {
+                    decisionHandler(.cancel)
+                    failureDomain = "AdditionalTopLevelNavigation"
+                    failureCode = 1
+                    close()
+                    return
+                }
+                sentMainFrame = true
+            }
             let scheme = action.request.url?.scheme
             decisionHandler(scheme == "https" && !action.shouldPerformDownload ? .allow : .cancel)
         }

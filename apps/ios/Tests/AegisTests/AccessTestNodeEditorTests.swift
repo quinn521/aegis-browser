@@ -3,6 +3,8 @@ import CoreImage
 import Vision
 import WebKit
 import UIKit
+import CryptoKit
+import Network
 import Security
 import Synchronization
 import XCTest
@@ -283,6 +285,90 @@ final class AccessTestNodeEditorTests: XCTestCase {
 #if DEBUG
 @MainActor
 final class AccessTestNodeDeviceTests: XCTestCase {
+    func testPhysicalDomainCampaign() async throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("This campaign requires its designated physical device")
+#else
+        let env = ProcessInfo.processInfo.environment
+        guard env["AEGIS_TEST_CAMPAIGN_DEVICE"] == "ios-device-2d62695fc7",
+              let node = env["AEGIS_TEST_AUTHORIZED_NODE"],
+              let input = Bundle.main.url(forResource: "domains", withExtension: "txt") else {
+            throw XCTSkip("Explicit physical campaign inputs are required")
+        }
+        var system = utsname()
+        uname(&system)
+        let model = withUnsafePointer(to: &system.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
+        }
+        guard model == "iPhone14,3" else { XCTFail("Wrong physical device model"); return }
+        let data = try Data(contentsOf: input)
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard digest == "84a004adf2537fde3befb724fe77512cf3a4acb1df8ec350cd898a6cf8428374" else {
+            XCTFail("Campaign input digest differs"); return
+        }
+        let hosts = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+        guard hosts.count == 4372, Set(hosts).count == hosts.count else { XCTFail("Campaign input is incomplete"); return }
+        let repository = AccessTestNodeRepository.shared
+        guard repository.allowsEditing(isPrivate: false) else { XCTFail("Native admission denied"); return }
+        let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
+        if (try? repository.savedNode().parameters()) != parameters {
+            _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
+        }
+        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ios208-domain-dispatch.jsonl")
+        if !FileManager.default.fileExists(atPath: file.path) {
+            try Data().write(to: file, options: .atomic)
+        }
+        let prior = try Data(contentsOf: file)
+        var reserved = Set<String>()
+        for line in String(decoding: prior, as: UTF8.self).split(separator: "\n") {
+            guard let json = line.data(using: .utf8), let record = try JSONSerialization.jsonObject(with: json) as? [String: Any],
+                  record["dataset"] as? String == digest else { XCTFail("Dispatch ledger is damaged"); return }
+            if record["event"] as? String == "reserved", let host = record["host"] as? String { reserved.insert(host) }
+        }
+        let output = try FileHandle(forWritingTo: file)
+        defer { try? output.close() }
+        try output.seekToEnd()
+        func append(_ item: [String: Any]) throws {
+            var record = item
+            record["dataset"] = digest
+            record["device"] = "ios-device-2d62695fc7"
+            record["bundle"] = Bundle.main.bundleIdentifier
+            record["time"] = Date().timeIntervalSince1970
+            var bytes = try JSONSerialization.data(withJSONObject: record, options: .sortedKeys)
+            bytes.append(10)
+            try output.write(contentsOf: bytes)
+            try output.synchronize()
+        }
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        for host in hosts where !reserved.contains(host) {
+            let attempt = UUID().uuidString
+            try append(["event":"reserved", "host":host, "attempt":attempt])
+            reserved.insert(host)
+            guard let url = URL(string: "https://" + host + "/") else { XCTFail("Invalid fixed hostname"); return }
+            let page = AccessTestNodePage(singleNavigation: true)
+            await page.open(url)
+            if let view = page.webView { view.frame = window.bounds; window.addSubview(view) }
+            let deadline = Date().addingTimeInterval(20)
+            while page.status == "正在加载", Date() < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            try append(["event":"result", "host":host, "attempt":attempt,
+                        "state":page.status, "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
+                        "endpoint":page.endpoint?.identity ?? "", "generation":page.endpoint?.generation ?? 0,
+                        "actualProtocol":"http"])
+            page.close()
+            let stopDeadline = Date().addingTimeInterval(5)
+            while page.endpoint != nil, Date() < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
+            page.webView?.removeFromSuperview()
+            guard page.endpoint == nil else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
+        }
+#endif
+    }
+
     /// Explicit operator-supplied inputs only. Never uses any member of the domain campaign as a probe.
     func testAuthorizedAppPath() async throws {
         let environment = ProcessInfo.processInfo.environment
