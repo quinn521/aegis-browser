@@ -246,6 +246,12 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNil(denied.endpoint)
     }
 
+    func testPageExposesBothWebKitPolicySelectors() {
+        let page = AccessTestNodePage()
+        XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationAction:decisionHandler:")))
+        XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")))
+    }
+
     func testClosingPendingPageCommitsInertDocumentAndReleasesEndpoint() async throws {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),

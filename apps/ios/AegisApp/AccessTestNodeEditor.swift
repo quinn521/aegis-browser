@@ -490,13 +490,13 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
-                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+                 decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
         if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
         decisionHandler(response.canShowMIMEType ? .allow : .cancel)
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                 decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         if retiring {
             decisionHandler(action.request.url == retirementURL ? .allow : .cancel)
         } else {
