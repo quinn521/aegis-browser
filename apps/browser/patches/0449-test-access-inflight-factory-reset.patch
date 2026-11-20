@@ -1,8 +1,11 @@
-From b075157bdceeb9432c76b8cb14ab703c55a0fdb9 Mon Sep 17 00:00:00 2001
+From ca269d4b53f31ff7b7403a51b1a7c4c7f73d064c Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 08:10:32 +0800
 Subject: [PATCH] test(access): preserve in-flight HTTP during factory reset
+
 ---
+ .../access_network_context_ipc_unittest.cc    | 64 +++++++++++++++++--
+ 1 file changed, 57 insertions(+), 7 deletions(-)
 
 diff --git a/components/aegis_access/access_network_context_ipc_unittest.cc b/components/aegis_access/access_network_context_ipc_unittest.cc
 index 4542d7d93acda14313cc243641f06cbf5ea69af6..702f2e7d1c1cf5c539642dcff6c9bb728b3a7a09 100644
@@ -120,3 +123,6 @@ index 4542d7d93acda14313cc243641f06cbf5ea69af6..702f2e7d1c1cf5c539642dcff6c9bb72
  TEST_F(AccessNetworkContextIPCTest, RetainedPrivateContextUsesExactOriginalContext) {
    mojo::Remote<mojom::AegisAccessContext> capability;
    base::test::TestFuture<std::string> future;
+-- 
+2.54.0 (Apple Git-157)
+

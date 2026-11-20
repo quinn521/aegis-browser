@@ -1,9 +1,12 @@
-From aa4db4023802a486918b97a293910484e059f0c4 Mon Sep 17 00:00:00 2001
+From fa5118f57ddc385cc787e5bc45f15e56cc503e4d Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 16:45:08 +0800
 Subject: [PATCH] fix(access): use valid GN comments for private route test
  targets
+
 ---
+ components/aegis_access/BUILD.gn | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 341b2e48052a538e79d894f7a26fe1573383dd41..ee204d3cc3357d599f28860b71bf5c0568f12f02 100644
@@ -27,3 +30,6 @@ index 341b2e48052a538e79d894f7a26fe1573383dd41..ee204d3cc3357d599f28860b71bf5c05
  test("access_network_url_loader_unittests") {
    sources = [
      "access_network_test_main.cc",
+-- 
+2.54.0 (Apple Git-157)
+

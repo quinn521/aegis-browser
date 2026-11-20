@@ -1,9 +1,17 @@
-From 07c49d72dd61342bcc5547bfe0d592bdf4145e2b Mon Sep 17 00:00:00 2001
+From 1c731a1702f2d89c9a0e421195e96cc14e5a13df Mon Sep 17 00:00:00 2001
 From: Aegis Local Validation <aegis-local@invalid>
 Date: Tue, 10 Nov 2026 04:53:21 +0800
 Subject: [PATCH] fix(access): compile native session targets and preserve
  committed recovery routes
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          | 18 +++++++------
+ .../aegis/access/access_site_intent.cc        |  3 +++
+ .../browser/aegis/access/access_site_intent.h |  3 +++
+ .../aegis/access/access_site_proxy_session.cc | 16 +++++++++++-
+ .../aegis/access/access_site_proxy_session.h  |  6 ++++-
+ .../access_site_proxy_session_unittest.cc     | 25 +++++++++++++++++++
+ 6 files changed, 62 insertions(+), 9 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index c79ec02c31661a909d1f92db8bebe098a78b9ec7..fcca1322832927be3dc78a28ccfa5cfd8a1faa86 100644
@@ -206,3 +214,6 @@ index 8a4116af54f76a756aee50336e8692851c0a12b6..f38f750bb830a7e4720250c32b67a1de
  TEST(AccessSiteProxySessionTest,
       NetworkServiceRestartRebuildsProxyWithoutDirect) {
    FakeOrchestrator orchestrator;
+-- 
+2.54.0 (Apple Git-157)
+

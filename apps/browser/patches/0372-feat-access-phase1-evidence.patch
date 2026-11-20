@@ -1,8 +1,17 @@
-From 1522b5ff1d3ffb5446ce1da6d375cb407596eeb3 Mon Sep 17 00:00:00 2001
+From b9fdc08c6d50f510a9a2e7f57064483f74011b3e Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Sun, 8 Nov 2026 16:00:00 +0000
 Subject: [PATCH] feat: add macOS product phase-1 evidence pack
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   2 +
+ ...proxying_url_loader_factory_browsertest.cc |   4 +
+ ...cess_site_proxy_phase1_evidence_fixture.cc | 200 ++++++++++++++++++
+ ...ccess_site_proxy_phase1_evidence_fixture.h |  74 +++++++
+ .../access_site_proxy_session_unittest.cc     |  80 +++++++
+ 5 files changed, 360 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_phase1_evidence_fixture.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_phase1_evidence_fixture.h
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index c491344334069cdfb8820ff9698d60f3772131c6..81c8f1bb1524cb20e9f6d869f0d7a4054ebbdf36 100644
@@ -415,3 +424,6 @@ index 7da61816ca6bace2ba147a010823508a8a290710..c4d851d9ce199bd4207e1f80f4816525
  }  // namespace
  }  // namespace aegis::access
 +
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,12 @@
-From c436d4ea80aa25ab2da14103963ea914e5cefd0e Mon Sep 17 00:00:00 2001
+From cb6badb7f953c7d0ac2d1f44e63093ea96602c13 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 15:29:44 +0800
 Subject: [PATCH] test(access): reproduce OFF during committed readiness
  verification
+
 ---
+ .../access_site_proxy_product_unittest.cc     | 55 +++++++++++++++++++
+ 1 file changed, 55 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index 70de30cd2cfadb55bd9a932782c30f1dbd6e6633..9691540b5960333bb859abbdd2a75b80027d9cf1 100644
@@ -78,3 +81,6 @@ index 70de30cd2cfadb55bd9a932782c30f1dbd6e6633..9691540b5960333bb859abbdd2a75b80
  TEST_F(AccessRetryNavigationProductTest, NewNavigationBeforeRealAckIsNotReloaded) {
    BeginHeldRetry();
    const GURL replacement("https://replacement.example/keep");
+-- 
+2.54.0 (Apple Git-157)
+

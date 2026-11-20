@@ -1,8 +1,16 @@
-From d28249be547a265b9b11f66aab7696bb6a42f3ed Mon Sep 17 00:00:00 2001
+From 12074b9dec8b49f2859564a4f0d1243673dcffa1 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 20:45:00 +0800
-Subject: [PATCH] 修复 Windows 工具初始化并递增候选为 204
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=20Windows=20=E5=B7=A5?=
+ =?UTF-8?q?=E5=85=B7=E5=88=9D=E5=A7=8B=E5=8C=96=E5=B9=B6=E9=80=92=E5=A2=9E?=
+ =?UTF-8?q?=E5=80=99=E9=80=89=E4=B8=BA=20204?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index edcce161cf13d4c954da5b7f3c3dea6257ea1709..2fc67e2e91642bb3644407a29f56ce40ce56940f 100644
@@ -19,3 +27,6 @@ index edcce161cf13d4c954da5b7f3c3dea6257ea1709..2fc67e2e91642bb3644407a29f56ce40
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

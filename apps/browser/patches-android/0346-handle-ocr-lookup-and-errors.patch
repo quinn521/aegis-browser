@@ -1,4 +1,4 @@
-From 4cf71274fdb88a1b514a16d57aa55e836674f5fc Mon Sep 17 00:00:00 2001
+From 96b3ab1ea17702bd74d502594508e3e7e0b26e3b Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Tue, 17 Nov 2026 21:18:33 +0800
 Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=20OCR=20=E9=A1=B5=E9=9D=A2?=
@@ -8,6 +8,10 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/browser/resources/aegis/aegis.ts       | 4 ++--
+ chrome/browser/resources/aegis/capture.js     | 8 ++++----
+ chrome/browser/resources/aegis/offline_ocr.js | 2 +-
+ 3 files changed, 7 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/aegis.ts b/chrome/browser/resources/aegis/aegis.ts
 index 52581d36c495b05ff11f78ecefd4da73c361cf9a..0deae524031e16cdbbf75dd3f8b7a90221edaec5 100644
@@ -79,3 +83,6 @@ index 9dab32a708f6461b439269c7f72084e31638003f..e42bcd1fd91e4ee4c54fb08c0f0f9ebd
      createScriptURL(value) {
        if (value === workerPath) return value;
        throw new TypeError('Unexpected OCR worker');
+-- 
+2.54.0 (Apple Git-157)
+

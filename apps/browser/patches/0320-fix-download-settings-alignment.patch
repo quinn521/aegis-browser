@@ -1,8 +1,17 @@
-From 8f346caf35c6a840cd09994513e6790136aaac41 Mon Sep 17 00:00:00 2001
+From cc93c075e98c9dd3a96d17723b236bea0fe348e2 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Wed, 21 Oct 2026 23:10:00 +0800
-Subject: [PATCH] 对齐下载设置卡片与限速选项
+Subject: [PATCH] =?UTF-8?q?=E5=AF=B9=E9=BD=90=E4=B8=8B=E8=BD=BD=E8=AE=BE?=
+ =?UTF-8?q?=E7=BD=AE=E5=8D=A1=E7=89=87=E4=B8=8E=E9=99=90=E9=80=9F=E9=80=89?=
+ =?UTF-8?q?=E9=A1=B9?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ .../downloads_page/downloads_page.css         | 29 +++++++++++++++++--
+ .../ui/webui/help/aegis_github_update.h       |  4 +--
+ 2 files changed, 29 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/resources/settings/downloads_page/downloads_page.css b/chrome/browser/resources/settings/downloads_page/downloads_page.css
 index 3d281247297dda3db5897b3629be63cf99a22354..f6bac9c13f6638a0928a6a577bbcddf7bbe16906 100644
@@ -71,3 +80,6 @@ index bbdd1766defaa62983c77f3fe3a0161750eef73e..ef83cd35a50d3c625bd99f4d33472aab
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

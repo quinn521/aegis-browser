@@ -1,9 +1,12 @@
-From 794edb8d74a4407947f96aa01ac5fc519f9bfce8 Mon Sep 17 00:00:00 2001
+From b44dfb9caa49bf518f8a99a6231c0a56d631a949 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 08:22:08 +0800
 Subject: [PATCH] test(access): match proxy response path and guard fixture
  wait
+
 ---
+ .../aegis_access/access_network_context_ipc_unittest.cc   | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
 
 diff --git a/components/aegis_access/access_network_context_ipc_unittest.cc b/components/aegis_access/access_network_context_ipc_unittest.cc
 index 702f2e7d1c1cf5c539642dcff6c9bb728b3a7a09..eb0e091ee8d41e0ab7bfae6f53874cbc6c781f7f 100644
@@ -38,3 +41,6 @@ index 702f2e7d1c1cf5c539642dcff6c9bb728b3a7a09..eb0e091ee8d41e0ab7bfae6f53874cbc
      response.WaitForRequest();
      ASSERT_TRUE(response.has_received_request());
      ASSERT_FALSE(client_->has_received_completion());
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,8 +1,17 @@
-From 7c913882add37665d9dbf76ffc501790926e5ed8 Mon Sep 17 00:00:00 2001
+From f1a3a714e71aae5292f2b35b0013c1bd8edd1835 Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 05:42:54 +0800
 Subject: [PATCH] feat(access): isolate socket and HTTP2 session pool keys
+
 ---
+ components/aegis_access/BUILD.gn              |  12 ++
+ .../access_route_pool_isolation_unittest.cc   | 115 ++++++++++++++++++
+ net/socket/client_socket_pool.cc              |   6 +-
+ net/socket/client_socket_pool.h               |   9 +-
+ net/spdy/spdy_session_key.cc                  |  15 ++-
+ net/spdy/spdy_session_key.h                   |   9 +-
+ 6 files changed, 157 insertions(+), 9 deletions(-)
+ create mode 100644 components/aegis_access/access_route_pool_isolation_unittest.cc
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 9e759fb88702bc6cb978cf34f31197baf9130d36..3b6d17f03179264051a44f81738559c02693c4a0 100644
@@ -312,3 +321,6 @@ index 1592b2dea164770d3d51fb0052cd0922b01cbc6e..d0f512618330c947261a5d95dcd41afd
  };
  
  NET_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
+-- 
+2.54.0 (Apple Git-157)
+

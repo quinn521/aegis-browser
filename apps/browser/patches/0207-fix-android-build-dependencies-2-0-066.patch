@@ -1,4 +1,4 @@
-From c376bc47440d965607e320154b189eef461754a6 Mon Sep 17 00:00:00 2001
+From dcd7bcc04b4ae918a4fda87c86a066495ea1e05d Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 29 Sep 2026 04:34:35 +0800
 Subject: [PATCH] =?UTF-8?q?=E8=A1=A5=E9=BD=90=20Android=20=E6=9E=84?=
@@ -9,12 +9,19 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/browser/BUILD.gn                            | 1 +
+ chrome/browser/aegis/BUILD.gn                      | 4 ++--
+ chrome/browser/aegis/agent/aegis_browser_tools.cc  | 3 ++-
+ chrome/browser/policy/BUILD.gn                     | 1 +
+ chrome/browser/ui/webui/aegis/aegis_ui_handler.cc  | 3 ++-
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 6 files changed, 10 insertions(+), 6 deletions(-)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index 42f7820ca4efe9be81bc8acba1e6b25f28c16b3a..85ba26ddfc29ab2332cb02bc0209808fc3013d59 100644
+index 9950d11b42ea5ee086466c6b1a4c27a296051113..d9e5bd8329eb292bfcdf2bf7fdc8d77092333985 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -1875,6 +1875,7 @@ source_set("core") {
+@@ -1511,6 +1511,7 @@ source_set("core") {
        "//chrome/browser/prefetch/android",
        "//chrome/browser/preloading/android",
        "//chrome/browser/ui/page_info",
@@ -73,10 +80,10 @@ index 04e77a74a0b460d04fd3386f8cfa963fdb8b7710..fdc7986171fe78e49cb0cb730e03985e
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #endif
 diff --git a/chrome/browser/policy/BUILD.gn b/chrome/browser/policy/BUILD.gn
-index bc96564c17ab58a883386eae648046c4bfb0c708..a5728a23c28deb0e6e0dafaa746af7e0723e1324 100644
+index 5ff20f872948b2c1e013ca34fe30226dceadf451..999a6db3324d125854af452e1290a304b0604cee 100644
 --- a/chrome/browser/policy/BUILD.gn
 +++ b/chrome/browser/policy/BUILD.gn
-@@ -863,6 +863,7 @@ source_set("unit_tests") {
+@@ -862,6 +862,7 @@ source_set("unit_tests") {
      "//chrome/test/base:testing_browser_process",
      "//components/account_id:test_support",
      "//components/enterprise:test_support",
@@ -113,3 +120,6 @@ index 4a0e8967b485a0b018c5c84d094d9f7065821a27..442e37c0dc5f615d5286c4a78761d364
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

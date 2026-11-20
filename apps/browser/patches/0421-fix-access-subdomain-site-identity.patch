@@ -1,9 +1,15 @@
-From 269d0b21af88a7a85f358cd12ad118b9be79c903 Mon Sep 17 00:00:00 2001
+From dbc052594deb11e52aa6020c94d89465a55e6316 Mon Sep 17 00:00:00 2001
 From: Codex <codex@localhost>
 Date: Tue, 10 Nov 2026 22:09:37 +0800
 Subject: [PATCH] fix(access): canonicalize top-level sites for exact subdomain
  rules
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  1 +
+ .../aegis/access/access_site_intent.cc        | 10 ++++-
+ .../access/access_site_intent_unittest.cc     | 40 +++++++++++++++++++
+ .../access_site_proxy_product_unittest.cc     | 27 +++++++++++++
+ 4 files changed, 76 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 6af852c0f08f9b5582440b26bfc03202f2ac8b1b..01b61e21b6e3c5fdb552cd57beb33088f5cbeaa7 100644
@@ -132,3 +138,6 @@ index d6e00b0136e59c8b8e8986aace0f7214676adb08..ff1fa59938cedd3c8d3f2f6bffa1ea2c
 +
  }  // namespace
  }  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

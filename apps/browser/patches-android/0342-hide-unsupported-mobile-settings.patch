@@ -1,9 +1,11 @@
-From 1bf912063ea77fb382f4d51d53e82a50db73958b Mon Sep 17 00:00:00 2001
+From 6a92d57f73a1cbf42af98a6b1ddbec6ef0748409 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Tue, 17 Nov 2026 20:54:09 +0800
 Subject: [PATCH] 0326-hide-unsupported-mobile-settings.patch
 
 ---
+ chrome/browser/resources/aegis/mobile_settings.ts | 14 ++++----------
+ 1 file changed, 4 insertions(+), 10 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/mobile_settings.ts b/chrome/browser/resources/aegis/mobile_settings.ts
 index 899df8b1b51ff75e65bda94fae9a217571ecd15b..21b84a627e2e87d3a219abe5ed211c63784bf526 100644
@@ -45,3 +47,6 @@ index 899df8b1b51ff75e65bda94fae9a217571ecd15b..21b84a627e2e87d3a219abe5ed211c63
        card.append(description);
        const actions: Array<[string, string]> = group.id === 'reading' ? [
          ['reading', text('本机翻译设置', 'Local translation settings', '本機翻譯設定')],
+-- 
+2.54.0 (Apple Git-157)
+

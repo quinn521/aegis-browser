@@ -1,9 +1,12 @@
-From 8be39f1d37e6c7755e7b8235567f695cfa3d6646 Mon Sep 17 00:00:00 2001
+From dc7c53819a2f92b2d2b6af91f1bd3df7fd85d87e Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 15:31:48 +0800
 Subject: [PATCH] test(access): use supported captured callback in OFF race
  fixture
+
 ---
+ .../browser/aegis/access/access_site_proxy_product_unittest.cc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index 9691540b5960333bb859abbdd2a75b80027d9cf1..7269364ec306523f2826c2088105ff4512a71fee 100644
@@ -26,3 +29,6 @@ index 9691540b5960333bb859abbdd2a75b80027d9cf1..7269364ec306523f2826c2088105ff45
      EXPECT_EQ(bubble_->SnapshotForCommittedUrl(failed_).intent,
                AccessSiteIntent::kAllow);
      EXPECT_TRUE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+-- 
+2.54.0 (Apple Git-157)
+

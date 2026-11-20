@@ -1,9 +1,18 @@
-From 32b5e0062d2a86f66bb4822228447de0ba9f981b Mon Sep 17 00:00:00 2001
+From 3ea3059c8836412a4a78cc589bf67f7208d9e44c Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 11:35:57 +0800
 Subject: [PATCH] feat(access): preserve security parameters through private
  factory terminal
+
 ---
+ components/aegis_access/BUILD.gn              |  22 ++++
+ .../aegis_access/access_network_test_main.cc  |  10 ++
+ .../access_terminal_factory_unittest.cc       | 106 ++++++++++++++++++
+ .../public/cpp/url_loader_factory_builder.cc  |  22 +++-
+ .../public/cpp/url_loader_factory_builder.h   |  20 +++-
+ 5 files changed, 175 insertions(+), 5 deletions(-)
+ create mode 100644 components/aegis_access/access_network_test_main.cc
+ create mode 100644 components/aegis_access/access_terminal_factory_unittest.cc
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 7678e9d21a4e8c5c05cd2102ac8ca2b350ebbce2..47c0d18cd757b959d55bf4fab7b6407da4cbdc84 100644
@@ -277,3 +286,6 @@ index f0e41b291984b1a92f194e3dec1a453062ede9b9..9e7dcccedd50320099000b5e1aec3f92
    size_t num_interceptors_ = 0;
  };
  
+-- 
+2.54.0 (Apple Git-157)
+

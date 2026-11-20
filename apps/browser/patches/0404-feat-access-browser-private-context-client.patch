@@ -1,9 +1,19 @@
-From 060aa50eda168e484eb00f1ec2a44b80dde50f69 Mon Sep 17 00:00:00 2001
+From 8cd3fed125f40f16ea59a39ef74b287df99ef58c Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 17:12:10 +0800
 Subject: [PATCH] feat(access): publish full snapshots through Browser-retained
  Context client
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  13 +
+ .../access/access_private_context_client.cc   | 145 +++++
+ .../access/access_private_context_client.h    |  50 ++
+ components/aegis_access/BUILD.gn              |  19 +
+ .../access_private_context_client_unittest.cc | 595 ++++++++++++++++++
+ 5 files changed, 822 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_private_context_client.cc
+ create mode 100644 chrome/browser/aegis/access/access_private_context_client.h
+ create mode 100644 components/aegis_access/access_private_context_client_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 34c7eb832c875ef48d473f5212f18ab6535bb090..a724e7927898edd8ff1c8af4797d8794ef4017bf 100644
@@ -861,3 +871,6 @@ index 0000000000000000000000000000000000000000..e3691397402ef8c42e30854495326aa4
 +}
 +}  // namespace
 +}  // namespace network
+-- 
+2.54.0 (Apple Git-157)
+

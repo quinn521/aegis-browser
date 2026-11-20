@@ -1,8 +1,16 @@
-From 15ce7f5a31b020a167ab6215a1b1963585b21c6e Mon Sep 17 00:00:00 2001
+From 823ea7184060d9b3532020d26bbb3efb01cff71b Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Tue, 13 Oct 2026 20:45:00 +0800
-Subject: [PATCH] 补齐 Windows 源码 origin 并递增候选为 205
+Subject: [PATCH] =?UTF-8?q?=E8=A1=A5=E9=BD=90=20Windows=20=E6=BA=90?=
+ =?UTF-8?q?=E7=A0=81=20origin=20=E5=B9=B6=E9=80=92=E5=A2=9E=E5=80=99?=
+ =?UTF-8?q?=E9=80=89=E4=B8=BA=20205?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index 2fc67e2e91642bb3644407a29f56ce40ce56940f..892b5f0e24c38374aabf5a59802607327cdf8492 100644
@@ -19,3 +27,6 @@ index 2fc67e2e91642bb3644407a29f56ce40ce56940f..892b5f0e24c38374aabf5a5980260732
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,8 +1,16 @@
-From 5266272d9b137a01a64f7aadd119d6b1dac3381d Mon Sep 17 00:00:00 2001
+From 184563e2c48d85b1e946564a979e45d81bbb9d54 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 00:15:00 +0800
-Subject: [PATCH] 同步 Android 原生设置候选的产品版本
+Subject: [PATCH] =?UTF-8?q?=E5=90=8C=E6=AD=A5=20Android=20=E5=8E=9F?=
+ =?UTF-8?q?=E7=94=9F=E8=AE=BE=E7=BD=AE=E5=80=99=E9=80=89=E7=9A=84=E4=BA=A7?=
+ =?UTF-8?q?=E5=93=81=E7=89=88=E6=9C=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index b0ba1b52ebac01333c0472d19e40085bf312d822..4ffb80865ce83cdd51c72d8aacdf40d438b50a7f 100644
@@ -19,3 +27,6 @@ index b0ba1b52ebac01333c0472d19e40085bf312d822..4ffb80865ce83cdd51c72d8aacdf40d4
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

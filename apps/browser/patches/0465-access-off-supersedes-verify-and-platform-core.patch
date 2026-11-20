@@ -1,9 +1,18 @@
-From 1b787dc045816ada9ffb8e08239465dcd388d11a Mon Sep 17 00:00:00 2001
+From bfa5b73f07e89bb6bd5a7db6af71e03b2971218e Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 15:45:53 +0800
 Subject: [PATCH] fix(access): preserve newer OFF and isolate macOS core
  implementation
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          | 31 ++++++++++---
+ .../access_local_core_manager_unavailable.cc  | 42 ++++++++++++++++++
+ ...local_core_manager_unavailable_unittest.cc | 44 +++++++++++++++++++
+ .../access_site_proxy_bubble_controller.cc    | 18 +++++++-
+ .../access_site_proxy_bubble_controller.h     |  5 ++-
+ 5 files changed, 132 insertions(+), 8 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_local_core_manager_unavailable.cc
+ create mode 100644 chrome/browser/aegis/access/access_local_core_manager_unavailable_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 48bbe5c1601c3009f7f03d5acad21c3f08c53b57..ba2ef93753d931f45f77b39c415d914ca0bfae95 100644
@@ -228,3 +237,6 @@ index 1e4aee7700c0738e04679c24440eba7ec650d913..986e2e5a822c2217ac2c59d576ddcb0d
    std::unique_ptr<AccessLocalCoreManager> local_core_;
    bool local_core_ready_ = false;
    bool restoring_core_ = false;
+-- 
+2.54.0 (Apple Git-157)
+

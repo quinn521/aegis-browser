@@ -1,11 +1,19 @@
-From 3ea55546e85f9238f270362697abd6b6cb9ecc1b Mon Sep 17 00:00:00 2001
+From 4deb943ffd331118c18bf7c4faa0051d1583b9b5 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 06:55:00 +0800
-Subject: [PATCH] 补齐 Android 更新请求说明并递增候选版本
+Subject: [PATCH] =?UTF-8?q?=E8=A1=A5=E9=BD=90=20Android=20=E6=9B=B4?=
+ =?UTF-8?q?=E6=96=B0=E8=AF=B7=E6=B1=82=E8=AF=B4=E6=98=8E=E5=B9=B6=E9=80=92?=
+ =?UTF-8?q?=E5=A2=9E=E5=80=99=E9=80=89=E7=89=88=E6=9C=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 使用 Chromium 网络适配接口记录手动检查及下载请求，保留原超时、跳转和安装校验。
 修复当前 Error Prone 网络规则报错，不关闭检查或压制告警。候选递增至 Ver 6.0 (249)。
 ---
+ .../about_settings/AegisAndroidUpdate.java    | 33 ++++++++++++++++++-
+ .../ui/webui/help/aegis_github_update.h       |  4 +--
+ 2 files changed, 34 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java
 index de7c941ee1a056df210cad6a1a5b4cada2121fa0..f666cb1d6d75994d80f4a5ec9ea1a78aae3397ac 100644
@@ -80,3 +88,6 @@ index 43519a7f3b7d7be7e3569347fdd52670f680d7da..f1a551fd7a3ab665c6fb74e36340cbbb
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

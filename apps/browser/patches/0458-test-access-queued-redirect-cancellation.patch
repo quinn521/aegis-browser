@@ -1,8 +1,11 @@
-From d5754629782c5ae2e8e60b95c2e6ac1788eba1fb Mon Sep 17 00:00:00 2001
+From 887ec177fdd823abe4cb64e1d9d11f83fba5e42a Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 13:21:42 +0800
 Subject: [PATCH] test(access): cover cancellation at queued redirect readiness
+
 ---
+ .../access_site_proxy_product_unittest.cc     | 64 +++++++++++++++++++
+ 1 file changed, 64 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index 0da729a0f067f60d1a47827da999fcd1be820870..70de30cd2cfadb55bd9a932782c30f1dbd6e6633 100644
@@ -96,3 +99,6 @@ index 0da729a0f067f60d1a47827da999fcd1be820870..70de30cd2cfadb55bd9a932782c30f1d
  TEST_F(AccessRetryNavigationProductTest,
         NativeRedirectSurvivesPrivateFactoryAdmissionReset) {
    auto request = StartHeldRedirect(false);
+-- 
+2.54.0 (Apple Git-157)
+

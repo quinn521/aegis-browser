@@ -1,4 +1,4 @@
-From 9248c820023eea52abcb187b14fa146f1397b47f Mon Sep 17 00:00:00 2001
+From cce1136fd66bf71a3431bdad6da50a8955da5aa1 Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Sun, 8 Nov 2026 13:30:00 +0000
 Subject: [PATCH] feat: expose macOS site allow/block/off intent API
@@ -7,6 +7,14 @@ Add product-facing AccessSiteIntent helpers and keep Chromium patch
 series synchronized with the overlay. Block stays outside ordinary
 DIRECT publication.
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  22 ++
+ .../aegis/access/access_site_intent.cc        | 252 ++++++++++++++++++
+ .../browser/aegis/access/access_site_intent.h | 125 +++++++++
+ .../access/access_site_intent_unittest.cc     | 123 +++++++++
+ 4 files changed, 522 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_site_intent.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_intent.h
+ create mode 100644 chrome/browser/aegis/access/access_site_intent_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 0e57c40308e470de0ce8c56fa5c8b9b4f5774114..cb92dd1af9364fa81d4217f230ad297c28ca9833 100644
@@ -559,3 +567,6 @@ index 0000000000000000000000000000000000000000..35e99b6aaca6762042042a744a12e8d1
 +
 +}  // namespace
 +}  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

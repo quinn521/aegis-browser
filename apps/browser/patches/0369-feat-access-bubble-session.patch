@@ -1,8 +1,25 @@
-From 1caaf820c62dadd7eb8a609743e08a8784dbc9a5 Mon Sep 17 00:00:00 2001
+From bff882039fd3e0ba7e039386ba432991568f08b4 Mon Sep 17 00:00:00 2001
 From: Aegis <aegis@invalid>
 Date: Tue, 10 Nov 2026 03:59:36 +0800
 Subject: [PATCH] feat: publish macOS site-proxy bubble session to local proxy
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  45 ++-
+ .../browser/aegis/access/access_rule_store.cc |  32 ++
+ .../browser/aegis/access/access_rule_store.h  |  16 +
+ .../access_site_proxy_bubble_controller.cc    | 264 +++++++++++++-
+ .../access_site_proxy_bubble_controller.h     |  41 ++-
+ .../access/access_site_proxy_bubble_model.cc  |   4 +-
+ .../access/access_site_proxy_bubble_model.h   |   5 +-
+ ...access_site_proxy_bubble_model_unittest.cc |  15 +
+ .../aegis/access/access_site_proxy_session.cc | 334 ++++++++++++++++++
+ .../aegis/access/access_site_proxy_session.h  | 147 ++++++++
+ .../access_site_proxy_session_unittest.cc     | 182 ++++++++++
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |   8 +-
+ 12 files changed, 1078 insertions(+), 15 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_session.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_session.h
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_session_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index a24b41dbc68f9c905d18fd15664293e806d2d8a1..40a2c0d6b3d5f35b9269f2458df220e887e8864d 100644
@@ -1303,3 +1320,6 @@ index aa32f73d4edc7b0eb629fe414a7b0a7708a4b934..0a19c9d9512552e08b17e51f3da525e5
      AddLabel(parent,
               Copy(u"开关状态与连通状态分开显示。",
                    u"Switch state is shown separately from connectivity.",
+-- 
+2.54.0 (Apple Git-157)
+

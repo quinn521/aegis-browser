@@ -1,9 +1,15 @@
-From ed63508d17e71323ed0bc1e083055cefebd8d27a Mon Sep 17 00:00:00 2001
+From 9cb4a1342062a11ef38e0c876dc782a48a6fd971 Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 08:14:28 +0800
 Subject: [PATCH] feat(access): preserve route through connect job factory
  dispatch
+
 ---
+ .../access_proxy_tunnel_context_unittest.cc   | 48 +++++++++++++++++++
+ .../client_socket_pool_base_unittest.cc       |  3 +-
+ net/socket/connect_job_factory.cc             | 17 ++++---
+ net/socket/connect_job_factory.h              |  9 ++--
+ 4 files changed, 67 insertions(+), 10 deletions(-)
 
 diff --git a/components/aegis_access/access_proxy_tunnel_context_unittest.cc b/components/aegis_access/access_proxy_tunnel_context_unittest.cc
 index 796890c5e100fda8906f611f5c4310f77d3dcb9a..6a9bd4504d0a1f83f72fab9313f5bc3c268129fe 100644
@@ -171,3 +177,6 @@ index cf1b3829d3cdeee5cb498921e6d960d2b1b2d452..5916b837b3ace32a4464eafe16dd2497
  
    std::unique_ptr<HttpProxyConnectJob::Factory> http_proxy_connect_job_factory_;
    std::unique_ptr<SOCKSConnectJob::Factory> socks_connect_job_factory_;
+-- 
+2.54.0 (Apple Git-157)
+

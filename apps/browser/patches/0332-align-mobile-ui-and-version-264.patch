@@ -1,8 +1,20 @@
-From adacffea8cfc80792ad8e2057b8656ad35826dfc Mon Sep 17 00:00:00 2001
+From 2b156e0eb7563e5689a9ea3940b1a736f38f0eba Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 20:10:57 +0800
-Subject: [PATCH] 同步移动界面修复与产品版本
+Subject: [PATCH] =?UTF-8?q?=E5=90=8C=E6=AD=A5=E7=A7=BB=E5=8A=A8=E7=95=8C?=
+ =?UTF-8?q?=E9=9D=A2=E4=BF=AE=E5=A4=8D=E4=B8=8E=E4=BA=A7=E5=93=81=E7=89=88?=
+ =?UTF-8?q?=E6=9C=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ .../browser/resources/aegis_agent/agent.css   | 30 +++++++++++++++++--
+ .../resources/aegis_agent/mobile_settings.ts  | 11 +++++++
+ .../ui/webui/help/aegis_github_update.h       |  4 +--
+ .../aegis_downloads/aegis_download_panel.css  | 22 ++++++++++++--
+ .../aegis_downloads/aegis_download_panel.ts   | 24 +++++++++++----
+ 5 files changed, 79 insertions(+), 12 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis_agent/agent.css b/chrome/browser/resources/aegis_agent/agent.css
 index 73194f33d65f00497b577eb21ccb9b1679b669a7..0938005f2761c5ee0a41bc341cdbad7451f6a6de 100644
@@ -182,3 +194,6 @@ index b88cd928138b47e8e0baffbe30861ecb89cf2e0a..516735f5611f1b6aab1ff9db62fcd6ad
        }
      } catch (error) {
        this.previewText_ = this.formatPreviewError_(error);
+-- 
+2.54.0 (Apple Git-157)
+

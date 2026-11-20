@@ -1,8 +1,23 @@
-From 490d95305a50e87d844232073720072b07ba92cb Mon Sep 17 00:00:00 2001
+From cb3caf3d9a0385998f6c636d526a521cba2876e1 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Fri, 13 Nov 2026 18:51:22 +0800
 Subject: [PATCH] fix(access-log): enforce clear and credential boundaries
+
 ---
+ chrome/browser/aegis/BUILD.gn                 |  1 +
+ chrome/browser/aegis/access/access_core_log.h | 43 ++++++---
+ .../access/access_core_log_disk_unittest.cc   | 54 ++++++++---
+ .../aegis/access/access_core_log_share.cc     | 95 +++++++++++++++----
+ .../aegis/access/access_core_log_share.h      |  9 +-
+ .../aegis/access/access_core_log_store.cc     | 47 ++++++---
+ .../aegis/access/access_core_log_store.h      |  8 ++
+ .../aegis/access/access_core_log_unittest.cc  | 26 +++++
+ .../aegis/access/access_local_core_manager.cc | 85 +++++++++++++----
+ .../access_local_core_manager_unittest.cc     | 40 +++++++-
+ .../access_site_proxy_bubble_controller.cc    |  2 +-
+ chrome/browser/aegis/aegis_service_factory.cc |  8 ++
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  2 +-
+ 13 files changed, 344 insertions(+), 76 deletions(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 512f133b73b0a4b5d56e5bd864aafd38996f6a17..a95a8671afe6209d90b910ca52b4409ff7e9662c 100644
@@ -844,3 +859,6 @@ index 6bf90ecfbfc4d4f7932595020501f4f0b197dfd6..bd6b803c64db37bbc07cf9ac9e8f6db8
                      self->RefreshSoon();
                    }
                  }, self->weak_.GetWeakPtr()));
+-- 
+2.54.0 (Apple Git-157)
+

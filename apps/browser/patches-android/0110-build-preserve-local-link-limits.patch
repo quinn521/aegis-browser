@@ -1,4 +1,4 @@
-From 71333cc26c91eea4815f5ee6ef83e8cc427eb0bc Mon Sep 17 00:00:00 2001
+From 568650047e7238c263b2921edc9338795e9c6ee9 Mon Sep 17 00:00:00 2001
 From: GCSA <aegis@gcsa.local>
 Date: Sun, 13 Sep 2026 03:06:52 +0800
 Subject: [PATCH] =?UTF-8?q?build(aegis):=20=E4=BF=9D=E7=95=99=E6=9C=AC?=
@@ -9,12 +9,16 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/BUILD.gn               | 9 +++++++++
+ chrome/browser/aegis/BUILD.gn | 4 ++++
+ chrome/test/BUILD.gn          | 4 ++++
+ 3 files changed, 17 insertions(+)
 
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index f1d133b6cda978b105c6110b279fdd75a1b2f061..fec79333c9c23c52a043fa2a84f3c39cc6fb79f6 100644
+index 06bfcf5a90d093b9ac8e255e93ef2ffd0a00421e..e16bc04a089af92413cb24643b5f3ad74c84636a 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
-@@ -1364,6 +1364,14 @@ if (is_win) {
+@@ -1379,6 +1379,14 @@ if (is_win) {
      }
    }
  
@@ -29,7 +33,7 @@ index f1d133b6cda978b105c6110b279fdd75a1b2f061..fec79333c9c23c52a043fa2a84f3c39c
    mac_framework_bundle("chrome_framework") {
      output_name = chrome_framework_name
  
-@@ -1376,6 +1384,7 @@ if (is_win) {
+@@ -1391,6 +1399,7 @@ if (is_win) {
  
      configs -= [ "//build/config/compiler:thinlto_optimize_default" ]
      configs += [ "//build/config/compiler:thinlto_optimize_max" ]
@@ -53,10 +57,10 @@ index 5543d5affb08d914e41616bf4df1b5ca31a9ba15..0a6c89102a9ca5fb0f3cb1f5db43bdca
      "aegis_ai_control_unittest.cc",
      "aegis_download_prefs_unittest.cc",
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
-index 8fff03283474382fcb728d7006560d8ada5054fb..63ad9752490160c822dd34432248676ec5276264 100644
+index ceb95fd49b27d823e012a2fcc6e53ce2dca7f979..6c52cdb404dc928de61b6d2e834c10d57c6e93f8 100644
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn
-@@ -1327,6 +1327,10 @@ if (!is_android) {
+@@ -1207,6 +1207,10 @@ if (!is_android) {
    test("browser_tests") {
      use_xvfb = use_xvfb_in_this_config
  
@@ -64,6 +68,9 @@ index 8fff03283474382fcb728d7006560d8ada5054fb..63ad9752490160c822dd34432248676e
 +      configs += [ "//chrome:aegis_acceptance_link_limits" ]
 +    }
 +
-     configs += [ "//build/config:precompiled_headers" ]
      configs += [ ":disable_thinlto_cache_flags" ]
      defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+ 
+-- 
+2.54.0 (Apple Git-157)
+

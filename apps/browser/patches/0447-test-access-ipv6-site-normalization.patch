@@ -1,8 +1,11 @@
-From 9387afaacc8b1150ebbfc1c83171a99323b83aeb Mon Sep 17 00:00:00 2001
+From 7ccd546abd96114c7131de7f376a2edceb7722c7 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 07:33:27 +0800
 Subject: [PATCH] test(access): cover canonical IPv6 site normalization
+
 ---
+ .../aegis/access/access_site_intent_unittest.cc  | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_site_intent_unittest.cc b/chrome/browser/aegis/access/access_site_intent_unittest.cc
 index 9cf6bfc0da1ed81daf252a02a6c0985f5abc46f5..ef7bd2496ab25b7226766808545283f9592c9f89 100644
@@ -31,3 +34,6 @@ index 9cf6bfc0da1ed81daf252a02a6c0985f5abc46f5..ef7bd2496ab25b7226766808545283f9
  TEST(AccessSiteIntentTest, MapsIntentOntoOrdinaryCoordinatorModes) {
    EXPECT_EQ(OrdinaryAccessModeForIntent(AccessSiteIntent::kAllow),
              AccessMode::kProxy);
+-- 
+2.54.0 (Apple Git-157)
+

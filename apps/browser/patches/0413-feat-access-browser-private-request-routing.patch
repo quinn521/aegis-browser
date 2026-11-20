@@ -1,9 +1,27 @@
-From 00750e3cced0f04ba19c02e35724a0ad13f47fc6 Mon Sep 17 00:00:00 2001
+From e6ff187faa3b155b97c8a4f142ed2f9f97a534c9 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 20:18:31 +0800
 Subject: [PATCH] feat(access): connect Browser private request routing and
  exact ready gates
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  17 +-
+ .../aegis/access/access_local_core_manager.cc |   4 +
+ .../access_network_context_transport.cc       | 144 +++++-
+ .../access/access_network_context_transport.h |  32 +-
+ .../access/access_private_context_client.h    |   1 +
+ .../access_private_publication_unittest.cc    | 200 +++++++++
+ .../access_proxying_url_loader_factory.cc     | 420 ++++++++++++------
+ .../access_proxying_url_loader_factory.h      |  15 +-
+ .../access_proxying_url_tracked_request.cc    |  34 +-
+ .../access_proxying_url_tracked_request.h     |   5 +
+ .../access/access_request_dispatch_state.cc   |  20 +
+ .../access/access_request_dispatch_state.h    |   5 +
+ .../access/access_service_coordinator.cc      |  42 +-
+ .../aegis/access/access_service_coordinator.h |   1 +
+ .../access_site_proxy_bubble_controller.cc    |   8 +-
+ 15 files changed, 807 insertions(+), 141 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_private_publication_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index a07d28c727988341962ae7fb4c5b95a07284b74a..09595735704b55b02abc0e1c9d3f8308e72ca53e 100644
@@ -1471,3 +1489,6 @@ index 996734828931f207c0a233bf5e02e7937afcd014..9e786a4fe7d66eea815f861a0dc37815
      FailCorePreparation(host, "The proxy binding changed during verification.");
      return;
    }
+-- 
+2.54.0 (Apple Git-157)
+

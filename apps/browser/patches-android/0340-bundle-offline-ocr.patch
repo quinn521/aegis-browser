@@ -1,4 +1,4 @@
-From 53071ca48633bf8b5ab2650d3bbc962c03b7c1a3 Mon Sep 17 00:00:00 2001
+From b640c9613c76efbd3f54ad3d3094748b75f68e62 Mon Sep 17 00:00:00 2001
 From: Aegis <aegis@gcsa.local>
 Date: Mon, 16 Nov 2026 07:51:39 +0800
 Subject: [PATCH] =?UTF-8?q?=E9=9A=8F=E5=8C=85=E6=8F=90=E4=BE=9B=E7=A6=BB?=
@@ -9,6 +9,31 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ .../aegis/ocr_assets/chi_sim.traineddata.gz   | Bin 0 -> 1718768 bytes
+ .../aegis/ocr_assets/chi_tra.traineddata.gz   | Bin 0 -> 1656239 bytes
+ .../aegis/ocr_assets/eng.traineddata.gz       | Bin 0 -> 2952873 bytes
+ .../resources/aegis/ocr_assets/manifest.json  |  62 ++++
+ .../aegis/ocr_assets/tessdata-LICENSE.txt     | 176 +++++++++++
+ .../ocr_assets/tesseract-core-LICENSE.txt     | 202 +++++++++++++
+ .../ocr_assets/tesseract-core-lstm.wasm.js    | 283 ++++++++++++++++++
+ .../aegis/ocr_assets/tesseract-js-LICENSE.txt | 201 +++++++++++++
+ .../aegis/ocr_assets/tesseract.min.js         |   3 +
+ .../ocr_assets/tesseract.min.js.LICENSE.txt   |   1 +
+ .../resources/aegis/ocr_assets/worker.min.js  |  13 +
+ .../ocr_assets/worker.min.js.LICENSE.txt      |  12 +
+ 12 files changed, 953 insertions(+)
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/chi_sim.traineddata.gz
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/chi_tra.traineddata.gz
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/eng.traineddata.gz
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/manifest.json
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/tessdata-LICENSE.txt
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/tesseract-core-LICENSE.txt
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/tesseract-core-lstm.wasm.js
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/tesseract-js-LICENSE.txt
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/tesseract.min.js
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/tesseract.min.js.LICENSE.txt
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/worker.min.js
+ create mode 100644 chrome/browser/resources/aegis/ocr_assets/worker.min.js.LICENSE.txt
 
 diff --git a/chrome/browser/resources/aegis/ocr_assets/chi_sim.traineddata.gz b/chrome/browser/resources/aegis/ocr_assets/chi_sim.traineddata.gz
 new file mode 100644
@@ -122295,3 +122320,6 @@ index 0000000000000000000000000000000000000000..42641c150958869d91bdc485c44b2736
 +/*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/facebook/regenerator/blob/main/LICENSE */
 +
 +/** @license zlib.js 2012 - imaya [ https://github.com/imaya/zlib.js ] The MIT License */
+-- 
+2.54.0 (Apple Git-157)
+

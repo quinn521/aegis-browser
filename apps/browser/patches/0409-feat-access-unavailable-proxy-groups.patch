@@ -1,8 +1,20 @@
-From 89dab8cad578d3cc0ffcc0569f3fbeb8945a5855 Mon Sep 17 00:00:00 2001
+From 7c9e8b3ba9ffd30158a67d28e4febe5c8c62cb22 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 18:19:43 +0800
 Subject: [PATCH] feat(access): preserve proxy intent for unavailable groups
+
 ---
+ .../access/access_private_context_client.cc   | 20 ++++++-
+ .../access/access_private_context_client.h    |  7 +++
+ .../access_network_route_registry_unittest.cc | 51 ++++++++++++++++++
+ .../access_private_context_client_unittest.cc | 54 +++++++++++++++++++
+ .../access_route_wire_unittest.cc             | 36 +++++++++++++
+ .../network/aegis/access_route_registry.cc    | 17 +++++-
+ .../network/aegis/access_route_registry.h     |  5 +-
+ services/network/aegis/access_route_wire.cc   |  6 +++
+ services/network/network_context.cc           |  3 ++
+ .../mojom/aegis_access_route_types.mojom      | 10 +++-
+ 10 files changed, 205 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_private_context_client.cc b/chrome/browser/aegis/access/access_private_context_client.cc
 index 571d9deba13b70abeeadb0385f043b639b0c8591..4654ca1a1b899299059e7966e88acf018a8f3c38 100644
@@ -359,10 +371,10 @@ index 039be40b0d729ea18fa43ea80ff59edff3f8e65d..420dc3fb904850ed05469672550cdd06
    if (!validator.Install(wire.sequence, snapshot)) return std::nullopt;
    return DecodedAccessRouteSnapshot{std::move(owner), wire.incarnation,
 diff --git a/services/network/network_context.cc b/services/network/network_context.cc
-index 58c3d18fc7802083d08fc31239aefcfbbb549630..f415ea09b665d2a90ef5e83383a926f993f47285 100644
+index 0f41aba7e11f215961ec88f7d035aa373fe5ff61..05b44fe4fd5106c1e021d8305f7aaef106541e98 100644
 --- a/services/network/network_context.cc
 +++ b/services/network/network_context.cc
-@@ -1189,6 +1189,9 @@ void NetworkContext::InstallAegisAccessSnapshot(
+@@ -1192,6 +1192,9 @@ void NetworkContext::InstallAegisAccessSnapshot(
          endpoint->proxy_group_id, endpoint->registration_id,
          endpoint->selection_generation));
    }
@@ -412,3 +424,6 @@ index 825e3fc47b7eb27877c7f6a0a8ad0c08d79b2f0f..d9ffbb65b46ea241d32b92842a89c11f
    array<AegisAccessRegistrationAck> registrations;
 +  array<AegisAccessUnavailableGroup> unavailable_groups;
  };
+-- 
+2.54.0 (Apple Git-157)
+

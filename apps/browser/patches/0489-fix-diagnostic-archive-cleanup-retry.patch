@@ -1,9 +1,17 @@
-From 87d6facc6c7e3a8b3e9f4a8603fb536ec0691d5e Mon Sep 17 00:00:00 2001
+From 5c123f0dc98af1b19fd33fa8249a6cbaf8068d31 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Fri, 13 Nov 2026 20:24:01 +0800
 Subject: [PATCH] fix(access-log): recover failed archive deletion before
  sharing again
+
 ---
+ .../aegis/access/access_core_log_share.cc     | 118 +++++++++++++-----
+ .../aegis/access/access_core_log_share.h      |  10 +-
+ .../access_local_core_manager_unittest.cc     |  50 ++++++++
+ .../access_site_proxy_bubble_controller.cc    |  32 +++--
+ .../access_site_proxy_bubble_controller.h     |   6 +-
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  19 ++-
+ 6 files changed, 188 insertions(+), 47 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_core_log_share.cc b/chrome/browser/aegis/access/access_core_log_share.cc
 index 75190a574075bf1924a2b6aa41d555df9e605ccd..d696afb29b231d83b82b5de64da53704e6f80970 100644
@@ -429,3 +437,6 @@ index 9802f7574f9b73f86616e9e96499672378908d6a..84f92128d5109d28868b4208a3cc359c
            }, weak_.GetWeakPtr()));
      }
    }
+-- 
+2.54.0 (Apple Git-157)
+

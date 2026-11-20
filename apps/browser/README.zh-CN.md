@@ -1,3 +1,5 @@
+> **2026-11-20 · Chromium 158 源码候选**：桌面 `158.0.8127.37`、Android `158.0.8127.42`，产品准备为 Ver 7.4 (341)。独立 Chromium 序列为 522/348 项，两套 V8 各 3 项；源码回放完成，原生构建、功能测试与最终复查仍待完成。见[整合记录](../../docs/audit/upstream-feature-integration-2026-11-18.zh-CN.md)。
+
 [English](./README.md) | [**简体中文**](./README.zh-CN.md) | [繁體中文](./README.zh-TW.md)
 
 # GCSA-aegis Browser

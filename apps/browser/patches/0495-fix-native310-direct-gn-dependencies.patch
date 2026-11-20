@@ -1,4 +1,4 @@
-From b7d869ac74a87ee396ff58ca5bfcfb23c9ebdb0b Mon Sep 17 00:00:00 2001
+From a7ed5d3eaebddb9e1c9e0310582b31a24a0d96dc Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-4.local>
 Date: Sat, 14 Nov 2026 09:12:31 +0800
 Subject: [PATCH] =?UTF-8?q?fix(aegis):=20=E8=A1=A5=E9=BD=90=E8=B4=A6?=
@@ -14,10 +14,10 @@ Content-Transfer-Encoding: 8bit
  2 files changed, 2 insertions(+)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index f6d7314d86366b1b6fd5b464ef7cd8b0d462d0cd..cfc0aae10ad448396c7b0d774b84687daad1de65 100644
+index c653f70f36ca227cafa58cf0b154196c3c332d76..c954d458445c0ec0bbc7809e65e526d4e5cab8b9 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -516,6 +516,7 @@ if (!is_android) {
+@@ -515,6 +515,7 @@ if (!is_android) {
    source_set("chrome_browser_interface_binders_webui_parts_desktop") {
      sources = [ "chrome_browser_interface_binders_webui_parts_desktop.cc" ]
      deps = [
@@ -38,5 +38,5 @@ index f64f175fabdd36b0039bf817ed187bdb6f7c3b8f..fc683729ecb155038230a78046f5be8f
      "//components/proxy_config",
      "//content/test:test_support",
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

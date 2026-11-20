@@ -1,9 +1,18 @@
-From e80f0184dbe39768014244f8ca6f36d987135ac7 Mon Sep 17 00:00:00 2001
+From 67611d56c67cd8a55f1ea8101b1b7a5ed5f65096 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 19:01:48 +0800
 Subject: [PATCH] feat(access): prepare authenticated managed core with real
  HTTPS readiness
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  22 ++
+ .../aegis/access/access_local_core_manager.cc | 314 ++++++++++++++++++
+ .../aegis/access/access_local_core_manager.h  |  50 +++
+ .../access_local_core_manager_unittest.cc     |  68 ++++
+ 4 files changed, 454 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_local_core_manager.cc
+ create mode 100644 chrome/browser/aegis/access/access_local_core_manager.h
+ create mode 100644 chrome/browser/aegis/access/access_local_core_manager_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 05c3ceb5951c58fddbe8a2755abe429352c0660e..c84dad6092a2700d6329f41a208777a94ced7c79 100644
@@ -488,3 +497,6 @@ index 0000000000000000000000000000000000000000..1f5233938d40e569c6795782f24ca676
 +}
 +}  // namespace
 +}  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

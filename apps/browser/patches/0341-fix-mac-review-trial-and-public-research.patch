@@ -1,4 +1,4 @@
-From 4d833f414355f8a7caf6801083b3e791b638afb8 Mon Sep 17 00:00:00 2001
+From f59829aad0166d8a3b8796121ad4aada71f8b595 Mon Sep 17 00:00:00 2001
 From: Aegis Patch Export <aegis-patch-export@invalid>
 Date: Mon, 26 Oct 2026 12:48:37 +0800
 Subject: [PATCH] fix: bind trial consent and validate public research
@@ -6,6 +6,9 @@ Subject: [PATCH] fix: bind trial consent and validate public research
 
 Keep the desktop patch payload aligned with the overlay.
 ---
+ .../aegis/agent/aegis_agent_browsertest.cc    | 19 +++++++++++++------
+ .../browser/resources/aegis/enhancements.js   |  9 ++++++++-
+ 2 files changed, 21 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 index f2565336cdb2a7f489904a573ae5961daaf7b0e9..6412a5cf70a637b2076c4e4f95c55fad441a1563 100644
@@ -64,3 +67,6 @@ index c93286810042d91817d53ec93a29d549190b7ddb..d80280584131d73c33ba21250df1c1ba
    render(await request({op: "state"}));
    notify(
      uiText("已安排试运行：") + (r.result?.result?.value || uiText("请检查网页效果，并刷新运行状态。")),
+-- 
+2.54.0 (Apple Git-157)
+

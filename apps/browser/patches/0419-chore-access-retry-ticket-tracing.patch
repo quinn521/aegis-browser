@@ -1,9 +1,12 @@
-From 281427ac39e685f8755395bfe20afde685b8dbe0 Mon Sep 17 00:00:00 2001
+From a726790986c15c3d1f669cce756e9e904b1b094c Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 21:42:06 +0800
 Subject: [PATCH] chore(access): distinguish retry ticket and pending entry
  admission
+
 ---
+ .../browser/aegis/access/access_navigation_retry_tab_helper.cc | 3 +++
+ 1 file changed, 3 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc b/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc
 index 0315d727ad80777e09fb4cc86e777c457de07347..a7ac89f886a95e18a4e4100aac6058755cef82ae 100644
@@ -26,3 +29,6 @@ index 0315d727ad80777e09fb4cc86e777c457de07347..a7ac89f886a95e18a4e4100aac605875
      proxy_preparation_pending_ = false;
      weak_factory_.InvalidateWeakPtrs();
      state_.BeginNavigation(navigation->GetNavigationId());
+-- 
+2.54.0 (Apple Git-157)
+

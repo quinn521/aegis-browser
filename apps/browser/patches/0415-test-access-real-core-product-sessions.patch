@@ -1,9 +1,15 @@
-From a33bcaf9b3fe1766e4bc216e4efebbe9354a0912 Mon Sep 17 00:00:00 2001
+From 36920991c674c343112b5d4dbc0f5d8ea7cb137e Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 20:28:43 +0800
 Subject: [PATCH] test(access): exercise product sessions with real managed
  core and private ACK
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   6 +-
+ .../access_service_coordinator_unittest.cc    | 111 ---------
+ .../access_site_proxy_product_unittest.cc     | 217 ++++++++++++++++++
+ 3 files changed, 222 insertions(+), 112 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 09595735704b55b02abc0e1c9d3f8308e72ca53e..264c345edbc6bfdcd8cc5db3b80f9a20c7832bc3 100644
@@ -374,3 +380,6 @@ index 0000000000000000000000000000000000000000..ec4b89496f892c803753c0e8ababfeb3
 +
 +}  // namespace
 +}  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

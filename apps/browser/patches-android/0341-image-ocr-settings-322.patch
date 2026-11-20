@@ -1,4 +1,4 @@
-From 6e99d20d473bd9e75d4aba8ebded21eff9bcae91 Mon Sep 17 00:00:00 2001
+From 65f85c5318492f0615dc0ad158d8cba2de6f52fe Mon Sep 17 00:00:00 2001
 From: Aegis <aegis@local>
 Date: Mon, 16 Nov 2026 16:40:58 +0800
 Subject: [PATCH] =?UTF-8?q?=E5=9C=A8=E6=B5=8F=E8=A7=88=E5=99=A8=E8=AE=BE?=
@@ -9,6 +9,19 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/browser/aegis/aegis_prefs.cc           |   1 +
+ chrome/browser/resources/aegis/aegis.css      |  19 +++
+ chrome/browser/resources/aegis/aegis.html     |  22 ++++
+ chrome/browser/resources/aegis/aegis.ts       |  67 ++++++++++
+ chrome/browser/resources/aegis/capture.js     |  63 +++++++---
+ .../resources/aegis/mobile_settings.ts        |   2 +
+ chrome/browser/ui/webui/aegis/BUILD.gn        |   8 +-
+ .../ui/webui/aegis/aegis_capture_handler.cc   | 118 +++++++++++++++---
+ .../ui/webui/aegis/aegis_capture_handler.h    |  11 ++
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  43 +++++++
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   2 +
+ chrome/common/aegis/pref_names.h              |   1 +
+ 12 files changed, 326 insertions(+), 31 deletions(-)
 
 diff --git a/chrome/browser/aegis/aegis_prefs.cc b/chrome/browser/aegis/aegis_prefs.cc
 index 72f2ca7aa9acab0ac2f3a08c90e0a46dca564b16..86abc0b846da4533784b40f6225f420121bd4180 100644
@@ -653,3 +666,6 @@ index b99bae409f3c5d425b4c627f59475c8047fe585d..019cef9cb2e18360392591636744fa28
  inline constexpr char kModelProvider[] = "aegis.model_provider";
  inline constexpr char kModelBaseUrl[] = "aegis.model_base_url";
  inline constexpr char kModelName[] = "aegis.model_name";
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,12 @@
-From fb4bf5776c8d6ecbc98d08a37d8757f913e48622 Mon Sep 17 00:00:00 2001
+From f38b16ba4e4e9fc2ff83f0d40da1c685696c11ec Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 06:25:10 +0800
 Subject: [PATCH] test(access): reproduce legacy proxy leak across private
  contexts
+
 ---
+ .../access_private_publication_unittest.cc    | 62 +++++++++++++++++++
+ 1 file changed, 62 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_private_publication_unittest.cc b/chrome/browser/aegis/access/access_private_publication_unittest.cc
 index c79feac4c037304c34c204d72f289df62b4e5607..dbd0046ee058daa26be75f03ae50c0ec0fdb8866 100644
@@ -92,3 +95,6 @@ index c79feac4c037304c34c204d72f289df62b4e5607..dbd0046ee058daa26be75f03ae50c0ec
  TEST_F(AccessPrivatePublicationTest, ChangedCommonTupleRequiresFreshPrivateAck) {
    auto notifier = net::NetworkChangeNotifier::CreateMockIfNeeded();
    HeldPrivateContext context;
+-- 
+2.54.0 (Apple Git-157)
+

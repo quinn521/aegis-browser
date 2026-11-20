@@ -1,9 +1,22 @@
-From 95c6ee34d45c4fdde3326bb5cbbe52df1c1d4358 Mon Sep 17 00:00:00 2001
+From 551066216b4d29af0ed7cb689b3ef2f07b98a866 Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 11:43:06 +0800
 Subject: [PATCH] feat(access): validate immutable Network route registry and
  restoration fence
+
 ---
+ components/aegis_access/BUILD.gn              |  15 ++
+ .../access_network_route_registry_unittest.cc | 168 ++++++++++++++++++
+ .../aegis_access/access_policy_evaluator.cc   |  42 +++--
+ .../aegis_access/access_policy_evaluator.h    |   5 +
+ services/network/aegis/BUILD.gn               |  12 ++
+ .../network/aegis/access_route_registry.cc    | 162 +++++++++++++++++
+ .../network/aegis/access_route_registry.h     |  65 +++++++
+ 7 files changed, 451 insertions(+), 18 deletions(-)
+ create mode 100644 components/aegis_access/access_network_route_registry_unittest.cc
+ create mode 100644 services/network/aegis/BUILD.gn
+ create mode 100644 services/network/aegis/access_route_registry.cc
+ create mode 100644 services/network/aegis/access_route_registry.h
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 47c0d18cd757b959d55bf4fab7b6407da4cbdc84..904d48464c8c48228147b7c2cc80021485de7357 100644
@@ -537,3 +550,6 @@ index 0000000000000000000000000000000000000000..2cb485558b005cba562e87f66325a9cf
 +};
 +}  // namespace network
 +#endif  // SERVICES_NETWORK_AEGIS_ACCESS_ROUTE_REGISTRY_H_
+-- 
+2.54.0 (Apple Git-157)
+

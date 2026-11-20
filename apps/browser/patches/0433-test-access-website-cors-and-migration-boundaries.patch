@@ -1,9 +1,14 @@
-From ae246babcb7b170295bd80a16412fe7c2ee15c34 Mon Sep 17 00:00:00 2001
+From ebdc97c282359ed69a7a4475fa69e49670e3b180 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 02:32:44 +0800
 Subject: [PATCH] test(access): validate website CORS and legacy migration
  boundaries
+
 ---
+ .../browser/aegis/access/access_rule_store.cc | 15 +++++
+ .../access/access_rule_store_unittest.cc      | 32 +++++++++--
+ .../access_private_factory_unittest.cc        | 55 ++++++++++++++++++-
+ 3 files changed, 97 insertions(+), 5 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
 index 5b83b815723255bc3583370deebb4f171b58ad8b..d75362caea1078acc6c915e996b22b78d5c22fab 100644
@@ -188,3 +193,6 @@ index 6afd84f336de96839aa7e0d7ee5b83b847ddd3b9..efbb14db3a5cad8995d96dc06f3dda37
  TEST_F(AccessPrivateFactoryTest, SuccessfulTerminalEventsSurviveControlPipeClosure) {
    for (int i = 0; i < 20; ++i) {
      SCOPED_TRACE(i);
+-- 
+2.54.0 (Apple Git-157)
+

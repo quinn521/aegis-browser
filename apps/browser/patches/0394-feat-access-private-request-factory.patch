@@ -1,9 +1,19 @@
-From 5ff3d614c49955a4aa3e83084a505e06a0b6876f Mon Sep 17 00:00:00 2001
+From 99e7c8f37994eecc17289f6c3f50dfc8d7735675 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 12:51:29 +0800
 Subject: [PATCH] feat(access): bind private Mojo requests and redirect
  authority to CORS
+
 ---
+ components/aegis_access/BUILD.gn              |  19 ++
+ .../access_private_factory_unittest.cc        | 307 ++++++++++++++++++
+ services/network/BUILD.gn                     |   2 +
+ .../access_private_url_loader_factory.cc      | 210 ++++++++++++
+ .../aegis/access_private_url_loader_factory.h |  69 ++++
+ 5 files changed, 607 insertions(+)
+ create mode 100644 components/aegis_access/access_private_factory_unittest.cc
+ create mode 100644 services/network/aegis/access_private_url_loader_factory.cc
+ create mode 100644 services/network/aegis/access_private_url_loader_factory.h
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 44ef71551edde513709235b7763bafbb9af8e946..1173bc68623a30f20a6f1cc54d4bea17dff320f3 100644
@@ -346,7 +356,7 @@ index 0000000000000000000000000000000000000000..fe037aad0b88a401723efe84cc5a619d
 +}  // namespace
 +}  // namespace network
 diff --git a/services/network/BUILD.gn b/services/network/BUILD.gn
-index 49edcf6f18fc86620f15624b5868971b5ed80fca..5f6e8b126da9963b0fbd46a7dfc7b7afb3bce68a 100644
+index 9799f4c616a99fa077714c84aa72d42e22dfdf91..294e9340338713feb42d53c2e31d4617ecf6fa1b 100644
 --- a/services/network/BUILD.gn
 +++ b/services/network/BUILD.gn
 @@ -13,6 +13,8 @@ component("network_service") {
@@ -649,3 +659,6 @@ index 0000000000000000000000000000000000000000..0dada53af47cb98fed6baa37bb55ff40
 +};
 +}  // namespace network
 +#endif  // SERVICES_NETWORK_AEGIS_ACCESS_PRIVATE_URL_LOADER_FACTORY_H_
+-- 
+2.54.0 (Apple Git-157)
+

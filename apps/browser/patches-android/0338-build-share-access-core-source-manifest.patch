@@ -1,9 +1,19 @@
-From 7a35d690d3ca86227571444a51b2b22f8d204d08 Mon Sep 17 00:00:00 2001
+From 426751b37dd464c9515c62f0fb19d1622f7b8866 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
 Date: Mon, 16 Nov 2026 12:14:11 +0800
 Subject: [PATCH] build: share Access core source manifest
 
 ---
+ components/aegis_access/BUILD.gn              | 88 +++++++------------
+ .../aegis_access/access_route_planner.cc      |  3 +-
+ components/aegis_access/access_route_types.h  |  3 +
+ components/aegis_access/access_sources.json   | 66 ++++++++++++++
+ .../request_ownership_registry.cc             | 30 +++++--
+ .../aegis_access/request_ownership_registry.h | 11 +++
+ .../aegis_access/site_proxy_rule_group.cc     |  2 +
+ .../aegis_access/site_proxy_rule_group.h      |  3 +
+ 8 files changed, 141 insertions(+), 65 deletions(-)
+ create mode 100644 components/aegis_access/access_sources.json
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index d02cf73589ac0f99617841698cbd73cd9abf2615..25c683a4c4021e317876c67a1d30ecc5e7abaef0 100644
@@ -423,3 +433,6 @@ index 3a13ec2ed6f65b16bca1f67e6bf0fe6d766d93ce..e7bf2e828f84fafab5d67a33ed92622c
  };
  
  struct GroupValidation {
+-- 
+2.54.0 (Apple Git-157)
+

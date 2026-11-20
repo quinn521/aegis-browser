@@ -1,9 +1,20 @@
-From b1481a67455638db9487d130631e19a290dd393d Mon Sep 17 00:00:00 2001
+From a5f37e45bfeeeec1ccf77de78327ef05a3a76380 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 00:39:37 +0800
 Subject: [PATCH] fix(access): isolate Alpha channel mapping from browser
  adapter dependencies
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          | 19 ++++++++--
+ .../access/access_browser_request_adapter.cc  | 27 +-------------
+ .../access/access_browser_request_adapter.h   |  4 ---
+ .../aegis/access/access_build_channel.cc      | 36 +++++++++++++++++++
+ .../aegis/access/access_build_channel.h       | 12 +++++++
+ .../access_site_proxy_bubble_controller.cc    |  2 +-
+ .../access_site_proxy_product_unittest.cc     |  2 +-
+ 7 files changed, 67 insertions(+), 35 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_build_channel.cc
+ create mode 100644 chrome/browser/aegis/access/access_build_channel.h
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index c874750664684095b7f1c771cddcbf8e1d558824..2053ecb7e51a035c8b12dc387c697f37c592dbb4 100644
@@ -209,3 +220,6 @@ index de882308db3444b88ce2057570de68cd9820f465..db68a1a34b29ce4d12a790c6acdf0073
  #include "chrome/browser/aegis/access/access_buildflags.h"
  
  #include "base/command_line.h"
+-- 
+2.54.0 (Apple Git-157)
+

@@ -37,3 +37,13 @@ GitHub CLI 的既有身份已具备仓库写权限，可读取 runner；连接�
 主线新增的桌面 0496–0501 按候选前序树重新生成 0516–0521，Android 0330 重新生成 0347；原邮件补丁保存在各平台 `archive/main-before-pr174-integration-20261120/`。桌面活动序列为 521 项，Android 为 347 项。157 的 omnibox GN 列表和 feature 邻接上下文已适配；Access BUILD.gn 通过可核对的旧 blob 三方合并，保留截图测试与平台依赖。其余主线实现、iOS 与 CI 改动保留。
 
 新增 6/1 项补丁在各自精确文件前序树上通过邮件回放和 ordered exact lineage v2；两套完整活动序列的相邻 blob 身份及 overlay 对照无不一致。这些是定向源码验证；完整 Chromium 回放、GN/编译、原生浏览器测试、最终提交质量门与独立复查另行登记，尚不构成发行验收。原生 runner 缺少齐备的受信平台路由，不降低现有准入门槛。
+
+## 2026-11-20：Chromium 158 源码适配候选 341
+
+主线文档继续整合至 `167f61b52ac7c6d3bbf1714fd949dc73a462b967`；保留之前的失败与暂停记录。本轮按用户范围只在本机进行 Mac 开发和验证，Windows 执行继续暂停，Android 仅准备独立源码；平台状态不互相替代。
+
+固定桌面 [158.0.8127.37](https://github.com/chromium/chromium/commit/b8c2be851f62f6a394ec57955d7f31335d7cb6d4) 与 Android [158.0.8127.42](https://github.com/chromium/chromium/commit/52bdd21723d5db0c9ab11716d38feac74828cf84)，V8 官方前序为 `b601a2347f005e8bfadd32f285df97ffba5cf1bd`。原有 521/347 项 Chromium 补丁及两套各 3 项 V8 补丁均已在各自完整 Git 树上逐项重放；解决冲突后重新导出邮件，未跳过原有功能补丁。新增兼容补丁后桌面为 522 项、Android 为 348 项；786 份桌面及 V8 overlay 与对应已提交源码对象同步。
+
+适配保留 158 的 Actor surface 身份、预取校验、CORS 预检句柄生命周期、DevTools 同文档权限重验和当前 GN 目标结构；移除的 tab_helpers 入口不恢复，现有防护、手势及页面增强在 TabFeatures 的初始化和页面重建入口保留。Actor 请求通过官方转换接口从授权标签取得 surface，并增加两种 ID 模式下的真实导航回归。设置页入口迁移到 Lit，同时保留 Aegis 分类卸载时清理监听器和子页的行为，新增分类切换回归；新版 Gin 绑定与窗口打开枚举一并适配。
+
+完整产品版本准备为 `7.4.0.341` / `Ver 7.4 (341)`，Android versionCode 为 `2007000341`，与打包默认值和两套补丁版本头保持一致。完整补丁 lineage、最终产品质量门、Mac GN/编译、浏览器与功能回归、最终独立复查和最终 SHA 的 CI 结果按后续收据登记；本段不宣称这些门槛已经通过。未执行签名、公证、安装、tag 或 Release。源码回退应通过保留的 157 基线和原邮件历史形成可审查的新候选，不直接覆盖用户安装或改写主线。

@@ -1,3 +1,5 @@
+> **2026-11-20**：Android 原始碼固定為 `158.0.8127.42`，包含獨立 348 項 Chromium 補丁及 3 項 V8 補丁；產品中繼資料為 Ver 7.4 (341)，versionCode `2007000341`。這僅是原始碼準備，APK、簽章與實機驗收仍待完成；目前執行範圍為本機 Mac 開發。
+
 [English](./android.md) | [简体中文](./android.zh-CN.md) | [**繁體中文**](./android.zh-TW.md)
 
 # Android 狀態：No-Go

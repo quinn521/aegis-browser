@@ -1,9 +1,52 @@
-From 26f48c4a4ae7600d769cdc79c90ce7b66abebdb3 Mon Sep 17 00:00:00 2001
+From 1847873d69e9cee8d1d7165045b557341817090a Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 18 Nov 2026 19:04:29 +0800
 Subject: [PATCH] feat(mac): isolate internal Access Options capabilities and
  storage
 
+---
+ chrome/browser/aegis/BUILD.gn                 |   7 +
+ chrome/browser/aegis/access/BUILD.gn          |  48 +++-
+ .../aegis/access/access_async_rule_store.cc   |   4 +
+ .../aegis/access/access_async_rule_store.h    |   1 +
+ .../aegis/access/access_build_channel.cc      |  27 +-
+ .../aegis/access/access_build_channel.h       |   8 +-
+ .../aegis/access/access_core_log_unittest.cc  |  14 +
+ .../access_local_core_manager_unittest.cc     |   8 +
+ .../access/access_options_browsertest.cc      | 103 +++++++
+ .../aegis/access/access_options_service.cc    |  58 ++++
+ .../aegis/access/access_options_service.h     |  26 ++
+ .../access/access_options_service_unittest.cc |  50 ++++
+ .../aegis/access/access_options_store.cc      | 253 ++++++++++++++++++
+ .../aegis/access/access_options_store.h       |  48 ++++
+ .../access/access_options_store_unittest.cc   | 192 +++++++++++++
+ .../access/access_service_coordinator.cc      |  29 ++
+ .../aegis/access/access_service_coordinator.h |   3 +
+ .../access_site_proxy_bubble_controller.cc    |  22 +-
+ .../access_site_proxy_product_unittest.cc     |  18 +-
+ chrome/browser/aegis/access/alpha_access.gni  |  13 +
+ .../access/verify_access_build_identity.py    |  55 ++++
+ .../verify_access_build_identity_test.py      |  79 ++++++
+ chrome/browser/ui/webui/aegis/BUILD.gn        |   6 +
+ chrome/browser/ui/webui/aegis/aegis_ui.cc     |  22 ++
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  47 ++++
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   9 +
+ components/aegis_access/BUILD.gn              |   5 +
+ .../aegis_access/access_options_capability.h  |  87 ++++++
+ .../access_options_capability_test.cc         |  70 +++++
+ components/aegis_access/access_sources.json   |   3 +
+ 30 files changed, 1296 insertions(+), 19 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_options_browsertest.cc
+ create mode 100644 chrome/browser/aegis/access/access_options_service.cc
+ create mode 100644 chrome/browser/aegis/access/access_options_service.h
+ create mode 100644 chrome/browser/aegis/access/access_options_service_unittest.cc
+ create mode 100644 chrome/browser/aegis/access/access_options_store.cc
+ create mode 100644 chrome/browser/aegis/access/access_options_store.h
+ create mode 100644 chrome/browser/aegis/access/access_options_store_unittest.cc
+ create mode 100644 chrome/browser/aegis/access/verify_access_build_identity.py
+ create mode 100644 chrome/browser/aegis/access/verify_access_build_identity_test.py
+ create mode 100644 components/aegis_access/access_options_capability.h
+ create mode 100644 components/aegis_access/access_options_capability_test.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index b9e8c87b26961b10c8532d2700d9f3b3b872d867..bc3075a08f903cee09c0e4aa8b970a58751eae1a 100644
@@ -1741,3 +1784,6 @@ index ce3d880390db19853414eabed36c691dbb471046..35bde368d9fde9f0828c7464e04eafa4
      ]
    },
    "test_main": "access_route_planner_native_test.cc",
+-- 
+2.54.0 (Apple Git-157)
+

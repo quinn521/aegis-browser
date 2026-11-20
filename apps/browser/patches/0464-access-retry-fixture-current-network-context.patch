@@ -1,9 +1,12 @@
-From f001d488c00db45178865567680aa7f9c339f21f Mon Sep 17 00:00:00 2001
+From 30ef10950481d6d2e4f6a50b0ed7a85239b60053 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 15:41:59 +0800
 Subject: [PATCH] test(access): bind current private context after initial
  navigation
+
 ---
+ .../access/access_site_proxy_product_unittest.cc   | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index afb49b3ca8c2ad86039c2c384bfd9ddbaf45970f..673732c17605555f718d482c75f6e92e4ece28f0 100644
@@ -30,3 +33,6 @@ index afb49b3ca8c2ad86039c2c384bfd9ddbaf45970f..673732c17605555f718d482c75f6e92e
      context_.hold_next = true;
      ASSERT_TRUE(helper()->RequestProxyRetry(completed_.GetCallback()));
      ASSERT_TRUE(base::test::RunUntil([&] {
+-- 
+2.54.0 (Apple Git-157)
+

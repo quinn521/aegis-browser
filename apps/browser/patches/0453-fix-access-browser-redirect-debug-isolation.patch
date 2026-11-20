@@ -1,9 +1,17 @@
-From 03ed480d33af1849232988f18787234dd73f7ad6 Mon Sep 17 00:00:00 2001
+From 7ec77d4563c39ff79a1cc53576ac87b37b86d116 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 08:59:55 +0800
 Subject: [PATCH] fix(access): preserve redirect routing mode and isolate DEV
  preview
+
 ---
+ .../access_proxying_url_loader_factory.cc     | 17 +++++++-------
+ .../access_proxying_url_loader_factory.h      |  3 +++
+ .../access_site_dev_allow_block_panel.h       |  5 ++--
+ .../access_site_proxy_bubble_controller.cc    | 12 ++--------
+ .../access_site_proxy_bubble_controller.h     |  5 ++--
+ .../ui/views/toolbar/aegis_toolbar_button.cc  | 23 +++++++++----------
+ 6 files changed, 30 insertions(+), 35 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 index 1ab8c1acee8e2dc171d69b5a05224f469818e1cc..b3e1479f0cc0be9e5979ec728cb1d549d8b92418 100644
@@ -219,3 +227,6 @@ index 437c46f1c55e8d030c1cbb9acc88885c2341dbd1..eb81acfae16042030ba1a25c6c54e5ca
    }
    void Build() {
      if (!Valid()) return;
+-- 
+2.54.0 (Apple Git-157)
+

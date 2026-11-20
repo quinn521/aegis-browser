@@ -1,4 +1,4 @@
-From 70284480aee851a62363b9f666af9bf26e3d49fc Mon Sep 17 00:00:00 2001
+From 1a9ad599cb13d82e4482daa261cfa1167d265629 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Thu, 1 Oct 2026 00:22:38 +0800
 Subject: [PATCH] =?UTF-8?q?=E8=A1=A5=E9=BD=90=20Windows=20=E5=9B=BA?=
@@ -9,6 +9,9 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ .../ui/webui/help/aegis_github_update.h       |  4 +-
+ .../install_static/install_util_unittest.cc   | 49 +++++++++----------
+ 2 files changed, 25 insertions(+), 28 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index 129120ba49512585ea1d55c73b23c3250c3d5af0..55213a3dfd12c8201e2595bf16a2b05b97bd7aa1 100644
@@ -131,3 +134,6 @@ index 6f407f18efa2e2dcaa589e6a489d2c69b6177d7a..7f8642fcd296a345ca2a1582150fa975
    });
  #endif
    static_assert(std::size(kSandBoxSids) == NUM_INSTALL_MODES,
+-- 
+2.54.0 (Apple Git-157)
+

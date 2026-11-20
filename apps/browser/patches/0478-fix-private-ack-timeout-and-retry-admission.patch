@@ -1,9 +1,21 @@
-From bdc62a4083c0b6b15b087916020caeafe2cd006b Mon Sep 17 00:00:00 2001
+From e7c2af4ed82af1b9c7b59fcab89453b5b9c9bfb6 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Thu, 12 Nov 2026 11:53:01 +0800
 Subject: [PATCH] fix(access): bound rollback acknowledgements and admit retry
  per tab
+
 ---
+ .../access_navigation_retry_tab_helper.cc     |  2 +-
+ .../access_navigation_retry_tab_helper.h      |  1 +
+ ...ss_navigation_retry_tab_helper_unittest.cc | 19 ++++++++++
+ .../access_proxying_url_loader_factory.cc     |  7 ++++
+ .../access_proxying_url_loader_factory.h      |  2 ++
+ .../access/access_service_coordinator.cc      | 35 ++++++++++++-------
+ .../aegis/access/access_service_coordinator.h |  2 ++
+ .../access_site_proxy_bubble_controller.cc    |  1 +
+ .../access_site_proxy_product_unittest.cc     | 27 ++++++++++++++
+ .../browser/chrome_content_browser_client.cc  |  6 ++--
+ 10 files changed, 87 insertions(+), 15 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc b/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc
 index c8826fd5b05d4baa2809d3eb7d61272ebe3bffe3..9bbbf4335273a84facb63096d649c58835098185 100644
@@ -244,10 +256,10 @@ index 1035dfab77476e19475001583f4c0e32d579d109..ea643929765a40a7aa4ef0c7dcc315d2
    AccessServiceCoordinatorTestPeer::SetFailure(coordinator_,
        AccessRuleStore::FailurePointForTesting::kBuildPreparedCandidateBeforeRead);
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 3501a23a3044f91027e320627104a0719fc9a2bf..3dc85103e52795f677d9240f6d413309ea804a66 100644
+index 9312712f132469e40faabba9e7169b60fa5153fd..567f629ad3a15a9d4c33c4af24ab2a862378cc84 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -9107,8 +9107,10 @@ ChromeContentBrowserClient::GetAlternativeErrorPageOverrideInfo(
+@@ -9177,8 +9177,10 @@ ChromeContentBrowserClient::GetAlternativeErrorPageOverrideInfo(
  #if BUILDFLAG(IS_MAC)
    // The renderer builds the error document from the final request method.
    // The browser retry ticket is bound to the original navigation method.
@@ -260,3 +272,6 @@ index 3501a23a3044f91027e320627104a0719fc9a2bf..3dc85103e52795f677d9240f6d413309
      auto info = content::mojom::AlternativeErrorPageOverrideInfo::New();
      info->alternative_error_page_params.Set(error_page::kSuppressAegisProxyRetry,
                                              true);
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,15 +1,19 @@
-From 9ffa35a2b3b2e2445a32582f872757193c110d8d Mon Sep 17 00:00:00 2001
+From 0af718224a2d2d85813690eba4898c5d03821c67 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Tue, 15 Sep 2026 04:02:53 +0800
 Subject: [PATCH] fix(aegis): migrate profile access in menu and toolbar (029)
 
 ---
+ chrome/browser/ui/toolbar/app_menu_model.cc             | 2 +-
+ chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc | 8 ++++----
+ chrome/browser/ui/webui/help/aegis_github_update.h      | 6 +++---
+ 3 files changed, 8 insertions(+), 8 deletions(-)
 
 diff --git a/chrome/browser/ui/toolbar/app_menu_model.cc b/chrome/browser/ui/toolbar/app_menu_model.cc
-index f31a3faa3ed3dc899f1ee6db0d2486727f76f502..a140c3de4d96de0b9ccdce07032c3e043be7fdf3 100644
+index dd294d971333b1dd29603a02140944b6d785ec83..826b1b2147ca6b7bad42324fa082bc3fde9a48be 100644
 --- a/chrome/browser/ui/toolbar/app_menu_model.cc
 +++ b/chrome/browser/ui/toolbar/app_menu_model.cc
-@@ -2483,7 +2483,7 @@ void AppMenuModel::Build() {
+@@ -2512,7 +2512,7 @@ void AppMenuModel::Build() {
    AddItemWithStringIdAndVectorIcon(
        this, IDC_OPTIONS, IDS_SETTINGS,
        features::IsRoundedIconsEnabled() ? kSettingsIcon : kSettingsMenuOldIcon);
@@ -75,3 +79,6 @@ index ce14883c5b99d99fba6074882c9b82c1974c4e7b..89f68e35de5fa9c1359acea7b6c0b879
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,36 @@
-From e251cdb1a4105b768044d878ca9b7f2caaac43e0 Mon Sep 17 00:00:00 2001
+From c0a92c3bb8da7bef3702f30ed10ce92f3d0e15f6 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 02:16:59 +0800
 Subject: [PATCH] feat(access): proxy trusted website resources and migrate
  explicit scope
+
 ---
+ .../access_network_context_transport.cc       |   7 +-
+ .../access/access_private_context_client.cc   |   1 +
+ .../browser/aegis/access/access_rule_store.cc | 127 +++++++++++++++---
+ .../access/access_rule_store_unittest.cc      | 122 +++++++++++++++++
+ .../access/access_service_coordinator.cc      |  14 ++
+ .../aegis/access/access_site_intent.cc        |  12 ++
+ .../browser/aegis/access/access_site_intent.h |   2 +
+ .../access/access_site_intent_unittest.cc     |   8 ++
+ .../access_site_proxy_bubble_controller.cc    |  46 +++++--
+ .../access_site_proxy_bubble_controller.h     |   3 +
+ .../access_site_proxy_product_unittest.cc     |  26 +++-
+ .../aegis/access/access_site_proxy_session.cc |   9 +-
+ .../aegis/access/access_site_proxy_session.h  |   3 +-
+ .../aegis_access/access_policy_evaluator.cc   |  15 ++-
+ .../access_policy_evaluator_unittest.cc       |  64 +++++++++
+ .../aegis_access/access_route_planner.cc      |   3 +-
+ components/aegis_access/access_route_types.h  |   3 +
+ .../access_route_wire_unittest.cc             |  27 ++++
+ .../request_ownership_registry.cc             |  10 +-
+ .../aegis_access/request_ownership_registry.h |   3 +
+ .../request_ownership_registry_unittest.cc    |  26 ++++
+ .../aegis_access/site_proxy_rule_group.cc     |   2 +
+ .../aegis_access/site_proxy_rule_group.h      |   3 +
+ services/network/aegis/access_route_wire.cc   |   1 +
+ .../mojom/aegis_access_route_types.mojom      |   2 +-
+ 25 files changed, 498 insertions(+), 41 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
 index e15dbead36ec2de6434393a80730ee6a418eb582..2ddfff6c8dd342690999171cb1256d735cfe8a7b 100644
@@ -1235,3 +1262,6 @@ index d9ffbb65b46ea241d32b92842a89c11fd58bb45a..6188b3a5bd37e3becad0b8c71085e321
  enum AegisAccessMode { kNone, kDirect, kProxy, kReject };
  enum AegisAccessScheme { kHttp, kHttps, kWs, kWss };
  enum AegisAccessPortScope { kAllBrowserPermitted, kExplicitSubset };
+-- 
+2.54.0 (Apple Git-157)
+

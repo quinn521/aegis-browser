@@ -1,9 +1,16 @@
-From 23806622f36159c77ce8c554bb8fa7f41bdcbda4 Mon Sep 17 00:00:00 2001
+From 433d618feba49e728ded51c048859cdb024e0683 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Thu, 12 Nov 2026 02:34:49 +0800
 Subject: [PATCH] fix(access): expose Stop while the active error tab prepares
  its proxy
+
 ---
+ .../access_navigation_retry_tab_helper.cc     | 17 +++++++--
+ .../access_navigation_retry_tab_helper.h      |  3 ++
+ ...ss_navigation_retry_tab_helper_unittest.cc | 35 +++++++++++++++++++
+ chrome/browser/ui/BUILD.gn                    |  5 ++-
+ .../browser/ui/browser_command_controller.cc  | 15 ++++++--
+ 5 files changed, 70 insertions(+), 5 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc b/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc
 index 696f905cc60e75a0c14a194b9d6c342dddb84248..c8826fd5b05d4baa2809d3eb7d61272ebe3bffe3 100644
@@ -137,10 +144,10 @@ index 7c1d346bf55d3d4e63446da81183b70f269c3b07..2daaa96d4afe199bed0bc2deddb6baea
    Fail(GURL("https://failed.example/path"));
    auto ready = helper()->CaptureRouteReadyCallback();
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 399a05355fce3ee42ed177e2de5775e52e51e200..a3ea9d7145e8ac1a9f887c7c091c011f433022d0 100644
+index 8d8f8a273403dd80883acc630c12a3926dc835b7..d6d8cb8b801d496ca6f3c4d7484db4d0b9e22013 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -788,7 +788,10 @@ if (!is_android) {
+@@ -795,7 +795,10 @@ if (!is_android) {
        ]
      }
      if (is_mac) {
@@ -153,10 +160,10 @@ index 399a05355fce3ee42ed177e2de5775e52e51e200..a3ea9d7145e8ac1a9f887c7c091c011f
      if (use_ozone) {
        deps += [ "//ui/ozone" ]
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index 99bc06383791cf2dbe7a8aecc600745867cbc960..b718e8a6a5e2574b3898ce0ae4a6e42df6ffbc08 100644
+index d492b8ec11275addb142ad8efbf6803579c556d4..c2dec04fb2d6538488947442b97096950a28981c 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
-@@ -163,6 +163,7 @@
+@@ -165,6 +165,7 @@
  #endif
  
  #if BUILDFLAG(IS_MAC)
@@ -164,7 +171,7 @@ index 99bc06383791cf2dbe7a8aecc600745867cbc960..b718e8a6a5e2574b3898ce0ae4a6e42d
  #include "chrome/browser/ui/browser_commands_mac.h"
  #endif
  
-@@ -2748,8 +2749,18 @@ void BrowserCommandController::UpdateReloadStopState(bool is_loading,
+@@ -2785,8 +2786,18 @@ void BrowserCommandController::UpdateReloadStopState(bool is_loading,
      return;
    }
  
@@ -185,3 +192,6 @@ index 99bc06383791cf2dbe7a8aecc600745867cbc960..b718e8a6a5e2574b3898ce0ae4a6e42d
    UpdateCloseFindOrStop();
  }
  
+-- 
+2.54.0 (Apple Git-157)
+

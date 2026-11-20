@@ -1,4 +1,4 @@
-From add2c1f67f6f88503c708f4f6bbc09be75558df7 Mon Sep 17 00:00:00 2001
+From 09d88c945884b60e1db28ff50be9be5e38ccf42b Mon Sep 17 00:00:00 2001
 From: Aegis CI <aegis-ci@users.noreply.github.com>
 Date: Sat, 31 Oct 2026 11:44:12 +0800
 Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E6=A1=8C=E9=9D=A2=20Aegis=20?=
@@ -7,7 +7,10 @@ Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E6=A1=8C=E9=9D=A2=20Aegis=20?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/aegis/BUILD.gn | 2 ++
+ 1 file changed, 2 insertions(+)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 86e7688dd76efa86db60e6b5238f31b179850b39..b4dfe72b6cde081c2f1bb3026ec67ec6220791ca 100644
@@ -22,3 +25,6 @@ index 86e7688dd76efa86db60e6b5238f31b179850b39..b4dfe72b6cde081c2f1bb3026ec67ec6
        "//chrome/browser/actor",
        "//chrome/browser/actor/ui:event_dispatcher",
        "//chrome/browser/actor/ui:test_support",
+-- 
+2.54.0 (Apple Git-157)
+

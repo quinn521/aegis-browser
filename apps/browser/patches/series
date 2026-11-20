@@ -519,3 +519,4 @@
 0519-feat-access-windows-desktop-parity.patch
 0520-feat-macos-access-options-admission-store.patch
 0521-fix-access-private-staging-tool-and-review-findings.patch
+0522-adapt-chromium-158-api-candidate-341.patch

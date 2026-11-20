@@ -1,10 +1,16 @@
-From c51d5c9a7b6398a4eece4bf743f6d56c19371442 Mon Sep 17 00:00:00 2001
+From e25da5256d9c358afa1206a076ceec73fcd08471 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
 Date: Sun, 15 Nov 2026 16:43:55 +0800
 Subject: [PATCH] fix(desktop): preserve persisted configuration and Windows
  test resources
 
 ---
+ chrome/browser/aegis/BUILD.gn                               | 4 ++++
+ .../browser/aegis/enhancements/enhancement_browsertest.cc   | 5 +++++
+ chrome/browser/aegis/enhancements/enhancement_store.cc      | 3 ++-
+ .../aegis/enhancements/enhancement_store_unittest.cc        | 6 ++++++
+ chrome/browser/ui/webui/help/aegis_github_update.h          | 4 ++--
+ 5 files changed, 19 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 0e3c5317aa1c80fd37cb9e8ea66daeb49c92c3e8..2151c4e779ce54c764346ff19aaf90bd7a2e70f6 100644
@@ -83,3 +89,6 @@ index dd891906eb410413666676536885bae3862c97bf..e98c16535fe9fa6ab44ed94a6ea30288
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

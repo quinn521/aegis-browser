@@ -1,9 +1,23 @@
-From 816718e56821cc6bc67a5af953d8bce38f7675b0 Mon Sep 17 00:00:00 2001
+From da2ce11033259cbbd9232d92d14f5af98c5075d0 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Thu, 12 Nov 2026 12:49:05 +0800
 Subject: [PATCH] feat(access-account): retain the macOS account query on the
  integrated Access tree
+
 ---
+ chrome/browser/aegis/BUILD.gn                 |   5 +
+ .../browser/aegis/access/access_account_mac.h |  17 ++
+ .../aegis/access/access_account_mac.mm        | 222 ++++++++++++++++++
+ chrome/browser/aegis/aegis_service.h          |   6 +
+ .../aegis/aegis_service_access_account_mac.mm |  44 ++++
+ .../aegis/aegis_ui_handler_unittest.cc        | 119 ++++++++++
+ .../settings/aegis_page/aegis_page.ts         |   3 +
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  29 +++
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   6 +
+ 9 files changed, 451 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_account_mac.h
+ create mode 100644 chrome/browser/aegis/access/access_account_mac.mm
+ create mode 100644 chrome/browser/aegis/aegis_service_access_account_mac.mm
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 852a5a5195c60dc6ce596b3d54effe7db46775fa..cfd5a413e6333dd989df34fe9886c7d7732a87bb 100644
@@ -589,3 +603,6 @@ index 7d53f3d9f245a70bfe3eb3f0ceffa4a7724e646a..f657d2e1dc0f8b4cb6fe799b4fb50a3b
    base::WeakPtrFactory<AegisUIHandler> weak_factory_{this};
  };
  
+-- 
+2.54.0 (Apple Git-157)
+

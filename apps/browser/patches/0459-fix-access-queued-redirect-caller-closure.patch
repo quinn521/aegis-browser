@@ -1,8 +1,11 @@
-From 2de3154bcb4447fde85d9621cf57938aeab0c526 Mon Sep 17 00:00:00 2001
+From 769be7e7bc02bc5897fc2fcee4e84cb5cb7e8c6f Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 13:24:24 +0800
 Subject: [PATCH] fix(access): reject closed callers at redirect readiness
+
 ---
+ .../aegis/access/access_proxying_url_tracked_request.cc      | 5 +++++
+ 1 file changed, 5 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc b/chrome/browser/aegis/access/access_proxying_url_tracked_request.cc
 index f49d52d65d90fa46a8a80699cf04c2e086a76df6..397862ff13decb4dae497c402d5bfddd09777a5c 100644
@@ -21,3 +24,6 @@ index f49d52d65d90fa46a8a80699cf04c2e086a76df6..397862ff13decb4dae497c402d5bfddd
        !target_loader_.is_bound() ||
        (private_route_ && !private_control_.is_connected())) {
      FailClosed(/*complete_registry=*/true);
+-- 
+2.54.0 (Apple Git-157)
+

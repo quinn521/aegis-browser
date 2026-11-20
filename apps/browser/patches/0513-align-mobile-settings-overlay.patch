@@ -1,4 +1,4 @@
-From cf032e99866aaedf7652f4d629699a5de8d253a0 Mon Sep 17 00:00:00 2001
+From 4335253670dcde08e73786d6bfb52bcf5c252275 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Tue, 17 Nov 2026 20:55:17 +0800
 Subject: [PATCH] =?UTF-8?q?=E5=90=8C=E6=AD=A5=E7=A7=BB=E5=8A=A8=E7=AB=AF?=
@@ -9,6 +9,8 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ chrome/browser/resources/aegis/mobile_settings.ts | 14 ++++----------
+ 1 file changed, 4 insertions(+), 10 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/mobile_settings.ts b/chrome/browser/resources/aegis/mobile_settings.ts
 index 42668a449813f680fefad3ca859c4dd610c5cd11..fcc98dbb556913416e3c653ae9553e4268ba73e6 100644
@@ -50,3 +52,6 @@ index 42668a449813f680fefad3ca859c4dd610c5cd11..fcc98dbb556913416e3c653ae9553e42
        card.append(description);
        const actions: Array<[string, string]> = group.id === 'reading' ? [
          ['reading', text('本机翻译设置', 'Local translation settings', '本機翻譯設定')],
+-- 
+2.54.0 (Apple Git-157)
+

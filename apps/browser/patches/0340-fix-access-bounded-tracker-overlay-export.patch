@@ -1,4 +1,4 @@
-From 0e60b3da6140fb321e5cc5859dbb84531a3c2ba2 Mon Sep 17 00:00:00 2001
+From 7749b2e698c23ff88058532a1436751d1d104fbf Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Thu, 22 Oct 2026 18:50:39 +0000
 Subject: [PATCH] fix: export bounded tracker runtime and browser regressions
@@ -6,6 +6,14 @@ Subject: [PATCH] fix: export bounded tracker runtime and browser regressions
 Keep the ordered Chromium patch series synchronized with the expected overlay.
 This transports the existing overlay fixes; native acceptance remains separate.
 ---
+ ...proxying_url_loader_factory_browsertest.cc | 207 ++++++++++++-
+ tools/aegis/current151_tracker/README.md      | 286 +++++++++---------
+ .../current151_tracker/bounded_runtime.cc     | 123 +++++++-
+ .../current151_tracker/bounded_runtime.h      |  23 +-
+ .../current151_tracker/native_regressions.cc  | 201 ++++++++----
+ tools/aegis/current151_tracker/owned_leaf.cc  |  27 +-
+ tools/aegis/current151_tracker/regressions.py |  20 ++
+ 7 files changed, 662 insertions(+), 225 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory_browsertest.cc
 index 8612ef233fca03edf1f2d4a48df3bf3601bc604e..c6f743ca3afa539757774cdbb6037ff5323a8ab4 100644
@@ -1181,3 +1189,6 @@ index 26328238a2325de03abd7a43af5b60bdce5c8114..6e09d0e50cb005736208b5b1ae629e4f
 +
  if __name__ == "__main__":
      unittest.main(verbosity=2)
+-- 
+2.54.0 (Apple Git-157)
+

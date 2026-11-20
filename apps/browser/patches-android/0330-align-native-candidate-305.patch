@@ -1,8 +1,15 @@
-From 956b419996a277e45369fc7516e0c8e14104f0fa Mon Sep 17 00:00:00 2001
+From 6cd13884524434e163498cd0b6f61acb1eb379cb Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Sun, 8 Nov 2026 22:24:00 +0800
-Subject: [PATCH] 对齐原生候选产品版本305
+Subject: [PATCH] =?UTF-8?q?=E5=AF=B9=E9=BD=90=E5=8E=9F=E7=94=9F=E5=80=99?=
+ =?UTF-8?q?=E9=80=89=E4=BA=A7=E5=93=81=E7=89=88=E6=9C=AC305?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index 854156892137caabf2b1f38937002cfed1a4e98c..5d4ce9744f8afbb51fcd1efa2efa3b4bf1f05476 100644
@@ -19,3 +26,6 @@ index 854156892137caabf2b1f38937002cfed1a4e98c..5d4ce9744f8afbb51fcd1efa2efa3b4b
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

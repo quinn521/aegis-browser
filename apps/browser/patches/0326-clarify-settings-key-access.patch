@@ -1,10 +1,28 @@
-From 3476ac3b6492543429499e12e2701614bb98609b Mon Sep 17 00:00:00 2001
+From 3752526460b546c188c6cb96041e32b48e53c423 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 23:20:00 +0800
-Subject: [PATCH] 明确设置键访问与事件绑定并保留翻译标记行为
+Subject: [PATCH] =?UTF-8?q?=E6=98=8E=E7=A1=AE=E8=AE=BE=E7=BD=AE=E9=94=AE?=
+ =?UTF-8?q?=E8=AE=BF=E9=97=AE=E4=B8=8E=E4=BA=8B=E4=BB=B6=E7=BB=91=E5=AE=9A?=
+ =?UTF-8?q?=E5=B9=B6=E4=BF=9D=E7=95=99=E7=BF=BB=E8=AF=91=E6=A0=87=E8=AE=B0?=
+ =?UTF-8?q?=E8=A1=8C=E4=B8=BA?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 将受控字典和字段访问写为显式结构；保留现有保存队列、失败回退及消息来源检查。
 ---
+ chrome/browser/resources/aegis/aegis.ts       |  9 +++--
+ chrome/browser/resources/aegis/gestures.ts    | 17 +++++----
+ .../resources/aegis/mobile_settings.ts        |  6 +--
+ chrome/browser/resources/aegis_agent/agent.ts |  9 +++--
+ .../resources/aegis_agent/language_packs.ts   |  4 +-
+ .../aegis_agent/local_ai/asset_manifest.json  |  4 +-
+ .../resources/aegis_agent/local_ai/worker.js  | 35 ++++++++++--------
+ .../aegis_agent/reading_workspace.ts          |  6 +--
+ .../settings/aegis_page/aegis_page.ts         | 37 ++++++++++++-------
+ .../downloads_page/downloads_page.html.ts     | 20 +++++-----
+ .../settings/downloads_page/downloads_page.ts |  3 +-
+ 11 files changed, 88 insertions(+), 62 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/aegis.ts b/chrome/browser/resources/aegis/aegis.ts
 index cf4d1da0aa9e058f5e6e61439cd55bd58b2158cb..b08e6c42a55054d5ced3413c583bff3e3dabd5bb 100644
@@ -468,3 +486,6 @@ index b81a8a28c2a33bb4ba5f5900f672c2c26cd2361e..deaeedc6e10b9243671de8067d44981f
      const value = select.value === 'unlimited' ? 0 : 256;
      if (select.id === 'aegisDownloadMode') this.aegisTorrentDownloadLimitKib_ = value;
      else this.aegisTorrentUploadLimitKib_ = value;
+-- 
+2.54.0 (Apple Git-157)
+

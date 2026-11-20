@@ -1,9 +1,13 @@
-From ab0716e33a28609c68b517407dac5eee17a9f6e4 Mon Sep 17 00:00:00 2001
+From 0930757149de25fa65f9a20837b80ca83d097c6e Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
 Date: Mon, 16 Nov 2026 11:56:37 +0800
 Subject: [PATCH] build: share Access core source manifest
 
 ---
+ components/aegis_access/BUILD.gn            | 92 ++++++++-------------
+ components/aegis_access/access_sources.json | 66 +++++++++++++++
+ 2 files changed, 100 insertions(+), 58 deletions(-)
+ create mode 100644 components/aegis_access/access_sources.json
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index bcbd62e644ba653f7bfe6f680e1d64e2f1999c8b..cd66e78c53b7ebe66afd73f62bbb76a10ffc046d 100644
@@ -246,3 +250,6 @@ index 0000000000000000000000000000000000000000..ce3d880390db19853414eabed36c691d
 +    "output": "policy_matcher_golden_vectors.inc"
 +  }
 +}
+-- 
+2.54.0 (Apple Git-157)
+

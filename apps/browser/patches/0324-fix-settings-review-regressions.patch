@@ -1,10 +1,19 @@
-From f24d140a250388d2cd339cd9271eb9cdffb2d5d1 Mon Sep 17 00:00:00 2001
+From 1081e4f268afacfde2cb46739c6e9cf3796abd2a Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 21:00:00 +0800
-Subject: [PATCH] 修复下载保存冲突与阅读语言包入口
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E4=B8=8B=E8=BD=BD=E4=BF=9D?=
+ =?UTF-8?q?=E5=AD=98=E5=86=B2=E7=AA=81=E4=B8=8E=E9=98=85=E8=AF=BB=E8=AF=AD?=
+ =?UTF-8?q?=E8=A8=80=E5=8C=85=E5=85=A5=E5=8F=A3?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 保存失败后取消本轮待执行草稿，允许阅读侧栏主动展开语言包，并同步 Worker 资源摘要。
 ---
+ chrome/browser/resources/aegis_agent/agent.css     |  5 +++++
+ .../aegis_agent/local_ai/asset_manifest.json       |  4 ++--
+ .../settings/downloads_page/downloads_page.ts      | 14 +++++++++++---
+ 3 files changed, 18 insertions(+), 5 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis_agent/agent.css b/chrome/browser/resources/aegis_agent/agent.css
 index 667657b4cc3e4eb6cf550f7ce19017fcbba2315e..ec39cd4ff5247d6af534b75fd347d84b9f97dac5 100644
@@ -101,3 +110,6 @@ index 1fa2fd98bdc226ebf617e7336433769a0a0b92ef..c2d780befaf0b9072cd96b428fbc84b3
                                    try { await this.loadAegisDownloadSettings_(); }
                                    finally { this.aegisSaveStatus_ = this.aegisStrings_.failed; }
                                  }).catch(() => {});
+-- 
+2.54.0 (Apple Git-157)
+

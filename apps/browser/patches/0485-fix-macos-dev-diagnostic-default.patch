@@ -1,9 +1,14 @@
-From 63c6b22db4189b61acd6e2ba20b8497f557a665a Mon Sep 17 00:00:00 2001
+From b72f6a3aa61393b0061f24eb6072e595593218d2 Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
 Date: Thu, 12 Nov 2026 13:00:00 +0800
 Subject: [PATCH] fix(access): recognize ordinary unbranded DEV diagnostic
  defaults
+
 ---
+ .../aegis/access/access_build_channel.cc      |  3 ++-
+ .../aegis/access/access_build_channel.h       | 15 ++++++++----
+ .../aegis/access/access_core_log_unittest.cc  | 23 +++++++++++++++++++
+ 3 files changed, 36 insertions(+), 5 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_build_channel.cc b/chrome/browser/aegis/access/access_build_channel.cc
 index 9a488c8ce6af385f7772100f6d4666a69795e8b3..aa7166af04c97434aae7d71b38be19d23d26d82f 100644
@@ -96,3 +101,6 @@ index 6dd0b660b42f23c030c87a08e1ecdb244ea5fe62..398065bbcf4fb600ddb295efc4f9db10
  }
  
  TEST(AccessCoreLogTest, ChannelDefaultsRetainThresholdRedactionAndManualOff) {
+-- 
+2.54.0 (Apple Git-157)
+

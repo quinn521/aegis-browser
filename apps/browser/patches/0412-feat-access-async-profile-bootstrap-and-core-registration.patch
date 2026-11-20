@@ -1,9 +1,21 @@
-From 3c0741b18d3b869f25dfe81b770a6b93455e2327 Mon Sep 17 00:00:00 2001
+From ec5b67fa0b380983d84133460a05f67f1bbff211 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 19:34:09 +0800
 Subject: [PATCH] feat(access): restore Profile asynchronously and register
  prepared core
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   5 +
+ .../access_network_context_transport.cc       |  55 +++++-
+ .../access/access_network_context_transport.h |  12 +-
+ .../access_proxying_url_loader_factory.cc     |  15 ++
+ .../access_proxying_url_loader_factory.h      |   2 +
+ .../access/access_service_coordinator.cc      | 180 +++++++++++++++++-
+ .../aegis/access/access_service_coordinator.h |  21 +-
+ .../access_service_coordinator_unittest.cc    |  51 +++++
+ .../access_site_proxy_bubble_controller.cc    |  74 ++++++-
+ .../access_site_proxy_bubble_controller.h     |   4 +
+ 10 files changed, 410 insertions(+), 9 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 5e6d668e307ac0ab74f20411283fa92abfe54544..a07d28c727988341962ae7fb4c5b95a07284b74a 100644
@@ -790,3 +802,6 @@ index ea9a847953a4054ffdee8246db176f4b7c3caad4..a6ccbc5c804f22c2f1230fd78f3872d5
    void OnLocalCorePrepared(AccessSiteHost host, OwnershipKey owner,
                            AccessLocalCoreReady result);
    void OnCommittedCoreVerified(AccessSiteHost host, AccessLocalCoreReady result);
+-- 
+2.54.0 (Apple Git-157)
+

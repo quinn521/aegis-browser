@@ -1,8 +1,17 @@
-From e5eb1863dd4b6305fe2359bb417658c76af76d9b Mon Sep 17 00:00:00 2001
+From 58197fc9e7259d6252edb6cb30852145bb2192bc Mon Sep 17 00:00:00 2001
 From: GCSA Tools Team <tools@gcsa.org>
 Date: Wed, 14 Oct 2026 17:25:00 +0800
-Subject: [PATCH] 兼容安全扫描器并保留本机 AI 资源清理
+Subject: [PATCH] =?UTF-8?q?=E5=85=BC=E5=AE=B9=E5=AE=89=E5=85=A8=E6=89=AB?=
+ =?UTF-8?q?=E6=8F=8F=E5=99=A8=E5=B9=B6=E4=BF=9D=E7=95=99=E6=9C=AC=E6=9C=BA?=
+ =?UTF-8?q?=20AI=20=E8=B5=84=E6=BA=90=E6=B8=85=E7=90=86?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ .../resources/aegis_agent/local_ai/research.js       |  4 ++--
+ .../browser/resources/aegis_agent/local_ai/worker.js | 12 ++++++------
+ 2 files changed, 8 insertions(+), 8 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis_agent/local_ai/research.js b/chrome/browser/resources/aegis_agent/local_ai/research.js
 index 5b1dbf56008a14d86745ddefdb5fe4a667a7fc85..2c3085b7cd5a1ecf6a4d7f218e2b1c8827ff7360 100644
@@ -78,3 +87,6 @@ index 54821b84f2db735c662cec327937170f6023149a..2e73cd4e7e6b2bdbb94e219d272ea7a6
  }
  self.onmessage = async ({data}) => {
    try { self.postMessage({result: await execute(data)}); }
+-- 
+2.54.0 (Apple Git-157)
+

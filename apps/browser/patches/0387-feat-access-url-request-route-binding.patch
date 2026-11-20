@@ -1,9 +1,15 @@
-From 53a7f011a3d2e350f50673a08456fce9c8ea68be Mon Sep 17 00:00:00 2001
+From 36e0c638b413de51ee3cda22bfeec4aa002c74ec Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 11:20:19 +0800
 Subject: [PATCH] feat(access): bind URLRequest route and revalidate redirects
  before cache
+
 ---
+ .../access_http_route_execution_unittest.cc   | 123 ++++++++++++++++++
+ net/url_request/url_request.cc                |  11 ++
+ net/url_request/url_request.h                 |  16 +++
+ net/url_request/url_request_http_job.cc       |  17 +++
+ 4 files changed, 167 insertions(+)
 
 diff --git a/components/aegis_access/access_http_route_execution_unittest.cc b/components/aegis_access/access_http_route_execution_unittest.cc
 index bbb911db7c436f97bac0de13acdca20614fbeaa1..fb765d4193016de40977adb76c243ab84d899375 100644
@@ -286,3 +292,6 @@ index c909310d202002b724941bd4e2b4fede56b69d45..2287c220650038886a2d3a3680bdd0a7
    request_info_.priority_incremental = request_->priority_incremental();
    request_info_.secure_dns_policy = request_->secure_dns_policy();
    request_info_.traffic_annotation =
+-- 
+2.54.0 (Apple Git-157)
+

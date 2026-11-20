@@ -1,9 +1,15 @@
-From 107ee9791879bede3681fea54cb766f4570d3e95 Mon Sep 17 00:00:00 2001
+From 3a20352a99a914ed7b643095f625c5665557f75c Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 06:34:34 +0800
 Subject: [PATCH] fix(access): keep private routing off legacy config and test
  pending aborts
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   1 +
+ .../access_network_context_transport.cc       |  12 +-
+ .../access/access_network_context_transport.h |   3 +
+ .../access_site_proxy_product_unittest.cc     | 127 ++++++++++++++++++
+ 4 files changed, 141 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 6c65bcaac716f90381f1382dd7af5c8137c39877..b8bd372d001b0bde4eb845170f2677cff59189bc 100644
@@ -237,3 +243,6 @@ index 7b6ef259af9d0ba562bc0ba1c5ce0c65ad837a43..d7aa44ddd46bffefb39de0b541de3282
 +
  }  // namespace
  }  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

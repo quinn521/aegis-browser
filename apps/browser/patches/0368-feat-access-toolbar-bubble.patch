@@ -1,4 +1,4 @@
-From 52ada03aaebc5f652dc97ea412e2c5fb42cd1513 Mon Sep 17 00:00:00 2001
+From 1b5ba14dd8d6bb0ac572bc75fe52a2ccf4780c1c Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Sun, 8 Nov 2026 13:53:40 +0000
 Subject: [PATCH] feat: add macOS toolbar bubble for per-site proxy
@@ -7,6 +7,20 @@ Show current host, site-proxy toggle, and short status with switch
 state distinct from connectivity. Sync overlay with the Chromium
 patch series.
 ---
+ chrome/browser/aegis/BUILD.gn                 |   3 +
+ chrome/browser/aegis/access/BUILD.gn          |  26 +++++
+ .../access_site_proxy_bubble_controller.cc    |  67 ++++++++++++
+ .../access_site_proxy_bubble_controller.h     |  56 ++++++++++
+ .../access/access_site_proxy_bubble_model.cc  | 102 +++++++++++++++++
+ .../access/access_site_proxy_bubble_model.h   |  77 +++++++++++++
+ ...access_site_proxy_bubble_model_unittest.cc | 103 ++++++++++++++++++
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  98 +++++++++++++++++
+ 8 files changed, 532 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_bubble_model.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_bubble_model.h
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_bubble_model_unittest.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 185b8719f0ced89de9606446a5909f34567789e2..852a5a5195c60dc6ce596b3d54effe7db46775fa 100644
@@ -631,3 +645,6 @@ index f93e0180735bfe7c77243aa8d3ee06c7cfd03830..aa32f73d4edc7b0eb629fe414a7b0a77
      AddLabel(panel_, Copy(u"隐私保护", u"Privacy protection", u"隱私保護"), views::style::CONTEXT_DIALOG_TITLE);
      AddLabel(panel_, (summary_.paused ? Copy(u"本站保护已暂停 · ", u"Protection paused · ", u"本站保護已暫停 · ")
                                      : Copy(u"保护已开启 · ", u"Protection on · ", u"保護已開啟 · ")) +
+-- 
+2.54.0 (Apple Git-157)
+

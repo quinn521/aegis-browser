@@ -1,8 +1,19 @@
-From 0c98653ebbb776a1c7a98ed0f025f16e4aff6831 Mon Sep 17 00:00:00 2001
+From 11b514ee15204777f87e03c2426c9b43040f2651 Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Sun, 8 Nov 2026 22:24:00 +0800
-Subject: [PATCH] 适配157拆分后的原生测试UI依赖并递增至305
+Subject: [PATCH] =?UTF-8?q?=E9=80=82=E9=85=8D157=E6=8B=86=E5=88=86?=
+ =?UTF-8?q?=E5=90=8E=E7=9A=84=E5=8E=9F=E7=94=9F=E6=B5=8B=E8=AF=95UI?=
+ =?UTF-8?q?=E4=BE=9D=E8=B5=96=E5=B9=B6=E9=80=92=E5=A2=9E=E8=87=B3305?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/aegis/BUILD.gn                 | 20 ++++++++++++++-----
+ .../enhancements/enhancement_browsertest.cc   |  6 +++---
+ .../google_service_prompt_browsertest.cc      | 10 +++++-----
+ .../ui/webui/help/aegis_github_update.h       |  4 ++--
+ 4 files changed, 25 insertions(+), 15 deletions(-)
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index e1c7ce98acd908d0d5e6501ff99794a91903b344..ccf50ba0f4d6259b4c690977b2361b5351f478d7 100644
@@ -167,3 +178,6 @@ index 854156892137caabf2b1f38937002cfed1a4e98c..5d4ce9744f8afbb51fcd1efa2efa3b4b
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

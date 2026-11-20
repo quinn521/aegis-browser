@@ -1,4 +1,4 @@
-From b94ef22aefe088cd8a2f2a69cde436444071b3f7 Mon Sep 17 00:00:00 2001
+From 775bed98d159a68e4761b2bf83690e9f4a8ddf66 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro-3.local>
 Date: Mon, 12 Oct 2026 01:00:16 +0800
 Subject: [PATCH] =?UTF-8?q?feat:=20=E6=8E=A5=E5=85=A5=E6=9C=AC=E6=9C=BA?=
@@ -8,9 +8,58 @@ MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-
 Public source export omits local-only research weights and vocabulary.
 ---
+ chrome/browser/aegis/aegis_prefs.cc           |    2 +
+ .../aegis/agent/aegis_agent_browsertest.cc    |   90 +
+ chrome/browser/resources/aegis_agent/BUILD.gn |   23 +
+ .../browser/resources/aegis_agent/agent.css   |   25 +-
+ .../browser/resources/aegis_agent/agent.html  |   21 +
+ .../resources/aegis_agent/local_ai/NOTICE.txt |   21 +
+ .../aegis_agent/local_ai/asset_manifest.json  |   89 +
+ .../aegis_agent/local_ai/bergamot/LICENSE     |  373 +++
+ .../local_ai/bergamot/translator.js           |  884 +++++
+ .../worker/bergamot-translator-worker.js      | 2919 +++++++++++++++++
+ .../worker/bergamot-translator-worker.wasm    |  Bin 0 -> 5174294 bytes
+ .../bergamot/worker/translator-worker.js      |  480 +++
+ .../aegis_agent/local_ai/research.js          |  120 +
+ .../local_ai/research_manifest.json           |   16 +
+ .../local_ai/translation_manifest.json        |  149 +
+ .../aegis_agent/local_ai/vendor/fzstd-LICENSE |   21 +
+ .../aegis_agent/local_ai/vendor/fzstd.js      |  753 +++++
+ .../local_ai/vendor/js-md5-LICENSE            |   20 +
+ .../aegis_agent/local_ai/vendor/md5.js        |  876 +++++
+ .../local_ai/vendor/onnxruntime-web-LICENSE   |   21 +
+ .../local_ai/vendor/ort-wasm-simd-threaded.js |   81 +
+ .../vendor/ort-wasm-simd-threaded.wasm        |  Bin 0 -> 11246032 bytes
+ .../aegis_agent/local_ai/vendor/ort.js        |    7 +
+ .../resources/aegis_agent/local_ai/worker.js  |  138 +
+ .../resources/aegis_agent/local_ai_client.ts  |   36 +
+ .../aegis_agent/reading_workspace.ts          |  150 +-
+ .../ui/webui/aegis_agent/aegis_agent_ui.cc    |   49 +-
+ .../ui/webui/aegis_agent/reading_workspace.cc |   89 +-
+ .../ui/webui/help/aegis_github_update.h       |    4 +-
+ 29 files changed, 7437 insertions(+), 20 deletions(-)
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/NOTICE.txt
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/asset_manifest.json
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/bergamot/LICENSE
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/bergamot/translator.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/bergamot/worker/bergamot-translator-worker.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/bergamot/worker/bergamot-translator-worker.wasm
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/bergamot/worker/translator-worker.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/research.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/research_manifest.json
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/translation_manifest.json
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/fzstd-LICENSE
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/fzstd.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/js-md5-LICENSE
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/md5.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/onnxruntime-web-LICENSE
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/ort-wasm-simd-threaded.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/ort-wasm-simd-threaded.wasm
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/vendor/ort.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/worker.js
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai_client.ts
 
 diff --git a/chrome/browser/aegis/aegis_prefs.cc b/chrome/browser/aegis/aegis_prefs.cc
 index ae4d7ac38e43bf9c0e7c2832991168d766e2311f..72f2ca7aa9acab0ac2f3a08c90e0a46dca564b16 100644
@@ -114108,3 +114157,6 @@ index 23448226782854b8e16f06a4661b951926a71680..3b5a05b752d491f34f4302b9368d4dd3
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

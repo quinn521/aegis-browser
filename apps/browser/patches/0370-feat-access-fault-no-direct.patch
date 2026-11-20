@@ -1,8 +1,21 @@
-From dcc171726e67ea0a66d3b7e77078b616746b71ea Mon Sep 17 00:00:00 2001
+From f9aa315f86d754c8891120f31a05ec840989abed Mon Sep 17 00:00:00 2001
 From: Aegis <aegis@invalid>
 Date: Tue, 10 Nov 2026 03:59:36 +0800
 Subject: [PATCH] feat: fail closed on macOS site-proxy fault without DIRECT
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   2 +
+ ...proxying_url_loader_factory_browsertest.cc |   4 +
+ .../access_site_proxy_bubble_controller.cc    |  42 ++++
+ .../access_site_proxy_bubble_controller.h     |  11 ++
+ .../access/access_site_proxy_fault_fixture.cc |  94 +++++++++
+ .../access/access_site_proxy_fault_fixture.h  |  49 +++++
+ .../aegis/access/access_site_proxy_session.cc | 187 +++++++++++++++++-
+ .../aegis/access/access_site_proxy_session.h  |  57 +++++-
+ .../access_site_proxy_session_unittest.cc     | 159 +++++++++++++++
+ 9 files changed, 600 insertions(+), 5 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_fault_fixture.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_proxy_fault_fixture.h
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 40a2c0d6b3d5f35b9269f2458df220e887e8864d..01d094fac3e004712478905978e705f47170211a 100644
@@ -847,3 +860,6 @@ index 9a19d8794fda34668a65f5854027b87792b8ee7f..7da61816ca6bace2ba147a010823508a
 +
  }  // namespace
  }  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

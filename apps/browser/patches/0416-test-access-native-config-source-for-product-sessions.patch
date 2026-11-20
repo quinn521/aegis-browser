@@ -1,9 +1,13 @@
-From 3cb16536b7a1ba48f7c727cf4ab74010af11ae15 Mon Sep 17 00:00:00 2001
+From c77e87348ff0efd4670895aadc60a17305d38225 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 20:44:16 +0800
 Subject: [PATCH] test(access): use real native config monitor for product
  sessions
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  3 +++
+ .../access_site_proxy_product_unittest.cc     | 22 ++++++++++++++++++-
+ 2 files changed, 24 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 264c345edbc6bfdcd8cc5db3b80f9a20c7832bc3..079e11764bbe2a97817f2d544d625f8c1944ee03 100644
@@ -65,3 +69,6 @@ index ec4b89496f892c803753c0e8ababfeb3de19d8a4..d6e00b0136e59c8b8e8986aace0f7214
      network::mojom::NetworkContextParams params;
      ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(
          profile_.get(), {}, &params));
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,8 +1,15 @@
-From 1d909ecccb5891c3b98a0f7c4f4a04cfa6324f81 Mon Sep 17 00:00:00 2001
+From e9743b3c8ea53dda42318f81f677625b0a0c2b72 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 04:45:59 +0800
 Subject: [PATCH] test(access): cover core faults and real retry cancellation
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  13 ++
+ .../access_local_core_manager_unittest.cc     | 125 ++++++++++++++++++
+ .../access/access_local_core_test_child.cc    | 118 +++++++++++++++++
+ .../access_site_proxy_product_unittest.cc     | 118 +++++++++++++++++
+ 4 files changed, 374 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_local_core_test_child.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 5bf445ea3ab1e3b9b9ce2bb74a3294c16d30c0a4..35aa35db61da2a4f7afba834b5bb9175d5a9a76b 100644
@@ -455,3 +462,6 @@ index e5e63ef7e021926a6423c1fb1638f37bc383c334..b20f32c5697b0ad8bdb5da608613908d
 +
  }  // namespace
  }  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,4 +1,4 @@
-From 5daef45bf8dbfbe4d8f0bffaf73fce5620384db3 Mon Sep 17 00:00:00 2001
+From dc95a0babbb2c3ff9e5e3a5e6333379adeb6deac Mon Sep 17 00:00:00 2001
 From: GCSA-aegis <aegis@gcsa.local>
 Date: Thu, 13 Aug 2026 04:36:41 +0800
 Subject: [PATCH] Aegis: add EasyList compiler and runtime filter-list updater
@@ -6,6 +6,41 @@ Subject: [PATCH] Aegis: add EasyList compiler and runtime filter-list updater
 Compile EasyList/EasyPrivacy into host tables, persist per profile, and
 push the snapshot to renderer throttles. chrome://aegis can update now.
 ---
+ chrome/browser/aegis/BUILD.gn                 |   3 +
+ chrome/browser/aegis/aegis_prefs.cc           |   7 +
+ chrome/browser/aegis/aegis_service.cc         |  61 ++++-
+ chrome/browser/aegis/aegis_service.h          |  17 +-
+ chrome/browser/aegis/filter_list_updater.cc   | 213 +++++++++++++++
+ chrome/browser/aegis/filter_list_updater.h    |  63 +++++
+ chrome/browser/profiles/renderer_updater.cc   |  31 +++
+ chrome/browser/profiles/renderer_updater.h    |   5 +
+ chrome/browser/resources/aegis/aegis.css      |  36 +++
+ chrome/browser/resources/aegis/aegis.html     |   9 +
+ chrome/browser/resources/aegis/aegis.ts       |  51 +++-
+ chrome/browser/ui/webui/aegis/aegis_ui.cc     |  47 +++-
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  53 +++-
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   6 +
+ chrome/common/aegis/BUILD.gn                  |   4 +
+ chrome/common/aegis/aegis_net_throttle.cc     |   5 +-
+ chrome/common/aegis/aegis_net_throttle.h      |   2 +-
+ chrome/common/aegis/features.cc               |   1 +
+ chrome/common/aegis/features.h                |   1 +
+ chrome/common/aegis/filter_list.cc            | 246 ++++++++++++++++++
+ chrome/common/aegis/filter_list.h             |  48 ++++
+ chrome/common/aegis/filter_list_matcher.cc    | 112 ++++++++
+ chrome/common/aegis/filter_list_matcher.h     |  59 +++++
+ chrome/common/aegis/pref_names.h              |   7 +
+ chrome/common/renderer_configuration.mojom    |   3 +
+ .../renderer/chrome_render_thread_observer.cc |  13 +
+ .../renderer/chrome_render_thread_observer.h  |   4 +
+ third_party/aegis_policy/README.md            |   2 +
+ 28 files changed, 1082 insertions(+), 27 deletions(-)
+ create mode 100644 chrome/browser/aegis/filter_list_updater.cc
+ create mode 100644 chrome/browser/aegis/filter_list_updater.h
+ create mode 100644 chrome/common/aegis/filter_list.cc
+ create mode 100644 chrome/common/aegis/filter_list.h
+ create mode 100644 chrome/common/aegis/filter_list_matcher.cc
+ create mode 100644 chrome/common/aegis/filter_list_matcher.h
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index 76ca9ea201cb15e7db52afbab1347c18e5e79063..e311e638e0c44060adbf5459af9a9e18b6bd59b4 100644
@@ -492,7 +527,7 @@ index 0000000000000000000000000000000000000000..e40894e24e8ec3225153f2c4257b1217
 +
 +#endif  // CHROME_BROWSER_AEGIS_FILTER_LIST_UPDATER_H_
 diff --git a/chrome/browser/profiles/renderer_updater.cc b/chrome/browser/profiles/renderer_updater.cc
-index c7a791e6320ca75a27b1785f2c93768b93189984..0653cda24f8f51db8b5fc0ba22c4208e5b666816 100644
+index 6819b51a953de98a10bd681a748781c30ac5eea9..a166906322693f0eac1d3132c7a1d17f31cc57ca 100644
 --- a/chrome/browser/profiles/renderer_updater.cc
 +++ b/chrome/browser/profiles/renderer_updater.cc
 @@ -17,6 +17,8 @@
@@ -515,7 +550,7 @@ index c7a791e6320ca75a27b1785f2c93768b93189984..0653cda24f8f51db8b5fc0ba22c4208e
  
  #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY) && !BUILDFLAG(IS_ANDROID)
    if (auto* platform_runtime_host =
-@@ -179,6 +185,7 @@ void RendererUpdater::InitializeRenderer(
+@@ -181,6 +187,7 @@ void RendererUpdater::InitializeRenderer(
        std::move(bound_session_request_throttled_handler));
  
    renderer_configuration->SetConfiguration(CreateRendererDynamicParams());
@@ -523,7 +558,7 @@ index c7a791e6320ca75a27b1785f2c93768b93189984..0653cda24f8f51db8b5fc0ba22c4208e
  }
  
  RendererUpdater::RendererConfigurations
-@@ -255,6 +262,30 @@ void RendererUpdater::UpdateAllRenderers() {
+@@ -257,6 +264,30 @@ void RendererUpdater::UpdateAllRenderers() {
    }
  }
  
@@ -1584,3 +1619,6 @@ index 27ea501d285376c916f7647465f0a5bdbc58f972..5555470acf3e0d4d38b8b44ef35ea95d
  ```
  
  Do not hand-edit generated `.inc` files — edit TypeScript under `packages/core` instead.
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,14 @@
-From 3601b87db01bfd2b52b5ae86626d26db849ed0f5 Mon Sep 17 00:00:00 2001
+From 43d1291a2640b6ef3f765d086bf3632f747eb91a Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 17:29:04 +0800
 Subject: [PATCH] feat(access): publish freshly versioned restored policy and
  capture native common tuple
+
 ---
+ .../access_published_request_runtime.cc       | 56 +++++++++++++------
+ .../access/access_published_request_runtime.h | 15 +++++
+ ...cess_published_request_runtime_unittest.cc | 37 ++++++++++++
+ 3 files changed, 92 insertions(+), 16 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_published_request_runtime.cc b/chrome/browser/aegis/access/access_published_request_runtime.cc
 index 9a47c1831983419992df3616af979357c218812f..38e561edf9c14b233d5baae01669e809472c1bbd 100644
@@ -173,3 +178,6 @@ index bcb20edc379796a61fdc143d020c7fab313bd5e2..64efba866f86ac952b4f76ea7b87f01e
  TEST_F(AccessPublishedRequestRuntimeTest, PublishesCommittedSnapshotInMemory) {
    const auto published = runtime_->PublishCommittedPolicySnapshot(Snapshot(1));
    EXPECT_EQ(published.status, AccessPolicyPublicationStatus::kPublished);
+-- 
+2.54.0 (Apple Git-157)
+

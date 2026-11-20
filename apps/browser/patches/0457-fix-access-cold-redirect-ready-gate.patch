@@ -1,9 +1,16 @@
-From b4fafbb846e786304ebe0dfdb551a5a7e83b4244 Mon Sep 17 00:00:00 2001
+From 3e5accd37d7d5ccc5c1d0dfb382ead28dd6a0260 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 12:29:05 +0800
 Subject: [PATCH] fix(access): await saved redirect core and private policy
  readiness
+
 ---
+ .../access_proxying_url_loader_factory.cc     | 74 +++++++++++++++++++
+ .../access_proxying_url_loader_factory.h      | 11 +++
+ .../access_proxying_url_tracked_request.cc    | 25 ++++++-
+ .../access_proxying_url_tracked_request.h     |  4 +
+ .../access_site_proxy_product_unittest.cc     | 53 +++++++++++++
+ 5 files changed, 166 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 index b3e1479f0cc0be9e5979ec728cb1d549d8b92418..a702736e3766ac0c19c17653c27a9cc463c9c13e 100644
@@ -241,3 +248,6 @@ index e5448e0716c7da0b450f579dd5a5059b76a29626..0da729a0f067f60d1a47827da999fcd1
  TEST_F(AccessRetryNavigationProductTest,
         NativeRedirectSurvivesPrivateFactoryAdmissionReset) {
    auto request = StartHeldRedirect(false);
+-- 
+2.54.0 (Apple Git-157)
+

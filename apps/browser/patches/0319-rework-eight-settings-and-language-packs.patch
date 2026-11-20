@@ -1,8 +1,65 @@
-From 94cc11725e7a870500ba17a88e96ae1e32e546df Mon Sep 17 00:00:00 2001
+From 13e9838451473d88a7f170b19a633f2b2694f951 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Wed, 21 Oct 2026 18:00:00 +0800
-Subject: [PATCH] 整改八类设置流程并扩充本机翻译语言包
+Subject: [PATCH] =?UTF-8?q?=E6=95=B4=E6=94=B9=E5=85=AB=E7=B1=BB=E8=AE=BE?=
+ =?UTF-8?q?=E7=BD=AE=E6=B5=81=E7=A8=8B=E5=B9=B6=E6=89=A9=E5=85=85=E6=9C=AC?=
+ =?UTF-8?q?=E6=9C=BA=E7=BF=BB=E8=AF=91=E8=AF=AD=E8=A8=80=E5=8C=85?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/aegis/aegis_service.cc         |   8 +
+ chrome/browser/aegis/aegis_service.h          |   3 +
+ .../aegis/enhancements/enhancement_store.cc   |  23 +-
+ .../enhancement_store_unittest.cc             |  63 ++
+ .../enhancements/enhancement_tab_helper.cc    |  45 +-
+ .../enhancements/enhancement_tab_helper.h     |   4 +
+ chrome/browser/resources/aegis/aegis.css      |  54 +-
+ chrome/browser/resources/aegis/aegis.html     |  27 +-
+ chrome/browser/resources/aegis/aegis.ts       | 196 +++--
+ .../browser/resources/aegis/enhancements.html |  19 +-
+ .../browser/resources/aegis/enhancements.js   |  69 +-
+ .../aegis/enhancements_shared/i18n.js         | 570 ++++++++++++-
+ chrome/browser/resources/aegis/gestures.css   |  53 +-
+ chrome/browser/resources/aegis/gestures.html  |  23 +-
+ chrome/browser/resources/aegis/gestures.ts    | 367 ++++----
+ chrome/browser/resources/aegis/markdown.html  |   4 +-
+ chrome/browser/resources/aegis_agent/BUILD.gn |   3 +
+ .../browser/resources/aegis_agent/agent.css   |  83 +-
+ .../browser/resources/aegis_agent/agent.html  |  87 +-
+ chrome/browser/resources/aegis_agent/agent.ts | 231 +++--
+ .../resources/aegis_agent/language_packs.ts   | 191 +++++
+ .../resources/aegis_agent/local_ai/NOTICE.txt |   5 +-
+ .../aegis_agent/local_ai/asset_manifest.json  |  20 +-
+ .../aegis_agent/local_ai/catalog.d.ts         |  20 +
+ .../resources/aegis_agent/local_ai/catalog.js |  48 ++
+ .../local_ai/translation_manifest.json        | 797 +++++++++++++++++-
+ .../resources/aegis_agent/local_ai/worker.js  | 173 ++--
+ .../resources/aegis_agent/local_ai_client.ts  |  14 +-
+ .../aegis_agent/reading_workspace.ts          |  95 ++-
+ .../settings/aegis_page/aegis_page.html       | 139 +--
+ .../settings/aegis_page/aegis_page.ts         | 324 +++++--
+ .../downloads_page/downloads_browser_proxy.ts |   6 +-
+ .../downloads_page/downloads_page.html.ts     |  27 +-
+ .../settings/downloads_page/downloads_page.ts |  56 +-
+ chrome/browser/resources/settings/router.ts   |   6 +
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  11 +-
+ .../webui/aegis/aegis_enhancement_handler.cc  |   2 +-
+ .../ui/webui/aegis/aegis_gesture_handler.cc   |  10 +-
+ chrome/browser/ui/webui/aegis/aegis_ui.cc     |   2 +-
+ .../ui/webui/aegis_agent/aegis_agent.mojom    |   8 +-
+ .../aegis_agent/aegis_agent_page_handler.cc   |  22 +
+ .../aegis_agent/aegis_agent_page_handler.h    |   2 +
+ .../ui/webui/aegis_agent/aegis_agent_ui.cc    | 116 ++-
+ .../ui/webui/aegis_agent/reading_workspace.cc |   4 +-
+ .../ui/webui/help/aegis_github_update.h       |   4 +-
+ .../ui/webui/settings/downloads_handler.cc    |   7 +-
+ .../browser/ui/webui/settings/settings_ui.cc  |  12 +-
+ 47 files changed, 3357 insertions(+), 696 deletions(-)
+ create mode 100644 chrome/browser/resources/aegis_agent/language_packs.ts
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/catalog.d.ts
+ create mode 100644 chrome/browser/resources/aegis_agent/local_ai/catalog.js
 
 diff --git a/chrome/browser/aegis/aegis_service.cc b/chrome/browser/aegis/aegis_service.cc
 index 09ad60ba98d59a515d2fe27023428546139aa33f..317b4d4da6ee7d97c8db58f321d5bb940aa9d0e0 100644
@@ -5923,10 +5980,10 @@ index 2b4dd9d48545a03d0040a8f2b632e22ceea78795..f1e219b0bc6fc00c151bd9497eaca865
        DownloadSettingsFromValue(args[1]);
    if (!settings) {
 diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
-index 7ea82132a5dcea9536dac190656e5537fc3793ad..95c33a6761664c458aa03ea319c6e4048ecdab82 100644
+index e059e36cc27c1d2536af2ec65ef9482b720a990a..09a880aa77d8692b8607e5ce4a08f2cabd4950e7 100644
 --- a/chrome/browser/ui/webui/settings/settings_ui.cc
 +++ b/chrome/browser/ui/webui/settings/settings_ui.cc
-@@ -263,19 +263,19 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+@@ -285,19 +285,19 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
    html_source->AddString("aegisAiTitle", chinese ? (traditional ? "AI 與模型" : "AI 与模型") : "AI and models");
    html_source->AddString("aegisDownloadsTitle", chinese ? (traditional ? "下載增強" : "下载增强") : "Download enhancements");
    html_source->AddString("aegisToolsTitle", chinese ? (traditional ? "本機工具連線" : "本机工具连接") : "Local tool connections");
@@ -5952,3 +6009,6 @@ index 7ea82132a5dcea9536dac190656e5537fc3793ad..95c33a6761664c458aa03ea319c6e404
    // 默认 language 仅保留基础语言；动态文案需要地区信息区分简繁体。
    html_source->AddString("aegisLocale",
                           g_browser_process->GetApplicationLocale());
+-- 
+2.54.0 (Apple Git-157)
+

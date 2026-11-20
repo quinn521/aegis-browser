@@ -1,8 +1,11 @@
-From 3c80cc41f0d12a0a632e5aa73bbebdb347317205 Mon Sep 17 00:00:00 2001
+From bc79a408f45d99af01518757037f4fdc70b4a31c Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 03:14:51 +0800
 Subject: [PATCH] fix(access): explain reconnection without internal terms
+
 ---
+ .../browser/aegis/access/access_site_proxy_bubble_controller.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 index 7878f2478f3c661d4862f79827c012688276b844..8d5e9ff0f58976b0cda42721bd997fa53bf9af8a 100644
@@ -17,3 +20,6 @@ index 7878f2478f3c661d4862f79827c012688276b844..8d5e9ff0f58976b0cda42721bd997fa5
      }
    }
    AccessSiteIntentStore presentation;
+-- 
+2.54.0 (Apple Git-157)
+

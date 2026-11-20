@@ -197,7 +197,7 @@ class PolicyDetails:
   PH_PATTERN = re.compile('<ph[^>]*>([^<]*|[^<]*<ex>([^<]*)</ex>[^<]*)</ph>')
 
   def _CheckTagsValidity(self, valid_tags):
-    if self.tags == None:
+    if self.tags == None:  # noqa: E711
       raise RuntimeError(
         'Policy ' + self.name + ' has to contain a list of '
         'tags!\n An empty list is also valid but means '
@@ -205,7 +205,7 @@ class PolicyDetails:
         'privacy or security.\n'
       )
     for tag in self.tags:
-      if not tag in valid_tags:
+      if tag not in valid_tags:
         raise RuntimeError(
           'Invalid Tag:' + tag + '!\n'
           'Chose a valid tag from \'risk_tag_definitions\' (a '
@@ -254,7 +254,7 @@ class PolicyAtomicGroup:
   def _CheckPoliciesValidity(
     self, available_policies, policies_already_in_group
   ):
-    if self.policies == None or len(self.policies) <= 0:
+    if self.policies == None or len(self.policies) <= 0:  # noqa: E711
       raise RuntimeError(
         'Atomic policy group ' + self.name + ' has to contain a list of '
         'policies!\n'
@@ -266,7 +266,7 @@ class PolicyAtomicGroup:
           'in policy_templates.json)!'
         )
       policies_already_in_group.add(policy)
-      if not policy in available_policies:
+      if policy not in available_policies:
         raise RuntimeError(
           'Invalid policy: ' + policy + ' in atomic group ' + self.name + '.\n'
         )
@@ -523,7 +523,7 @@ def _GetSupportedPolicies(policies, target_platform):
   # TODO(crbug.com/40855589): Remove this special case once deprecated policies
   # have been removed for fuchsia
   if target_platform == 'fuchsia':
-    is_deprecated = lambda policy: (
+    is_deprecated = lambda policy: (  # noqa: E731
       len(policy.platforms) + len(policy.future_on) > 0 and policy.is_deprecated
     )
     return [
@@ -805,7 +805,7 @@ class SchemaNodesGenerator:
 
   def AppendRestriction(self, first, second):
     r = RestrictionNode(str(first), str(second))
-    if not r in self.ranges:
+    if r not in self.ranges:
       self.ranges[r] = len(self.restriction_nodes)
       self.restriction_nodes.append(r)
     return self.ranges[r]
@@ -830,7 +830,7 @@ class SchemaNodesGenerator:
     )
 
   def GetEnumIntegerType(self, schema, is_sensitive_value, name):
-    if not (all(type(x) == int for x in schema['enum'])):
+    if not (all(type(x) == int for x in schema['enum'])):  # noqa: E721
       raise AssertionError("政策定义不满足生成约束")
     possible_values = schema['enum']
     if self.IsConsecutiveInterval(possible_values):
@@ -852,7 +852,7 @@ class SchemaNodesGenerator:
     )
 
   def GetEnumStringType(self, schema, is_sensitive_value, name):
-    if not (all(type(x) == str for x in schema['enum'])):
+    if not (all(type(x) == str for x in schema['enum'])):  # noqa: E721
       raise AssertionError("政策定义不满足生成约束")
     offset_begin = len(self.string_enums)
     self.string_enums += schema['enum']
@@ -1004,7 +1004,7 @@ class SchemaNodesGenerator:
       required_properties = schema.get('required', [])
       if not (type(required_properties) is list):
         raise AssertionError("政策定义不满足生成约束")
-      if not (all(type(x) == str for x in required_properties)):
+      if not (all(type(x) == str for x in required_properties)):  # noqa: E721
         raise AssertionError("政策定义不满足生成约束")
       self.required_properties += required_properties
       required_end = len(self.required_properties)
@@ -1264,11 +1264,11 @@ def _GenerateDefaultValue(value):
   the value).
 
   |value|: The deserialized value to convert to base::Value."""
-  if type(value) == bool or type(value) == int:
+  if type(value) == bool or type(value) == int:  # noqa: E721
     return [], 'base::Value(%s)' % json.dumps(value)
-  elif type(value) == str:
+  elif type(value) == str:  # noqa: E721
     return [], 'base::Value("%s")' % value
-  elif type(value) == list:
+  elif type(value) == list:  # noqa: E721
     setup = ['base::ListValue default_value;']
     for entry in value:
       decl, fetch = _GenerateDefaultValue(entry)
@@ -1731,7 +1731,7 @@ class RiskTags(object):
   def ComputeMaxTags(self, policies):
     self.max_tags = 0
     for policy in policies:
-      if not policy.is_supported or policy.tags == None:
+      if not policy.is_supported or policy.tags == None:  # noqa: E711
         continue
       self.max_tags = max(len(policy.tags), self.max_tags)
 
@@ -1746,13 +1746,13 @@ class RiskTags(object):
 
   def _ReadRiskTagMetaData(self, template_file_contents):
     for tag in template_file_contents['risk_tag_definitions']:
-      if tag.get('name', None) == None:
+      if tag.get('name', None) == None:  # noqa: E711
         raise RuntimeError(
           'Tag in \'risk_tag_definitions\' without description found!'
         )
-      if tag.get('description', None) == None:
+      if tag.get('description', None) == None:  # noqa: E711
         raise RuntimeError('Tag ' + tag['name'] + ' has no description!')
-      if tag.get('user-description', None) == None:
+      if tag.get('user-description', None) == None:  # noqa: E711
         raise RuntimeError('Tag ' + tag['name'] + ' has no user-description!')
       self.enum_for_tag[tag['name']] = (
         "RISK_TAG_" + tag['name'].replace("-", "_").upper()

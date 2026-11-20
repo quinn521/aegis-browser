@@ -1,4 +1,4 @@
-From 811b18b87548057c3a1dce078689d8c1d8b8cd70 Mon Sep 17 00:00:00 2001
+From d86bf7ee9ec0e4406b2e417f2e0bf55938189c44 Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Sun, 15 Nov 2026 16:08:24 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=95=B4=E5=90=88=E5=B7=B2=E5=90=88=E5=85=A5?=
@@ -77,7 +77,7 @@ diff --git a/chrome/browser/aegis/access/access_account_mac.mm b/chrome/browser/
 index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c780825785 100644
 --- a/chrome/browser/aegis/access/access_account_mac.mm
 +++ b/chrome/browser/aegis/access/access_account_mac.mm
-@@ -115,6 +115,9 @@ NSDictionary* Entitlement(NSData* data, NSString* account, int64_t* evaluatedAt)
+@@ -115,6 +115,9 @@ bool Nonempty(id value) {
        @"measuredAt", @"receivedAt", @"snapshotAgeMs", @"freshness"];
    NSString* status = body[@"status"];
    bool subscribed = ![status isEqual:@"not_subscribed"];
@@ -87,7 +87,7 @@ index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c7
    NSMutableDictionary* out = [@{@"entitlementAccountId": account} mutableCopy];
    for (NSString* field in fields) {
      id value = body[field];
-@@ -132,17 +135,36 @@ NSDictionary* Entitlement(NSData* data, NSString* account, int64_t* evaluatedAt)
+@@ -132,17 +135,36 @@ bool Nonempty(id value) {
          *received < *start || !quota || !up || !down || !used || !remaining ||
          *up > INT64_MAX || *down > INT64_MAX || *quota > INT64_MAX ||
          *up + *down != *used || *remaining != (*used < *quota ? *quota - *used : 0)) return nil;
@@ -127,7 +127,7 @@ index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c7
        freshness = Freshness(*age);
      }
      if (![freshness isEqual:out[@"freshness"]]) return nil;
-@@ -159,15 +181,14 @@ NSDictionary* Entitlement(NSData* data, NSString* account, int64_t* evaluatedAt)
+@@ -159,15 +181,14 @@ bool Nonempty(id value) {
  }
  
  AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange change,
@@ -155,7 +155,7 @@ index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c7
    };
  }
  }  // namespace
-@@ -191,6 +213,7 @@ AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange c
+@@ -191,6 +213,7 @@ @interface AegisAccountTransfer : NSObject <NSURLSessionDataDelegate>
  @property(nonatomic, copy) NSDictionary* binding;
  @property(nonatomic, copy) AegisAccountCompletion completion;
  @property(nonatomic, strong) NSMutableData* body;
@@ -163,7 +163,7 @@ index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c7
  @property(nonatomic, copy) void (^rawCompletion)(NSInteger, NSData*);
  @end
  
-@@ -199,6 +222,7 @@ AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange c
+@@ -199,6 +222,7 @@ @implementation AegisAccountTransfer
  @synthesize binding = _binding;
  @synthesize completion = _completion;
  @synthesize body = _body;
@@ -171,7 +171,7 @@ index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c7
  @synthesize rawCompletion = _rawCompletion;
  - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task
      willPerformHTTPRedirection:(NSHTTPURLResponse*)response newRequest:(NSURLRequest*)request
-@@ -222,7 +246,6 @@ AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange c
+@@ -222,7 +246,6 @@ - (void)URLSession:(NSURLSession*)session dataTask:(NSURLSessionDataTask*)task
  }
  - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task
      didCompleteWithError:(NSError*)error {
@@ -179,7 +179,7 @@ index 78200ff0f3f80968a02ac5b7e8667e81e53b84cd..50f507548cdebf7b415f6e34334ff3c7
    [session finishTasksAndInvalidate];
    if (self.rawCompletion) {
      NSInteger status = !error && [task.response isKindOfClass:NSHTTPURLResponse.class]
-@@ -237,11 +260,13 @@ AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange c
+@@ -237,11 +260,13 @@ - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task
      if (status == 401) result = State(@"signed_out");
      if (status == 200) result = Entitlement(self.body, self.binding[@"accountId"], &evaluatedAt);
    }
@@ -929,7 +929,7 @@ index f69ed9715bca40122aa532fb2f0a632f09d04cef..60de94d5d5f56b4528d9b89e9fd57449
  #include <set>
  #include <vector>
  
-@@ -65,8 +66,9 @@ class SiteLease final : public base::SupportsUserData::Data {
+@@ -65,8 +66,9 @@ AccountNodeStatus Status(const std::string& site) const {
      return in_flight_ ? AccountNodeStatus::kAcquiring : AccountNodeStatus::kUnavailable;
    }
    bool HasSites() const { return !sites_.empty(); }
@@ -940,7 +940,7 @@ index f69ed9715bca40122aa532fb2f0a632f09d04cef..60de94d5d5f56b4528d9b89e9fd57449
        Publish();
        if (sites_.empty()) Reset();
        return;
-@@ -77,6 +79,7 @@ class SiteLease final : public base::SupportsUserData::Data {
+@@ -77,6 +79,7 @@ void Toggle(const std::string& site) {
                             (change_ && change_()))) Reset();
      sites_.insert(site);
      if (!Publish()) { sites_.erase(site); return; }
@@ -948,7 +948,7 @@ index f69ed9715bca40122aa532fb2f0a632f09d04cef..60de94d5d5f56b4528d9b89e9fd57449
      if (!auth_.empty() || in_flight_) return;
      // An abandoned in-flight POST may arrive after a later off/on cycle. Give
      // the new authorization its own context so the old POST cannot rotate it.
-@@ -142,6 +145,19 @@ class SiteLease final : public base::SupportsUserData::Data {
+@@ -142,6 +145,19 @@ static double RenewalTime(double now, double expires) {
    void Check() {
      double now = NSDate.date.timeIntervalSince1970 * 1000;
      if (now >= expires_ || (change_ && change_())) { Reset(); Publish(); return; }
@@ -968,7 +968,7 @@ index f69ed9715bca40122aa532fb2f0a632f09d04cef..60de94d5d5f56b4528d9b89e9fd57449
      if (now < renew_ || in_flight_) return;
      in_flight_ = true;
      __block auto reply = base::BindPostTaskToCurrentDefault(base::BindOnce(
-@@ -162,6 +178,7 @@ class SiteLease final : public base::SupportsUserData::Data {
+@@ -162,6 +178,7 @@ void Renewed(int64_t expiry) {
    void Reset() {
      weak_.InvalidateWeakPtrs();
      guard_.Stop();
@@ -976,7 +976,7 @@ index f69ed9715bca40122aa532fb2f0a632f09d04cef..60de94d5d5f56b4528d9b89e9fd57449
      if (revoke_) revoke_();
      revoke_ = nil;
      extend_ = nil;
-@@ -172,6 +189,7 @@ class SiteLease final : public base::SupportsUserData::Data {
+@@ -172,6 +189,7 @@ void Reset() {
    }
    raw_ptr<Profile> profile_;
    std::set<std::string> sites_;
@@ -1622,7 +1622,7 @@ index cebb45d41ce9211a93fd976c72a8f0e1a3ae17ce..9be4a12bd76a3f788905a85a763c6470
  #endif
  
 diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
-index 442bf5d054ff38d674649e991ede265725eb5f35..5464d62ab05334fdc0c7731e613fe1f38b22b457 100644
+index 1c0c4ff2f4652cc65f2fccba029f1118d296d341..365c8225ca7bbf6a75d85154b1558ca2cf375c9f 100644
 --- a/chrome/browser/resources/settings/BUILD.gn
 +++ b/chrome/browser/resources/settings/BUILD.gn
 @@ -156,6 +156,7 @@ build_webui("build") {
@@ -2003,7 +2003,7 @@ index 5b93452f99e75249c8114f5e97a01afeaee70992..153d5e1242ad597cd9a5d37929ddc080
    private onFrameMessage_ = (event: MessageEvent) => {
      for (const frame of this.shadowRoot?.querySelectorAll<HTMLIFrameElement>('iframe') || []) {
 diff --git a/chrome/browser/ui/views/toolbar/BUILD.gn b/chrome/browser/ui/views/toolbar/BUILD.gn
-index a1c77d326c7ce9be4e6121b508b96ceaad6ad183..e0b396d72bfb97507d5efee33799f21c7253f0c1 100644
+index c1c0645922768ef77a711231c07dd8d8da6a4df6..795925adf97085afbb7adb6ab86cec5b672c3206 100644
 --- a/chrome/browser/ui/views/toolbar/BUILD.gn
 +++ b/chrome/browser/ui/views/toolbar/BUILD.gn
 @@ -244,6 +244,7 @@ source_set("impl") {
@@ -2449,5 +2449,5 @@ index f657d2e1dc0f8b4cb6fe799b4fb50a3bcd8f3fef..4febe4a1648f95d943097c23e8e6fb66
  #endif
    base::WeakPtrFactory<AegisUIHandler> weak_factory_{this};
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

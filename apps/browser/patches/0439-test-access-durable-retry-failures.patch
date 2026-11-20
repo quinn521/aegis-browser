@@ -1,9 +1,14 @@
-From 0d382f2ecb496063b650afdb25b435c15abd6626 Mon Sep 17 00:00:00 2001
+From bdd03eb72bd89cbe4c3b496e6cd88096a412f91e Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 05:02:41 +0800
 Subject: [PATCH] test(access): cover durable retry failures with initialized
  RVH context
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  1 -
+ .../access_service_coordinator_unittest.cc    | 27 +++++++++
+ .../access_site_proxy_product_unittest.cc     | 55 +++++++++++++++----
+ 3 files changed, 72 insertions(+), 11 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index ebd2d34f42f9d1f977df31bdb59b8f38ded1280f..6c65bcaac716f90381f1382dd7af5c8137c39877 100644
@@ -152,3 +157,6 @@ index ddc9a401bbf66de38f8876a317f5c96297c266fe..39de8526bb7e34576a124c1ee90cda8f
 +
  }  // namespace
  }  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

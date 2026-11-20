@@ -1,4 +1,4 @@
-From 84a75495d83d1e576704dfa136856fb05817c0e1 Mon Sep 17 00:00:00 2001
+From 976f54963efa33ae0a62323b9470c800f55a5eef Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Fri, 9 Oct 2026 04:07:44 +0800
 Subject: [PATCH] =?UTF-8?q?fix:=20=E5=B0=86=20Quinn=20Agent=20=E4=BF=AE?=
@@ -9,6 +9,18 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ .../aegis/agent/aegis_agent_browsertest.cc    | 119 +++++++++++++++
+ .../aegis/agent/aegis_agent_service.cc        | 120 ++++++++++++++-
+ .../browser/aegis/agent/aegis_agent_service.h |   7 +
+ .../agent/aegis_agent_service_unittest.cc     | 139 +++++++++++++++++-
+ chrome/browser/aegis/agent/agent_execution.cc |  24 ++-
+ chrome/browser/aegis/agent/agent_execution.h  |  11 +-
+ .../aegis/agent/agent_execution_unittest.cc   | 105 ++++++++++++-
+ chrome/browser/aegis/agent/agent_research.cc  |  57 +++++--
+ .../aegis/agent/agent_research_unittest.cc    |  82 +++++++++--
+ .../aegis_agent/aegis_agent_page_handler.cc   |  15 +-
+ .../ui/webui/help/aegis_github_update.h       |   4 +-
+ 11 files changed, 630 insertions(+), 53 deletions(-)
 
 diff --git a/chrome/browser/aegis/agent/aegis_agent_browsertest.cc b/chrome/browser/aegis/agent/aegis_agent_browsertest.cc
 index e30ced6e3f6fd6f429c63145f288de49a3a96dc5..89db493b010ce7f9d1f1fe9736778d3e40e44558 100644
@@ -1165,3 +1177,6 @@ index 97feebf5d76d82bf75f4a5570e77e6d0618749b4..360fa87e5dd834e37999c0a199f58173
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

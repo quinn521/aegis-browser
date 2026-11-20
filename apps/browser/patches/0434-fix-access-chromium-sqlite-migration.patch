@@ -1,8 +1,12 @@
-From 9176ffd4d3de8ef7501cf260aa3eb044fffd258b Mon Sep 17 00:00:00 2001
+From 9259a9dc94e5c5da28dbe57df5afb9a7afff73a2 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 02:38:35 +0800
 Subject: [PATCH] fix(access): migrate legacy rules with Chromium SQLite
+
 ---
+ chrome/browser/aegis/access/access_rule_store.cc          | 7 +++++--
+ chrome/browser/aegis/access/access_rule_store_unittest.cc | 8 ++++++--
+ 2 files changed, 11 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
 index d75362caea1078acc6c915e996b22b78d5c22fab..aa65f1a0b7fa463816c8d48a18115a1d8c592dd1 100644
@@ -50,3 +54,6 @@ index 11288fb5ca5fd6eca3beecc9be779dc43d1ed8a9..90b548e28b0643a2d5cc677c926faba8
    ASSERT_EQ(store.Open(), StoreStatus::kValid);
    const auto legacy = Prepare(&store, BubbleWebsiteFixture("legacy-pending", "www.example.com", false));
    EXPECT_EQ(store.PrepareSiteGroupMutation(BubbleWebsiteFixture("website-conflict", "example.com", true)).status,
+-- 
+2.54.0 (Apple Git-157)
+

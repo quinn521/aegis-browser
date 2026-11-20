@@ -1,8 +1,18 @@
-From dd5b4c08520e9fb681e1504a9b1472d8f9189762 Mon Sep 17 00:00:00 2001
+From c6cd3fb430c5d092e1ae64b3db87e5a1c160b79d Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Thu, 22 Oct 2026 16:00:00 +0800
-Subject: [PATCH] 对齐移动端设置与展开表单
+Subject: [PATCH] =?UTF-8?q?=E5=AF=B9=E9=BD=90=E7=A7=BB=E5=8A=A8=E7=AB=AF?=
+ =?UTF-8?q?=E8=AE=BE=E7=BD=AE=E4=B8=8E=E5=B1=95=E5=BC=80=E8=A1=A8=E5=8D=95?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/resources/aegis/aegis.css      | 41 ++++++++++++++++-
+ chrome/browser/resources/aegis/aegis.html     |  2 +-
+ .../browser/resources/aegis_agent/agent.css   | 44 ++++++++++++++++---
+ .../aegis_downloads/aegis_download_panel.css  | 21 +++++++++
+ 4 files changed, 100 insertions(+), 8 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/aegis.css b/chrome/browser/resources/aegis/aegis.css
 index 19cfdbb252af12539c120cf111626f3371e1c828..96118db9328ee4c3f3a92cb8f48a97a0aae85c92 100644
@@ -193,3 +203,6 @@ index 98ceb272b4978b795d61b2b273edaabcc89c071e..645db7d8466900a893314bfc54999d9a
 +:host([embedded]) .task {
 +  padding-inline: 0;
 +}
+-- 
+2.54.0 (Apple Git-157)
+

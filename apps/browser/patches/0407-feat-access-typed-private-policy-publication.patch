@@ -1,9 +1,15 @@
-From 022d24f68e8491e669c9080c14b23c9fc6eec929 Mon Sep 17 00:00:00 2001
+From e72ae025496028638e57baae333d884a99d37e43 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 17:41:30 +0800
 Subject: [PATCH] feat(access): encode full Browser policy and registered
  groups for private publication
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   1 +
+ .../access/access_private_context_client.cc   | 127 ++++++++++++++++++
+ .../access/access_private_context_client.h    |  17 +++
+ .../access_private_context_client_unittest.cc |  41 +++++-
+ 4 files changed, 185 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index a724e7927898edd8ff1c8af4797d8794ef4017bf..bceb74ffdfe55959ee3ff2b4d26c669975aea814 100644
@@ -279,3 +285,6 @@ index e3691397402ef8c42e30854495326aa43244c216..d2ac865716544636a7354555696625cd
  TEST_F(AccessPrivateContextClientTest, OriginalInitiatorLockStillRejectsMismatch) {
    mojo::test::BadMessageObserver observer;
    Start(true);
+-- 
+2.54.0 (Apple Git-157)
+

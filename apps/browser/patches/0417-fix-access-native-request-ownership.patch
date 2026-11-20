@@ -1,9 +1,15 @@
-From ef5dc2de38062172f9ef92f6c9ea4f99fa4c8f93 Mon Sep 17 00:00:00 2001
+From 5e80404c8a938f9c008f5aaf1f3fa762411a09d5 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 20:49:46 +0800
 Subject: [PATCH] fix(access): track native requests without a proxy selection
  generation
+
 ---
+ .../access_proxying_url_loader_factory.cc     |  1 +
+ .../request_ownership_registry.cc             | 20 ++++++---
+ .../aegis_access/request_ownership_registry.h |  8 ++++
+ .../request_ownership_registry_unittest.cc    | 45 +++++++++++++++++++
+ 4 files changed, 67 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
 index 5abe7ace5bb969d689c7673fa7830e3bc16b3dff..102ec5816d26c6d4c11843741f26626f02dac3fa 100644
@@ -136,3 +142,6 @@ index a24811e1afddf4165f9b112d714269d090fd04c2..712779f92788c049cf177cca27ff94dc
 +
  }  // namespace
  }  // namespace aegis_access::test
+-- 
+2.54.0 (Apple Git-157)
+

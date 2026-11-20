@@ -1,4 +1,4 @@
-From 4b7307f7bb2f586ff516c12f43ced5cf9e53174a Mon Sep 17 00:00:00 2001
+From 32a8affce61268bfd22a0746eaf130ea66ea388d Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Sun, 8 Nov 2026 12:30:00 +0000
 Subject: [PATCH] feat: admit no-auth SOCKS5 inbound on access overlay
@@ -6,6 +6,17 @@ Subject: [PATCH] feat: admit no-auth SOCKS5 inbound on access overlay
 Keep the ordered Chromium patch series synchronized with the expected overlay.
 Username/password SOCKS5 remains fail-closed.
 ---
+ components/aegis_access/BUILD.gn              |   3 +
+ .../access_proxy_route_adapter.cc             |   2 +
+ .../aegis_access/access_proxy_route_adapter.h |   6 +-
+ .../access_proxy_route_adapter_unittest.cc    |  25 +++
+ .../access_socks5_inbound_parser.cc           | 179 ++++++++++++++++++
+ .../access_socks5_inbound_parser.h            |  67 +++++++
+ .../access_socks5_inbound_parser_unittest.cc  |  52 +++++
+ 7 files changed, 332 insertions(+), 2 deletions(-)
+ create mode 100644 components/aegis_access/access_socks5_inbound_parser.cc
+ create mode 100644 components/aegis_access/access_socks5_inbound_parser.h
+ create mode 100644 components/aegis_access/access_socks5_inbound_parser_unittest.cc
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 4e2fe481c440ba896619ee9f383756db56849fa3..a57ce391e084591af5fddc8db51186231f09455f 100644
@@ -416,3 +427,6 @@ index 0000000000000000000000000000000000000000..d3b146dc36da75006462736a43467459
 +
 +}  // namespace
 +}  // namespace aegis_access
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,12 @@
-From bb9e5837579a8a860edfcc483ec4e1f9bfcc46da Mon Sep 17 00:00:00 2001
+From c27564525b854fb20cd7ade753f6e623cfb4c47b Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 05:11:31 +0800
 Subject: [PATCH] test(access): drain canceled retry transactions before
  checking tabs
+
 ---
+ .../access_site_proxy_product_unittest.cc     | 24 +++++++++++++------
+ 1 file changed, 17 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index 315222dc9c5848ff478d201fe40692bb4b180181..307da9fa46fc94b2865c0dd992715c20f3de7476 100644
@@ -76,3 +79,6 @@ index 315222dc9c5848ff478d201fe40692bb4b180181..307da9fa46fc94b2865c0dd992715c20
    EXPECT_FALSE(controller().GetPendingEntry());
    EXPECT_EQ(web_contents()->GetLastCommittedURL(), failed_);
  }
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,20 @@
-From 29b93e2eb02861850d45da5aab4e00242aebd20f Mon Sep 17 00:00:00 2001
+From 5f777f7efa11aacb7134d5b3f9ff0bcf73c450a1 Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 11:50:24 +0800
 Subject: [PATCH] feat(access): bind single-send request and redirect
  authorization state
+
 ---
+ components/aegis_access/BUILD.gn              |   1 +
+ .../access_request_route_state_unittest.cc    | 105 ++++++++++++++++++
+ services/network/aegis/BUILD.gn               |   2 +
+ .../aegis/access_request_route_state.cc       |  83 ++++++++++++++
+ .../aegis/access_request_route_state.h        |  53 +++++++++
+ .../network/aegis/access_route_registry.h     |   6 +
+ 6 files changed, 250 insertions(+)
+ create mode 100644 components/aegis_access/access_request_route_state_unittest.cc
+ create mode 100644 services/network/aegis/access_request_route_state.cc
+ create mode 100644 services/network/aegis/access_request_route_state.h
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 904d48464c8c48228147b7c2cc80021485de7357..c0765f839518427cc01bc6e3e2b8f12031ff07f8 100644
@@ -320,3 +331,6 @@ index 2cb485558b005cba562e87f66325a9cf3a840ea5..f1a7ebf6a1b2858ba92f84c1c3e9edc1
  };
  }  // namespace network
  #endif  // SERVICES_NETWORK_AEGIS_ACCESS_ROUTE_REGISTRY_H_
+-- 
+2.54.0 (Apple Git-157)
+

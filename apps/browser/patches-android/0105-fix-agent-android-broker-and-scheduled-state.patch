@@ -1,4 +1,4 @@
-From 324ee3e4d6e518793e91656e74a4b7693ad12d83 Mon Sep 17 00:00:00 2001
+From 932f17696aaedf83a36088114d7f9aa2941f920b Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Sat, 5 Sep 2026 15:06:02 +0800
 Subject: [PATCH] =?UTF-8?q?fix(aegis):=20=E4=BF=AE=E5=A4=8D=20Android=20?=
@@ -10,6 +10,20 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
+ .../aegis/agent/aegis_agent_service.cc        |  86 ++++++++-----
+ .../agent/aegis_agent_service_unittest.cc     |  54 +++++++++
+ .../aegis/agent/aegis_browser_tools.cc        |  10 +-
+ .../aegis/agent/agent_core_unittest.cc        |  38 ++++++
+ .../aegis/agent/agent_monitor_scheduler.h     |   4 +
+ .../aegis/agent/agent_result_verifier.cc      |  19 +--
+ .../chrome_browser_interface_binders_webui.cc |   4 +
+ ...me_browser_interface_binders_webui_parts.h |   2 +
+ ...r_interface_binders_webui_parts_android.cc |   8 ++
+ chrome/browser/resources/aegis_agent/agent.ts | 113 +++++++++++++++---
+ .../ui/webui/aegis_agent/aegis_agent.mojom    |   1 +
+ .../aegis_agent/aegis_agent_page_handler.cc   |   1 +
+ .../ui/webui/aegis_agent/aegis_agent_ui.cc    |  46 +++++++
+ 13 files changed, 325 insertions(+), 61 deletions(-)
 
 diff --git a/chrome/browser/aegis/agent/aegis_agent_service.cc b/chrome/browser/aegis/agent/aegis_agent_service.cc
 index 8baa30f81180007d8163e46574d54d93fddff6f8..5d4815fb5e808e27237889815ceba084ac8c2ff5 100644
@@ -436,10 +450,10 @@ index 0c2abce187a288f391f7f78033eb19a15f1194e1..bc21a7ad18e7d593b27e477442975b2e
    if (call.tool_name == "monitor.list") {
      return HasList(value, "monitors") && HasString(value, "revision")
 diff --git a/chrome/browser/chrome_browser_interface_binders_webui.cc b/chrome/browser/chrome_browser_interface_binders_webui.cc
-index 4ef3e944e5238050cbe364125c8ff3a26154de61..82924c61ba3d390f7122f1a5b0e187fd823e5e39 100644
+index 7962e24806b25932309ee869a35bba05b2218c3e..2e8159024a7920eaa3d4314458572db796d2c3ec 100644
 --- a/chrome/browser/chrome_browser_interface_binders_webui.cc
 +++ b/chrome/browser/chrome_browser_interface_binders_webui.cc
-@@ -490,6 +490,10 @@ void PopulateUntrustedChromeWebUIFrameInterfaceBrokers(
+@@ -509,6 +509,10 @@ void PopulateUntrustedChromeWebUIFrameInterfaceBrokers(
      content::WebUIBrowserInterfaceBrokerRegistry& registry) {
    PopulateChromeWebUIFrameInterfaceBrokersUntrustedPartsFeatures(registry);
  
@@ -807,3 +821,6 @@ index 2de867a0d3762842de8e677fb13a407c0f6f8393..e33c1dfb3fa6b6ea466b48ed7fae91c2
    add("timelineFailedDetail", "The plan did not pass; no web action ran",
        "计划未通过检查，没有执行网页操作", "計畫未通過檢查，沒有執行網頁操作");
    add("timelineExecutionFormatFailed",
+-- 
+2.54.0 (Apple Git-157)
+

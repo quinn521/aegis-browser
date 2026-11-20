@@ -1,9 +1,15 @@
-From 845cc6f858186062978c3583c240765210078594 Mon Sep 17 00:00:00 2001
+From ca3ff7b1337cd1fbf6331e5d44a9bb90a1530152 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Fri, 13 Nov 2026 21:05:15 +0800
 Subject: [PATCH] fix(access-log): use bounded Chromium file reads for
  diagnostics
+
 ---
+ .../access/access_core_log_disk_unittest.cc   | 25 ++++++++++++------
+ .../aegis/access/access_core_log_store.cc     | 10 ++++---
+ .../aegis/access/access_core_log_store.h      |  7 +++--
+ .../aegis/access/access_local_core_manager.cc | 26 ++++++++++---------
+ 4 files changed, 40 insertions(+), 28 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_core_log_disk_unittest.cc b/chrome/browser/aegis/access/access_core_log_disk_unittest.cc
 index a96e97eac7da51e4390248a0b429122fd222a15e..c8bf790beb5675433e82f47dde7664a8b6246789 100644
@@ -198,3 +204,6 @@ index 56a5a07114a14fc3d12960fa53500f658058aa99..e511fbb4fde0260aa29669c1cc61f54e
    std::unique_ptr<base::FileDescriptorWatcher::Controller> log_watch_;
    CoreLogFramer framer_;
    uint64_t log_generation_ = 0;
+-- 
+2.54.0 (Apple Git-157)
+

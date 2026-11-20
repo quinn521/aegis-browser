@@ -1,4 +1,4 @@
-From 88ac810a45b06841c83955e83b01924a8ee20b7c Mon Sep 17 00:00:00 2001
+From e82defd5ddeafedfc8f03c304905ea56e5d00715 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 17 Nov 2026 15:32:47 +0800
 Subject: [PATCH] test(mac): verify AIM presentation after hidden input
@@ -6,6 +6,9 @@ Subject: [PATCH] test(mac): verify AIM presentation after hidden input
 Use the product popup state manager and settled native activation for
 AIM first show and reopen. Check input delivery and require successful
 native presentation in both classic and Full popup modes.
+---
+ .../omnibox_popup_visibility_browsertest.cc   | 76 +++++++++++++++++++
+ 1 file changed, 76 insertions(+)
 
 diff --git a/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc b/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
 index aee0b252564684e283b94148ad78d3e7c2a0172b..f16830ff248bae22dbaf0228f22d7ce8c76a25be 100644
@@ -114,3 +117,6 @@ index aee0b252564684e283b94148ad78d3e7c2a0172b..f16830ff248bae22dbaf0228f22d7ce8
  INSTANTIATE_TEST_SUITE_P(AllPopupModes,
                           OmniboxPopupVisibilityBrowserTest,
                           testing::Bool());
+-- 
+2.54.0 (Apple Git-157)
+

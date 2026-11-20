@@ -1,9 +1,12 @@
-From e4613817486bd93ba6c6e389ec2299fe70b731a7 Mon Sep 17 00:00:00 2001
+From 890134fc98d11bbb510e936045527aef8f18f951 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 16:48:37 +0800
 Subject: [PATCH] fix(access): iterate generation test members without raw
  indexing
+
 ---
+ .../access_network_route_registry_unittest.cc       | 13 ++++++-------
+ 1 file changed, 6 insertions(+), 7 deletions(-)
 
 diff --git a/components/aegis_access/access_network_route_registry_unittest.cc b/components/aegis_access/access_network_route_registry_unittest.cc
 index d4d9a76d1aeff3020fb36d2d829e180dba1eff87..4328178d4513b24bd012c54f8561579ca38fd158 100644
@@ -30,3 +33,6 @@ index d4d9a76d1aeff3020fb36d2d829e180dba1eff87..4328178d4513b24bd012c54f8561579c
      EXPECT_NE(registry.Resolve(Metadata(), Target(), expected).net_error, net::OK);
    }
    auto expected = Expected();
+-- 
+2.54.0 (Apple Git-157)
+

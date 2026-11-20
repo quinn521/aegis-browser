@@ -1,8 +1,17 @@
-From ed578c8d13bb3cb245db1db9901d6c7cee766582 Mon Sep 17 00:00:00 2001
+From 3c1462b7ce4674490fae5803bcc2f80a937cfeb7 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 20:52:09 +0800
-Subject: [PATCH] 修复平台说明编译条件并更新版本
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E5=B9=B3=E5=8F=B0=E8=AF=B4?=
+ =?UTF-8?q?=E6=98=8E=E7=BC=96=E8=AF=91=E6=9D=A1=E4=BB=B6=E5=B9=B6=E6=9B=B4?=
+ =?UTF-8?q?=E6=96=B0=E7=89=88=E6=9C=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/aegis/aegis_ui.cc          | 7 +++++--
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 2 files changed, 7 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/aegis/aegis_ui.cc b/chrome/browser/ui/webui/aegis/aegis_ui.cc
 index 070133ce61784a43b423fa1ce39adbef093ffda2..86603291a0e5408b90fc6ec2605870af13ad8e3a 100644
@@ -37,3 +46,6 @@ index a59dd2b37c07cbe441f475b98586f06d98c36474..95ff7d16da5a2a015107d59386156bc7
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,19 @@
-From ca4509d85b29eee6c5677429dd5dbc57099e337f Mon Sep 17 00:00:00 2001
+From cab8adf492b7c0b95e5b5900e30fe0b6cfe960ea Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 09:14:43 +0800
 Subject: [PATCH] feat(access): bind one-shot retry to original failed
  navigation
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  26 +++
+ .../access_navigation_retry_tab_helper.cc     | 103 +++++++++++
+ .../access_navigation_retry_tab_helper.h      |  43 +++++
+ ...ss_navigation_retry_tab_helper_unittest.cc | 168 ++++++++++++++++++
+ .../access_proxying_url_loader_factory.cc     |   8 +
+ 5 files changed, 348 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc
+ create mode 100644 chrome/browser/aegis/access/access_navigation_retry_tab_helper.h
+ create mode 100644 chrome/browser/aegis/access/access_navigation_retry_tab_helper_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 5d6f5195f78974a35227ef5b1468a4561a462d2b..34c7eb832c875ef48d473f5212f18ab6535bb090 100644
@@ -407,3 +417,6 @@ index f58c3577ea82b3d6f752234d73f8bf4924a1b45d..3c21307330d9333b8c4b9bf19197d61c
    std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata =
        CaptureProxyFactoryMetadata(profile, frame, navigation_id);
    if (!metadata.has_value() ||
+-- 
+2.54.0 (Apple Git-157)
+

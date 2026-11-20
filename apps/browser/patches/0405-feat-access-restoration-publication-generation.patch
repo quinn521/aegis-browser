@@ -1,9 +1,14 @@
-From 9ae633efc889ce789dad7ce7ddba2c921bf2574c Mon Sep 17 00:00:00 2001
+From fe53173effe7440dd5b4d5720934075629562e4f Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 17:24:52 +0800
 Subject: [PATCH] feat(access): reserve durable publication generations for
  bootstrap and recovery
+
 ---
+ .../browser/aegis/access/access_rule_store.cc | 42 +++++++++++++
+ .../browser/aegis/access/access_rule_store.h  |  8 +++
+ .../access/access_rule_store_unittest.cc      | 62 +++++++++++++++++++
+ 3 files changed, 112 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_rule_store.cc b/chrome/browser/aegis/access/access_rule_store.cc
 index 89efd848f0c0774e628a27f86a9659b0619c0700..d5191d4ae4ce9cecfb0eb0746e328fbf0a469310 100644
@@ -150,3 +155,6 @@ index 51f763a101ca8cc78842297cc6be580a43a4de5e..a066e6dcbe99766d465ccf0a27adaed4
  TEST(AccessRuleStoreTest, PrepareIsDurableButDoesNotReplaceCommittedRows) {
    base::ScopedTempDir temp;
    ASSERT_TRUE(temp.CreateUniqueTempDir());
+-- 
+2.54.0 (Apple Git-157)
+

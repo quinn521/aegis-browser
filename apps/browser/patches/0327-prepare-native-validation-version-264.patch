@@ -1,8 +1,16 @@
-From f88938ae831b883fcecb8c5ac3f8c6d211459f2f Mon Sep 17 00:00:00 2001
+From 4403e45153261305ac228638337a38e815e10255 Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Sat, 24 Oct 2026 19:00:00 +0800
-Subject: [PATCH] 为 Chromium 156 原生验收递增产品版本至 264
+Subject: [PATCH] =?UTF-8?q?=E4=B8=BA=20Chromium=20156=20=E5=8E=9F=E7=94=9F?=
+ =?UTF-8?q?=E9=AA=8C=E6=94=B6=E9=80=92=E5=A2=9E=E4=BA=A7=E5=93=81=E7=89=88?=
+ =?UTF-8?q?=E6=9C=AC=E8=87=B3=20264?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index f729efc3ccebf26d850ca384a9b00f8ffcce80bf..4d25b66792b66b98abf57bbc3b9b28e1f3b02e48 100644
@@ -19,3 +27,6 @@ index f729efc3ccebf26d850ca384a9b00f8ffcce80bf..4d25b66792b66b98abf57bbc3b9b28e1
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

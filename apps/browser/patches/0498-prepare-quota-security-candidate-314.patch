@@ -1,4 +1,4 @@
-From 47df1e36dc36d6b0774f8dbc6c7975b45d48a7f2 Mon Sep 17 00:00:00 2001
+From 48f058a94b2709306169761ccd4a97e6e506c24a Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Sun, 15 Nov 2026 16:08:52 +0800
 Subject: [PATCH] =?UTF-8?q?=E5=87=86=E5=A4=87=20Ver=207.1=20(314)=20?=
@@ -28,5 +28,5 @@ index a2c85aa5be4a00366838783a2997fdea4804c5f0..dd891906eb410413666676536885bae3
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

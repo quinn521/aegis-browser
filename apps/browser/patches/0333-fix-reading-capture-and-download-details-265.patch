@@ -1,8 +1,20 @@
-From 10a46a2f801902552d87b09efe5e0eabe559c89c Mon Sep 17 00:00:00 2001
+From 49eaafaa072403039be6431d49dede23846f09da Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 20:42:59 +0800
-Subject: [PATCH] 修复设置内阅读提取并区分下载平台说明
+Subject: [PATCH] =?UTF-8?q?=E4=BF=AE=E5=A4=8D=E8=AE=BE=E7=BD=AE=E5=86=85?=
+ =?UTF-8?q?=E9=98=85=E8=AF=BB=E6=8F=90=E5=8F=96=E5=B9=B6=E5=8C=BA=E5=88=86?=
+ =?UTF-8?q?=E4=B8=8B=E8=BD=BD=E5=B9=B3=E5=8F=B0=E8=AF=B4=E6=98=8E?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/resources/aegis/aegis.html                | 2 +-
+ chrome/browser/ui/webui/aegis/aegis_ui.cc                | 2 ++
+ chrome/browser/ui/webui/aegis_agent/reading_workspace.cc | 7 +++++++
+ chrome/browser/ui/webui/aegis_agent/reading_workspace.h  | 2 ++
+ chrome/browser/ui/webui/help/aegis_github_update.h       | 4 ++--
+ 5 files changed, 14 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/aegis.html b/chrome/browser/resources/aegis/aegis.html
 index 5b549961c08557956d0f0c3d2633e7ffa77aad72..f875fcfab4e183567b035e39bb5796a55904ed06 100644
@@ -97,3 +109,6 @@ index 4d25b66792b66b98abf57bbc3b9b28e1f3b02e48..a59dd2b37c07cbe441f475b98586f06d
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

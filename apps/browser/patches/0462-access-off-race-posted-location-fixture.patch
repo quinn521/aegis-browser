@@ -1,8 +1,11 @@
-From 13323a509509e8177afbd5a7b56517200bf698b8 Mon Sep 17 00:00:00 2001
+From fe5edcba4b63a6f3193a404f5e5a2316f28e5778 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 15:34:16 +0800
 Subject: [PATCH] test(access): match the compiler callback source location
+
 ---
+ .../aegis/access/access_site_proxy_product_unittest.cc       | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index 7269364ec306523f2826c2088105ff4512a71fee..bd9dc01cb4298db9900cb08fe0f33cae7261a6eb 100644
@@ -20,3 +23,6 @@ index 7269364ec306523f2826c2088105ff4512a71fee..bd9dc01cb4298db9900cb08fe0f33cae
        disabled_ = true;
        std::move(disable_).Run();
      }
+-- 
+2.54.0 (Apple Git-157)
+

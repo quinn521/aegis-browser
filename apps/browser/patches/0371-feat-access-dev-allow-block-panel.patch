@@ -1,4 +1,4 @@
-From 5606a4da0920c25f8f189ba8acc3c55f7bdec2b3 Mon Sep 17 00:00:00 2001
+From f63cdbdb2f13b328adb565d3968c9b3e7f9f886a Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Sun, 8 Nov 2026 15:45:00 +0000
 Subject: [PATCH] feat: add macOS DEV allow/block debug panel
@@ -6,6 +6,17 @@ Subject: [PATCH] feat: add macOS DEV allow/block debug panel
 DEV/Alpha debug panel for explicit-host ALLOW/BLOCK via the site intent
 API. Beta/Release do not register the panel or a general rule editor.
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  27 +++
+ .../access_site_dev_allow_block_panel.cc      | 164 ++++++++++++++++++
+ .../access_site_dev_allow_block_panel.h       | 102 +++++++++++
+ ...ess_site_dev_allow_block_panel_unittest.cc | 162 +++++++++++++++++
+ .../access_site_proxy_bubble_controller.cc    |  34 ++++
+ .../access_site_proxy_bubble_controller.h     |  13 ++
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  79 +++++++++
+ 7 files changed, 581 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_site_dev_allow_block_panel.cc
+ create mode 100644 chrome/browser/aegis/access/access_site_dev_allow_block_panel.h
+ create mode 100644 chrome/browser/aegis/access/access_site_dev_allow_block_panel_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 01d094fac3e004712478905978e705f47170211a..c491344334069cdfb8820ff9698d60f3772131c6 100644
@@ -713,3 +724,6 @@ index 0a19c9d9512552e08b17e51f3da525e518b6e038..ea4e64dc50b7eb8c34a895f7ceb7d7e2
      AddLabel(panel_, Copy(u"隐私保护", u"Privacy protection", u"隱私保護"), views::style::CONTEXT_DIALOG_TITLE);
      AddLabel(panel_, (summary_.paused ? Copy(u"本站保护已暂停 · ", u"Protection paused · ", u"本站保護已暫停 · ")
                                      : Copy(u"保护已开启 · ", u"Protection on · ", u"保護已開啟 · ")) +
+-- 
+2.54.0 (Apple Git-157)
+

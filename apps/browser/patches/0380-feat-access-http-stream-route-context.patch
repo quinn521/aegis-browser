@@ -1,9 +1,18 @@
-From 5bbddb6b2bed06298dd7ff57ed146232b1b830a6 Mon Sep 17 00:00:00 2001
+From f75571d47ad28d9329c6b247997ae4a7a5c6b3ef Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 06:29:41 +0800
 Subject: [PATCH] feat(access): retain route context through HTTP stream
  requests
+
 ---
+ components/aegis_access/BUILD.gn              | 11 +++
+ .../access_route_request_context_unittest.cc  | 87 +++++++++++++++++++
+ net/http/http_request_info.cc                 |  2 +
+ net/http/http_request_info.h                  |  6 ++
+ net/http/http_stream_factory.cc               | 12 ++-
+ net/http/http_stream_factory.h                |  1 +
+ 6 files changed, 117 insertions(+), 2 deletions(-)
+ create mode 100644 components/aegis_access/access_route_request_context_unittest.cc
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 38e127012d18cde98ca2c798032cbc7e73164dc8..52601a89ff1c264adf6fd5ac699e4e96ea54919b 100644
@@ -226,3 +235,6 @@ index 3f70b0242367a5795bfe031364354e2e9ced6d2b..7ba9a3738af131050d12322690ac2167
      std::string method;
      NetworkAnonymizationKey network_anonymization_key;
      MutableNetworkTrafficAnnotationTag traffic_annotation;
+-- 
+2.54.0 (Apple Git-157)
+

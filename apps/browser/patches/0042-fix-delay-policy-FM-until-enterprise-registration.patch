@@ -1,9 +1,13 @@
-From de5a3b45cb8757a0894fa6eae4a07cb0ba5040d9 Mon Sep 17 00:00:00 2001
+From dcdb44cd59875e55ddf675cfd797322bf49441f7 Mon Sep 17 00:00:00 2001
 From: MacBook Pro <lazy@MacBook-Pro.local>
 Date: Tue, 25 Aug 2026 01:35:43 +0800
 Subject: [PATCH] fix: delay policy FM until enterprise registration
 
 ---
+ ...fm_registration_token_uploader_unittest.cc | 208 ++++++++++++++++++
+ .../user_fm_registration_token_uploader.cc    |  90 +++++++-
+ .../user_fm_registration_token_uploader.h     |  25 ++-
+ 3 files changed, 315 insertions(+), 8 deletions(-)
 
 diff --git a/chrome/browser/policy/cloud/fm_registration_token_uploader_unittest.cc b/chrome/browser/policy/cloud/fm_registration_token_uploader_unittest.cc
 index 85c009fc9ea046557891b2b1373152ec85fdd450..ce13ca764b7b718d4e40a36e1ac1e7520026702c 100644
@@ -428,3 +432,6 @@ index 8fcf54be081c72a5dc65c3030ec463d5a1b8f707..b4fce1d345a71693ef6501655720e7ca
    std::vector<std::unique_ptr<FmRegistrationTokenUploader>> uploaders_;
  };
  
+-- 
+2.54.0 (Apple Git-157)
+

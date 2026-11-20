@@ -1,9 +1,12 @@
-From 31ca1adabb30f24172bb7ae6810baad1a2bc10ec Mon Sep 17 00:00:00 2001
+From 0966e425cb18956e007525be14cc56b090c159c4 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 00:58:03 +0800
 Subject: [PATCH] test(access): compile only the active Alpha input admission
  branch
+
 ---
+ .../aegis/access/access_site_proxy_product_unittest.cc     | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index db68a1a34b29ce4d12a790c6acdf0073ae51d86a..cf3e0e8890c56c1ad29548fa3d20cf35422a04a5 100644
@@ -26,3 +29,6 @@ index db68a1a34b29ce4d12a790c6acdf0073ae51d86a..cf3e0e8890c56c1ad29548fa3d20cf35
      ASSERT_TRUE(directory_.CreateUniqueTempDir());
      profile_ = TestingProfile::Builder()
          .SetPath(directory_.GetPath())
+-- 
+2.54.0 (Apple Git-157)
+

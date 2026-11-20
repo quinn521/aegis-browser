@@ -1,8 +1,19 @@
-From b509b596e0ceb968ac7792d0cb2d3bcc2a674e12 Mon Sep 17 00:00:00 2001
+From 35d4dacecab3d2710c04a98de57345cf74a57ee1 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Wed, 21 Oct 2026 23:45:00 +0800
-Subject: [PATCH] 统一设置卡片与表单对齐
+Subject: [PATCH] =?UTF-8?q?=E7=BB=9F=E4=B8=80=E8=AE=BE=E7=BD=AE=E5=8D=A1?=
+ =?UTF-8?q?=E7=89=87=E4=B8=8E=E8=A1=A8=E5=8D=95=E5=AF=B9=E9=BD=90?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/resources/aegis/aegis.css      |  7 +++--
+ chrome/browser/resources/aegis/gestures.css   | 26 +++++++++++++++++++
+ .../browser/resources/aegis_agent/agent.css   | 22 ++++++++++++++--
+ .../settings/aegis_page/aegis_page.html       | 16 +++++++++---
+ .../ui/webui/help/aegis_github_update.h       |  4 +--
+ 5 files changed, 65 insertions(+), 10 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/aegis.css b/chrome/browser/resources/aegis/aegis.css
 index 21249b5df748c98caaf20d868cbb2b055174c38c..f968a35042850a978ad19da5c9dc0c52cc4cd0f2 100644
@@ -182,3 +193,6 @@ index ef83cd35a50d3c625bd99f4d33472aab6a793ef6..786bf30bcd989a1811950ed7e00ad7c9
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,8 +1,20 @@
-From 0e656469811197714256da4fd253024e05abf001 Mon Sep 17 00:00:00 2001
+From 41b583412151518c8f384b6aa9b8b0b7098ae767 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Sat, 24 Oct 2026 20:10:57 +0800
-Subject: [PATCH] 完善 Android 阅读工作区和下载表单的手机界面
+Subject: [PATCH] =?UTF-8?q?=E5=AE=8C=E5=96=84=20Android=20=E9=98=85?=
+ =?UTF-8?q?=E8=AF=BB=E5=B7=A5=E4=BD=9C=E5=8C=BA=E5=92=8C=E4=B8=8B=E8=BD=BD?=
+ =?UTF-8?q?=E8=A1=A8=E5=8D=95=E7=9A=84=E6=89=8B=E6=9C=BA=E7=95=8C=E9=9D=A2?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ .../browser/resources/aegis_agent/agent.css   | 30 +++++++++++++++++--
+ .../resources/aegis_agent/mobile_settings.ts  | 11 +++++++
+ .../ui/webui/help/aegis_github_update.h       |  4 +--
+ .../aegis_downloads/aegis_download_panel.css  | 22 ++++++++++++--
+ .../aegis_downloads/aegis_download_panel.ts   | 24 +++++++++++----
+ 5 files changed, 79 insertions(+), 12 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis_agent/agent.css b/chrome/browser/resources/aegis_agent/agent.css
 index 25f6414f71d2bd39ecfd537156125052edb2ae8d..6421ccca598b9ff5b67e412d0b1caa2e28133005 100644
@@ -182,3 +194,6 @@ index ace6866cfe9b2a69a812f7cba8c50824e25d5e3c..4c4157f594741e40fed5d6fb8521e5f2
        }
      } catch (error) {
        this.previewText_ = this.formatPreviewError_(error);
+-- 
+2.54.0 (Apple Git-157)
+

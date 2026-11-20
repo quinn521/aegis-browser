@@ -1,9 +1,14 @@
-From fb99d6bf984fa1036ace84866f8a60bcc59bdeb9 Mon Sep 17 00:00:00 2001
+From 1a5029d17ae744451f64885af06fe15b98257d5a Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 21:21:47 +0800
 Subject: [PATCH] chore(access): trace retry navigation admission without URLs
  or credentials
+
 ---
+ .../access/access_navigation_retry_tab_helper.cc     | 12 +++++++++++-
+ .../access/access_proxying_url_loader_factory.cc     |  3 +++
+ chrome/browser/net/net_error_tab_helper.cc           |  4 ++++
+ 3 files changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc b/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc
 index d7663a45e569594335213cbbf9dd3517ce1846f8..0315d727ad80777e09fb4cc86e777c457de07347 100644
@@ -76,3 +81,6 @@ index e5a15dbb98aec2a04e915a4427e3ead68bd84921..bcf2ed7e09b33f92ca57cfa4395adc37
    if (&sender == web_contents()->GetPrimaryMainFrame() &&
        entry && entry->GetPageType() == content::PAGE_TYPE_ERROR) {
      auto* helper = aegis::access::AccessNavigationRetryTabHelper::FromWebContents(
+-- 
+2.54.0 (Apple Git-157)
+

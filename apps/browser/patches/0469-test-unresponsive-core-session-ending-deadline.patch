@@ -1,9 +1,13 @@
-From 9ab08c11641dd9bcf90b6306991054a7b86171e5 Mon Sep 17 00:00:00 2001
+From ceb2fb924691c6cf49f1261c50b0ad3469c08f60 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 22:58:04 +0800
 Subject: [PATCH] test(access): reproduce unresponsive core session-ending
  deadline
+
 ---
+ .../access_local_core_manager_unittest.cc     | 67 +++++++++++++++++++
+ .../access/access_local_core_test_child.cc    | 20 ++++++
+ 2 files changed, 87 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/access_local_core_manager_unittest.cc b/chrome/browser/aegis/access/access_local_core_manager_unittest.cc
 index 9271bee64864ebaea15f40ee8f3a28397d8478c6..2bacc92a4d4900a184a54a13179b69c04fc037e1 100644
@@ -132,3 +136,6 @@ index 0dcb2adab361d650e9fdaa1d8c3644fa30d5bd15..0e908679beac7f9a902f6d0efc075401
    signal(SIGPIPE, SIG_IGN);
    base::ScopedFD listener(socket(AF_INET, SOCK_STREAM, 0));
    if (!listener.is_valid()) return 5;
+-- 
+2.54.0 (Apple Git-157)
+

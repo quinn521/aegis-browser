@@ -1,9 +1,44 @@
-From f2b886421c74d9d15de5195e7e2c401bc939b892 Mon Sep 17 00:00:00 2001
+From b09bbc80f35e86b25f05103de82c02437456d60a Mon Sep 17 00:00:00 2001
 From: Aegis Browser <devnull@localhost>
 Date: Thu, 12 Nov 2026 13:00:00 +0800
 Subject: [PATCH] feat(access): persist scoped diagnostics with channel
  defaults and compressed sharing
+
 ---
+ chrome/browser/aegis/BUILD.gn                 |   1 +
+ chrome/browser/aegis/access/BUILD.gn          |  53 +++-
+ .../aegis/access/access_build_channel.cc      |   5 +
+ .../aegis/access/access_build_channel.h       |  28 +-
+ .../browser/aegis/access/access_core_log.cc   |   7 +
+ chrome/browser/aegis/access/access_core_log.h | 265 ++++++++++++++++++
+ .../aegis/access/access_core_log_disk.cc      | 121 ++++++++
+ .../aegis/access/access_core_log_disk.h       |  21 ++
+ .../access/access_core_log_disk_unittest.cc   | 202 +++++++++++++
+ .../aegis/access/access_core_log_share.cc     | 203 ++++++++++++++
+ .../aegis/access/access_core_log_share.h      |  53 ++++
+ .../aegis/access/access_core_log_store.cc     | 153 ++++++++++
+ .../aegis/access/access_core_log_store.h      |  82 ++++++
+ .../aegis/access/access_core_log_unittest.cc  | 112 ++++++++
+ .../aegis/access/access_local_core_manager.cc |  81 +++++-
+ .../aegis/access/access_local_core_manager.h  |   9 +
+ .../access_local_core_manager_unittest.cc     | 234 ++++++++++++++++
+ .../access/access_local_core_test_child.cc    |   8 +
+ .../access_site_proxy_bubble_controller.cc    |  94 ++++++-
+ .../access_site_proxy_bubble_controller.h     |  18 ++
+ chrome/browser/aegis/aegis_prefs.cc           |   4 +
+ chrome/browser/aegis/aegis_prefs.h            |   4 +
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  80 ++++++
+ 23 files changed, 1826 insertions(+), 12 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/access_core_log.cc
+ create mode 100644 chrome/browser/aegis/access/access_core_log.h
+ create mode 100644 chrome/browser/aegis/access/access_core_log_disk.cc
+ create mode 100644 chrome/browser/aegis/access/access_core_log_disk.h
+ create mode 100644 chrome/browser/aegis/access/access_core_log_disk_unittest.cc
+ create mode 100644 chrome/browser/aegis/access/access_core_log_share.cc
+ create mode 100644 chrome/browser/aegis/access/access_core_log_share.h
+ create mode 100644 chrome/browser/aegis/access/access_core_log_store.cc
+ create mode 100644 chrome/browser/aegis/access/access_core_log_store.h
+ create mode 100644 chrome/browser/aegis/access/access_core_log_unittest.cc
 
 diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
 index cfd5a413e6333dd989df34fe9886c7d7732a87bb..512f133b73b0a4b5d56e5bd864aafd38996f6a17 100644
@@ -2254,3 +2289,6 @@ index eb81acfae16042030ba1a25c6c54e5cace7e41fb..6bf90ecfbfc4d4f7932595020501f4f0
    base::RepeatingTimer timer_;
    base::WeakPtrFactory<AegisPageBubble> weak_{this};
  };
+-- 
+2.54.0 (Apple Git-157)
+

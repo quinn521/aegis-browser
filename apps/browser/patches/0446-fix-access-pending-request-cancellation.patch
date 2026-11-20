@@ -1,9 +1,14 @@
-From 2722f7ad04c009236dc498ccc3f15038b566b859 Mon Sep 17 00:00:00 2001
+From 2716dc395caf04cb5c086d40bf50758367449f12 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 06:51:24 +0800
 Subject: [PATCH] fix(access): observe request cancellation before readiness
  waits
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   1 +
+ .../access_proxying_url_loader_factory.cc     | 211 +++++++++++++-----
+ .../access_proxying_url_loader_factory.h      |  22 +-
+ 3 files changed, 162 insertions(+), 72 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index b8bd372d001b0bde4eb845170f2677cff59189bc..bf0f7a6bd4978406afa3fbf3b682f29655624952 100644
@@ -345,3 +350,6 @@ index edf2314f0a148c99e4eac9cfdcc233662183112b..72ae56f5d378628d8a9deadef27bee74
    base::WeakPtrFactory<AccessProxyingURLLoaderFactory> weak_factory_{this};
  };
  
+-- 
+2.54.0 (Apple Git-157)
+

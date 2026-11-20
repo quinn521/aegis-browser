@@ -1,14 +1,20 @@
-From 994690f0e46ffa60e2b7ca0898a700aee6d76586 Mon Sep 17 00:00:00 2001
+From c3d85346edbeda817bd6b29c40be3cda539b61cb Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Mon, 16 Nov 2026 13:54:25 +0800
 Subject: [PATCH] fix(mac): keep unshown Omnibox popup contents hidden
 
+---
+ chrome/browser/ui/views/omnibox/BUILD.gn      |  4 +
+ .../omnibox_popup_visibility_browsertest.cc   | 91 +++++++++++++++++++
+ components/omnibox/common/omnibox_features.cc |  2 +-
+ 3 files changed, 96 insertions(+), 1 deletion(-)
+ create mode 100644 chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
 
 diff --git a/chrome/browser/ui/views/omnibox/BUILD.gn b/chrome/browser/ui/views/omnibox/BUILD.gn
-index be19fc11a671a2590ab4405f5dcb0a6aaac70688..cb926950b1ece96ff55c5cf241d13f78796c0eb3 100644
+index f1a4d68af5f3cce3b7e39cd5d03b4df2af837e4c..abb4f942b8a17db5580373ee15fa71e1cb89d0ff 100644
 --- a/chrome/browser/ui/views/omnibox/BUILD.gn
 +++ b/chrome/browser/ui/views/omnibox/BUILD.gn
-@@ -295,6 +295,10 @@ source_set("browser_tests") {
+@@ -309,6 +309,10 @@ source_set("browser_tests") {
      "omnibox_webui_popup_defer_creation_browsertest.cc",
    ]
  
@@ -16,9 +22,9 @@ index be19fc11a671a2590ab4405f5dcb0a6aaac70688..cb926950b1ece96ff55c5cf241d13f78
 +    sources += [ "omnibox_popup_visibility_browsertest.cc" ]
 +  }
 +
-   configs += [ "//build/config/compiler:no_exit_time_destructors" ]
- 
    deps = [
+     ":omnibox",
+     ":test_support",
 diff --git a/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc b/chrome/browser/ui/views/omnibox/omnibox_popup_visibility_browsertest.cc
 new file mode 100644
 index 0000000000000000000000000000000000000000..aee0b252564684e283b94148ad78d3e7c2a0172b
@@ -117,10 +123,10 @@ index 0000000000000000000000000000000000000000..aee0b252564684e283b94148ad78d3e7
 +                         OmniboxPopupVisibilityBrowserTest,
 +                         testing::Bool());
 diff --git a/components/omnibox/common/omnibox_features.cc b/components/omnibox/common/omnibox_features.cc
-index 5f7afdbfc77cc65a08a0b923b9fe9e9defa9fcc2..8f7d6722792f15ec381123727e3e81234688c63a 100644
+index 21f0f8a9733853cd51ec025b1479d9875d2f90b3..da38ed736bc278e78045aa24884818b9de903f71 100644
 --- a/components/omnibox/common/omnibox_features.cc
 +++ b/components/omnibox/common/omnibox_features.cc
-@@ -329,7 +329,7 @@ BASE_FEATURE(kOmniboxFullWebUISizeWebViewToPreferredHeight, DISABLED);
+@@ -326,7 +326,7 @@ BASE_FEATURE(kOmniboxFullWebUISizeWebViewToPreferredHeight, DISABLED);
  // When enabled, the Omnibox WebUI popup presenter will explicitly hide the
  // widget upon creation, preventing pre-warmed child widgets from inheriting
  // parent window visibility and locking compositor frames.
@@ -129,3 +135,6 @@ index 5f7afdbfc77cc65a08a0b923b9fe9e9defa9fcc2..8f7d6722792f15ec381123727e3e8123
  
  // When enabled, a WebUI omnibox popup presenter creates its native widget on
  // the first `Show()` instead of when the popup is created with the browser
+-- 
+2.54.0 (Apple Git-157)
+

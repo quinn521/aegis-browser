@@ -1,9 +1,19 @@
-From 59a9e77ea4f417f2e8fb33d729c5109617f13a55 Mon Sep 17 00:00:00 2001
+From c3ee77f72b9e72a1805178d4580229086859d49a Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 10:26:31 +0800
 Subject: [PATCH] feat(access): retain route identity across socket pool
  dispatch
+
 ---
+ .../access_route_pool_isolation_unittest.cc   | 103 ++++++++++++++++++
+ net/http/http_stream_factory_job.cc           |   9 +-
+ net/socket/client_socket_pool.cc              |  21 +++-
+ net/socket/client_socket_pool.h               |  15 ++-
+ net/socket/client_socket_pool_manager.cc      |  42 +++++--
+ net/socket/client_socket_pool_manager.h       |  15 ++-
+ net/socket/transport_client_socket_pool.cc    |   8 ++
+ .../websocket_transport_client_socket_pool.cc |   8 ++
+ 8 files changed, 195 insertions(+), 26 deletions(-)
 
 diff --git a/components/aegis_access/access_route_pool_isolation_unittest.cc b/components/aegis_access/access_route_pool_isolation_unittest.cc
 index dd3e977f9778686ae1226cfedd39f5372671a2dd..5fa5c65bb96eb7643b37ad901bd308c9c7784c07 100644
@@ -495,3 +505,6 @@ index eadc1444a01a58fc40a393a32768ef7960380b1b..c174b30124111359146faace3a6657a9
    NOTIMPLEMENTED();
    return OK;
  }
+-- 
+2.54.0 (Apple Git-157)
+

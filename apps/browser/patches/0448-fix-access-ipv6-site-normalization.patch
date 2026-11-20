@@ -1,8 +1,11 @@
-From 183fc1bd27ab3f105636f12c5a10f11af9084142 Mon Sep 17 00:00:00 2001
+From f9a823fff3be035a349d98a4571967b398435620 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 07:36:51 +0800
 Subject: [PATCH] fix(access): preserve canonical IPv6 host brackets
+
 ---
+ chrome/browser/aegis/access/access_site_intent.cc | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_intent.cc b/chrome/browser/aegis/access/access_site_intent.cc
 index ffd0851850011614544e3f2af7611502ab377c3f..5780233389e90ad8b4cc553f7e4227e9c075d3c4 100644
@@ -25,3 +28,6 @@ index ffd0851850011614544e3f2af7611502ab377c3f..5780233389e90ad8b4cc553f7e4227e9
      }
    } else {
      const size_t colon = text.rfind(':');
+-- 
+2.54.0 (Apple Git-157)
+

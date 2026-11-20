@@ -1,8 +1,13 @@
-From 90e8c7703e8cafc3fd407b803d8ff110f3eee557 Mon Sep 17 00:00:00 2001
+From a8d584f86fe5fb0d00eb68f7a00105ab980aa78a Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 08:12:41 +0800
 Subject: [PATCH] feat(access): carry route through proxy connect parameters
+
 ---
+ .../access_proxy_tunnel_context_unittest.cc   | 38 +++++++++++++++++++
+ net/socket/connect_job_params_factory.cc      | 23 ++++++++---
+ net/socket/connect_job_params_factory.h       |  3 +-
+ 3 files changed, 57 insertions(+), 7 deletions(-)
 
 diff --git a/components/aegis_access/access_proxy_tunnel_context_unittest.cc b/components/aegis_access/access_proxy_tunnel_context_unittest.cc
 index 21261736e82400a7b2e8fe89d0ac881c09b81594..796890c5e100fda8906f611f5c4310f77d3dcb9a 100644
@@ -142,3 +147,6 @@ index 37dce058e062d134f3949a99f14042ea582090c7..b4f6e2ca55ac2f8b6ece8d99d89ac6a6
  
  }  // namespace net
  
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,21 @@
-From 434cb0a19bf44cb39bee409158625d8e3d894619 Mon Sep 17 00:00:00 2001
+From e1734e75835fb5d59a33b16d1187b7b7114d6820 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 13:00:35 +0800
 Subject: [PATCH] feat(access): decode full route snapshots and bind local
  credentials
+
 ---
+ components/aegis_access/BUILD.gn              |  16 +++
+ .../access_route_wire_unittest.cc             | 105 ++++++++++++++++
+ services/network/aegis/BUILD.gn               |   3 +
+ .../network/aegis/access_route_registry.cc    |  21 +++-
+ .../network/aegis/access_route_registry.h     |   3 +
+ services/network/aegis/access_route_wire.cc   | 119 ++++++++++++++++++
+ services/network/aegis/access_route_wire.h    |  20 +++
+ 7 files changed, 285 insertions(+), 2 deletions(-)
+ create mode 100644 components/aegis_access/access_route_wire_unittest.cc
+ create mode 100644 services/network/aegis/access_route_wire.cc
+ create mode 100644 services/network/aegis/access_route_wire.h
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 1173bc68623a30f20a6f1cc54d4bea17dff320f3..a5d20272adc2b4091b4817ae7cae28c67e81a2c4 100644
@@ -382,3 +394,6 @@ index 0000000000000000000000000000000000000000..a137a2951017a64ea87d81084b2c69f4
 +    const mojom::AegisAccessSnapshot& wire);
 +}  // namespace network
 +#endif  // SERVICES_NETWORK_AEGIS_ACCESS_ROUTE_WIRE_H_
+-- 
+2.54.0 (Apple Git-157)
+

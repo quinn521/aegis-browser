@@ -1,15 +1,24 @@
-From bdcd3e6c5194517dc5e6c53d970b9c1901e05131 Mon Sep 17 00:00:00 2001
+From b7642b9e0bc83abc8847346b07553ec077664e4c Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 01:16:11 +0800
 Subject: [PATCH] fix(access): reject stale Alpha assets in normal build
  outputs
+
 ---
+ chrome/BUILD.gn                               |  4 +++
+ chrome/browser/aegis/access/BUILD.gn          | 15 +++++++++
+ .../access_local_core_manager_unittest.cc     | 16 ++++++----
+ .../verify_no_alpha_access_resources.py       | 32 +++++++++++++++++++
+ .../verify_no_alpha_access_resources_test.py  | 29 +++++++++++++++++
+ 5 files changed, 89 insertions(+), 7 deletions(-)
+ create mode 100644 chrome/browser/aegis/access/verify_no_alpha_access_resources.py
+ create mode 100644 chrome/browser/aegis/access/verify_no_alpha_access_resources_test.py
 
 diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
-index 86a5d9c275aca47d060828b835a052eacff512b5..4dcf6f2ec73099094b4d5e364d7de35a3d245ab1 100644
+index b95636b8bc3ecb08dd90ee64f1a577359931e674..16d8da4e55ec0b18526a15ded37e8c9d5ad5b1eb 100644
 --- a/chrome/BUILD.gn
 +++ b/chrome/BUILD.gn
-@@ -1412,6 +1412,10 @@ if (is_win) {
+@@ -1427,6 +1427,10 @@ if (is_win) {
      ]
  
      public_deps = [ ":chrome_dll" ]
@@ -164,3 +173,6 @@ index 0000000000000000000000000000000000000000..b0c9b1703ac2e8c73608a0d67e51bc9f
 +
 +if __name__ == "__main__":
 +    unittest.main()
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,19 @@
-From 57f4f2d157a998432a23f68bfd75eee6ae96e9b6 Mon Sep 17 00:00:00 2001
+From 5fab3ca3ca8cf2a732d37e123318c0872f6f1533 Mon Sep 17 00:00:00 2001
 From: Aegis Development <dev@gcsa.local>
 Date: Tue, 10 Nov 2026 05:28:15 +0800
 Subject: [PATCH] feat(access): define complete request route isolation
  identity
+
 ---
+ components/aegis_access/BUILD.gn              |  1 +
+ ...access_route_isolation_key_contract_test.h | 78 +++++++++++++++++++
+ .../access_route_planner_native_test.cc       |  3 +
+ .../access_route_planner_unittest.cc          |  7 ++
+ net/BUILD.gn                                  |  1 +
+ net/base/access_route_isolation_key.h         | 42 ++++++++++
+ 6 files changed, 132 insertions(+)
+ create mode 100644 components/aegis_access/access_route_isolation_key_contract_test.h
+ create mode 100644 net/base/access_route_isolation_key.h
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index a57ce391e084591af5fddc8db51186231f09455f..9e759fb88702bc6cb978cf34f31197baf9130d36 100644
@@ -148,10 +158,10 @@ index 0d01482eb6595e59ba3bb0997906c3b33d57f9d0..d331c1f82078ed564b8db28b54774203
    GtestObserver observer;
    RunSiteProxyRuleGroupContractTests(observer);
 diff --git a/net/BUILD.gn b/net/BUILD.gn
-index 228a325df98f052770cac50c4e040996f6ed14c2..6922402768377be606b9a3eebe19835904d4f727 100644
+index a7353c1507d807387bebf4c532a6afcb793ae012..12f11c82cab11d2553f43632da579c8cec098095 100644
 --- a/net/BUILD.gn
 +++ b/net/BUILD.gn
-@@ -175,6 +175,7 @@ source_set("chrome_root_store_data") {
+@@ -192,6 +192,7 @@ rust_static_library("http_chunked_decoder_rust") {
  
  component("net") {
    sources = [
@@ -207,3 +217,6 @@ index 0000000000000000000000000000000000000000..6b7ccb3f238caf7d545ac69b6543a374
 +}  // namespace net
 +
 +#endif  // NET_BASE_ACCESS_ROUTE_ISOLATION_KEY_H_
+-- 
+2.54.0 (Apple Git-157)
+

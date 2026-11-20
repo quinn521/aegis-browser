@@ -1,9 +1,13 @@
-From 30a8fe171006b3af98adacbb1ce3980077f449ae Mon Sep 17 00:00:00 2001
+From 2ef189948792b59a733700bcf7e67be8503830d4 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 12:22:09 +0800
 Subject: [PATCH] fix(access): prepare failed redirect site and cover saved
  redirect core startup
+
 ---
+ .../access_navigation_retry_tab_helper.cc     |  3 +-
+ .../access_site_proxy_product_unittest.cc     | 84 ++++++++++++++++++-
+ 2 files changed, 83 insertions(+), 4 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc b/chrome/browser/aegis/access/access_navigation_retry_tab_helper.cc
 index ddcfba3a3d55467fc428e1dd018333d0c257d2c8..53e79facc02bfbeadb8d23a42bdced3281cee483 100644
@@ -132,3 +136,6 @@ index 8c1dbb9ade812ed7e2277410781af4557bfd4214..a29bc06be75cc8d836bd324e7b7366b2
  TEST_F(AccessRetryNavigationProductTest,
         NativeRedirectSurvivesPrivateFactoryAdmissionReset) {
    auto request = StartHeldRedirect(false);
+-- 
+2.54.0 (Apple Git-157)
+

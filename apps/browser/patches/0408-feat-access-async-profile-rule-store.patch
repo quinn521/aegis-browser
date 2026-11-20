@@ -1,9 +1,18 @@
-From db5c2c2b6d86b9b6af8257e0b15affa92305b500 Mon Sep 17 00:00:00 2001
+From 5f066a1495e20cca642c1ffbfad918d19cf516a5 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 17:57:38 +0800
 Subject: [PATCH] feat(access): keep Profile rule store lifecycle and recovery
  off UI sequence
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |  22 +++
+ .../aegis/access/access_async_rule_store.cc   | 118 ++++++++++++++
+ .../aegis/access/access_async_rule_store.h    |  47 ++++++
+ .../access_async_rule_store_unittest.cc       | 150 ++++++++++++++++++
+ 4 files changed, 337 insertions(+)
+ create mode 100644 chrome/browser/aegis/access/access_async_rule_store.cc
+ create mode 100644 chrome/browser/aegis/access/access_async_rule_store.h
+ create mode 100644 chrome/browser/aegis/access/access_async_rule_store_unittest.cc
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index bceb74ffdfe55959ee3ff2b4d26c669975aea814..05c3ceb5951c58fddbe8a2755abe429352c0660e 100644
@@ -368,3 +377,6 @@ index 0000000000000000000000000000000000000000..faf4098ca49123efff3552ccd2d2b76b
 +}
 +}  // namespace
 +}  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

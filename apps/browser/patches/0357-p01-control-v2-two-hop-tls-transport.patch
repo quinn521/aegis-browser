@@ -1,10 +1,31 @@
-From acf97e4eb878a7b0c4464aa39754c7f4ff1142b6 Mon Sep 17 00:00:00 2001
+From 5d548291f87dc9c0af7afcaef8eb0f8b7747bdaf Mon Sep 17 00:00:00 2001
 From: P01 source owner <p01-source@localhost>
 Date: Wed, 4 Nov 2026 09:49:03 +0800
 Subject: [PATCH] feat(proxy): package P01 control v2 and two-hop TLS transport
 
 Source-only draft. GN, compilation, fourteen test definitions and independent review await separate admission.
 ---
+ chrome/browser/aegis/proxy/BUILD.gn           |  38 ++
+ .../aegis/proxy/access_core_control.proto     |  56 ++
+ .../browser/aegis/proxy/core_control_limits.h |  11 +
+ .../aegis/proxy/core_control_wire_guard.cc    | 430 ++++++++++++++++
+ .../aegis/proxy/core_control_wire_guard.h     |  16 +
+ chrome/browser/aegis/proxy/core_relay_pair.cc | 247 +++++++++
+ chrome/browser/aegis/proxy/core_relay_pair.h  |  45 ++
+ chrome/browser/aegis/proxy/core_tls.cc        | 296 +++++++++++
+ chrome/browser/aegis/proxy/core_tls.h         |  75 +++
+ .../browser/aegis/proxy/core_tls_unittest.cc  | 486 ++++++++++++++++++
+ 10 files changed, 1700 insertions(+)
+ create mode 100644 chrome/browser/aegis/proxy/BUILD.gn
+ create mode 100644 chrome/browser/aegis/proxy/access_core_control.proto
+ create mode 100644 chrome/browser/aegis/proxy/core_control_limits.h
+ create mode 100644 chrome/browser/aegis/proxy/core_control_wire_guard.cc
+ create mode 100644 chrome/browser/aegis/proxy/core_control_wire_guard.h
+ create mode 100644 chrome/browser/aegis/proxy/core_relay_pair.cc
+ create mode 100644 chrome/browser/aegis/proxy/core_relay_pair.h
+ create mode 100644 chrome/browser/aegis/proxy/core_tls.cc
+ create mode 100644 chrome/browser/aegis/proxy/core_tls.h
+ create mode 100644 chrome/browser/aegis/proxy/core_tls_unittest.cc
 
 diff --git a/chrome/browser/aegis/proxy/BUILD.gn b/chrome/browser/aegis/proxy/BUILD.gn
 new file mode 100644
@@ -1766,3 +1787,6 @@ index 0000000000000000000000000000000000000000..c9ec3d0d5b7a57a88eb40a61ad673206
 +
 +}  // namespace
 +}  // namespace aegis::proxy
+-- 
+2.54.0 (Apple Git-157)
+

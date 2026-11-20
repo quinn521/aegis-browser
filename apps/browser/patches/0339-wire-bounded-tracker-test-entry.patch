@@ -1,4 +1,4 @@
-From 852edc0ac884faf2c3e4ecfe57d5f61f56ed15aa Mon Sep 17 00:00:00 2001
+From 5b3ed195b58a0dc955f9c3d1b9025fe92f4a32bc Mon Sep 17 00:00:00 2001
 From: Aegis Packaging Proposal <aegis-proposal@invalid>
 Date: Fri, 9 Oct 2026 14:00:00 +0800
 Subject: [PATCH] test: wire bounded tracker test entry and support
@@ -8,6 +8,28 @@ Append-only transport of exact overlay bytes; no native execution or acceptance.
 Keep the bounded option default off and require Darwin when enabled.
 Both process controls remain REQUIRED/BLOCKED pending a loss-safe executor.
 ---
+ components/aegis_access/BUILD.gn              |  16 +-
+ ...cy_publication_ack_tracker_bounded_main.cc |  13 +
+ tools/aegis/current151_tracker/BUILD.gn       |  23 +
+ tools/aegis/current151_tracker/README.md      | 149 ++++
+ .../current151_tracker/bounded_runtime.cc     | 227 ++++++
+ .../current151_tracker/bounded_runtime.h      |  49 ++
+ tools/aegis/current151_tracker/closure.py     | 124 ++++
+ tools/aegis/current151_tracker/driver.py      | 422 +++++++++++
+ .../current151_tracker/native_regressions.cc  | 215 ++++++
+ tools/aegis/current151_tracker/owned_leaf.cc  | 340 +++++++++
+ tools/aegis/current151_tracker/regressions.py | 656 ++++++++++++++++++
+ 11 files changed, 2233 insertions(+), 1 deletion(-)
+ create mode 100644 components/aegis_access/policy_publication_ack_tracker_bounded_main.cc
+ create mode 100644 tools/aegis/current151_tracker/BUILD.gn
+ create mode 100644 tools/aegis/current151_tracker/README.md
+ create mode 100644 tools/aegis/current151_tracker/bounded_runtime.cc
+ create mode 100644 tools/aegis/current151_tracker/bounded_runtime.h
+ create mode 100644 tools/aegis/current151_tracker/closure.py
+ create mode 100644 tools/aegis/current151_tracker/driver.py
+ create mode 100644 tools/aegis/current151_tracker/native_regressions.cc
+ create mode 100644 tools/aegis/current151_tracker/owned_leaf.cc
+ create mode 100644 tools/aegis/current151_tracker/regressions.py
 
 diff --git a/components/aegis_access/BUILD.gn b/components/aegis_access/BUILD.gn
 index 01b0f6a6f2e3e96f867b981f96ef2f043c322c1f..4e2fe481c440ba896619ee9f383756db56849fa3 100644
@@ -2323,3 +2345,6 @@ index 0000000000000000000000000000000000000000..26328238a2325de03abd7a43af5b60bd
 +
 +if __name__ == "__main__":
 +    unittest.main(verbosity=2)
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,21 @@
-From 47b887070f2b7bcf8649eab87870afa09871675e Mon Sep 17 00:00:00 2001
+From 5a2a7095a071a4c69e32aceb2030ea8e8eb6fcc0 Mon Sep 17 00:00:00 2001
 From: Aegis <aegis@invalid>
 Date: Tue, 10 Nov 2026 03:59:38 +0800
 Subject: [PATCH] fix: bind site publication to committed state and refresh
  host status
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   1 +
+ .../access/access_service_coordinator.cc      |  10 +
+ .../aegis/access/access_service_coordinator.h |   4 +
+ .../access_service_coordinator_unittest.cc    | 112 +++++++++++
+ .../access_site_proxy_bubble_controller.cc    | 176 +++++++++++-------
+ .../access_site_proxy_bubble_controller.h     |  22 +--
+ .../aegis/access/access_site_proxy_session.cc |  34 +++-
+ .../aegis/access/access_site_proxy_session.h  |   4 +-
+ .../access_site_proxy_session_unittest.cc     |  47 ++++-
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  10 +-
+ 10 files changed, 332 insertions(+), 88 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index 81c8f1bb1524cb20e9f6d869f0d7a4054ebbdf36..c79ec02c31661a909d1f92db8bebe098a78b9ec7 100644
@@ -787,3 +799,6 @@ index ea4e64dc50b7eb8c34a895f7ceb7d7e2e840e0c5..67bf7ec26580e8a91be03b9b050912e0
    std::set<std::string> expanded_;
    std::u16string notice_;
    base::RepeatingTimer timer_;
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,9 +1,18 @@
-From e1bda8acc7743836f933657a8d84684b5bb2b79f Mon Sep 17 00:00:00 2001
+From 8de40e1ce3eea562552de1a9396a13c52e1ccf49 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Thu, 12 Nov 2026 01:14:50 +0800
 Subject: [PATCH] fix(access): allow an explicit retry on the stopped error
  entry
+
 ---
+ .../access/access_navigation_retry_state.cc   | 21 +++++++++-
+ .../access/access_navigation_retry_state.h    |  5 +++
+ .../access_navigation_retry_state_unittest.cc | 21 ++++++++++
+ .../access_navigation_retry_tab_helper.cc     | 38 ++++++++++++-------
+ .../access_navigation_retry_tab_helper.h      |  7 +++-
+ ...ss_navigation_retry_tab_helper_unittest.cc | 34 +++++++++++++++++
+ .../access_site_proxy_product_unittest.cc     |  9 +++++
+ 7 files changed, 119 insertions(+), 16 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_navigation_retry_state.cc b/chrome/browser/aegis/access/access_navigation_retry_state.cc
 index 99524f8afe636c4357028991eab3e9b4402ceb71..ed5f8a4443a6564df7872a9449a35f5d646300dd 100644
@@ -295,3 +304,6 @@ index 41b96b63bdbca4e4c1a065916499dd09ef860a01..5c7255895769cb1f4c8c6c92488bbb00
  }
  
  TEST_F(AccessRetryNavigationProductTest,
+-- 
+2.54.0 (Apple Git-157)
+

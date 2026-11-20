@@ -1,9 +1,12 @@
-From 2f44feb42acc5c86482083f8a0f613a9baf56f99 Mon Sep 17 00:00:00 2001
+From 5c68a2d910da9e75c3e7641091f0750d4934b1f5 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 15:38:48 +0800
 Subject: [PATCH] test(access): act on committed verification state and drain
  late probe
+
 ---
+ .../access_site_proxy_product_unittest.cc     | 43 ++++++++++++-------
+ 1 file changed, 28 insertions(+), 15 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
 index bd9dc01cb4298db9900cb08fe0f33cae7261a6eb..afb49b3ca8c2ad86039c2c384bfd9ddbaf45970f 100644
@@ -99,3 +102,6 @@ index bd9dc01cb4298db9900cb08fe0f33cae7261a6eb..afb49b3ca8c2ad86039c2c384bfd9ddb
    EXPECT_FALSE(controller().GetPendingEntry());
    EXPECT_EQ(web_contents()->GetLastCommittedURL(), failed_);
    const auto state = bubble_->SnapshotForCommittedUrl(failed_);
+-- 
+2.54.0 (Apple Git-157)
+

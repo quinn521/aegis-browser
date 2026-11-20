@@ -1,8 +1,14 @@
-From 094da5af8c7e1cd3bfd38edd0f409d76fa492c5b Mon Sep 17 00:00:00 2001
+From 57cb7920bffda8f813d68298af618fc4d9d88538 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 03:05:53 +0800
 Subject: [PATCH] fix(access): require current private ACK for ready UI
+
 ---
+ .../access_site_proxy_bubble_controller.cc    | 14 ++++++++-
+ .../access/access_site_proxy_bubble_model.h   |  3 ++
+ .../access_site_proxy_product_unittest.cc     | 31 ++++++++++++++++++-
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  7 ++++-
+ 4 files changed, 52 insertions(+), 3 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 index edba8bd08d75b5fb6839a3441e727f1b423bac4c..7878f2478f3c661d4862f79827c012688276b844 100644
@@ -131,3 +137,6 @@ index 67bf7ec26580e8a91be03b9b050912e071c2e458..437c46f1c55e8d030c1cbb9acc88885c
    std::set<std::string> expanded_;
    std::u16string notice_;
    base::RepeatingTimer timer_;
+-- 
+2.54.0 (Apple Git-157)
+

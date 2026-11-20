@@ -1,9 +1,13 @@
-From 2a42900371d1065fd5eb2a81882a602c839789ca Mon Sep 17 00:00:00 2001
+From 04f089e2976751ef69bfa7cc0cb11c70c3d80fff Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Wed, 11 Nov 2026 08:56:00 +0800
 Subject: [PATCH] test(access): cover Browser redirect reset and debug state
  isolation
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   1 +
+ .../access_site_proxy_product_unittest.cc     | 209 ++++++++++++++++++
+ 2 files changed, 210 insertions(+)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index bf0f7a6bd4978406afa3fbf3b682f29655624952..48bbe5c1601c3009f7f03d5acad21c3f08c53b57 100644
@@ -274,3 +278,6 @@ index 269ca0ea84f996b0a133527f844fb99187019a42..8c1dbb9ade812ed7e2277410781af455
 +
  }  // namespace
  }  // namespace aegis::access
+-- 
+2.54.0 (Apple Git-157)
+

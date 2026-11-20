@@ -1,10 +1,27 @@
-From 0ce07de35e934c6fe0b0aba65cff914e6654f243 Mon Sep 17 00:00:00 2001
+From 01d1fcd1c399c1306c097a814aa00b0d1880f744 Mon Sep 17 00:00:00 2001
 From: GCSA-ToolsTeam <316909304+GCSA-ToolsTeam@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 21:25:00 +0800
-Subject: [PATCH] 明确设置回调与空值类型并规范选择器
+Subject: [PATCH] =?UTF-8?q?=E6=98=8E=E7=A1=AE=E8=AE=BE=E7=BD=AE=E5=9B=9E?=
+ =?UTF-8?q?=E8=B0=83=E4=B8=8E=E7=A9=BA=E5=80=BC=E7=B1=BB=E5=9E=8B=E5=B9=B6?=
+ =?UTF-8?q?=E8=A7=84=E8=8C=83=E9=80=89=E6=8B=A9=E5=99=A8?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 保留现有错误处理、界面状态和访问边界，补齐 Codacy 逐条审查中的类型与表达式约束。
 ---
+ chrome/browser/resources/aegis/aegis.ts       | 40 +++++++++------
+ .../browser/resources/aegis/enhancements.css  |  2 +-
+ chrome/browser/resources/aegis/gestures.ts    | 32 +++++++-----
+ .../resources/aegis/mobile_settings.ts        | 12 +++--
+ .../browser/resources/aegis_agent/agent.css   |  4 +-
+ chrome/browser/resources/aegis_agent/agent.ts | 51 +++++++++++--------
+ .../resources/aegis_agent/language_packs.ts   | 10 ++--
+ .../resources/aegis_agent/mobile_settings.ts  | 22 +++++---
+ .../aegis_agent/reading_workspace.ts          |  2 +-
+ .../settings/aegis_page/aegis_page.ts         | 41 ++++++++-------
+ .../settings/downloads_page/downloads_page.ts |  6 ++-
+ 11 files changed, 131 insertions(+), 91 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/aegis.ts b/chrome/browser/resources/aegis/aegis.ts
 index cb3f7f1a72cf07377326a3cc7079085493ba864b..cf4d1da0aa9e058f5e6e61439cd55bd58b2158cb 100644
@@ -693,3 +710,6 @@ index c2d780befaf0b9072cd96b428fbc84b33a4ea066..b81a8a28c2a33bb4ba5f5900f672c2c2
                                    this.aegisSaved_ = saved;
                                    if (JSON.stringify(requested) ===
                                        JSON.stringify(
+-- 
+2.54.0 (Apple Git-157)
+

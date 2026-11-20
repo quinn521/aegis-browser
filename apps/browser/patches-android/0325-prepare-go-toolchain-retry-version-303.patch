@@ -1,8 +1,16 @@
-From 730c1225f3717ba1369cae332052ab52c4b0017a Mon Sep 17 00:00:00 2001
+From ee0968d17848e7c1e19b047f4c0370b32e936c05 Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Mon, 26 Oct 2026 16:32:00 +0800
-Subject: [PATCH] 为恢复官方Go工具链后的原生重试递增至303
+Subject: [PATCH] =?UTF-8?q?=E4=B8=BA=E6=81=A2=E5=A4=8D=E5=AE=98=E6=96=B9Go?=
+ =?UTF-8?q?=E5=B7=A5=E5=85=B7=E9=93=BE=E5=90=8E=E7=9A=84=E5=8E=9F=E7=94=9F?=
+ =?UTF-8?q?=E9=87=8D=E8=AF=95=E9=80=92=E5=A2=9E=E8=87=B3303?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
 ---
+ chrome/browser/ui/webui/help/aegis_github_update.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
 index 5d70561e7ea5b1147c62c18f5412f9f00a8725f9..eedb7f02580ef90d457109af946489546b08932e 100644
@@ -19,3 +27,6 @@ index 5d70561e7ea5b1147c62c18f5412f9f00a8725f9..eedb7f02580ef90d457109af94648954
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

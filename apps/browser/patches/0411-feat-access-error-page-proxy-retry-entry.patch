@@ -1,9 +1,27 @@
-From 89addf6ed662c5e0a75d1c0bfa8a40691d1487e3 Mon Sep 17 00:00:00 2001
+From 28fdc27356490fe4d3aab039d2391e1a4f4036ba Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Tue, 10 Nov 2026 19:01:48 +0800
 Subject: [PATCH] feat(access): route failed-page retry through Browser-owned
  navigation
+
 ---
+ chrome/browser/aegis/access/BUILD.gn          |   4 +
+ .../access_navigation_retry_tab_helper.cc     |  32 +++++
+ .../access_navigation_retry_tab_helper.h      |  10 ++
+ ...ss_navigation_retry_tab_helper_unittest.cc |  60 ++++++++
+ .../access_proxying_url_loader_factory.cc     |   6 +
+ .../access_site_proxy_bubble_controller.cc    | 132 ++++++++++++++++--
+ .../access_site_proxy_bubble_controller.h     |  12 ++
+ chrome/browser/net/BUILD.gn                   |   1 +
+ chrome/browser/net/net_error_tab_helper.cc    |  21 +++
+ chrome/browser/net/net_error_tab_helper.h     |   1 +
+ .../common/net/net_error_page_support.mojom   |   2 +
+ chrome/renderer/net/net_error_helper.cc       |  39 ++++++
+ chrome/renderer/net/net_error_helper.h        |   3 +-
+ .../renderer/net/net_error_page_controller.cc |   6 +
+ .../renderer/net/net_error_page_controller.h  |   2 +
+ components/neterror/resources/neterror.ts     |  32 ++++-
+ 16 files changed, 349 insertions(+), 14 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
 index c84dad6092a2700d6329f41a208777a94ced7c79..5e6d668e307ac0ab74f20411283fa92abfe54544 100644
@@ -449,7 +467,7 @@ index 8919d49d32d87d3d76c554f371a8896de234cd57..ea9a847953a4054ffdee8246db176f4b
  };
  
 diff --git a/chrome/browser/net/BUILD.gn b/chrome/browser/net/BUILD.gn
-index a8aa3bec8db55f63af65fe375d023c1addff1dd2..77c98d1ff535cb5343d925cb2e7a6e43df061659 100644
+index 98d725e2ee57998513273d88bf9ea22632dd8043..447e8613cedb034418affed0dc77679dedf4f6a7 100644
 --- a/chrome/browser/net/BUILD.gn
 +++ b/chrome/browser/net/BUILD.gn
 @@ -183,6 +183,7 @@ source_set("impl") {
@@ -617,7 +635,7 @@ index 49b9b32d7b908d0ae5058624be0c67056fdad92d..582a008e50a590a7316b8fe377750dd0
  };
  
 diff --git a/chrome/renderer/net/net_error_page_controller.cc b/chrome/renderer/net/net_error_page_controller.cc
-index 5a2377904dbee97d9bfcd9a3b2e82f875f140e16..ce4eb87fe0eb7661901319c35bdcdee180cbd30d 100644
+index a9ae539d7e6af15ff48c047514fdb219f4cc16e5..b494528bdb8c777bfd89f50b70cafac55493c6f4 100644
 --- a/chrome/renderer/net/net_error_page_controller.cc
 +++ b/chrome/renderer/net/net_error_page_controller.cc
 @@ -51,6 +51,10 @@ bool NetErrorPageController::DownloadButtonClick() {
@@ -631,15 +649,15 @@ index 5a2377904dbee97d9bfcd9a3b2e82f875f140e16..ce4eb87fe0eb7661901319c35bdcdee1
  
  bool NetErrorPageController::DetailsButtonClick() {
    return ButtonClick(NetErrorHelperCore::MORE_BUTTON);
-@@ -110,6 +114,8 @@ gin::ObjectTemplateBuilder NetErrorPageController::GetObjectTemplateBuilder(
-                  &NetErrorPageController::DownloadButtonClick)
-       .SetMethod("reloadButtonClick",
-                  &NetErrorPageController::ReloadButtonClick)
-+      .SetMethod("retryWithAegisProxy",
-+                 &NetErrorPageController::RetryWithAegisProxy)
-       .SetMethod("detailsButtonClick",
-                  &NetErrorPageController::DetailsButtonClick)
-       .SetMethod("diagnoseErrorsButtonClick",
+@@ -111,6 +115,8 @@ gin::ObjectTemplateBuilder NetErrorPageController::GetObjectTemplateBuilder(
+           "downloadButtonClick")
+       .SetMethod<&NetErrorPageController::ReloadButtonClick>(
+           "reloadButtonClick")
++      .SetMethod<&NetErrorPageController::RetryWithAegisProxy>(
++          "retryWithAegisProxy")
+       .SetMethod<&NetErrorPageController::DetailsButtonClick>(
+           "detailsButtonClick")
+       .SetMethod<&NetErrorPageController::DiagnoseErrorsButtonClick>(
 diff --git a/chrome/renderer/net/net_error_page_controller.h b/chrome/renderer/net/net_error_page_controller.h
 index 95beca0b0723640f62474c1229c864404c9d907e..07fb4f19a22b01fdb987ef638cf602af0a5b0b12 100644
 --- a/chrome/renderer/net/net_error_page_controller.h
@@ -731,3 +749,6 @@ index c638ccd028a6f78901ec398f6d759aea033eecc6..84280edee0f48cff782a6cea3ec560da
            ${data.reloadButton ? html`
              <button id="reload-button"
                  class="blue-button text-button"
+-- 
+2.54.0 (Apple Git-157)
+

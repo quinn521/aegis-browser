@@ -1,11 +1,19 @@
-From 3c5662832a0eafdd3b0d8dc4a9fdc0d2bcbfd129 Mon Sep 17 00:00:00 2001
+From 9f2cb04ded3f05a99e389df347c56e2cf9e3ba91 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 17:10:00 +0800
-Subject: [PATCH] 下载前申请 Android 存储空间并递增候选版本
+Subject: [PATCH] =?UTF-8?q?=E4=B8=8B=E8=BD=BD=E5=89=8D=E7=94=B3=E8=AF=B7?=
+ =?UTF-8?q?=20Android=20=E5=AD=98=E5=82=A8=E7=A9=BA=E9=97=B4=E5=B9=B6?=
+ =?UTF-8?q?=E9=80=92=E5=A2=9E=E5=80=99=E9=80=89=E7=89=88=E6=9C=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 采用系统可分配空间接口，保留 128 MiB 余量及下载前失败行为。
 严格 Lint 检查继续启用；候选递增至 Ver 6.0 (250)。
 ---
+ .../browser/about_settings/AegisAndroidUpdate.java | 14 +++++++++++---
+ chrome/browser/ui/webui/help/aegis_github_update.h |  4 ++--
+ 2 files changed, 13 insertions(+), 5 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java b/chrome/android/java/src/org/chromium/chrome/browser/about_settings/AegisAndroidUpdate.java
 index f666cb1d6d75994d80f4a5ec9ea1a78aae3397ac..b2d6dfb30b3191b51c32e5dbb7b3613dacd1525a 100644
@@ -65,3 +73,6 @@ index f1a551fd7a3ab665c6fb74e36340cbbb1e18b0c8..374c6c3235d65c732746cdcbd50b4067
  inline constexpr char kReleaseAPI[] =
      "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
  inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

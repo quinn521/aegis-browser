@@ -1,8 +1,13 @@
-From 6d6e3b5fb998ab4a19b3b288503f5d96c56216d4 Mon Sep 17 00:00:00 2001
+From c29651d9cc3ecc4b2ae0e2efdec3353e4d13d096 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Thu, 12 Nov 2026 02:45:10 +0800
 Subject: [PATCH] fix(access): honor an immediate error-page retry after Stop
+
 ---
+ .../access_site_proxy_bubble_controller.cc    | 39 +++++++++++++++----
+ .../access_site_proxy_bubble_controller.h     |  3 ++
+ .../access_site_proxy_product_unittest.cc     | 38 ++++++++++++++++++
+ 3 files changed, 73 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
 index 77fc6adb6ddf3e8e396a9c23230c5dfc61b6249d..c8914318aa746fe2867f2d89877c6c8beec250f1 100644
@@ -180,3 +185,6 @@ index 5c7255895769cb1f4c8c6c92488bbb000ed92a96..b3532fb584767853461a0eb462c15a76
  TEST_F(AccessRetryNavigationProductTest, StopBeforeRealAckRevokesOriginalRetry) {
    BeginHeldRetry();
    web_contents()->Stop();
+-- 
+2.54.0 (Apple Git-157)
+

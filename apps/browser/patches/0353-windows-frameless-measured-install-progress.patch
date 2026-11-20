@@ -1,8 +1,31 @@
-From 999211219013e0a6c7305add33f1a44eaf3bd897 Mon Sep 17 00:00:00 2001
+From 04dfaeb82e897d5660de7c7e4d79203f2a5aed9f Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@example.invalid>
 Date: Tue, 3 Nov 2026 15:17:25 +0800
 Subject: [PATCH] Refine frameless installer and report measured stage progress
+
 ---
+ chrome/installer/BUILD.gn                     |   8 +
+ chrome/installer/aegis_install_progress.h     | 139 +++++++
+ chrome/installer/mini_installer/BUILD.gn      |   7 +-
+ .../mini_installer/aegis_install_ui.cc        | 346 +++++++++++++-----
+ .../mini_installer/aegis_install_ui.h         |  23 +-
+ .../aegis_install_ui_unittest.cc              |  64 +++-
+ .../mini_installer/mini_installer.cc          |  54 ++-
+ chrome/installer/setup/BUILD.gn               |   2 +
+ .../setup/aegis_install_progress_unittest.cc  | 259 +++++++++++++
+ chrome/installer/setup/install.cc             |   5 +
+ chrome/installer/setup/installer_state.cc     |  59 +++
+ chrome/installer/setup/installer_state.h      |   8 +
+ chrome/installer/setup/unpack_archive.cc      |  44 ++-
+ chrome/installer/util/lzma_util.cc            |  20 +-
+ chrome/installer/util/lzma_util.h             |  14 +-
+ chrome/installer/util/work_item_list.cc       |  13 +
+ chrome/installer/util/work_item_list.h        |  10 +-
+ .../lzma_sdk/google/seven_zip_reader.cc       | 152 +++++++-
+ .../lzma_sdk/google/seven_zip_reader.h        |   9 +
+ 19 files changed, 1088 insertions(+), 148 deletions(-)
+ create mode 100644 chrome/installer/aegis_install_progress.h
+ create mode 100644 chrome/installer/setup/aegis_install_progress_unittest.cc
 
 diff --git a/chrome/installer/BUILD.gn b/chrome/installer/BUILD.gn
 index a4ad87db54e3c5a6b6022f3d9c1878db0b74e3ad..f0e54d69bfbf9a47efc64b3ec965370d0b5ece20 100644
@@ -2029,3 +2052,6 @@ index f4992dfc8f5ab4866f8e453b9692f103978bead7..e5595ac86bc43eddce924ecacd3b0d60
   private:
    SevenZipReader(std::unique_ptr<internal::SevenZipReaderImpl> impl,
                   Delegate& delegate);
+-- 
+2.54.0 (Apple Git-157)
+

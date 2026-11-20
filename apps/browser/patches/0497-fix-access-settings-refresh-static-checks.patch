@@ -1,4 +1,4 @@
-From 962dcb58a9567d51f38334a33e34d9520378d88d Mon Sep 17 00:00:00 2001
+From 39266b6f740f211afb4ed6e7f0eda3681a2d42cb Mon Sep 17 00:00:00 2001
 From: Aegis Upstream <aegis-upstream@example.invalid>
 Date: Sun, 15 Nov 2026 16:08:24 +0800
 Subject: [PATCH] =?UTF-8?q?=E6=95=B4=E5=90=88=E5=B7=B2=E5=90=88=E5=85=A5?=
@@ -97,5 +97,5 @@ index 153d5e1242ad597cd9a5d37929ddc08091c72526..d0b5c054744a5b2477abc89f15a21b09
    }
    override disconnectedCallback() {
 -- 
-2.52.0
+2.54.0 (Apple Git-157)
 

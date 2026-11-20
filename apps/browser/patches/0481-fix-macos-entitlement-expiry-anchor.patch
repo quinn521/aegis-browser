@@ -1,15 +1,18 @@
-From 13d4d0c969f13f75a0ba56d4732dc6a294b50633 Mon Sep 17 00:00:00 2001
+From 1e447ee5d07ba91b28f8b874c33455841ac7d3f4 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Thu, 12 Nov 2026 13:26:07 +0800
 Subject: [PATCH] fix(access-account): use server evaluation time for queued
  expiry
+
 ---
+ .../aegis/access/access_account_mac.mm        | 23 ++++++++++---------
+ 1 file changed, 12 insertions(+), 11 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_account_mac.mm b/chrome/browser/aegis/access/access_account_mac.mm
 index fec2f916405182398e4e1883d0f265659e86938b..74957b620c96503d56202fc91878b3ce0a63f9fc 100644
 --- a/chrome/browser/aegis/access/access_account_mac.mm
 +++ b/chrome/browser/aegis/access/access_account_mac.mm
-@@ -106,7 +106,7 @@ NSString* Freshness(int64_t age) {
+@@ -106,7 +106,7 @@ bool Nonempty(id value) {
    return @"unavailable";
  }
  
@@ -18,7 +21,7 @@ index fec2f916405182398e4e1883d0f265659e86938b..74957b620c96503d56202fc91878b3ce
    id body = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
    if (![body isKindOfClass:NSDictionary.class] ||
        ![body[@"entitlementAccountId"] isEqual:account]) return nil;
-@@ -133,22 +133,23 @@ NSDictionary* Entitlement(NSData* data, NSString* account) {
+@@ -133,22 +133,23 @@ bool Nonempty(id value) {
          *up > INT64_MAX || *down > INT64_MAX || *quota > INT64_MAX ||
          *up + *down != *used || *remaining != (*used < *quota ? *quota - *used : 0)) return nil;
      auto now = *received;
@@ -46,7 +49,7 @@ index fec2f916405182398e4e1883d0f265659e86938b..74957b620c96503d56202fc91878b3ce
      } else if (expired || ![status isEqual:(*used >= *quota ? @"exhausted" : @"active")]) {
        return nil;
      }
-@@ -158,7 +159,7 @@ NSDictionary* Entitlement(NSData* data, NSString* account) {
+@@ -158,7 +159,7 @@ bool Nonempty(id value) {
  }
  
  AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange change,
@@ -71,7 +74,7 @@ index fec2f916405182398e4e1883d0f265659e86938b..74957b620c96503d56202fc91878b3ce
      }
      if (now >= std::min([entitlement[@"periodEnd"] longLongValue],
                          [entitlement[@"expiresAt"] longLongValue])) {
-@@ -223,12 +223,13 @@ AegisAccountReply PrepareReply(NSDictionary* result, AegisAccountBindingChange c
+@@ -223,12 +223,13 @@ - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task
    uint64_t received = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
    [session finishTasksAndInvalidate];
    NSDictionary* result = nil;
@@ -96,3 +99,6 @@ index fec2f916405182398e4e1883d0f265659e86938b..74957b620c96503d56202fc91878b3ce
        return;
      }
      AegisAccountTransfer* transfer = [[AegisAccountTransfer alloc] init];
+-- 
+2.54.0 (Apple Git-157)
+
