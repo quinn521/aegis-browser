@@ -53,3 +53,7 @@ GitHub CLI 的既有身份已具备仓库写权限，可读取 runner；连接�
 首次真实 GN 检查发现 Agent WebUI 仍引用已移除的 `browser_public_dependencies`，两处截图入口缺少直接依赖，以及 Access Options 测试引用了 158 已限制可见性的 `Browser` 头文件。新增桌面 0523、Android 0349：WebUI 明确依赖 `browser_process`，截图实现拆为独立目标供入口引用；桌面测试使用 `BrowserWindowInterface`。现行 Chromium 序列为 523/349 项，原有补丁和失败记录保留。
 
 修复后的 macOS `gn gen --check` 已通过，生成 37,510 个目标；该诊断绑定原生前序 `773216cbe5647e754d971128905878e6970038ef` 与完整改动，随后提交为 `b4fc62e58db0ec4f7fabde1d87aa387bbafba59a`。编译和运行测试尚未开始；新候选的完整 lineage、质量门、独立复查及最终 SHA 的 CI 仍须另行核对。Android 本轮仅同步共用源码修复，不宣称 Android 编译或设备验收。
+
+### 整合上游 #207
+
+将上游 `8af307ce1284d4c2e0cf01bb5edf4024a1991747` 合入本地候选。原桌面 0502–0505 移入同一历史归档，按 158 的前序树重新导出为 0524–0527。截图菜单沿用 0523 已接入的独立目标，保留各平台条件和上游 Windows 启动修复。共用的 `StoragePartition` 完整类型修复同步为 Android 0350。活动序列现在是桌面 527 项、Android 350 项。当前验证在本机 macOS 进行。

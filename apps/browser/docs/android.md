@@ -1,4 +1,4 @@
-> **2026-11-20**: Android source is pinned to `158.0.8127.42` with 349 Chromium patches and three V8 patches; the desktop pin is `158.0.8127.37`. Product metadata is Ver 7.4 (341), versionCode `2007000341`. This is source preparation. APK build, signing and physical-device acceptance remain pending; current execution is limited to local Mac development.
+> **2026-11-20**: Android source is pinned to `158.0.8127.42` with 350 Chromium patches and three V8 patches; the desktop pin is `158.0.8127.37`. Product metadata is Ver 7.4 (341), versionCode `2007000341`. This is source preparation. APK build, signing and physical-device acceptance remain pending; current execution is limited to local Mac development.
 
 > **2026-11-14**：本轮Android源码为正式 Stable `157.0.8103.78`，桌面为 `157.0.8103.79`；使用独立335项补丁，含310产品版本准备。原主线新增账户、本地核心及诊断功能按既定Mac平台设计验证，不宣称Android已实现。APK、原签名及真机验收仍待完成。
 

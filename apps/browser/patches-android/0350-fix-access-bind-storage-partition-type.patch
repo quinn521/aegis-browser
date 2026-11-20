@@ -1,0 +1,23 @@
+From 4ecc885b0c16d110471090d460ddebe45da90205 Mon Sep 17 00:00:00 2001
+From: Aegis Development <development@example.invalid>
+Date: Thu, 19 Nov 2026 22:52:48 +0800
+Subject: [PATCH] fix(access): include storage partition type for callback
+ binding
+
+---
+ .../browser/aegis/access/access_proxying_url_loader_factory.cc  | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+index f58c3577ea82b3d6f752234d73f8bf4924a1b45d..ef42d78f531306b03bca5882519b1242827b1241 100644
+--- a/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
++++ b/chrome/browser/aegis/access/access_proxying_url_loader_factory.cc
+@@ -27,6 +27,8 @@
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/page.h"
+ #include "content/public/browser/render_frame_host.h"
++// BindOnce 在创建异步回调时需要完整类型来检查分区指针的绑定约束。
++#include "content/public/browser/storage_partition.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_observer.h"
+ #include "mojo/public/cpp/bindings/receiver.h"

@@ -31,3 +31,7 @@ apps/browser/overlay/third_party/aegis_libtorrent/UPSTREAM_ROUTE_H.txt whitespac
 
 # 保留随 OCR 分发的上游许可证原始字节及清单摘要。
 apps/browser/overlay/chrome/browser/resources/aegis/ocr_assets/tesseract-core-LICENSE.txt whitespace=-blank-at-eof
+
+# Preserve unified diff context and signatures in the PR 174 source archive.
+apps/browser/patches/archive/main-before-pr174-integration-20261120/*.patch whitespace=-blank-at-eol,-blank-at-eof
+apps/browser/patches-android/archive/main-before-pr174-integration-20261120/*.patch whitespace=-blank-at-eol,-blank-at-eof
