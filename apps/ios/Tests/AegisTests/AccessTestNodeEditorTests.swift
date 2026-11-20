@@ -417,6 +417,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             guard preparationFailures < 3 else { XCTFail("Repeated preparation failures; campaign stopped"); return }
         }
 #endif
+
     }
 
     /// Explicit operator-supplied inputs only. Never uses any member of the domain campaign as a probe.
@@ -455,6 +456,166 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let retirementDeadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
+    }
+}
+#endif
+
+#if DEBUG
+/// Explicit physical protocol admission, independent of the domain campaign.
+@MainActor
+final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
+    private static var quarantined: [(WKWebView, AccessGoEmbeddedCore, UIWindow)] = []
+
+    func testControlledSOCKSWebKitAdmission() async throws {
+#if targetEnvironment(simulator)
+        throw XCTSkip("SOCKS OS admission requires the designated physical device")
+#else
+        let env = ProcessInfo.processInfo.environment
+        guard env["AEGIS_TEST_SOCKS_PROBE"] == "1",
+              env["AEGIS_TEST_CAMPAIGN_DEVICE"] == "ios-device-2d62695fc7",
+              let raw = env["AEGIS_TEST_CONTROLLED_URL"], let url = URL(string: raw),
+              let host = url.host,
+              let nonce = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .first(where: { $0.name == "nonce" })?.value else {
+            throw XCTSkip("Explicit physical SOCKS admission inputs required")
+        }
+        var system = utsname()
+        uname(&system)
+        let model = withUnsafePointer(to: &system.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
+        }
+        guard model == "iPhone14,3" else { XCTFail("Wrong physical device model"); return }
+        let repository = AccessTestNodeRepository.shared
+        guard repository.allowsEditing(isPrivate: false) else { XCTFail("Internal admission required"); return }
+        let parameters = try repository.savedNode().parameters()
+        let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters)
+        var config = try XCTUnwrap(JSONSerialization.jsonObject(with: outbound.embeddedInstanceJSONData()) as? [String: Any])
+        // Fixed DEV admission fixture only; product listeners use assigned ports.
+        config["inbounds"] = [["listen": "127.0.0.1", "port": 10806, "protocol": "socks",
+                              "settings": ["auth": "noauth", "udp": false]]]
+        let core = try AccessGoEmbeddedCore(isolated: true)
+        try await core.start(configData: JSONSerialization.data(withJSONObject: config))
+        var result: [String: Any] = ["device": "ios-device-2d62695fc7", "model": model,
+            "os": ProcessInfo.processInfo.operatingSystemVersionString,
+            "sourceSHA": env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
+            "bundle": Bundle.main.bundleIdentifier ?? "unknown", "protocol": "socks5",
+            "port": 10806, "nonce": nonce, "status": "probe-incomplete"]
+        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ios208-socks-admission.json")
+        defer {
+            if let bytes = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
+                try? bytes.write(to: file, options: .atomic)
+            }
+        }
+        do {
+            try await Self.nativeSOCKSConnect(host: host, port: 443)
+            result["nativeConnect"] = true
+        } catch {
+            result["nativeConnect"] = false
+            result["errorDomain"] = (error as NSError).domain
+            result["errorCode"] = (error as NSError).code
+            await core.stop()
+            XCTFail("Native SOCKS fixture did not admit CONNECT; no OS conclusion")
+            return
+        }
+        let store = WKWebsiteDataStore.nonPersistent()
+        var proxy = ProxyConfiguration(socksv5Proxy: .hostPort(host: "127.0.0.1", port: 10806))
+        proxy.allowFailover = false
+        store.proxyConfigurations = [proxy]
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = store
+        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: configuration)
+        let observer = SOCKSProbeNavigation()
+        view.navigationDelegate = observer
+        let window = UIWindow(frame: view.frame)
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.addSubview(view)
+        window.makeKeyAndVisible()
+        view.load(URLRequest(url: url))
+        let deadline = Date().addingTimeInterval(30)
+        while !observer.finished, observer.failure == nil, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let html = observer.finished ? (try? await view.evaluateJavaScript("document.documentElement.textContent") as? String) : nil
+        result["proxyCount"] = store.proxyConfigurations.count
+        result["allowFailover"] = proxy.allowFailover
+        result["httpStatus"] = observer.httpStatus ?? 0
+        result["documentContainsNonce"] = html?.contains(nonce) == true
+        result["status"] = observer.finished && observer.httpStatus == 200 && html?.contains(nonce) == true
+            ? "webkit-response-verified" : "webkit-not-admitted"
+        if let failure = observer.failure {
+            result["errorDomain"] = failure.domain
+            result["errorCode"] = failure.code
+        }
+        // Keep ownership until the actual old document has been replaced.
+        observer.retirement = nil
+        view.stopLoading()
+        observer.retirement = view.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">",
+                                                  baseURL: URL(string: "https://aegis.invalid/socks-retired"))
+        let stopDeadline = Date().addingTimeInterval(10)
+        while !observer.retired, Date() < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
+        result["retired"] = observer.retired
+        if observer.retired {
+            await core.stop()
+            view.removeFromSuperview()
+            window.isHidden = true
+        } else {
+            Self.quarantined.append((view, core, window))
+            XCTFail("SOCKS fixture document retirement unconfirmed; listener retained until process exit")
+        }
+#endif
+    }
+
+    private static func nativeSOCKSConnect(host: String, port: UInt16) async throws {
+        let connection = NWConnection(host: "127.0.0.1", port: 10806, using: .tcp)
+        connection.start(queue: DispatchQueue(label: "ios208-socks-admission"))
+        let deadline = Task { try? await Task.sleep(for: .seconds(15)); connection.cancel() }
+        defer { deadline.cancel(); connection.cancel() }
+        func send(_ bytes: Data) async throws {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                connection.send(content: bytes, completion: .contentProcessed { error in
+                    if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                })
+            }
+        }
+        func receive(_ count: Int) async throws -> Data {
+            try await withCheckedThrowingContinuation { continuation in
+                connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                    if let error { continuation.resume(throwing: error) }
+                    else if let data, data.count == count { continuation.resume(returning: data) }
+                    else { continuation.resume(throwing: URLError(.badServerResponse)) }
+                }
+            }
+        }
+        try await send(Data([5, 1, 0]))
+        guard try await receive(2) == Data([5, 0]), host.utf8.count < 256 else { throw URLError(.badServerResponse) }
+        var request = Data([5, 1, 0, 3, UInt8(host.utf8.count)])
+        request.append(contentsOf: host.utf8)
+        request.append(contentsOf: [UInt8(port >> 8), UInt8(port & 255)])
+        try await send(request)
+        let reply = try await receive(10)
+        guard reply[0] == 5, reply[1] == 0 else { throw URLError(.cannotConnectToHost) }
+    }
+
+    private final class SOCKSProbeNavigation: NSObject, WKNavigationDelegate {
+        var finished = false
+        var failure: NSError?
+        var httpStatus: Int?
+        var retirement: WKNavigation?
+        var retired = false
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished = true }
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            if let navigation, navigation === retirement { retired = true }
+        }
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            failure = error as NSError
+        }
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failure = error as NSError }
+        func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                     decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+            if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
+            decisionHandler(.allow)
+        }
     }
 }
 #endif
