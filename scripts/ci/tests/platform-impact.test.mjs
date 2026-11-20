@@ -143,13 +143,30 @@ test('quality preflight selects Linux docs and preserves full checks on all othe
   assert.match(workflow.concurrency.group, /github.ref, github.sha/u);
 });
 
+const archiveScript = resolve('scripts/ci/run-ios-unsigned-archive.sh');
+
+function prepareArchiveFixture(root) {
+  const source = join(root, 'Source');
+  mkdirSync(join(source, 'apps/ios/Aegis.xcodeproj'), {recursive: true});
+  mkdirSync(join(source, 'apps/ios/EmbeddedCore'), {recursive: true});
+  writeFileSync(join(source, 'apps/ios/Aegis.xcodeproj/project.pbxproj'), '// fixture\n');
+  writeFileSync(join(source, 'apps/ios/EmbeddedCore/embedded-core-lock.json'), '{}\n');
+  for (const name of ['tmp', 'DerivedData', 'SourcePackages', 'PackageCache', 'ModuleCache']) {
+    mkdirSync(join(root, name), {recursive: true});
+  }
+  return source;
+}
+
 test('archive compiler diagnostics reach Actions and retain exit status before sealing', () => {
   const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
   const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
+  assert.match(step.run, /run-ios-unsigned-archive\.sh/u);
+  assert.equal(step.env.IOS_CI_SOURCE, '${{ steps.storage.outputs.source }}');
   const root = mkdtempSync(join(tmpdir(), 'archive-diagnostics-'));
   const bin = join(root, 'bin');
   const trace = join(root, 'python-calls.txt');
   mkdirSync(bin);
+  prepareArchiveFixture(root);
   writeFileSync(join(bin, 'python3'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$ARCHIVE_TEST_TRACE"\n');
   writeFileSync(join(bin, 'xcodebuild'), '#!/bin/bash\nprintf "archive-compiler-diagnostic\\n" >&2\nexit "$ARCHIVE_TEST_EXIT"\n');
   chmodSync(join(bin, 'python3'), 0o755);
@@ -157,8 +174,9 @@ test('archive compiler diagnostics reach Actions and retain exit status before s
   try {
     for (const exitCode of [65, 0]) {
       writeFileSync(trace, '');
-      const result = spawnSync('bash', ['-e', '-c', step.run], {encoding: 'utf8', env: {
+      const result = spawnSync('bash', [archiveScript], {encoding: 'utf8', env: {
         ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
+        IOS_CI_SOURCE: join(root, 'Source'),
         ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_EXIT: String(exitCode),
       }});
       assert.equal(result.status, exitCode, result.stderr);
@@ -174,9 +192,11 @@ test('archive compiler diagnostics reach Actions and retain exit status before s
 test('archive package resolution inherits the existing GitHub transport policy', () => {
   const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
   const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
+  assert.match(step.run, /run-ios-unsigned-archive\.sh/u);
   const root = mkdtempSync(join(tmpdir(), 'archive-git-policy-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
+  prepareArchiveFixture(root);
   const trace = join(root, 'git-policy.txt');
   const args = join(root, 'xcode-args.txt');
   const config = join(root, 'gitconfig');
@@ -199,8 +219,9 @@ exit 65
   }
   try {
     const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_CONFIG_')));
-    const result = spawnSync('bash', ['-e', '-c', step.run], {encoding: 'utf8', env: {
+    const result = spawnSync('bash', [archiveScript], {encoding: 'utf8', env: {
       ...environment, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
+      IOS_CI_SOURCE: join(root, 'Source'),
       GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1',
       ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
     }});
