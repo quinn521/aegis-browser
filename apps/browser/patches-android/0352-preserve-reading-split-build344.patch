@@ -1,0 +1,51 @@
+From b5873165e13a44c191a466a053395257ca16079f Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Fri, 20 Nov 2026 19:16:02 +0800
+Subject: [PATCH] Preserve the reading split layout on Chromium 158 (build 344)
+
+---
+ chrome/browser/ui/webui/aegis_agent/reading_workspace.cc | 5 ++++-
+ chrome/browser/ui/webui/help/aegis_github_update.h       | 4 ++--
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/ui/webui/aegis_agent/reading_workspace.cc b/chrome/browser/ui/webui/aegis_agent/reading_workspace.cc
+index f80c60690da2da921aeae35d5e514cadd3aa7bd4..24b985dde1e2846fb55f240a3c75ebaf3a6b0043 100644
+--- a/chrome/browser/ui/webui/aegis_agent/reading_workspace.cc
++++ b/chrome/browser/ui/webui/aegis_agent/reading_workspace.cc
+@@ -27,6 +27,7 @@
+ #include "components/os_crypt/async/browser/os_crypt_async.h"
+ #include "components/os_crypt/async/common/encryptor.h"
+ #include "components/prefs/pref_service.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "components/tabs/public/tab_interface.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+@@ -387,7 +388,9 @@ void AegisReadingWorkspace::Dispatch(
+       if (!exists) additions.Append(std::move(item));
+     }
+     if (op == "split") {
+-      const bool ok = tabs->CreateSplit(handles).has_value();
++      // 继续使用旧接口内部的默认并排布局。
++      const bool ok =
++          tabs->CreateSplit(handles, split_tabs::SplitTabVisualData()).has_value();
+       Reply(std::move(callback), {}, ok ? "" : "split_unavailable"); return;
+     }
+     auto next = records_.Clone();
+diff --git a/chrome/browser/ui/webui/help/aegis_github_update.h b/chrome/browser/ui/webui/help/aegis_github_update.h
+index dbe4023627ff6ab9bc81e207b3937bb241681838..c46066b6c012d965f5e38ed266d3f66c21676717 100644
+--- a/chrome/browser/ui/webui/help/aegis_github_update.h
++++ b/chrome/browser/ui/webui/help/aegis_github_update.h
+@@ -21,8 +21,8 @@ class SimpleURLLoader;
+ 
+ namespace aegis {
+ // 产品版本独立于 Chromium 内核版本；发布 tag 使用对应产品版本。
+-inline constexpr char kProductVersion[] = "7.5.0.342";
+-inline constexpr char kProductVersionLabel[] = "Ver 7.5 (342)";
++inline constexpr char kProductVersion[] = "7.5.0.344";
++inline constexpr char kProductVersionLabel[] = "Ver 7.5 (344)";
+ inline constexpr char kReleaseAPI[] =
+     "https://api.github.com/repos/gcsagroup/aegis-browser/releases/latest";
+ inline constexpr char kReleasePage[] =
+-- 
+2.54.0 (Apple Git-157)
+

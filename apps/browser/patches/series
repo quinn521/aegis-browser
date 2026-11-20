@@ -526,3 +526,4 @@
 0526-fix-access-bind-storage-partition-type.patch
 0527-fix-windows-access-network-environment.patch
 0528-align-chromium-158-product-version-342.patch
+0529-preserve-reading-split-build344.patch
