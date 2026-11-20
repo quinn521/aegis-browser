@@ -150,6 +150,7 @@ jobs:
       - name: Prepare locked EmbeddedCore XCFramework
         env:
           IOS_CI_ROOT: ${{ steps.storage.outputs.root }}
+          IOS_CI_SOURCE: ${{ steps.storage.outputs.source }}
         run: |
           export MISE_TRUSTED_CONFIG_PATHS="${MISE_TRUSTED_CONFIG_PATHS:-$PWD}"
           if command -v mise >/dev/null 2>&1; then
@@ -167,11 +168,13 @@ jobs:
             export PATH="${GOPATH:-$HOME/go}/bin:$PATH"
             gomobile init
           fi
-          # Hosted gomobile slices drift across clean runners; keep source pins
-          # strict in the build script, but accept the rebuild digests for archive.
+          # Build against the job-private Source tree so archive verify/seal see the
+          # same absolute Xcode inputs after cancel isolation.
           AEGIS_EMBEDDED_CORE_DIGEST_MODE=ci-rebuild \
             bash scripts/release/prepare-ios-access-core.sh \
-              apps/ios/EmbeddedCore/embedded-core-lock.json "$IOS_CI_ROOT/EmbeddedCore"
+              "$IOS_CI_SOURCE/apps/ios/EmbeddedCore/embedded-core-lock.json" \
+              "$IOS_CI_ROOT/EmbeddedCore" \
+              "$IOS_CI_SOURCE"
           test -d "$IOS_CI_ROOT/EmbeddedCore/AegisEmbeddedCore.xcframework"
       - name: Compile uncredentialed native archive
         env:
