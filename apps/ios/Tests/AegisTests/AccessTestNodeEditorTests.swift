@@ -407,6 +407,31 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertTrue(page.retirementEvents.contains("replacement-committed"))
     }
 
+    func testInterruptedRetirementRequiresFreshLocalCommitAndKeepsTheBinding() async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
+        let page = AccessTestNodePage(repository: repository, testingCore: PageCore())
+        await page.open(URL(string: "https://example.invalid/pending")!)
+        let view = try XCTUnwrap(page.webView)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        window.addSubview(view); view.frame = window.bounds; window.makeKeyAndVisible()
+        defer { view.removeFromSuperview(); window.isHidden = true }
+        page.close()
+        let interrupted = try XCTUnwrap(page.retirementNavigation)
+        view.stopLoading()
+        // Inject a cancellation for the exact replacement, then deliver its stale
+        // commit before another actor turn. Neither callback is a retirement ack.
+        page.webView(view, didFailProvisionalNavigation: interrupted, withError: URLError(.cancelled))
+        page.webView(view, didCommit: interrupted)
+        XCTAssertNotNil(page.endpoint, "An interrupted replacement cannot release the binding")
+        let deadline = Date().addingTimeInterval(10)
+        while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNil(page.endpoint, "Only a fresh local replacement commit may release the binding")
+        XCTAssertTrue(page.retirementEvents.contains("replacement-retry-scheduled"))
+        XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
+    }
+
     private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
         let running = Mutex(false)
         var isRunning: Bool { running.withLock { $0 } }

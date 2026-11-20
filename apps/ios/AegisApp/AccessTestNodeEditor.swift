@@ -374,7 +374,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var observerID: UUID?
     private var deadlineTask: Task<Void, Never>?
     private var retirement: (() -> Void)?
-    private var retirementNavigation: WKNavigation?
+    private(set) var retirementNavigation: WKNavigation?
     private let retirementURL = URL(string: "https://aegis.invalid/retired/" + UUID().uuidString)!
     private var retiringOwner: AccessTestNodePage?
     /// Bounded, secret-free lifecycle evidence; no URL or document content.
