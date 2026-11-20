@@ -363,6 +363,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private(set) var webView: WKWebView?
     private(set) var status = "正在准备连接"
     private(set) var endpoint: AccessManagedProxyEndpoint?
+    /// Read-only identity of the store actually created; survives retirement for receipts.
+    private(set) var initialBinding: AccessManagedProxyEndpoint?
     private let repository: AccessTestNodeRepository
     private let registry = AccessHostDataStoreRegistry()
     private let testingCore: (any AccessEmbeddedCoreControlling)?
@@ -458,6 +460,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             let view = WKWebView(frame: .zero, configuration: configuration)
             view.navigationDelegate = self
             webView = view
+            initialBinding = result.endpoint
             status = "正在加载"
             view.load(URLRequest(url: url))
         } catch {

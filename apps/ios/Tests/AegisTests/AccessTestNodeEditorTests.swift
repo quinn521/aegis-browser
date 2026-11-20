@@ -303,6 +303,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let deadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "A proxy-bound pending document must retire before its port is released")
+        XCTAssertNotNil(page.initialBinding, "Retirement must retain its immutable receipt identity")
         XCTAssertEqual(view.url?.host, "aegis.invalid")
         XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
     }
@@ -455,8 +456,11 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "state":timedOut ? "timeout" : page.status,
                         "errorDomain":page.failureDomain ?? "", "errorCode":page.failureCode ?? 0,
                         "httpStatus":page.httpStatus ?? 0, "documentPrefixSHA256":documentDigest,
-                        "endpoint":page.endpoint?.identity ?? "", "generation":page.endpoint?.generation ?? 0,
-                        "actualProtocol":page.selectedTransport == .socks5 ? "socks5" : "http", "network":network.0])
+                        "endpoint":page.initialBinding?.identity ?? "", "generation":page.initialBinding?.generation ?? 0,
+                        "port":page.initialBinding?.port ?? 0,
+                        "phase":page.initialBinding == nil ? "preparation" : "navigation",
+                        "actualProtocol":page.initialBinding.map { $0.transport == .socks5 ? "socks5" : "http" } ?? "unbound",
+                        "network":network.0])
             consecutiveNetworkFailures = timedOut || page.failureDomain == NSURLErrorDomain ? consecutiveNetworkFailures + 1 : 0
             preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
             page.close()
@@ -550,7 +554,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         XCTAssertEqual(page.status, "已连接", "Controlled page did not finish through its bound profile")
         XCTAssertNotNil(page.endpoint)
         XCTAssertEqual(page.selectedTransport, expectedTransport)
-        receipt["port"] = page.endpoint?.port
+        receipt["port"] = page.initialBinding?.port
+        receipt["endpoint"] = page.initialBinding?.identity
+        receipt["generation"] = page.initialBinding?.generation
         receipt["httpStatus"] = page.httpStatus
         XCTAssertNotEqual(page.endpoint?.port, 0)
         if expectedTransport == .socks5 { XCTAssertNotEqual(page.endpoint?.port, 1080) }
@@ -575,6 +581,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         while page.endpoint != nil, Date() < retirementDeadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = page.endpoint == nil
+        XCTAssertNotNil(page.initialBinding)
     }
 }
 #endif
