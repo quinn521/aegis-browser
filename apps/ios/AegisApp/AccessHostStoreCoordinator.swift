@@ -27,6 +27,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private static let accelerationModeKey = "browser.websiteAcceleration.mode"
     private static let accelerationChoicesKey = "browser.websiteAcceleration.siteChoices.v1"
     private static let accelerationCategoriesKey = "browser.websiteAcceleration.categories"
+    private static let overseasEnabledKey = "browser.websiteAcceleration.overseasEnabled.v1"
+    private static let overseasListKey = "browser.websiteAcceleration.overseasHosts.v1"
     private let websiteRoutePolicy: AccessWebsiteRoutePolicy
     let geoSiteCache: AccessGeoSiteCache?
     private var geoSiteView: AccessGeoSiteCache.View?
@@ -37,6 +39,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private var geoSiteRefresh: (context: AccessGeoSiteCache.Context, task: Task<Void, Never>)?
     private static let geoSiteRetry: [TimeInterval] = [60, 300, 1_800, 21_600]
     @Published private(set) var websiteAccelerationMode: AccessWebsiteAccelerationMode = .manual
+    @Published private(set) var overseasAccelerationEnabled = false
+    @Published private var overseasRules: AccessOverseasRuleList?
+    var overseasAccelerationHostCount: Int { overseasRules?.count ?? 0 }
     private var websiteRouteChoices: [AccessSiteHost: AccessWebsiteRouteChoice] = [:]
     private let categoryOwner = UUID()
     private var categorySelectionRevision: UInt64 = 0
@@ -81,7 +86,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         websiteRoutePolicy: AccessWebsiteRoutePolicy = AccessWebsiteRoutePolicy(),
         geoSiteCache: AccessGeoSiteCache? = nil,
         geoSiteTransport: AccessGeoSiteUpdateTransport? = nil,
-        registry: AccessHostDataStoreRegistry = AccessHostDataStoreRegistry()
+        registry: AccessHostDataStoreRegistry = AccessHostDataStoreRegistry(),
+        overseasRules: AccessOverseasRuleList? = nil
     ) {
         self.registry = registry
         self.publisher = publisher ?? AccessFailClosedProxyEntryPublisher()
@@ -94,6 +100,14 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         self.geoSiteCache = channel == .dev ? geoSiteCache : nil
         self.geoSiteTransport = self.geoSiteCache == nil ? nil : geoSiteTransport
         geoSiteView = self.geoSiteCache?.view
+        if self.releaseChannel == .dev {
+            if let stored = locationPreferences?.data(forKey: Self.overseasListKey) {
+                self.overseasRules = AccessOverseasRuleList(data: stored)
+            } else {
+                self.overseasRules = overseasRules
+            }
+            overseasAccelerationEnabled = locationPreferences?.bool(forKey: Self.overseasEnabledKey) ?? false
+        }
         if self.releaseChannel == .dev {
             if locationPreferences?.object(forKey: Self.accelerationCategoriesKey) == nil {
                 selectedWebsiteCategories = [.debian]
@@ -285,6 +299,26 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private func hasValidRouteOwner(for tab: BrowserTab) -> Bool {
         !accelerationAllowed(scopeID: tab.browsingScopeID, isPrivate: tab.profile.isPrivate)
             || offersWebsiteAcceleration(for: tab)
+    }
+
+    @discardableResult
+    func installOverseasAccelerationList(_ data: Data, for tab: BrowserTab) -> Bool {
+        guard offersWebsiteAcceleration(for: tab), let rules = AccessOverseasRuleList(data: data) else { return false }
+        if overseasRules?.canonicalData == rules.canonicalData { return true }
+        changeWebsitePolicy(.catalogue) {
+            self.overseasRules = rules
+            locationPreferences?.set(rules.canonicalData, forKey: Self.overseasListKey)
+        }
+        return true
+    }
+
+    func setOverseasAccelerationEnabled(_ enabled: Bool, for tab: BrowserTab) {
+        guard offersWebsiteAcceleration(for: tab), overseasAccelerationEnabled != enabled,
+              !enabled || overseasRules != nil else { return }
+        changeWebsitePolicy(.catalogue) {
+            overseasAccelerationEnabled = enabled
+            locationPreferences?.set(enabled, forKey: Self.overseasEnabledKey)
+        }
     }
 
     func setWebsiteAccelerationMode(_ mode: AccessWebsiteAccelerationMode, for tab: BrowserTab) {
@@ -607,7 +641,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool {
-        guard let host = Self.httpHost(url), tab.hostCoordinator === self, geoSiteCache != nil else { return false }
+        guard let host = Self.httpHost(url), tab.hostCoordinator === self else { return false }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
         return websiteRoute(tab: tab, url: url, key: key) == .indeterminate
     }
@@ -661,13 +695,22 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             return .landing(landing)
         }
         guard accelerationAllowed(for: key) else { return .legacy }
+        let overseas = overseasMatch(url)
+        if overseas == .managed { return .service }
         let smart = smartMatch(url)
         if smart == .managed { return .service }
         // A one-shot address action, explicit recovery group, or an already
         // protected document retains its independent authorization.
         if legacyRouteIntent(tab: tab, key: key) == .on { return .legacy }
-        if smart == .indeterminate { return .indeterminate }
+        if smart == .indeterminate || overseas == .indeterminate { return .indeterminate }
         return websiteAccelerationMode == .smart ? .original : .legacy
+    }
+
+    private func overseasMatch(_ url: URL) -> AccessGeoSiteCache.Match {
+        guard overseasAccelerationEnabled, let host = AccessWebsiteRoutePolicy.websiteHost(url),
+              AccessLocalSite.classify(host.rawValue) == nil else { return .original }
+        guard let rules = overseasRules else { return .indeterminate }
+        return rules.contains(host) ? .managed : .original
     }
 
     private func smartMatch(_ url: URL) -> AccessGeoSiteCache.Match {

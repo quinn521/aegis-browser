@@ -535,6 +535,125 @@
         }
       }
     },
+    "国外加速": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "International acceleration"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "國外加速"
+          }
+        }
+      }
+    },
+    "自动加速清单内网站": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically accelerate listed sites"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自動加速清單內網站"
+          }
+        }
+      }
+    },
+    "导入域名清单": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import domain list"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "匯入網域清單"
+          }
+        }
+      }
+    },
+    "域名数量": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domains"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "網域數量"
+          }
+        }
+      }
+    },
+    "请导入现有的国外加速域名清单。": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import the existing domain list for international acceleration."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "請匯入現有的國外加速網域清單。"
+          }
+        }
+      }
+    },
+    "清单网站及页面内资源会使用 Access。": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Listed websites and resources on their pages use Access."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清單網站及頁面內資源會使用 Access。"
+          }
+        }
+      }
+    },
+    "域名清单无法验证。": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The domain list could not be verified."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法驗證網域清單。"
+          }
+        }
+      }
+    },
     "国内加速": {
       "extractionState": "manual",
       "localizations": {

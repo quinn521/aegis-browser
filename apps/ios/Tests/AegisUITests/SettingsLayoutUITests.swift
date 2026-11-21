@@ -313,6 +313,7 @@ final class SettingsLayoutUITests: XCTestCase {
         openSettings(app)
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
         XCTAssertFalse(domestic.exists)
+        XCTAssertFalse(app.buttons["overseas-acceleration-link"].exists)
         XCTAssertFalse(app.buttons["website-acceleration-categories"].exists)
         capture("私密浏览-设置隐藏国内加速", app)
     }
@@ -452,6 +453,25 @@ final class SettingsLayoutUITests: XCTestCase {
         let verifiedDomains = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "expanded.example.com")).firstMatch
         XCTAssertTrue(reveal(verifiedDomains, app))
         capture("加速分类-批准新增范围并重新启动", app)
+    }
+
+    func testOverseasAccelerationOffersLocalListImportAndDefaultsOff() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+        let entry = app.buttons["overseas-acceleration-link"]
+        XCTAssertTrue(reveal(entry, app))
+        XCTAssertEqual(entry.label, "国外加速")
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["国外加速"].waitForExistence(timeout: 5))
+        let toggle = app.switches["overseas-acceleration-toggle"]
+        XCTAssertTrue(reveal(toggle, app))
+        XCTAssertEqual(toggle.value as? String, "0")
+        XCTAssertFalse(toggle.isEnabled)
+        XCTAssertTrue(reveal(app.buttons["overseas-acceleration-import"], app))
     }
 
     func testWebsiteAccelerationModesInDevSettings() {

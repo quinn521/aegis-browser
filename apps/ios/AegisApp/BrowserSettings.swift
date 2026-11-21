@@ -2,6 +2,7 @@ import AgentKit
 import AccessKit
 import BrowserKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ImageOcrConfiguration: Codable {
     enum Mode: String, CaseIterable, Codable {
@@ -68,6 +69,10 @@ struct BrowserSettingsView: View {
                             if let current = browser.activeTab { DomesticAccelerationSettingsView(tab: current) }
                         }
                         .accessibilityIdentifier("domestic-acceleration-link")
+                        NavigationLink("国外加速") {
+                            if let current = browser.activeTab { OverseasAccelerationSettingsView(tab: current) }
+                        }
+                        .accessibilityIdentifier("overseas-acceleration-link")
                     }
                     Button("打开系统 App 设置") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -145,6 +150,65 @@ struct BrowserSettingsView: View {
     }
 }
 
+
+private struct OverseasAccelerationSettingsView: View {
+    @EnvironmentObject private var browser: BrowserSession
+    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
+    @State private var importingList = false
+    @State private var importFailed = false
+    let tab: BrowserTab
+
+    private var enabled: Binding<Bool> {
+        Binding(
+            get: { hostStores.overseasAccelerationEnabled },
+            set: { hostStores.setOverseasAccelerationEnabled($0, for: tab) }
+        )
+    }
+
+    var body: some View {
+        Form {
+            if browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) {
+                Section {
+                    Toggle("自动加速清单内网站", isOn: enabled)
+                        .disabled(hostStores.overseasAccelerationHostCount == 0 && !hostStores.overseasAccelerationEnabled)
+                        .accessibilityIdentifier("overseas-acceleration-toggle")
+                    Button("导入域名清单", systemImage: "square.and.arrow.down") { importingList = true }
+                        .accessibilityIdentifier("overseas-acceleration-import")
+                    if hostStores.overseasAccelerationHostCount > 0 {
+                        LabeledContent("域名数量", value: hostStores.overseasAccelerationHostCount.formatted())
+                    }
+                } footer: {
+                    if hostStores.overseasAccelerationHostCount == 0 {
+                        Text("请导入现有的国外加速域名清单。")
+                    } else {
+                        Text("清单网站及页面内资源会使用 Access。")
+                    }
+                    if !hostStores.offersLocationService { Text("加速服务未配置。") }
+                }
+            }
+        }
+        .localizedNavigationTitle("国外加速")
+        .fileImporter(isPresented: $importingList, allowedContentTypes: [.plainText], onCompletion: importList)
+        .alert("域名清单无法验证。", isPresented: $importFailed) {
+            Button("确定", role: .cancel) {}
+        }
+    }
+
+    private func importList(_ result: Result<URL, Error>) {
+        guard browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) else { return }
+        do {
+            let url = try result.get()
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            let data = try file.read(upToCount: AccessOverseasRuleList.maximumInputBytes + 1) ?? Data()
+            importFailed = !hostStores.installOverseasAccelerationList(data, for: tab)
+        } catch {
+            importFailed = true
+        }
+    }
+}
 
 // 功能名称与桌面一致，使用 iOS 的导航、触控尺寸和动态字号。
 private struct DomesticAccelerationSettingsView: View {
