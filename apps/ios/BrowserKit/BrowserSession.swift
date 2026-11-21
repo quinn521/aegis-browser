@@ -922,7 +922,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     }
 
     /// Cancel the load and keep the verified address available for editing the next route.
-    public func pauseAfterWebsiteRouteChange(detachStore: Bool) {
+    public func pauseAfterWebsiteRouteChange(detachStore: Bool, retireOriginalDocument: Bool = false) {
         let editableAddress = websiteRouteControlURL
         let keepsTerminalFailure = lastMainFrameFailure != nil && editableAddress != nil
         if !keepsTerminalFailure { stop() }
@@ -930,8 +930,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             if keepsTerminalFailure { hostCoordinator?.pendingRecoveryInvalidated(tab: self) }
             rebindWebsiteDataStore(originalWebsiteDataStore, host: nil)
             loadingErrorAllowsProxyRetry = false
+        } else if retireOriginalDocument {
+            terminateCurrentDocument()
         }
-        guard detachStore || !keepsTerminalFailure else { return }
+        guard detachStore || retireOriginalDocument || !keepsTerminalFailure else { return }
         // Bind the control to the paused tab state after Stop and any store teardown.
         // The old request and document identities stay retired.
         websiteRoutePause = (attempt.navigationID, navigationEpoch, editableAddress)
@@ -1123,6 +1125,13 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         rebindWebsiteDataStore(originalWebsiteDataStore, host: nil)
         isLoading = true
         isSuspended = false
+        return true
+    }
+
+    /// A newly protected displayed page must stop even when another request is held.
+    public func retireOriginalDocumentDuringProxyHold(_ pending: BrowserPendingAddressNavigation) -> Bool {
+        guard matchesPendingAddressNavigation(pending), pendingProxyRequest != nil else { return false }
+        terminateCurrentDocument()
         return true
     }
 

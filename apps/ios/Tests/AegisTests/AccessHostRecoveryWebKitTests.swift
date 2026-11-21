@@ -1367,6 +1367,7 @@ extension AccessHostRecoveryWebKitTests {
         let coordinator = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: true,
                                                      locationPreferences: defaults)
         let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        tab.hostCoordinator = coordinator
         defer { tab.dispose {} }
         let member = try XCTUnwrap(URL(string: "https://security.debian.org"))
         let nonmember = try XCTUnwrap(URL(string: "https://outside.invalid"))
@@ -1400,6 +1401,7 @@ extension AccessHostRecoveryWebKitTests {
         let nonmember = try XCTUnwrap(URL(string: "https://outside.invalid"))
         let dev = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false,
                                              locationPreferences: defaults)
+        ordinaryTab.hostCoordinator = dev
         XCTAssertTrue(dev.requiresProxy(tab: ordinaryTab, url: member), "网站加速／智能应在 DEV 普通标签页生效")
         XCTAssertTrue(dev.requiresProxyPreparation(tab: ordinaryTab, url: member), "网站加速／智能应为 DEV 普通标签页准备代理")
 
@@ -1452,6 +1454,7 @@ extension AccessHostRecoveryWebKitTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let coordinator = AccessHostStoreCoordinator(channel: .dev, locationPreferences: defaults)
         let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        tab.hostCoordinator = coordinator
         defer { tab.dispose {} }
         let cases: [(String, Bool)] = [
             ("https://debian.org/", true),
@@ -1486,6 +1489,107 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     #if DEBUG
+    func testGeoSiteSelectedOfficialDoubanUsesManagedWebKitStore() async throws {
+        let managedPort: UInt16 = 18_489
+        let originalPort: UInt16 = 18_490
+        let managed = AnsweringOpener(finishAfterRecording: true)
+        let original = AnsweringOpener(finishAfterRecording: true)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        defer { try? managedListener.stop(); try? originalListener.stop() }
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try await managedListener.start(at: startedAt)
+        try await originalListener.start(at: startedAt)
+
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["DOUBAN"], forKey: "browser.websiteAcceleration.categories")
+        let gate = WindowPrepareGate()
+        defer { gate.finish() }
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            await gate.wait()
+            return .init(endpoint: .init(identity: "official-categories", generation: generation,
+                loopbackHost: "127.0.0.1", port: managedPort, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let secondSession = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(session.activeTab)
+        let sibling = try XCTUnwrap(secondSession.activeTab)
+        try await tab.prepareContentRulesForTests()
+        try await sibling.prepareContentRulesForTests()
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer {
+            withExtendedLifetime(coordinator) { session.closeWindow(); secondSession.closeWindow() }
+            restoreOriginal()
+        }
+        let window = show(tab.webView)
+        let secondWindow = show(sibling.webView)
+        defer {
+            window.isHidden = true
+            secondWindow.isHidden = true
+            let receipt = XCTAttachment(string: "managed=\(managed.authorities)\noriginal=\(original.authorities)")
+            receipt.name = "Official category CONNECT witnesses"
+            receipt.lifetime = .keepAlways
+            add(receipt)
+        }
+
+        // Both local observers stop at CONNECT, before TLS or DNS for the target.
+        func witness(_ host: String, managed expectedManaged: Bool, tab: BrowserTab, window: UIWindow,
+                     duringLoad: (@MainActor () async throws -> Void)? = nil) async throws {
+            let url = try XCTUnwrap(URL(string: "https://\(host)/"))
+            let authority = "\(host):443"
+            let priorManaged = managed.authorities.filter { $0 == authority }.count
+            let priorOriginal = original.authorities.filter { $0 == authority }.count
+            tab.loadFromAddressBar(url)
+            try await duringLoad?()
+            try await waitUntil(seconds: 12, {
+                self.attach(tab.webView, to: window)
+                return managed.authorities.filter { $0 == authority }.count > priorManaged
+                    || original.authorities.filter { $0 == authority }.count > priorOriginal
+            }, message: "Expected either local listener to record CONNECT \(authority)")
+            try await waitUntil(seconds: 12, { !tab.webView.isLoading },
+                                message: "WebKit did not finish the controlled CONNECT attempt for \(authority)")
+            XCTAssertEqual(managed.authorities.filter { $0 == authority }.count > priorManaged,
+                           expectedManaged, "Managed CONNECT \(authority)")
+            XCTAssertEqual(original.authorities.filter { $0 == authority }.count > priorOriginal,
+                           !expectedManaged, "Original CONNECT \(authority)")
+            XCTAssertEqual(tab.websiteDataStore === tab.originalWebsiteDataStore, !expectedManaged)
+        }
+
+        try await witness("original-control.geosite.invalid", managed: false, tab: tab, window: window)
+        try await witness("notdouban.com", managed: false, tab: tab, window: window)
+        try await witness("debian.org", managed: false, tab: tab, window: window)
+        try await witness("www.meituan.com", managed: false, tab: tab, window: window)
+        try await witness("www.douban.com", managed: true, tab: tab, window: window) {
+            try await self.waitUntil { gate.started }
+            let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+            let onlyDouban = try XCTUnwrap(coordinator.websiteCategories(for: sibling))
+            coordinator.setWebsiteCategory(.meituan, selected: true, from: onlyDouban, for: sibling)
+            let both = try XCTUnwrap(coordinator.websiteCategories(for: sibling))
+            coordinator.setWebsiteCategory(.meituan, selected: false, from: both, for: sibling)
+            XCTAssertEqual(tab.pendingAddressNavigation, pending)
+            XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: tab))
+            gate.finish()
+        }
+
+        let initial = try XCTUnwrap(coordinator.websiteCategories(for: sibling))
+        coordinator.setWebsiteCategory(.douban, selected: false, from: initial, for: sibling)
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore, "The same owner's managed document must detach")
+        XCTAssertTrue(try XCTUnwrap(coordinator.websiteCategories(for: tab)).selected.isEmpty)
+        try await witness("second-original-control.geosite.invalid", managed: false, tab: sibling, window: secondWindow)
+        try await witness("www.douban.com", managed: false, tab: sibling, window: secondWindow)
+
+        let empty = try XCTUnwrap(coordinator.websiteCategories(for: tab))
+        coordinator.setWebsiteCategory(.debian, selected: true, from: empty, for: tab)
+        let debian = try XCTUnwrap(coordinator.websiteCategories(for: tab))
+        coordinator.setWebsiteCategory(.meituan, selected: true, from: debian, for: tab)
+        try await witness("debian.org", managed: true, tab: sibling, window: secondWindow)
+        try await witness("www.meituan.com", managed: true, tab: sibling, window: secondWindow)
+        try await witness("www.dianping.com", managed: true, tab: sibling, window: secondWindow)
+    }
+
     @MainActor
     func testGeoSiteTopLevelNavigationSelectsManagedOrOriginal() async throws {
         let managedPort: UInt16 = 18_471
@@ -1643,6 +1747,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(coordinator.requiresProxyPreparation(tab: sibling, url: miss))
 
         let recreated = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        first.hostCoordinator = recreated
+        second.hostCoordinator = recreated
         XCTAssertEqual(recreated.websiteAccelerationMode, .smart)
         XCTAssertFalse(recreated.requiresProxy(tab: sibling, url: member))
         XCTAssertTrue(recreated.requiresProxy(tab: sibling, url: miss))
