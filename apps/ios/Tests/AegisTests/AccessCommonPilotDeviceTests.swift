@@ -81,7 +81,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         let window = makeWindow()
         defer { window.isHidden = true }
         func permitsTraffic() -> Bool {
-            if budget.stopReason() != nil { return false }
+            guard permitsPinnedNode(.shared, revision: input.nodeRevision, budget: budget) else { return false }
             let controlValue = try? String(contentsOf: control, encoding: .utf8)
             if controlValue != "run\n" || !path.snapshot.wifi {
                 budget.stop(.externalStop)
@@ -148,13 +148,13 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             reserved += 1
             try append("reserved", identity)
             let result = try await run(url, window: window, budget: budget, transport: .socks5,
-                                       observation: .seconds(20), permit: permitsTraffic) { attempt in
+                                       observation: .seconds(20), permit: permitsTraffic, resultCheckpoint: { attempt in
                 var row = identity.merging(attempt.fields) { first, _ in first }
                 if let issued = attempt.page.timeline.instant(.loadIssued) {
                     row["navigationIssuedAtMs"] = Self.milliseconds(budget.started.duration(to: issued))
                 }
                 try append("result", row)
-            }
+            })
             try append("retirement", identity.merging(result.retirementFields) { first, _ in first })
             if let stop = budget.stopReason() {
                 try checkpoint(stop.rawValue)
@@ -284,14 +284,62 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         }
     }
 
+    func testControlledCampaignStopsOnRouteLoss() async throws {
+        let input = try admittedInputs()
+        guard input.environment["AEGIS_TEST_COMMON_MATRIX"] == "1" else { throw XCTSkip("Owned fixture required") }
+        let window = makeWindow()
+        defer { window.isHidden = true }
+        let ledger = try fixtureLedger("route-loss", input.environment)
+        for stop in [AccessCampaignBudget.Stop.nodeRevisionChanged, .transportLost] {
+            let repository = AccessTestNodeRepository(channel: .dev, storage: FixtureNodeStorage())
+            let revision = try repository.apply(input.parameters, expectedRevision: nil, isPrivate: false)
+            let budget = AccessCampaignBudget(duration: .seconds(35), bytes: 8 * 1024 * 1024)
+            let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            let query = [URLQueryItem(name: "nonce", value: nonce)]
+            let slow = input.origin.appendingPathComponent("slow").appending(queryItems: query)
+            func permit() -> Bool { permitsPinnedNode(repository, revision: revision, budget: budget) }
+
+            let active = try await run(slow, window: window, budget: budget, transport: .socks5,
+                                       observation: .seconds(16), repository: repository, permit: permit, afterCommit: { core in
+                if stop == .nodeRevisionChanged {
+                    // The same authorized parameters saved again create a different revision.
+                    _ = try repository.apply(input.parameters, expectedRevision: revision, isPrivate: false)
+                } else {
+                    await core.stop()
+                }
+            })
+            let forbidden = input.origin.appendingPathComponent("forbidden").appending(queryItems: query)
+            let later = try await run(forbidden, window: window, budget: budget, transport: .socks5,
+                                      observation: .seconds(5), repository: repository, permit: permit)
+            let reason = try XCTUnwrap(budget.stopReason())
+            var row = active.attempt.fields.merging(active.retirementFields) { first, _ in first }
+            row["nonce"] = nonce
+            row["sourceSHA"] = input.source
+            row["stopReason"] = reason.rawValue
+            row["subsequentNavigationIssued"] = later.attempt.page.timeline.instant(.loadIssued) != nil
+            try ledger.append(row)
+
+            XCTAssertEqual(reason, stop)
+            XCTAssertEqual(active.attempt.outcome, .stopped)
+            XCTAssertEqual(active.attempt.page.firstVisibleHTTPStatus, 200)
+            XCTAssertNotNil(active.attempt.page.timeline.instant(.documentCommit))
+            XCTAssertTrue(active.retired)
+            XCTAssertTrue(active.quiesced)
+            XCTAssertNil(later.attempt.page.timeline.instant(.loadIssued))
+            XCTAssertNil(later.attempt.page.initialBinding)
+        }
+    }
+
     private func run(_ url: URL, window: UIWindow, budget: AccessCampaignBudget,
                      transport: AccessTestNodeTransport, observation: Duration,
                      settleBeforeRetiring: Duration = .zero, competeDuringRetirement: Bool = false,
-                     permit: @escaping () -> Bool = { true },
+                     repository: AccessTestNodeRepository = .shared, permit: @escaping () -> Bool = { true },
+                     afterCommit: ((any AccessEmbeddedCoreControlling) async throws -> Void)? = nil,
                      resultCheckpoint: (Attempt) throws -> Void = { _ in }) async throws -> AttemptResult {
         let core = AccessCampaignMeteredCore(base: try AccessGoEmbeddedCore(isolated: true), budget: budget)
-        let page = AccessTestNodePage(testingCore: core, singleNavigation: true, transport: transport,
-                                      navigationAllowed: { budget.stopReason() == nil && permit() })
+        let page = AccessTestNodePage(repository: repository, testingCore: core, singleNavigation: true,
+                                      transport: transport, navigationAllowed: { budget.stopReason() == nil && permit() },
+                                      onTransportLoss: { if permit() { budget.stop(.transportLost) } })
         let fence = Task { @MainActor in
             while !Task.isCancelled {
                 if budget.stopReason() != nil || !permit() { page.close(); return }
@@ -305,8 +353,13 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             window.addSubview(view)
         }
         let navigationDeadline = page.timeline.instant(.loadIssued)?.advanced(by: observation)
+        var commitAction = afterCommit
         if let navigationDeadline {
             while page.status == "正在加载", budget.stopReason() == nil, ContinuousClock.now < navigationDeadline {
+                if let action = commitAction, page.timeline.instant(.documentCommit) != nil {
+                    commitAction = nil
+                    try await action(core)
+                }
                 try await Task.sleep(for: .milliseconds(50))
             }
         }
@@ -362,7 +415,18 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         return AttemptResult(attempt: attempt, retired: retired, quiesced: quiesced, retirementFields: retirement)
     }
 
-    private func admittedInputs() throws -> (environment: [String: String], origin: URL, source: String) {
+    private func permitsPinnedNode(_ repository: AccessTestNodeRepository, revision: UUID,
+                                   budget: AccessCampaignBudget) -> Bool {
+        guard budget.stopReason() == nil else { return false }
+        guard (try? repository.revision(isPrivate: false)) == revision else {
+            budget.stop(.nodeRevisionChanged)
+            return false
+        }
+        return true
+    }
+
+    private func admittedInputs() throws -> (environment: [String: String], origin: URL, source: String,
+                                             nodeRevision: UUID, parameters: AccessRealityVisionParameters) {
 #if targetEnvironment(simulator)
         throw XCTSkip("TEST01 pilot requires the designated physical iPhone")
 #else
@@ -386,10 +450,13 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
               AccessInternalSOCKSAdmission.current else { throw CocoaError(.fileReadCorruptFile) }
         let repository = AccessTestNodeRepository.shared
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
-        if (try? repository.savedNode().parameters()) != parameters {
-            _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
+        let revision: UUID
+        if let saved = try? repository.savedNode(), try saved.parameters() == parameters {
+            revision = saved.revision
+        } else {
+            revision = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
-        return (environment, origin, source)
+        return (environment, origin, source, revision, parameters)
 #endif
     }
 
@@ -419,6 +486,14 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         private let state = Mutex((reported: false, wifi: false))
         func update(wifi: Bool) { state.withLock { $0 = (true, wifi) } }
         var snapshot: (reported: Bool, wifi: Bool) { state.withLock { $0 } }
+    }
+
+    private final class FixtureNodeStorage: AccessTestNodeStoring {
+        private var record: AccessTestNodeRecord?
+
+        func read(channel: AccessInternalOptions) throws -> AccessTestNodeRecord? { record }
+        func write(_ record: AccessTestNodeRecord, channel: AccessInternalOptions) throws { self.record = record }
+        func remove(channel: AccessInternalOptions) throws { record = nil }
     }
 
     private func startNetworkMonitor() -> (NetworkState, NWPathMonitor) {

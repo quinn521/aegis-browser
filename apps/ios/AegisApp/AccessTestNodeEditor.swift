@@ -465,6 +465,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private let transportPreference: AccessTestNodeTransport
     private let socksAdmitted: Bool
     private let navigationAllowed: () -> Bool
+    private let onTransportLoss: (() -> Void)?
     private(set) var selectedTransport: AccessInboundTransport?
     private var sentMainFrame = false
     private var committedMainFrame = false
@@ -480,7 +481,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
          preparationTimeout: Duration = .seconds(15),
          waitForPreparationDeadline: @escaping @MainActor (ContinuousClock.Instant) async throws -> Void = {
              try await ContinuousClock().sleep(until: $0)
-         }) {
+         },
+         onTransportLoss: (() -> Void)? = nil) {
         self.transportPreference = transport
         self.socksAdmitted = socksAdmitted ?? AccessInternalSOCKSAdmission.current
         self.repository = repository
@@ -490,6 +492,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         self.preparationTimeout = preparationTimeout
         self.waitForPreparationDeadline = waitForPreparationDeadline
         self.navigationAllowed = navigationAllowed
+        self.onTransportLoss = onTransportLoss
         super.init()
     }
 
@@ -584,6 +587,10 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             webView = view
             initialBinding = result.endpoint
             guard navigationAllowed() else { close(); return }
+            if onTransportLoss != nil, (newPublisher as? AccessProxyEntryPublisher)?.isCurrentEntryHealthy != true {
+                close()
+                return
+            }
             status = "正在加载"
             timeline.record(.loadIssued)
             currentNavigation = view.load(URLRequest(url: url))
@@ -614,6 +621,12 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             failureDomain = NSURLErrorDomain
             failureCode = NSURLErrorTimedOut
         }
+        // A navigation error can arrive before the publisher's health poll.
+        // Sample its current entry before ordinary shutdown makes it unhealthy.
+        if let onTransportLoss, initialBinding != nil,
+           (publisher as? AccessProxyEntryPublisher)?.isCurrentEntryHealthy != true {
+            onTransportLoss()
+        }
         closed = true
         if let observerID { repository.removeObserver(observerID) }
         observerID = nil
@@ -629,6 +642,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
 
     private func retire(_ finish: @escaping () -> Void) {
         if retirementRequestedAt == nil { retirementRequestedAt = .now }
+        // A publisher can initiate retirement itself when its health watch fails.
+        if !closed, initialBinding != nil { onTransportLoss?() }
         status = "连接暂不可用"
         retiring = true
         timeline.record(.retirementRequested)

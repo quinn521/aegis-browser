@@ -11,6 +11,8 @@ final class AccessCampaignBudget: Sendable {
         case byteLimit = "byte-limit"
         case externalStop = "external-stop"
         case meteringFailure = "metering-failure"
+        case nodeRevisionChanged = "node-revision-changed"
+        case transportLost = "transport-lost"
     }
 
     private struct State {
@@ -41,7 +43,7 @@ final class AccessCampaignBudget: Sendable {
     }
 
     func stop(_ reason: Stop) {
-        state.withLock { if $0.reason == nil { $0.reason = reason } }
+        state.withLock { if $0.reason == nil { $0.reason = .now >= deadline ? .timeLimit : reason } }
     }
 
     func reserve(_ count: Int, wholeChunk: Bool, at now: ContinuousClock.Instant = .now) throws -> Int {
@@ -62,11 +64,12 @@ final class AccessCampaignBudget: Sendable {
         }
     }
 
-    func settle(_ reservation: Int, bytes: Int) {
+    func settle(_ reservation: Int, bytes: Int, at now: ContinuousClock.Instant = .now) {
         state.withLock {
             precondition(reservation <= $0.reserved && bytes >= 0)
             $0.reserved -= reservation
             $0.charged += min(bytes, reservation)
+            if $0.reason == nil, now >= deadline { $0.reason = .timeLimit }
             if bytes > reservation {
                 $0.reason = $0.reason ?? .meteringFailure
             } else if $0.charged == byteLimit {
@@ -189,6 +192,15 @@ final class AccessCampaignBudgetTests: XCTestCase {
         meter.settle(lastReservation, bytes: 4)
         XCTAssertEqual(meter.bytes.charged, 4)
         XCTAssertEqual(meter.stopReason(at: meter.deadline), .timeLimit)
+    }
+
+    func testTimeLimitWinsWhenTheLastReservationSettlesAtTheDeadline() throws {
+        let start = ContinuousClock.now
+        let meter = AccessCampaignBudget(duration: .seconds(1), bytes: 10, started: start)
+        let reservation = try meter.reserve(10, wholeChunk: true, at: start)
+        meter.settle(reservation, bytes: 10, at: meter.deadline)
+        XCTAssertEqual(meter.bytes.charged, 10)
+        XCTAssertEqual(meter.stopReason(), .timeLimit)
     }
 
     func testOnlyThreeConsecutiveNavigationTimeoutsWithoutHTTPStopDispatch() {
