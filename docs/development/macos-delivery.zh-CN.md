@@ -15,6 +15,19 @@ fork 上恢复的是测试用打包签名：
 
 macOS 沿用 fork 变量 `AEGIS_MACOS_BRANCH_REHEARSAL=true` 和 `AEGIS_MACOS_REHEARSAL_SIGNING_MODE=temporary-ad-hoc`。Runner 优先 `AEGIS_MACOS_RUNNER_LABEL`，否则用现有 iOS self-hosted 标签，不改成 `macos-26`。
 
+## DEV GeoSite 静态规则编译（M1）
+
+在仓库根目录用 Node.js 20 或更新版本，从本地 XTLS/Xray-rules-dat 标准版 raw `geosite.dat`（`20261120235103`）及 Chromium `155.0.8059.80` ICANN+PRIVATE PSL 生成单组静态清单。
+
+```sh
+node scripts/dev/compile-geosite.mjs --dat geosite.dat --psl effective_tld_names.dat \
+  --group DEBIAN --output debian.json
+```
+
+可选组为 `DEBIAN`、`DOUBAN`、`MEITUAN`。加 `--verify` 可重建并逐字节核对现有清单。历史 `DEBIAN` 清单使用 V2Fly `20261121064510` 的 `--dlc dlc.dat` 复现。每次必须明确指定一个来源，编译器离线校验原文件与完整 typed 规则的摘要。[固定分类与来源规格](https://github.com/quinn521/aegis-browser/blob/54ce210fdcaf242b2df3bc74a24d77a820075a5c/docs/superpowers/specs/2026-11-21-geosite-updates-design.md#官方来源与首批完整分类)
+
+在 `node --test scripts/dev/tests/compile-geosite.test.mjs` 前设置 `AEGIS_XRAY_GEOSITE_INPUT_DIR`（`geosite.dat`、`beta-groups.json`）和 `AEGIS_GEOSITE_INPUT_DIR`（`dlc.dat`、`effective_tld_names.dat`）可运行真实输入回归。
+
 # macOS Delivery（前期，不公证）
 
 手动工作流：`.github/workflows/macos-delivery.yml`。
