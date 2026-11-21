@@ -23,6 +23,33 @@ final class AccessTestNodeEditorTests: XCTestCase {
     private let webSocketLink = "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.20:8443"
         + "?security=tls&type=ws&host=ws.example.com&fp=chrome&sni=cert.example.com&path=%2Finside&encryption=none&alpn=#synthetic-ws"
 
+    func testTestNodeImportPreservesWebSocketWireValuesAndLegacyReality() throws {
+        let address = "xn--bcher-kva.example"
+        let uri = try XCTUnwrap(URLComponents(string: webSocketLink.replacingOccurrences(of: "198.51.100.20", with: address)))
+        var nested = uri
+        let path = "/upgrade?origin=https://assets.example/"
+        nested.queryItems = uri.queryItems?.map { $0.name == "path" ? URLQueryItem(name: "path", value: path) : $0 }
+        let share = try XCTUnwrap(nested.string)
+        XCTAssertTrue(share.contains("https://assets.example/"))
+        guard case .vlessWebSocketTLS(let parameters) = try AccessInternalTestNode.parseSingleShareURI(share)
+        else { return XCTFail("Expected a typed WebSocket profile") }
+        XCTAssertEqual(parameters.address, address)
+        XCTAssertEqual(parameters.path, path)
+
+        let legacy = link.replacingOccurrences(of: "sid=abcd1234", with: "sid=abcd1234&spx=/café")
+        let expected = try AccessLocalV2RayConfigLoader.parseSingleShareURI(legacy)
+        XCTAssertEqual(expected.spiderX, "/café")
+        XCTAssertEqual(try AccessInternalTestNode.parseSingleShareURI(legacy), .realityVision(expected))
+
+        for scoped in ["[fe80::1%25lo0]", "[fe80::1%lo0]", "fe80::1%lo0"] {
+            XCTAssertThrowsError(try AccessVLESSWebSocketTLSParameters(address: scoped, port: 443, userID: parameters.userID,
+                serverName: parameters.serverName, requestHost: parameters.requestHost, path: "/", fingerprint: "", alpn: ""))
+        }
+        XCTAssertThrowsError(try AccessVLESSWebSocketTLSParameters(address: address, port: 443, userID: parameters.userID,
+            serverName: parameters.serverName, requestHost: "[fe80::1%lo0]:443", path: "/", fingerprint: "", alpn: ""))
+        XCTAssertThrowsError(try AccessInternalTestNode.parseSingleShareURI(share + webSocketLink))
+    }
+
     func testWebSocketProfileImportsOneShareAndPreservesVersionedRecords() throws {
         let store = Storage()
         let repository = AccessTestNodeRepository(channel: .dev, storage: store)

@@ -9,28 +9,34 @@ public enum AccessInternalTestNode: Equatable, Sendable {
     public static func parseSingleShareURI(_ input: String) throws -> Self {
         let link = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let forbidden = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
-        let shareWithoutLabel = String(link.prefix(while: { $0 != "#" }))
         guard input.utf8.count <= 8_192,
               link.lowercased().hasPrefix("vless://"),
-              link.unicodeScalars.allSatisfy({ !forbidden.contains($0) }),
-              !link.dropFirst("vless://".count).contains("://"),
-              let components = URLComponents(string: shareWithoutLabel, encodingInvalidCharacters: false),
+              link.unicodeScalars.allSatisfy({ !forbidden.contains($0) }) else {
+            throw AccessLocalV2RayConfigError.invalidJSON
+        }
+        let uri = link.prefix(while: { $0 != "#" })
+        let share = String(uri)
+        guard URLComponents(string: share)?.queryItems?.contains(where: { $0.name == "type" && $0.value == "ws" }) == true else {
+            return .realityVision(try AccessLocalV2RayConfigLoader.parseSingleShareURI(input))
+        }
+        // Only the path query may contain a nested URL. The display label
+        // is discarded, but may not contain a concatenated link.
+        guard share.dropFirst("vless://".count).range(of: "vless://", options: .caseInsensitive) == nil,
+              !link[uri.endIndex...].contains("://"),
+              let components = URLComponents(string: share, encodingInvalidCharacters: false),
               components.percentEncodedPassword == nil,
               components.percentEncodedPath.isEmpty || components.percentEncodedPath == "/" else {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
         let items = components.queryItems ?? []
-        guard items.contains(where: { $0.name == "type" && $0.value == "ws" }) else {
-            return .realityVision(try AccessLocalV2RayConfigLoader.parseSingleShareURI(input))
-        }
         let permitted: Set<String> = ["type", "security", "host", "sni", "fp", "path", "encryption", "alpn"]
         let names = Set(items.map(\.name))
         guard names.count == items.count, names.isSubset(of: permitted),
               items.allSatisfy({ $0.value != nil }),
-              let address = components.host, let rawPort = components.port, let port = UInt16(exactly: rawPort),
+              let address = components.encodedHost, let rawPort = components.port, let port = UInt16(exactly: rawPort),
               let id = components.user else { throw AccessLocalV2RayConfigError.invalidJSON }
         let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
-        guard query["security"] == "tls", [nil, "", "none"].contains(query["encryption"]),
+        guard query["type"] == "ws", query["security"] == "tls", [nil, "", "none"].contains(query["encryption"]),
               let serverName = query["sni"] else {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
@@ -54,6 +60,9 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
 
     public init(address: String, port: UInt16, userID: String, serverName: String,
                 requestHost: String, path: String, fingerprint: String, alpn: String) throws {
+        guard !address.contains("%") else {
+            throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
+        }
         let normalizedAddress: String
         if address.hasPrefix("[") {
             guard address.hasSuffix("]"), let literal = Self.ipv6Literal(address) else {
@@ -104,7 +113,8 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
 
     private static func ipv6Literal(_ bracketed: String) -> String? {
         let value = String(bracketed.dropFirst().dropLast())
-        return IPv6Address(value) == nil ? nil : value
+        guard !value.contains("%"), IPv6Address(value) != nil else { return nil }
+        return value
     }
 
     private static func isHTTPAuthority(_ authority: String) -> Bool {
