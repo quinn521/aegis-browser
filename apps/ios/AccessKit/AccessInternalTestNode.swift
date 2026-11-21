@@ -33,7 +33,7 @@ public enum AccessInternalTestNode: Equatable, Sendable {
         guard names.count == items.count, names.isSubset(of: permitted),
               items.allSatisfy({ $0.value != nil }),
               let host = components.encodedHost,
-              let address = host.hasPrefix("[") ? host : host.removingPercentEncoding,
+              let address = dialAddress(from: host),
               let rawPort = components.port, let port = UInt16(exactly: rawPort),
               let id = components.user else { throw AccessLocalV2RayConfigError.invalidJSON }
         let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
@@ -46,6 +46,16 @@ public enum AccessInternalTestNode: Equatable, Sendable {
             requestHost: query["host"] ?? serverName, path: query["path"] ?? "/",
             fingerprint: query["fp"] ?? "", alpn: query["alpn"] ?? ""
         ))
+    }
+
+    private static func dialAddress(from encodedHost: String) -> String? {
+        if encodedHost.hasPrefix("[") { return encodedHost }
+        guard let host = encodedHost.removingPercentEncoding else { return nil }
+        if host.utf8.allSatisfy({ $0 < 128 }) { return host }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = host
+        return components.encodedHost
     }
 }
 
@@ -71,8 +81,7 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
             }
             normalizedAddress = literal
         } else {
-            let dnsLabels = address.hasSuffix(".") ? String(address.dropLast()) : address
-            guard Self.isDNSName(dnsLabels) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
+            guard Self.isDNSName(address, allowsRootLabel: true) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
                 throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
             }
             normalizedAddress = address
@@ -96,9 +105,10 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         self.alpn = alpn
     }
 
-    private static func isDNSName(_ name: String) -> Bool {
-        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
-        return name.utf8.count <= 253 && labels.count >= 2
+    private static func isDNSName(_ name: String, allowsRootLabel: Bool = false) -> Bool {
+        let hostname = allowsRootLabel && name.hasSuffix(".") ? name.dropLast() : name[...]
+        let labels = hostname.split(separator: ".", omittingEmptySubsequences: false)
+        return hostname.utf8.count <= 253 && labels.count >= 2
             && labels.last?.utf8.contains(where: { (65...90).contains($0) || (97...122).contains($0) }) == true
             && labels.allSatisfy { label in
                 (1...63).contains(label.utf8.count) && label.first != "-" && label.last != "-"
@@ -116,10 +126,10 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
     private static func isWebSocketRequestTarget(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("#"), !path.contains("\\"),
               path.utf8.count <= 2_048, path.utf8.allSatisfy({ (33...126).contains($0) }),
-              path.range(of: #"%(?![A-Fa-f0-9]{2})|%(?:[01][A-Fa-f0-9]|7[Ff])"#, options: .regularExpression) == nil,
+              let decoded = decodedRequestTargetForValidation(path),
               URLComponents(string: path, encodingInvalidCharacters: false)?.string == path else { return false }
         // A callback URL can be a path value. A second proxy share cannot.
-        let withoutWebSchemes = path.replacingOccurrences(of: #"(?i)(?<![a-z0-9+.-])https?://"#, with: "",
+        let withoutWebSchemes = decoded.replacingOccurrences(of: #"(?i)(?<![a-z0-9+.-])https?://"#, with: "",
                                                          options: .regularExpression)
         guard !withoutWebSchemes.contains("://") else { return false }
         guard let query = path.firstIndex(of: "?") else { return true }
@@ -129,6 +139,31 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
             let name = String(field.prefix(while: { $0 != "=" }))
             return name.removingPercentEncoding != "ed"
         }
+    }
+
+    /// Classify nested schemes without altering the original wire target.
+    private static func decodedRequestTargetForValidation(_ path: String) -> String? {
+        func nibble(_ byte: UInt8) -> UInt8? {
+            switch byte {
+            case 48...57: byte - 48
+            case 65...70: byte - 55
+            case 97...102: byte - 87
+            default: nil
+            }
+        }
+        var input = path.utf8.makeIterator()
+        var decoded: [UInt8] = []
+        while let byte = input.next() {
+            if byte == 37 {
+                guard let high = input.next().flatMap(nibble), let low = input.next().flatMap(nibble) else { return nil }
+                let unescaped = (high << 4) | low
+                guard unescaped >= 32, unescaped != 127 else { return nil }
+                decoded.append(unescaped)
+            } else {
+                decoded.append(byte)
+            }
+        }
+        return String(decoding: decoded, as: UTF8.self)
     }
 
     private static func isHTTPAuthority(_ authority: String) -> Bool {
@@ -141,7 +176,7 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         } else {
             hostEnd = authority.firstIndex(of: ":") ?? authority.endIndex
             let host = String(authority[..<hostEnd])
-            guard isDNSName(host) || IPv4Address(host) != nil else { return false }
+            guard isDNSName(host, allowsRootLabel: true) || IPv4Address(host) != nil else { return false }
         }
         let suffix = authority[hostEnd...]
         if suffix.isEmpty { return true }

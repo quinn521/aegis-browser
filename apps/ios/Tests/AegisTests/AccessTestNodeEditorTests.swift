@@ -58,6 +58,15 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(node.address, "route.example.")
         XCTAssertEqual(node.path, "/upgrade?tag=%E9")
 
+        let callback = webSocketLink.replacingOccurrences(of: "198.51.100.20", with: "b%C3%BCcher.example")
+            .replacingOccurrences(of: "host=ws.example.com", with: "host=ws.example.com.%3A8443")
+            .replacingOccurrences(of: "path=%2Finside", with: "path=%2Fupgrade%3Fnext%3D%2568ttps://assets.example/")
+        guard case .vlessWebSocketTLS(let callbackNode) = try AccessInternalTestNode.parseSingleShareURI(callback)
+        else { return XCTFail("Expected a WebSocket profile") }
+        XCTAssertEqual(callbackNode.address, "xn--bcher-kva.example")
+        XCTAssertEqual(callbackNode.requestHost, "ws.example.com.:8443")
+        XCTAssertEqual(callbackNode.path, "/upgrade?next=%68ttps://assets.example/")
+
         let withPathLast = String(webSocketLink.prefix(while: { $0 != "#" }))
             .replacingOccurrences(of: "&path=%2Finside", with: "") + "&path=/upgrade"
         for scheme in ["vless", "ss", "trojan", "vmess"] {
