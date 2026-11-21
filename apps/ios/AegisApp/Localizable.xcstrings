@@ -357,358 +357,269 @@
         }
       }
     },
-    "手动保留浏览器原有的选路规则。": {
+    "自行选择要加速的网站。": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Im manuellen Modus gelten die bisherigen Verbindungsregeln des Browsers."
+            "value": "Wählen Sie selbst, welche Websites beschleunigt werden."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Manual keeps the browser’s existing routing rules."
+            "value": "Choose which websites to accelerate."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El modo manual mantiene las reglas de conexión actuales del navegador."
+            "value": "Elige qué sitios web quieres acelerar."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le mode manuel conserve les règles de connexion actuelles du navigateur."
+            "value": "Choisissez les sites web à accélérer."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mode manual mempertahankan aturan koneksi peramban yang sudah ada."
+            "value": "Pilih sendiri situs web yang ingin dipercepat."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "La modalità manuale mantiene le regole di connessione esistenti del browser."
+            "value": "Scegli quali siti web accelerare."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "手動では、ブラウザの既存の接続ルールを使用します。"
+            "value": "高速化するウェブサイトを自分で選びます。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "수동 모드는 브라우저의 기존 연결 규칙을 유지합니다."
+            "value": "가속할 웹사이트를 직접 선택하세요."
           }
         },
         "ms": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mod manual mengekalkan peraturan sambungan sedia ada pelayar."
+            "value": "Pilih sendiri laman web yang ingin dipercepat."
           }
         },
         "pt": {
           "stringUnit": {
             "state": "translated",
-            "value": "O modo manual mantém as regras de conexão atuais do navegador."
+            "value": "Escolha quais sites deseja acelerar."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "โหมดกำหนดเองจะใช้กฎการเชื่อมต่อเดิมของเบราว์เซอร์"
+            "value": "เลือกเองว่าต้องการเร่งความเร็วให้เว็บไซต์ใด"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Chế độ thủ công giữ nguyên các quy tắc kết nối hiện có của trình duyệt."
+            "value": "Tự chọn trang web muốn tăng tốc."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "手动保留浏览器原有的选路规则。"
+            "value": "自行选择要加速的网站。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "手動模式沿用瀏覽器原有的連線規則。"
+            "value": "自行選擇要加速的網站。"
           }
         }
       }
     },
-    "智能将 debian.org、dotdeb.org 及其子域名的主页面连接交给服务。其他网站通常使用浏览器原有连接（包括系统代理），已有站点选择或授权仍然有效。子资源沿用所在页面的连接。": {
+    "当前仅自动加速 Debian 相关网站。": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Im intelligenten Modus werden Hauptseiten von debian.org, dotdeb.org und deren Subdomains über den Dienst geöffnet. Andere Websites verwenden in der Regel die bisherige Verbindung einschließlich des Systemproxys. Bestehende Website-Einstellungen und Freigaben gelten weiterhin. Eingebettete Inhalte nutzen die Verbindung ihrer Seite."
+            "value": "Derzeit werden nur Websites mit Bezug zu Debian automatisch beschleunigt."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Smart uses the service for top-level pages on debian.org, dotdeb.org, and their subdomains. Other sites usually use the browser’s original connection, including any system proxy. Existing site choices and authorizations still apply. Subresources follow their page’s connection."
+            "value": "Only Debian-related websites are currently accelerated automatically."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El modo inteligente abre las páginas principales de debian.org, dotdeb.org y sus subdominios a través del servicio. Los demás sitios suelen usar la conexión habitual, incluido el proxy del sistema. Se respetan las preferencias y autorizaciones existentes. Los recursos integrados usan la conexión de su página."
+            "value": "Por ahora, solo se aceleran automáticamente los sitios web relacionados con Debian."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le mode intelligent ouvre les pages principales de debian.org, de dotdeb.org et de leurs sous-domaines via le service. Les autres sites utilisent généralement la connexion habituelle, y compris le proxy système. Les choix et autorisations existants restent valables. Les ressources intégrées utilisent la connexion de leur page."
+            "value": "Pour le moment, seuls les sites web liés à Debian sont accélérés automatiquement."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mode cerdas membuka halaman utama debian.org, dotdeb.org, dan subdomainnya melalui layanan. Situs lain biasanya memakai koneksi semula, termasuk proksi sistem. Pilihan dan izin situs yang sudah ada tetap berlaku. Sumber daya di dalam halaman memakai koneksi halaman tersebut."
+            "value": "Saat ini, hanya situs web terkait Debian yang dipercepat secara otomatis."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "La modalità intelligente apre tramite il servizio le pagine principali di debian.org, dotdeb.org e dei loro sottodomini. Gli altri siti usano in genere la connessione abituale, incluso il proxy di sistema. Le scelte e le autorizzazioni esistenti restano valide. Le risorse incorporate usano la connessione della pagina."
+            "value": "Al momento vengono accelerati automaticamente solo i siti web legati a Debian."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "スマートでは、debian.org、dotdeb.org とそのサブドメインのトップレベルページをサービス経由で開きます。その他のサイトは通常、システムプロキシを含む元の接続を使用します。既存のサイト設定や許可は引き続き有効です。ページ内の画像などはそのページと同じ接続を使用します。"
+            "value": "現在、自動で高速化されるのは Debian 関連のウェブサイトのみです。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "스마트 모드는 debian.org, dotdeb.org 및 그 하위 도메인의 최상위 페이지를 서비스를 통해 엽니다. 다른 사이트는 보통 시스템 프록시를 포함한 기존 연결을 사용합니다. 기존 사이트 선택과 권한은 계속 적용됩니다. 페이지 안의 리소스는 해당 페이지의 연결을 사용합니다."
+            "value": "현재는 Debian 관련 웹사이트만 자동으로 가속합니다."
           }
         },
         "ms": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mod pintar membuka halaman utama debian.org, dotdeb.org dan subdomainnya melalui perkhidmatan. Laman lain biasanya menggunakan sambungan asal, termasuk proksi sistem. Pilihan dan kebenaran laman sedia ada terus berkuat kuasa. Sumber dalam halaman menggunakan sambungan halaman itu."
+            "value": "Buat masa ini, hanya laman web berkaitan Debian dipercepat secara automatik."
           }
         },
         "pt": {
           "stringUnit": {
             "state": "translated",
-            "value": "O modo inteligente abre pelo serviço as páginas principais de debian.org, dotdeb.org e seus subdomínios. Os outros sites normalmente usam a conexão original, incluindo o proxy do sistema. As escolhas e autorizações existentes continuam válidas. Os recursos incorporados usam a conexão da página."
+            "value": "No momento, apenas sites relacionados ao Debian são acelerados automaticamente."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "โหมดอัจฉริยะจะเปิดหน้าหลักของ debian.org, dotdeb.org และโดเมนย่อยผ่านบริการ เว็บไซต์อื่นมักจะใช้การเชื่อมต่อเดิมรวมถึงพร็อกซีของระบบ การตั้งค่าและสิทธิ์เดิมของแต่ละเว็บไซต์ยังคงมีผล ทรัพยากรในหน้าเว็บใช้การเชื่อมต่อเดียวกับหน้านั้น"
+            "value": "ขณะนี้เร่งความเร็วโดยอัตโนมัติเฉพาะเว็บไซต์ที่เกี่ยวข้องกับ Debian"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Chế độ thông minh mở các trang cấp cao nhất của debian.org, dotdeb.org và các tên miền con qua dịch vụ. Các trang khác thường dùng kết nối ban đầu, kể cả proxy hệ thống. Các lựa chọn và quyền đã cấp cho từng trang vẫn có hiệu lực. Tài nguyên trong trang dùng chung kết nối của trang đó."
+            "value": "Hiện chỉ tự động tăng tốc các trang web liên quan đến Debian."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "智能将 debian.org、dotdeb.org 及其子域名的主页面连接交给服务。其他网站通常使用浏览器原有连接（包括系统代理），已有站点选择或授权仍然有效。子资源沿用所在页面的连接。"
+            "value": "当前仅自动加速 Debian 相关网站。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "智慧模式會透過服務開啟 debian.org、dotdeb.org 及其子網域的頂層網頁。其他網站通常使用瀏覽器原有的連線（含系統代理伺服器），既有的網站選擇與授權仍然有效。頁面內的資源沿用該頁的連線。"
+            "value": "目前僅自動加速 Debian 相關網站。"
           }
         }
       }
     },
-    "已配置连接服务，打开网站时检查服务是否可用。": {
+    "加速服务未配置。": {
       "extractionState": "manual",
       "localizations": {
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Verbindungsdienst ist eingerichtet. Seine Verfügbarkeit wird beim Öffnen einer Website geprüft."
+            "value": "Der Beschleunigungsdienst ist nicht eingerichtet."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The connection service is configured. Availability is checked when you open a website."
+            "value": "The acceleration service is not configured."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El servicio de conexión está configurado. Su disponibilidad se comprueba al abrir un sitio."
+            "value": "El servicio de aceleración no está configurado."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le service de connexion est configuré. Sa disponibilité est vérifiée à l’ouverture d’un site."
+            "value": "Le service d’accélération n’est pas configuré."
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Layanan koneksi sudah dikonfigurasi. Ketersediaannya diperiksa saat Anda membuka situs."
+            "value": "Layanan akselerasi belum dikonfigurasi."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il servizio di connessione è configurato. La disponibilità viene verificata quando apri un sito."
+            "value": "Il servizio di accelerazione non è configurato."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "接続サービスは設定済みです。サイトを開くときに利用可能か確認します。"
+            "value": "高速化サービスが設定されていません。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "연결 서비스가 설정되어 있습니다. 사이트를 열 때 서비스 사용 가능 여부를 확인합니다."
+            "value": "가속 서비스가 설정되지 않았습니다."
           }
         },
         "ms": {
           "stringUnit": {
             "state": "translated",
-            "value": "Perkhidmatan sambungan telah dikonfigurasi. Ketersediaannya diperiksa apabila anda membuka laman."
+            "value": "Perkhidmatan pecutan belum dikonfigurasi."
           }
         },
         "pt": {
           "stringUnit": {
             "state": "translated",
-            "value": "O serviço de conexão está configurado. A disponibilidade é verificada ao abrir um site."
+            "value": "O serviço de aceleração não está configurado."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "ตั้งค่าบริการเชื่อมต่อแล้ว ระบบจะตรวจสอบความพร้อมเมื่อคุณเปิดเว็บไซต์"
+            "value": "ยังไม่ได้ตั้งค่าบริการเร่งความเร็ว"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dịch vụ kết nối đã được thiết lập. Trình duyệt kiểm tra tính khả dụng khi bạn mở trang web."
+            "value": "Dịch vụ tăng tốc chưa được thiết lập."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已配置连接服务，打开网站时检查服务是否可用。"
+            "value": "加速服务未配置。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "連線服務已設定。開啟網站時會檢查服務是否可用。"
-          }
-        }
-      }
-    },
-    "尚未配置连接服务。需要服务的网站暂时无法打开。": {
-      "extractionState": "manual",
-      "localizations": {
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Der Verbindungsdienst ist noch nicht eingerichtet. Websites, die ihn benötigen, lassen sich derzeit nicht öffnen."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The connection service is not set up. Sites that require it are temporarily unavailable."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El servicio de conexión aún no está configurado. Los sitios que lo necesitan no se pueden abrir por el momento."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le service de connexion n’est pas encore configuré. Les sites qui en dépendent sont momentanément inaccessibles."
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Layanan koneksi belum dikonfigurasi. Situs yang memerlukannya sementara tidak dapat dibuka."
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il servizio di connessione non è ancora configurato. I siti che lo richiedono sono temporaneamente inaccessibili."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "接続サービスはまだ設定されていません。サービスが必要なサイトは現在開けません。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "연결 서비스가 아직 설정되지 않았습니다. 서비스가 필요한 사이트는 현재 열 수 없습니다."
-          }
-        },
-        "ms": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Perkhidmatan sambungan belum dikonfigurasi. Laman yang memerlukannya tidak dapat dibuka buat sementara waktu."
-          }
-        },
-        "pt": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O serviço de conexão ainda não está configurado. Os sites que precisam dele estão temporariamente indisponíveis."
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ยังไม่ได้ตั้งค่าบริการเชื่อมต่อ เว็บไซต์ที่ต้องใช้บริการจะยังเปิดไม่ได้ในขณะนี้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dịch vụ kết nối chưa được thiết lập. Hiện chưa thể mở các trang cần dịch vụ này."
-          }
-        },
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未配置连接服务。需要服务的网站暂时无法打开。"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "尚未設定連線服務。需要此服務的網站暫時無法開啟。"
+            "value": "尚未設定加速服務。"
           }
         }
       }

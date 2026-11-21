@@ -125,6 +125,7 @@ final class SettingsLayoutUITests: XCTestCase {
     func testWebsiteAccelerationModesInDevSettings() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
         app.launch()
         defer { app.terminate() }
 
@@ -142,6 +143,13 @@ final class SettingsLayoutUITests: XCTestCase {
 
         let manual = app.buttons["website-acceleration-manual"]
         let smart = app.buttons["website-acceleration-smart"]
+        let manualHint = app.staticTexts.matching(NSPredicate(format: "label == %@", "自行选择要加速的网站。"))
+        let smartHint = app.staticTexts.matching(NSPredicate(format: "label == %@", "当前仅自动加速 Debian 相关网站。"))
+        let serviceNotice = app.staticTexts.matching(NSPredicate(format: "label == %@", "加速服务未配置。"))
+        let engineeringDetails = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS[c] %@ OR label CONTAINS %@ OR label CONTAINS %@",
+            "debian.org", "系统代理", "原有的选路规则"
+        ))
         XCTAssertTrue(manual.waitForExistence(timeout: 5))
         XCTAssertTrue(smart.waitForExistence(timeout: 5))
         XCTAssertEqual(manual.label, "手动")
@@ -149,11 +157,21 @@ final class SettingsLayoutUITests: XCTestCase {
         // --ui-testing resets the isolated preferences suite on launch.
         XCTAssertTrue(manual.isSelected)
         XCTAssertFalse(smart.isSelected)
+        XCTAssertEqual(manualHint.count, 1)
+        XCTAssertFalse(smartHint.firstMatch.exists)
+        XCTAssertEqual(serviceNotice.count, 1)
+        XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
+        capture("国内加速-网站加速-手动", app)
 
         XCTAssertTrue(reveal(smart, app))
         smart.tap()
         XCTAssertTrue(smart.isSelected)
         XCTAssertFalse(manual.isSelected)
+        XCTAssertEqual(smartHint.count, 1)
+        XCTAssertFalse(manualHint.firstMatch.exists)
+        XCTAssertFalse(engineeringDetails.firstMatch.exists)
+        XCTAssertEqual(serviceNotice.count, 1)
+        XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
         capture("国内加速-网站加速-智能", app)
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -162,6 +180,8 @@ final class SettingsLayoutUITests: XCTestCase {
         entry.tap()
         XCTAssertTrue(smart.waitForExistence(timeout: 5))
         XCTAssertTrue(smart.isSelected)
+        XCTAssertEqual(smartHint.count, 1)
+        XCTAssertFalse(manualHint.firstMatch.exists)
 
         app.terminate()
         app.launchArguments.append("--ui-testing-preferences-keep")
@@ -172,11 +192,15 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(smart.waitForExistence(timeout: 5))
         XCTAssertTrue(smart.isSelected)
         XCTAssertFalse(manual.isSelected)
+        XCTAssertEqual(smartHint.count, 1)
+        XCTAssertFalse(manualHint.firstMatch.exists)
 
         XCTAssertTrue(reveal(manual, app))
         manual.tap()
         XCTAssertTrue(manual.isSelected)
         XCTAssertFalse(smart.isSelected)
+        XCTAssertEqual(manualHint.count, 1)
+        XCTAssertFalse(smartHint.firstMatch.exists)
     }
     #endif
 

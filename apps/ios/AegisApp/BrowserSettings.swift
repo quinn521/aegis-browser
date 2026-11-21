@@ -162,12 +162,14 @@ private struct DomesticAccelerationSettingsView: View {
                         .accessibilityIdentifier("website-acceleration-section")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("手动保留浏览器原有的选路规则。")
-                        Text("智能将 debian.org、dotdeb.org 及其子域名的主页面连接交给服务。其他网站通常使用浏览器原有连接（包括系统代理），已有站点选择或授权仍然有效。子资源沿用所在页面的连接。")
-                        if hostStores.offersLocationService {
-                            Text("已配置连接服务，打开网站时检查服务是否可用。")
-                        } else {
-                            Text("尚未配置连接服务。需要服务的网站暂时无法打开。")
+                        switch hostStores.websiteAccelerationMode {
+                        case .manual:
+                            Text("自行选择要加速的网站。")
+                        case .smart:
+                            Text("当前仅自动加速 Debian 相关网站。")
+                        }
+                        if !hostStores.offersLocationService {
+                            Text("加速服务未配置。")
                                 .accessibilityIdentifier("website-acceleration-service-unavailable")
                         }
                     }
