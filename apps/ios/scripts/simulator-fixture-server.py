@@ -9,6 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.client import HTTPConnection
+from socketserver import TCPServer
 from urllib.parse import parse_qs, urlsplit
 
 PAYLOAD = b"Aegis Browser simulator download verification\n" * 1024
@@ -260,8 +261,19 @@ window.addEventListener('copy',e=>{window.copyBlocked=true;e.preventDefault();})
             return self.respond(400, {"error": "请求格式不正确"})
 
 
+class LoopbackFixtureServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # macOS hosted runners can stall on the HTTPServer reverse lookup
+        # between bind() and listen(). The fixture uses a numeric address.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
+
+
 def self_test():
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    from unittest.mock import patch
+
+    with patch("socket.getfqdn", side_effect=AssertionError("Fixture bind must not resolve a hostname")):
+        server = LoopbackFixtureServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     # 仅连接刚启动的本机服务，不接受 URL，也不自动跟随重定向。
@@ -341,6 +353,6 @@ if __name__ == "__main__":
     if args.self_test:
         self_test()
     else:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+        server = LoopbackFixtureServer(("127.0.0.1", args.port), Handler)
         print(json.dumps({"base_url": f"http://127.0.0.1:{server.server_port}", "download_sha256": hashlib.sha256(PAYLOAD).hexdigest(), "model": "aegis-simulator-fixture"}), flush=True)
         server.serve_forever()
