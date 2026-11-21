@@ -30,7 +30,8 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
     }
 
     /// Caller is the connection queue, which is where the 200 completion runs.
-    public func start(host: String, port: UInt16, prelude: Data) {
+    public func start(host: String, port: UInt16, prelude: Data,
+                      successResponse: Data? = nil, onEstablished: (@Sendable () -> Void)? = nil) {
         lock.lock()
         defer { lock.unlock() }
         guard !stopped, task == nil else { return }
@@ -42,6 +43,9 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
                     remote.close()
                     return
                 }
+                if let successResponse { try await self.sendClient(successResponse) }
+                try Task.checkCancellation()
+                onEstablished?()
                 if !prelude.isEmpty {
                     try await remote.write(prelude)
                 }

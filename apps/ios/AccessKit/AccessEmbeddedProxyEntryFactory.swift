@@ -18,9 +18,12 @@ public enum AccessEmbeddedProxyEntryFactory {
         configPath: String? = AccessLocalV2RayConfigLoader.productPath(),
         verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
         parameters: (@MainActor () async throws -> AccessRealityVisionParameters)? = nil,
-        connectionAllowed: (@MainActor () -> Bool)? = nil
+        connectionAllowed: (@MainActor () -> Bool)? = nil,
+        retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil,
+        transport: AccessInboundTransport = .http
     ) -> any AccessProxyEntryPublishing {
         do {
+            guard transport == .http || transport == .socks5 else { return AccessFailClosedProxyEntryPublisher() }
             let data = try lockData ?? loadBundledLockData()
             let manifest = try AccessEmbeddedCoreManifest.load(from: data)
             guard manifest.mayLink else {
@@ -38,16 +41,20 @@ public enum AccessEmbeddedProxyEntryFactory {
             }
             let session: AccessEmbeddedProxyEntrySession
             if let parameters {
-                session = AccessEmbeddedProxyEntrySession(core: core, parameters: parameters)
+                session = AccessEmbeddedProxyEntrySession(core: core, parameters: parameters, retireDocuments: retireDocuments, transport: transport)
             } else {
                 guard let configPath else { return AccessFailClosedProxyEntryPublisher() }
                 let local = try AccessLocalV2RayConfigLoader.load(path: configPath)
                 let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: local.parameters)
-                session = AccessEmbeddedProxyEntrySession(core: core, outbound: outbound)
+                session = AccessEmbeddedProxyEntrySession(core: core, outbound: outbound, transport: transport, retireDocuments: retireDocuments)
             }
             return AccessProxyEntryPublisher(
                 provision: { generation, deadline in
-                    try await session.provision(generation: generation, deadline: deadline)
+                    do { return try await session.provision(generation: generation, deadline: deadline) }
+                    catch {
+                        await session.stopUnpublished()
+                        throw error
+                    }
                 },
                 shutdown: { identity in
                     session.shutdown(identity: identity)
@@ -79,21 +86,31 @@ public enum AccessEmbeddedProxyEntryFactory {
 final class AccessEmbeddedProxyEntrySession {
     private let core: any AccessEmbeddedCoreControlling
     private let loadOutbound: @MainActor () async throws -> AccessRealityVisionOutboundConfig
-    private var listener: AccessHTTPInboundListener?
+    private var listener: AccessEmbeddedInboundListener?
+    private let transport: AccessInboundTransport
     private var identity: String?
     private var startedCore = false
     private var pendingStop: Task<Void, Never>?
     private var logCapture: AccessDiagnosticLog.Capture?
+    private var retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
 
-    init(core: any AccessEmbeddedCoreControlling, outbound: AccessRealityVisionOutboundConfig) {
+    init(core: any AccessEmbeddedCoreControlling, outbound: AccessRealityVisionOutboundConfig,
+         transport: AccessInboundTransport = .http,
+         retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil) {
         self.core = core
+        self.transport = transport
+        self.retireDocuments = retireDocuments
         self.loadOutbound = { outbound }
     }
 
     init(core: any AccessEmbeddedCoreControlling,
-         parameters: @escaping @MainActor () async throws -> AccessRealityVisionParameters) {
+         parameters: @escaping @MainActor () async throws -> AccessRealityVisionParameters,
+         retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil,
+         transport: AccessInboundTransport = .http) {
         self.core = core
+        self.transport = transport
         self.loadOutbound = { try AccessRealityVisionOutboundConfigBuilder.build(parameters: await parameters()) }
+        self.retireDocuments = retireDocuments
     }
 
     func provision(generation: UInt64, deadline: Duration) async throws -> AccessProxyEntryPublisher.Provision {
@@ -105,14 +122,16 @@ final class AccessEmbeddedProxyEntrySession {
             self.pendingStop = nil
         }
         try Task.checkCancellation()
-        if let listener, let identity, listener.isListening, core.isRunning {
+        if let listener, let identity, listener.isListening,
+           let actualPort = listener.boundPort, actualPort != 0, core.isRunning {
             return AccessProxyEntryPublisher.Provision(
                 endpoint: AccessManagedProxyEndpoint(
                     identity: identity,
                     generation: generation,
                     loopbackHost: AccessEndpoint.loopbackHost,
-                    port: listener.registration.endpoint.port,
-                    state: .ready
+                    port: actualPort,
+                    state: .ready,
+                    transport: transport
                 ),
                 listenerReady: true,
                 runtimeHealthy: true,
@@ -141,13 +160,20 @@ final class AccessEmbeddedProxyEntrySession {
             throw AccessSiteSessionError.runtimeNotReady
         }
 
-        let port: UInt16
+        let boundSocket: NWListener
         do {
-            port = try await Self.reserveLoopbackPort()
+            boundSocket = try await Self.reserveLoopbackSocket()
         } catch let error as AccessSiteSessionError {
             throw error
         } catch {
             throw AccessSiteSessionError.prepareFailed("port.reserve: \(error)")
+        }
+        var transferredSocket = false
+        defer { if !transferredSocket { boundSocket.cancel() } }
+        try Task.checkCancellation()
+        guard let port = boundSocket.port?.rawValue, port != 0,
+              transport != .socks5 || port != 1080 else {
+            throw AccessSiteSessionError.runtimeNotReady
         }
 
         let registration: AccessRegistration
@@ -155,7 +181,7 @@ final class AccessEmbeddedProxyEntrySession {
             registration = try AccessRegistration(
                 id: try AccessRegistrationID("embedded-entry-\(generation)-\(port)"),
                 owner: try AccessOwner(channel: 1, profile: "ordinary", partition: "default"),
-                transport: .http,
+                transport: transport,
                 endpoint: try AccessEndpoint(host: AccessEndpoint.loopbackHost, port: port),
                 credentialSlot: try AccessCredentialSlot(id: "embedded-entry"),
                 lease: try AccessLease(
@@ -168,14 +194,25 @@ final class AccessEmbeddedProxyEntrySession {
         }
 
         let opener = AccessEmbeddedTunnelOpener(dialer: AccessEmbeddedRealityDialer(core: core))
-        let next: AccessHTTPInboundListener
+        let next: AccessEmbeddedInboundListener
         do {
-            next = try AccessHTTPInboundListener(registration: registration, tunnels: opener)
+            switch transport {
+            case .http: next = .http(try AccessHTTPInboundListener(registration: registration, preparedSocket: boundSocket, tunnels: opener))
+            case .socks5: next = .socks5(try AccessSOCKS5InboundListener(registration: registration, preparedSocket: boundSocket, tunnels: opener))
+            case .https: throw AccessSiteSessionError.runtimeNotReady
+            }
             try await next.start(at: Date())
         } catch {
             throw AccessSiteSessionError.prepareFailed("listener.start: \(error)")
         }
-        let entryIdentity = "embedded-\(registration.id.rawValue)"
+        guard let actualPort = next.boundPort, actualPort == port, actualPort != 0,
+              transport != .socks5 || actualPort != 1080 else {
+            try? next.stop()
+            throw AccessSiteSessionError.runtimeNotReady
+        }
+        try Task.checkCancellation()
+        let entryIdentity = "embedded-\(transport.rawValue)-\(registration.id.rawValue)"
+        transferredSocket = true
         listener = next
         identity = entryIdentity
         return AccessProxyEntryPublisher.Provision(
@@ -183,8 +220,9 @@ final class AccessEmbeddedProxyEntrySession {
                 identity: entryIdentity,
                 generation: generation,
                 loopbackHost: AccessEndpoint.loopbackHost,
-                port: port,
-                state: .ready
+                port: actualPort,
+                state: .ready,
+                transport: transport
             ),
             listenerReady: true,
             runtimeHealthy: true,
@@ -201,13 +239,13 @@ final class AccessEmbeddedProxyEntrySession {
         level: AccessLogLevel
     ) async throws -> AccessDiagnosticLog.Capture? {
         let parameters = outbound.parameters
-        let capture = try? diagnostics.start(
+        let capture = try? diagnostics.acquireShared(
             level: level, secrets: [parameters.userID, parameters.publicKey, parameters.shortID]
         )
         if level != .none && capture == nil { diagnostics.markUnavailable() }
         do {
             let config = try outbound.embeddedInstanceJSONData(
-                logLevel: capture == nil ? .none : level,
+                logLevel: capture?.level ?? .none,
                 errorLogPath: capture?.path, includeAccessLog: true
             )
             try await core.start(configData: config)
@@ -224,6 +262,14 @@ final class AccessEmbeddedProxyEntrySession {
         }
     }
 
+    func stopUnpublished() async {
+        guard identity == nil, startedCore else { return }
+        startedCore = false
+        await core.stop()
+        if let logCapture { AccessDiagnosticLog.shared.stop(capture: logCapture) }
+        logCapture = nil
+    }
+
     var isRuntimeHealthy: Bool {
         guard let listener, identity != nil else { return false }
         return listener.isListening && core.isRunning
@@ -232,7 +278,12 @@ final class AccessEmbeddedProxyEntrySession {
     func shutdown(identity: String) {
         guard self.identity == identity else { return }
         if let listener {
-            try? listener.stop()
+            if let retireDocuments {
+                listener.suspend()
+                retireDocuments { try? listener.stop() }
+            } else {
+                try? listener.stop()
+            }
         }
         listener = nil
         self.identity = nil
@@ -248,39 +299,39 @@ final class AccessEmbeddedProxyEntrySession {
         }
     }
 
-    /// Reserves an ephemeral loopback port via NWListener, then cancels it.
-    /// Uses async continuation + task-group timeout — no semaphore / NSLock.
-    private static func reserveLoopbackPort() async throws -> UInt16 {
-        try await withThrowingTaskGroup(of: UInt16.self) { group in
+    /// The ready socket is transferred intact to the selected protocol listener.
+    /// A port number obtained from a cancelled reservation is never published.
+    static func reserveLoopbackSocket() async throws -> NWListener {
+        try await withThrowingTaskGroup(of: NWListener.self) { group in
             group.addTask {
-                try await Self.awaitEphemeralLoopbackPort()
+                try await Self.awaitEphemeralLoopbackSocket()
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(2))
                 throw AccessSiteSessionError.prepareFailed("port reserve timed out")
             }
-            guard let port = try await group.next() else {
+            guard let socket = try await group.next() else {
                 throw AccessSiteSessionError.prepareFailed("port reserve returned no value")
             }
             group.cancelAll()
-            return port
+            return socket
         }
     }
 
-    private static func awaitEphemeralLoopbackPort() async throws -> UInt16 {
-        // Prefer `NWListener(using:on:)` for ephemeral bind. Setting
-        // `requiredLocalEndpoint` to `port: .any` with reuse can return EINVAL
-        // on some simulator runtimes.
+    private static func awaitEphemeralLoopbackSocket() async throws -> NWListener {
         let nwListener: NWListener
         do {
-            nwListener = try NWListener(using: .tcp, on: .any)
+            let parameters = NWParameters.tcp
+            parameters.allowLocalEndpointReuse = false
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+            nwListener = try NWListener(using: parameters, on: .any)
         } catch {
             throw AccessSiteSessionError.prepareFailed(String(describing: error))
         }
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let resume = OncePortResume(continuation)
+                let resume = OnceSocketResume(continuation)
                 // Required before start on current Network.framework — missing handler
                 // surfaces as POSIX EINVAL on some simulator runtimes.
                 nwListener.newConnectionHandler = { connection in
@@ -290,16 +341,18 @@ final class AccessEmbeddedProxyEntrySession {
                     switch state {
                     case .ready:
                         if let port = nwListener.port?.rawValue, port > 0 {
-                            resume.finish(returning: port)
+                            nwListener.stateUpdateHandler = nil
+                            resume.finish(returning: nwListener)
                         } else {
                             resume.finish(
                                 throwing: AccessSiteSessionError.prepareFailed(
                                     "port.reserve: listener ready without port"
                                 )
                             )
+                            nwListener.cancel()
                         }
-                        nwListener.cancel()
                     case .failed(let error):
+                        nwListener.stateUpdateHandler = nil
                         resume.finish(
                             throwing: AccessSiteSessionError.prepareFailed(
                                 "port.reserve: \(error)"
@@ -307,7 +360,7 @@ final class AccessEmbeddedProxyEntrySession {
                         )
                         nwListener.cancel()
                     case .cancelled:
-                        // Success path also cancels; OncePortResume ignores the second finish.
+                        nwListener.stateUpdateHandler = nil
                         resume.finish(throwing: CancellationError())
                     default:
                         break
@@ -325,22 +378,22 @@ final class AccessEmbeddedProxyEntrySession {
 ///
 /// `Mutex` is preferred over `NSLock` on iOS 18+/Swift 6; kept as a class so the
 /// non-Copyable mutex can own the continuation.
-private final class OncePortResume: Sendable {
-    private let state: Mutex<CheckedContinuation<UInt16, Error>?>
+private final class OnceSocketResume: Sendable {
+    private let state: Mutex<CheckedContinuation<NWListener, Error>?>
 
-    init(_ continuation: CheckedContinuation<UInt16, Error>) {
+    init(_ continuation: CheckedContinuation<NWListener, Error>) {
         state = Mutex(continuation)
     }
 
-    func finish(returning port: UInt16) {
-        take()?.resume(returning: port)
+    func finish(returning listener: NWListener) {
+        take()?.resume(returning: listener)
     }
 
     func finish(throwing error: Error) {
         take()?.resume(throwing: error)
     }
 
-    private func take() -> CheckedContinuation<UInt16, Error>? {
+    private func take() -> CheckedContinuation<NWListener, Error>? {
         state.withLock { pending in
             let value = pending
             pending = nil
@@ -358,5 +411,27 @@ private final class AccessEmbeddedTunnelOpener: AccessHTTPTunnelOpening, @unchec
 
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         try await dialer.dial(host: host, port: port)
+    }
+}
+
+
+private enum AccessEmbeddedInboundListener {
+    case http(AccessHTTPInboundListener)
+    case socks5(AccessSOCKS5InboundListener)
+
+    var isListening: Bool {
+        switch self { case .http(let value): value.isListening; case .socks5(let value): value.isListening }
+    }
+    var boundPort: UInt16? {
+        switch self { case .http(let value): value.boundPort; case .socks5(let value): value.boundPort }
+    }
+    func start(at now: Date) async throws {
+        switch self { case .http(let value): try await value.start(at: now); case .socks5(let value): try await value.start(at: now) }
+    }
+    func suspend() {
+        switch self { case .http(let value): value.suspend(); case .socks5(let value): value.suspend() }
+    }
+    func stop() throws {
+        switch self { case .http(let value): try value.stop(); case .socks5(let value): try value.stop() }
     }
 }

@@ -1,9 +1,131 @@
 import Foundation
 import Network
 import XCTest
+import Synchronization
 @testable import AccessKit
 
 final class AccessSOCKS5InboundTests: XCTestCase {
+    func testTwoPreparedSOCKSSocketsStayDistinctAndServeAfterAdoption() async throws {
+        let first = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        let second = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { first.cancel(); second.cancel() }
+        let firstPort = try XCTUnwrap(first.port?.rawValue)
+        let secondPort = try XCTUnwrap(second.port?.rawValue)
+        XCTAssertNotEqual(firstPort, secondPort)
+        for port in [firstPort, secondPort] { XCTAssertNotEqual(port, 0); XCTAssertNotEqual(port, 1080) }
+        let rival = try AccessSOCKS5InboundListener(registration: makeRegistration(port: firstPort))
+        do {
+            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try? rival.stop()
+            XCTFail("The assigned SOCKS port must remain held before adoption")
+        } catch { }
+        for (socket, port) in [(first, firstPort), (second, secondPort)] {
+            let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: port), preparedSocket: socket)
+            try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            XCTAssertTrue(listener.boundSocketForTests === socket)
+            let client = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+            client.start(queue: .global())
+            try await Self.send(Data([5, 1, 0]), to: client)
+            let reply = try await Self.receive(2, from: client)
+            XCTAssertEqual(reply, Data([5, 0]))
+            client.cancel()
+            try listener.stop()
+        }
+    }
+
+    func testPreparedSOCKSSocketRejectsMismatchedRegistration() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let listener = try AccessSOCKS5InboundListener(
+            registration: makeRegistration(port: port == 65535 ? 65534 : port + 1), preparedSocket: socket)
+        do {
+            try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            XCTFail("A prepared socket cannot be relabelled with another endpoint")
+        } catch { }
+        XCTAssertNil(listener.boundSocketForTests)
+        XCTAssertEqual(listener.acceptedConnectionCount, 0)
+    }
+
+    func testProductionTunnelWaitsForUpstreamAndPreservesPipelinedBytes() async throws {
+        let tunnel = GatedTunnel()
+        let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806), tunnels: tunnel)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        let connection = NWConnection(host: "127.0.0.1", port: 10806, using: .tcp)
+        connection.start(queue: .global())
+        let deadline = Task { try? await Task.sleep(for: .seconds(5)); connection.cancel() }
+        defer { deadline.cancel(); tunnel.release(); connection.cancel(); try? listener.stop() }
+        try await Self.send(Data([5, 1, 0]), to: connection)
+        let method = try await Self.receive(2, from: connection)
+        XCTAssertEqual(method, Data([5, 0]))
+        var request = Data([5, 1, 0, 3, 11])
+        request.append(contentsOf: "example.com".utf8)
+        request.append(contentsOf: [1, 187])
+        request.append(Data("first-bytes".utf8))
+        try await Self.send(request, to: connection)
+        let replied = Mutex(false)
+        let response = Task { () throws -> Data in
+            let data = try await Self.receive(10, from: connection)
+            replied.withLock { $0 = true }
+            return data
+        }
+        let wait = Date().addingTimeInterval(2)
+        while !tunnel.isWaiting, Date() < wait { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(tunnel.isWaiting)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(replied.withLock { $0 }, "SOCKS success cannot precede the authorized upstream")
+        tunnel.release()
+        let success = try await response.value
+        XCTAssertEqual(success, AccessSOCKS5InboundParser.successReply())
+        let writeDeadline = Date().addingTimeInterval(2)
+        while tunnel.stream.writtenSnapshot.isEmpty, Date() < writeDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(tunnel.stream.writtenSnapshot, Data("first-bytes".utf8))
+        tunnel.stream.push(Data("reply".utf8))
+        let responseBytes = try await Self.receive(5, from: connection)
+        XCTAssertEqual(responseBytes, Data("reply".utf8))
+        listener.suspend()
+        let closeDeadline = Date().addingTimeInterval(2)
+        while tunnel.stream.isOpen, Date() < closeDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertTrue(listener.isListening, "Suspension retains the bound port until document retirement")
+        let rival = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806))
+        do { try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000)); try? rival.stop(); XCTFail("Port was released too early") }
+        catch { }
+    }
+
+    private static func send(_ data: Data, to connection: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.send(content: data, completion: .contentProcessed { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            })
+        }
+    }
+
+    private static func receive(_ count: Int, from connection: NWConnection) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                if let error { continuation.resume(throwing: error) }
+                else if let data, data.count == count { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: URLError(.badServerResponse)) }
+            }
+        }
+    }
+
+    private final class GatedTunnel: AccessHTTPTunnelOpening, @unchecked Sendable {
+        let stream = AccessMemoryRealityStream()
+        let waiter = Mutex<CheckedContinuation<Void, Never>?>(nil)
+        var isWaiting: Bool { waiter.withLock { $0 != nil } }
+        func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+            await withCheckedContinuation { continuation in waiter.withLock { $0 = continuation } }
+            try Task.checkCancellation()
+            return stream
+        }
+        func release() {
+            let pending = waiter.withLock { value in let current = value; value = nil; return current }
+            pending?.resume()
+        }
+    }
+
     private func makeRegistration(
         transport: AccessInboundTransport = .socks5,
         port: UInt16 = 18_805
@@ -19,6 +141,24 @@ final class AccessSOCKS5InboundTests: XCTestCase {
                 expiresAt: Date(timeIntervalSince1970: 1_700_000_000 + 60)
             )
         )
+    }
+
+    func testLocalSOCKSPort1080CannotRestoreRotateOrStart() throws {
+        let legacy = try makeRegistration(port: 1080)
+        XCTAssertFalse(legacy.isActive(at: Date(timeIntervalSince1970: 1_700_000_000), observedGeneration: 1))
+        XCTAssertThrowsError(try AccessSOCKS5InboundListener(registration: legacy))
+        XCTAssertThrowsError(try JSONDecoder().decode(AccessRegistration.self, from: JSONEncoder().encode(legacy)))
+        XCTAssertThrowsError(try AccessProxyRegistrationFixture(registrationId: "legacy", dataStoreKind: .ordinary,
+            transport: .socks5, loopbackHost: "127.0.0.1", port: 1080, isActive: true))
+        let admitted = try makeRegistration(port: 10806)
+        XCTAssertTrue(admitted.hasAdmittedEndpoint)
+        XCTAssertNoThrow(try JSONDecoder().decode(AccessRegistration.self, from: JSONEncoder().encode(admitted)))
+        XCTAssertThrowsError(try admitted.rotated(id: AccessRegistrationID("next"),
+            endpoint: AccessEndpoint(host: "127.0.0.1", port: 1080),
+            credentialSlot: admitted.credentialSlot,
+            lease: AccessLease(generation: 2, expiresAt: Date(timeIntervalSince1970: 1_700_000_120))))
+        XCTAssertTrue(try makeRegistration(transport: .http, port: 1080).hasAdmittedEndpoint)
+        XCTAssertNoThrow(try AccessSOCKS5ConnectRequest(address: .domain("example.com"), port: 1080))
     }
 
     func testParserNoAuthGreetingAndConnect() throws {

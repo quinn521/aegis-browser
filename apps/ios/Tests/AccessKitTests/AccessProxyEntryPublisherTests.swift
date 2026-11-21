@@ -62,6 +62,19 @@ final class AccessProxyEntryPublisherTests: XCTestCase {
         XCTAssertFalse(publisher.validateReady(wrong))
     }
 
+    func testReadyAndRetentionRejectForgedTransportOrPort() async throws {
+        let publisher = AccessProxyEntryPublisher { generation, _ in self.provision(generation: generation) }
+        let result = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5)))
+        let key = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("a.example"), isPrivate: false)
+        for changeTransport in [false, true] {
+            var forged = result.endpoint
+            if changeTransport { forged.transport = .socks5 } else { forged.port += 1 }
+            XCTAssertFalse(publisher.validateReady(.init(operationID: result.operationID, endpoint: forged)))
+            XCTAssertFalse(publisher.retain(forged, for: key))
+        }
+        publisher.cancel(operationID: result.operationID)
+    }
+
     func testClosedGenerationDoesNotBecomeReadyAgain() async throws {
         let publisher = AccessProxyEntryPublisher { generation, _ in
             self.provision(generation: generation)

@@ -1,9 +1,16 @@
 package embeddedcore
 
 import (
+	"encoding/json"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	clog "github.com/xtls/xray-core/common/log"
 )
 
 const freedomConfig = `{
@@ -57,10 +64,10 @@ func TestAsyncIOBeyondDispatchCapacity(t *testing.T) {
 	ids := make([]int64, 0, count)
 	for i := 0; i < count; i++ {
 		a, b := net.Pipe()
-		id := nextID.Add(1)
-		mu.Lock()
-		streams[id] = &streamHandle{conn: observedReadConn{a, entered}, cancel: func() {}}
-		mu.Unlock()
+		id := legacy.nextID.Add(1)
+		legacy.mu.Lock()
+		legacy.streams[id] = &streamHandle{conn: observedReadConn{a, entered}, cancel: func() {}}
+		legacy.mu.Unlock()
 		peers = append(peers, b)
 		ids = append(ids, id)
 		ReadAsync(id, 1, resultReceiver{reads})
@@ -158,10 +165,10 @@ func TestAsyncWriteOwnsBorrowedArgument(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	id := nextID.Add(1)
-	mu.Lock()
-	streams[id] = &streamHandle{conn: a, cancel: func() {}}
-	mu.Unlock()
+	id := legacy.nextID.Add(1)
+	legacy.mu.Lock()
+	legacy.streams[id] = &streamHandle{conn: a, cancel: func() {}}
+	legacy.mu.Unlock()
 	defer CloseStream(id)
 	written := make(chan asyncResult, 1)
 	input := []byte("original")
@@ -178,4 +185,95 @@ func TestAsyncWriteOwnsBorrowedArgument(t *testing.T) {
 	if r := awaitResult(t, written); r.failure != "" {
 		t.Fatal(r.failure)
 	}
+}
+
+func TestRuntimeOwnershipSeparatesStreamsAndStop(t *testing.T) {
+	first, second := NewRuntime(), NewRuntime()
+	if err := first.Start(freedomConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Start(freedomConfig); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+	defer second.Stop()
+	a, b := net.Pipe()
+	defer b.Close()
+	first.streams[1] = &streamHandle{conn: a, cancel: func() {}}
+	if _, err := second.Read(1, 1); err == nil {
+		t.Fatal("another runtime must not read an owned stream")
+	}
+	second.CloseStream(1)
+	if _, err := first.lookup(1); err != nil {
+		t.Fatal("another runtime closed an owned stream")
+	}
+	if err := second.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !first.IsRunning() {
+		t.Fatal("another runtime stopped first runtime")
+	}
+}
+
+func TestConcurrentRuntimeInitialization(t *testing.T) {
+	const count = 12
+	gate := make(chan struct{})
+	results := make(chan error, count)
+	runtimes := make([]*Runtime, count)
+	for i := range runtimes {
+		runtimes[i] = NewRuntime()
+		go func(runtime *Runtime) {
+			<-gate
+			results <- runtime.Start(freedomConfig)
+		}(runtimes[i])
+	}
+	close(gate)
+	for range count {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stopped sync.WaitGroup
+	for _, runtime := range runtimes {
+		stopped.Go(func() { _ = runtime.Stop() })
+	}
+	stopped.Wait()
+}
+
+func TestStoppingNewestRuntimeRestoresLiveLogger(t *testing.T) {
+	directory := t.TempDir()
+	config := func(name string) string {
+		var value map[string]any
+		if err := json.Unmarshal([]byte(freedomConfig), &value); err != nil {
+			t.Fatal(err)
+		}
+		value["log"] = map[string]any{"loglevel": "info", "access": "none", "error": filepath.Join(directory, name)}
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	first, second := NewRuntime(), NewRuntime()
+	if err := first.Start(config("first.log")); err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop()
+	if err := second.Start(config("second.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	const marker = "surviving-runtime-marker"
+	clog.Record(&clog.GeneralMessage{Severity: clog.Severity_Info, Content: marker})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(filepath.Join(directory, "first.log"))
+		if strings.Contains(string(data), marker) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("stopping another runtime stranded the surviving logger")
 }

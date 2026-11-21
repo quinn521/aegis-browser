@@ -13,19 +13,46 @@ import (
 	"sync"
 	"sync/atomic"
 
+	xraylog "github.com/xtls/xray-core/app/log"
+	clog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
-var (
+// Runtime owns an isolated Xray instance and its streams.
+// Legacy package entry points below retain their original single-runtime API.
+type Runtime struct {
 	mu              sync.Mutex
 	instance        *core.Instance
-	streams         = map[int64]*streamHandle{}
+	streams         map[int64]*streamHandle
 	nextID          atomic.Int64
 	instanceContext context.Context
 	instanceCancel  context.CancelFunc
-)
+}
+
+func NewRuntime() *Runtime { return &Runtime{streams: map[int64]*streamHandle{}} }
+
+var legacy = NewRuntime()
+
+// Xray initialization and the selected logger are process-wide even though
+// instance routing and stream tables are independent.
+var lifecycleMu sync.Mutex
+var liveInstances []*core.Instance
+
+type discardedLog struct{}
+
+func (discardedLog) Handle(clog.Message) {}
+
+func selectLiveLogger() {
+	for i := len(liveInstances) - 1; i >= 0; i-- {
+		if handler, ok := liveInstances[i].GetFeature((*xraylog.Instance)(nil).Type()).(clog.Handler); ok {
+			clog.RegisterHandler(handler)
+			return
+		}
+	}
+	clog.RegisterHandler(discardedLog{})
+}
 
 var (
 	errNotRunning     = errors.New("embedded core is not running")
@@ -40,29 +67,33 @@ type streamHandle struct {
 }
 
 // Start boots one Xray instance from JSON config bytes (UTF-8).
-// A stopped instance cannot be restarted; call Start again after Stop.
-func Start(configJSON string) error {
-	mu.Lock()
-	defer mu.Unlock()
-	if instance != nil {
+// Calling Start after Stop creates a fresh instance rather than reusing it.
+func (r *Runtime) Start(configJSON string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.instance != nil {
 		return errAlreadyRunning
 	}
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 	inst, err := core.StartInstance("json", []byte(configJSON))
 	if err != nil {
+		selectLiveLogger()
 		return err
 	}
-	instance = inst
-	instanceContext, instanceCancel = context.WithCancel(context.Background())
+	r.instance = inst
+	liveInstances = append(liveInstances, inst)
+	r.instanceContext, r.instanceCancel = context.WithCancel(context.Background())
 	return nil
 }
 
 // Stop closes every open dial stream and the running instance.
-func Stop() error {
-	mu.Lock()
-	inst, cancel, closing := instance, instanceCancel, streams
-	instance, instanceContext, instanceCancel = nil, nil, nil
-	streams = map[int64]*streamHandle{}
-	mu.Unlock()
+func (r *Runtime) Stop() error {
+	r.mu.Lock()
+	inst, cancel, closing := r.instance, r.instanceCancel, r.streams
+	r.instance, r.instanceContext, r.instanceCancel = nil, nil, nil
+	r.streams = map[int64]*streamHandle{}
+	r.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
@@ -71,28 +102,45 @@ func Stop() error {
 		_ = handle.conn.Close()
 	}
 	if inst != nil {
-		return inst.Close()
+		lifecycleMu.Lock()
+		defer lifecycleMu.Unlock()
+		for i, live := range liveInstances {
+			if live == inst {
+				copy(liveInstances[i:], liveInstances[i+1:])
+				liveInstances[len(liveInstances)-1] = nil
+				liveInstances = liveInstances[:len(liveInstances)-1]
+				break
+			}
+		}
+		if len(liveInstances) > 0 {
+			selectLiveLogger()
+		}
+		err := inst.Close()
+		if len(liveInstances) == 0 {
+			selectLiveLogger()
+		}
+		return err
 	}
 	return nil
 }
 
 // IsRunning reports whether the embedded instance is live.
-func IsRunning() bool {
-	mu.Lock()
-	defer mu.Unlock()
-	return instance != nil && instance.IsRunning()
+func (r *Runtime) IsRunning() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.instance != nil && r.instance.IsRunning()
 }
 
 // Dial opens one TCP path through the running instance to host:port.
 // Returns a stream id used by Read / Write / CloseStream.
-func Dial(host string, port int) (int64, error) {
+func (r *Runtime) Dial(host string, port int) (int64, error) {
 	host = strings.TrimSpace(host)
 	if host == "" || port <= 0 || port > 65535 {
 		return 0, errEmptyDial
 	}
-	mu.Lock()
-	inst, parent := instance, instanceContext
-	mu.Unlock()
+	r.mu.Lock()
+	inst, parent := r.instance, r.instanceContext
+	r.mu.Unlock()
 	if inst == nil || !inst.IsRunning() {
 		return 0, errNotRunning
 	}
@@ -103,26 +151,26 @@ func Dial(host string, port int) (int64, error) {
 		cancel()
 		return 0, err
 	}
-	id := nextID.Add(1)
-	mu.Lock()
-	if instance != inst {
-		mu.Unlock()
+	id := r.nextID.Add(1)
+	r.mu.Lock()
+	if r.instance != inst {
+		r.mu.Unlock()
 		cancel()
 		_ = conn.Close()
 		return 0, errNotRunning
 	}
-	streams[id] = &streamHandle{conn: conn, cancel: cancel}
-	mu.Unlock()
+	r.streams[id] = &streamHandle{conn: conn, cancel: cancel}
+	r.mu.Unlock()
 	return id, nil
 }
 
 // Read returns up to maxBytes from the stream. An empty slice with a nil
 // error means EOF. A closed stream returns an error.
-func Read(streamID int64, maxBytes int) ([]byte, error) {
+func (r *Runtime) Read(streamID int64, maxBytes int) ([]byte, error) {
 	if maxBytes <= 0 {
 		maxBytes = 16 * 1024
 	}
-	handle, err := lookup(streamID)
+	handle, err := r.lookup(streamID)
 	if err != nil {
 		return nil, err
 	}
@@ -141,8 +189,8 @@ func Read(streamID int64, maxBytes int) ([]byte, error) {
 }
 
 // Write sends the whole chunk on the stream.
-func Write(streamID int64, data []byte) error {
-	handle, err := lookup(streamID)
+func (r *Runtime) Write(streamID int64, data []byte) error {
+	handle, err := r.lookup(streamID)
 	if err != nil {
 		return err
 	}
@@ -151,13 +199,13 @@ func Write(streamID int64, data []byte) error {
 }
 
 // CloseStream closes one dial stream. Idempotent for unknown ids.
-func CloseStream(streamID int64) {
-	mu.Lock()
-	handle, ok := streams[streamID]
+func (r *Runtime) CloseStream(streamID int64) {
+	r.mu.Lock()
+	handle, ok := r.streams[streamID]
 	if ok {
-		delete(streams, streamID)
+		delete(r.streams, streamID)
 	}
-	mu.Unlock()
+	r.mu.Unlock()
 	if !ok {
 		return
 	}
@@ -165,10 +213,10 @@ func CloseStream(streamID int64) {
 	_ = handle.conn.Close()
 }
 
-func lookup(streamID int64) (*streamHandle, error) {
-	mu.Lock()
-	defer mu.Unlock()
-	handle, ok := streams[streamID]
+func (r *Runtime) lookup(streamID int64) (*streamHandle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	handle, ok := r.streams[streamID]
 	if !ok {
 		return nil, errBadStream
 	}
@@ -195,24 +243,38 @@ func complete(c Completion, value int64, data []byte, err error) {
 	c.Complete(value, data, failure)
 }
 
-func StartAsync(configJSON string, c Completion) {
-	go func() { complete(c, 0, nil, Start(configJSON)) }()
+func (r *Runtime) StartAsync(configJSON string, c Completion) {
+	go func() { complete(c, 0, nil, r.Start(configJSON)) }()
 }
-func DialAsync(host string, port int, c Completion) {
-	go func() { id, err := Dial(host, port); complete(c, id, nil, err) }()
+func (r *Runtime) DialAsync(host string, port int, c Completion) {
+	go func() { id, err := r.Dial(host, port); complete(c, id, nil, err) }()
 }
-func ReadAsync(streamID int64, maxBytes int, c Completion) {
-	go func() { data, err := Read(streamID, maxBytes); complete(c, 0, data, err) }()
+func (r *Runtime) ReadAsync(streamID int64, maxBytes int, c Completion) {
+	go func() { data, err := r.Read(streamID, maxBytes); complete(c, 0, data, err) }()
 }
 
 // Gomobile lends argument bytes only for this call; own them before returning.
-func WriteAsync(streamID int64, data []byte, c Completion) {
+func (r *Runtime) WriteAsync(streamID int64, data []byte, c Completion) {
 	data = append([]byte(nil), data...)
-	go func() { complete(c, 0, nil, Write(streamID, data)) }()
+	go func() { complete(c, 0, nil, r.Write(streamID, data)) }()
 }
-func StopAsync(c Completion) {
-	go func() { complete(c, 0, nil, Stop()) }()
+func (r *Runtime) StopAsync(c Completion) {
+	go func() { complete(c, 0, nil, r.Stop()) }()
 }
-func CloseStreamAsync(streamID int64) {
-	go CloseStream(streamID)
+func (r *Runtime) CloseStreamAsync(streamID int64) {
+	go r.CloseStream(streamID)
 }
+
+func Start(configJSON string) error                  { return legacy.Start(configJSON) }
+func Stop() error                                    { return legacy.Stop() }
+func IsRunning() bool                                { return legacy.IsRunning() }
+func Dial(host string, port int) (int64, error)      { return legacy.Dial(host, port) }
+func Read(id int64, maxBytes int) ([]byte, error)    { return legacy.Read(id, maxBytes) }
+func Write(id int64, data []byte) error              { return legacy.Write(id, data) }
+func CloseStream(id int64)                           { legacy.CloseStream(id) }
+func StartAsync(configJSON string, c Completion)     { legacy.StartAsync(configJSON, c) }
+func StopAsync(c Completion)                         { legacy.StopAsync(c) }
+func DialAsync(host string, port int, c Completion)  { legacy.DialAsync(host, port, c) }
+func ReadAsync(id int64, maxBytes int, c Completion) { legacy.ReadAsync(id, maxBytes, c) }
+func WriteAsync(id int64, data []byte, c Completion) { legacy.WriteAsync(id, data, c) }
+func CloseStreamAsync(id int64)                      { legacy.CloseStreamAsync(id) }

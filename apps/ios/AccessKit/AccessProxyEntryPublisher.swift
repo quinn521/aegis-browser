@@ -141,16 +141,17 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
     public func validateReady(_ result: AccessProxyEntryPrepareResult) -> Bool {
         guard let instance, waiters[result.operationID] === instance.generation else { return false }
         guard !instance.generation.isClosed, isHealthy(instance.provision) else { return false }
-        guard result.endpoint.identity == instance.provision.endpoint.identity else { return false }
+        guard result.endpoint == instance.provision.endpoint else { return false }
         guard result.endpoint.generation == instance.generation.number else { return false }
         guard result.endpoint.state == .ready else { return false }
-        guard result.endpoint.loopbackHost == "127.0.0.1", result.endpoint.port != 0 else { return false }
+        guard result.endpoint.loopbackHost == "127.0.0.1", result.endpoint.port != 0,
+              result.endpoint.transport != .socks5 || result.endpoint.port != 1080 else { return false }
         return true
     }
 
     public func retain(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey) -> Bool {
         guard let instance, !instance.generation.isClosed, isHealthy(instance.provision) else { return false }
-        guard endpoint.identity == instance.provision.endpoint.identity,
+        guard endpoint == instance.provision.endpoint,
               endpoint.generation == instance.generation.number
         else { return false }
         consumers[key] = instance
@@ -201,6 +202,7 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
             && provision.endpoint.state == .ready
             && provision.endpoint.loopbackHost == "127.0.0.1"
             && provision.endpoint.port != 0
+            && (provision.endpoint.transport != .socks5 || provision.endpoint.port != 1080)
             && !provision.endpoint.identity.isEmpty
     }
 

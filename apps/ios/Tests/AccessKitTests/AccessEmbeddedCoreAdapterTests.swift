@@ -200,6 +200,61 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
 
 @MainActor
 final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
+    func testTwoNativeRuntimesKeepTrafficAndSharedCaptureOpen() async throws {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let connections = Mutex<[NWConnection]>([])
+        listener.newConnectionHandler = { connection in
+            connections.withLock { $0.append(connection) }
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 1024) { data, _, _, _ in
+                if let data { connection.send(content: data, completion: .contentProcessed { _ in }) }
+            }
+        }
+        let ready = expectation(description: "local diagnostic origin ready")
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+        listener.start(queue: .global())
+        await fulfillment(of: [ready], timeout: 3)
+        let port = try XCTUnwrap(listener.port?.rawValue)
+        defer { listener.cancel(); connections.withLock { $0.forEach { $0.cancel() } } }
+        let diagnostics = AccessDiagnosticLog()
+        defer { diagnostics.stop() }
+        let firstCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
+        let config = try JSONSerialization.data(withJSONObject: [
+            "log": ["loglevel": "info", "access": firstCapture.path, "error": firstCapture.path],
+            "inbounds": [], "outbounds": [["protocol": "freedom"]]
+        ])
+        // Test-only local transport: no external target or product DIRECT fallback.
+        let first = try AccessGoEmbeddedCore(isolated: true)
+        let second = try AccessGoEmbeddedCore(isolated: true)
+        addTeardownBlock { await first.stop(); await second.stop() }
+        try await first.start(configData: config)
+        diagnostics.disableAndClear()
+        let secondCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
+        XCTAssertEqual(firstCapture.path, secondCapture.path)
+        try await second.start(configData: config)
+        await second.stop()
+        XCTAssertTrue(diagnostics.stop(capture: secondCapture))
+        XCTAssertTrue(first.isRunning)
+        let stream = try await first.dial(host: "127.0.0.1", port: port)
+        defer { stream.close() }
+        try await stream.write(Data("surviving-core".utf8))
+        let echoed = try await stream.read(maxBytes: 1024)
+        XCTAssertEqual(echoed, Data("surviving-core".utf8))
+        // Core.Dial's local freedom fixture has no inbound access message.
+        // The Go regression verifies native logger selection; this controlled
+        // record verifies the surviving Swift reader without inventing one.
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: firstCapture.path))
+        try writer.write(contentsOf: Data("2026/11/20 00:00:00 from local accepted //surviving-native.example:443\n".utf8))
+        try writer.close()
+        let deadline = Date().addingTimeInterval(3)
+        while !diagnostics.snapshot().contains("surviving-native.example:443"), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(diagnostics.snapshot().contains("surviving-native.example:443"))
+        await first.stop()
+        XCTAssertTrue(diagnostics.stop(capture: firstCapture))
+    }
+
     func testFreshNativeCallbacksSupportDuplexCancellationAndStop() async throws {
         let listener = try NWListener(using: .tcp, on: .any)
         let connections = Mutex<[NWConnection]>([])

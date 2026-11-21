@@ -7,6 +7,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     struct Capture: Sendable {
         let id: UUID
         let path: String
+        let level: AccessLogLevel
     }
     public static let shared: AccessDiagnosticLog = {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -32,6 +33,9 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     private var readerFD: Int32?
     private var directory: URL?
     private var captureID: UUID?
+    private let sharedLock = NSLock()
+    private var sharedCapture: Capture?
+    private var sharedOwners: Set<UUID> = []
     private var minimumRank = 2
     private let storage: AccessDiagnosticLogStorage?
     private var storageReady: Bool
@@ -150,7 +154,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             try? FileManager.default.removeItem(at: dir)
             throw failure
         }
-        let capture = Capture(id: UUID(), path: fifo.path)
+        let capture = Capture(id: UUID(), path: fifo.path, level: level)
         queue.sync {
             enabled = true
             failed = false
@@ -186,7 +190,50 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     @discardableResult
     func stop(capture: Capture) -> Bool {
-        stop(ifID: capture.id)
+        sharedLock.lock()
+        if sharedOwners.remove(capture.id) != nil {
+            guard sharedOwners.isEmpty else { sharedLock.unlock(); return true }
+            let underlying = sharedCapture
+            sharedCapture = nil
+            sharedLock.unlock()
+            return underlying.map { stop(ifID: $0.id) } ?? true
+        }
+        sharedLock.unlock()
+        return stop(ifID: capture.id)
+    }
+
+    /// Live embedded cores share Xray's process logger. Each owns a lease on
+    /// the filtered FIFO, and all active credentials remain in its redactor.
+    func acquireShared(level: AccessLogLevel, secrets: [String]) throws -> Capture? {
+        sharedLock.lock()
+        defer { sharedLock.unlock() }
+        if let capture = sharedCapture,
+           queue.sync(execute: { captureID == capture.id && readerFD != nil }) {
+            queue.sync {
+                self.secrets = Array(Set(self.secrets + secrets.filter { !$0.isEmpty }))
+                let safe = lines.compactMap(restoredLine)
+                if safe != lines { lines = safe; trimLocked(); dirty = true; scheduleSaveLocked() }
+                // Disabling ingestion does not release live cores' FIFO leases.
+                // Re-enable the same reader only after discarding bytes queued
+                // while logging was off; their old writers still own this path.
+                if level == .none {
+                    clearLocked(disable: true, completion: nil)
+                } else if !enabled && !failed {
+                    clearLocked(disable: false, completion: nil)
+                    minimumRank = Self.rank(level)
+                    enabled = true
+                }
+            }
+            let owner = Capture(id: UUID(), path: capture.path, level: capture.level)
+            sharedOwners.insert(owner.id)
+            return owner
+        }
+        sharedOwners.removeAll()
+        sharedCapture = try start(level: level, secrets: secrets)
+        guard let capture = sharedCapture else { return nil }
+        let owner = Capture(id: UUID(), path: capture.path, level: capture.level)
+        sharedOwners.insert(owner.id)
+        return owner
     }
 
     private func stop(ifID: UUID?) -> Bool {

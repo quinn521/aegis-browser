@@ -162,6 +162,29 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertTrue(restored.snapshot().contains("final.example:443"))
     }
 
+    func testSharedDiagnosticsKeepTheSurvivingCoreReaderAndAllSecretFilters() throws {
+        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
+        defer { log.stop() }
+        let first = try XCTUnwrap(log.acquireShared(level: .info, secrets: ["first-secret.example"]))
+        let second = try XCTUnwrap(log.acquireShared(level: .debug, secrets: ["second-secret.example"]))
+        XCTAssertEqual(first.path, second.path)
+        XCTAssertNotEqual(first.id, second.id)
+        XCTAssertEqual(second.level, first.level)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: first.path))
+        defer { try? writer.close() }
+        XCTAssertTrue(log.stop(capture: second))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+        try writer.write(contentsOf: Data((
+            "2026/11/11 00:00:00 from local accepted //first-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //second-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //surviving.example:443\n").utf8))
+        XCTAssertTrue(log.stop(capture: first))
+        XCTAssertTrue(log.snapshot().contains("surviving.example:443"))
+        XCTAssertFalse(log.snapshot().contains("first-secret.example"))
+        XCTAssertFalse(log.snapshot().contains("second-secret.example"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+    }
+
     func testStopDrainPreservesClearAndNoneDiscardBoundaries() throws {
         for disable in [false, true] {
             let log = AccessDiagnosticLog(pollInterval: .seconds(60))
@@ -177,6 +200,33 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
             if disable { XCTAssertEqual(log.snapshot(), "") }
             else { XCTAssertTrue(log.snapshot().contains("after-clear.example:443")) }
         }
+    }
+
+    func testDisabledSharedCaptureKeepsLiveLeasesWhenLoggingResumes() throws {
+        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
+        defer { log.stop() }
+        let subscription = try XCTUnwrap(log.acquireShared(level: .info, secrets: ["subscription-secret.example"]))
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: subscription.path))
+        defer { try? writer.close() }
+        log.disableAndClear()
+        let quietPage = try XCTUnwrap(log.acquireShared(level: .none, secrets: []))
+        XCTAssertEqual(quietPage.path, subscription.path)
+        XCTAssertTrue(log.stop(capture: quietPage))
+        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //disabled.example:443\n".utf8))
+        let page = try XCTUnwrap(log.acquireShared(level: .info, secrets: ["page-secret.example"]))
+        XCTAssertEqual(page.path, subscription.path)
+        XCTAssertTrue(log.stop(capture: page))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: subscription.path))
+        try writer.write(contentsOf: Data((
+            "2026/11/11 00:00:00 from local accepted //subscription-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //page-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //resumed.example:443\n").utf8))
+        XCTAssertTrue(log.stop(capture: subscription))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: subscription.path))
+        XCTAssertTrue(log.snapshot().contains("resumed.example:443"))
+        XCTAssertFalse(log.snapshot().contains("disabled.example"))
+        XCTAssertFalse(log.snapshot().contains("subscription-secret.example"))
+        XCTAssertFalse(log.snapshot().contains("page-secret.example"))
     }
 
     func testStartupCleanupRemovesAbandonedArchivesWithoutFollowingLinks() throws {
