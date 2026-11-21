@@ -64,10 +64,10 @@ struct BrowserSettingsView: View {
                     NavigationLink("搜索、主页与浏览方式") { BrowserGeneralSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("general-browser-settings")
                     if let tab = browser.activeTab, hostStores.offersWebsiteAcceleration(for: tab) {
-                        NavigationLink("网站加速") {
-                            if let current = browser.activeTab { WebsiteAccelerationSettingsView(tab: current) }
+                        NavigationLink("国内加速") {
+                            if let current = browser.activeTab { DomesticAccelerationSettingsView(tab: current) }
                         }
-                        .accessibilityIdentifier("website-acceleration-link")
+                        .accessibilityIdentifier("domestic-acceleration-link")
                     }
                     Button("打开系统 App 设置") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -146,7 +146,7 @@ struct BrowserSettingsView: View {
 
 
 // 功能名称与桌面一致，使用 iOS 的导航、触控尺寸和动态字号。
-private struct WebsiteAccelerationSettingsView: View {
+private struct DomesticAccelerationSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @ObservedObject var tab: BrowserTab
@@ -158,8 +158,8 @@ private struct WebsiteAccelerationSettingsView: View {
                     modeButton(.manual, title: "手动", id: "website-acceleration-manual")
                     modeButton(.smart, title: "智能", id: "website-acceleration-smart")
                 } header: {
-                    Text("国内加速")
-                        .accessibilityIdentifier("website-acceleration-domestic-section")
+                    Text("网站加速")
+                        .accessibilityIdentifier("website-acceleration-section")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("手动保留浏览器原有的选路规则。")
@@ -196,7 +196,7 @@ private struct WebsiteAccelerationSettingsView: View {
                 }
             }
         }
-        .localizedNavigationTitle("网站加速")
+        .localizedNavigationTitle("国内加速")
     }
 
     private func modeButton(_ mode: AccessWebsiteAccelerationMode, title: LocalizedStringKey, id: String) -> some View {

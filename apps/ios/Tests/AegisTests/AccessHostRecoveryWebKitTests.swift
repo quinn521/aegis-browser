@@ -1651,6 +1651,40 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(publisher.provisionCount, 0)
     }
 
+    func testWebsiteAccelerationPauseKeepsOnlyTheVerifiedDisplayedSiteEditable() throws {
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let publisher = readyPublisher(port: 18_474)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let site = try XCTUnwrap(URL(string: "https://debian.org/site"))
+        let host = try AccessSiteHost("debian.org")
+
+        tab.adoptPolicyMainFrameNavigationForTests(url: site)
+        tab.commitPendingMainFrameForTests()
+        coordinator.setWebsiteAccelerationMode(.manual, for: tab)
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertEqual(coordinator.websiteAccelerationHost(for: tab), host)
+        XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
+
+        tab.adoptPolicyMainFrameNavigationForTests(url: site, method: "POST")
+        XCTAssertNil(coordinator.websiteAccelerationHost(for: tab), "A new navigation to the same URL invalidates the paused site's choice.")
+        coordinator.setWebsiteRouteChoice(.service, for: tab, displayedHost: host)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: site))
+
+        tab.commitPendingMainFrameForTests()
+        coordinator.setWebsiteAccelerationMode(.smart, for: tab)
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertNil(coordinator.websiteAccelerationHost(for: tab), "Pausing a POST cannot make its site editable.")
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: host)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: site))
+        XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+        XCTAssertEqual(publisher.provisionCount, 0)
+    }
+
     #if DEBUG
     func testWebsiteAccelerationDiscardsLateReadyAfterModeChangeSiteChangeOrLeaving() async throws {
         enum Change: CaseIterable { case manual, original, leave }

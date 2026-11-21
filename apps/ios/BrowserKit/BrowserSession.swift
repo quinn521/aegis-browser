@@ -164,6 +164,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private typealias MainFrameAttempt = MainFrameNavigationState.Attempt
     private var committedRequest: MainFrameAttempt?
     private var committedDocumentEpoch: UInt64?
+    private var websiteRoutePause: (navigationID: String, documentEpoch: UInt64, editableAddress: URL?)?
     private var restoreURL: URL?
     private let navigationState = MainFrameNavigationState()
     private var attempt: MainFrameAttempt {
@@ -202,10 +203,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
                   request.url == address, request.httpMethod == failure.method else { return nil }
             return address
         }
+        if let pause = websiteRoutePause {
+            guard !isLoading, pause.navigationID == attempt.navigationID, attempt.url == address,
+                  pause.documentEpoch == navigationEpoch, pause.editableAddress == address else { return nil }
+            return address
+        }
         guard loadingErrorPresentation == nil, let committedRequest, isLatestAttempt(committedRequest),
               committedDocumentEpoch == navigationEpoch, committedMainFrameURL == address,
-              committedRequest.url == address, ["GET", "HEAD"].contains(committedRequest.method),
-              !committedRequest.hasReplayableBody else { return nil }
+              committedRequest.url == address, attempt.url == address,
+              ["GET", "HEAD"].contains(committedRequest.method), attempt.method == committedRequest.method,
+              !committedRequest.hasReplayableBody, !attempt.hasReplayableBody else { return nil }
         return address
     }
 
@@ -459,6 +466,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         hasReplayableBody: Bool = false,
         policyType: WKNavigationType? = nil
     ) {
+        websiteRoutePause = nil
         cancelJavaScriptDialog()
         afterProxyDocumentStops = nil
         documentStopDeadline?.cancel()
@@ -913,10 +921,17 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
     }
 
-    /// Stop the outstanding request. The coordinator separately retires a
-    /// revoked store when its document is no longer authorized.
-    public func pauseAfterWebsiteRouteChange() {
-        stop()
+    /// Cancel the load and keep the verified address available for editing the next route.
+    public func pauseAfterWebsiteRouteChange(detachStore: Bool) {
+        let editableAddress = websiteRouteControlURL
+        // A verified terminal failure already owns its displayed address and has no load to stop.
+        let keepsTerminalFailure = lastMainFrameFailure != nil && editableAddress != nil
+        if !keepsTerminalFailure { stop() }
+        if detachStore { rebindWebsiteDataStore(originalWebsiteDataStore, host: nil) }
+        guard !keepsTerminalFailure else { return }
+        // Bind the control to the paused tab state after Stop and any store teardown.
+        // The old request and document identities stay retired.
+        websiteRoutePause = (attempt.navigationID, navigationEpoch, editableAddress)
         loadingErrorPresentation = .resource("网站连接方式已更改，请重新打开此页面。")
     }
 
@@ -2137,6 +2152,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let now = Date()
         recentTerminations = recentTerminations.filter { now.timeIntervalSince($0) < 60 } + [now]
         guard isActive else { releaseWebView(); return }
+        guard websiteRoutePause == nil else { return }
         guard recentTerminations.count <= 1 else {
             loadTask?.cancel(); loadGeneration = UUID(); pendingNavigation = nil; isLoading = false
             loadingErrorPresentation = .resource("页面连续停止运行，已暂停自动重载。请手动重试或关闭此标签。")

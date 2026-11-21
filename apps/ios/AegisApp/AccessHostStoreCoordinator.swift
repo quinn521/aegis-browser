@@ -225,8 +225,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 websiteBindings.removeValue(forKey: tab.instanceID.uuidString)
                 websiteLandingParents.removeValue(forKey: tab.instanceID.uuidString)
             }
-            tab.pauseAfterWebsiteRouteChange()
-            if mustDetach { tab.rebindWebsiteDataStore(tab.originalWebsiteDataStore, host: nil) }
+            tab.pauseAfterWebsiteRouteChange(detachStore: mustDetach)
         }
         revision &+= 1
     }

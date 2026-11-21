@@ -1,6 +1,6 @@
-# 网站加速设计
+# 国内加速中的网站加速设计
 
-「网站加速」是设置中的统一入口。本期在同一页显示「国内加速」，用户直接选择「手动」或「智能」。未来加入「位置加速」时与「国内加速」并列。本期界面只显示已能使用的功能。首个可安装交付为 iOS DEV，随后完善 macOS DEV，最后接入 Android。Hysteria 2（HY2）另行验证传输故障恢复。[TDD 实施计划](../plans/2026-11-21-access-geosite.md)
+设置中的统一入口暂名「国内加速」。点开后直接看到「网站加速」的「手动」和「智能」两种模式。未来的「位置加速」与「网站加速」在同一页并列。本期界面只显示已能使用的功能。首个可安装交付为 iOS DEV，随后完善 macOS DEV，最后接入 Android。Hysteria 2（HY2）另行验证传输故障恢复。[TDD 实施计划](../plans/2026-11-21-access-geosite.md)
 
 设计基线为 `quinn521/aegis-browser:develop@e18106b84c56589a69faa1b0965e696caea2cb8c`。产品决策建立在 iOS WebKit 顶层导航试件之上。
 
@@ -22,13 +22,13 @@ V2Fly 输入 SHA-256 为 `b1e803c6b8d02def0865b1b4953ee391c562478d8ff7ee3e8b621a
 
 ## iOS 先行试件与证据边界
 
-XCTest 把分类器接到 `BrowserTab` 正常的 `prepareProxyNavigation` 调用。在独立试件内，命中组时将当前 host 映射到现有精确主机意图；未命中交给现有策略。生产 `AccessHostStoreCoordinator` 负责准备、租用及选择 store，`AccessHostDataStoreRegistry` 绑定实际 `WKWebsiteDataStore`。同一标签页通过 `loadFromAddressBar` 依次访问四个 `.geosite.invalid` 镜像。原设置 store 和受管 store 各连一个不可故障转移的回环 CONNECT 监听器，监听器记录 authority 后终止。对同一目标要求预期出口有记录、另一出口为零。镜像保留标签关系，真实域名只做离线分类。[浏览器入口](../../../apps/ios/BrowserKit/BrowserSession.swift) · [协调器](../../../apps/ios/AegisApp/AccessHostStoreCoordinator.swift) · [store 注册表](../../../apps/ios/AccessKit/AccessHostDataStoreRegistry.swift) · [Apple 的 store 代理 API](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations-cdc1)
+最初的 XCTest 试件通过适配器把分类器接到 `BrowserTab.prepareProxyNavigation`。产品版已移除该适配器，测试和普通 DEV 窗口都由同一协调器求值，只在测试内把固定规则投影到保留域名。生产 `AccessHostStoreCoordinator` 负责准备、租用及选择 store，`AccessHostDataStoreRegistry` 绑定实际 `WKWebsiteDataStore`。同一标签页通过 `loadFromAddressBar` 依次访问四个 `.geosite.invalid` 镜像。原设置 store 和受管 store 各连一个不可故障转移的回环 CONNECT 监听器，监听器记录 authority 后终止。对同一目标要求预期出口有记录、另一出口为零。镜像保留标签关系，真实域名只做离线分类。[浏览器入口](../../../apps/ios/BrowserKit/BrowserSession.swift) · [协调器](../../../apps/ios/AegisApp/AccessHostStoreCoordinator.swift) · [store 注册表](../../../apps/ios/AccessKit/AccessHostDataStoreRegistry.swift) · [Apple 的 store 代理 API](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations-cdc1)
 
-模拟器已验证用户发起的顶层 GET 分类和 CONNECT 选择，也覆盖了命中组但入口准备失败时回原设置的次数为零。原设置可包含用户的系统代理。WebKit 页面内资源随已绑定 store；既有受信 landing 还有来源及 generation 约束。产品级 iOS 自动开关、已提交页面的跳转与历史、iframe、worker、独立下载、TLS/页面完成及真机另行取证。现有位置保护、手动选择、精确成员恢复组保持各自语义。[iOS 精确主机设计](../../plans/access-service-v1.0/ios-exact-host-store-sdd.zh-CN.md) · [模拟器测试](../../../apps/ios/Tests/AegisTests/AccessHostRecoveryWebKitTests.swift)
+模拟器已验证用户发起的顶层 GET 分类和 CONNECT 选择，也覆盖了命中组但入口准备失败时回原设置的次数为零。原设置可包含用户的系统代理。产品版另有真实设置页回归。受控 HTTP 页面完成重定向后，跨域资源随已绑定的 store，跨 store 提交的 POST 也没有发往另一出口。受信 landing 仍须核对来源与 generation。iframe、worker、独立下载、公网 TLS、物理 iPhone 和真实网站速度各需另行取证。[iOS 精确主机设计](../../plans/access-service-v1.0/ios-exact-host-store-sdd.zh-CN.md) · [模拟器测试](../../../apps/ios/Tests/AegisTests/AccessHostRecoveryWebKitTests.swift)
 
 ## iOS DEV 产品合同
 
-设置页标题为「网站加速」，在「国内加速」下直接显示两个模式；「隐藏地理位置服务」继续展示既有服务用量。选择「智能」即开启类别选路，选择「手动」即关闭它。普通窗口共享偏好。新装、旧版本升级、无法识别的模式均使用「手动」和原有隐私策略，保留独立的用户选择。入口展示和路由执行均核对受信任 DEV 渠道及普通窗口身份。私密会话继续使用自身的路由与存储。
+设置页标题为「国内加速」，在「网站加速」下直接显示两个模式；「隐藏地理位置服务」继续展示既有服务用量。选择「智能」即开启类别选路，选择「手动」即关闭它。普通窗口共享偏好。新装、旧版本升级、无法识别的模式均使用「手动」和原有隐私策略，保留独立的用户选择。入口展示和路由执行均核对受信任 DEV 渠道及普通窗口身份。私密会话继续使用自身的路由与存储。
 
 | 普通窗口的顶层导航 | 生效行为 |
 |---|---|
@@ -38,7 +38,7 @@ XCTest 把分类器接到 `BrowserTab` 正常的 `prepareProxyNavigation` 调用
 | 智能，未命中，且无独立授权 | 使用原连接，跳过原先可选的全站首次准备。明确选择「智能」会改变旧的默认首次尝试；界面需在选择时说明 |
 | 底层导航仍在准备时改变选择 | 重新验证当前标签、导航、站点和授权代际；先前已失效的结果不能绑定、重发或开启手动选项。只在既有安全规则允许时处理无正文的 GET/HEAD，其他请求需用户重新提交 |
 
-分类器只读已审核的两个根域。真实 App、准备入口、store 选择和测试使用同一套判断。类别命中不写入手动授权。一个已加载文档内的子资源共用该文档的 WebKit 出口。不同顶层站点可使用不同出口。这里的「国内加速」是功能名称；首组覆盖 Debian 项目及相关软件源，可验证连接选择，公开网站访问成功率和速度需独立测量。[WebKit API](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations-cdc1) · [固定分组原文](https://github.com/v2fly/domain-list-community/blob/ffb513217b9cb22835eb74a39a907d77742ce68f/data/debian)
+分类器只读已审核的两个根域。真实 App、准备入口、store 选择和测试使用同一套判断。类别命中不写入手动授权。一个已加载文档内的子资源共用该文档的 WebKit 出口。不同顶层站点可使用不同出口。「国内加速」是统一入口的暂定名称；首组覆盖 Debian 项目及相关软件源，可验证连接选择，公开网站访问成功率和速度需独立测量。[WebKit API](https://developer.apple.com/documentation/webkit/wkwebsitedatastore/proxyconfigurations-cdc1) · [固定分组原文](https://github.com/v2fly/domain-list-community/blob/ffb513217b9cb22835eb74a39a907d77742ce68f/data/debian)
 
 ## macOS DEV 的手动与智能模式
 
@@ -53,7 +53,7 @@ GeoSite 决定是否使用 Access。若结果为 `preserve_native`，原生 Opti
 
 ## Android 接续
 
-macOS 完成后，在 Android Chromium 的原生设置接入同一「网站加速 → 国内加速」界面。可信 Profile、Incognito 隔离、站点覆盖、请求优先级及固定目录与 macOS 对齐。用 Android 自己的浏览器和设备验证实际出口、重定向、撤销与非 DEV 拒绝。独立的原生 Options 工作有既定 owner 和 ARM 构建前提。[Android 原生工作单](https://github.com/gcsagroup/aegis-browser/issues/210)
+macOS 完成后，在 Android Chromium 的原生设置接入同一「国内加速 → 网站加速」界面。可信 Profile、Incognito 隔离、站点覆盖、请求优先级及固定目录与 macOS 对齐。用 Android 自己的浏览器和设备验证实际出口、重定向、撤销与非 DEV 拒绝。独立的原生 Options 工作有既定 owner 和 ARM 构建前提。[Android 原生工作单](https://github.com/gcsagroup/aegis-browser/issues/210)
 
 ## Hysteria 2 的独立受控实验
 
