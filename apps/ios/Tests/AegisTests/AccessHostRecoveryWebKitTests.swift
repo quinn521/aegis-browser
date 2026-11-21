@@ -2037,6 +2037,89 @@ extension AccessHostRecoveryWebKitTests {
         try await verifyCommittedLegacyLanding(managedPort: 18_779, serviceOverride: .reloadBeforeClearing)
     }
 
+    func testClearingServiceOverrideKeepsOnlyTheDirectlyProtectedTab() async throws {
+        let managed = AnsweringOpener(body: "<title>Direct legacy grant</title>")
+        let original = AnsweringOpener(finishAfterRecording: true)
+        let started = Date(timeIntervalSince1970: 1_700_000_000)
+        let managedListener = try await makeListener(port: 18_793, tunnels: managed)
+        try await managedListener.start(at: started)
+        defer { try? managedListener.stop() }
+        let originalListener = try await makeListener(port: 18_794, tunnels: original)
+        try await originalListener.start(at: started)
+        defer { try? originalListener.stop() }
+
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("manual", forKey: "browser.websiteAcceleration.mode")
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_793), channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let protected = try XCTUnwrap(browser.activeTab)
+        let sibling = browser.newTab()
+        let restoreOriginal = try observeOriginalStore(of: protected, port: 18_794)
+        defer { browser.closeWindow(); restoreOriginal() }
+        try await protected.prepareContentRulesForTests()
+        try await sibling.prepareContentRulesForTests()
+        let window = show(protected.webView)
+        let otherWindow = show(sibling.webView)
+        defer { window.isHidden = true; otherWindow.isHidden = true }
+        let url = try XCTUnwrap(URL(string: "https://direct-legacy.geosite.invalid/check"))
+        let host = try AccessSiteHost("direct-legacy.geosite.invalid")
+        let authority = "\(host.rawValue):443"
+        func managedConnects() -> Int { managed.authorities.filter { $0 == authority }.count }
+        func originalConnects() -> Int { original.authorities.filter { $0 == authority }.count }
+
+        protected.loadFromAddressBar(url)
+        try await commitGeoSiteReviewConnect(url, tab: protected, window: window, observer: managed)
+        XCTAssertNil(protected.parentForProxyLanding(url))
+        coordinator.setWebsiteAccelerationMode(.smart, for: protected)
+        XCTAssertTrue(coordinator.requiresProxy(tab: protected, url: url))
+        XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: url))
+
+        let heldStore = protected.websiteDataStore
+        coordinator.setWebsiteRouteChoice(.service, for: protected, displayedHost: host)
+        var before = managedConnects()
+        protected.reload()
+        try await commitGeoSiteReviewConnect(url, tab: protected, window: window, observer: managed, after: before)
+        before = managedConnects()
+        sibling.loadFromAddressBar(url)
+        try await commitGeoSiteReviewConnect(url, tab: sibling, window: otherWindow, observer: managed, after: before)
+        XCTAssertTrue(sibling.websiteDataStore === heldStore)
+        XCTAssertTrue(original.authorities.isEmpty)
+
+        coordinator.setWebsiteRouteChoice(nil, for: protected, displayedHost: host)
+        XCTAssertTrue(coordinator.requiresProxy(tab: protected, url: url))
+        XCTAssertTrue(protected.websiteDataStore === heldStore)
+        XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: url))
+        XCTAssertTrue(sibling.websiteDataStore === sibling.originalWebsiteDataStore)
+
+        before = managedConnects()
+        protected.reload()
+        try await waitUntil({
+            self.attach(protected.webView, to: window)
+            return managedConnects() > before || original.authorities.contains(authority)
+        }, message: "The tab with the original default-privacy grant must send its reload")
+        XCTAssertGreaterThan(managedConnects(), before)
+        XCTAssertFalse(original.authorities.contains(authority))
+        protected.stop()
+        before = managedConnects()
+        let beforeOriginal = originalConnects()
+        sibling.loadFromAddressBar(url)
+        try await waitUntil({
+            self.attach(sibling.webView, to: otherWindow)
+            return originalConnects() > beforeOriginal
+        }, message: "The override-only tab must send a new CONNECT through its original route after clearing")
+        XCTAssertEqual(managedConnects(), before)
+
+        // Simulate the registry releasing a tab before its old WebView has been replaced.
+        coordinator.registry.unbind(protected.instanceID.uuidString)
+        XCTAssertEqual(protected.boundHostName, host.rawValue)
+        XCTAssertTrue(protected.websiteDataStore === heldStore)
+        let registered = coordinator.registry.store(scopeID: protected.browsingScopeID, host: host, isPrivate: false)
+        XCTAssertTrue(registered === heldStore)
+        XCTAssertFalse(coordinator.requiresProxy(tab: protected, url: url))
+    }
+
     private enum LandingServiceOverride {
         case clearImmediately
         case reloadBeforeClearing
