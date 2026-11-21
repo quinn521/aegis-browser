@@ -97,7 +97,21 @@ xcodebuild test -project apps/ios/Aegis.xcodeproj -scheme Aegis-Debug \
 
 复跑所有新增类、AccessHostRecoveryWebKitTests、AccessHostWebKitRouteTests、AccessHostStorePolicyTests、受影响 PSL／WebKitProtectionTests 及设置 UI；UI 用对应 AegisUITests 选择。核对预期用例实际执行、零跳过；保存命令、退出码、xcresult 与网络附件。DEV 包检查三组清单、raw 来源 digest、PSL、许可、非 DEV 身份门，无测试 trust；保留既有 App Groups／扩展／开发签名，签名产物记录 App hash，真机安装验证按 exact build 单列。
 
-分别报告：原始来源／完整集成／模拟器／签名 DEV 产物／真机／最终 SHA CI／发布。缺任何所需证据不能借其他栏通过；本计划各阶段待实施，来源核验不代表产品通过。后续交付时刷新并遵循 [origin/develop 的 CI 指南](../../development/ci.zh-CN.md)，普通功能 PR squash 到 develop；合并与发布维持原授权。
+分别报告：原始来源／完整集成／模拟器／签名 DEV 产物／真机／最终 SHA CI／发布。缺任何所需证据不能借其他栏通过；来源核验不代表产品通过。后续交付时刷新并遵循 [origin/develop 的 CI 指南](../../development/ci.zh-CN.md)，普通功能 PR squash 到 develop；合并与发布维持原授权。
+
+在同一模拟器串行复跑同意流程：用仓库默认合成 HTTPS runner 写入待确认范围，中间跑 Beta 勾选／清空回归，再验证批准和重启。核对三项实际执行且零跳过。
+
+```sh
+python3 apps/ios/scripts/geosite-https-fixture.py --receipt "$RESULT_ROOT/$RUN_ID-geosite-https.json" -- \
+  xcodebuild test -project apps/ios/Aegis.xcodeproj -scheme Aegis-Debug \
+  -configuration Debug -destination "platform=iOS Simulator,id=$SIM_UDID" \
+  -derivedDataPath "$RESULT_ROOT/DerivedData" -parallel-testing-enabled NO \
+  -onlyUsePackageVersionsFromResolvedFile "AEGIS_EMBEDDED_CORE_PRODUCTS=$CORE_PRODUCTS" \
+  -resultBundlePath "$RESULT_ROOT/$RUN_ID.xcresult" \
+  -only-testing:AegisTests/AccessGeoSiteSettingsFixtureTests/testPrepareVerifiedStagedScopeForSettings \
+  -only-testing:AegisUITests/SettingsLayoutUITests/testWebsiteAccelerationBetaSelectionAndPersistence \
+  -only-testing:AegisUITests/SettingsLayoutUITests/testWebsiteAccelerationConsentAndRelaunch
+```
 
 ## 后续平台
 

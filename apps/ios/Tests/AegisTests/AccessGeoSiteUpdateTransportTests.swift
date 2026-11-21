@@ -547,12 +547,9 @@ private struct GeoSiteTestInstall {
 @MainActor
 final class AccessGeoSiteSettingsFixtureTests: XCTestCase {
     func testPrepareVerifiedStagedScopeForSettings() async throws {
-        guard ProcessInfo.processInfo.environment["AEGIS_GEOSITE_FROZEN"] != "0" else {
-            throw XCTSkip("Run explicitly before the GeoSite consent UI test")
-        }
         let fixture = try GeoSiteHTTPSFixture()
         try await fixture.select("expand", version: 1, reset: true)
-        let storage = try AccessGeoSiteStorage.uiTest(keep: false)
+        let storage = try AccessGeoSiteStorage.consentUITest(keep: false)
         let cache = AccessGeoSiteCache(storage: storage)
         await cache.restore(migrating: .init(mode: .smart, categories: [.debian, .douban]))
         let coordinator = AccessHostStoreCoordinator(channel: .dev, geoSiteCache: cache, geoSiteTransport: fixture.transport())

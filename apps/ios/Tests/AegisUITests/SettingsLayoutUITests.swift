@@ -309,13 +309,12 @@ final class SettingsLayoutUITests: XCTestCase {
     }
 
     func testWebsiteAccelerationConsentAndRelaunch() throws {
-        let env = ProcessInfo.processInfo.environment
-        guard env["AEGIS_GEOSITE_METADATA"] != nil, env["AEGIS_GEOSITE_FROZEN"] != "0" else {
+        guard ProcessInfo.processInfo.environment["AEGIS_GEOSITE_METADATA"] != nil else {
             throw XCTSkip("First prepare the GeoSite consent cache with the isolated HTTPS fixture")
         }
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "--ui-testing-geosite-cache",
-                               "--ui-testing-geosite-cache-keep", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "--ui-testing-geosite-consent-fixture",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
         defer { app.terminate() }
 

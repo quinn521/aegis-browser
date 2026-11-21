@@ -32,15 +32,26 @@ struct AccessGeoSiteStorage: Sendable {
 
 #if DEBUG
     static func uiTest(keep: Bool) throws -> Self {
-        let store = Self(directory: FileManager.default.temporaryDirectory.appendingPathComponent("GeoSite-UITest"),
-                         service: "com.gcsa.aegis.ios.geosite.ui-testing")
+        try Self(directory: FileManager.default.temporaryDirectory.appendingPathComponent("GeoSite-UITest"),
+                 service: "com.gcsa.aegis.ios.geosite.ui-testing").preparedForUITest(keep: keep)
+    }
+
+#if targetEnvironment(simulator)
+    static func consentUITest(keep: Bool) throws -> Self {
+        // The hosted fixture test and the XCUI app share this simulator app container.
+        try Self(directory: FileManager.default.temporaryDirectory.appendingPathComponent("GeoSite-Consent-UITest"),
+                 service: "com.gcsa.aegis.ios.geosite.ui-testing.consent").preparedForUITest(keep: keep)
+    }
+#endif
+
+    private func preparedForUITest(keep: Bool) throws -> Self {
         if !keep {
-            let status = SecItemDelete(store.key as CFDictionary)
+            let status = SecItemDelete(key as CFDictionary)
             guard status == errSecSuccess || status == errSecItemNotFound else { throw AccessGeoSiteCache.Failure.unavailable }
-            do { try FileManager.default.removeItem(at: store.directory) }
+            do { try FileManager.default.removeItem(at: directory) }
             catch let error as CocoaError where error.code == .fileNoSuchFile {}
         }
-        return store
+        return self
     }
 #endif
 
