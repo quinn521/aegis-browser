@@ -81,7 +81,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         let window = makeWindow()
         defer { window.isHidden = true }
         func permitsTraffic() -> Bool {
-            guard permitsPinnedNode(.shared, revision: input.nodeRevision, budget: budget) else { return false }
+            guard permitsPinnedNode(input.repository, revision: input.nodeRevision, budget: budget) else { return false }
             let controlValue = try? String(contentsOf: control, encoding: .utf8)
             if controlValue != "run\n" || !path.snapshot.wifi {
                 budget.stop(.externalStop)
@@ -117,7 +117,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
                 URLQueryItem(name: "nonce", value: nonce)
             ])
             let result = try await run(url, window: window, budget: budget, transport: .socks5,
-                                       observation: .seconds(8), permit: permitsTraffic)
+                                       observation: .seconds(8), repository: input.repository, permit: permitsTraffic)
             try append("health", result.attempt.fields.merging(result.retirementFields) { first, _ in first }
                 .merging(["phase": phase, "probeNonce": nonce]) { first, _ in first })
             return result.attempt.outcome == .finished && result.attempt.page.httpStatus == 200
@@ -148,7 +148,8 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             reserved += 1
             try append("reserved", identity)
             let result = try await run(url, window: window, budget: budget, transport: .socks5,
-                                       observation: .seconds(20), permit: permitsTraffic, resultCheckpoint: { attempt in
+                                       observation: .seconds(20), repository: input.repository, permit: permitsTraffic,
+                                       resultCheckpoint: { attempt in
                 var row = identity.merging(attempt.fields) { first, _ in first }
                 if let issued = attempt.page.timeline.instant(.loadIssued) {
                     row["navigationIssuedAtMs"] = Self.milliseconds(budget.started.duration(to: issued))
@@ -196,7 +197,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
                 let result = try await run(target, window: window, budget: budget, transport: transport,
                                            observation: name == "slow" ? .seconds(8) : .seconds(20),
                                            settleBeforeRetiring: name == "script" ? .milliseconds(800) : .zero,
-                                           competeDuringRetirement: name == "retire")
+                                           competeDuringRetirement: name == "retire", repository: input.repository)
                 let page = result.attempt.page
                 let stage = page.timeline
                 var row = result.attempt.fields.merging(result.retirementFields) { first, _ in first }
@@ -264,7 +265,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             ])
             let budget = AccessCampaignBudget(duration: limits.2, bytes: limits.3)
             let result = try await run(url, window: window, budget: budget, transport: .socks5,
-                                       observation: .seconds(25))
+                                       observation: .seconds(25), repository: input.repository)
             let reason = try XCTUnwrap(budget.stopReason())
             var row = result.attempt.fields.merging(result.retirementFields) { first, _ in first }
             row["sourceSHA"] = input.source
@@ -333,7 +334,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
     private func run(_ url: URL, window: UIWindow, budget: AccessCampaignBudget,
                      transport: AccessTestNodeTransport, observation: Duration,
                      settleBeforeRetiring: Duration = .zero, competeDuringRetirement: Bool = false,
-                     repository: AccessTestNodeRepository = .shared, permit: @escaping () -> Bool = { true },
+                     repository: AccessTestNodeRepository, permit: @escaping () -> Bool = { true },
                      afterCommit: ((any AccessEmbeddedCoreControlling) async throws -> Void)? = nil,
                      resultCheckpoint: (Attempt) throws -> Void = { _ in }) async throws -> AttemptResult {
         let core = AccessCampaignMeteredCore(base: try AccessGoEmbeddedCore(isolated: true), budget: budget)
@@ -432,7 +433,8 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
     }
 
     private func admittedInputs() throws -> (environment: [String: String], origin: URL, source: String,
-                                             nodeRevision: UUID, parameters: AccessRealityVisionParameters) {
+                                             repository: AccessTestNodeRepository, nodeRevision: UUID,
+                                             parameters: AccessRealityVisionParameters) {
 #if targetEnvironment(simulator)
         throw XCTSkip("TEST01 pilot requires the designated physical iPhone")
 #else
@@ -450,11 +452,19 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         }
         let allowedOrigin = origin.scheme == "https" && origin.host?.hasSuffix(".trycloudflare.com") == true
             && origin.user == nil && origin.password == nil && origin.query == nil && origin.fragment == nil
+        let bundle = Bundle.main
         guard model == "iPhone14,3", Self.sha256(Data(node.utf8)) == Self.nodeDigest,
               allowedOrigin, source.count == 40,
-              Bundle.main.bundleIdentifier == "com.gcsa.aegis.alpha.internal.validation208",
+              bundle.bundleIdentifier == "com.gcsa.aegis.alpha.internal.validation208",
+              bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String == "alpha",
+              bundle.object(forInfoDictionaryKey: "AegisReleaseProfile") as? String == "alpha",
+              bundle.object(forInfoDictionaryKey: "AegisAccessInternalOptions") as? String == "YES",
+              AccessInternalOptions.installed == nil,
               AccessInternalSOCKSAdmission.current else { throw CocoaError(.fileReadCorruptFile) }
-        let repository = AccessTestNodeRepository.shared
+        // This signed XCTest host is outside product Options admission. Its
+        // dedicated Keychain service uses the same storage and revision APIs.
+        let repository = AccessTestNodeRepository(channel: .alpha,
+            storage: AccessTestNodeKeychain(service: "com.gcsa.aegis.ios.access-common-pilot.v2"))
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
         let revision: UUID
         if let saved = try? repository.savedNode(), try saved.parameters() == parameters {
@@ -462,7 +472,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         } else {
             revision = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
-        return (environment, origin, source, revision, parameters)
+        return (environment, origin, source, repository, revision, parameters)
 #endif
     }
 
