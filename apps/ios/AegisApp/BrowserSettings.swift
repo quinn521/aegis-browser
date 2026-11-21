@@ -301,7 +301,10 @@ private struct WebsiteCategoriesView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @Environment(\.locale) private var locale
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var tab: BrowserTab
+    @State private var approval: Task<Void, Never>?
+    @State private var unsavedApproval: AccessGeoSiteCache.Proposal?
 
     var body: some View {
         Form {
@@ -313,35 +316,34 @@ private struct WebsiteCategoriesView: View {
                         }
                     }
                 }
-                Section {
-                    DisclosureGroup("分类范围") {
-                        if categories.scopes == nil {
-                            LabeledContent("版本", value: categories.catalogue.tag)
-                        }
-                        ForEach(AccessGeoSiteCategory.allCases, id: \.self) { category in
-                            if let group = categories.catalogue.groups[category] {
-                                scopeDetails(category, group: group, version: version(for: category, in: categories))
-                            } else if let scope = categories.scopes?[category] {
-                                LabeledContent {
-                                    if case .withdrawn = scope { Text("暂无规则") }
-                                    else { Text("暂不可用") }
-                                } label: {
-                                    Text(verbatim: AegisLocalization.string(category.displayName))
-                                }
+                Section("分类范围") {
+                    ForEach(AccessGeoSiteCategory.allCases, id: \.self) { category in
+                        if categories.scopes != nil || categories.catalogue.groups[category] != nil {
+                            DisclosureGroup {
+                                scopeDetails(category, categories: categories)
+                            } label: {
+                                Text(verbatim: AegisLocalization.string(category.displayName))
+                                    .accessibilityIdentifier("website-acceleration-details-\(category.rawValue)")
                             }
                         }
                     }
-                    .accessibilityIdentifier("website-acceleration-category-scope")
                 }
             }
         }
         .localizedNavigationTitle("加速分类")
         .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { approval?.cancel() }
+        .onChange(of: browser.tabSelectionRevision) { _, _ in approval?.cancel() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { approval?.cancel() } }
     }
 
     private func categoryButton(_ category: AccessGeoSiteCategory,
                                 categories: AccessHostStoreCoordinator.WebsiteCategories) -> some View {
         let selected = categories.selected.contains(category)
+        let pending = selected && categories.staged[category] != nil
+        let includesDianping = category == .meituan
+        let details = [includesDianping ? AegisLocalization.string("含大众点评") : nil,
+                       pending ? AegisLocalization.string("等待确认") : nil].compactMap { $0 }
         return Button {
             guard browser.activeTab === tab else { return }
             hostStores.setWebsiteCategory(category, selected: !selected, from: categories, for: tab)
@@ -349,9 +351,8 @@ private struct WebsiteCategoriesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(verbatim: AegisLocalization.string(category.displayName))
-                    if category == .meituan {
-                        Text("含大众点评").font(.footnote).foregroundStyle(Color.secondary)
-                    }
+                    if includesDianping { Text("含大众点评").font(.footnote).foregroundStyle(.secondary) }
+                    if pending { Text("等待确认").font(.footnote).foregroundStyle(.secondary) }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 Spacer()
@@ -360,32 +361,87 @@ private struct WebsiteCategoriesView: View {
             .contentShape(Rectangle())
         }
         .accessibilityLabel(Text(verbatim: AegisLocalization.string(category.displayName)))
-        .accessibilityValue(Text(verbatim: category == .meituan ? AegisLocalization.string("含大众点评") : ""))
+        .accessibilityValue(Text(verbatim: ListFormatter.localizedString(byJoining: details)))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("website-acceleration-category-\(category.rawValue)")
     }
 
-    private func version(for category: AccessGeoSiteCategory,
-                         in categories: AccessHostStoreCoordinator.WebsiteCategories) -> String? {
-        guard case .available(_, let version) = categories.scopes?[category] else { return nil }
-        return version?.release.tag ?? categories.catalogue.tag
+    @ViewBuilder
+    private func scopeDetails(_ category: AccessGeoSiteCategory,
+                              categories: AccessHostStoreCoordinator.WebsiteCategories) -> some View {
+        switch categories.scopes?[category] {
+        case .available(let group, let version):
+            LabeledContent("版本", value: version?.release.tag ?? categories.catalogue.tag)
+            if let version { expiry(version.expiry) }
+            LabeledContent("域名数", value: group.rules.count.formatted(.number.locale(locale)))
+            typedRules(group.rules)
+        case .withdrawn(let tag):
+            LabeledContent("版本", value: tag)
+            Text("暂无规则")
+        case .expired(_, let version):
+            LabeledContent("版本", value: version.release.tag)
+            expiry(version.expiry)
+            Text("暂不可用")
+        case .unavailable:
+            Text("暂不可用")
+        case nil:
+            if let group = categories.catalogue.groups[category] {
+                LabeledContent("版本", value: categories.catalogue.tag)
+                LabeledContent("域名数", value: group.rules.count.formatted(.number.locale(locale)))
+                typedRules(group.rules)
+            }
+        }
+        if let staged = categories.staged[category] {
+            stagedDetails(staged, category: category)
+        }
     }
 
-    private func scopeDetails(_ category: AccessGeoSiteCategory, group: AccessGeoSiteCatalogue.Group, version: String?) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(verbatim: AegisLocalization.string(category.displayName)).font(.headline)
-            if let version { LabeledContent("版本", value: version) }
-            LabeledContent("域名数", value: group.rules.count.formatted(.number.locale(locale)))
-            let domains = group.rules.filter { $0.kind == .domain }
-            let exact = group.rules.filter { $0.kind == .full }
-            if !domains.isEmpty {
-                Text("含所列域名的子域名。").font(.footnote).foregroundStyle(.secondary)
-                domainList(domains)
+    private func expiry(_ date: Date) -> some View {
+        LabeledContent("到期时间") { Text(date, format: .dateTime.year().month().day().hour().minute()) }
+    }
+
+    @ViewBuilder
+    private func stagedDetails(_ staged: AccessGeoSiteCache.StagedScope, category: AccessGeoSiteCategory) -> some View {
+        LabeledContent("等待确认", value: staged.release.tag)
+            .accessibilityIdentifier("website-acceleration-candidate-\(category.rawValue)")
+        expiry(staged.expiry)
+        LabeledContent("新增域名数", value: staged.addedRules.count.formatted(.number.locale(locale)))
+        if staged.addedRules.count > 32 {
+            Text("新增范围过大，无法批准。").font(.footnote)
+        } else {
+            typedRules(staged.addedRules)
+            Text("页面资源随主页面使用同一连接。").font(.footnote).foregroundStyle(.secondary)
+            if let proposal = hostStores.websiteCategoryProposal(category, for: browser) {
+                Button("批准新增范围") { approve(proposal) }
+                    .disabled(approval != nil || scenePhase != .active)
+                    .accessibilityIdentifier("website-acceleration-approve-\(category.rawValue)")
+                    .onDisappear { approval?.cancel() }
+                if unsavedApproval == proposal { Text("设置未保存，请重试。").font(.footnote) }
             }
-            if !exact.isEmpty {
-                if !domains.isEmpty { Divider() }
-                domainList(exact)
-            }
+        }
+    }
+
+    private func approve(_ proposal: AccessGeoSiteCache.Proposal) {
+        guard approval == nil, scenePhase == .active, browser.activeTab === tab else { return }
+        unsavedApproval = nil
+        approval = Task { @MainActor in
+            let accepted = await hostStores.confirmWebsiteCategory(proposal, for: browser)
+            if !accepted, !Task.isCancelled { unsavedApproval = proposal }
+            approval = nil
+        }
+    }
+
+    @ViewBuilder
+    private func typedRules(_ rules: [AccessGeoSiteCatalogue.Rule]) -> some View {
+        let domains = rules.filter { $0.kind == .domain }
+        let exact = rules.filter { $0.kind == .full }
+        if !domains.isEmpty {
+            Text("含所列域名的子域名。").font(.footnote).foregroundStyle(.secondary)
+            domainList(domains)
+        }
+        if !exact.isEmpty {
+            Text("仅匹配所列域名。").font(.footnote).foregroundStyle(.secondary)
+            domainList(exact)
         }
     }
 

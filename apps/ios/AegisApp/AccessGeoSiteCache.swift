@@ -179,6 +179,15 @@ final class AccessGeoSiteCache {
     struct RefreshState: Codable, Equatable, Sendable {
         var failureCount = 0
         var nextAttempt: Date?
+        var lastRequest: Date?
+        var etag: String?
+    }
+
+    struct ConditionalReceipt: Equatable, Sendable {
+        let etag: String
+        let receipt: AccessGeoSiteAdmission.Receipt
+        fileprivate let activeFile: String?
+        fileprivate let stagedFile: String?
     }
 
     enum Status: Equatable, Sendable { case loading, ready, unavailable, clockRollback, unsaved }
@@ -200,7 +209,7 @@ final class AccessGeoSiteCache {
         let addedRules: [AccessGeoSiteCatalogue.Rule]
         fileprivate let session: UUID
         fileprivate let candidate: AccessGeoSiteAdmission.Receipt
-        fileprivate let oldDigest: String?
+        fileprivate let oldScope: Scope
         fileprivate let deltaDigest: String
     }
 
@@ -213,15 +222,22 @@ final class AccessGeoSiteCache {
     enum Scope: Equatable, Sendable {
         case available(AccessGeoSiteCatalogue.Group, Version?)
         case withdrawn(String)
-        case expired(AccessGeoSiteCatalogue.Group?)
+        case expired(AccessGeoSiteCatalogue.Group?, Version)
         case unavailable
+    }
+
+    struct StagedScope: Equatable, Sendable {
+        let release: AccessGeoSiteAdmission.Receipt
+        let expiry: Date
+        let group: AccessGeoSiteCatalogue.Group
+        let addedRules: [AccessGeoSiteCatalogue.Rule]
     }
 
     struct View: Equatable, Sendable {
         let status: Status
         let selection: Selection?
         let groups: [AccessGeoSiteCategory: Scope]
-        let candidateTag: String?
+        var staged: [AccessGeoSiteCategory: StagedScope] = [:]
 
         func match(_ url: URL) -> Match {
             guard let host = AccessWebsiteRoutePolicy.websiteHost(url)?.rawValue else { return .original }
@@ -233,7 +249,7 @@ final class AccessGeoSiteCache {
                 switch groups[category] {
                 case .available(let group, _):
                     if group.rules.contains(where: { $0.matches(host) }) { return .managed }
-                case .expired(let group):
+                case .expired(let group, _):
                     if group?.rules.contains(where: { $0.matches(host) }) != false { unresolved = true }
                 case .withdrawn:
                     break
@@ -308,7 +324,7 @@ final class AccessGeoSiteCache {
     private var writing = false
     private var selectionUnsaved = false
     private var expiryTask: Task<Void, Never>?
-    private(set) var view = View(status: .loading, selection: nil, groups: [:], candidateTag: nil)
+    private(set) var view = View(status: .loading, selection: nil, groups: [:])
     var onChange: (@MainActor (View) -> Void)?
 
     var status: Status { view.status }
@@ -317,6 +333,7 @@ final class AccessGeoSiteCache {
     var activeFileSHA256: String? { current?.ledger.activeFile }
     var stagedFileSHA256: String? { current?.ledger.stagedFile }
     var refreshState: RefreshState { current?.ledger.refresh ?? RefreshState() }
+    var effectiveTime: Date { readClock().date }
 
     init(storage: AccessGeoSiteStorage, time: TimeSource = TimeSource()) {
         self.storage = storage
@@ -369,7 +386,8 @@ final class AccessGeoSiteCache {
         return Context(owner: record.owner, revision: revision, session: session)
     }
 
-    func apply(_ candidate: AccessGeoSiteAdmission.Candidate, using context: Context) async throws {
+    func apply(_ candidate: AccessGeoSiteAdmission.Candidate, using context: Context,
+               refreshed: RefreshState? = nil) async throws {
         guard var next = current, context == updateContext() else { throw Failure.ineligible }
         let clock = readClock()
         guard candidate.suffixListSHA256 == RegisteredDomain.verifiedGeoSiteSuffixListSHA256,
@@ -400,33 +418,34 @@ final class AccessGeoSiteCache {
                 next.staged[key] = offered
             }
         }
-        try await publish(next, context: context, expiresAt: candidate.expiresAt, suffixSHA: candidate.suffixListSHA256)
+        try await publish(next, context: context, expiresAt: candidate.expiresAt,
+                          suffixSHA: candidate.suffixListSHA256, refreshed: refreshed)
     }
 
     func proposal(for category: AccessGeoSiteCategory) -> Proposal? {
-        guard let current, let context = updateContext(), current.ledger.selection.categories.contains(category),
-              let receipt = current.ledger.highWater, (try? receipt.expiry(at: readClock().date)) != nil,
-              let group = current.staged[category.rawValue] else { return nil }
-        let old = Self.scopeGroup(category, in: current)
-        let added = old.map { Self.additions(in: group, over: $0) } ?? group.rules
-        guard (1...32).contains(added.count) else { return nil }
-        let text = added.map { "\($0.kind.rawValue):\($0.host)\n" }.joined()
-        let oldDigest = current.ledger.decisions[category.rawValue]?.version?.scope ?? old?.typedSHA256
-        return Proposal(owner: context.owner, category: category, revision: context.revision, version: receipt.tag,
-            group: group, addedRules: added, session: session, candidate: receipt, oldDigest: oldDigest,
-            deltaDigest: AccessGeoSiteAdmission.sha256(Data(text.utf8)))
+        guard let current, let context = updateContext(), current.ledger.selection.categories.contains(category) else { return nil }
+        let now = readClock().date
+        let old = Self.scope(category, in: current, at: now)
+        guard let staged = Self.stagedScope(category, in: current, over: old, at: now),
+              (1...32).contains(staged.addedRules.count) else { return nil }
+        let text = staged.addedRules.map { "\($0.kind.rawValue):\($0.host)\n" }.joined()
+        return Proposal(owner: context.owner, category: category, revision: context.revision, version: staged.release.tag,
+            group: staged.group, addedRules: staged.addedRules, session: session, candidate: staged.release,
+            oldScope: old, deltaDigest: AccessGeoSiteAdmission.sha256(Data(text.utf8)))
     }
 
-    func confirm(_ proposal: Proposal) async throws {
+    func confirm(_ proposal: Proposal, whileValid: @MainActor () -> Bool = { true }) async throws {
         guard var next = current, let context = updateContext(), self.proposal(for: proposal.category) == proposal,
-              let suffixSHA = RegisteredDomain.verifiedGeoSiteSuffixListSHA256 else { throw Failure.stale }
+              let suffixSHA = RegisteredDomain.verifiedGeoSiteSuffixListSHA256, whileValid() else { throw Failure.stale }
         let expiry = try proposal.candidate.expiry(at: readClock().date)
         let key = proposal.category.rawValue
         let version = Version(release: proposal.candidate, scope: proposal.group.typedSHA256, expiry: expiry)
         next.ledger.decisions[key] = .accepted(version)
         next.active[key] = proposal.group
         next.staged[key] = nil
-        try await publish(next, context: context, expiresAt: expiry, suffixSHA: suffixSHA)
+        try await publish(next, context: context, expiresAt: expiry, suffixSHA: suffixSHA) {
+            whileValid() && self.proposal(for: proposal.category) == proposal
+        }
     }
 
     func checkpointClock() throws {
@@ -450,11 +469,54 @@ final class AccessGeoSiteCache {
     }
 
     func setRefreshState(_ state: RefreshState, using context: Context) throws {
-        guard var next = current, context == updateContext(), (0...4).contains(state.failureCount),
-              state.nextAttempt.map({ $0.timeIntervalSinceReferenceDate.isFinite }) != false
+        guard var next = current, context == updateContext(), Self.validRefreshState(state)
         else { throw Failure.ineligible }
+        let date = readClock().date
+        markTime(date, in: &next.ledger)
+        let changed = next.ledger.decisions != current?.ledger.decisions
         next.ledger.refresh = state
-        try commit(next, status: .ready, invalidate: false)
+        try commit(next, status: .ready, at: date, invalidate: changed)
+    }
+
+    /// A metadata validator is useful only while its durable receipt and
+    /// selected, authorized active data can still be recovered.
+    func conditionalReceipt(using context: Context) async -> ConditionalReceipt? {
+        guard context == updateContext(), let snapshot = current,
+              let etag = snapshot.ledger.refresh.etag, let receipt = snapshot.ledger.highWater,
+              let activeFile = snapshot.ledger.activeFile,
+              hasValidActive(snapshot, receipt: receipt) else { return nil }
+        let record = snapshot.ledger
+        let store = storage
+        let intact = await Task.detached(priority: .utility) {
+            guard let bytes = try? store.readLedger(), let disk = try? JSONDecoder().decode(Ledger.self, from: bytes),
+                  disk.owner == record.owner, disk.selection == record.selection,
+                  disk.highWater == receipt, disk.refresh.etag == etag,
+                  disk.activeFile == activeFile, disk.stagedFile == record.stagedFile,
+                  disk.decisions == record.decisions,
+                  Self.loadBlob(.active, digest: activeFile, storage: store) == snapshot.active else { return false }
+            if let staged = record.stagedFile {
+                return !snapshot.staged.isEmpty && Self.loadBlob(.staged, digest: staged, storage: store) == snapshot.staged
+            }
+            return true
+        }.value
+        guard intact, !Task.isCancelled, context == updateContext(),
+              current?.ledger.highWater == receipt, current?.ledger.activeFile == activeFile,
+              current?.ledger.stagedFile == record.stagedFile, current?.ledger.refresh.etag == etag,
+              hasValidActive(snapshot, receipt: receipt) else { return nil }
+        return ConditionalReceipt(etag: etag, receipt: receipt, activeFile: activeFile, stagedFile: record.stagedFile)
+    }
+
+    private func hasValidActive(_ snapshot: Snapshot, receipt: AccessGeoSiteAdmission.Receipt) -> Bool {
+        let now = readClock().date
+        guard (try? receipt.expiry(at: now)) != nil else { return false }
+        let selected = snapshot.ledger.selection.categories.map { Self.scope($0, in: snapshot, at: now) }
+        return selected.contains { if case .available(_, .some) = $0 { return true }; return false }
+            && selected.allSatisfy {
+                switch $0 {
+                case .available, .withdrawn: true
+                case .expired, .unavailable: false
+                }
+            }
     }
 
     func match(_ url: URL) -> Match { runtimeView().match(url) }
@@ -464,10 +526,11 @@ final class AccessGeoSiteCache {
     func runtimeView() -> View {
         let clock = readClock()
         let status: Status = status == .ready && clock.rollback ? .clockRollback : self.status
-        return makeView(status, at: clock.date)
+        return makeView(status, at: clock.date, includeStaged: false)
     }
 
-    private func publish(_ snapshot: Snapshot, context: Context, expiresAt: Date, suffixSHA: String) async throws {
+    private func publish(_ snapshot: Snapshot, context: Context, expiresAt: Date, suffixSHA: String,
+                         refreshed: RefreshState? = nil, whileValid: @MainActor () -> Bool = { true }) async throws {
         guard !writing else { throw Failure.stale }
         writing = true
         defer { writing = false }
@@ -479,9 +542,15 @@ final class AccessGeoSiteCache {
         }.value
         try Task.checkCancellation()
         let clock = readClock()
-        guard context == updateContext(), expiresAt > clock.date,
+        guard context == updateContext(), expiresAt > clock.date, whileValid(),
               RegisteredDomain.verifiedGeoSiteSuffixListSHA256 == suffixSHA else { throw Failure.stale }
-        if let latest = current?.ledger { next.ledger.refresh = latest.refresh }
+        if let refreshed {
+            guard Self.validRefreshState(refreshed) else { throw Failure.stale }
+            next.ledger.refresh = refreshed
+        } else if let latest = current?.ledger {
+            next.ledger.refresh = latest.refresh
+            if latest.highWater != next.ledger.highWater { next.ledger.refresh.etag = nil }
+        }
         next.ledger.activeFile = files.0
         next.ledger.stagedFile = files.1
         markTime(clock.date, in: &next.ledger)
@@ -528,12 +597,12 @@ final class AccessGeoSiteCache {
 
     private func scheduleExpiry(for view: View, at now: Date) {
         expiryTask?.cancel()
-        guard view.status == .ready, let settings = view.selection, settings.mode == .smart else { return }
-        let expiry = settings.categories.compactMap { category -> Date? in
-            guard case .available(_, let version) = view.groups[category] else { return nil }
+        guard view.status == .ready else { return }
+        let active = view.groups.values.compactMap { scope -> Date? in
+            guard case .available(_, let version) = scope else { return nil }
             return version?.expiry
-        }.min()
-        guard let expiry else { return }
+        }
+        guard let expiry = (active + view.staged.values.map(\.expiry)).min() else { return }
         expiryTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSince(now)))) }
             catch { return }
@@ -541,12 +610,31 @@ final class AccessGeoSiteCache {
         }
     }
 
-    private func makeView(_ status: Status, at date: Date) -> View {
-        guard let current else { return View(status: status, selection: nil, groups: [:], candidateTag: nil) }
+    private func makeView(_ status: Status, at date: Date, includeStaged: Bool = true) -> View {
+        guard let current else { return View(status: status, selection: nil, groups: [:]) }
         let groups = Dictionary(uniqueKeysWithValues: AccessGeoSiteCategory.allCases.map { category in
             (category, Self.scope(category, in: current, at: date))
         })
-        return View(status: status, selection: current.ledger.selection, groups: groups, candidateTag: current.ledger.highWater?.tag)
+        var view = View(status: status, selection: current.ledger.selection, groups: groups)
+        if includeStaged, status == .ready {
+            for (category, scope) in groups {
+                view.staged[category] = Self.stagedScope(category, in: current, over: scope, at: date)
+            }
+        }
+        return view
+    }
+
+    private nonisolated static func stagedScope(_ category: AccessGeoSiteCategory, in snapshot: Snapshot,
+                                                over scope: Scope, at now: Date) -> StagedScope? {
+        guard let receipt = snapshot.ledger.highWater, let expiry = try? receipt.expiry(at: now),
+              let group = snapshot.staged[category.rawValue] else { return nil }
+        let added: [AccessGeoSiteCatalogue.Rule]
+        if case .available(let old, _) = scope {
+            added = additions(in: group, over: old)
+        } else {
+            added = group.rules
+        }
+        return StagedScope(release: receipt, expiry: expiry, group: group, addedRules: added)
     }
 
     private nonisolated static func scope(_ category: AccessGeoSiteCategory, in snapshot: Snapshot, at date: Date) -> Scope {
@@ -555,10 +643,10 @@ final class AccessGeoSiteCache {
         case .bundled:
             return group.map { .available($0, nil) } ?? .unavailable
         case .accepted(let version):
-            if version.expiry <= date { return .expired(group) }
+            if version.expiry <= date { return .expired(group, version) }
             return group.map { .available($0, version) } ?? .unavailable
-        case .expired:
-            return .expired(group)
+        case .expired(let version):
+            return .expired(group, version)
         case .withdrawn(let tag):
             return .withdrawn(tag)
         case nil:
@@ -607,12 +695,18 @@ final class AccessGeoSiteCache {
         return Snapshot(ledger: record, active: active, staged: staged)
     }
 
+    private nonisolated static func validRefreshState(_ state: RefreshState) -> Bool {
+        (0...4).contains(state.failureCount)
+            && state.nextAttempt.map { $0.timeIntervalSinceReferenceDate.isFinite } != false
+            && state.lastRequest.map { $0.timeIntervalSinceReferenceDate.isFinite } != false
+            && AccessGeoSiteUpdateTransport.validETag(state.etag) == state.etag
+    }
+
     private nonisolated static func validRecord(_ record: Ledger) -> Bool {
         let categories = Set(AccessGeoSiteCategory.allCases.map(\.rawValue))
         guard record.schema == 1, Set(record.decisions.keys) == categories,
               record.clockFloor.timeIntervalSinceReferenceDate.isFinite,
-              (0...4).contains(record.refresh.failureCount),
-              record.refresh.nextAttempt.map({ $0.timeIntervalSinceReferenceDate.isFinite }) != false,
+              validRefreshState(record.refresh),
               record.activeFile.map(AccessGeoSiteAdmission.isSHA256) != false,
               record.stagedFile.map(AccessGeoSiteAdmission.isSHA256) != false else { return false }
         if let highest = record.highWater {

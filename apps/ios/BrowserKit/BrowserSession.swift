@@ -109,9 +109,11 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
     func tabClosed(_ tab: BrowserTab)
     func ordinaryHostStores() -> [WKWebsiteDataStore]
     func endPrivateSession(scopeID: String)
+    func setGeoSiteForeground(window: UUID, eligible: Bool)
 }
 
 public extension BrowserHostStoreCoordinating {
+    func setGeoSiteForeground(window: UUID, eligible: Bool) {}
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool { false }
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { false }
     func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool { false }
@@ -162,6 +164,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public var boundHostName: String?
     public var browsingScopeID = "ordinary"
     var configurationFactory: ((WKWebsiteDataStore) -> WKWebViewConfiguration)?
+#if DEBUG && targetEnvironment(simulator)
+    var keepsExplicitHTTPForTesting = false
+#endif
     public weak var hostCoordinator: BrowserHostStoreCoordinating?
     private typealias MainFrameAttempt = MainFrameNavigationState.Attempt
     private var committedRequest: MainFrameAttempt?
@@ -1537,6 +1542,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if localOrInternal || (attempt.recoveryOperationID != nil && requestURL.scheme == "http") {
             webPreferences.preferredHTTPSNavigationPolicy = .keepAsRequested
         }
+#if DEBUG && targetEnvironment(simulator)
+        if keepsExplicitHTTPForTesting, requestURL.scheme == "http" {
+            webPreferences.preferredHTTPSNavigationPolicy = .keepAsRequested
+        }
+#endif
         webPreferences.preferredContentMode = (site.desktop ?? preferences.values.desktop) ? .desktop : .recommended
         webPreferences.allowsContentJavaScript = site.javaScript ?? preferences.values.javaScript
         let decision = navigationDecision(requestURL, method: navigationAction.request.httpMethod ?? "GET")
@@ -2293,8 +2303,13 @@ public final class BrowserSession: ObservableObject {
     private var pendingTabDisposals: Set<UUID> = []
     private var ordinaryDisposalStores: [UUID: WKWebsiteDataStore] = [:]
     private var disposalWaiters: [(ids: Set<UUID>, finish: @MainActor () -> Void)] = []
-    @Published public var activeTabID: UUID?
-    @Published public var profile: BrowserProfile = .standard
+    public private(set) var tabSelectionRevision: UInt64 = 0
+    @Published public var activeTabID: UUID? {
+        didSet { if oldValue != activeTabID { tabSelectionRevision &+= 1 } }
+    }
+    @Published public var profile: BrowserProfile = .standard {
+        didSet { if oldValue != profile { publishGeoSiteForeground() } }
+    }
     @Published public private(set) var extensionStatus = "WebExtension 正在初始化"
     @Published public private(set) var bookmarkIsActive = false
     @Published private var sessionErrorPresentation: AegisLocalizedMessage?
@@ -2402,8 +2417,26 @@ public final class BrowserSession: ObservableObject {
     public let standardProfileID = UUID()
     public let privateProfileID = UUID()
     public private(set) var privateSessionID = UUID()
+    private var windowInForeground = false
     public weak var hostCoordinator: BrowserHostStoreCoordinating? {
-        didSet { (standardTabs + privateTabs).forEach { $0.hostCoordinator = hostCoordinator } }
+        didSet {
+            if oldValue !== hostCoordinator {
+                oldValue?.setGeoSiteForeground(window: standardProfileID, eligible: false)
+                publishGeoSiteForeground()
+            }
+            (standardTabs + privateTabs).forEach { $0.hostCoordinator = hostCoordinator }
+        }
+    }
+
+    public func setWindowForeground(_ active: Bool) {
+        guard windowInForeground != active else { return }
+        windowInForeground = active
+        publishGeoSiteForeground()
+    }
+
+    private func publishGeoSiteForeground() {
+        hostCoordinator?.setGeoSiteForeground(window: standardProfileID,
+            eligible: windowInForeground && !isWindowClosed && profile == .standard)
     }
     public let dataStore: BrowserDataStore
     public let workspaceStore: WorkspaceStore
@@ -2553,6 +2586,7 @@ public final class BrowserSession: ObservableObject {
         guard !isWindowClosed else { return }
         persistSession()
         isWindowClosed = true
+        publishGeoSiteForeground()
         presentedAccessDownloads.removeAll(); presentedAccessDownloadOrder.removeAll()
         pendingDownloadURL = nil; pendingMarkdown = nil
         disposeTabs(standardTabs + privateTabs, endingPrivateScopeID: privateSessionID.uuidString)
@@ -2871,11 +2905,16 @@ public final class BrowserSession: ObservableObject {
             let needsProtectedPreparation = self.hostCoordinator?.requiresProxy(tab: tab, url: url) == true
                 && self.hostCoordinator?.requiresProxyPreparation(tab: tab, url: url) == true
             guard !needsProtectedPreparation,
+                  self.hostCoordinator?.isMainFrameRouteIndeterminate(tab: tab, url: url) != true,
                   !(self.hostCoordinator?.wouldSwitchStore(tab: tab, url: url) ?? false) else { return .declined }
             let child = self.makeTab(profile: profile, suppliedConfiguration: configuration,
                                      originalStore: tab.originalWebsiteDataStore)
             child.inheritedHardenedSecurity = hardened
             child.boundHostName = tab.boundHostName
+            guard self.hostCoordinator?.isMainFrameRouteIndeterminate(tab: child, url: url) != true else {
+                self.disposeTabs([child])
+                return .declined
+            }
             let routed = self.hostCoordinator?.dataStoreForMainFrame(tab: child, url: url)
             guard (routed ?? child.originalWebsiteDataStore) === configuration.websiteDataStore,
                   self.hostCoordinator?.requiresProxy(tab: child, url: url) != true || routed != nil,

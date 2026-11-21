@@ -111,12 +111,19 @@ struct AegisApp: App {
         let publisher = AccessThreeXUIWebEntry.makePublisher(for: subscription)
         let channel = AccessProductChannel.resolve()
         let geoSiteCache = Self.makeGeoSiteCache(channel: channel, isUITest: isTest)
+#if DEBUG && targetEnvironment(simulator)
+        let isHostedTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+#else
+        let isHostedTest = false
+#endif
+        let refreshGeoSite = channel == .dev && !isTest && !isHostedTest
         let hostStores = AccessHostStoreCoordinator(
             publisher: publisher,
             channel: channel,
             defaultLocationPrivacy: !(publisher is AccessFailClosedProxyEntryPublisher),
             locationPreferences: defaults,
-            geoSiteCache: geoSiteCache
+            geoSiteCache: geoSiteCache,
+            geoSiteTransport: refreshGeoSite ? AccessGeoSiteUpdateTransport() : nil
         )
         registry.hostRouting = hostStores
         hostStores.startForegroundSweep()
@@ -243,9 +250,9 @@ struct AegisApp: App {
 
 /// 浏览会话的生命周期跟随窗口，公共资料与下载仍由 App 持有。
 private struct AegisWindowView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var language: AppLanguageSettings
     @EnvironmentObject private var accessRegistry: AccessSiteProxyStoreRegistry
-    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @StateObject private var browser: BrowserSession
     @StateObject private var lifetime = AegisWindowLifetime()
     @ObservedObject var windows: BrowserWindowStore
@@ -267,16 +274,17 @@ private struct AegisWindowView: View {
                 lifetime.browser = browser
                 lifetime.accessRegistry = accessRegistry
                 windows.register(browser.windowID)
-                hostStores.tabs = { [weak browser] in
-                    guard let browser else { return [] }
-                    return browser.standardTabs + browser.privateTabs
-                }
+                browser.setWindowForeground(scenePhase == .active)
                 browser.persistSession()
             }
             .onChange(of: browser.retiredPrivateWebsiteDataStoreRevision) { _, _ in
                 accessRegistry.release(browser.consumeRetiredPrivateWebsiteDataStores())
             }
+            .onChange(of: scenePhase) { _, phase in
+                browser.setWindowForeground(phase == .active)
+            }
             .onDisappear {
+                browser.setWindowForeground(false)
                 browser.persistSession()
             }
     }

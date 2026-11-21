@@ -1313,10 +1313,13 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
     private let body: String?
     private let finishAfterRecording: Bool
     private let redirects: [String: URL]
-    init(body: String? = nil, finishAfterRecording: Bool = false, redirects: [String: URL] = [:]) {
+    private let workerScript: String?
+    init(body: String? = nil, finishAfterRecording: Bool = false, redirects: [String: URL] = [:],
+         workerScript: String? = nil) {
         self.body = body
         self.finishAfterRecording = finishAfterRecording
         self.redirects = redirects
+        self.workerScript = workerScript
     }
     private let lock = OSAllocatedUnfairLock(initialState: "")
     private let authorityLock = OSAllocatedUnfairLock(initialState: [String]())
@@ -1334,7 +1337,7 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         authorityLock.withLock { $0.append("\(host):\(port)") }
         if finishAfterRecording { throw URLError(.secureConnectionFailed) }
-        let stream = AnsweringStream(host: host, body: body, redirects: redirects)
+        let stream = AnsweringStream(host: host, body: body, redirects: redirects, workerScript: workerScript)
         if port == 443 { heldTLS.withLock { $0[host, default: []].append(stream) } }
         stream.onRequest = { [weak self] request in
             self?.append(request)
@@ -1362,10 +1365,12 @@ private final class AnsweringStream: AccessRealityPathStream, @unchecked Sendabl
 
     private let body: String?
     private let redirects: [String: URL]
-    init(host: String, body: String? = nil, redirects: [String: URL] = [:]) {
+    private let workerScript: String?
+    init(host: String, body: String? = nil, redirects: [String: URL] = [:], workerScript: String? = nil) {
         self.host = host
         self.body = body
         self.redirects = redirects
+        self.workerScript = workerScript
     }
 
     var isOpen: Bool {
@@ -1413,10 +1418,11 @@ private final class AnsweringStream: AccessRealityPathStream, @unchecked Sendabl
            let destination = redirects[String(target)] {
             return Data("HTTP/1.1 302 Found\r\nLocation: \(destination.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
         }
-        let body = self.body.map { request.contains("/pulse") ? "ok" : $0 } ?? (host == "cdn.invalid"
+        let worker = request.hasPrefix("GET /geo-worker.js?") ? workerScript : nil
+        let body = worker ?? self.body.map { request.contains("/pulse") ? "ok" : $0 } ?? (host == "cdn.invalid"
             ? "body{}"
             : "<link rel=\"stylesheet\" href=\"http://cdn.invalid/a.css\">")
-        let type = host == "cdn.invalid" ? "text/css" : "text/html"
+        let type = worker != nil ? "text/javascript" : (host == "cdn.invalid" ? "text/css" : "text/html")
         let header = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
         _ = request
         return Data(header.utf8)
@@ -2176,6 +2182,179 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(tab.recoveryLoadCount, 0)
         XCTAssertTrue(coordinator.registry.endpointSnapshot.isEmpty)
     }
+
+#if DEBUG && targetEnvironment(simulator)
+    func testOfficialGeoSiteConsentAndWithdrawalRetireOnlyAffectedLiveTraffic() async throws {
+        let fixture = try GeoSiteHTTPSFixture()
+        try await fixture.select("expand", version: 1, reset: true)
+        let simulatedOffset = OSAllocatedUnfairLock(initialState: 0.0)
+        let location = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let storage = AccessGeoSiteStorage(directory: location, service: "geosite-switch." + UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: location)
+            SecItemDelete([kSecClass as String: kSecClassGenericPassword,
+                           kSecAttrService as String: storage.service] as CFDictionary)
+        }
+        let cache = AccessGeoSiteCache(storage: storage, time: .init(wall: { Date().addingTimeInterval(simulatedOffset.withLock { $0 }) }))
+        await cache.restore(migrating: .init(mode: .smart, categories: [.debian, .douban]))
+        XCTAssertEqual(cache.status, .ready)
+
+        func page(_ title: String) -> String {
+            """
+            <title>\(title)</title><script>
+            const path = location.pathname;
+            fetch('/pulse-resource' + path, {cache: 'no-store'});
+            setInterval(() => fetch('/pulse-script' + path, {cache: 'no-store'}), 80);
+            window.worker = new Worker('/geo-worker.js?' + path);
+            </script>
+            """
+        }
+        let script = """
+        const path = self.location.search.slice(1);
+        setInterval(() => fetch('/pulse-worker' + path, {cache: 'no-store'}), 100);
+        """
+        let managed = AnsweringOpener(body: page("Managed GeoSite"), workerScript: script)
+        let original = AnsweringOpener(body: page("Original GeoSite"), workerScript: script)
+        let managedPort: UInt16 = 18_641
+        let originalPort: UInt16 = 18_642
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        defer { try? managedListener.stop() }
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        defer { try? originalListener.stop() }
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try await managedListener.start(at: date)
+        try await originalListener.start(at: date)
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
+            geoSiteCache: cache, geoSiteTransport: fixture.transport())
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences,
+                                     hostCoordinator: coordinator)
+        let other = BrowserSession(dataStore: browser.dataStore, preferences: preferences, hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(browser.activeTab)
+        let sibling = try XCTUnwrap(other.activeTab)
+        tab.keepsExplicitHTTPForTesting = true
+        sibling.keepsExplicitHTTPForTesting = true
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer { browser.closeWindow(); other.closeWindow(); restoreOriginal() }
+        try await tab.prepareContentRulesForTests()
+        try await sibling.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        let otherWindow = show(sibling.webView)
+        defer {
+            window.isHidden = true
+            otherWindow.isHidden = true
+            let receipt = XCTAttachment(string: """
+            original authorities=\(Set(original.authorities).sorted())
+            managed authorities=\(Set(managed.authorities).sorted())
+            original resource=\(requests(original, "/pulse-resource/original")) script=\(requests(original, "/pulse-script/original")) worker=\(requests(original, "/pulse-worker/original"))
+            managed write=\(requests(managed, "POST /written")) script=\(requests(managed, "/pulse-script/written")) worker=\(requests(managed, "/pulse-worker/written"))
+            independent script=\(requests(managed, "/pulse-script/independent")) worker=\(requests(managed, "/pulse-worker/independent"))
+            """)
+            receipt.name = "GeoSite switch listener witnesses"
+            receipt.lifetime = .keepAlways
+            add(receipt)
+        }
+
+        func requests(_ listener: AnsweringOpener, _ path: String) -> Int {
+            listener.transcript.components(separatedBy: path + " ").count - 1
+        }
+        func route(_ path: String, host: String = "expanded.example.com") -> URL {
+            URL(string: "http://\(host)/\(path)")!
+        }
+        func awaitPage(_ tab: BrowserTab, in window: UIWindow, title: String,
+                       listener: AnsweringOpener, path: String) async throws {
+            func pageIsLive() -> Bool {
+                self.attach(tab.webView, to: window)
+                return tab.webView.title == title && requests(listener, "/pulse-resource/" + path) > 0
+                    && requests(listener, "/pulse-script/" + path) > 1 && requests(listener, "/pulse-worker/" + path) > 1
+            }
+            try await waitUntil(seconds: 12, pageIsLive, message: "Expected page, resource, script and worker at \(path)")
+            _ = try XCTUnwrap(pageIsLive() ? tab.webView.title : nil,
+                "Fixture traffic never became live. Title: \(tab.webView.title ?? "") error: \(tab.loadingError ?? "")")
+        }
+        func proveStopped(_ oldView: WKWebView, listener: AnsweringOpener, path: String) async throws {
+            try await waitUntil(seconds: 8, { oldView.url?.absoluteString == "about:blank" },
+                                message: "The affected WebKit document must become inert")
+            XCTAssertNil(oldView.load(URLRequest(url: route("resurrect"))))
+            try await Task.sleep(for: .milliseconds(180))
+            let scriptCount = requests(listener, "/pulse-script/" + path)
+            let workerCount = requests(listener, "/pulse-worker/" + path)
+            let controlCount = requests(managed, "/pulse-worker/independent")
+            try await Task.sleep(for: .milliseconds(420))
+            XCTAssertEqual(requests(listener, "/pulse-script/" + path), scriptCount)
+            XCTAssertEqual(requests(listener, "/pulse-worker/" + path), workerCount)
+            XCTAssertGreaterThan(requests(managed, "/pulse-worker/independent"), controlCount)
+        }
+
+        // The active tabs schedule their own start-page loads. Let those
+        // commits settle before sending either test document.
+        func windowsAreReady() -> Bool {
+            [tab, sibling].allSatisfy {
+                $0.liveCommittedDocumentURL?.absoluteString == "aegis://start" && !$0.isLoading
+            }
+        }
+        try await waitUntil(seconds: 8, windowsAreReady, message: "Both initial WebKit documents must finish")
+        guard windowsAreReady() else { throw CocoaError(.featureUnsupported) }
+        let oldOriginal = tab.webView
+        tab.load(route("original"))
+        sibling.load(route("independent", host: "independent.dotdeb.org"))
+        try await awaitPage(tab, in: window, title: "Original GeoSite", listener: original, path: "original")
+        try await awaitPage(sibling, in: otherWindow, title: "Managed GeoSite", listener: managed, path: "independent")
+        XCTAssertFalse(managed.authorities.contains("expanded.example.com:80"))
+        XCTAssertFalse(original.authorities.contains("independent.dotdeb.org:80"))
+
+        other.setWindowForeground(true)
+        try await waitUntil(seconds: 8, { cache.highWater?.releaseID == 1001 }, message: "First official response should stage Douban")
+        XCTAssertTrue(tab.webView === oldOriginal, "Refreshing alone does not provide consent")
+        let stale = try XCTUnwrap(coordinator.websiteCategoryProposal(.douban, for: other))
+        XCTAssertEqual(stale.addedRules.map(\.host), ["expanded.example.com"])
+
+        try await fixture.select("expand", version: 2)
+        simulatedOffset.withLock { $0 += 86_401 }
+        coordinator.checkpointGeoSiteClock()
+        try await waitUntil(seconds: 8, { cache.highWater?.releaseID == 1002 }, message: "Second official candidate should replace the first")
+        XCTAssertEqual(try XCTUnwrap(cache.highWater).releaseID, 1002)
+        let staleAccepted = await coordinator.confirmWebsiteCategory(stale, for: other)
+        XCTAssertFalse(staleAccepted)
+        XCTAssertTrue(tab.webView === oldOriginal)
+        let fresh = try XCTUnwrap(coordinator.websiteCategoryProposal(.douban, for: other))
+        XCTAssertNotEqual(stale.version, fresh.version)
+        let accepted = await coordinator.confirmWebsiteCategory(fresh, for: other)
+        XCTAssertTrue(accepted)
+        try await proveStopped(oldOriginal, listener: original, path: "original")
+
+        tab.load(route("entry"))
+        try await awaitPage(tab, in: window, title: "Managed GeoSite", listener: managed, path: "entry")
+        var post = URLRequest(url: route("written"))
+        post.httpMethod = "POST"
+        post.httpBody = Data("test-write".utf8)
+        tab.load(post)
+        try await awaitPage(tab, in: window, title: "Managed GeoSite", listener: managed, path: "written")
+        let oldManaged = tab.webView
+        let oldStore = tab.websiteDataStore
+        XCTAssertFalse(oldStore.proxyConfigurations.isEmpty)
+        XCTAssertEqual(requests(managed, "POST /written"), 1)
+        XCTAssertEqual(requests(original, "POST /written"), 0)
+
+        try await fixture.select("removed", version: 3)
+        simulatedOffset.withLock { $0 += 86_401 }
+        coordinator.checkpointGeoSiteClock()
+        try await waitUntil(seconds: 8, { cache.highWater?.releaseID == 1003 }, message: "Valid newer withdrawal should commit")
+        try await proveStopped(oldManaged, listener: managed, path: "written")
+        XCTAssertTrue(oldStore.proxyConfigurations.isEmpty, "Release the withdrawn store after its final document stops")
+        XCTAssertEqual(requests(managed, "POST /written"), 1)
+        XCTAssertEqual(requests(original, "POST /written"), 0)
+        XCTAssertFalse(original.transcript.contains("/pulse-script/written"))
+        XCTAssertFalse(managed.transcript.contains("/pulse-script/original"))
+
+        tab.load(route("reopened"))
+        try await awaitPage(tab, in: window, title: "Original GeoSite", listener: original, path: "reopened")
+        XCTAssertFalse(managed.transcript.contains("/pulse-script/reopened"))
+    }
+
+#endif
 
     func testGeoSiteLoadsRedirectedPageAndItsResourcesAndDoesNotReplayWritesAcrossStores() async throws {
         let managedPort: UInt16 = 18_474

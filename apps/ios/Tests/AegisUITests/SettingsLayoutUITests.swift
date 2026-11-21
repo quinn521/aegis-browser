@@ -308,6 +308,65 @@ final class SettingsLayoutUITests: XCTestCase {
         capture("加速分类-重新启动后保留空选", app)
     }
 
+    func testWebsiteAccelerationConsentAndRelaunch() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["AEGIS_GEOSITE_METADATA"] != nil, env["AEGIS_GEOSITE_FROZEN"] != "0" else {
+            throw XCTSkip("First prepare the GeoSite consent cache with the isolated HTTPS fixture")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "--ui-testing-geosite-cache",
+                               "--ui-testing-geosite-cache-keep", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
+        defer { app.terminate() }
+
+        func open() {
+            app.launch()
+            XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+            let entry = app.buttons["domestic-acceleration-link"]
+            XCTAssertTrue(reveal(entry, app))
+            entry.tap()
+            let link = app.buttons["website-acceleration-categories"]
+            XCTAssertTrue(reveal(link, app))
+            link.tap()
+            XCTAssertTrue(app.navigationBars["加速分类"].waitForExistence(timeout: 5))
+        }
+
+        func control(_ identifier: String) -> XCUIElement {
+            app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        }
+
+        open()
+        let douban = app.buttons["website-acceleration-category-DOUBAN"]
+        XCTAssertTrue(douban.isSelected)
+        XCTAssertEqual(douban.value as? String, "等待确认")
+        let details = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@",
+            "豆瓣", "website-acceleration-category-DOUBAN")).firstMatch
+        let candidate = control("website-acceleration-candidate-DOUBAN")
+        let approve = app.buttons["website-acceleration-approve-DOUBAN"]
+        XCTAssertFalse(candidate.exists)
+        XCTAssertFalse(approve.exists)
+        XCTAssertTrue(reveal(details, app))
+        details.tap()
+        XCTAssertTrue(reveal(candidate, app))
+        XCTAssertTrue(reveal(app.staticTexts["expanded.example.com"], app))
+        XCTAssertTrue(reveal(approve, app))
+        approve.tap()
+        XCTAssertTrue(approve.waitForNonExistence(timeout: 10))
+        XCTAssertFalse(candidate.exists)
+        XCTAssertTrue(douban.isSelected)
+
+        app.terminate()
+        open()
+        XCTAssertTrue(douban.isSelected)
+        XCTAssertNotEqual(douban.value as? String, "等待确认")
+        XCTAssertTrue(reveal(details, app))
+        details.tap()
+        XCTAssertFalse(approve.exists)
+        let verifiedDomains = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "expanded.example.com")).firstMatch
+        XCTAssertTrue(reveal(verifiedDomains, app))
+        capture("加速分类-批准新增范围并重新启动", app)
+    }
+
     func testWebsiteAccelerationModesInDevSettings() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]

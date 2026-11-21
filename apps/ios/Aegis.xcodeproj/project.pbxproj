@@ -389,7 +389,9 @@
 		FF0A91425480299B9A465E34 /* ExternalPageLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D2FFC6E99254E69EFC1E7 /* ExternalPageLink.swift */; };
 		FFD0D8F1BB9920FE7C0C3B35 /* ThreeXUISubscriptionRedirectFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EEC6BC393F5B54A72EFBC2B /* ThreeXUISubscriptionRedirectFixtureTests.swift */; };
 		CF40698120DE47BCA6C9C7C3 /* AccessGeoSiteCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 884B39628C0654FC1D223CF0 /* AccessGeoSiteCache.swift */; };
+		1E28A7D21BD347D1E4758CD4 /* AccessGeoSiteUpdateTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAE0CA05715F3CBE5D0B9326 /* AccessGeoSiteUpdateTransport.swift */; };
 		E44C81770C4E6E49CF5AAF0F /* AccessGeoSiteCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4957F47D9F5EAA2BFCB08D5F /* AccessGeoSiteCacheTests.swift */; };
+		F7941A2A40B34C362D948844 /* AccessGeoSiteUpdateTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01C1A6CE3C985BE392417071 /* AccessGeoSiteUpdateTransportTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -936,7 +938,9 @@
 		FDD2FCA82FA95816988BFBFD /* AgentCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCenterView.swift; sourceTree = "<group>"; };
 		FDEB860E4BF7C92C09B917CB /* BrowserOperationsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserOperationsView.swift; sourceTree = "<group>"; };
 		884B39628C0654FC1D223CF0 /* AccessGeoSiteCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteCache.swift; sourceTree = "<group>"; };
+		DAE0CA05715F3CBE5D0B9326 /* AccessGeoSiteUpdateTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteUpdateTransport.swift; sourceTree = "<group>"; };
 		4957F47D9F5EAA2BFCB08D5F /* AccessGeoSiteCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteCacheTests.swift; sourceTree = "<group>"; };
+		01C1A6CE3C985BE392417071 /* AccessGeoSiteUpdateTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteUpdateTransportTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1130,6 +1134,7 @@
 				BCE5417970C2B1407C37C098 /* AccessAccountUsageRefreshCoordinatorTests.swift */,
 				312850823718580735F43C85 /* AccessGeoSiteAdmissionTests.swift */,
 				4957F47D9F5EAA2BFCB08D5F /* AccessGeoSiteCacheTests.swift */,
+				01C1A6CE3C985BE392417071 /* AccessGeoSiteUpdateTransportTests.swift */,
 				11407544FE931A82D1CAB39E /* AccessGeoSiteSelectionTests.swift */,
 				AFC664B288C30F20D35AADCA /* AccessHostRecoveryWebKitTests.swift */,
 				02D5318F98B98D709C5312B7 /* AccessHostSelectiveProxyCapabilityTests.swift */,
@@ -1510,6 +1515,7 @@
 				A2BEA4361879D2CEE0ED1B87 /* AccessDevAllowBlockSectionModel.swift */,
 				21DFE3B27F6365B330F0E739 /* AccessDevAllowBlockSectionView.swift */,
 				884B39628C0654FC1D223CF0 /* AccessGeoSiteCache.swift */,
+				DAE0CA05715F3CBE5D0B9326 /* AccessGeoSiteUpdateTransport.swift */,
 				E40AA63717545D841D62E3FD /* AccessHostStoreCoordinator.swift */,
 				848462AF10B5714544903958 /* AccessProxyCapabilityPresentation.swift */,
 				2A3D7253C7215FF069464853 /* AccessSiteProxySessionStore.swift */,
@@ -2223,6 +2229,7 @@
 				D2A8C3B83A86549918A5C5D4 /* AccessDevAllowBlockSectionModel.swift in Sources */,
 				5F330B083DC9F2371801C627 /* AccessDevAllowBlockSectionView.swift in Sources */,
 				CF40698120DE47BCA6C9C7C3 /* AccessGeoSiteCache.swift in Sources */,
+				1E28A7D21BD347D1E4758CD4 /* AccessGeoSiteUpdateTransport.swift in Sources */,
 				F7ADDDE71FC0B0F0615BADD9 /* AccessHostStoreCoordinator.swift in Sources */,
 				60B3F5A46ED48E0EEE59FDEC /* AccessProxyCapabilityPresentation.swift in Sources */,
 				A5A1195ADA40E0F62926A870 /* AccessSiteProxySessionStore.swift in Sources */,
@@ -2303,6 +2310,7 @@
 				24F51C670915D79EBA8F8045 /* AccessEmbeddedProxyEntryFactoryTests.swift in Sources */,
 				D3E812CDF18D6E59014C5AE4 /* AccessGeoSiteAdmissionTests.swift in Sources */,
 				E44C81770C4E6E49CF5AAF0F /* AccessGeoSiteCacheTests.swift in Sources */,
+				F7941A2A40B34C362D948844 /* AccessGeoSiteUpdateTransportTests.swift in Sources */,
 				EEA6F079B54F71682D31FEC4 /* AccessGeoSiteSelectionTests.swift in Sources */,
 				6EBBC2FDFD05EB0CB7E7895A /* AccessHTTPConnectTests.swift in Sources */,
 				3D59E66EA76B0E1A0061BAB8 /* AccessHTTPInboundListenerTests.swift in Sources */,
