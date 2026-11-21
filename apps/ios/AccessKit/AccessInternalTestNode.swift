@@ -25,6 +25,7 @@ public enum AccessInternalTestNode: Equatable, Sendable {
         let permitted: Set<String> = ["type", "security", "host", "sni", "fp", "path", "encryption", "alpn"]
         let names = Set(items.map(\.name))
         guard names.count == items.count, names.isSubset(of: permitted),
+              items.allSatisfy({ $0.value != nil }),
               let address = components.host, let rawPort = components.port, let port = UInt16(exactly: rawPort),
               let id = components.user else { throw AccessLocalV2RayConfigError.invalidJSON }
         let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
@@ -57,11 +58,15 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
         }
         guard port != 0, let uuid = UUID(uuidString: userID) else { throw AccessLocalV2RayConfigError.invalidJSON }
-        guard Self.isDNSName(serverName), Self.isDNSName(requestHost) else {
+        guard Self.isDNSName(serverName), Self.isHTTPAuthority(requestHost) else {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("tls-host")
         }
         guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("#"), !path.contains("\\"),
-              path.utf8.count <= 2_048, path.utf8.allSatisfy({ (33...126).contains($0) }) else {
+              path.utf8.count <= 2_048, path.utf8.allSatisfy({ (33...126).contains($0) }),
+              let decoded = path.removingPercentEncoding,
+              decoded.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
+              let parts = URLComponents(string: path),
+              (parts.queryItems ?? []).allSatisfy({ $0.name != "ed" }) else {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("path")
         }
         guard ["", "chrome", "firefox", "safari", "ios", "android", "edge"].contains(fingerprint),
@@ -87,9 +92,27 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
             }
     }
 
+    private static func isHTTPAuthority(_ authority: String) -> Bool {
+        guard !authority.isEmpty, !authority.hasSuffix(":"), !authority.contains("%"),
+              let url = URLComponents(string: "https://" + authority), let host = url.host,
+              url.user == nil, url.password == nil, url.path.isEmpty, url.query == nil, url.fragment == nil,
+              url.port.map({ (1...65_535).contains($0) }) ?? true else { return false }
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            return IPv6Address(String(host.dropFirst().dropLast())) != nil
+        }
+        return isDNSName(host) || IPv4Address(host) != nil
+    }
+
+    var diagnosticSecrets: [String] {
+        let values = URLComponents(string: path)?.queryItems?.compactMap(\.value) ?? []
+        return [userID, path == "/" ? "" : path] + values
+    }
+
     /// Emits one typed outbound and requires normal TLS certificate verification.
-    func embeddedInstanceJSONData() throws -> Data {
-        var tls: [String: Any] = ["serverName": serverName]
+    func embeddedInstanceJSONData(
+        logLevel: AccessLogLevel = .none, errorLogPath: String? = nil, logCaptureGeneration: Int64? = nil
+    ) throws -> Data {
+        var tls: [String: Any] = ["serverName": serverName, "useSystemCA": true]
         if !fingerprint.isEmpty { tls["fingerprint"] = fingerprint }
         if !alpn.isEmpty { tls["alpn"] = [alpn] }
         let outbound: [String: Any] = [
@@ -106,10 +129,14 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
                 "wsSettings": ["host": requestHost, "path": path],
             ],
         ]
-        return try JSONSerialization.data(withJSONObject: [
-            "log": ["loglevel": "none", "access": "none", "error": "none"],
+        let log = try AccessRealityVisionOutboundConfig.embeddedLog(
+            logLevel: logLevel, errorLogPath: errorLogPath, includeAccessLog: true)
+        var config: [String: Any] = [
+            "log": log,
             "inbounds": [],
             "outbounds": [outbound],
-        ], options: [.sortedKeys])
+        ]
+        if let logCaptureGeneration { config["aegisLogCaptureGeneration"] = logCaptureGeneration }
+        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
     }
 }

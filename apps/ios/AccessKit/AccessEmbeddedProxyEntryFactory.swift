@@ -45,7 +45,7 @@ public enum AccessEmbeddedProxyEntryFactory {
     /// Used by the existing native test Profile after its channel and revision checks.
     public static func makeInternalTestPublisher(
         lockData: Data? = nil,
-        verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
+        verifiedCore: any AccessEmbeddedCoreControlling,
         node: @escaping @MainActor () async throws -> AccessInternalTestNode,
         connectionAllowed: @escaping @MainActor () -> Bool,
         retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void,
@@ -228,7 +228,16 @@ final class AccessEmbeddedProxyEntrySession {
                         level: AccessDiagnosticLog.selectedLevel()
                     )
                 case .vlessWebSocketTLS(let parameters):
-                    try await core.start(configData: parameters.embeddedInstanceJSONData())
+                    logLease = try await Self.startCoreWithDiagnostics(
+                        core: core, diagnostics: .shared, level: AccessDiagnosticLog.selectedLevel(),
+                        secrets: parameters.diagnosticSecrets
+                    ) { lease in
+                        guard let lease else { return try parameters.embeddedInstanceJSONData() }
+                        return try parameters.embeddedInstanceJSONData(
+                            logLevel: lease.level, errorLogPath: lease.path,
+                            logCaptureGeneration: lease.generation
+                        )
+                    }
                 }
             } catch {
                 throw AccessSiteSessionError.prepareFailed("core.start: \(error)")
@@ -320,25 +329,41 @@ final class AccessEmbeddedProxyEntrySession {
         disableCaptureWhenQuiet: Bool = true
     ) async throws -> AccessDiagnosticLog.Lease {
         let parameters = outbound.parameters
-        let lease = diagnostics.acquireShared(
-            level: level, secrets: [parameters.userID, parameters.publicKey, parameters.shortID],
+        return try await startCoreWithDiagnostics(
+            core: core, diagnostics: diagnostics, level: level,
+            secrets: [parameters.userID, parameters.publicKey, parameters.shortID],
             disableCaptureWhenQuiet: disableCaptureWhenQuiet
+        ) { lease in
+            guard let lease else { return try outbound.embeddedInstanceJSONData() }
+            return try outbound.embeddedInstanceJSONData(
+                logLevel: lease.level, errorLogPath: lease.path, includeAccessLog: true,
+                logCaptureGeneration: lease.generation
+            )
+        }
+    }
+
+    private static func startCoreWithDiagnostics(
+        core: any AccessEmbeddedCoreControlling,
+        diagnostics: AccessDiagnosticLog,
+        level: AccessLogLevel,
+        secrets: [String],
+        disableCaptureWhenQuiet: Bool = true,
+        render: (AccessDiagnosticLog.Lease?) throws -> Data
+    ) async throws -> AccessDiagnosticLog.Lease {
+        let lease = diagnostics.acquireShared(
+            level: level, secrets: secrets, disableCaptureWhenQuiet: disableCaptureWhenQuiet
         )
         var started = false
         defer { if !started { diagnostics.stop(lease: lease) } }
         do {
-            let config = try outbound.embeddedInstanceJSONData(
-                logLevel: lease.level, errorLogPath: lease.path, includeAccessLog: true,
-                logCaptureGeneration: lease.generation
-            )
-            try await core.start(configData: config)
+            try await core.start(configData: render(lease))
         } catch {
             let text = (error as NSError).localizedDescription
             let loggerFailure = text.contains("failed to initialize access logger") ||
                 text.contains("failed to initialize error logger")
             guard lease.path != nil, !core.isRunning, loggerFailure else { throw error }
             diagnostics.markUnavailable()
-            try await core.start(configData: outbound.embeddedInstanceJSONData())
+            try await core.start(configData: render(nil))
         }
         started = true
         return lease

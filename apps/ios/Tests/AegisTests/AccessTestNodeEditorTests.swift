@@ -31,8 +31,14 @@ final class AccessTestNodeEditorTests: XCTestCase {
         editor.preview(link)
         editor.apply()
         let legacy = try repository.savedNode(isPrivate: false)
-        let previous = try JSONEncoder().encode(legacy)
-        XCTAssertEqual(try JSONDecoder().decode(AccessTestNodeRecord.self, from: previous).node, legacy.node)
+        let previous = Data("""
+        {"version":1,"revision":"E1EA5ABF-608B-40E3-886A-9D92520F79A1","address":"198.51.100.10",
+         "port":443,"userID":"550e8400-e29b-41d4-a716-446655440000","serverName":"www.example.com",
+         "publicKey":"abcdefghijklmnopqrstuvwxyzABCDEFG","shortID":"abcd1234","fingerprint":"chrome","spiderX":""}
+        """.utf8)
+        let restoredLegacy = try JSONDecoder().decode(AccessTestNodeRecord.self, from: previous)
+        XCTAssertEqual(restoredLegacy.node, legacy.node)
+        XCTAssertEqual(restoredLegacy.revision.uuidString, "E1EA5ABF-608B-40E3-886A-9D92520F79A1")
 
         editor.preview(webSocketLink)
         XCTAssertEqual(editor.draftProtocolName, "VLESS / WS / TLS")
@@ -48,11 +54,19 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(node.requestHost, "ws.example.com")
         XCTAssertEqual(node.path, "/inside")
         XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(webSocketLink))
+        let explicitPort = webSocketLink.replacingOccurrences(of: "host=ws.example.com", with: "host=ws.example.com%3A8443")
+        guard case .vlessWebSocketTLS(let authority) = try AccessInternalTestNode.parseSingleShareURI(explicitPort)
+        else { return XCTFail("Wrong outbound for HTTP authority") }
+        XCTAssertEqual(authority.requestHost, "ws.example.com:8443")
+        XCTAssertEqual(authority.serverName, "cert.example.com")
 
         for invalid in [webSocketLink.replacingOccurrences(of: "security=tls", with: "security=none"),
                         webSocketLink.replacingOccurrences(of: "&alpn=", with: "&allowInsecure=1"),
                         webSocketLink.replacingOccurrences(of: "&alpn=", with: "&security=tls"),
                         webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2F%0D%0AX-Forged"),
+                        webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2Finvalid%25"),
+                        webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2F%3F%2565d%3D1"),
+                        webSocketLink.replacingOccurrences(of: "alpn=", with: "alpn=%FF"),
                         webSocketLink + "\n" + webSocketLink] {
             editor.preview(invalid)
             XCTAssertFalse(editor.canApply)
@@ -83,6 +97,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(stream["security"] as? String, "tls")
         let tls = try XCTUnwrap(stream["tlsSettings"] as? [String: Any])
         XCTAssertNil(tls["allowInsecure"])
+        XCTAssertEqual(tls["useSystemCA"] as? Bool, true)
         XCTAssertEqual(tls["serverName"] as? String, "cert.example.com")
         let webSocket = try XCTUnwrap(stream["wsSettings"] as? [String: String])
         XCTAssertEqual(webSocket["host"], "ws.example.com")
