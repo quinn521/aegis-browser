@@ -2280,7 +2280,10 @@ extension AccessHostRecoveryWebKitTests {
         let digest = AccessGeoSiteAdmission.sha256(data)
         let rules = try XCTUnwrap(AccessOverseasRuleList(data: data, expectedCount: 1, expectedDigest: digest))
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
-            locationPreferences: defaults, overseasRules: rules)
+            probeRunner: AccessSiteProbeRunner(sessionFactory: {
+                XCTFail("A required overseas host must never open a direct diagnostic session")
+                return URLSession(configuration: .ephemeral)
+            }), locationPreferences: defaults, overseasRules: rules)
         let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
         let tab = try XCTUnwrap(session.activeTab)
         tab.keepsExplicitHTTPForTesting = true
@@ -2318,6 +2321,15 @@ extension AccessHostRecoveryWebKitTests {
         try await witness("sub." + listed, path: "unlisted", useManaged: false)
         try await witness(listed, path: "on", useManaged: true)
         let listedHost = try AccessSiteHost(listed)
+        let protectedView = tab.webView
+        let protectedStore = tab.websiteDataStore
+        XCTAssertTrue(coordinator.setAutoRecoveryEnabled(true, for: tab).isArmed)
+        XCTAssertTrue(coordinator.runProbe(for: tab, candidates: [listedHost]))
+        try await waitUntil({ !coordinator.snapshot(for: tab).probeBusy })
+        XCTAssertTrue(coordinator.snapshot(for: tab).probeSuggestionLines.contains { $0.contains("跳过直连探测") })
+        XCTAssertEqual(coordinator.setAutoRecoveryEnabled(false, for: tab), .revoked)
+        XCTAssertTrue(tab.webView === protectedView && tab.websiteDataStore === protectedStore)
+        XCTAssertEqual(tab.boundHostName, listed)
         coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: listedHost)
         XCTAssertEqual(coordinator.websiteRouteChoice(for: tab), .original)
         try await witness(listed, path: "override", useManaged: false)
@@ -2330,6 +2342,164 @@ extension AccessHostRecoveryWebKitTests {
         try await waitUntil(seconds: 8, { managedView.url?.absoluteString == "about:blank" },
                             message: "The managed document should retire when its authorization is revoked")
         try await witness(listed, path: "revoked", useManaged: false)
+    }
+
+    func testOverseasRuleDoesNotAuthorizeAnUnlistedHTTPSLanding() async throws {
+        let host = "overseas-landing.invalid"
+        let managed = AnsweringOpener()
+        let original = AnsweringOpener()
+        let managedPort: UInt16 = 18_495
+        let originalPort: UInt16 = 18_496
+        let proxy = try await makeListener(port: managedPort, tunnels: managed)
+        let direct = try await makeListener(port: originalPort, tunnels: original)
+        try await proxy.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? proxy.stop() }
+        try await direct.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? direct.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
+                                                     overseasRules: try makeOverseasRule(host))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(browser.activeTab)
+        let restore = try observeOriginalStore(of: tab, port: originalPort)
+        defer { browser.closeWindow(); restore() }
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        coordinator.setOverseasAccelerationEnabled(true, for: tab)
+        let source = try XCTUnwrap(URL(string: "https://\(host)/approved"))
+        let landing = try XCTUnwrap(URL(string: "https://www.\(host)/unlisted"))
+        tab.loadFromAddressBar(source)
+        try await commitGeoSiteReviewConnect(source, tab: tab, window: window, observer: managed)
+        XCTAssertEqual(tab.boundHostName, host)
+        _ = try XCTUnwrap(tab.webView.load(URLRequest(url: landing)))
+        try await waitUntil(seconds: 8, {
+            self.attach(tab.webView, to: window)
+            return original.authorities.contains("www.\(host):443")
+        }, message: "The unlisted HTTPS target should use the existing original route")
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: landing))
+        // A CONNECT from the old WebKit process is not a document load or an
+        // authorized landing. Verify the target's selected store and lease.
+        XCTAssertNil(tab.parentForProxyLanding(landing))
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        let key = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("www." + host), isPrivate: false)
+        XCTAssertNil(coordinator.registry.endpointSnapshot[key])
+    }
+
+    func testOverseasSwitchRetiresAnOriginalDocumentWithAWarmSiblingHost() async throws {
+        let host = "overseas-warm.geosite.invalid"
+        let direct = AnsweringOpener(body: "<title>Original warm</title>")
+        let managed = AnsweringOpener(body: "<title>Managed warm</title>")
+        let directPort: UInt16 = 18_497
+        let managedPort: UInt16 = 18_498
+        let directListener = try await makeListener(port: directPort, tunnels: direct)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        try await directListener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? directListener.stop() }
+        try await managedListener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? managedListener.stop() }
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            if generation == 1 { throw AccessSiteSessionError.nodeUnavailable }
+            return .init(endpoint: .init(identity: "overseas-warm", generation: generation,
+                loopbackHost: "127.0.0.1", port: managedPort, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, defaultLocationPrivacy: true,
+                                                     overseasRules: try makeOverseasRule(host))
+        let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let second = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(first.activeTab)
+        let sibling = try XCTUnwrap(second.activeTab)
+        let restore = try observeOriginalStore(of: tab, port: directPort)
+        defer { first.closeWindow(); second.closeWindow(); restore() }
+        tab.keepsExplicitHTTPForTesting = true
+        sibling.keepsExplicitHTTPForTesting = true
+        try await tab.prepareContentRulesForTests()
+        try await sibling.prepareContentRulesForTests()
+        let originalView = tab.webView
+        let window = show(originalView)
+        let siblingWindow = show(sibling.webView)
+        defer { window.isHidden = true; siblingWindow.isHidden = true }
+        let source = try XCTUnwrap(URL(string: "http://\(host)/original"))
+        let warm = try XCTUnwrap(URL(string: "http://\(host)/warm"))
+        tab.loadFromAddressBar(source)
+        try await waitUntil {
+            tab.liveCommittedDocumentURL == source && !tab.isLoading && direct.transcript.contains("GET /original ")
+        }
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        sibling.loadFromAddressBar(warm)
+        try await waitUntil {
+            self.attach(sibling.webView, to: siblingWindow)
+            return sibling.liveCommittedDocumentURL == warm && !sibling.isLoading
+                && managed.transcript.contains("GET /warm ")
+        }
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: source), "The warm host influences the next navigation")
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        coordinator.setOverseasAccelerationEnabled(true, for: sibling)
+        try await waitUntil { originalView.url?.absoluteString == "about:blank" }
+        XCTAssertEqual(sibling.liveCommittedDocumentURL, warm)
+    }
+
+    func testOverseasSwitchPreservesAUserAuthorizedPendingAddress() async throws {
+        let host = "overseas-pending.invalid"
+        let port: UInt16 = 18_499
+        let tunnel = AnsweringOpener()
+        let listener = try await makeListener(port: port, tunnels: tunnel)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let gate = WindowPrepareGate()
+        defer { gate.finish() }
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            await gate.wait()
+            return .init(endpoint: .init(identity: "overseas-pending", generation: generation,
+                loopbackHost: "127.0.0.1", port: port, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev,
+                                                     overseasRules: try makeOverseasRule(host))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let target = try XCTUnwrap(URL(string: "https://\(host)/held"))
+        tab.loadFromAddressBar(target)
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        let operation = try XCTUnwrap(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+        try await waitUntil { gate.started }
+        coordinator.setOverseasAccelerationEnabled(true, for: tab)
+        XCTAssertTrue(tab.matchesPendingAddressNavigation(pending))
+        XCTAssertEqual(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending), operation)
+        gate.finish()
+        try await waitUntil {
+            self.attach(tab.webView, to: window)
+            return tunnel.authorities.contains(host + ":443")
+        }
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertEqual(tab.boundHostName, host)
+    }
+
+    func testOverseasFailureShowsAccessUnavailableBeforeAttaching() async throws {
+        let host = "overseas-unavailable.invalid"
+        let coordinator = AccessHostStoreCoordinator(channel: .dev, overseasRules: try makeOverseasRule(host))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let target = try XCTUnwrap(URL(string: "https://\(host)/unavailable"))
+        coordinator.setOverseasAccelerationEnabled(true, for: tab)
+        tab.loadFromAddressBar(target)
+        try await waitUntil { tab.lastMainFrameFailure?.url == target && !tab.isLoading }
+        let status = coordinator.snapshot(for: tab)
+        XCTAssertEqual(status.connection, .unavailable)
+        XCTAssertEqual(status.intentStatus, .overseasUnavailable)
+        XCTAssertFalse(status.toggleOn)
+        XCTAssertNil(tab.boundHostName)
+    }
+
+    private func makeOverseasRule(_ host: String) throws -> AccessOverseasRuleList {
+        let data = Data((host + "\n").utf8)
+        return try XCTUnwrap(AccessOverseasRuleList(
+            data: data, expectedCount: 1, expectedDigest: AccessGeoSiteAdmission.sha256(data)))
     }
 
     func testOverseasListLossBlocksNewRoutesUntilOptOutAndUsesExistingOwnerGate() throws {
@@ -2349,8 +2519,12 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(coordinator.isMainFrameRouteIndeterminate(tab: tab, url: url))
         XCTAssertFalse(coordinator.installOverseasAccelerationList(Data(), for: tab))
         let other = AccessHostStoreCoordinator(channel: .dev)
-        other.setOverseasAccelerationEnabled(false, for: tab)
+        let otherSession = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: other)
+        defer { otherSession.closeWindow() }
+        let otherTab = try XCTUnwrap(otherSession.activeTab)
+        coordinator.setOverseasAccelerationEnabled(false, for: otherTab)
         XCTAssertTrue(coordinator.overseasAccelerationEnabled)
+        XCTAssertTrue(defaults.bool(forKey: "browser.websiteAcceleration.overseasEnabled.v1"))
         coordinator.setOverseasAccelerationEnabled(false, for: tab)
         XCTAssertFalse(coordinator.isMainFrameRouteIndeterminate(tab: tab, url: url))
         XCTAssertFalse(defaults.bool(forKey: "browser.websiteAcceleration.overseasEnabled.v1"))

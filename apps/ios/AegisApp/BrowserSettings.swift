@@ -156,6 +156,7 @@ private struct OverseasAccelerationSettingsView: View {
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @State private var importingList = false
     @State private var importFailed = false
+    @State private var importTask: Task<Void, Never>?
     let tab: BrowserTab
 
     private var enabled: Binding<Bool> {
@@ -173,6 +174,7 @@ private struct OverseasAccelerationSettingsView: View {
                         .disabled(hostStores.overseasAccelerationHostCount == 0 && !hostStores.overseasAccelerationEnabled)
                         .accessibilityIdentifier("overseas-acceleration-toggle")
                     Button("导入域名清单", systemImage: "square.and.arrow.down") { importingList = true }
+                        .disabled(importTask != nil)
                         .accessibilityIdentifier("overseas-acceleration-import")
                     if hostStores.overseasAccelerationHostCount > 0 {
                         LabeledContent("域名数量", value: hostStores.overseasAccelerationHostCount.formatted())
@@ -189,6 +191,10 @@ private struct OverseasAccelerationSettingsView: View {
         }
         .localizedNavigationTitle("国外加速")
         .fileImporter(isPresented: $importingList, allowedContentTypes: [.plainText], onCompletion: importList)
+        .onDisappear {
+            importTask?.cancel()
+            importTask = nil
+        }
         .alert("域名清单无法验证。", isPresented: $importFailed) {
             Button("确定", role: .cancel) {}
         }
@@ -196,17 +202,34 @@ private struct OverseasAccelerationSettingsView: View {
 
     private func importList(_ result: Result<URL, Error>) {
         guard browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) else { return }
-        do {
-            let url = try result.get()
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let file = try FileHandle(forReadingFrom: url)
-            defer { try? file.close() }
-            let data = try file.read(upToCount: AccessOverseasRuleList.maximumInputBytes + 1) ?? Data()
-            importFailed = !hostStores.installOverseasAccelerationList(data, for: tab)
-        } catch {
+        guard case .success(let url) = result else {
             importFailed = true
+            return
         }
+        let read = Task.detached(priority: .userInitiated) { try Self.readList(at: url) }
+        importTask = Task { @MainActor in
+            let result = await read.result
+            guard !Task.isCancelled else { return }
+            importTask = nil
+            guard browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) else { return }
+            switch result {
+            case .success(let data):
+                importFailed = !hostStores.installOverseasAccelerationList(data, for: tab)
+            case .failure:
+                importFailed = true
+            }
+        }
+    }
+
+    private nonisolated static func readList(at url: URL) throws -> Data {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw CocoaError(.fileReadUnsupportedScheme)
+        }
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        return try file.read(upToCount: AccessOverseasRuleList.maximumInputBytes + 1) ?? Data()
     }
 }
 

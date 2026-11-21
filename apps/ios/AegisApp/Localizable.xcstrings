@@ -586,6 +586,38 @@
         }
       }
     },
+    "国外加速连接不可用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "International acceleration unavailable"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "國外加速連線無法使用"
+          }
+        }
+      }
+    },
+    "此网站使用国外加速": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This site uses international acceleration"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此網站使用國外加速"
+          }
+        }
+      }
+    },
     "域名数量": {
       "extractionState": "manual",
       "localizations": {
