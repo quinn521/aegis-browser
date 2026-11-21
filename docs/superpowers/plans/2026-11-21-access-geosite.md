@@ -1,6 +1,6 @@
-# Access GeoSite 的 TDD 实施计划
+# 网站加速的 TDD 实施计划
 
-先在 iOS 验证顶层导航分类和真实选路，再交付 macOS DEV 的手动与自动分流。Hysteria 2 有独立的实验、回执和退出条件。基线为 `develop@e18106b84c56589a69faa1b0965e696caea2cb8c`。每个后续任务先提交能暴露对应行为差异的测试，记录 RED，再做最小实现、重跑同一用例并回归；以下命令区分已存在的入口与拟增测试。[设计规格](../specs/2026-11-21-access-geosite-design.md) · [Superpowers 计划方法](https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/writing-plans/SKILL.md) · [TDD 方法](https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/test-driven-development/SKILL.md)
+先交付可安装的 iOS DEV「网站加速」，在「国内加速」下提供「手动」和「智能」。随后完善 macOS DEV，最后接入 Android。Hysteria 2 有独立的实验、回执和退出条件。基线为 `develop@e18106b84c56589a69faa1b0965e696caea2cb8c`。每个后续任务先提交能暴露对应行为差异的测试，记录 RED，再做最小实现、重跑同一用例并回归；以下命令区分已存在的入口与拟增测试。[设计规格](../specs/2026-11-21-access-geosite-design.md) · [Superpowers 计划方法](https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/writing-plans/SKILL.md) · [TDD 方法](https://github.com/obra/superpowers/blob/22f0b463e7a5e579904dd6211a520321035526f7/skills/test-driven-development/SKILL.md)
 
 ## 1. 已执行的 iOS 顶层导航试验
 
@@ -58,7 +58,46 @@ xcrun xcresulttool export attachments --path "$RESULT_ROOT/GeoSite.xcresult" \
 
 后续 iOS 产品决策需另测用户显式覆盖和清除、位置保护联动、私密会话终止、重启撤销、已提交页面与受信 landing；iframe、worker、下载依各自传输栈验收。该批次不占用 #208 的入站 Options 验收顺序。[iOS 跟踪](https://github.com/gcsagroup/aegis-browser/issues/208)
 
-## 2. macOS DEV 双入口的实施顺序
+## 2. iOS DEV 的国内加速
+
+| 步骤 | 失败测试与通过条件 |
+|---|---|
+| 设置入口 | 用真实「设置」打开「网站加速」。核对「国内加速」下的「手动」「智能」、默认选择、切换和重新进入；DEV 以外或私密会话沿用原设置 |
+| 普通窗口策略 | 直接调用产品协调器。已有默认位置保护的普通窗口启用智能后，匹配域必须准备服务，未匹配域走原连接。测试显式服务、显式原连接、清除继承、重建偏好与禁用 |
+| WebKit 实际出口 | 移除先行试件的决策适配器。沿真实 BrowserTab 入口，在同一标签页跨根域、子域、相似域和未命中域往返。两个互斥监听器记录 CONNECT；故障后用独立正对照验证原路径可观测 |
+| 切换与生命周期 | 在受管准备未完成时切换模式或手动覆盖，注入迟到结果，观察零错误出口，保留其他标签独立授权。POST、同页资源、既有恢复和私密会话分别回归 |
+| 安装与审查 | 构建并安装 DEV 模拟器 App。真机版本保留原 App Groups、扩展与 Apple Development 签名，逐项核对嵌入描述文件及受支持设备；记录安装包哈希。对最终代码、设计和原始回执运行独立只读审查，再提交 PR 验证最终 SHA 的 CI |
+
+### iOS DEV 产品回执与复跑
+
+前置试件的回执保留在第 1 节。产品候选先在旧 App 上得到 3 个行为失败，分别是设置入口缺失、普通窗口智能目标未选择服务、非成员仍尝试全站默认服务。接线后的首轮 6 个 XCTest 全部通过。同一标签页四个受控 HTTPS 顶层目标各有 8 次 CONNECT 到达预期监听器，另一侧均为零；这里统计的是 WebKit 重试，样本为四个目标。服务准备失败时，仅独立对照域到达原设置侧。
+
+第二轮 4 个 XCTest 覆盖了本站选择跨窗口与重建、操作中切换设置或离开、受管超时、可完成的 HTTP 重定向与跨域资源，以及切换存储时保护 POST。另有一项行为测试先复现无服务时无法为失败网站选择原连接，再验证用户可更改或清除该选择，原请求保持停止。完整 iOS 回归、签名包摘要及最终提交的 CI 记录在[产品 PR](https://github.com/quinn521/aegis-browser/pull/402)。
+
+在仓库根目录准备固定核心和新的绝对输出目录，使用专用模拟器。打开「设置 → 网站加速」，在「国内加速」下切换「手动／智能」，重启后核对选择。真机 Debug 构建需要匹配主 App 和两个扩展的开发描述文件。分享扩展与 App 共用现有 App Group。账户服务按原有 DEV 构建配置提供；无配置时，选中服务的顶层导航会报告不可用。[DEV 订阅与核心构建说明](../../development/ios-alpha-quota.zh-CN.md)
+
+```bash
+: "${RESULT_ROOT:?use a fresh absolute result directory}"
+: "${SIM_UDID:?select a test simulator}"
+: "${IOS_DEVELOPMENT_TEAM:?select the development team for this app}"
+bash scripts/release/prepare-ios-package-core.sh "$PWD" "$RESULT_ROOT/EmbeddedCore"
+ios_project=apps/ios/Aegis.xcodeproj
+xcodebuild test -project "$ios_project" -scheme Aegis-Debug -configuration Debug \
+  -destination "platform=iOS Simulator,id=$SIM_UDID" -derivedDataPath "$RESULT_ROOT/SimulatorBuild" \
+  -onlyUsePackageVersionsFromResolvedFile -parallel-testing-enabled NO \
+  -resultBundlePath "$RESULT_ROOT/WebsiteAcceleration.xcresult" \
+  "AEGIS_EMBEDDED_CORE_PRODUCTS=$RESULT_ROOT/EmbeddedCore" \
+  -only-testing:AegisTests/AccessHostRecoveryWebKitTests \
+  -only-testing:AegisTests/AccessHostWebKitRouteTests \
+  -only-testing:AegisUITests/SettingsLayoutUITests/testWebsiteAccelerationModesInDevSettings
+xcodebuild build -project "$ios_project" -scheme Aegis-Debug -configuration Debug \
+  -destination 'generic/platform=iOS' -derivedDataPath "$RESULT_ROOT/DeviceBuild" \
+  -onlyUsePackageVersionsFromResolvedFile "DEVELOPMENT_TEAM=$IOS_DEVELOPMENT_TEAM" \
+  "AEGIS_EMBEDDED_CORE_PRODUCTS=$RESULT_ROOT/EmbeddedCore"
+codesign --verify --deep --strict "$RESULT_ROOT/DeviceBuild/Build/Products/Debug-iphoneos/Aegis.app"
+```
+
+## 3. macOS DEV 的手动与智能模式
 
 | 任务与落点 | RED 与最小实现 | GREEN 与回归 |
 |---|---|---|
@@ -69,7 +108,13 @@ xcrun xcresulttool export attachments --path "$RESULT_ROOT/GeoSite.xcresult" \
 
 M2 从 `PrivatePslPreventsCrossTenantSuffix` 和 `WebsiteMainNavigationReevaluatesEachTrustedHop` 两个现有回归扩展；M3 同时检查按钮与 UI 之外的读取、写入、导入、恢复和激活。GN 测试目标为 `aegis_access_unittests`，再跑受影响的 Options 服务及浏览器测试。每一项在受控 DEV 构建上取证，并与 #209 既有 FIRST 协调。阶段状态为待实施。[求值测试](../../../apps/browser/overlay/components/aegis_access/access_policy_evaluator_unittest.cc) · [能力测试](../../../apps/browser/overlay/components/aegis_access/access_options_capability_test.cc) · [Options 服务测试](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_service_unittest.cc) · [真实浏览器入口测试](../../../apps/browser/overlay/chrome/browser/aegis/access/access_browser_request_adapter_browsertest.cc) · [性能合同](../../plans/access-service-v1.0/spec.zh-CN.md)
 
-## 3. Hysteria 2 的受控验证
+## 4. Android 的实施顺序
+
+1. 复用已审核的分类向量和共同策略验收，在 Android 原生设置及后端先测 ordinary、Incognito、错误构建身份和手动覆盖。
+2. 在真实 Chromium 顶层和请求入口接线，测试重定向、同页资源、账户或入口不可用、禁用后重新选路。由 Android 测试记录服务端、原连接侧及设备端证据。
+3. 生成 Android DEV 的安装包，在匹配环境验证两个模式。记录 APK 哈希、运行设备和请求级回执，沿用 #210 已有所有权和环境前提。[Android 工作单](https://github.com/gcsagroup/aegis-browser/issues/210)
+
+## 5. Hysteria 2 的受控验证
 
 | 次序 | RED → GREEN | 留存证据 |
 |---|---|---|

@@ -1184,9 +1184,11 @@ private final class OriginReceipt: @unchecked Sendable {
 private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendable {
     private let body: String?
     private let finishAfterRecording: Bool
-    init(body: String? = nil, finishAfterRecording: Bool = false) {
+    private let redirects: [String: URL]
+    init(body: String? = nil, finishAfterRecording: Bool = false, redirects: [String: URL] = [:]) {
         self.body = body
         self.finishAfterRecording = finishAfterRecording
+        self.redirects = redirects
     }
     private let lock = OSAllocatedUnfairLock(initialState: "")
     private let authorityLock = OSAllocatedUnfairLock(initialState: [String]())
@@ -1198,7 +1200,7 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         authorityLock.withLock { $0.append("\(host):\(port)") }
         if finishAfterRecording { throw URLError(.secureConnectionFailed) }
-        let stream = AnsweringStream(host: host, body: body)
+        let stream = AnsweringStream(host: host, body: body, redirects: redirects)
         stream.onRequest = { [weak self] request in
             self?.append(request)
         }
@@ -1224,7 +1226,12 @@ private final class AnsweringStream: AccessRealityPathStream, @unchecked Sendabl
     private let lock = OSAllocatedUnfairLock(initialState: State())
 
     private let body: String?
-    init(host: String, body: String? = nil) { self.host = host; self.body = body }
+    private let redirects: [String: URL]
+    init(host: String, body: String? = nil, redirects: [String: URL] = [:]) {
+        self.host = host
+        self.body = body
+        self.redirects = redirects
+    }
 
     var isOpen: Bool {
         lock.withLock { !$0.closed }
@@ -1267,6 +1274,10 @@ private final class AnsweringStream: AccessRealityPathStream, @unchecked Sendabl
     }
 
     private func answer(for request: String) -> Data {
+        if let target = request.split(separator: " ").dropFirst().first,
+           let destination = redirects[String(target)] {
+            return Data("HTTP/1.1 302 Found\r\nLocation: \(destination.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+        }
         let body = self.body.map { request.contains("/pulse") ? "ok" : $0 } ?? (host == "cdn.invalid"
             ? "body{}"
             : "<link rel=\"stylesheet\" href=\"http://cdn.invalid/a.css\">")
@@ -1340,63 +1351,101 @@ private final class WindowPrepareGate {
 }
 
 extension AccessHostRecoveryWebKitTests {
-    private enum PinnedDebianGeoSite {
-        // Complete DEBIAN group from v2fly dlc.dat 20261121064510 (two Domain records).
-        private static let domains = ["debian.org", "dotdeb.org"]
+    func testWebsiteAccelerationSmartPreferenceSelectsMemberAndSkipsDefaultOnMiss() throws {
+        let suiteName = "test.websiteAcceleration." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("smart", forKey: "browser.websiteAcceleration.mode")
 
-        static func matches(_ url: URL, projectedSuffix: String = "") -> Bool {
-            guard let scheme = url.scheme?.lowercased(),
-                  scheme == "http" || scheme == "https",
-                  var host = url.host?.lowercased() else {
-                return false
-            }
-            if host.hasSuffix(".") {
-                host.removeLast()
-            }
-            guard !host.isEmpty, !host.hasPrefix("."), !host.hasSuffix("."), !host.contains("..") else { return false }
-            return domains.contains { root in
-                let domain = root + projectedSuffix
-                return host == domain || host.hasSuffix("." + domain)
+        let coordinator = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: true,
+                                                     locationPreferences: defaults)
+        let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        defer { tab.dispose {} }
+        let member = try XCTUnwrap(URL(string: "https://security.debian.org"))
+        let nonmember = try XCTUnwrap(URL(string: "https://outside.invalid"))
+
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: member), "网站加速／智能命中时应选用代理")
+        XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: member), "网站加速／智能命中时应准备代理")
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: nonmember), "网站加速／智能未命中时应使用原设置")
+        XCTAssertFalse(coordinator.requiresProxyPreparation(tab: tab, url: nonmember), "网站加速／智能未命中时应跳过默认代理准备")
+
+        let memberHost = try AccessSiteHost("security.debian.org")
+        coordinator.setProxyEnabled(false, host: memberHost, scopeID: tab.browsingScopeID, isPrivate: false)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: member), "手动关闭应覆盖智能命中")
+        XCTAssertFalse(coordinator.requiresProxyPreparation(tab: tab, url: member), "手动关闭后应跳过代理准备")
+
+        let nonmemberHost = try AccessSiteHost("outside.invalid")
+        coordinator.setProxyEnabled(true, host: nonmemberHost, scopeID: tab.browsingScopeID, isPrivate: false)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: nonmember), "手动开启应覆盖智能未命中")
+        XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: nonmember), "手动开启后应准备代理")
+    }
+
+    func testWebsiteAccelerationRequiresDevOrdinaryScope() throws {
+        let suiteName = "test.websiteAcceleration." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let modeKey = "browser.websiteAcceleration.mode"
+        defaults.set("smart", forKey: modeKey)
+
+        let ordinaryTab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        defer { ordinaryTab.dispose {} }
+        let member = try XCTUnwrap(URL(string: "https://security.debian.org"))
+        let nonmember = try XCTUnwrap(URL(string: "https://outside.invalid"))
+        let dev = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false,
+                                             locationPreferences: defaults)
+        XCTAssertTrue(dev.requiresProxy(tab: ordinaryTab, url: member), "网站加速／智能应在 DEV 普通标签页生效")
+        XCTAssertTrue(dev.requiresProxyPreparation(tab: ordinaryTab, url: member), "网站加速／智能应为 DEV 普通标签页准备代理")
+
+        let otherChannels: [AccessReleaseChannel] = [.release, .alpha, .beta, .unknown]
+        for channel in otherChannels {
+            let coordinator = AccessHostStoreCoordinator(channel: channel, defaultLocationPrivacy: false,
+                                                         locationPreferences: defaults)
+            let context = "网站加速／智能，\(channel.rawValue)"
+            XCTAssertFalse(coordinator.requiresProxy(tab: ordinaryTab, url: member), context)
+            XCTAssertFalse(coordinator.requiresProxyPreparation(tab: ordinaryTab, url: member), context)
+            XCTAssertFalse(coordinator.offersWebsiteAcceleration(for: ordinaryTab), context)
+            coordinator.setWebsiteAccelerationMode(.manual, for: ordinaryTab)
+            XCTAssertEqual(defaults.string(forKey: modeKey), "smart", context)
+        }
+
+        let privateTab = makeWebsiteAccelerationTab(profile: .privateMode, defaults: defaults)
+        privateTab.browsingScopeID = UUID().uuidString
+        defer { privateTab.dispose {} }
+        XCTAssertFalse(dev.requiresProxy(tab: privateTab, url: member), "网站加速／智能，DEV 私密标签页")
+        XCTAssertFalse(dev.requiresProxyPreparation(tab: privateTab, url: member), "网站加速／智能，DEV 私密标签页")
+        XCTAssertFalse(dev.offersWebsiteAcceleration(for: privateTab))
+        dev.setWebsiteAccelerationMode(.manual, for: privateTab)
+        XCTAssertEqual(defaults.string(forKey: modeKey), "smart")
+
+        let legacyPreferences: [(String?, String)] = [
+            ("manual", "网站加速／手动"),
+            (nil, "网站加速偏好缺失"),
+            ("corrupt", "网站加速偏好无效")
+        ]
+        for (preference, context) in legacyPreferences {
+            defaults.set(preference, forKey: modeKey)
+            let coordinator = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: true,
+                                                         locationPreferences: defaults)
+            for url in [member, nonmember] {
+                XCTAssertFalse(coordinator.requiresProxy(tab: ordinaryTab, url: url), "\(context) \(url)")
+                XCTAssertTrue(coordinator.requiresProxyPreparation(tab: ordinaryTab, url: url), "\(context) \(url)")
             }
         }
     }
 
-    // Installed only by the XCTest. BrowserTab calls this hook before sending an explicit
-    // top-level load. The production coordinator owns preparation, lifetime and store choice.
-    @MainActor
-    private final class GeoSiteTopLevelCoordinator: BrowserHostStoreCoordinating {
-        let base: AccessHostStoreCoordinator
-        private var authorized = Set<AccessHostStoreKey>()
-
-        init(base: AccessHostStoreCoordinator) { self.base = base }
-
-        func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool {
-            if let url = request.url, PinnedDebianGeoSite.matches(url, projectedSuffix: ".geosite.invalid"),
-               let raw = url.host, let host = try? AccessSiteHost.normalize(raw) {
-                let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
-                if authorized.insert(key).inserted {
-                    base.setProxyEnabled(true, host: host, scopeID: key.scopeID, isPrivate: key.isPrivate)
-                }
-            }
-            return base.prepareProxyNavigation(tab: tab, request: request)
-        }
-
-        func requiresProxy(tab: BrowserTab, url: URL) -> Bool { base.requiresProxy(tab: tab, url: url) }
-        func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { base.requiresProxyPreparation(tab: tab, url: url) }
-        func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool { base.wouldSwitchStore(tab: tab, url: url) }
-        func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? {
-            base.dataStoreForMainFrame(tab: tab, url: url)
-        }
-        func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError) {
-            base.mainFrameFailed(tab: tab, failure: failure, error: error)
-        }
-        func pendingRecoveryInvalidated(tab: BrowserTab) { base.pendingRecoveryInvalidated(tab: tab) }
-        func tabClosed(_ tab: BrowserTab) { base.tabClosed(tab) }
-        func ordinaryHostStores() -> [WKWebsiteDataStore] { base.ordinaryHostStores() }
-        func endPrivateSession(scopeID: String) { base.endPrivateSession(scopeID: scopeID) }
+    private func makeWebsiteAccelerationTab(profile: BrowserProfile, defaults: UserDefaults) -> BrowserTab {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        return BrowserTab(profile: profile, configuration: configuration,
+                          preferences: BrowserPreferences(defaults: defaults))
     }
 
     func testGeoSitePinnedDomainClassification() throws {
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = AccessHostStoreCoordinator(channel: .dev, locationPreferences: defaults)
+        let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        defer { tab.dispose {} }
         let cases: [(String, Bool)] = [
             ("https://debian.org/", true),
             ("http://dotdeb.org/", true),
@@ -1409,16 +1458,27 @@ extension AccessHostRecoveryWebKitTests {
             ("https://dotdeb.org.attacker.invalid/", false),
             ("https://outside.invalid/files/debian.org", false),
             ("https://debian.org@outside.invalid/", false),
+            ("https://_broken.debian.org/", false),
+            ("https://-broken.debian.org/", false),
+            ("https://debian.org../", false),
+            ("https://localhost/", false),
+            ("https://127.0.0.1/", false),
+            ("https://[::1]/", false),
+            ("https://%64ebian.org/", true),
+            ("https://www.食狮.debian.org/", true),
+            ("https://www.%E9%A3%9F%E7%8B%AE.debian.org/", true),
             ("ftp://debian.org/", false),
             ("file:///debian.org", false)
         ]
 
         for (address, expected) in cases {
             let url = try XCTUnwrap(URL(string: address))
-            XCTAssertEqual(PinnedDebianGeoSite.matches(url), expected, address)
+            XCTAssertEqual(AccessWebsiteRoutePolicy().matches(url), expected, address)
+            XCTAssertEqual(coordinator.requiresProxy(tab: tab, url: url), expected, address)
         }
     }
 
+    #if DEBUG
     @MainActor
     func testGeoSiteTopLevelNavigationSelectsManagedOrOriginal() async throws {
         let managedPort: UInt16 = 18_471
@@ -1434,16 +1494,17 @@ extension AccessHostRecoveryWebKitTests {
         try await managedListener.start(at: startedAt)
         try await originalListener.start(at: startedAt)
 
-        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort))
-        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
-        let trial = GeoSiteTopLevelCoordinator(base: coordinator)
-        session.hostCoordinator = trial
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
         let tab = try XCTUnwrap(session.activeTab)
         try await tab.prepareContentRulesForTests()
 
         let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
         defer {
-            withExtendedLifetime(trial) { session.closeWindow() }
+            withExtendedLifetime(coordinator) { session.closeWindow() }
             restoreOriginal()
         }
 
@@ -1497,14 +1558,16 @@ extension AccessHostRecoveryWebKitTests {
         defer { try? listener.stop() }
 
         let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
-        let trial = GeoSiteTopLevelCoordinator(base: AccessHostStoreCoordinator(publisher: publisher))
-        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
-        session.hostCoordinator = trial
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
         let tab = try XCTUnwrap(session.activeTab)
         try await tab.prepareContentRulesForTests()
         let restoreOriginal = try observeOriginalStore(of: tab, port: port)
         defer {
-            withExtendedLifetime(trial) { session.closeWindow() }
+            withExtendedLifetime(coordinator) { session.closeWindow() }
             restoreOriginal()
         }
         let window = show(tab.webView)
@@ -1534,6 +1597,257 @@ extension AccessHostRecoveryWebKitTests {
         receipt.lifetime = .keepAlways
         add(receipt)
     }
+    #endif
+
+    private func makeSmartPreferences() throws -> (UserDefaults, String) {
+        let name = "test.geosite." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defaults.set("smart", forKey: "browser.websiteAcceleration.mode")
+        return (defaults, name)
+    }
+
+    func testWebsiteAccelerationSiteChoicesOverrideInBothDirectionsAndRestoreAcrossWindows() throws {
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let publisher = readyPublisher(port: 18_474)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let second = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { first.closeWindow(); second.closeWindow() }
+        let tab = try XCTUnwrap(first.activeTab)
+        let sibling = try XCTUnwrap(second.activeTab)
+        let member = try XCTUnwrap(URL(string: "https://debian.org/site"))
+        let memberHost = try AccessSiteHost("debian.org")
+        let miss = try XCTUnwrap(URL(string: "https://outside.invalid/site"))
+        let missHost = try AccessSiteHost("outside.invalid")
+
+        tab.adoptPolicyMainFrameNavigationForTests(url: member)
+        tab.commitPendingMainFrameForTests()
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: missHost)
+        XCTAssertTrue(coordinator.requiresProxy(tab: sibling, url: member), "A stale displayed host cannot change the site's choice")
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: memberHost)
+        XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: member))
+        XCTAssertFalse(coordinator.requiresProxyPreparation(tab: sibling, url: member))
+
+        tab.adoptPolicyMainFrameNavigationForTests(url: miss)
+        tab.commitPendingMainFrameForTests()
+        coordinator.setWebsiteRouteChoice(.service, for: tab, displayedHost: missHost)
+        XCTAssertTrue(coordinator.requiresProxy(tab: sibling, url: miss))
+        XCTAssertTrue(coordinator.requiresProxyPreparation(tab: sibling, url: miss))
+
+        let recreated = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        XCTAssertEqual(recreated.websiteAccelerationMode, .smart)
+        XCTAssertFalse(recreated.requiresProxy(tab: sibling, url: member))
+        XCTAssertTrue(recreated.requiresProxy(tab: sibling, url: miss))
+        recreated.setWebsiteRouteChoice(nil, for: tab, displayedHost: missHost)
+        XCTAssertFalse(recreated.requiresProxy(tab: sibling, url: miss))
+        tab.adoptPolicyMainFrameNavigationForTests(url: member)
+        tab.commitPendingMainFrameForTests()
+        recreated.setWebsiteRouteChoice(nil, for: tab, displayedHost: memberHost)
+        XCTAssertTrue(recreated.requiresProxy(tab: sibling, url: member))
+        recreated.setWebsiteAccelerationMode(.manual, for: tab)
+        XCTAssertFalse(recreated.requiresProxy(tab: sibling, url: member))
+        XCTAssertEqual(AccessHostStoreCoordinator(channel: .dev, locationPreferences: defaults).websiteAccelerationMode, .manual)
+        XCTAssertEqual(publisher.provisionCount, 0)
+    }
+
+    #if DEBUG
+    func testWebsiteAccelerationDiscardsLateReadyAfterModeChangeSiteChangeOrLeaving() async throws {
+        enum Change: CaseIterable { case manual, original, leave }
+        for change in Change.allCases {
+            let gate = WindowPrepareGate()
+            defer { gate.finish() }
+            let publisher = AccessProxyEntryPublisher { generation, _ in
+                await gate.wait()
+                return .init(endpoint: .init(identity: "late-geosite", generation: generation,
+                    loopbackHost: "127.0.0.1", port: 18_474, state: .ready),
+                    listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+            }
+            let (defaults, suite) = try makeSmartPreferences()
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults,
+                                                         websiteRoutePolicy: .geositeFixture)
+            let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+            let anotherWindow = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+            defer { browser.closeWindow(); anotherWindow.closeWindow() }
+            let tab = try XCTUnwrap(browser.activeTab)
+            let sibling = try XCTUnwrap(anotherWindow.activeTab)
+            let host = try AccessSiteHost("debian.org.geosite.invalid")
+            let target = try XCTUnwrap(URL(string: "https://\(host.rawValue)/held"))
+            sibling.adoptPolicyMainFrameNavigationForTests(url: target)
+            sibling.commitPendingMainFrameForTests()
+            tab.loadFromAddressBar(target)
+            try await waitUntil({ gate.started }, message: "The matched request must start preparation")
+            XCTAssertNotNil(tab.heldProxyRequestForTests)
+            switch change {
+            case .manual: coordinator.setWebsiteAccelerationMode(.manual, for: sibling)
+            case .original: coordinator.setWebsiteRouteChoice(.original, for: sibling, displayedHost: host)
+            case .leave: tab.load(try XCTUnwrap(URL(string: "aegis://start")))
+            }
+            XCTAssertNil(tab.heldProxyRequestForTests)
+            gate.finish()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(tab.recoveryLoadCount, 0)
+            XCTAssertNil(publisher.currentEndpoint)
+            XCTAssertNil(coordinator.registry.endpoint(scopeID: "ordinary", host: host, isPrivate: false))
+            XCTAssertNil(coordinator.registry.store(scopeID: "ordinary", host: host, isPrivate: false))
+            XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        }
+    }
+
+    func testWebsiteAccelerationRequiredPreparationTimesOutWithoutDefaultFallback() async throws {
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let clock = AccessManualPreparationClock()
+        let publisher = AccessProxyEntryPublisher { _, _ in
+            try await clock.sleep(until: .seconds(20))
+            throw AccessSiteSessionError.nodeUnavailable
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: clock, channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let target = try XCTUnwrap(URL(string: "https://dotdeb.org.geosite.invalid/hold"))
+        tab.loadFromAddressBar(target)
+        try await waitUntil { publisher.provisionCount == 1 }
+        clock.advance(to: .seconds(15))
+        try await waitUntil { tab.loadingError != nil && tab.pendingAddressNavigation == nil }
+        XCTAssertTrue(tab.canTryDefaultRoute(for: target), "A required route never records a first-visit fallback")
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: target))
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+        XCTAssertTrue(coordinator.registry.endpointSnapshot.isEmpty)
+    }
+
+    func testGeoSiteLoadsRedirectedPageAndItsResourcesAndDoesNotReplayWritesAcrossStores() async throws {
+        let managedPort: UInt16 = 18_474
+        let originalPort: UInt16 = 18_475
+        let start = try XCTUnwrap(URL(string: "http://debian.org.geosite.invalid/redirect"))
+        let final = try XCTUnwrap(URL(string: "http://packages.dotdeb.org.geosite.invalid/final"))
+        let managed = AnsweringOpener(redirects: ["/redirect": final])
+        let original = AnsweringOpener(finishAfterRecording: true)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await managedListener.start(at: now)
+        defer { try? managedListener.stop() }
+        try await originalListener.start(at: now)
+        defer { try? originalListener.stop() }
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let publisher = readyPublisher(port: managedPort)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer { restoreOriginal() }
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+
+        var post = URLRequest(url: start.appendingPathComponent("cold-post"))
+        post.httpMethod = "POST"
+        tab.load(post)
+        XCTAssertNotNil(tab.loadingError)
+        XCTAssertEqual(publisher.provisionCount, 0)
+        post.httpBody = Data("site-write".utf8)
+        tab.load(post)
+        XCTAssertNotNil(tab.loadingError)
+        XCTAssertEqual(publisher.provisionCount, 0)
+
+        tab.load(start)
+        try await waitUntil(seconds: 15, {
+            self.attach(tab.webView, to: window)
+            return tab.committedMainFrameURL == final && !tab.isLoading && managed.transcript.contains("GET /a.css ")
+        }, message: "A managed redirect must commit a real document and load its unmatched stylesheet: \(managed.transcript)")
+        XCTAssertEqual(tab.boundHostName, final.host)
+        XCTAssertTrue(managed.transcript.contains("GET /redirect "))
+        XCTAssertTrue(managed.transcript.contains("GET /final "))
+        XCTAssertTrue(managed.authorities.contains("cdn.invalid:80"))
+        XCTAssertTrue(original.authorities.isEmpty)
+        XCTAssertFalse(managed.transcript.contains("cold-post"))
+
+        post.url = start.appendingPathComponent("cross-store-post")
+        tab.load(post)
+        XCTAssertNotNil(tab.loadingError)
+        XCTAssertEqual(tab.boundHostName, final.host)
+        XCTAssertFalse(managed.transcript.contains("cross-store-post"))
+
+        post.url = final.appendingPathComponent("same-store-post")
+        tab.load(post)
+        try await waitUntil({ managed.transcript.contains("POST /final/same-store-post ") && !tab.isLoading },
+                            message: "A write in its existing managed store must reach the listener")
+        XCTAssertEqual(managed.transcript.components(separatedBy: "POST /final/same-store-post ").count, 2)
+        XCTAssertEqual(publisher.provisionCount, 1)
+
+        XCTAssertFalse(coordinator.snapshot(for: tab).autoRecoveryEnabled)
+        XCTAssertTrue(coordinator.setAutoRecoveryEnabled(true, for: tab).isArmed)
+        coordinator.setWebsiteAccelerationMode(.manual, for: tab)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: final), "An armed group does not inherit a Smart-only binding")
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertTrue(coordinator.snapshot(for: tab).autoRecoveryEnabled, "The independent recovery grant stays armed")
+    }
+    #endif
+
+    #if DEBUG
+    func testWebsiteAccelerationCanChangeTheDisplayedFailedSiteWithoutAConfiguredService() async throws {
+        let (preferences, suite) = try makeSmartPreferences()
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let coordinator = AccessHostStoreCoordinator(channel: .dev, locationPreferences: preferences,
+                                                     websiteRoutePolicy: .geositeFixture)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let member = try XCTUnwrap(URL(string: "https://security.debian.org.geosite.invalid/"))
+        let host = try AccessSiteHost("security.debian.org.geosite.invalid")
+        XCTAssertFalse(coordinator.offersLocationService)
+        let previousDocument = member.appendingPathComponent("previous")
+        tab.adoptPolicyMainFrameNavigationForTests(url: previousDocument)
+        tab.commitPendingMainFrameForTests()
+        XCTAssertEqual(coordinator.websiteAccelerationHost(for: tab), host)
+
+        tab.loadFromAddressBar(member)
+        XCTAssertNil(coordinator.websiteAccelerationHost(for: tab), "A pending request cannot authorize a site choice.")
+        try await waitUntil({ tab.lastMainFrameFailure?.url == member })
+        let failure = try XCTUnwrap(tab.lastMainFrameFailure)
+
+        XCTAssertEqual(coordinator.websiteAccelerationHost(for: tab), host)
+        XCTAssertEqual(coordinator.websiteRouteSelection(for: tab), .service)
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: try AccessSiteHost("other.invalid"))
+        XCTAssertNil(coordinator.websiteRouteChoice(for: tab))
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: member))
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: host)
+        XCTAssertEqual(coordinator.websiteRouteChoice(for: tab), .original)
+        XCTAssertEqual(coordinator.websiteRouteSelection(for: tab), .original)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: member))
+        XCTAssertEqual(tab.lastMainFrameFailure?.url, member, "Changing the next route must not resend a failed load.")
+        coordinator.setWebsiteRouteChoice(nil, for: tab, displayedHost: host)
+        XCTAssertNil(coordinator.websiteRouteChoice(for: tab))
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: member))
+
+        coordinator.setWebsiteRouteChoice(.service, for: tab, displayedHost: host)
+        XCTAssertEqual(coordinator.websiteRouteChoice(for: tab), .service)
+        XCTAssertEqual(coordinator.websiteRouteSelection(for: tab), .service)
+        XCTAssertFalse(coordinator.canSendMainFrame(tab: tab, url: member))
+        coordinator.setWebsiteRouteChoice(nil, for: tab, displayedHost: host)
+        XCTAssertNil(coordinator.websiteRouteChoice(for: tab))
+        XCTAssertEqual(tab.lastMainFrameFailure, failure)
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertEqual(tab.recoveryLoadCount, 0)
+
+        tab.adoptPolicyMainFrameNavigationForTests(url: previousDocument)
+        XCTAssertNil(coordinator.websiteAccelerationHost(for: tab), "The prior commit cannot authorize a new navigation to the same URL.")
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: host)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: member))
+
+        tab.adoptPolicyMainFrameNavigationForTests(url: member, method: "POST")
+        tab.commitPendingMainFrameForTests()
+        XCTAssertNil(coordinator.websiteAccelerationHost(for: tab))
+    }
+    #endif
 
     private func observeOriginalStore(of tab: BrowserTab, port: UInt16) throws -> @MainActor () -> Void {
         let store = tab.originalWebsiteDataStore

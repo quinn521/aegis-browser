@@ -108,12 +108,77 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-progress"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
-        let emptyState = app.descendants(matching: .any).matching(identifier: "access-usage-unlinked").firstMatch
-        XCTAssertTrue(emptyState.waitForExistence(timeout: 5))
+        let unavailable = language == "en"
+            ? "Allowance query unavailable; this does not mean the balance is zero" : "额度查询不可用，不代表余额为零"
+        let emptyState = app.staticTexts[unavailable]
+        XCTAssertTrue(reveal(emptyState, app))
         assertInsideWindow(emptyState, app)
-        XCTAssertFalse(app.buttons["access-usage-refresh"].exists)
+        let refresh = app.buttons["access-usage-refresh"]
+        XCTAssertTrue(reveal(refresh, app))
+        refresh.tap()
+        XCTAssertTrue(emptyState.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)
         capture("账号与用量-\(language)-\(largeText ? "最大字体" : "普通字体")", app)
     }
+
+    #if DEBUG
+    func testWebsiteAccelerationModesInDevSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+        let entry = app.buttons["website-acceleration-link"]
+        XCTAssertTrue(reveal(entry, app), "设置中的网站加速入口必须可见且可点击")
+        assertInsideWindow(entry, app)
+        XCTAssertEqual(entry.label, "网站加速")
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["网站加速"].waitForExistence(timeout: 5))
+        let domestic = app.descendants(matching: .any)["website-acceleration-domestic-section"]
+        XCTAssertTrue(domestic.waitForExistence(timeout: 5))
+        XCTAssertEqual(domestic.label, "国内加速")
+        XCTAssertFalse(app.staticTexts["位置加速"].exists)
+
+        let manual = app.buttons["website-acceleration-manual"]
+        let smart = app.buttons["website-acceleration-smart"]
+        XCTAssertTrue(manual.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.waitForExistence(timeout: 5))
+        XCTAssertEqual(manual.label, "手动")
+        XCTAssertEqual(smart.label, "智能")
+        // --ui-testing resets the isolated preferences suite on launch.
+        XCTAssertTrue(manual.isSelected)
+        XCTAssertFalse(smart.isSelected)
+
+        XCTAssertTrue(reveal(smart, app))
+        smart.tap()
+        XCTAssertTrue(smart.isSelected)
+        XCTAssertFalse(manual.isSelected)
+        capture("网站加速-国内加速-智能", app)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        XCTAssertTrue(smart.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.isSelected)
+
+        app.terminate()
+        app.launchArguments.append("--ui-testing-preferences-keep")
+        app.launch()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        XCTAssertTrue(smart.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.isSelected)
+        XCTAssertFalse(manual.isSelected)
+
+        XCTAssertTrue(reveal(manual, app))
+        manual.tap()
+        XCTAssertTrue(manual.isSelected)
+        XCTAssertFalse(smart.isSelected)
+    }
+    #endif
 
     func testSettingsPagesAtStandardSize() {
         inspectSettings(largeText: false)

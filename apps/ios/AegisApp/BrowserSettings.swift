@@ -52,6 +52,7 @@ final class BrowserSettings: ObservableObject {
 struct BrowserSettingsView: View {
     @EnvironmentObject private var settings: BrowserSettings
     @EnvironmentObject private var browser: BrowserSession
+    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @Environment(\.dismiss) private var dismiss
 
     @Environment(\.locale) private var localizationLocale
@@ -62,6 +63,12 @@ struct BrowserSettingsView: View {
                 Section("浏览") {
                     NavigationLink("搜索、主页与浏览方式") { BrowserGeneralSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("general-browser-settings")
+                    if let tab = browser.activeTab, hostStores.offersWebsiteAcceleration(for: tab) {
+                        NavigationLink("网站加速") {
+                            if let current = browser.activeTab { WebsiteAccelerationSettingsView(tab: current) }
+                        }
+                        .accessibilityIdentifier("website-acceleration-link")
+                    }
                     Button("打开系统 App 设置") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }
@@ -139,6 +146,88 @@ struct BrowserSettingsView: View {
 
 
 // 功能名称与桌面一致，使用 iOS 的导航、触控尺寸和动态字号。
+private struct WebsiteAccelerationSettingsView: View {
+    @EnvironmentObject private var browser: BrowserSession
+    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
+    @ObservedObject var tab: BrowserTab
+
+    var body: some View {
+        Form {
+            if browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) {
+                Section {
+                    modeButton(.manual, title: "手动", id: "website-acceleration-manual")
+                    modeButton(.smart, title: "智能", id: "website-acceleration-smart")
+                } header: {
+                    Text("国内加速")
+                        .accessibilityIdentifier("website-acceleration-domestic-section")
+                } footer: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("手动保留浏览器原有的选路规则。")
+                        Text("智能将 debian.org、dotdeb.org 及其子域名的主页面连接交给服务。其他网站通常使用浏览器原有连接（包括系统代理），已有站点选择或授权仍然有效。子资源沿用所在页面的连接。")
+                        if hostStores.offersLocationService {
+                            Text("已配置连接服务，打开网站时检查服务是否可用。")
+                        } else {
+                            Text("尚未配置连接服务。需要服务的网站暂时无法打开。")
+                                .accessibilityIdentifier("website-acceleration-service-unavailable")
+                        }
+                    }
+                }
+                if let host = hostStores.websiteAccelerationHost(for: tab) {
+                    Section {
+                        LabeledContent("当前网站", value: host.rawValue)
+                        LabeledContent("下次打开时的连接") {
+                            switch hostStores.websiteRouteSelection(for: tab) {
+                            case .service:
+                                Text("使用连接服务")
+                            case .original:
+                                Text("使用原有连接")
+                            case nil:
+                                Text("按现有规则选择连接")
+                            }
+                        }
+                        siteButton(.service, title: "使用连接服务", host: host)
+                        siteButton(.original, title: "使用原有连接", host: host)
+                        siteButton(nil, title: "清除站点选择", host: host)
+                    } header: {
+                        Text("本站连接")
+                    } footer: {
+                        Text("站点选择用于此域名的主页面。清除后恢复所选模式和已有隐私设置。")
+                    }
+                }
+            }
+        }
+        .localizedNavigationTitle("网站加速")
+    }
+
+    private func modeButton(_ mode: AccessWebsiteAccelerationMode, title: LocalizedStringKey, id: String) -> some View {
+        choiceButton(title, selected: hostStores.websiteAccelerationMode == mode) {
+            guard browser.activeTab === tab else { return }
+            hostStores.setWebsiteAccelerationMode(mode, for: tab)
+        }
+        .accessibilityIdentifier(id)
+    }
+
+    private func siteButton(_ choice: AccessWebsiteRouteChoice?, title: LocalizedStringKey, host: AccessSiteHost) -> some View {
+        choiceButton(title, selected: hostStores.websiteRouteChoice(for: tab) == choice) {
+            guard browser.activeTab === tab else { return }
+            hostStores.setWebsiteRouteChoice(choice, for: tab, displayedHost: host)
+        }
+    }
+
+    private func choiceButton(_ title: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
+            }
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel(Text(title))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
 private struct AegisFeatureSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
     @State private var showsDownloads = false
