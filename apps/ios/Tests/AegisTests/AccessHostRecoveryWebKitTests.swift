@@ -1012,7 +1012,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let windows = BrowserWindowStore()
         let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
                                    windowID: try windows.createWindow(), windowStore: windows)
-        first.hostCoordinator = delayed
+        first.hostCoordinator = coordinator
         let old = try XCTUnwrap(first.activeTab), host = try AccessSiteHost("localhost")
         arm(old, host: host, port: 18_262, coordinator: coordinator)
         old.load(URL(string: "http://localhost:18263/page")!)
@@ -1023,6 +1023,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             return old.url?.path == "/page" && !old.isLoading
         }
         let oldView = old.webView, oldStore = old.websiteDataStore
+        first.hostCoordinator = delayed
         first.closeWindow()
         try await waitUntil { delayed.pending.count == 1 }
         let restored = BrowserSession(dataStore: first.dataStore, windowID: first.windowID, windowStore: windows)
@@ -1439,6 +1440,35 @@ private final class WindowPrepareGate {
 }
 
 extension AccessHostRecoveryWebKitTests {
+    func testExactWebsiteChoiceRequiresTheOwningCoordinator() throws {
+        let name = "test.geosite.exact-owner." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let url = try XCTUnwrap(URL(string: "https://choice.example.invalid/"))
+        defaults.set(["choice.example.invalid": "service"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let owner = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false, locationPreferences: defaults)
+        let otherOwner = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false)
+        let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        defer { tab.dispose {} }
+
+        tab.hostCoordinator = owner
+        XCTAssertTrue(owner.offersWebsiteAcceleration(for: tab))
+        XCTAssertTrue(owner.requiresProxy(tab: tab, url: url))
+        XCTAssertTrue(owner.requiresProxyPreparation(tab: tab, url: url))
+
+        tab.hostCoordinator = otherOwner
+        XCTAssertFalse(owner.offersWebsiteAcceleration(for: tab))
+        XCTAssertFalse(owner.requiresProxy(tab: tab, url: url))
+        XCTAssertFalse(owner.requiresProxyPreparation(tab: tab, url: url))
+        XCTAssertTrue(otherOwner.offersWebsiteAcceleration(for: tab))
+        XCTAssertFalse(otherOwner.requiresProxy(tab: tab, url: url))
+
+        tab.hostCoordinator = nil
+        XCTAssertFalse(owner.offersWebsiteAcceleration(for: tab))
+        XCTAssertFalse(owner.requiresProxy(tab: tab, url: url))
+        XCTAssertFalse(owner.requiresProxyPreparation(tab: tab, url: url))
+    }
+
     func testWebsiteAccelerationSmartPreferenceSelectsMemberAndSkipsDefaultOnMiss() throws {
         let suiteName = "test.websiteAcceleration." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -1448,6 +1478,7 @@ extension AccessHostRecoveryWebKitTests {
         let coordinator = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: true,
                                                      locationPreferences: defaults)
         let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        tab.hostCoordinator = coordinator
         defer { tab.dispose {} }
         let member = try XCTUnwrap(URL(string: "https://security.debian.org"))
         let nonmember = try XCTUnwrap(URL(string: "https://outside.invalid"))
@@ -1481,6 +1512,7 @@ extension AccessHostRecoveryWebKitTests {
         let nonmember = try XCTUnwrap(URL(string: "https://outside.invalid"))
         let dev = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false,
                                              locationPreferences: defaults)
+        ordinaryTab.hostCoordinator = dev
         XCTAssertTrue(dev.requiresProxy(tab: ordinaryTab, url: member), "网站加速／智能应在 DEV 普通标签页生效")
         XCTAssertTrue(dev.requiresProxyPreparation(tab: ordinaryTab, url: member), "网站加速／智能应为 DEV 普通标签页准备代理")
 
@@ -1514,6 +1546,7 @@ extension AccessHostRecoveryWebKitTests {
             defaults.set(preference, forKey: modeKey)
             let coordinator = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: true,
                                                          locationPreferences: defaults)
+            ordinaryTab.hostCoordinator = coordinator
             for url in [member, nonmember] {
                 XCTAssertFalse(coordinator.requiresProxy(tab: ordinaryTab, url: url), "\(context) \(url)")
                 XCTAssertTrue(coordinator.requiresProxyPreparation(tab: ordinaryTab, url: url), "\(context) \(url)")
@@ -1533,6 +1566,7 @@ extension AccessHostRecoveryWebKitTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let coordinator = AccessHostStoreCoordinator(channel: .dev, locationPreferences: defaults)
         let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        tab.hostCoordinator = coordinator
         defer { tab.dispose {} }
         let cases: [(String, Bool)] = [
             ("https://debian.org/", true),
@@ -1694,6 +1728,81 @@ extension AccessHostRecoveryWebKitTests {
         return (defaults, name)
     }
 
+    func testWebsiteAccelerationExactStoreCannotCrossOwners() async throws {
+        let suite = "test.website-route-owner." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let host = try AccessSiteHost("ready-owner.example.invalid")
+        let coldHost = try AccessSiteHost("cold-owner.example.invalid")
+        let target = try XCTUnwrap(URL(string: "https://\(host.rawValue)/"))
+        let coldTarget = try XCTUnwrap(URL(string: "https://\(coldHost.rawValue)/"))
+        defaults.set([host.rawValue: "service", coldHost.rawValue: "service"],
+                     forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let publisher = readyPublisher(port: 20_404)
+        let owner = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        let otherOwner = AccessHostStoreCoordinator(channel: .dev)
+        func makeTab(for coordinator: AccessHostStoreCoordinator) -> BrowserTab {
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .nonPersistent()
+            let tab = BrowserTab(profile: .standard, configuration: configuration,
+                                 preferences: BrowserPreferences(defaults: defaults))
+            tab.configurationFactory = { store in
+                let configuration = WKWebViewConfiguration()
+                configuration.websiteDataStore = store
+                return configuration
+            }
+            tab.hostCoordinator = coordinator
+            return tab
+        }
+        let owned = makeTab(for: owner)
+        let foreign = makeTab(for: otherOwner)
+        defer {
+            owner.tabClosed(owned)
+            owner.tabClosed(foreign)
+            owner.releaseIdleResources()
+        }
+
+        XCTAssertTrue(owner.requiresProxy(tab: owned, url: target))
+        XCTAssertTrue(owner.requiresProxyPreparation(tab: owned, url: target))
+        let prepared = try await publisher.prepare(.init(operationID: UUID(), deadline: owner.clock.now + owner.prepareBudget))
+        defer { publisher.cancel(operationID: prepared.operationID) }
+        let key = AccessHostStoreKey(scopeID: "ordinary", host: host, isPrivate: false)
+        XCTAssertTrue(owner.retainLandingEndpoint(prepared.endpoint, for: key))
+        let store = try XCTUnwrap(owner.dataStoreForMainFrame(tab: owned, url: target))
+        XCTAssertFalse(store.isPersistent)
+        XCTAssertEqual(store.proxyConfigurations.count, 1)
+        owned.rebindWebsiteDataStore(store, host: host.rawValue)
+        XCTAssertTrue(owned.websiteDataStore === store)
+        XCTAssertTrue(owner.canSendMainFrame(tab: owned, url: target))
+        XCTAssertFalse(owner.requiresProxyPreparation(tab: owned, url: target))
+
+        for coordinator in [otherOwner, nil] as [AccessHostStoreCoordinator?] {
+            foreign.hostCoordinator = coordinator
+            let tabState = coordinator == nil ? "detached" : "foreign"
+            XCTAssertFalse(owner.requiresProxy(tab: foreign, url: target), "\(tabState) tab received the owner's route")
+            XCTAssertFalse(owner.wouldSwitchStore(tab: foreign, url: target), "\(tabState) tab was routed to the owner's store")
+            XCTAssertNil(owner.dataStoreForMainFrame(tab: foreign, url: target), "\(tabState) tab acquired the owner's store")
+            XCTAssertFalse(owner.registry.isBound(foreign.instanceID.uuidString, to: key),
+                           "\(tabState) tab entered the owner's registry")
+        }
+        XCTAssertTrue(owner.registry.isBound(owned.instanceID.uuidString, to: key))
+        XCTAssertTrue(owner.dataStoreForMainFrame(tab: owned, url: target) === store)
+
+        foreign.hostCoordinator = otherOwner
+        foreign.adoptPolicyMainFrameNavigationForTests(url: coldTarget)
+        XCTAssertTrue(owner.requiresProxyPreparation(tab: owned, url: coldTarget))
+        XCTAssertFalse(owner.requiresProxyPreparation(tab: foreign, url: coldTarget), "Foreign tab received a preparation grant")
+        XCTAssertFalse(owner.prepareProxyNavigation(tab: foreign, request: URLRequest(url: coldTarget)),
+                       "Foreign tab started the owner's preparation")
+        XCTAssertNil(foreign.heldProxyRequestForTests, "Foreign tab's load was held by the owner")
+        XCTAssertEqual(owner.retainedOperationCount, 0, "Owner retained a foreign preparation")
+        XCTAssertEqual(owner.registry.endpointSnapshot, [key: prepared.endpoint])
+
+        owned.hostCoordinator = otherOwner
+        XCTAssertFalse(owner.canSendMainFrame(tab: owned, url: target), "Stale owner authorized a send on its old store")
+        XCTAssertNil(owner.dataStoreForMainFrame(tab: owned, url: target), "Stale owner returned its old store")
+    }
+
     func testWebsiteAccelerationSiteChoicesOverrideInBothDirectionsAndRestoreAcrossWindows() throws {
         let (defaults, suite) = try makeSmartPreferences()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -1724,6 +1833,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(coordinator.requiresProxyPreparation(tab: sibling, url: miss))
 
         let recreated = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        first.hostCoordinator = recreated
+        second.hostCoordinator = recreated
         XCTAssertEqual(recreated.websiteAccelerationMode, .smart)
         XCTAssertFalse(recreated.requiresProxy(tab: sibling, url: member))
         XCTAssertTrue(recreated.requiresProxy(tab: sibling, url: miss))

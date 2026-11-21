@@ -126,11 +126,22 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     func releaseIdleResources() { registry.releaseIdleStores() }
 
     private func accelerationAllowed(for key: AccessHostStoreKey) -> Bool {
-        releaseChannel == .dev && key.scopeID == "ordinary" && !key.isPrivate
+        accelerationAllowed(scopeID: key.scopeID, isPrivate: key.isPrivate)
+    }
+
+    private func accelerationAllowed(scopeID: String, isPrivate: Bool) -> Bool {
+        releaseChannel == .dev && scopeID == "ordinary" && !isPrivate
     }
 
     func offersWebsiteAcceleration(for tab: BrowserTab) -> Bool {
-        !tab.isDisposed && releaseChannel == .dev && tab.profile == .standard && tab.browsingScopeID == "ordinary"
+        !tab.isDisposed && tab.hostCoordinator === self && tab.profile == .standard
+            && accelerationAllowed(scopeID: tab.browsingScopeID, isPrivate: tab.profile.isPrivate)
+    }
+
+    // Ordinary DEV navigation can reach owner-scoped website policy and host stores.
+    private func hasValidRouteOwner(for tab: BrowserTab) -> Bool {
+        !accelerationAllowed(scopeID: tab.browsingScopeID, isPrivate: tab.profile.isPrivate)
+            || offersWebsiteAcceleration(for: tab)
     }
 
     func setWebsiteAccelerationMode(_ mode: AccessWebsiteAccelerationMode, for tab: BrowserTab) {
@@ -270,7 +281,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func setProxyEnabled(_ enabled: Bool, for tab: BrowserTab) {
-        guard let host = host(for: tab) else { return }
+        guard hasValidRouteOwner(for: tab), let host = host(for: tab) else { return }
         if enabled {
             if tab.loadingErrorAllowsProxyRetry {
                 _ = startRecovery(tab: tab, trigger: .userToggle)
@@ -291,7 +302,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     /// Revalidate the host shown by the control before changing any shared state.
     func setSiteProxyEnabled(_ enabled: Bool, for tab: BrowserTab, displayedHost: AccessSiteHost, forLocationControl: Bool = false) {
         let currentHost = forLocationControl ? locationControlHost(for: tab) : host(for: tab)
-        guard !tab.isDisposed, currentHost == displayedHost else { return }
+        guard !tab.isDisposed, hasValidRouteOwner(for: tab), currentHost == displayedHost else { return }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: displayedHost, isPrivate: tab.profile.isPrivate)
         let affected = BrowserSession.openTabs().filter { current in
             // A committed document may remain visible while a different host is
@@ -351,6 +362,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     private func websiteRoute(tab: BrowserTab, url: URL, key: AccessHostStoreKey, allowLanding: Bool = true) -> WebsiteRoute {
+        guard hasValidRouteOwner(for: tab) else { return .original }
         if let choice = websiteChoice(for: key) {
             return choice == .service ? .service : .original
         }
@@ -480,6 +492,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool {
+        guard hasValidRouteOwner(for: tab) else { return false }
         guard let host = Self.httpHost(url) else { return true }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
         switch websiteRoute(tab: tab, url: url, key: key) {
@@ -596,6 +609,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     /// Preflight body-less writes before touching the registry or releasing the live document.
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool {
+        guard hasValidRouteOwner(for: tab) else { return false }
         guard let host = Self.httpHost(url) else { return tab.boundHostName != nil }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
         let bound = tab.boundHostName == host.rawValue
@@ -609,7 +623,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? {
-        guard !tab.isDisposed else { return nil }
+        guard !tab.isDisposed, hasValidRouteOwner(for: tab) else { return nil }
         let bound = tab.boundHostName.flatMap { try? AccessSiteHost($0) }
         let tabID = tab.instanceID.uuidString
         guard let host = Self.httpHost(url) else {
@@ -923,7 +937,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError) {
-        guard !tab.isDisposed else { return }
+        guard !tab.isDisposed, hasValidRouteOwner(for: tab) else { return }
         guard BrowserNavigationFailure.isRecoverableNetworkFailure(error) else { return }
         guard failure.recoveryOperationID == nil else { return }
         guard !failure.hasReplayableBody else { return }
@@ -1113,7 +1127,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     private func manualProxyRoute(tab: BrowserTab, url: URL, key: AccessHostStoreKey) -> WebsiteRoute? {
         // A Smart-mode miss can still opt into location privacy. An exact original choice takes precedence.
-        guard websiteChoice(for: key) != .original else { return nil }
+        guard hasValidRouteOwner(for: tab), websiteChoice(for: key) != .original else { return nil }
         let route = websiteRoute(tab: tab, url: url, key: key)
         // An inherited landing can retry or resume only through an authorized route.
         guard route.requiredPreparation != nil || tab.parentForProxyLanding(url) == nil else { return nil }
@@ -1249,7 +1263,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         addressNavigation: BrowserPendingAddressNavigation? = nil,
         routePreparation: RoutePreparation? = nil
     ) -> UUID? {
-        guard !tab.isDisposed else { return nil }
+        guard !tab.isDisposed, hasValidRouteOwner(for: tab) else { return nil }
         let method = (failure?.method ?? "GET").uppercased()
         let preparation: RoutePreparation?
         if let failure {
@@ -1310,7 +1324,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             let publisher = self.publisher
             Task { @MainActor [weak self] in
                 // A synchronous Stop/Off may run before this task gets its first turn.
-                guard self?.operations[operationID]?.state == .preparing else { return }
+                guard let operation = self?.operations[operationID], operation.state == .preparing else { return }
+                if case .website? = operation.routePreparation, self?.tabOwning(operation) == nil {
+                    self?.fail(operationID, reason: "这次准备已经失效")
+                    return
+                }
                 // Cancellation or owner teardown can race the awaited preparation.
                 // The task must remove its own waiter even when no operation survives.
                 defer { publisher.cancel(operationID: operationID) }
