@@ -1030,7 +1030,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     func failureProxyRetry(for tab: BrowserTab) -> FailureProxyRetry {
         guard let (failure, key) = failedProxyTarget(for: tab),
-              let route = failedProxyRoute(tab: tab, url: failure.url, key: key) else { return .unavailable }
+              let route = manualProxyRoute(tab: tab, url: failure.url, key: key) else { return .unavailable }
         if navigationIntent(tab: tab, key: key, route: route) == .on { return .required }
         return offersLocationService ? .optional : .unavailable
     }
@@ -1040,28 +1040,62 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         startRecovery(tab: tab, trigger: .userRetry)
     }
 
+    enum PendingAddressProxyState: Equatable {
+        case unavailable
+        case available
+        case preparing
+    }
+
+    func pendingAddressProxyState(tab: BrowserTab, pending: BrowserPendingAddressNavigation) -> PendingAddressProxyState {
+        switch pendingAddressProxyAction(tab: tab, pending: pending) {
+        case .prepare: .available
+        case .reuse: .preparing
+        case nil: .unavailable
+        }
+    }
+
     func isPreparingAddressProxy(tab: BrowserTab) -> Bool {
         guard let pending = tab.pendingAddressNavigation else { return false }
-        return operations.values.contains {
-            $0.tabID == tab.instanceID.uuidString && $0.addressNavigation == pending && $0.state == .preparing
-        }
+        return pendingAddressProxyState(tab: tab, pending: pending) == .preparing
     }
 
     /// A visible address choice authorizes only this safe, still-pending target.
     /// No failed-navigation ticket or trusted committed host is synthesized.
     @discardableResult
     func openPendingAddressViaProxy(tab: BrowserTab, pending: BrowserPendingAddressNavigation) -> UUID? {
-        guard tab.matchesPendingAddressNavigation(pending), let host = Self.httpHost(pending.url) else { return nil }
-        if let existing = operations.values.first(where: {
-            $0.tabID == tab.instanceID.uuidString && $0.addressNavigation == pending && $0.state == .preparing
-        }) { return existing.id }
+        switch pendingAddressProxyAction(tab: tab, pending: pending) {
+        case .reuse(let operationID):
+            return operationID
+        case .prepare(let key, let preparation):
+            guard tab.ensureProxyHold(pending) else { return nil }
+            return beginPrepare(for: tab, key: key, failure: nil, trigger: .userRetry, addressNavigation: pending,
+                                routePreparation: preparation)
+        case nil:
+            return nil
+        }
+    }
+
+    private enum PendingAddressProxyAction {
+        case prepare(AccessHostStoreKey, RoutePreparation?)
+        case reuse(UUID)
+    }
+
+    private func pendingAddressProxyAction(tab: BrowserTab, pending: BrowserPendingAddressNavigation) -> PendingAddressProxyAction? {
+        guard tab.hostCoordinator === self, tab.matchesPendingAddressNavigation(pending),
+              let host = Self.httpHost(pending.url) else { return nil }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
-        guard websiteChoice(for: key) != .original else { return nil }
-        let preparation = websiteRoute(tab: tab, url: pending.url, key: key).requiredPreparation
-        guard preparation != nil || tab.parentForProxyLanding(pending.url) == nil else { return nil }
-        guard tab.ensureProxyHold(pending) else { return nil }
-        return beginPrepare(for: tab, key: key, failure: nil, trigger: .userRetry, addressNavigation: pending,
-                            routePreparation: preparation)
+        let tabID = tab.instanceID.uuidString
+        // An authorized hold can already be preparing a safe HEAD or a required route.
+        if let existing = operations.values.first(where: {
+            $0.tabID == tabID && $0.addressNavigation == pending && $0.state == .preparing
+        }) {
+            guard existing.key == key, existing.hostRevision == (hostRevisions[key] ?? 0),
+                  clock.now < existing.deadline, authorizationStillValid(existing, tab: tab) else { return nil }
+            return .reuse(existing.id)
+        }
+        guard offersLocationService, tab.safeRouteReloadRequest?.httpMethod == "GET",
+              let route = manualProxyRoute(tab: tab, url: pending.url, key: key) else { return nil }
+        return .prepare(key, route.requiredPreparation)
     }
 
     private func failedProxyTarget(for tab: BrowserTab) -> (BrowserMainFrameFailure, AccessHostStoreKey)? {
@@ -1077,11 +1111,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         return (failure, key)
     }
 
-    private func failedProxyRoute(tab: BrowserTab, url: URL, key: AccessHostStoreKey) -> WebsiteRoute? {
+    private func manualProxyRoute(tab: BrowserTab, url: URL, key: AccessHostStoreKey) -> WebsiteRoute? {
         // A Smart-mode miss can still opt into location privacy. An exact original choice takes precedence.
         guard websiteChoice(for: key) != .original else { return nil }
         let route = websiteRoute(tab: tab, url: url, key: key)
-        // An inherited failure can retry through its current route only.
+        // An inherited landing can retry or resume only through an authorized route.
         guard route.requiredPreparation != nil || tab.parentForProxyLanding(url) == nil else { return nil }
         return route
     }
@@ -1094,7 +1128,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     func retryReadyTabs(operationID: UUID) {
         guard var operation = operations[operationID], operation.state == .preparing || operation.state == .sent else { return }
         guard var ticket = operation.ticket else { return }
-        guard let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) else { return }
+        guard let tab = tabOwning(operation) else { return }
         guard let failure = tab.lastMainFrameFailure, failure.failureID == ticket.failureID else { return }
         guard failure.navigationID == ticket.navigationID else { return }
         guard hostRevisions[operation.key] ?? 0 == operation.hostRevision else { return }
@@ -1220,7 +1254,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         let preparation: RoutePreparation?
         if let failure {
             guard !failure.hasReplayableBody, method == "GET" || method == "HEAD",
-                  let route = failedProxyRoute(tab: tab, url: failure.url, key: key) else { return nil }
+                  let route = manualProxyRoute(tab: tab, url: failure.url, key: key) else { return nil }
             if let existing = operations.values.first(where: {
                 $0.tabID == tab.instanceID.uuidString && $0.failureID == failure.failureID && $0.state == .preparing
             }) { return existing.id }
@@ -1304,10 +1338,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             fail(operationID, reason: "这次准备已经失效")
             return
         }
-        guard let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }),
-              !tab.isDisposed, tab.browsingScopeID == operation.key.scopeID,
-              tab.profile.isPrivate == operation.key.isPrivate,
-              authorizationStillValid(operation, tab: tab) else {
+        guard let tab = tabOwning(operation), authorizationStillValid(operation, tab: tab) else {
             fail(operationID, reason: "这次准备已经失效")
             return
         }
@@ -1378,6 +1409,13 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         }
     }
 
+    private func tabOwning(_ operation: RecoveryOperation) -> BrowserTab? {
+        BrowserSession.openTabs().first {
+            $0.instanceID.uuidString == operation.tabID && $0.hostCoordinator === self && !$0.isDisposed
+                && $0.browsingScopeID == operation.key.scopeID && $0.profile.isPrivate == operation.key.isPrivate
+        }
+    }
+
     private func fail(_ operationID: UUID, reason: String) {
         timeoutTasks.removeValue(forKey: operationID)?.cancel()
         guard var operation = operations[operationID], operation.state == .preparing else { return }
@@ -1385,8 +1423,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         operations[operationID] = operation
         phases[operation.tabID] = .failed
         lastRecoveryFailure = reason
-        if let pending = operation.addressNavigation,
-           let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
+        if let pending = operation.addressNavigation, let tab = tabOwning(operation) {
             if operation.automaticFirstVisit, authorizationStillValid(operation, tab: tab),
                tab.boundHostName != operation.key.host.rawValue {
                 tab.continueWithoutDefaultRoute(pending)
@@ -1413,8 +1450,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             timeoutTasks.removeValue(forKey: id)?.cancel()
             publisher.cancel(operationID: id)
             phases[operation.tabID] = nil
-            if let pending = operation.addressNavigation,
-               let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }),
+            if let pending = operation.addressNavigation, let tab = tabOwning(operation),
                tab.matchesPendingAddressNavigation(pending) {
                 // The original navigation was retired by holdForProxy. Cancelling
                 // its preparation and deadline must also settle that UI hold.
@@ -1558,7 +1594,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 return route == .legacy && usesDefaultRoute(operation.key)
             }
         }
-        if operation.addressNavigation != nil { return true }
+        if let pending = operation.addressNavigation {
+            guard let tab, let route = manualProxyRoute(tab: tab, url: pending.url, key: operation.key) else { return false }
+            return route.requiredPreparation == nil
+        }
         guard let grant = operation.authorization else {
             return intents[operation.key] == .on
         }

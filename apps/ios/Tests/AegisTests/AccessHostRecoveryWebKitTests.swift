@@ -1,5 +1,6 @@
 import AccessKit
 import Network
+import SwiftUI
 import os
 import UIKit
 import WebKit
@@ -10,6 +11,86 @@ import XCTest
 /// Failed page reloads through the app HTTP CONNECT listener, not a test-only proxy socket.
 @MainActor
 final class AccessHostRecoveryWebKitTests: XCTestCase {
+    func testExplicitOriginalPendingNavigationOffersNoProxyAction() async throws {
+        let original = AnsweringOpener()
+        let managed = AnsweringOpener()
+        let listener = try await makeListener(port: 18_431, tunnels: original)
+        let managedListener = try await makeListener(port: 18_432, tunnels: managed)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await listener.start(at: now)
+        defer { try? listener.stop() }
+        try await managedListener.start(at: now)
+        defer { try? managedListener.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_432), channel: .dev)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let store = tab.originalWebsiteDataStore
+        let previousProxy = store.proxyConfigurations
+        var observer = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: 18_431))
+        observer.allowFailover = false
+        store.proxyConfigurations = [observer]
+        defer { store.proxyConfigurations = previousProxy }
+
+        let originalHost = try AccessSiteHost("chosen-route.example.invalid")
+        let chosen = try XCTUnwrap(URL(string: "https://chosen-route.example.invalid/explicit"))
+        let unrestricted = try XCTUnwrap(URL(string: "https://optional-route.example.invalid/control"))
+        tab.load(chosen)
+        tab.webView(tab.webView, didFailProvisionalNavigation: tab.currentNavigationForTests,
+                    withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: originalHost)
+        XCTAssertEqual(coordinator.websiteRouteSelection(for: tab), .original)
+
+        let contents = ActiveTabView(tab: tab, address: .constant(""), addressIsEditing: false,
+                                     onEditAddress: {}, onFind: {}, onScroll: { _ in }, onImage: { _ in })
+            .environmentObject(coordinator)
+        let host = UIHostingController(rootView: contents)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let previous = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+
+        func proxyButton(in view: UIView) -> UIButton? {
+            if let button = view as? UIButton, button.accessibilityIdentifier == "page-load-proxy-retry" { return button }
+            return view.subviews.lazy.compactMap { proxyButton(in: $0) }.first
+        }
+
+        tab.loadFromAddressBar(unrestricted)
+        try await waitUntil(seconds: 8, {
+            host.view.layoutIfNeeded()
+            return original.authorities.contains("optional-route.example.invalid:443") && proxyButton(in: host.view) != nil
+        }, message: "An unrestricted pending request must reach the original listener and offer the configured service")
+        tab.loadFromAddressBar(chosen)
+        try await waitUntil(seconds: 8, {
+            original.authorities.contains("chosen-route.example.invalid:443")
+        }, message: "The explicitly original request must reach the original listener and remain pending")
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(tab.isLoading)
+        XCTAssertEqual(tab.pendingAddressNavigation?.url, chosen)
+        XCTAssertNil(proxyButton(in: host.view), "An explicitly original pending navigation must not offer a proxy action")
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertNil(coordinator.openPendingAddressViaProxy(tab: tab, pending: pending))
+
+        tab.loadFromAddressBar(unrestricted)
+        try await waitUntil(seconds: 8, {
+            host.view.layoutIfNeeded()
+            return tab.pendingAddressNavigation?.url == unrestricted && proxyButton(in: host.view) != nil
+        }, message: "The optional action must reappear for an unrestricted target")
+        let button = try XCTUnwrap(proxyButton(in: host.view))
+        XCTAssertTrue(button.isEnabled)
+        button.sendActions(for: .touchUpInside)
+        try await waitUntil(seconds: 8, {
+            managed.authorities.contains("optional-route.example.invalid:443")
+        }, message: "The visible action must send the unrestricted target to the managed listener")
+        XCTAssertEqual(tab.boundHostName, "optional-route.example.invalid")
+        XCTAssertFalse(managed.authorities.contains("chosen-route.example.invalid:443"))
+    }
+
     func testFirstPublicNavigationUsesTheDefaultProtectedRoute() async throws {
         let opener = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_277, tunnels: opener)
