@@ -91,5 +91,7 @@ jobs:
             ${{ env.IOS_REPORT_DIR }}/ios-input-sha256-*.txt
             ${{ env.IOS_REPORT_DIR }}/run-metadata.txt
             ${{ env.IOS_REPORT_DIR }}/simulator-runtime.json
+            ${{ env.IOS_REPORT_DIR }}/fixture.log
+            ${{ env.IOS_REPORT_DIR }}/build.log
           if-no-files-found: error
           retention-days: 14
