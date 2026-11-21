@@ -1,6 +1,7 @@
 import AccessKit
 import Network
 import os
+import Security
 import UIKit
 import WebKit
 import XCTest
@@ -1105,21 +1106,148 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
 
 private final class NavigationSink: NSObject, WKNavigationDelegate {}
 
+@MainActor
+private final class PinnedFixtureNavigation: NSObject, WKNavigationDelegate {
+    private let tab: BrowserTab
+    private let host: String
+    private let certificate: SecCertificate
+    private let leaf: Data
+
+    init(tab: BrowserTab, host: String, certificate: SecCertificate) {
+        self.tab = tab
+        self.host = host
+        self.certificate = certificate
+        leaf = SecCertificateCopyData(certificate) as Data
+    }
+
+    func webView(_ view: WKWebView, respondTo challenge: URLAuthenticationChallenge) async
+        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust, space.host == host,
+              let trust = space.serverTrust else {
+            return (.performDefaultHandling, nil)
+        }
+        guard SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, host as CFString)) == errSecSuccess,
+              SecTrustSetAnchorCertificates(trust, [certificate] as CFArray) == errSecSuccess,
+              SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
+              SecTrustSetNetworkFetchAllowed(trust, false) == errSecSuccess else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+        let pinnedLeaf = leaf
+        let matches = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                guard SecTrustEvaluateWithError(trust, nil),
+                      let certificate = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                continuation.resume(returning: SecCertificateCopyData(certificate) as Data == pinnedLeaf)
+            }
+        }
+        return matches ? (.useCredential, URLCredential(trust: trust)) : (.cancelAuthenticationChallenge, nil)
+    }
+
+    func webView(_ view: WKWebView, decidePolicyFor action: WKNavigationAction, preferences: WKWebpagePreferences,
+                 decisionHandler: @escaping @MainActor (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        tab.webView(view, decidePolicyFor: action, preferences: preferences, decisionHandler: decisionHandler)
+    }
+
+    func webView(_ view: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                 decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        tab.webView(view, decidePolicyFor: response, decisionHandler: decisionHandler)
+    }
+
+    func webView(_ view: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        tab.webView(view, didStartProvisionalNavigation: navigation)
+    }
+
+    func webView(_ view: WKWebView, didCommit navigation: WKNavigation!) {
+        tab.webView(view, didCommit: navigation)
+    }
+
+    func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
+        tab.webView(view, didFinish: navigation)
+    }
+
+    func webView(_ view: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        tab.webView(view, didFailProvisionalNavigation: navigation, withError: error)
+    }
+
+    func webView(_ view: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        tab.webView(view, didFail: navigation, withError: error)
+    }
+}
+
+private final class FixtureOriginTunnels: AccessHTTPTunnelOpening, @unchecked Sendable {
+    private let port: UInt16
+    private let observed = OSAllocatedUnfairLock(initialState: [String]())
+    var authorities: [String] { observed.withLock { $0 } }
+
+    init(port: UInt16) { self.port = port }
+
+    func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+        observed.withLock { $0.append("\(host):\(port)") }
+        guard port == 443, ["www.douban.com", "beta-hold-control.invalid"].contains(host),
+              let localPort = NWEndpoint.Port(rawValue: self.port) else { throw URLError(.cannotConnectToHost) }
+        return FixtureOriginSocket(port: localPort)
+    }
+
+    private final class FixtureOriginSocket: AccessRealityPathStream, @unchecked Sendable {
+        private let connection: NWConnection
+        private let closed = OSAllocatedUnfairLock(initialState: false)
+        var isOpen: Bool { closed.withLock { !$0 } }
+
+        init(port: NWEndpoint.Port) {
+            connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+            connection.start(queue: DispatchQueue(label: "test.geosite.fixture-tunnel"))
+        }
+
+        func read(maxBytes: Int) async throws -> Data? {
+            try await withCheckedThrowingContinuation { continuation in
+                connection.receive(minimumIncompleteLength: 1, maximumLength: maxBytes) { data, _, _, error in
+                    if let error { continuation.resume(throwing: error) }
+                    else { continuation.resume(returning: data) }
+                }
+            }
+        }
+
+        func write(_ data: Data) async throws {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                connection.send(content: data, completion: .contentProcessed { error in
+                    if let error { continuation.resume(throwing: error) }
+                    else { continuation.resume() }
+                })
+            }
+        }
+
+        func close() {
+            closed.withLock { $0 = true }
+            connection.cancel()
+        }
+    }
+}
+
 private final class OriginReceipt: @unchecked Sendable {
-    let port: UInt16
+    private let requestedPort: UInt16
+    var port: UInt16 { listener?.port?.rawValue ?? requestedPort }
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "access.auto-recovery.origin")
     private let lock = OSAllocatedUnfairLock(initialState: "")
 
     private let body: String
-    init(port: UInt16, body: String = "ok") { self.port = port; self.body = body }
+    private let tls: NWProtocolTLS.Options?
+    init(port: UInt16, body: String = "ok", tls: NWProtocolTLS.Options? = nil) {
+        requestedPort = port
+        self.body = body
+        self.tls = tls
+    }
 
     var transcript: String { lock.withLock { $0 } }
 
     func start() async throws {
-        let parameters = NWParameters.tcp
+        let parameters = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
         parameters.allowLocalEndpointReuse = true
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else { throw URLError(.badURL) }
+        guard let nwPort = NWEndpoint.Port(rawValue: requestedPort) else { throw URLError(.badURL) }
         parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: nwPort)
         let listener = try NWListener(using: parameters)
         listener.newConnectionHandler = { [weak self] connection in
@@ -1489,6 +1617,162 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     #if DEBUG
+    func testSelectingDoubanRetiresOriginalRealmAndPreservesHeldDebianNavigation() async throws {
+        try await assertSelectingDoubanDuringDebianHold(managedPort: 18_631, cancelDebian: false)
+    }
+
+    func testDeselectingDebianAfterDoubanRetirementRejectsLatePreparation() async throws {
+        try await assertSelectingDoubanDuringDebianHold(managedPort: 18_633, cancelDebian: true)
+    }
+
+    private func assertSelectingDoubanDuringDebianHold(managedPort: UInt16, cancelDebian: Bool) async throws {
+        let originalPort = managedPort + 1
+        let marker = UUID().uuidString
+        let html = """
+        <title>Original Douban \(marker)</title>
+        <script>if (location.hostname === 'www.douban.com') {
+          setInterval(() => fetch('/pulse?\(marker)', {cache: 'no-store'}), 60);
+        }</script>
+        """
+        // Xcode generates this identity in the test bundle. The two fixture
+        // delegates pin its leaf and all tunnel connections stay on loopback.
+        let resource = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "geosite-beta-hold-test-only",
+                                                               withExtension: "p12"))
+        var imported: CFArray?
+        let options: [String: Any] = [kSecImportExportPassphrase as String: "web-kit-fixture",
+                                      kSecImportToMemoryOnly as String: true]
+        let status = SecPKCS12Import(try Data(contentsOf: resource) as CFData, options as CFDictionary, &imported)
+        XCTAssertEqual(status, errSecSuccess)
+        let item = try XCTUnwrap((imported as? [[String: Any]])?.first?[kSecImportItemIdentity as String])
+        let identity = item as! SecIdentity
+        var importedCertificate: SecCertificate?
+        XCTAssertEqual(SecIdentityCopyCertificate(identity, &importedCertificate), errSecSuccess)
+        let certificate = try XCTUnwrap(importedCertificate)
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_local_identity(tls.securityProtocolOptions, try XCTUnwrap(sec_identity_create(identity)))
+        let origin = OriginReceipt(port: 0, body: html, tls: tls)
+        try await origin.start()
+        defer { origin.stop() }
+        let original = FixtureOriginTunnels(port: origin.port)
+        let managed = AnsweringOpener(finishAfterRecording: true)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        defer { try? managedListener.stop(); try? originalListener.stop() }
+        try await managedListener.start(at: now)
+        try await originalListener.start(at: now)
+
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gate = WindowPrepareGate()
+        defer { gate.finish() }
+        var provisionReturned = false
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            await gate.wait()
+            provisionReturned = true
+            return .init(endpoint: .init(identity: "category-hold-\(managedPort)", generation: generation,
+                loopbackHost: "127.0.0.1", port: managedPort, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let otherBrowser = BrowserSession(dataStore: browser.dataStore, hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(browser.activeTab)
+        let sibling = try XCTUnwrap(otherBrowser.activeTab)
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer { browser.closeWindow(); otherBrowser.closeWindow(); restoreOriginal() }
+        try await tab.prepareContentRulesForTests()
+        try await sibling.prepareContentRulesForTests()
+        let originalView = tab.webView
+        let window = show(originalView)
+        let siblingWindow = show(sibling.webView)
+        let douban = URL(string: "https://www.douban.com/page?\(marker)")!
+        let control = URL(string: "https://beta-hold-control.invalid/page?control")!
+        let originalNavigation = PinnedFixtureNavigation(tab: tab, host: "www.douban.com", certificate: certificate)
+        let controlNavigation = PinnedFixtureNavigation(tab: sibling, host: "beta-hold-control.invalid", certificate: certificate)
+        originalView.navigationDelegate = originalNavigation
+        sibling.webView.navigationDelegate = controlNavigation
+        defer {
+            withExtendedLifetime((originalNavigation, controlNavigation)) {}
+            window.isHidden = true
+            siblingWindow.isHidden = true
+            let receipt = XCTAttachment(string: "managed=\(managed.authorities)\noriginal=\(original.authorities)\n\(origin.transcript)")
+            receipt.name = "Original Douban retirement and held Debian route"
+            receipt.lifetime = .keepAlways
+            add(receipt)
+        }
+        let debian = URL(string: "https://debian.org/held?\(marker)")!
+        let pulse = "/pulse?\(marker)"
+        func pulses() -> Int { origin.transcript.components(separatedBy: pulse).count - 1 }
+
+        tab.loadFromAddressBar(douban)
+        try await waitUntil({ tab.committedMainFrameURL == douban && !tab.isLoading && pulses() >= 3 },
+                            message: "The real original Douban realm must commit and send pulses. \(original.authorities) \(origin.transcript)")
+        _ = try XCTUnwrap(tab.committedMainFrameURL == douban && pulses() >= 3 ? originalView : nil)
+        XCTAssertEqual(originalView.title, "Original Douban \(marker)")
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertTrue(original.authorities.contains("www.douban.com:443"))
+        XCTAssertTrue(managed.authorities.isEmpty)
+
+        tab.loadFromAddressBar(debian)
+        try await waitUntil({ gate.started }, message: "Debian must await the held publisher")
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertEqual(pending.url, debian)
+        XCTAssertTrue(tab.webView === originalView && tab.matchesPendingAddressNavigation(pending))
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: tab))
+        XCTAssertFalse(original.authorities.contains("debian.org:443"))
+
+        let initial = try XCTUnwrap(coordinator.websiteCategories(for: sibling))
+        XCTAssertEqual(initial.selected, [.debian])
+        coordinator.setWebsiteCategory(.douban, selected: true, from: initial, for: sibling)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: douban))
+        XCTAssertNil(originalView.superview)
+        XCTAssertNil(originalView.load(URLRequest(url: douban)), "The original view must reject further navigation")
+        XCTAssertTrue(tab.matchesPendingAddressNavigation(pending), "Retiring Douban must preserve the exact Debian hold")
+        XCTAssertFalse(tab.isSuspended)
+        var inert = false
+        tab.afterCurrentDocumentBecomesInert { inert = true }
+        try await waitUntil({ inert }, message: "The old WebKit realm must report its terminal document")
+
+        if cancelDebian {
+            let both = try XCTUnwrap(coordinator.websiteCategories(for: sibling))
+            coordinator.setWebsiteCategory(.debian, selected: false, from: both, for: sibling)
+            XCTAssertFalse(tab.matchesPendingAddressNavigation(pending))
+            XCTAssertNil(tab.pendingAddressNavigation)
+            XCTAssertFalse(coordinator.isPreparingAddressProxy(tab: tab))
+        }
+        gate.finish()
+        try await waitUntil({ provisionReturned }, message: "The held provision must return after release")
+        if !cancelDebian {
+            try await waitUntil(seconds: 8, {
+                self.attach(tab.webView, to: window)
+                return managed.authorities.contains("debian.org:443")
+            }, message: "The exact Debian request must send a fresh managed CONNECT after preparation")
+            XCTAssertEqual(tab.boundHostName, "debian.org")
+            XCTAssertFalse(tab.websiteDataStore === tab.originalWebsiteDataStore)
+            XCTAssertFalse(tab.webView === originalView)
+        }
+
+        // Allow any already-issued Douban pulses to drain, then prove that the
+        // original listener can still observe a separate, newly committed page.
+        var lastPulseCount = pulses(), quietSince = Date()
+        try await waitUntil(seconds: 2, {
+            if pulses() != lastPulseCount { lastPulseCount = pulses(); quietSince = Date() }
+            return Date().timeIntervalSince(quietSince) >= 0.25
+        }, message: "Terminal Douban realm must stop sending pulses")
+        let pulseCount = pulses()
+        sibling.loadFromAddressBar(control)
+        try await waitUntil({ sibling.committedMainFrameURL == control && !sibling.isLoading },
+                            message: "The sibling's independent original control must commit")
+        XCTAssertTrue(original.authorities.contains("beta-hold-control.invalid:443"))
+        XCTAssertFalse(managed.authorities.contains("beta-hold-control.invalid:443"))
+        XCTAssertFalse(managed.authorities.contains("www.douban.com:443"), "Old Douban realm must also never replay")
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(pulses(), pulseCount)
+        XCTAssertFalse(original.authorities.contains("debian.org:443"))
+        if cancelDebian { XCTAssertFalse(managed.authorities.contains("debian.org:443")) }
+    }
+
     func testGeoSiteSelectedOfficialDoubanUsesManagedWebKitStore() async throws {
         let managedPort: UInt16 = 18_489
         let originalPort: UInt16 = 18_490

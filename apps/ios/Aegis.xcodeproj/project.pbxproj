@@ -1610,6 +1610,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = D49277A57583B3AA12C26B2D /* Build configuration list for PBXNativeTarget "AegisTests" */;
 			buildPhases = (
+				26A20EEC22288995A15CAAC8 /* Generate GeoSite WebKit test identity */,
 				C3B60DD9AC74606C4C52DF6A /* Sources */,
 				19A7FD5C5BA9079DFCD53418 /* Resources */,
 				AA7F0325B0B522BF94DEB1FA /* Frameworks */,
@@ -1988,6 +1989,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "/usr/bin/python3 -B \"${SRCROOT}/scripts/private_test_node.py\"\n";
+		};
+		26A20EEC22288995A15CAAC8 /* Generate GeoSite WebKit test identity */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/generate-geosite-webkit-test-identity.sh",
+			);
+			name = "Generate GeoSite WebKit test identity";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/geosite-beta-hold-test-only.p12",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"${SCRIPT_INPUT_FILE_0}\"";
 		};
 		410C3AD95B8493D80F8C5CB5 /* Select Aegis Firebase registration */ = {
 			isa = PBXShellScriptBuildPhase;

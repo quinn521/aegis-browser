@@ -1132,6 +1132,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public func retireOriginalDocumentDuringProxyHold(_ pending: BrowserPendingAddressNavigation) -> Bool {
         guard matchesPendingAddressNavigation(pending), pendingProxyRequest != nil else { return false }
         terminateCurrentDocument()
+        // WebView teardown marks the tab suspended. The validated, unsent
+        // address request still owns its preparation and remains loading.
+        isLoading = true
+        isSuspended = false
         return true
     }
 
