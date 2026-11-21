@@ -9,12 +9,14 @@ import {dirname, join, resolve} from 'node:path';
 import {domainToASCII, fileURLToPath, URL} from 'node:url';
 import {parseArgs} from 'node:util';
 
-const MAX_DAT_BYTES = 4 * 1024 * 1024;
+const MAX_DAT_BYTES = 16 * 1024 * 1024;
 const MAX_PSL_BYTES = 512 * 1024;
 const MAX_PSL_RULES = 20_000;
 const MAX_GROUPS = 4_096;
 const MAX_GROUP_BYTES = 512 * 1024;
 const MAX_GROUP_CODE_BYTES = 64;
+// The pinned XTLS catalogue has opaque groups with up to 75,744 domain records.
+const MAX_SCANNED_GROUP_ROWS = 100_000;
 const MAX_GROUP_ROWS = 4_096;
 const MAX_ROW_BYTES = 1_024;
 
@@ -30,6 +32,21 @@ const DLC = {
   copyright: 'Copyright (c) 2018-2019 V2Ray',
   licenseUrl: 'https://github.com/v2fly/domain-list-community/blob/ffb513217b9cb22835eb74a39a907d77742ce68f/LICENSE',
 };
+const XTLS = {
+  project: 'XTLS/Xray-rules-dat',
+  version: '20261120235103',
+  commit: 'd74acca73490cb57a937674ce8a8709d2a3021ba',
+  tagCommit: '0f8082e3b11bbe8ee65f26de86cbd2e0d510c983',
+  file: 'geosite.dat',
+  bytes: 7_750_066,
+  sha256: '6fb761384d0141a9bd7dc3c18caf74b70516018ca91e3c36af11afefb543dcf9',
+  url: 'https://github.com/XTLS/Xray-rules-dat/releases/download/20261120235103/geosite.dat',
+  sourceUrl: 'https://github.com/XTLS/Xray-rules-dat/blob/d74acca73490cb57a937674ce8a8709d2a3021ba/README.md',
+  license: 'MIT',
+  licenseScope: 'Inherited V2Fly data',
+  copyright: 'Copyright (c) 2018-2019 V2Ray',
+  licenseUrl: 'https://github.com/XTLS/Xray-rules-dat/blob/d74acca73490cb57a937674ce8a8709d2a3021ba/LICENSE-inherited',
+};
 const PSL = {
   project: 'Chromium',
   version: '155.0.8059.80',
@@ -42,8 +59,14 @@ const PSL = {
   licenseUrl: 'https://mozilla.org/MPL/2.0/',
   privateDomains: true,
 };
-const APPROVED_GROUP = 'DEBIAN';
-const APPROVED_PAYLOAD_SHA256 = 'd865d67c829d0f13bf508e152ef402d5d9634227ed12a8b49434d231baf5a643';
+// Each allowlist certifies the complete typed payload for its raw source and the PSL above.
+const DEBIAN_SHA256 = 'd865d67c829d0f13bf508e152ef402d5d9634227ed12a8b49434d231baf5a643';
+const DLC_GROUPS = new Map([['DEBIAN', DEBIAN_SHA256]]);
+const XTLS_GROUPS = new Map([
+  ['DEBIAN', DEBIAN_SHA256],
+  ['DOUBAN', '62cfcbf5e006744783206139a2cbb6a3dffb05dbc366f1784a193e887e038619'],
+  ['MEITUAN', '7f23061fb1a46f4150077aa56c369188cfda5bb49bd99649264c5bfb7bf8efa9'],
+]);
 const GROUP_CODE = /^[A-Z0-9][A-Z0-9_!-]*$/;
 const LOCAL_SUFFIXES = ['local', 'localhost', 'localdomain', 'home.arpa', 'internal'];
 const utf8 = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true});
@@ -88,8 +111,8 @@ class Reader {
     return this.data.subarray(start, this.offset);
   }
 
-  skipBytes() {
-    const size = this.length(MAX_DAT_BYTES);
+  skipBytes(limit) {
+    const size = this.length(limit);
     this.offset += size;
   }
 }
@@ -104,6 +127,7 @@ function findGroup(data, requested) {
     const group = catalogue.bytes(MAX_DAT_BYTES);
     const fields = new Reader(group);
     let code;
+    let rowCount = 0;
     while (!fields.done) {
       switch (fields.varint()) {
         case 10: // GeoSite.country_code
@@ -111,7 +135,8 @@ function findGroup(data, requested) {
           code = utf8.decode(fields.bytes(MAX_GROUP_CODE_BYTES));
           break;
         case 18: // GeoSite.domain
-          fields.skipBytes();
+          if (++rowCount > MAX_SCANNED_GROUP_ROWS) throw new Error('GeoSite group exceeds record count limit');
+          fields.skipBytes(MAX_ROW_BYTES);
           break;
         default:
           throw new Error('Unsupported GeoSite group field');
@@ -194,7 +219,7 @@ function isPublicSuffix(name, {exact, wildcards, exceptions}) {
   return !parent || exact.has(name) || wildcards.has(parent);
 }
 
-function readRule(bytes, registry) {
+function readRule(bytes, registry, requireCanonical) {
   const domain = new Reader(bytes);
   let type;
   let value;
@@ -218,6 +243,7 @@ function readRule(bytes, registry) {
   if (type !== 2 && type !== 3) throw new Error('Unsupported GeoSite domain type: ' + (type ?? 0));
   const name = dnsName(value);
   if (!name || isLocal(name)) throw new Error('Invalid GeoSite DNS rule: ' + value);
+  if (requireCanonical && name !== value) throw new Error('Noncanonical GeoSite DNS rule: ' + value);
   if (isPublicSuffix(name, registry)) throw new Error('GeoSite rule is a public suffix: ' + name);
   if (type === 2 && registry.registryAncestors.has(name)) {
     throw new Error('GeoSite domain rule covers a registry boundary: ' + name);
@@ -227,7 +253,7 @@ function readRule(bytes, registry) {
 
 // The decoder can inspect synthetic and rejected groups. Only the CLI admits a
 // group for the macOS DEV build, after verifying both immutable inputs.
-export function compileGroup(buffer, pslText, group) {
+export function compileGroup(buffer, pslText, group, {requireCanonical = false} = {}) {
   if (!Buffer.isBuffer(buffer) || buffer.length > MAX_DAT_BYTES) throw new Error('Invalid DAT input or size limit exceeded');
   if (typeof group !== 'string' || group.length > MAX_GROUP_CODE_BYTES || !GROUP_CODE.test(group)) {
     throw new Error('Invalid requested GeoSite group code');
@@ -238,11 +264,11 @@ export function compileGroup(buffer, pslText, group) {
   while (!selected.done) {
     // findGroup verified that the only other field here is the group code.
     if (selected.varint() === 10) {
-      selected.skipBytes();
+      selected.skipBytes(MAX_GROUP_CODE_BYTES);
       continue;
     }
     if (rules.length >= MAX_GROUP_ROWS) throw new Error('Selected group exceeds row count limit');
-    rules.push(readRule(selected.bytes(MAX_ROW_BYTES), registry));
+    rules.push(readRule(selected.bytes(MAX_ROW_BYTES), registry, requireCanonical));
   }
   if (!rules.length) throw new Error('Selected GeoSite group is empty');
   rules.sort((left, right) => {
@@ -250,6 +276,11 @@ export function compileGroup(buffer, pslText, group) {
     if (left.value === right.value) return 0;
     return left.value < right.value ? -1 : 1;
   });
+  if (requireCanonical && rules.some((rule, index) =>
+    index > 0 && rule.type === rules[index - 1].type && rule.value === rules[index - 1].value
+  )) {
+    throw new Error('Duplicate GeoSite rule');
+  }
   return {rules: Object.freeze(rules)};
 }
 
@@ -323,6 +354,7 @@ function writeAtomically(path, data) {
 function main() {
   const {values} = parseArgs({
     options: {
+      dat: {type: 'string'},
       dlc: {type: 'string'},
       psl: {type: 'string'},
       group: {type: 'string'},
@@ -331,26 +363,35 @@ function main() {
       help: {type: 'boolean'},
     },
   });
-  const {dlc, psl, group, output, verify, help} = values;
+  const {dat, dlc, psl, group, output, verify, help} = values;
   if (help) {
-    console.log('Usage: node scripts/dev/compile-geosite.mjs --dlc <dlc.dat> --psl <effective_tld_names.dat> --group DEBIAN --output <catalogue.json> [--verify]');
-    console.log('Use the decoded Chromium 155.0.8059.80 PSL and V2Fly 20261121064510 dlc.dat. Both inputs are verified locally.');
-    console.log('--verify rebuilds in memory and compares the full catalogue byte for byte.');
+    console.log('Usage: node scripts/dev/compile-geosite.mjs --dat <geosite.dat> --psl <effective_tld_names.dat>');
+    console.log('       --group <DEBIAN|DOUBAN|MEITUAN> --output <catalogue.json> [--verify]');
+    console.log('Use raw XTLS/Xray-rules-dat standard geosite.dat 20261120235103 and the Chromium 155.0.8059.80 ICANN+PRIVATE PSL.');
+    console.log('Historical DEBIAN reproduction uses --dlc <dlc.dat> (V2Fly 20261121064510) in place of --dat.');
+    console.log('Inputs are verified offline. --verify compares the complete catalogue byte for byte.');
     return;
   }
-  if (!dlc || !psl || !group || !output) throw new Error('Required options: --dlc, --psl, --group, --output (see --help)');
-  if (group !== APPROVED_GROUP) throw new Error('Only the DEBIAN group is approved');
-  const datInput = readPinned(dlc, DLC, 'DLC');
+  const official = dat !== undefined;
+  if (official === (dlc !== undefined)) throw new Error('Specify exactly one of --dat or --dlc (see --help)');
+  const sourcePath = official ? dat : dlc;
+  if (!sourcePath || !psl || !group || !output) throw new Error('A source path, --psl, --group and --output are required (see --help)');
+  const approvedDigest = (official ? XTLS_GROUPS : DLC_GROUPS).get(group);
+  if (!approvedDigest) {
+    throw new Error(official ? 'GeoSite group must be approved for the pinned XTLS DAT' : 'Only the DEBIAN group is approved');
+  }
+  const source = official ? XTLS : DLC;
+  const datInput = readPinned(sourcePath, source, official ? 'DAT' : 'DLC');
   const pslInput = readPinned(psl, PSL, 'PSL');
-  const {rules} = compileGroup(datInput.data, utf8.decode(pslInput.data), group);
+  const {rules} = compileGroup(datInput.data, utf8.decode(pslInput.data), group, {requireCanonical: official});
   const payload = rules.map(({type, value}) => type + ':' + value + '\n').join('');
   const payloadSha256 = sha256(payload);
-  if (payloadSha256 !== APPROVED_PAYLOAD_SHA256) throw new Error('Compiled rule payload SHA-256 does not match the pin');
+  if (payloadSha256 !== approvedDigest) throw new Error('Compiled rule payload SHA-256 does not match the pin');
   const catalogue = {
     schemaVersion: 1,
     compiler: {name: 'compile-geosite', version: 1},
     group,
-    inputs: {dlc: DLC, psl: PSL},
+    inputs: {[official ? 'dat' : 'dlc']: source, psl: PSL},
     ruleCount: rules.length,
     payloadSha256,
     rules,

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import {linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {compileGroup, matchesHost} from '../compile-geosite.mjs';
 
+const cli = fileURLToPath(new URL('../compile-geosite.mjs', import.meta.url));
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 const psl = [
   '// ===BEGIN ICANN DOMAINS===', 'com', 'org', 'jp', '*.kawasaki.jp',
   '!city.kawasaki.jp', '// ===END ICANN DOMAINS===',
@@ -91,7 +93,6 @@ test('unverified CLI inputs preserve an existing catalogue', (t) => {
   writeFileSync(dat, group('DEBIAN', domain(2, 'altered.org')));
   writeFileSync(suffixes, psl);
   writeFileSync(output, 'previous\n');
-  const cli = fileURLToPath(new URL('../compile-geosite.mjs', import.meta.url));
   const result = spawnSync(process.execPath, [cli, '--dlc', dat, '--psl', suffixes, '--group', 'DEBIAN', '--output', output]);
   assert.notEqual(result.status, 0);
   assert.equal(readFileSync(output, 'utf8'), 'previous\n');
@@ -152,7 +153,7 @@ test('decoder rejects invalid fields, invalid UTF-8 and oversized input', () => 
     group('TRIAL', ...Array(12_000).fill(valid)),
     group('TRIAL'),
     Buffer.concat([catalogue, Buffer.from([0x0a, 0xff, 0xff, 0xff, 0xff, 0x0f])]),
-    Buffer.alloc(5 * 1024 * 1024),
+    Buffer.alloc(16 * 1024 * 1024 + 1),
   ]) {
     assert.throws(() => compileGroup(bad, psl, 'TRIAL'));
   }
@@ -162,6 +163,73 @@ test('decoder rejects invalid fields, invalid UTF-8 and oversized input', () => 
 test('unbacked PSL exceptions cannot admit a public suffix', () => {
   assert.throws(() => compileGroup(group('TRIAL', domain(2, 'tenant.example')), psl + '\n!tenant.example', 'TRIAL'),
     /invalid PSL exception/i);
+});
+
+test('a large unselected group can be skipped without relaxing the selected row limit', () => {
+  const selected = group('TRIAL', domain(2, 'good.org'));
+  const opaqueRow = domain(1, 'a'.repeat(64));
+  const unselected = bytes(1, Buffer.concat([...Array(75_744).fill(opaqueRow), bytes(1, 'OTHER-!CN')]));
+  const catalogue = Buffer.concat([selected, unselected]);
+  assert.ok(catalogue.length > 4 * 1024 * 1024);
+  assert.deepEqual(compileGroup(catalogue, psl, 'TRIAL').rules, [{type: 'domain', value: 'good.org'}]);
+  const ordinaryRow = domain(2, 'other.org');
+  assert.throws(() => compileGroup(group('TRIAL', ...Array(4_097).fill(ordinaryRow)), psl, 'TRIAL'),
+    /selected group.*row count/i);
+});
+
+test('skipped records and catalogue envelopes remain bounded through EOF', () => {
+  const selected = group('TRIAL', domain(2, 'good.org'));
+  const overlong = group('OTHER', bytes(2, Buffer.alloc(1_025)));
+  const overcount = bytes(1, Buffer.concat([bytes(1, 'OTHER'), ...Array(100_001).fill(domain(0, 'word'))]));
+  for (const [tail, diagnostic] of [
+    [overlong, /field exceeds size limit/i],
+    [overcount, /group.*record count limit/i],
+    [group('OTHER', domain(0, 'term')).subarray(0, -1), /truncated/i],
+    [Buffer.from([10, 7, 10, 1, 65, 18, 3, 8, 2]), /truncated/i],
+    [Buffer.from([10, 128, 128, 128, 128, 16]), /uint32/i],
+  ]) {
+    assert.throws(() => compileGroup(Buffer.concat([selected, tail]), psl, 'TRIAL'), diagnostic);
+  }
+  assert.throws(() => compileGroup(Buffer.alloc(16 * 1024 * 1024 + 1), psl, 'TRIAL'), /DAT.*size limit/i);
+});
+
+test('canonical rows reject noncanonical names, duplicates and unsupported classes as a whole', () => {
+  const valid = domain(2, 'good.org');
+  const compile = (...rows) => compileGroup(group('TRIAL', valid, ...rows), psl, 'TRIAL', {requireCanonical: true});
+  assert.deepEqual(compile(domain(3, 'news.good.org')).rules,
+    [{type: 'domain', value: 'good.org'}, {type: 'full', value: 'news.good.org'}]);
+  for (const host of ['Other.org', 'other.org.', 'bücher.org']) {
+    assert.throws(() => compile(domain(2, host)), /noncanonical/i);
+  }
+  assert.throws(() => compile(valid), /duplicate.*rule/i);
+  assert.throws(() => compile(domain(4, 'other.org')), /unsupported.*type/i);
+  assert.throws(() => compile(domain(2, 'tenant.example')), /public suffix/i);
+});
+
+test('source flags are exclusive and synthetic data cannot use the official CLI', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-source-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const dat = join(dir, 'geosite.dat');
+  const suffixes = join(dir, 'psl.dat');
+  const output = join(dir, 'catalogue.json');
+  writeFileSync(dat, group('DOUBAN', domain(2, 'douban.com')));
+  writeFileSync(suffixes, psl);
+  writeFileSync(output, 'previous\n');
+  const run = (groupName, ...flags) => spawnSync(process.execPath, [cli, '--psl', suffixes,
+    '--group', groupName, '--output', output, ...flags], {encoding: 'utf8'});
+  for (const [result, diagnostic] of [
+    [run('DOUBAN'), /exactly one.*--dat.*--dlc/i],
+    [run('DOUBAN', '--dat', dat, '--dlc', dat), /exactly one.*--dat.*--dlc/i],
+    [run('DOUBAN', '--dat=', '--dlc', dat), /exactly one.*--dat.*--dlc/i],
+    [run('DOUBAN', '--dat', dat), /DAT.*regular file of 7750066 bytes/i],
+    [run('WIKIMEDIA', '--dat', dat), /group.*approved/i],
+    [run('constructor', '--dat', dat), /group.*approved/i],
+    [run('DOUBAN', '--dlc', dat), /group.*approved/i],
+  ]) {
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, diagnostic);
+    assert.equal(readFileSync(output, 'utf8'), 'previous\n');
+  }
 });
 
 const pinnedInputs = process.env.AEGIS_GEOSITE_INPUT_DIR;
@@ -174,16 +242,15 @@ test('pinned inputs reproduce the DEBIAN catalogue and reject all of WIKIMEDIA',
     const dlc = readFileSync(dlcPath);
     const suffixes = readFileSync(pslPath, 'utf8');
     assert.throws(() => compileGroup(dlc, suffixes, 'WIKIMEDIA'), /public suffix.*(?:toolforge|wmcloud|wmflabs)\.org/i);
-    const cli = fileURLToPath(new URL('../compile-geosite.mjs', import.meta.url));
     const output = join(dir, 'catalogue.json');
     const run = ({dat = dlcPath, list = pslPath, groupName = 'DEBIAN', path = output, extra = []} = {}) =>
       spawnSync(process.execPath, [cli, '--dlc', dat, '--psl', list, '--group', groupName, '--output', path, ...extra],
         {encoding: 'utf8'});
     const success = (result) => assert.equal(result.status, 0, result.stderr);
-    const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 
     success(run());
     const first = readFileSync(output);
+    assert.equal(sha256(first), '74889c07232426b741c021f41a994e5902fce3a6b825cc83d9fa03a739bcc7fc');
     const catalogue = JSON.parse(first);
     assert.equal(catalogue.schemaVersion, 1);
     assert.equal(catalogue.group, 'DEBIAN');
@@ -228,4 +295,91 @@ test('pinned inputs reproduce the DEBIAN catalogue and reject all of WIKIMEDIA',
     assert.notEqual(run({path: occupied}).status, 0);
     assert.deepEqual(readdirSync(dir), entries);
     assert.deepEqual(readFileSync(join(occupied, 'previous')), first);
+  });
+
+const xrayInputs = process.env.AEGIS_XRAY_GEOSITE_INPUT_DIR;
+test('authentic standard XTLS DAT reproduces the three certified groups and rejects WIKIMEDIA',
+  {skip: !(xrayInputs && pinnedInputs) && 'set AEGIS_XRAY_GEOSITE_INPUT_DIR and AEGIS_GEOSITE_INPUT_DIR'}, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-xray-test-'));
+    t.after(() => rmSync(dir, {recursive: true, force: true}));
+    const datPath = join(xrayInputs, 'geosite.dat');
+    const pslPath = join(pinnedInputs, 'effective_tld_names.dat');
+    const legacyPath = join(pinnedInputs, 'dlc.dat');
+    const output = join(dir, 'catalogue.json');
+    const run = ({source = '--dat', dat = datPath, list = pslPath, groupName = 'DEBIAN', path = output, extra = []} = {}) =>
+      spawnSync(process.execPath, [cli, source, dat, '--psl', list, '--group', groupName, '--output', path, ...extra],
+        {encoding: 'utf8'});
+    const raw = readFileSync(datPath);
+    const suffixes = readFileSync(pslPath);
+    const vectors = JSON.parse(readFileSync(join(xrayInputs, 'beta-groups.json'), 'utf8'));
+    assert.deepEqual(Object.keys(vectors).sort(), ['DEBIAN', 'DOUBAN', 'MEITUAN']);
+    for (const [groupName, {count, rules, sha256: digest}] of Object.entries(vectors)) {
+      const result = run({groupName});
+      assert.equal(result.status, 0, result.stderr);
+      const generated = readFileSync(output);
+      const catalogue = JSON.parse(generated);
+      assert.equal(catalogue.schemaVersion, 1);
+      assert.equal(catalogue.group, groupName);
+      assert.equal(catalogue.ruleCount, count);
+      assert.deepEqual(catalogue.rules, rules.map(([type, value]) => ({type, value})));
+      assert.equal(catalogue.payloadSha256, digest);
+      assert.equal(catalogue.payloadSha256, sha256(catalogue.rules.map(({type, value}) => type + ':' + value + '\n').join('')));
+      assert.deepEqual(Object.keys(catalogue.inputs), ['dat', 'psl']);
+      assert.equal(catalogue.inputs.dat.project, 'XTLS/Xray-rules-dat');
+      assert.equal(catalogue.inputs.dat.file, 'geosite.dat');
+      assert.equal(catalogue.inputs.dat.version, '20261120235103');
+      assert.equal(catalogue.inputs.dat.commit, 'd74acca73490cb57a937674ce8a8709d2a3021ba');
+      assert.equal(catalogue.inputs.dat.tagCommit, '0f8082e3b11bbe8ee65f26de86cbd2e0d510c983');
+      assert.match(catalogue.inputs.dat.licenseUrl, /^https:\/\/github\.com\/XTLS\/Xray-rules-dat\/blob\/d74acca[0-9a-f]+\/LICENSE-inherited$/);
+      assert.equal(catalogue.inputs.dat.sha256, sha256(raw));
+      assert.equal(catalogue.inputs.psl.sha256, sha256(suffixes));
+      assert.equal(catalogue.inputs.psl.privateDomains, true);
+      for (const extra of [[], ['--verify']]) {
+        const repeat = run({groupName, extra});
+        assert.equal(repeat.status, 0, repeat.stderr);
+        assert.deepEqual(readFileSync(output), generated);
+      }
+    }
+    assert.throws(() => compileGroup(raw, suffixes.toString('utf8'), 'WIKIMEDIA', {requireCanonical: true}),
+      /public suffix.*(?:toolforge|wmcloud|wmflabs)\.org/i);
+
+    const previous = readFileSync(output);
+    const wrongDat = join(dir, 'wrong.dat');
+    const wrongPsl = join(dir, 'wrong-psl.dat');
+    const datAlias = join(dir, 'geosite-alias.dat');
+    const pslAlias = join(dir, 'psl-alias.dat');
+    // Use scratch copies so alias tests work across volumes and preserve the captured inputs.
+    const datCopy = join(dir, 'pinned-geosite.dat');
+    writeFileSync(datCopy, raw);
+    linkSync(datCopy, datAlias);
+    symlinkSync(pslPath, pslAlias);
+    raw[raw.length - 1] ^= 1;
+    suffixes[0] ^= 1;
+    writeFileSync(wrongDat, raw);
+    writeFileSync(wrongPsl, suffixes);
+    for (const [args, diagnostic] of [
+      [{dat: wrongDat}, /DAT.*SHA-256/i],
+      [{list: wrongPsl}, /PSL.*SHA-256/i],
+      [{dat: legacyPath}, /DAT.*regular file/i],
+      [{dat: datPath, source: '--dlc'}, /DLC.*regular file/i],
+      [{groupName: 'MEITUAN', dat: legacyPath, source: '--dlc'}, /group.*approved/i],
+      [{groupName: 'WIKIMEDIA'}, /group.*approved/i],
+      [{dat: datCopy, path: datAlias}, /output.*separate/i],
+      [{path: pslAlias}, /output.*separate/i],
+    ]) {
+      const result = run(args);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, diagnostic);
+      assert.deepEqual(readFileSync(output), previous);
+    }
+    assert.equal(sha256(readFileSync(datAlias)), sha256(readFileSync(datPath)));
+    assert.equal(sha256(readFileSync(pslAlias)), sha256(readFileSync(pslPath)));
+
+    const tampered = Buffer.from(previous);
+    tampered[0] ^= 1;
+    writeFileSync(output, tampered);
+    const verify = run({groupName: JSON.parse(previous).group, extra: ['--verify']});
+    assert.equal(verify.status, 1);
+    assert.match(verify.stderr, /catalogue.*match/i);
+    assert.deepEqual(readFileSync(output), tampered);
   });
