@@ -36,7 +36,31 @@ jobs:
           EVENT_PR_BASE: ${{ github.event.pull_request.base.sha }}
           EVENT_PR_HEAD: ${{ github.event.pull_request.head.sha }}
           EVENT_PUSH_BEFORE: ${{ github.event.before }}
-        run: bash scripts/ci/coverage-impact.sh android
+          COVERAGE_PLATFORM: android
+        shell: bash
+        run: |
+          router=scripts/ci/coverage-impact.sh
+          pr_base=''
+          pr_head=''
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            parents="$(git show -s --format=%P HEAD)"
+            read -r pr_base pr_head extra <<< "$parents"
+            [[ -n "$pr_base" && -n "$pr_head" && -z "$extra" && "$pr_head" == "$EVENT_PR_HEAD" ]]
+            [[ "$EVENT_PR_BASE" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$EVENT_PR_BASE" "$pr_base"
+            if ! git cat-file -e "$pr_base:$router"; then
+              printf 'run=true\npr_base=%s\npr_head=%s\n' "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            git show "$pr_base:$router" > "$RUNNER_TEMP/coverage-impact.sh"
+            router="$RUNNER_TEMP/coverage-impact.sh"
+          fi
+          output="$(mktemp "$RUNNER_TEMP/coverage-route.XXXXXX")"
+          GITHUB_OUTPUT="$output" bash "$router" "$COVERAGE_PLATFORM"
+          decision="$(grep '^run=' "$output")"
+          [[ "$decision" == 'run=true' || "$decision" == 'run=false' ]]
+          printf '%s\npr_base=%s\npr_head=%s\n' "$decision" "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
   android-java-coverage:
     name: android-java-coverage
     needs: impact
@@ -129,14 +153,20 @@ jobs:
         run: |
           node --input-type=module -e '
             import fs from "node:fs";
+            import {execFileSync} from "node:child_process";
+            const git = (...args) => execFileSync("git", args, {encoding: "utf8"}).trim();
             const context = JSON.parse(fs.readFileSync(process.env.EVIDENCE_DIR + "/ci-context.json", "utf8"));
             const report = JSON.parse(fs.readFileSync(process.env.EVIDENCE_DIR + "/coverage/summary.json", "utf8"));
-            if (context.testedSha !== process.env.AEGIS_TESTED_SHA || context.eventName !== process.env.GITHUB_EVENT_NAME ||
-                (context.eventName === "pull_request" && ![context.pullRequestHeadSha, context.pullRequestBaseSha].every(
-                  (sha) => /^[0-9a-f]{40}$/.test(sha))) ||
+            if (context.testedSha !== process.env.AEGIS_TESTED_SHA || context.testedSha !== git("rev-parse", "HEAD") ||
+                context.eventName !== process.env.GITHUB_EVENT_NAME ||
                 report.testedSha !== context.testedSha || report.repositoryDirtyAtBuild !== false ||
                 report.selfTestCases !== 6 || report.browserTested !== false || report.passed !== true ||
                 report.line.covered <= 0 || report.line.total !== report.line.covered + report.line.missed) process.exit(1);
+            if (context.eventName === "pull_request") {
+              const parents = git("show", "-s", "--format=%P", "HEAD").split(" ");
+              if (parents.length !== 2 || context.pullRequestBaseSha !== parents[0] ||
+                  context.pullRequestHeadSha !== parents[1]) process.exit(1);
+            } else if (context.pullRequestBaseSha !== null || context.pullRequestHeadSha !== null) process.exit(1);
           '
 
       - name: Upload Android Java coverage evidence

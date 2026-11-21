@@ -132,10 +132,10 @@ quality 汇总 job 使用中性 ID `quality-summary`，条件为 `always() && (�
 
 三个覆盖率 workflow 支持指向 `develop` 或 `main` 的 Ready PR、这两条分支的 push，以及手动 `workflow_dispatch`。Draft 暂缓分配 runner，转为 Ready 会触发适用作业。同一 PR 的后续触发取消旧运行，每个 push SHA 和手动运行各有独立分组。协调者分别核对平台结果和服务端 required checks。
 
-移动端先在 Linux 用 Git 对象确认被测 SHA，核验 PR 的两个合并父提交或 push 的前一个提交，再比较完整差异。手动运行直接执行平台测试。
+移动端先在 Linux 用 Git 对象确认被测 SHA，并核验 PR 的两个合并父提交。PR 以第一父提交中的规则比较完整差异，首次接入时执行平台测试。Push 按前一个提交比较差异，手动运行直接执行平台测试。
 
 - `iOS Coverage` 按 iOS 源码、共享测试资源、EmbeddedCore 构建脚本和 CI 入口的变更分配托管 Mac。作业校验固定 XcodeGen 发布包的 SHA-256。手动运行需仓库 Admin。报告记录双模拟器测试和 Swift 覆盖率。
-- `Android Java Coverage` 按 browser、共享 core 和 CI 入口变更分配模拟器。作业核验 normal 与 coverage 两种 APK 的 JaCoCo 边界，在同一 API 36 ADB transport 确认 AVD 身份后运行六项 fixture，并保存 tested SHA、实际 PR 父提交、JaCoCo exec/XML、原始 class 摘要与模拟器日志。报告的 `browserTested=false` 表示覆盖率范围为 instrumentation 工具。
+- `Android Java Coverage` 按 Android instrumentation 工具、打包守卫、相关脚本和 CI 入口变更分配模拟器。作业核验 normal 与 coverage 两种 APK 的 JaCoCo 边界，在同一 API 36 ADB transport 确认 AVD 身份后运行六项 fixture，并保存 tested SHA、实际 PR 父提交、JaCoCo exec/XML、原始 class 摘要与模拟器日志。报告的 `browserTested=false` 表示覆盖率范围为 instrumentation 工具。
 - `Other Platform Coverage` 在上述 PR 与 push 运行 Linux Bash 和 Windows PowerShell 覆盖率。Windows 安装器 fixture 从被测提交读取 Chromium pin，并保存实际输入头文件的已核验哈希。
 
 报告区分四种身份：

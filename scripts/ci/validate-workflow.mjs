@@ -219,12 +219,20 @@ try {
     if (
       coverage.needs !== 'impact' || impact['runs-on'] !== 'ubuntu-24.04' || impact['timeout-minutes'] !== 5 ||
       impact.outputs?.run !== '${{ steps.route.outputs.run }}' ||
-      route?.run !== `bash scripts/ci/coverage-impact.sh ${platform}` || 'if' in route ||
+      !route?.run || route.shell !== 'bash' || 'if' in route || route.env?.COVERAGE_PLATFORM !== platform ||
       route.env?.EVENT_PR_BASE !== '${{ github.event.pull_request.base.sha }}' ||
       route.env?.EVENT_PR_HEAD !== '${{ github.event.pull_request.head.sha }}' ||
       route.env?.EVENT_PUSH_BEFORE !== '${{ github.event.before }}'
     ) fail(`${platform} coverage must wait for the Git identity and full-diff check`);
   }
+  const iosRoute = iosJobs.impact.steps.find((step) => step.id === 'route');
+  const androidRoute = androidWorkflow.jobs.impact.steps.find((step) => step.id === 'route');
+  if (
+    iosRoute.run !== androidRoute.run ||
+    !iosRoute.run.includes('git merge-base --is-ancestor "$EVENT_PR_BASE" "$pr_base"') ||
+    !iosRoute.run.includes('git show "$pr_base:$router"') ||
+    !iosRoute.run.includes('[[ "$decision" == \'run=true\' || "$decision" == \'run=false\' ]]')
+  ) fail('Mobile routing must share base-owned PR rules and require an exact decision');
   for (const [field, env] of [['pr_base', 'AEGIS_PR_BASE_SHA'], ['pr_head', 'AEGIS_PR_HEAD_SHA']]) {
     if (
       androidWorkflow.jobs.impact.outputs?.[field] !== '${{ steps.route.outputs.' + field + ' }}' ||

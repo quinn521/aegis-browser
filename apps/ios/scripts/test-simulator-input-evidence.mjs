@@ -56,8 +56,8 @@ function createFixture(t) {
   return {sandbox, root};
 }
 
-// Only the Apple tools and the HTTP readiness probe are synthetic. The runner,
-// Git snapshots, project version update, plist check and coverage writer are real.
+// The Apple tools and fixture server are synthetic. The runner, Git snapshots,
+// project version update, plist check and coverage writer are real.
 const toolFixture = `#!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,12 +69,8 @@ const ios = path.join(root, 'apps/ios');
 const option = name => args[args.indexOf(name) + 1];
 const output = value => console.log(JSON.stringify(value));
 if (tool === 'python3') {
-  if (args.length === 1 && args[0] === '-') {
-    fs.readFileSync(0); // Treat the fixture server as ready; open no sockets.
-  } else {
-    const result = spawnSync(process.env.EVIDENCE_REAL_PYTHON, args, {stdio: 'inherit'});
-    process.exit(result.status ?? 1);
-  }
+  const result = spawnSync(process.env.EVIDENCE_REAL_PYTHON, args, {stdio: 'inherit'});
+  process.exit(result.status ?? 1);
 } else if (tool === 'xcodegen') {
   fs.writeFileSync(path.join(ios, 'Aegis.xcodeproj/project.pbxproj'), 'generated project');
 } else if (tool === 'xcodebuild') {

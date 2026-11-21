@@ -465,22 +465,7 @@ cleanup() {
 trap cleanup EXIT
 
 fixture_ready() {
-  python3 - <<'PYTHON'
-from http.client import HTTPConnection
-import json, sys
-
-connection = HTTPConnection('127.0.0.1', 8768, timeout=2)
-try:
-    connection.request('GET', '/v1/models')
-    response = connection.getresponse()
-    if response.status != 200 or json.load(response)['data'][0]['id'] != 'aegis-simulator-fixture':
-        raise ValueError(f'unexpected fixture response (HTTP {response.status})')
-except Exception as error:
-    print(f'Simulator fixture readiness: {error}', file=sys.stderr)
-    raise SystemExit(1)
-finally:
-    connection.close()
-PYTHON
+  python3 "${SCRIPT_DIR}/simulator-fixture-server.py" --probe --port 8768
 }
 if ! fixture_ready 2>/dev/null; then
   python3 "${SCRIPT_DIR}/simulator-fixture-server.py" --port 8768 > "${OUTPUT_DIR}/fixture.log" 2>&1 &

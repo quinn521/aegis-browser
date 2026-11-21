@@ -18,7 +18,20 @@ case "${1:-}" in
     )
     ;;
   android)
-    paths+=(.github/workflows/android-java-coverage.yml apps/browser packages/core)
+    paths+=(
+      .github/workflows/android-java-coverage.yml
+      apps/browser/scripts/android-agent-ui.mjs
+      apps/browser/scripts/android-agent-ui_test.mjs
+      apps/browser/scripts/android-ui-driver
+      apps/browser/scripts/common.sh
+      apps/browser/scripts/package-android.sh
+      apps/browser/scripts/package-android-guards_test.sh
+      apps/browser/scripts/run-android-java-coverage-emulator.sh
+      apps/browser/scripts/run-android-java-coverage-emulator_test.mjs
+      apps/browser/scripts/verify-android-agent-target.mjs
+      apps/browser/scripts/verify-android-agent-target_test.mjs
+      apps/browser/scripts/write-build-identity.mjs
+    )
     ;;
   *)
     echo 'Expected coverage platform ios or android' >&2
@@ -29,8 +42,6 @@ esac
 cd "$(git rev-parse --show-toplevel)"
 test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 base=''
-pr_base=''
-pr_head=''
 case "$GITHUB_EVENT_NAME" in
   pull_request)
     parents="$(git show -s --format=%P HEAD)"
@@ -66,4 +77,4 @@ if [[ -n "$base" ]]; then
     test "$diff_status" -eq 1 || exit "$diff_status"
   fi
 fi
-printf 'run=%s\npr_base=%s\npr_head=%s\n' "$run" "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
+printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"

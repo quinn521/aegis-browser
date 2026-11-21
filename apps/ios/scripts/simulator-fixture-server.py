@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import socket
 import threading
@@ -269,6 +270,17 @@ class LoopbackFixtureServer(ThreadingHTTPServer):
         self.server_name, self.server_port = self.server_address
 
 
+def probe(port):
+    connection = HTTPConnection("127.0.0.1", port, timeout=2)
+    try:
+        connection.request("GET", "/v1/models")
+        response = connection.getresponse()
+        if response.status != 200 or json.load(response)["data"][0]["id"] != "aegis-simulator-fixture":
+            raise ValueError(f"unexpected fixture response (HTTP {response.status})")
+    finally:
+        connection.close()
+
+
 def self_test():
     from unittest.mock import patch
 
@@ -339,7 +351,12 @@ def self_test():
         for route in ("login", "safe", "dynamic", "canvas"):
             if "<title>" not in request("GET", "/security/" + route).decode():
                 raise AssertionError("安全页面样例缺失")
-        print("SIMULATOR_FIXTURE_SELF_TEST=PASS cases=20")
+        with socket.socket() as unavailable_proxy:
+            unavailable_proxy.bind(("127.0.0.1", 0))
+            proxy_url = f"http://127.0.0.1:{unavailable_proxy.getsockname()[1]}"
+            with patch.dict(os.environ, {"http_proxy": proxy_url, "no_proxy": "", "NO_PROXY": ""}):
+                probe(server.server_port)
+        print("SIMULATOR_FIXTURE_SELF_TEST=PASS cases=21")
     finally:
         server.shutdown()
         server.server_close()
@@ -348,10 +365,17 @@ def self_test():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8768)
-    parser.add_argument("--self-test", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--self-test", action="store_true")
+    mode.add_argument("--probe", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
+    elif args.probe:
+        try:
+            probe(args.port)
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+            parser.exit(1, f"Simulator fixture readiness: {error}\n")
     else:
         server = LoopbackFixtureServer(("127.0.0.1", args.port), Handler)
         print(json.dumps({"base_url": f"http://127.0.0.1:{server.server_port}", "download_sha256": hashlib.sha256(PAYLOAD).hexdigest(), "model": "aegis-simulator-fixture"}), flush=True)
