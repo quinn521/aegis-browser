@@ -587,10 +587,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             webView = view
             initialBinding = result.endpoint
             guard navigationAllowed() else { close(); return }
-            if onTransportLoss != nil, (newPublisher as? AccessProxyEntryPublisher)?.isCurrentEntryHealthy != true {
-                close()
-                return
-            }
+            if observeBoundEntryLoss() { close(); return }
             status = "正在加载"
             timeline.record(.loadIssued)
             currentNavigation = view.load(URLRequest(url: url))
@@ -623,10 +620,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         }
         // A navigation error can arrive before the publisher's health poll.
         // Sample its current entry before ordinary shutdown makes it unhealthy.
-        if let onTransportLoss, initialBinding != nil,
-           (publisher as? AccessProxyEntryPublisher)?.isCurrentEntryHealthy != true {
-            onTransportLoss()
-        }
+        observeBoundEntryLoss()
         closed = true
         if let observerID { repository.removeObserver(observerID) }
         observerID = nil
@@ -638,6 +632,14 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         if let publisher = publisher as? AccessProxyEntryPublisher {
             if key != nil { publisher.closeCurrentGeneration() }
         } else { retire {} }
+    }
+
+    @discardableResult
+    func observeBoundEntryLoss() -> Bool {
+        guard !closed, !retiring, let onTransportLoss, initialBinding != nil,
+              (publisher as? AccessProxyEntryPublisher)?.isCurrentEntryHealthy != true else { return false }
+        onTransportLoss()
+        return true
     }
 
     private func retire(_ finish: @escaping () -> Void) {

@@ -342,7 +342,10 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
                                       onTransportLoss: { if permit() { budget.stop(.transportLost) } })
         let fence = Task { @MainActor in
             while !Task.isCancelled {
-                if budget.stopReason() != nil || !permit() { page.close(); return }
+                if budget.stopReason() != nil || !permit() || page.observeBoundEntryLoss() {
+                    page.close()
+                    return
+                }
                 try await Task.sleep(for: .milliseconds(50))
             }
         }
@@ -366,6 +369,9 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         if settleBeforeRetiring > .zero, budget.stopReason() == nil {
             try await Task.sleep(for: settleBeforeRetiring)
         }
+        // WebKit can finish after an interrupted subresource. Check the live
+        // binding before recording that callback as the attempt's outcome.
+        page.observeBoundEntryLoss()
         let finishedWithinBudget = page.timeline.instant(.documentFinish).map { finish in
             navigationDeadline.map { finish <= $0 } ?? false
         } ?? false
