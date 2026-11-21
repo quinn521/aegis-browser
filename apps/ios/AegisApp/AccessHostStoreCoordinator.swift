@@ -210,10 +210,16 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 .map { requiresProxy(tab: tab, url: $0) } ?? false)
             let interrupted = tab.isLoading && (invalidatedTabs.contains(tab.instanceID.uuidString)
                 || required != wasRequired.contains(tab.instanceID))
-            if let boundURL, let host = Self.httpHost(boundURL), tab.parentForProxyLanding(boundURL) != nil {
+            // The address bar can show a pending request while the landing is still displayed.
+            let landingURL = [tab.committedMainFrameURL, boundURL].compactMap { $0 }
+                .first { tab.parentForProxyLanding($0) != nil }
+            if let landingURL, let host = Self.httpHost(landingURL), host.rawValue == tab.boundHostName {
                 let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: false)
-                switch websiteRoute(tab: tab, url: boundURL, key: key) {
+                switch websiteRoute(tab: tab, url: landingURL, key: key) {
                 case .landing: break
+                case .service where landingRoute(tab: tab, url: landingURL, destination: key) != nil:
+                    // A service choice can supersede the route while the inherited grant remains valid.
+                    break
                 default:
                     tab.clearProxyLanding()
                     landingBindings.removeValue(forKey: tab.instanceID.uuidString)
@@ -625,8 +631,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             if accelerationAllowed(for: key), !defaultProtectedHosts.contains(key) {
                 websiteOnlyEndpoints.insert(key)
             }
-        } else {
-            if tab.parentForProxyLanding(url) != nil { tab.clearProxyLanding() }
+        } else if route != .service || bound != host || landingRoute(tab: tab, url: url, destination: key) == nil {
+            tab.clearProxyLanding()
             landingBindings.removeValue(forKey: tabID)
         }
         if let bound, bound != host || intent != .on,

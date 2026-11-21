@@ -2026,6 +2026,23 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     func testGeoSiteReviewSmartPreservesCommittedLegacyLanding() async throws {
+        try await verifyCommittedLegacyLanding()
+    }
+
+    func testGeoSiteClearingServiceOverridePreservesInheritedLanding() async throws {
+        try await verifyCommittedLegacyLanding(serviceOverride: .clearImmediately)
+    }
+
+    func testGeoSiteClearingServiceOverrideAfterReloadPreservesInheritedLanding() async throws {
+        try await verifyCommittedLegacyLanding(serviceOverride: .reloadBeforeClearing)
+    }
+
+    private enum LandingServiceOverride {
+        case clearImmediately
+        case reloadBeforeClearing
+    }
+
+    private func verifyCommittedLegacyLanding(serviceOverride: LandingServiceOverride? = nil) async throws {
         let managedPort: UInt16 = 18_481
         let originalPort: UInt16 = 18_482
         let managed = AnsweringOpener(body: "<title>Legacy route</title>")
@@ -2089,6 +2106,28 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: landing))
         XCTAssertNil(tab.loadingError)
 
+        if let serviceOverride {
+            coordinator.setWebsiteRouteChoice(.service, for: tab, displayedHost: child)
+            XCTAssertEqual(coordinator.websiteRouteChoice(for: tab), .service)
+            var expectedEpoch = childEpoch
+            if serviceOverride == .reloadBeforeClearing {
+                let priorConnects = managed.authorities.filter { $0 == childAuthority }.count
+                tab.reload()
+                try await commitGeoSiteReviewConnect(landing, tab: tab, window: window, observer: managed,
+                                                      after: priorConnects)
+                XCTAssertFalse(original.authorities.contains(childAuthority))
+                XCTAssertEqual(tab.parentForProxyLanding(landing), parent.rawValue)
+                expectedEpoch = tab.navigationEpoch
+            }
+            coordinator.setWebsiteRouteChoice(nil, for: tab, displayedHost: child)
+            XCTAssertNil(coordinator.websiteRouteChoice(for: tab))
+            XCTAssertEqual(tab.parentForProxyLanding(landing), parent.rawValue)
+            XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: landing))
+            XCTAssertTrue(tab.webView === childView)
+            XCTAssertTrue(tab.websiteDataStore === childStore)
+            XCTAssertEqual(tab.navigationEpoch, expectedEpoch)
+        }
+
         let priorManagedConnects = managed.authorities.filter { $0 == childAuthority }.count
         tab.reload()
         try await waitUntil({
@@ -2131,12 +2170,13 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     private func commitGeoSiteReviewConnect(_ url: URL, tab: BrowserTab, window: UIWindow,
-                                           observer: AnsweringOpener) async throws {
+                                           observer: AnsweringOpener, after priorConnects: Int = 0) async throws {
         let host = try XCTUnwrap(url.host)
+        let authority = "\(host):443"
         try await waitUntil(seconds: 12, {
             self.attach(tab.webView, to: window)
-            return tab.requestedURL == url && tab.webView.url == url
-                && tab.currentNavigationForTests != nil && observer.authorities.contains("\(host):443")
+            return tab.requestedURL == url && tab.webView.url == url && tab.currentNavigationForTests != nil
+                && observer.authorities.filter { $0 == authority }.count > priorConnects
         }, message: "The owned WebKit navigation must send CONNECT for \(host)")
         let navigation = try XCTUnwrap(tab.currentNavigationForTests)
         let view = tab.webView
