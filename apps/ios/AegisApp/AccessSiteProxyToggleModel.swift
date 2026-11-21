@@ -58,6 +58,7 @@ enum AccessSiteProxyIntentStatusId: String, Equatable, Sendable {
     case automaticConnected
     case automaticUnavailable
     case overseasProtected
+    case overseasOnNextOpen
     case overseasUnavailable
     case allowNotConnected
     case allowConnected
@@ -206,6 +207,8 @@ enum AccessSiteProxyToggleModel {
             return "自动重试连接不可用"
         case .overseasProtected:
             return "此网站使用国外加速"
+        case .overseasOnNextOpen:
+            return "重新打开此网站时使用国外加速"
         case .overseasUnavailable:
             return "国外加速连接不可用"
         case .allowNotConnected:
@@ -215,6 +218,20 @@ enum AccessSiteProxyToggleModel {
         case .blockLocalRefuse:
             return "已在本机停用"
         }
+    }
+
+    static func siteStatusLine(_ snapshot: AccessSiteProxyToggleSnapshot) -> String {
+        if snapshot.intentStatus == .overseasUnavailable {
+            return intentLine(for: snapshot.intentStatus)
+        }
+        if snapshot.attachment == .attachedUnavailable {
+            return "连接失败，未切回原连接"
+        }
+        if snapshot.connectionStatus == .connecting || snapshot.connectionStatus == .unavailable
+            || snapshot.intentStatus == .allowConnected {
+            return connectionLine(for: snapshot.connectionStatus)
+        }
+        return intentLine(for: snapshot.intentStatus)
     }
 
     static func connectionLine(for status: AccessSiteProxyConnectionStatusId) -> String {

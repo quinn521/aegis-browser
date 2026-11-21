@@ -618,6 +618,22 @@
         }
       }
     },
+    "重新打开此网站时使用国外加速": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "International acceleration will apply when you reopen this site"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新開啟此網站時使用國外加速"
+          }
+        }
+      }
+    },
     "域名数量": {
       "extractionState": "manual",
       "localizations": {
