@@ -221,11 +221,11 @@ enum AccessSiteProxyToggleModel {
     }
 
     static func siteStatusLine(_ snapshot: AccessSiteProxyToggleSnapshot) -> String {
-        if snapshot.intentStatus == .overseasUnavailable {
-            return intentLine(for: snapshot.intentStatus)
-        }
         if snapshot.attachment == .attachedUnavailable {
             return "连接失败，未切回原连接"
+        }
+        if snapshot.intentStatus == .overseasUnavailable {
+            return intentLine(for: snapshot.intentStatus)
         }
         if snapshot.connectionStatus == .connecting || snapshot.connectionStatus == .unavailable
             || snapshot.intentStatus == .allowConnected {

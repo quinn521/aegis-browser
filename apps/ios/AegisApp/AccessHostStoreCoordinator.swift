@@ -507,7 +507,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             affectedKeys.insert(operation.key)
             if operation.state == .preparing || operation.state == .sent {
                 phases[operation.tabID] = nil
-                invalidatedTabs.insert(operation.tabID)
+                let currentHost = tabsByID[operation.tabID]?.addressBarURL.flatMap(Self.httpHost)
+                // A sent parent request can already have handed off to a
+                // different host under its own policy.
+                if operation.state == .preparing || currentHost == operation.key.host {
+                    invalidatedTabs.insert(operation.tabID)
+                }
             }
         }
         for key in affectedKeys { releaseUnstoredConsumerIfUnused(key) }
@@ -2021,7 +2026,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             let route = websiteRoute(tab: tab, url: url, key: operation.key)
             switch preparation {
             case .website(let authorized):
-                return route == authorized || (route.isExactHostService && authorized.isExactHostService)
+                if route == authorized || (route.isExactHostService && authorized.isExactHostService) { return true }
+                return route == .legacy && authorized.isExactHostService && hasIndependentRoute(operation.key)
+                    && ownsHostStore(tab: tab, key: operation.key) && legacyRouteIntent(tab: tab, key: operation.key) == .on
             case .legacyRequired:
                 if route == .legacy { return legacyRouteIntent(tab: tab, key: operation.key) == .on }
                 return route.isExactHostService && ownsHostStore(tab: tab, key: operation.key)
@@ -2145,7 +2152,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         if phases[tab.instanceID.uuidString] == .sent {
             return AccessAutoRecoveryCopy.preparing
         }
-        return AccessAutoRecoveryCopy.armed
+        return tab.boundHostName == host.rawValue ? AccessAutoRecoveryCopy.armedOnCurrentConnection : AccessAutoRecoveryCopy.armed
     }
 
     private func saveDirectSites(afterChanging key: AccessHostStoreKey) {
@@ -2303,6 +2310,7 @@ enum AccessAutoRecoveryCopy {
     static let explanation = "先用当前连接打开网站；加载失败时尝试隐藏地理位置。"
     static let scopeWarning = "恢复后的页面及其资源会使用该页的专用存储，可能包括第三方域名。"
     static let armed = "使用浏览器原有连接"
+    static let armedOnCurrentConnection = "网站打不开时将自动重试"
     static let preparing = "正在准备连接"
     static let opened = "已通过服务连接打开"
     static let openedMember = "登录页已通过服务连接打开"

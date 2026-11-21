@@ -198,7 +198,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// A main-frame load already sent to this WebView. An address hold can set
     /// isLoading before WebKit receives the new request.
     public var activeMainFrameNavigationURL: URL? {
-        guard isLoading, pendingAddressNavigation == nil, pendingNavigation != nil else { return nil }
+        guard isLoading, pendingProxyRequest == nil, pendingNavigation != nil else { return nil }
         return requestedURL
     }
     /// The address the user is navigating or recovering, even when WebKit still

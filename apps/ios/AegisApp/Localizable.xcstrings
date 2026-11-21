@@ -538,10 +538,82 @@
     "国外加速": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Internationale Beschleunigung"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "International acceleration"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aceleración internacional"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accélération internationale"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akselerasi internasional"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accelerazione internazionale"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "海外サイトの高速化"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "해외 사이트 가속"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pecutan antarabangsa"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aceleração internacional"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การเร่งความเร็วเว็บไซต์ต่างประเทศ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tăng tốc quốc tế"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "国外加速"
           }
         },
         "zh-Hant": {
@@ -555,10 +627,82 @@
     "自动加速清单内网站": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Websites in der Liste automatisch beschleunigen"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Automatically accelerate listed sites"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acelerar automáticamente los sitios de la lista"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accélérer automatiquement les sites de la liste"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percepat situs dalam daftar secara otomatis"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accelera automaticamente i siti nell’elenco"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リスト内のサイトを自動で高速化"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "목록의 사이트 자동 가속"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percepat laman dalam senarai secara automatik"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Acelerar automaticamente os sites da lista"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เร่งความเร็วเว็บไซต์ในรายการโดยอัตโนมัติ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động tăng tốc các trang web trong danh sách"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动加速清单内网站"
           }
         },
         "zh-Hant": {
@@ -572,10 +716,82 @@
     "导入域名清单": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Domainliste importieren"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Import domain list"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importar lista de dominios"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importer la liste de domaines"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impor daftar domain"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importa elenco dei domini"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドメインリストを読み込む"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "도메인 목록 가져오기"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import senarai domain"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importar lista de domínios"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "นำเข้ารายการโดเมน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nhập danh sách tên miền"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "导入域名清单"
           }
         },
         "zh-Hant": {
@@ -586,12 +802,173 @@
         }
       }
     },
+    "网站打不开时将自动重试": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn die Website nicht lädt, wird der Verbindungsversuch automatisch wiederholt"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically retry if the site fails to load"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si el sitio no carga, se volverá a intentar automáticamente"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une nouvelle tentative sera lancée automatiquement si le site ne charge pas"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jika situs tidak dapat dimuat, coba lagi secara otomatis"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se il sito non si carica, il tentativo verrà ripetuto automaticamente"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サイトを読み込めない場合は自動で再試行します"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사이트를 불러오지 못하면 자동으로 다시 시도합니다"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jika laman gagal dimuatkan, percubaan akan diulang secara automatik"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se o site não carregar, será feita uma nova tentativa automaticamente"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "จะลองอีกครั้งโดยอัตโนมัติหากโหลดเว็บไซต์ไม่ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tự động thử lại nếu không tải được trang web"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网站打不开时将自动重试"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "網站無法開啟時將自動重試"
+          }
+        }
+      }
+    },
     "国外加速连接不可用": {
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Internationale Beschleunigung nicht verfügbar"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "International acceleration unavailable"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La aceleración internacional no está disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accélération internationale indisponible"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akselerasi internasional tidak tersedia"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accelerazione internazionale non disponibile"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "海外サイトの高速化は利用できません"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "해외 사이트 가속을 사용할 수 없습니다"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pecutan antarabangsa tidak tersedia"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A aceleração internacional está indisponível"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถใช้การเร่งความเร็วเว็บไซต์ต่างประเทศได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể sử dụng tính năng tăng tốc quốc tế"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "国外加速连接不可用"
           }
         },
         "zh-Hant": {
@@ -604,10 +981,82 @@
     },
     "此网站使用国外加速": {
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Website nutzt die internationale Beschleunigung"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "This site uses international acceleration"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este sitio usa la aceleración internacional"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce site utilise l’accélération internationale"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Situs ini menggunakan akselerasi internasional"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo sito usa l’accelerazione internazionale"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサイトは海外サイトの高速化を使用中です"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 사이트는 해외 사이트 가속을 사용 중입니다"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Laman ini menggunakan pecutan antarabangsa"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este site utiliza a aceleração internacional"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เว็บไซต์นี้ใช้การเร่งความเร็วเว็บไซต์ต่างประเทศ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trang web này đang dùng tính năng tăng tốc quốc tế"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此网站使用国外加速"
           }
         },
         "zh-Hant": {
@@ -620,10 +1069,82 @@
     },
     "重新打开此网站时使用国外加速": {
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die internationale Beschleunigung wird beim nächsten Öffnen dieser Website verwendet"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "International acceleration will apply when you reopen this site"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La aceleración internacional se aplicará al volver a abrir este sitio"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accélération internationale s’appliquera à la prochaine ouverture de ce site"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Akselerasi internasional akan digunakan saat situs ini dibuka lagi"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’accelerazione internazionale verrà applicata alla prossima apertura del sito"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサイトを開き直すと海外サイトの高速化が適用されます"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 사이트를 다시 열면 해외 사이트 가속이 적용됩니다"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pecutan antarabangsa akan digunakan apabila laman ini dibuka semula"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A aceleração internacional será aplicada ao reabrir este site"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การเร่งความเร็วจะมีผลเมื่อเปิดเว็บไซต์นี้อีกครั้ง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tính năng tăng tốc quốc tế sẽ áp dụng khi bạn mở lại trang web này"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新打开此网站时使用国外加速"
           }
         },
         "zh-Hant": {
@@ -637,10 +1158,82 @@
     "域名数量": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anzahl der Domains"
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Domains"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de dominios"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nombre de domaines"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jumlah domain"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero di domini"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドメイン数"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "도메인 수"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bilangan domain"
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de domínios"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "จำนวนโดเมน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Số lượng tên miền"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "域名数量"
           }
         },
         "zh-Hant": {
@@ -654,10 +1247,82 @@
     "请导入现有的国外加速域名清单。": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importiere die vorhandene Domainliste für die internationale Beschleunigung."
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Import the existing domain list for international acceleration."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importa la lista de dominios existente para la aceleración internacional."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importez la liste de domaines existante pour l’accélération internationale."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impor daftar domain yang sudah ada untuk akselerasi internasional."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importa l’elenco dei domini esistente per l’accelerazione internazionale."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "海外サイトの高速化に使う既存のドメインリストを読み込んでください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "해외 사이트 가속에 사용할 기존 도메인 목록을 가져오세요."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import senarai domain sedia ada untuk pecutan antarabangsa."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importe a lista de domínios existente para a aceleração internacional."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "นำเข้ารายการโดเมนที่มีอยู่เพื่อใช้เร่งความเร็วเว็บไซต์ต่างประเทศ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nhập danh sách tên miền hiện có để dùng tính năng tăng tốc quốc tế."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请导入现有的国外加速域名清单。"
           }
         },
         "zh-Hant": {
@@ -671,10 +1336,82 @@
     "开启后，清单网站及页面内资源会使用 Access。逐站选择优先。": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ist die Funktion aktiv, nutzen gelistete Websites und ihre Seitenressourcen Access. Einstellungen pro Website haben Vorrang."
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "When enabled, listed sites and their page resources use Access. Per-site choices take priority."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Al activar la opción, los sitios de la lista y los recursos de sus páginas utilizan Access. Las opciones de cada sitio tienen prioridad."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une fois l’option activée, les sites de la liste et les ressources de leurs pages utilisent Access. Les choix propres à chaque site sont prioritaires."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jika aktif, situs dalam daftar dan sumber daya halamannya menggunakan Access. Pilihan untuk tiap situs diutamakan."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando è attiva, i siti nell’elenco e le risorse delle loro pagine usano Access. Le scelte per singolo sito hanno la priorità."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "オンにすると、リスト内のサイトとページのリソースが Access を使用します。サイトごとの設定が優先されます。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "켜면 목록의 사이트와 페이지 리소스가 Access를 사용합니다. 사이트별 설정이 우선합니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apabila diaktifkan, laman dalam senarai dan sumber halamannya menggunakan Access. Pilihan bagi setiap laman diutamakan."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quando ativa, os sites da lista e os recursos das suas páginas utilizam o Access. As opções de cada site têm prioridade."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เมื่อเปิดใช้งาน เว็บไซต์ในรายการและทรัพยากรในหน้าจะใช้ Access โดยให้การตั้งค่ารายเว็บไซต์มีผลก่อน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Khi bật, các trang web trong danh sách và tài nguyên trên trang sẽ dùng Access. Lựa chọn riêng cho từng trang web được ưu tiên."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开启后，清单网站及页面内资源会使用 Access。逐站选择优先。"
           }
         },
         "zh-Hant": {
@@ -688,10 +1425,82 @@
     "域名清单无法验证。": {
       "extractionState": "manual",
       "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Domainliste konnte nicht geprüft werden."
+          }
+        },
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "The domain list could not be verified."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo verificar la lista de dominios."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de vérifier la liste de domaines."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Daftar domain tidak dapat diverifikasi."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile verificare l’elenco dei domini."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドメインリストを確認できませんでした。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "도메인 목록을 확인할 수 없습니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Senarai domain tidak dapat disahkan."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível verificar a lista de domínios."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถตรวจสอบรายการโดเมนได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể xác minh danh sách tên miền."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "域名清单无法验证。"
           }
         },
         "zh-Hant": {

@@ -1547,11 +1547,14 @@ private final class OriginReceipt: @unchecked Sendable {
     private let body: String
     private let tls: NWProtocolTLS.Options?
     private let redirects: [String: URL]
-    init(port: UInt16, body: String = "ok", tls: NWProtocolTLS.Options? = nil, redirects: [String: URL] = [:]) {
+    private let responseDelay: TimeInterval
+    init(port: UInt16, body: String = "ok", tls: NWProtocolTLS.Options? = nil, redirects: [String: URL] = [:],
+         responseDelay: TimeInterval = 0) {
         requestedPort = port
         self.body = body
         self.tls = tls
         self.redirects = redirects
+        self.responseDelay = responseDelay
     }
 
     var transcript: String { lock.withLock { $0 } }
@@ -1607,17 +1610,35 @@ private final class OriginReceipt: @unchecked Sendable {
 
     private func receive(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
-            let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
-            self?.lock.withLock { $0.append(request) }
-            let path = request.split(separator: " ", maxSplits: 2).dropFirst().first.map(String.init)
-            let body = self?.body ?? "ok"
-            let response: String
-            if let path, let target = self?.redirects[path] {
-                response = "HTTP/1.1 302 Found\r\nLocation: \(target.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            } else {
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        receiveRequestLine(connection, prefix: Data())
+    }
+
+    private func receiveRequestLine(_ connection: NWConnection, prefix: Data) {
+        let remaining = 8192 - prefix.count
+        guard remaining > 0 else { connection.cancel(); return }
+        connection.receive(minimumIncompleteLength: 1, maximumLength: remaining) { [weak self] data, _, complete, error in
+            guard let self, error == nil else { connection.cancel(); return }
+            var request = prefix
+            if let data { request.append(data) }
+            guard let end = request.range(of: Data([13, 10])) else {
+                if complete { connection.cancel() }
+                else { self.receiveRequestLine(connection, prefix: request) }
+                return
             }
+            self.respond(connection, requestLine: String(decoding: request[..<end.lowerBound], as: UTF8.self))
+        }
+    }
+
+    private func respond(_ connection: NWConnection, requestLine: String) {
+        lock.withLock { $0.append(requestLine + "\r\n") }
+        let path = requestLine.split(separator: " ", maxSplits: 2).dropFirst().first.map(String.init)
+        let response: String
+        if let path, let target = redirects[path] {
+            response = "HTTP/1.1 302 Found\r\nLocation: \(target.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        } else {
+            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        }
+        queue.asyncAfter(deadline: .now() + responseDelay) {
             connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })
@@ -2382,7 +2403,11 @@ extension AccessHostRecoveryWebKitTests {
         try await checkOverseasHTTPSRedirect(restoredWithoutList: true)
     }
 
-    private func checkOverseasHTTPSRedirect(restoredWithoutList: Bool) async throws {
+    func testOverseasSwitchOffPreservesAnExplicitOriginalHTTPSRedirect() async throws {
+        try await checkOverseasHTTPSRedirect(restoredWithoutList: false, switchOffAfterRedirect: true)
+    }
+
+    private func checkOverseasHTTPSRedirect(restoredWithoutList: Bool, switchOffAfterRedirect: Bool = false) async throws {
         let host = "overseas-landing.invalid"
         let child = "www." + host
         let hosts: Set<String> = [host, child]
@@ -2394,7 +2419,8 @@ extension AccessHostRecoveryWebKitTests {
         let (originalTLS, _) = try fixtureTLSIdentity()
         let managedOrigin = OriginReceipt(port: 0, body: "<title>Access \(marker)</title>", tls: managedTLS,
                                           redirects: ["/approved": landing])
-        let originalOrigin = OriginReceipt(port: 0, body: "<title>Original \(marker)</title>", tls: originalTLS)
+        let originalOrigin = OriginReceipt(port: 0, body: "<title>Original \(marker)</title>", tls: originalTLS,
+                                           responseDelay: switchOffAfterRedirect ? 2 : 0)
         try await managedOrigin.start()
         defer { managedOrigin.stop() }
         try await originalOrigin.start()
@@ -2415,6 +2441,8 @@ extension AccessHostRecoveryWebKitTests {
         if restoredWithoutList {
             defaults.set(true, forKey: "browser.websiteAcceleration.overseasEnabled.v1")
             defaults.set([host: "service"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        } else if switchOffAfterRedirect {
+            defaults.set([child: "original"], forKey: "browser.websiteAcceleration.siteChoices.v1")
         }
         let rules = restoredWithoutList ? nil : try makeOverseasRule(host)
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
@@ -2431,13 +2459,25 @@ extension AccessHostRecoveryWebKitTests {
             withExtendedLifetime(navigation) {}
         }
         if !restoredWithoutList { coordinator.setOverseasAccelerationEnabled(true, for: tab) }
-        tab.loadFromAddressBar(source)
-        try await waitUntil(seconds: 12, {
+        func attachPinnedNavigation() {
             let view = tab.webView
-            self.attach(view, to: window)
+            attach(view, to: window)
             if view.navigationDelegate !== navigation { view.navigationDelegate = navigation }
+        }
+        tab.loadFromAddressBar(source)
+        if switchOffAfterRedirect {
+            try await waitUntil {
+                attachPinnedNavigation()
+                return originalOrigin.transcript.contains("GET \(targetPath) ")
+            }
+            XCTAssertTrue(tab.isLoading)
+            XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+            coordinator.setOverseasAccelerationEnabled(false, for: tab)
+        }
+        try await waitUntil(seconds: 12, {
+            attachPinnedNavigation()
             return tab.liveCommittedDocumentURL == landing && !tab.isLoading
-        }, message: "Expected the unlisted HTTPS landing to commit in the original store")
+        }, message: "Expected the HTTPS landing to commit in its selected store")
         XCTAssertEqual(tab.webView.title, "\(restoredWithoutList ? "Access" : "Original") \(marker)")
         XCTAssertTrue(managedOrigin.transcript.contains("GET /approved "))
         XCTAssertEqual(originalOrigin.transcript.contains("GET \(targetPath) "), !restoredWithoutList)
@@ -2486,6 +2526,14 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     func testOverseasSwitchKeepsARequiredDefaultReload() async throws {
+        try await checkOverseasSwitchKeepsARequiredDefaultReload(switchOff: false)
+    }
+
+    func testOverseasSwitchOffKeepsARequiredDefaultReload() async throws {
+        try await checkOverseasSwitchKeepsARequiredDefaultReload(switchOff: true)
+    }
+
+    private func checkOverseasSwitchKeepsARequiredDefaultReload(switchOff: Bool) async throws {
         let host = try AccessSiteHost("overseas-default-reload.invalid")
         let port: UInt16 = 18_505
         let tunnel = AnsweringOpener(body: "<title>Protected reload</title>")
@@ -2516,6 +2564,7 @@ extension AccessHostRecoveryWebKitTests {
             return tab.liveCommittedDocumentURL == first && !tab.isLoading
         }
         XCTAssertEqual(tab.boundHostName, host.rawValue)
+        if switchOff { coordinator.setOverseasAccelerationEnabled(true, for: tab) }
         publisher.closeCurrentGeneration()
         try await waitUntil { coordinator.snapshot(for: tab).attachment == .attachedUnavailable }
         let target = try XCTUnwrap(URL(string: "http://\(host.rawValue)/reload"))
@@ -2523,7 +2572,7 @@ extension AccessHostRecoveryWebKitTests {
         try await waitUntil { gate.started && tab.pendingAddressNavigation?.url == target }
         let pending = try XCTUnwrap(tab.pendingAddressNavigation)
         XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: target))
-        coordinator.setOverseasAccelerationEnabled(true, for: tab)
+        coordinator.setOverseasAccelerationEnabled(!switchOff, for: tab)
         XCTAssertEqual(tab.pendingAddressNavigation, pending)
         gate.finish()
         try await waitUntil {
@@ -2567,6 +2616,64 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(snapshot.toggleOn)
         XCTAssertEqual(snapshot.connection, .ready)
         XCTAssertFalse(snapshot.autoRecoveryEnabled)
+    }
+
+    func testOverseasSwitchStopsSentHTTPSWhileAddressOfferRemainsVisible() async throws {
+        let host = "overseas-landing.invalid"
+        let (tls, certificate) = try fixtureTLSIdentity()
+        let origin = OriginReceipt(port: 0, tls: tls, responseDelay: 12)
+        try await origin.start()
+        defer { origin.stop() }
+        let original = FixtureOriginTunnels(port: origin.port, hosts: [host])
+        let managed = AnsweringOpener()
+        let directPort: UInt16 = 18_507
+        let managedPort: UInt16 = 18_508
+        let directListener = try await makeListener(port: directPort, tunnels: original)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try await directListener.start(at: now)
+        defer { try? directListener.stop() }
+        try await managedListener.start(at: now)
+        defer { try? managedListener.stop() }
+
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
+            defaultLocationPrivacy: true, overseasRules: try makeOverseasRule(host))
+        let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let second = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(first.activeTab)
+        let sibling = try XCTUnwrap(second.activeTab)
+        let restore = try observeOriginalStore(of: tab, port: directPort)
+        defer { first.closeWindow(); second.closeWindow(); restore() }
+        try await tab.prepareContentRulesForTests()
+        try await sibling.prepareContentRulesForTests()
+        let originalView = tab.webView
+        let window = show(originalView)
+        let siblingWindow = show(sibling.webView)
+        let navigation = PinnedFixtureNavigation(tab: tab, hosts: [host], certificate: certificate)
+        originalView.navigationDelegate = navigation
+        defer {
+            withExtendedLifetime(navigation) {}
+            window.isHidden = true
+            siblingWindow.isHidden = true
+        }
+        coordinator.setWebsiteAccelerationMode(.smart, for: tab)
+        let source = try XCTUnwrap(URL(string: "https://\(host)/slow-original"))
+        let warm = try XCTUnwrap(URL(string: "https://\(host)/warm"))
+        tab.loadFromAddressBar(source)
+        try await waitUntil { origin.transcript.contains("GET /slow-original ") && tab.isLoading }
+        XCTAssertEqual(tab.pendingAddressNavigation?.url, source)
+        XCTAssertEqual(tab.activeMainFrameNavigationURL, source)
+        coordinator.setWebsiteAccelerationMode(.manual, for: sibling)
+        sibling.loadFromAddressBar(warm)
+        try await waitUntil {
+            self.attach(sibling.webView, to: siblingWindow)
+            return managed.authorities.contains(host + ":443") && sibling.boundHostName == host
+        }
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: source))
+        coordinator.setOverseasAccelerationEnabled(true, for: sibling)
+        try await waitUntil { originalView.url?.absoluteString == "about:blank" }
+        XCTAssertNil(tab.liveCommittedDocumentURL)
     }
 
     func testOverseasSwitchRetiresAnOriginalDocumentWithAWarmSiblingHost() async throws {
@@ -2871,7 +2978,7 @@ extension AccessHostRecoveryWebKitTests {
             coordinator.snapshot(for: tab).attachment == .attachedUnavailable
         }
         let failed = coordinator.snapshot(for: tab)
-        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(failed), "国外加速连接不可用")
+        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(failed), "连接失败，未切回原连接")
         XCTAssertFalse(failed.toggleOn)
         XCTAssertEqual(tab.boundHostName, host)
     }
