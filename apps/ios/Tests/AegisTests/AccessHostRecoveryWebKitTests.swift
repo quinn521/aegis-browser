@@ -1407,13 +1407,13 @@ private final class NavigationSink: NSObject, WKNavigationDelegate {}
 @MainActor
 private final class PinnedFixtureNavigation: NSObject, WKNavigationDelegate {
     private let tab: BrowserTab
-    private let host: String
+    private let hosts: Set<String>
     private let certificate: SecCertificate
     private let leaf: Data
 
-    init(tab: BrowserTab, host: String, certificate: SecCertificate) {
+    init(tab: BrowserTab, hosts: Set<String>, certificate: SecCertificate) {
         self.tab = tab
-        self.host = host
+        self.hosts = hosts
         self.certificate = certificate
         leaf = SecCertificateCopyData(certificate) as Data
     }
@@ -1421,7 +1421,8 @@ private final class PinnedFixtureNavigation: NSObject, WKNavigationDelegate {
     func webView(_ view: WKWebView, respondTo challenge: URLAuthenticationChallenge) async
         -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         let space = challenge.protectionSpace
-        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust, space.host == host,
+        let host = space.host
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust, hosts.contains(host),
               let trust = space.serverTrust else {
             return (.performDefaultHandling, nil)
         }
@@ -1459,6 +1460,10 @@ private final class PinnedFixtureNavigation: NSObject, WKNavigationDelegate {
         tab.webView(view, didStartProvisionalNavigation: navigation)
     }
 
+    func webView(_ view: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+        tab.webView(view, didReceiveServerRedirectForProvisionalNavigation: navigation)
+    }
+
     func webView(_ view: WKWebView, didCommit navigation: WKNavigation!) {
         tab.webView(view, didCommit: navigation)
     }
@@ -1478,15 +1483,22 @@ private final class PinnedFixtureNavigation: NSObject, WKNavigationDelegate {
 
 private final class FixtureOriginTunnels: AccessHTTPTunnelOpening, @unchecked Sendable {
     private let port: UInt16
+    private let hosts: Set<String>
+    private let connectDelay: Duration?
     private let observed = OSAllocatedUnfairLock(initialState: [String]())
     var authorities: [String] { observed.withLock { $0 } }
 
-    init(port: UInt16) { self.port = port }
+    init(port: UInt16, hosts: Set<String> = ["www.douban.com", "beta-hold-control.invalid"], connectDelay: Duration? = nil) {
+        self.port = port
+        self.hosts = hosts
+        self.connectDelay = connectDelay
+    }
 
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         observed.withLock { $0.append("\(host):\(port)") }
-        guard port == 443, ["www.douban.com", "beta-hold-control.invalid"].contains(host),
+        guard port == 443, hosts.contains(host),
               let localPort = NWEndpoint.Port(rawValue: self.port) else { throw URLError(.cannotConnectToHost) }
+        if let connectDelay { try await Task.sleep(for: connectDelay) }
         return FixtureOriginSocket(port: localPort)
     }
 
@@ -1534,10 +1546,12 @@ private final class OriginReceipt: @unchecked Sendable {
 
     private let body: String
     private let tls: NWProtocolTLS.Options?
-    init(port: UInt16, body: String = "ok", tls: NWProtocolTLS.Options? = nil) {
+    private let redirects: [String: URL]
+    init(port: UInt16, body: String = "ok", tls: NWProtocolTLS.Options? = nil, redirects: [String: URL] = [:]) {
         requestedPort = port
         self.body = body
         self.tls = tls
+        self.redirects = redirects
     }
 
     var transcript: String { lock.withLock { $0 } }
@@ -1594,12 +1608,16 @@ private final class OriginReceipt: @unchecked Sendable {
     private func receive(_ connection: NWConnection) {
         connection.start(queue: queue)
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
-            if let data {
-                let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
-                self?.lock.withLock { $0.append(text) }
-            }
+            let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
+            self?.lock.withLock { $0.append(request) }
+            let path = request.split(separator: " ", maxSplits: 2).dropFirst().first.map(String.init)
             let body = self?.body ?? "ok"
-            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+            let response: String
+            if let path, let target = self?.redirects[path] {
+                response = "HTTP/1.1 302 Found\r\nLocation: \(target.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            } else {
+                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+            }
             connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })
@@ -1979,18 +1997,7 @@ extension AccessHostRecoveryWebKitTests {
         try await assertSelectingDoubanDuringDebianHold(managedPort: 18_635, cancelDebian: false, visitingStart: true)
     }
 
-    private func assertSelectingDoubanDuringDebianHold(managedPort: UInt16, cancelDebian: Bool,
-                                                       visitingStart: Bool = false) async throws {
-        let originalPort = managedPort + 1
-        let marker = UUID().uuidString
-        let html = """
-        <title>Original Douban \(marker)</title>
-        <script>if (location.hostname === 'www.douban.com') {
-          setInterval(() => fetch('/pulse?\(marker)', {cache: 'no-store'}), 60);
-        }</script>
-        """
-        // Xcode generates this identity in the test bundle. The two fixture
-        // delegates pin its leaf and all tunnel connections stay on loopback.
+    private func fixtureTLSIdentity() throws -> (NWProtocolTLS.Options, SecCertificate) {
         let resource = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "geosite-beta-hold-test-only",
                                                                withExtension: "p12"))
         var imported: CFArray?
@@ -2005,6 +2012,22 @@ extension AccessHostRecoveryWebKitTests {
         let certificate = try XCTUnwrap(importedCertificate)
         let tls = NWProtocolTLS.Options()
         sec_protocol_options_set_local_identity(tls.securityProtocolOptions, try XCTUnwrap(sec_identity_create(identity)))
+        return (tls, certificate)
+    }
+
+    private func assertSelectingDoubanDuringDebianHold(managedPort: UInt16, cancelDebian: Bool,
+                                                       visitingStart: Bool = false) async throws {
+        let originalPort = managedPort + 1
+        let marker = UUID().uuidString
+        let html = """
+        <title>Original Douban \(marker)</title>
+        <script>if (location.hostname === 'www.douban.com') {
+          setInterval(() => fetch('/pulse?\(marker)', {cache: 'no-store'}), 60);
+        }</script>
+        """
+        // Xcode generates this identity in the test bundle. The two fixture
+        // delegates pin its leaf and all tunnel connections stay on loopback.
+        let (tls, certificate) = try fixtureTLSIdentity()
         let origin = OriginReceipt(port: 0, body: html, tls: tls)
         try await origin.start()
         defer { origin.stop() }
@@ -2043,8 +2066,8 @@ extension AccessHostRecoveryWebKitTests {
         let siblingWindow = show(sibling.webView)
         let douban = URL(string: "https://www.douban.com/page?\(marker)")!
         let control = URL(string: "https://beta-hold-control.invalid/page?control")!
-        let originalNavigation = PinnedFixtureNavigation(tab: tab, host: "www.douban.com", certificate: certificate)
-        let controlNavigation = PinnedFixtureNavigation(tab: sibling, host: "beta-hold-control.invalid", certificate: certificate)
+        let originalNavigation = PinnedFixtureNavigation(tab: tab, hosts: ["www.douban.com"], certificate: certificate)
+        let controlNavigation = PinnedFixtureNavigation(tab: sibling, hosts: ["beta-hold-control.invalid"], certificate: certificate)
         originalView.navigationDelegate = originalNavigation
         sibling.webView.navigationDelegate = controlNavigation
         defer {
@@ -2352,9 +2375,32 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     func testOverseasRuleDoesNotAuthorizeAnUnlistedHTTPSLanding() async throws {
+        try await checkOverseasHTTPSRedirect(restoredWithoutList: false)
+    }
+
+    func testOverseasMissingListPreservesAnExplicitServiceRedirect() async throws {
+        try await checkOverseasHTTPSRedirect(restoredWithoutList: true)
+    }
+
+    private func checkOverseasHTTPSRedirect(restoredWithoutList: Bool) async throws {
         let host = "overseas-landing.invalid"
-        let managed = AnsweringOpener()
-        let original = AnsweringOpener()
+        let child = "www." + host
+        let hosts: Set<String> = [host, child]
+        let marker = UUID().uuidString
+        let targetPath = "/unlisted?\(marker)"
+        let source = try XCTUnwrap(URL(string: "https://\(host)/approved"))
+        let landing = try XCTUnwrap(URL(string: "https://\(child)\(targetPath)"))
+        let (managedTLS, managedCertificate) = try fixtureTLSIdentity()
+        let (originalTLS, _) = try fixtureTLSIdentity()
+        let managedOrigin = OriginReceipt(port: 0, body: "<title>Access \(marker)</title>", tls: managedTLS,
+                                          redirects: ["/approved": landing])
+        let originalOrigin = OriginReceipt(port: 0, body: "<title>Original \(marker)</title>", tls: originalTLS)
+        try await managedOrigin.start()
+        defer { managedOrigin.stop() }
+        try await originalOrigin.start()
+        defer { originalOrigin.stop() }
+        let managed = FixtureOriginTunnels(port: managedOrigin.port, hosts: hosts, connectDelay: .milliseconds(350))
+        let original = FixtureOriginTunnels(port: originalOrigin.port, hosts: hosts, connectDelay: .milliseconds(350))
         let managedPort: UInt16 = 18_495
         let originalPort: UInt16 = 18_496
         let proxy = try await makeListener(port: managedPort, tunnels: managed)
@@ -2363,33 +2409,164 @@ extension AccessHostRecoveryWebKitTests {
         defer { try? proxy.stop() }
         try await direct.start(at: Date(timeIntervalSince1970: 1_700_000_000))
         defer { try? direct.stop() }
+        let suite = "AccessOverseasRedirect.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        if restoredWithoutList {
+            defaults.set(true, forKey: "browser.websiteAcceleration.overseasEnabled.v1")
+            defaults.set([host: "service"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        }
+        let rules = restoredWithoutList ? nil : try makeOverseasRule(host)
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
-                                                     overseasRules: try makeOverseasRule(host))
+                                                     locationPreferences: defaults, overseasRules: rules)
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
         let tab = try XCTUnwrap(browser.activeTab)
         let restore = try observeOriginalStore(of: tab, port: originalPort)
         defer { browser.closeWindow(); restore() }
         try await tab.prepareContentRulesForTests()
         let window = show(tab.webView)
-        defer { window.isHidden = true }
-        coordinator.setOverseasAccelerationEnabled(true, for: tab)
-        let source = try XCTUnwrap(URL(string: "https://\(host)/approved"))
-        let landing = try XCTUnwrap(URL(string: "https://www.\(host)/unlisted"))
+        let navigation = PinnedFixtureNavigation(tab: tab, hosts: hosts, certificate: managedCertificate)
+        defer {
+            window.isHidden = true
+            withExtendedLifetime(navigation) {}
+        }
+        if !restoredWithoutList { coordinator.setOverseasAccelerationEnabled(true, for: tab) }
         tab.loadFromAddressBar(source)
-        try await commitGeoSiteReviewConnect(source, tab: tab, window: window, observer: managed)
-        XCTAssertEqual(tab.boundHostName, host)
-        _ = try XCTUnwrap(tab.webView.load(URLRequest(url: landing)))
-        try await waitUntil(seconds: 8, {
+        try await waitUntil(seconds: 12, {
+            let view = tab.webView
+            self.attach(view, to: window)
+            if view.navigationDelegate !== navigation { view.navigationDelegate = navigation }
+            return tab.liveCommittedDocumentURL == landing && !tab.isLoading
+        }, message: "Expected the unlisted HTTPS landing to commit in the original store")
+        XCTAssertEqual(tab.webView.title, "\(restoredWithoutList ? "Access" : "Original") \(marker)")
+        XCTAssertTrue(managedOrigin.transcript.contains("GET /approved "))
+        XCTAssertEqual(originalOrigin.transcript.contains("GET \(targetPath) "), !restoredWithoutList)
+        XCTAssertEqual(managedOrigin.transcript.contains("GET \(targetPath) "), restoredWithoutList)
+        XCTAssertFalse(originalOrigin.transcript.contains("GET /approved "))
+        XCTAssertEqual(coordinator.requiresProxy(tab: tab, url: landing), restoredWithoutList)
+        XCTAssertEqual(tab.parentForProxyLanding(landing), restoredWithoutList ? host : nil)
+        XCTAssertEqual(tab.websiteDataStore === tab.originalWebsiteDataStore, !restoredWithoutList)
+        let key = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost(child), isPrivate: false)
+        XCTAssertEqual(coordinator.registry.endpointSnapshot[key] != nil, restoredWithoutList)
+    }
+
+    func testOverseasSwitchCancelsAnUnsentOptionalHoldWithoutRetiringTheOriginalDocument() async throws {
+        let host = "overseas-unsent.invalid"
+        let target = try XCTUnwrap(URL(string: "https://\(host)/held"))
+        let origin = OriginReceipt(port: 0, body: "<a id='next' href='\(target.absoluteString)'>Next</a>")
+        try await origin.start()
+        defer { origin.stop() }
+        let gate = WindowPrepareGate()
+        defer { gate.finish() }
+        let publisher = AccessProxyEntryPublisher { _, _ in
+            await gate.wait()
+            throw AccessSiteSessionError.nodeUnavailable
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, defaultLocationPrivacy: true,
+                                                     overseasRules: try makeOverseasRule(host))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let view = tab.webView
+        let window = show(view)
+        defer { window.isHidden = true }
+        let original = try XCTUnwrap(URL(string: "http://localhost:\(origin.port)/first"))
+        tab.load(original)
+        try await waitUntil { tab.liveCommittedDocumentURL == original && !tab.isLoading }
+        _ = try await view.evaluateJavaScript("window.unsavedValue = 'retained'; document.getElementById('next').click(); true")
+        try await waitUntil { gate.started && tab.pendingAddressNavigation?.url == target }
+        XCTAssertNil(tab.activeMainFrameNavigationURL)
+        coordinator.setOverseasAccelerationEnabled(true, for: tab)
+        XCTAssertNil(tab.pendingAddressNavigation)
+        XCTAssertTrue(tab.webView === view)
+        XCTAssertEqual(tab.liveCommittedDocumentURL, original)
+        let retained = try await view.evaluateJavaScript("window.unsavedValue")
+        XCTAssertEqual(retained as? String, "retained")
+    }
+
+    func testOverseasSwitchKeepsARequiredDefaultReload() async throws {
+        let host = try AccessSiteHost("overseas-default-reload.invalid")
+        let port: UInt16 = 18_505
+        let tunnel = AnsweringOpener(body: "<title>Protected reload</title>")
+        let listener = try await makeListener(port: port, tunnels: tunnel)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let gate = WindowPrepareGate()
+        defer { gate.finish() }
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            if generation > 1 { await gate.wait() }
+            return .init(endpoint: .init(identity: "overseas-default-reload", generation: generation,
+                loopbackHost: "127.0.0.1", port: port, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, defaultLocationPrivacy: true,
+                                                     overseasRules: try makeOverseasRule(host.rawValue))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.keepsExplicitHTTPForTesting = true
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let first = try XCTUnwrap(URL(string: "http://\(host.rawValue)/first"))
+        tab.loadFromAddressBar(first)
+        try await waitUntil {
             self.attach(tab.webView, to: window)
-            return original.authorities.contains("www.\(host):443")
-        }, message: "The unlisted HTTPS target should use the existing original route")
-        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: landing))
-        // A CONNECT from the old WebKit process is not a document load or an
-        // authorized landing. Verify the target's selected store and lease.
-        XCTAssertNil(tab.parentForProxyLanding(landing))
-        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
-        let key = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("www." + host), isPrivate: false)
-        XCTAssertNil(coordinator.registry.endpointSnapshot[key])
+            return tab.liveCommittedDocumentURL == first && !tab.isLoading
+        }
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+        publisher.closeCurrentGeneration()
+        try await waitUntil { coordinator.snapshot(for: tab).attachment == .attachedUnavailable }
+        let target = try XCTUnwrap(URL(string: "http://\(host.rawValue)/reload"))
+        tab.loadFromAddressBar(target)
+        try await waitUntil { gate.started && tab.pendingAddressNavigation?.url == target }
+        let pending = try XCTUnwrap(tab.pendingAddressNavigation)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: target))
+        coordinator.setOverseasAccelerationEnabled(true, for: tab)
+        XCTAssertEqual(tab.pendingAddressNavigation, pending)
+        gate.finish()
+        try await waitUntil {
+            self.attach(tab.webView, to: window)
+            return tab.liveCommittedDocumentURL == target && !tab.isLoading
+        }
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+        XCTAssertTrue(tunnel.transcript.contains("GET /reload "))
+    }
+
+    func testOverseasSwitchOffPreservesTheExplicitServiceStatus() async throws {
+        let host = "overseas-explicit-service.invalid"
+        let port: UInt16 = 18_506
+        let tunnel = AnsweringOpener(body: "<title>Explicit Access</title>")
+        let listener = try await makeListener(port: port, tunnels: tunnel)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+        let suite = "AccessOverseasExplicitService.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([host: "service"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: port), channel: .dev,
+                                                     defaultLocationPrivacy: true, locationPreferences: defaults,
+                                                     overseasRules: try makeOverseasRule(host))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        tab.keepsExplicitHTTPForTesting = true
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let target = try XCTUnwrap(URL(string: "http://\(host)/explicit"))
+        tab.loadFromAddressBar(target)
+        try await waitUntil {
+            self.attach(tab.webView, to: window)
+            return tab.liveCommittedDocumentURL == target && !tab.isLoading
+        }
+        XCTAssertFalse(coordinator.overseasAccelerationEnabled)
+        XCTAssertEqual(coordinator.websiteRouteChoice(for: tab), .service)
+        let snapshot = coordinator.snapshot(for: tab)
+        XCTAssertTrue(snapshot.toggleOn)
+        XCTAssertEqual(snapshot.connection, .ready)
+        XCTAssertFalse(snapshot.autoRecoveryEnabled)
     }
 
     func testOverseasSwitchRetiresAnOriginalDocumentWithAWarmSiblingHost() async throws {
@@ -2521,6 +2698,10 @@ extension AccessHostRecoveryWebKitTests {
             try await Task.sleep(for: .milliseconds(120))
             XCTAssertEqual(tab.recoveryLoadCount, 0)
             XCTAssertTrue(tunnel.authorities.isEmpty)
+            let snapshot = coordinator.snapshot(for: tab)
+            XCTAssertEqual(snapshot.intentStatus, .overseasUnavailable)
+            XCTAssertEqual(snapshot.connection, .unavailable)
+            XCTAssertFalse(snapshot.toggleOn)
             return
         }
         gate.finish()
@@ -2652,6 +2833,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(coordinator.setAutoRecoveryEnabled(false, for: tab), .revoked)
         XCTAssertTrue(tab.webView === retainedView)
         XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: reloaded))
+        XCTAssertTrue(coordinator.setAutoRecoveryEnabled(true, for: tab).isArmed)
         coordinator.setOverseasAccelerationEnabled(false, for: tab)
         XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: reloaded))
         XCTAssertNil(tab.boundHostName)

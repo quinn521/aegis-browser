@@ -195,6 +195,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
     /// App-issued document loads already handed to WebKit, newest last.
     private var deliveredDocumentLoads: [(navigationID: String, url: URL)] = []
+    /// A main-frame load already sent to this WebView. An address hold can set
+    /// isLoading before WebKit receives the new request.
+    public var activeMainFrameNavigationURL: URL? {
+        guard isLoading, pendingAddressNavigation == nil, pendingNavigation != nil else { return nil }
+        return requestedURL
+    }
     /// The address the user is navigating or recovering, even when WebKit still
     /// displays an older document or its internal HTTPS warning page.
     public var addressBarURL: URL? {
@@ -1634,11 +1640,6 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             finish(.cancel)
             return
         }
-        if rejectIndeterminateRoute(requestURL) {
-            isLoading = false
-            finish(.cancel)
-            return
-        }
         let previousLanding = (proxyLandingParent, proxyLandingTarget)
         if decision.kind != .blocked, navigationAction.navigationType == .other,
            boundHostName != nil, let parent = proxyLandingParent ?? boundHostName, let target = Self.routingHost(of: requestURL),
@@ -1650,6 +1651,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
            RegisteredDomain.isCanonicalLandingHost(target, for: parent) {
             proxyLandingParent = parent
             proxyLandingTarget = target
+        }
+        if rejectIndeterminateRoute(requestURL) {
+            (proxyLandingParent, proxyLandingTarget) = previousLanding
+            isLoading = false
+            finish(.cancel)
+            return
         }
         let method = navigationAction.request.httpMethod ?? "GET"
         let hostMismatch = requestedURL.map { Self.routingHost(of: $0) != Self.routingHost(of: requestURL) } ?? false

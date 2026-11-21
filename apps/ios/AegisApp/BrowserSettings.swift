@@ -183,7 +183,7 @@ private struct OverseasAccelerationSettingsView: View {
                     if hostStores.overseasAccelerationHostCount == 0 {
                         Text("请导入现有的国外加速域名清单。")
                     } else {
-                        Text("清单网站及页面内资源会使用 Access。")
+                        Text("开启后，清单网站及页面内资源会使用 Access。逐站选择优先。")
                     }
                     if !hostStores.offersLocationService { Text("加速服务未配置。") }
                 }

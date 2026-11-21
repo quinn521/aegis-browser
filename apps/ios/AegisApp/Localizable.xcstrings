@@ -668,19 +668,19 @@
         }
       }
     },
-    "清单网站及页面内资源会使用 Access。": {
+    "开启后，清单网站及页面内资源会使用 Access。逐站选择优先。": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Listed websites and resources on their pages use Access."
+            "value": "When enabled, listed sites and their page resources use Access. Per-site choices take priority."
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "清單網站及頁面內資源會使用 Access。"
+            "value": "開啟後，清單網站及頁面內資源會使用 Access。逐站選擇優先。"
           }
         }
       }
