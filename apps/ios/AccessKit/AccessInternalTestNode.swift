@@ -9,13 +9,14 @@ public enum AccessInternalTestNode: Equatable, Sendable {
     public static func parseSingleShareURI(_ input: String) throws -> Self {
         let link = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let forbidden = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        let shareWithoutLabel = String(link.prefix(while: { $0 != "#" }))
         guard input.utf8.count <= 8_192,
               link.lowercased().hasPrefix("vless://"),
               link.unicodeScalars.allSatisfy({ !forbidden.contains($0) }),
               !link.dropFirst("vless://".count).contains("://"),
-              let components = URLComponents(string: link),
-              components.password == nil,
-              components.path.isEmpty || components.path == "/" else {
+              let components = URLComponents(string: shareWithoutLabel, encodingInvalidCharacters: false),
+              components.percentEncodedPassword == nil,
+              components.percentEncodedPath.isEmpty || components.percentEncodedPath == "/" else {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
         let items = components.queryItems ?? []
@@ -53,9 +54,17 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
 
     public init(address: String, port: UInt16, userID: String, serverName: String,
                 requestHost: String, path: String, fingerprint: String, alpn: String) throws {
-        let address = address.hasPrefix("[") && address.hasSuffix("]") ? String(address.dropFirst().dropLast()) : address
-        guard Self.isDNSName(address) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
-            throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
+        let normalizedAddress: String
+        if address.hasPrefix("[") {
+            guard address.hasSuffix("]"), let literal = Self.ipv6Literal(address) else {
+                throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
+            }
+            normalizedAddress = literal
+        } else {
+            guard Self.isDNSName(address) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
+                throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
+            }
+            normalizedAddress = address
         }
         guard port != 0, let uuid = UUID(uuidString: userID) else { throw AccessLocalV2RayConfigError.invalidJSON }
         guard Self.isDNSName(serverName), Self.isHTTPAuthority(requestHost) else {
@@ -65,13 +74,14 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
               path.utf8.count <= 2_048, path.utf8.allSatisfy({ (33...126).contains($0) }),
               let decoded = path.removingPercentEncoding,
               decoded.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
-              let parts = URLComponents(string: path),
+              let parts = URLComponents(string: path, encodingInvalidCharacters: false),
+              parts.string == path,
               (parts.queryItems ?? []).allSatisfy({ $0.name != "ed" }) else {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("path")
         }
         guard ["", "chrome", "firefox", "safari", "ios", "android", "edge"].contains(fingerprint),
               ["", "http/1.1"].contains(alpn) else { throw AccessLocalV2RayConfigError.invalidJSON }
-        self.address = address
+        self.address = normalizedAddress
         self.port = port
         self.userID = uuid.uuidString.lowercased()
         self.serverName = serverName
@@ -92,21 +102,33 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
             }
     }
 
-    private static func isHTTPAuthority(_ authority: String) -> Bool {
-        guard !authority.isEmpty, !authority.hasSuffix(":"), !authority.contains("%"),
-              let url = URLComponents(string: "https://" + authority), let host = url.host,
-              url.user == nil, url.password == nil, url.path.isEmpty, url.query == nil, url.fragment == nil,
-              url.port.map({ (1...65_535).contains($0) }) ?? true else { return false }
-        if host.hasPrefix("[") && host.hasSuffix("]") {
-            return IPv6Address(String(host.dropFirst().dropLast())) != nil
-        }
-        return isDNSName(host) || IPv4Address(host) != nil
+    private static func ipv6Literal(_ bracketed: String) -> String? {
+        let value = String(bracketed.dropFirst().dropLast())
+        return IPv6Address(value) == nil ? nil : value
     }
 
-    var diagnosticSecrets: [String] {
-        let values = URLComponents(string: path)?.queryItems?.compactMap(\.value) ?? []
-        return [userID, path == "/" ? "" : path] + values
+    private static func isHTTPAuthority(_ authority: String) -> Bool {
+        let hostEnd: String.Index
+        if authority.hasPrefix("[") {
+            guard let close = authority.firstIndex(of: "]") else { return false }
+            hostEnd = authority.index(after: close)
+            guard ipv6Literal(String(authority[..<hostEnd])) != nil else { return false }
+        } else {
+            hostEnd = authority.firstIndex(of: ":") ?? authority.endIndex
+            let host = String(authority[..<hostEnd])
+            guard isDNSName(host) || IPv4Address(host) != nil else { return false }
+        }
+        let suffix = authority[hostEnd...]
+        if suffix.isEmpty { return true }
+        let digits = suffix.dropFirst()
+        guard suffix.first == ":", digits.utf8.allSatisfy({ (48...57).contains($0) }),
+              let port = UInt16(digits), port > 0 else { return false }
+        return true
     }
+
+    // The diagnostic event filter admits only approved text and host/port
+    // fields. WS paths and queries never become diagnostic fields.
+    var diagnosticSecrets: [String] { [userID] }
 
     /// Emits one typed outbound and requires normal TLS certificate verification.
     func embeddedInstanceJSONData(

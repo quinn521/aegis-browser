@@ -59,6 +59,14 @@ final class AccessTestNodeEditorTests: XCTestCase {
         else { return XCTFail("Wrong outbound for HTTP authority") }
         XCTAssertEqual(authority.requestHost, "ws.example.com:8443")
         XCTAssertEqual(authority.serverName, "cert.example.com")
+        let ipv6 = webSocketLink.replacingOccurrences(of: "198.51.100.20", with: "[2001:db8::2]")
+        guard case .vlessWebSocketTLS(let literal) = try AccessInternalTestNode.parseSingleShareURI(ipv6)
+        else { return XCTFail("Wrong outbound for IPv6") }
+        XCTAssertEqual(literal.address, "2001:db8::2")
+        let withQuery = webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2Finside%3Fv%3D2")
+        guard case .vlessWebSocketTLS(let queryPath) = try AccessInternalTestNode.parseSingleShareURI(withQuery)
+        else { return XCTFail("Wrong outbound for a valid query") }
+        XCTAssertEqual(queryPath.path, "/inside?v=2")
 
         for invalid in [webSocketLink.replacingOccurrences(of: "security=tls", with: "security=none"),
                         webSocketLink.replacingOccurrences(of: "&alpn=", with: "&allowInsecure=1"),
@@ -66,7 +74,12 @@ final class AccessTestNodeEditorTests: XCTestCase {
                         webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2F%0D%0AX-Forged"),
                         webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2Finvalid%25"),
                         webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2F%3F%2565d%3D1"),
+                        webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2Finside%3Fv%3D%7B"),
                         webSocketLink.replacingOccurrences(of: "alpn=", with: "alpn=%FF"),
+                        webSocketLink.replacingOccurrences(of: "@198.51.100.20", with: ":%FF@198.51.100.20"),
+                        webSocketLink.replacingOccurrences(of: "8443?", with: "8443/%FF?"),
+                        webSocketLink.replacingOccurrences(of: "198.51.100.20", with: "[route.example]"),
+                        webSocketLink.replacingOccurrences(of: "host=ws.example.com", with: "host=ws.example.com%3A92233720368547758070"),
                         webSocketLink + "\n" + webSocketLink] {
             editor.preview(invalid)
             XCTAssertFalse(editor.canApply)
