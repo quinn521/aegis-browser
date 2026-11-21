@@ -1193,6 +1193,19 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         send(ticket, to: tab)
     }
 
+    enum FailureProxyRetry: Equatable {
+        case unavailable
+        case optional
+        case required
+    }
+
+    func failureProxyRetry(for tab: BrowserTab) -> FailureProxyRetry {
+        guard let (failure, key) = failedProxyTarget(for: tab),
+              let route = failedProxyRoute(tab: tab, url: failure.url, key: key) else { return .unavailable }
+        if navigationIntent(tab: tab, key: key, route: route) == .on { return .required }
+        return offersLocationService ? .optional : .unavailable
+    }
+
     @discardableResult
     func retryViaProxy(tab: BrowserTab) -> UUID? {
         startRecovery(tab: tab, trigger: .userRetry)
@@ -1222,19 +1235,30 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                             routePreparation: preparation)
     }
 
-    private func startRecovery(tab: BrowserTab, trigger: AccessNavigationRetryTrigger) -> UUID? {
-        guard tab.loadingErrorAllowsProxyRetry, let failure = tab.lastMainFrameFailure else { return nil }
-        guard let host = Self.httpHost(failure.url) else { return nil }
+    private func failedProxyTarget(for tab: BrowserTab) -> (BrowserMainFrameFailure, AccessHostStoreKey)? {
+        guard tab.hostCoordinator === self, !tab.isLoading, tab.loadingErrorAllowsProxyRetry,
+              let failure = tab.lastMainFrameFailure, let request = tab.safeRouteReloadRequest,
+              request.url == failure.url, request.httpMethod == failure.method,
+              let host = Self.httpHost(failure.url) else { return nil }
         let key = AccessHostStoreKey(
             scopeID: tab.browsingScopeID,
             host: host,
             isPrivate: tab.profile.isPrivate
         )
-        if let existing = operations.values.first(where: {
-            $0.tabID == tab.instanceID.uuidString && $0.failureID == failure.failureID && $0.state == .preparing
-        }) {
-            return existing.id
-        }
+        return (failure, key)
+    }
+
+    private func failedProxyRoute(tab: BrowserTab, url: URL, key: AccessHostStoreKey) -> WebsiteRoute? {
+        // A Smart-mode miss can still opt into location privacy. An exact original choice takes precedence.
+        guard websiteChoice(for: key) != .original else { return nil }
+        let route = websiteRoute(tab: tab, url: url, key: key)
+        // An inherited failure can retry through its current route only.
+        guard route.requiredPreparation != nil || tab.parentForProxyLanding(url) == nil else { return nil }
+        return route
+    }
+
+    private func startRecovery(tab: BrowserTab, trigger: AccessNavigationRetryTrigger) -> UUID? {
+        guard let (failure, key) = failedProxyTarget(for: tab) else { return nil }
         return beginPrepare(for: tab, key: key, failure: failure, trigger: trigger)
     }
 
@@ -1362,20 +1386,20 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         addressNavigation: BrowserPendingAddressNavigation? = nil,
         routePreparation: RoutePreparation? = nil
     ) -> UUID? {
-        guard !tab.isDisposed, websiteChoice(for: key) != .original else { return nil }
+        guard !tab.isDisposed else { return nil }
         let method = (failure?.method ?? "GET").uppercased()
-        if failure != nil, method != "GET", method != "HEAD" { return nil }
-        if let failure, failure.hasReplayableBody { return nil }
-        if let failure, let existing = operations.values.first(where: {
-            $0.tabID == tab.instanceID.uuidString && $0.failureID == failure.failureID && $0.state == .preparing
-        }) {
-            return existing.id
+        let preparation: RoutePreparation?
+        if let failure {
+            guard !failure.hasReplayableBody, method == "GET" || method == "HEAD",
+                  let route = failedProxyRoute(tab: tab, url: failure.url, key: key) else { return nil }
+            if let existing = operations.values.first(where: {
+                $0.tabID == tab.instanceID.uuidString && $0.failureID == failure.failureID && $0.state == .preparing
+            }) { return existing.id }
+            preparation = route.requiredPreparation
+        } else {
+            guard websiteChoice(for: key) != .original else { return nil }
+            preparation = routePreparation
         }
-        let preparation = routePreparation ?? failure.flatMap {
-            websiteRoute(tab: tab, url: $0.url, key: key).requiredPreparation
-        }
-        // An inherited failure can retry through its current route only.
-        if let failure, tab.parentForProxyLanding(failure.url) != nil, preparation == nil { return nil }
         for (id, operation) in operations where operation.tabID == tab.instanceID.uuidString && operation.state != .preparing {
             operations.removeValue(forKey: id)
             timeoutTasks.removeValue(forKey: id)?.cancel()
