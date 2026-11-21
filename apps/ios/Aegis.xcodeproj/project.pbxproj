@@ -241,6 +241,7 @@
 		A3D7B09E532CEACA66A14C52 /* FirebaseInstallPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7FDA58879685EA0D940C579 /* FirebaseInstallPreferencesTests.swift */; };
 		A40DD7C450CBA04822B373DE /* AccessSOCKS5InboundListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80D84634472E2C87E1E94807 /* AccessSOCKS5InboundListener.swift */; };
 		A5A1195ADA40E0F62926A870 /* AccessSiteProxySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A3D7253C7215FF069464853 /* AccessSiteProxySessionStore.swift */; };
+		B9B75E526C8F2D85476A19E7 /* AccessInternalTestNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0B1425D481624E85A5DE5EC /* AccessInternalTestNode.swift */; };
 		A5A816B1F50CAB795957DF4E /* AccessLocalV2RayConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00C47D09251B2A788E7A60D /* AccessLocalV2RayConfig.swift */; };
 		A5D16577C28F1F3AAE156C2A /* SettingsLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0510756A74BFFCEF7ECFDE21 /* SettingsLayoutUITests.swift */; };
 		A75E140D24416D324155FAD6 /* BrowserKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A066F1C80823C272439700C0 /* BrowserKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -826,6 +827,7 @@
 		BC98286B9A862ED718BF8D5A /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		BCE5417970C2B1407C37C098 /* AccessAccountUsageRefreshCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessAccountUsageRefreshCoordinatorTests.swift; sourceTree = "<group>"; };
 		BF3882C9101F2E7A348FF20A /* PIIScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PIIScanner.swift; sourceTree = "<group>"; };
+		C0B1425D481624E85A5DE5EC /* AccessInternalTestNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessInternalTestNode.swift; sourceTree = "<group>"; };
 		C00C47D09251B2A788E7A60D /* AccessLocalV2RayConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessLocalV2RayConfig.swift; sourceTree = "<group>"; };
 		C08F2957E0B8AC09DB27F60C /* DownloadPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadPlanTests.swift; sourceTree = "<group>"; };
 		C1007077C6F4B017DC7EE5E3 /* Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fixtures; path = Tests/Fixtures; sourceTree = SOURCE_ROOT; };
@@ -1362,6 +1364,7 @@
 				5053A89698AD0E575CB19539 /* AccessInboundStartErrorBox.swift */,
 				5A398A9E34522F0CA1E2490F /* AccessInboundTransport.swift */,
 				9A85EF94DBA62C58F6F16EDB /* AccessLease.swift */,
+				C0B1425D481624E85A5DE5EC /* AccessInternalTestNode.swift */,
 				C00C47D09251B2A788E7A60D /* AccessLocalV2RayConfig.swift */,
 				DF43E3E0C6CE65CB593CE859 /* AccessLocalV2RayConfigError.swift */,
 				688AE4D4C530053E1731F802 /* AccessLocalV2RayConfigLoader.swift */,
@@ -2394,6 +2397,7 @@
 				D18520E7A699B422B2FABDD0 /* AccessInboundStartErrorBox.swift in Sources */,
 				B1F8182A6E6E62899F34FB74 /* AccessInboundTransport.swift in Sources */,
 				F3F21A9A81F21149A43B8A33 /* AccessLease.swift in Sources */,
+				B9B75E526C8F2D85476A19E7 /* AccessInternalTestNode.swift in Sources */,
 				A5A816B1F50CAB795957DF4E /* AccessLocalV2RayConfig.swift in Sources */,
 				DBDAB280B700F4F92C53EEB0 /* AccessLocalV2RayConfigError.swift in Sources */,
 				A31A7D6BA786ABD964C0A2A7 /* AccessLocalV2RayConfigLoader.swift in Sources */,

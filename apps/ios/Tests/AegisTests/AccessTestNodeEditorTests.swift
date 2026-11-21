@@ -20,6 +20,75 @@ final class AccessTestNodeEditorTests: XCTestCase {
         + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
         + "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234#synthetic-node"
 
+    private let webSocketLink = "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.20:8443"
+        + "?security=tls&type=ws&host=ws.example.com&fp=chrome&sni=cert.example.com&path=%2Finside&encryption=none&alpn=#synthetic-ws"
+
+    func testWebSocketProfileImportsOneShareAndPreservesVersionedRecords() throws {
+        let store = Storage()
+        let repository = AccessTestNodeRepository(channel: .dev, storage: store)
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        editor.openProfile()
+        editor.preview(link)
+        editor.apply()
+        let legacy = try repository.savedNode(isPrivate: false)
+        let previous = try JSONEncoder().encode(legacy)
+        XCTAssertEqual(try JSONDecoder().decode(AccessTestNodeRecord.self, from: previous).node, legacy.node)
+
+        editor.preview(webSocketLink)
+        XCTAssertEqual(editor.draftProtocolName, "VLESS / WS / TLS")
+        XCTAssertEqual(store.writes, 1)
+        editor.apply()
+        let record = try repository.savedNode(isPrivate: false)
+        let restored = try JSONDecoder().decode(AccessTestNodeRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertEqual(record.node, restored.node)
+        XCTAssertEqual(record.revision, restored.revision)
+        XCTAssertNotEqual(legacy.revision, record.revision)
+        guard case .vlessWebSocketTLS(let node) = record.node else { return XCTFail("Wrong outbound") }
+        XCTAssertEqual(node.serverName, "cert.example.com")
+        XCTAssertEqual(node.requestHost, "ws.example.com")
+        XCTAssertEqual(node.path, "/inside")
+        XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(webSocketLink))
+
+        for invalid in [webSocketLink.replacingOccurrences(of: "security=tls", with: "security=none"),
+                        webSocketLink.replacingOccurrences(of: "&alpn=", with: "&allowInsecure=1"),
+                        webSocketLink.replacingOccurrences(of: "&alpn=", with: "&security=tls"),
+                        webSocketLink.replacingOccurrences(of: "path=%2Finside", with: "path=%2F%0D%0AX-Forged"),
+                        webSocketLink + "\n" + webSocketLink] {
+            editor.preview(invalid)
+            XCTAssertFalse(editor.canApply)
+            XCTAssertEqual(editor.error, .invalidLink)
+        }
+        XCTAssertEqual(store.writes, 2)
+    }
+
+    func testWebSocketPageRetainsCertificateVerificationAndUsesOneOutbound() async throws {
+        let storage = Storage()
+        let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        editor.openProfile()
+        editor.preview(webSocketLink)
+        editor.apply()
+        let core = PageCore()
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core, transport: .http)
+        defer { page.close() }
+        await page.open(URL(string: "https://controlled.example/page")!)
+        XCTAssertEqual(page.selectedTransport, .http)
+        let bytes = try XCTUnwrap(core.startedConfig.withLock { $0 })
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        XCTAssertEqual((json["inbounds"] as? [Any])?.count, 0)
+        let outbounds = try XCTUnwrap(json["outbounds"] as? [[String: Any]])
+        XCTAssertEqual(outbounds.count, 1)
+        let stream = try XCTUnwrap(outbounds.first?["streamSettings"] as? [String: Any])
+        XCTAssertEqual(stream["network"] as? String, "ws")
+        XCTAssertEqual(stream["security"] as? String, "tls")
+        let tls = try XCTUnwrap(stream["tlsSettings"] as? [String: Any])
+        XCTAssertNil(tls["allowInsecure"])
+        XCTAssertEqual(tls["serverName"] as? String, "cert.example.com")
+        let webSocket = try XCTUnwrap(stream["wsSettings"] as? [String: String])
+        XCTAssertEqual(webSocket["host"], "ws.example.com")
+        XCTAssertEqual(webSocket["path"], "/inside")
+    }
+
     func testTransportAdmissionAndBindingTimeSelection() throws {
         XCTAssertEqual(try AccessTestNodeTransport.automatic.select(socksAdmitted: true), .socks5)
         XCTAssertEqual(try AccessTestNodeTransport.automatic.select(socksAdmitted: false), .http)
@@ -848,6 +917,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let running = Mutex(false)
         private let beforeStart: (@MainActor () async throws -> Void)?
         private let afterStop: (@MainActor () -> Void)?
+        let startedConfig = Mutex<Data?>(nil)
         init(beforeStart: (@MainActor () async throws -> Void)? = nil, afterStop: (@MainActor () -> Void)? = nil) {
             self.beforeStart = beforeStart
             self.afterStop = afterStop
@@ -855,6 +925,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         var isRunning: Bool { running.withLock { $0 } }
         func start(configData: Data) async throws {
             if let beforeStart { try await beforeStart() }
+            startedConfig.withLock { $0 = configData }
             running.withLock { $0 = true }
         }
         func stop() async {

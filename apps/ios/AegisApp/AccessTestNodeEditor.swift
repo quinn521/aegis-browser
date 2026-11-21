@@ -76,60 +76,82 @@ enum AccessTestNodeError: Error {
 }
 
 struct AccessTestNodeRecord: Codable {
-    let version = 1
     let revision: UUID
-    private let address: String
-    private let port: UInt16
-    private let userID: String
-    private let serverName: String
-    private let publicKey: String
-    private let shortID: String
-    private let fingerprint: String
-    private let spiderX: String
+    let node: AccessInternalTestNode
 
-    // Use an explicit encoding schema. Unknown or missing versions are rejected at restore.
     private enum CodingKeys: String, CodingKey {
         case version, revision, address, port, userID, serverName, publicKey, shortID, fingerprint, spiderX
+        case requestHost, path, alpn
     }
 
-    init(_ node: AccessRealityVisionParameters) {
+    init(_ node: AccessInternalTestNode) {
         revision = UUID()
-        address = node.address
-        port = node.port
-        userID = node.userID
-        serverName = node.serverName
-        publicKey = node.publicKey
-        shortID = node.shortID
-        fingerprint = node.fingerprint
-        spiderX = node.spiderX
+        self.node = node
     }
 
+    init(_ parameters: AccessRealityVisionParameters) {
+        self.init(.realityVision(parameters))
+    }
+
+    // REALITY-only test fixtures keep their existing typed accessor.
     func parameters() throws -> AccessRealityVisionParameters {
-        let parameters = try AccessRealityVisionParameters(address: address, port: port, userID: userID,
-            serverName: serverName, publicKey: publicKey, shortID: shortID,
-            fingerprint: fingerprint, spiderX: spiderX)
+        guard case .realityVision(let parameters) = node else { throw AccessTestNodeError.unavailable }
         try AccessLocalV2RayConfigLoader.validateManualParameters(parameters)
         return parameters
     }
 
     init(from decoder: any Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
-        guard try fields.decode(Int.self, forKey: .version) == version else {
-            throw AccessTestNodeError.storageUnavailable
-        }
+        let version = try fields.decode(Int.self, forKey: .version)
+        guard version == 1 || version == 2 else { throw AccessTestNodeError.storageUnavailable }
         revision = try fields.decode(UUID.self, forKey: .revision)
-        address = try fields.decode(String.self, forKey: .address)
-        port = try fields.decode(UInt16.self, forKey: .port)
-        userID = try fields.decode(String.self, forKey: .userID)
-        serverName = try fields.decode(String.self, forKey: .serverName)
-        publicKey = try fields.decode(String.self, forKey: .publicKey)
-        shortID = try fields.decode(String.self, forKey: .shortID)
-        fingerprint = try fields.decode(String.self, forKey: .fingerprint)
-        spiderX = try fields.decode(String.self, forKey: .spiderX)
-        _ = try AccessRealityVisionParameters(
-            address: address, port: port, userID: userID, serverName: serverName, publicKey: publicKey,
-            shortID: shortID, fingerprint: fingerprint, spiderX: spiderX
-        )
+        let address = try fields.decode(String.self, forKey: .address)
+        let port = try fields.decode(UInt16.self, forKey: .port)
+        let userID = try fields.decode(String.self, forKey: .userID)
+        let serverName = try fields.decode(String.self, forKey: .serverName)
+        let fingerprint = try fields.decode(String.self, forKey: .fingerprint)
+        if version == 1 {
+            node = .realityVision(try AccessRealityVisionParameters(
+                address: address, port: port, userID: userID, serverName: serverName,
+                publicKey: fields.decode(String.self, forKey: .publicKey),
+                shortID: fields.decode(String.self, forKey: .shortID), fingerprint: fingerprint,
+                spiderX: fields.decode(String.self, forKey: .spiderX)
+            ))
+        } else {
+            node = .vlessWebSocketTLS(try AccessVLESSWebSocketTLSParameters(
+                address: address, port: port, userID: userID, serverName: serverName,
+                requestHost: fields.decode(String.self, forKey: .requestHost),
+                path: fields.decode(String.self, forKey: .path), fingerprint: fingerprint,
+                alpn: fields.decode(String.self, forKey: .alpn)
+            ))
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var fields = encoder.container(keyedBy: CodingKeys.self)
+        try fields.encode(revision, forKey: .revision)
+        switch node {
+        case .realityVision(let parameters):
+            try fields.encode(1, forKey: .version)
+            try fields.encode(parameters.address, forKey: .address)
+            try fields.encode(parameters.port, forKey: .port)
+            try fields.encode(parameters.userID, forKey: .userID)
+            try fields.encode(parameters.serverName, forKey: .serverName)
+            try fields.encode(parameters.fingerprint, forKey: .fingerprint)
+            try fields.encode(parameters.publicKey, forKey: .publicKey)
+            try fields.encode(parameters.shortID, forKey: .shortID)
+            try fields.encode(parameters.spiderX, forKey: .spiderX)
+        case .vlessWebSocketTLS(let parameters):
+            try fields.encode(2, forKey: .version)
+            try fields.encode(parameters.address, forKey: .address)
+            try fields.encode(parameters.port, forKey: .port)
+            try fields.encode(parameters.userID, forKey: .userID)
+            try fields.encode(parameters.serverName, forKey: .serverName)
+            try fields.encode(parameters.fingerprint, forKey: .fingerprint)
+            try fields.encode(parameters.requestHost, forKey: .requestHost)
+            try fields.encode(parameters.path, forKey: .path)
+            try fields.encode(parameters.alpn, forKey: .alpn)
+        }
     }
 }
 
@@ -243,6 +265,10 @@ final class AccessTestNodeRepository {
     }
 
     func apply(_ draft: AccessRealityVisionParameters, expectedRevision: UUID?, isPrivate: Bool) throws -> UUID {
+        try apply(.realityVision(draft), expectedRevision: expectedRevision, isPrivate: isPrivate)
+    }
+
+    func apply(_ draft: AccessInternalTestNode, expectedRevision: UUID?, isPrivate: Bool) throws -> UUID {
         guard let channel, !isPrivate else { throw AccessTestNodeError.unavailable }
         guard try revision(isPrivate: isPrivate) == expectedRevision else { throw AccessTestNodeError.conflict }
         try AccessLocalV2RayConfigLoader.validateManualParameters(draft)
@@ -269,7 +295,7 @@ final class AccessTestNodeEditor {
 
     private let repository: AccessTestNodeRepository
     private let isPrivate: Bool
-    private var draft: AccessRealityVisionParameters?
+    private var draft: AccessInternalTestNode?
     private var baseRevision: UUID?
     private var loaded = false
     private(set) var scan: Scan?
@@ -277,6 +303,13 @@ final class AccessTestNodeEditor {
 
     var allowsEditing: Bool { repository.allowsEditing(isPrivate: isPrivate) }
     var hasDraft: Bool { draft != nil }
+    var draftProtocolName: String? {
+        switch draft {
+        case .realityVision: "VLESS / TCP / REALITY / Vision"
+        case .vlessWebSocketTLS: "VLESS / WS / TLS"
+        case nil: nil
+        }
+    }
     var hasSavedNode: Bool { baseRevision != nil }
     var showsEmptyProfile: Bool { loaded && !hasSavedNode }
     var canApply: Bool { loaded && hasDraft && scan == nil }
@@ -310,7 +343,7 @@ final class AccessTestNodeEditor {
         guard loaded else { return }
         scan = nil
         do {
-            draft = try AccessLocalV2RayConfigLoader.parseSingleShareURI(input)
+            draft = try AccessInternalTestNode.parseSingleShareURI(input)
             error = nil
         } catch {
             // Remove an earlier candidate so Apply cannot save it after a failed preview.
@@ -513,15 +546,15 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             let revision = record.revision
             observerID = repository.observeRevocation { [weak self] in self?.close() }
             let core = try testingCore ?? AccessGoEmbeddedCore(isolated: true)
-            let newPublisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(
-                configPath: nil, verifiedCore: core,
-                parameters: { [repository, isPrivate] in
+            let newPublisher = AccessEmbeddedProxyEntryFactory.makeInternalTestPublisher(
+                verifiedCore: core,
+                node: { [repository, isPrivate] in
                     guard ContinuousClock.now < deadline else { throw AccessTestNodeError.unavailable }
                     let current = try repository.savedNode(isPrivate: isPrivate)
                     guard current.revision == revision else { throw AccessTestNodeError.conflict }
-                    let parameters = try current.parameters()
+                    if case .realityVision = current.node { _ = try current.parameters() }
                     guard ContinuousClock.now < deadline else { throw AccessTestNodeError.unavailable }
-                    return parameters
+                    return current.node
                 },
                 connectionAllowed: { [weak self, repository] in
                     guard let self, !self.closed, !self.preparationDeadlineElapsed, self.navigationAllowed() else { return false }

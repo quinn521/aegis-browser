@@ -23,24 +23,10 @@ public enum AccessEmbeddedProxyEntryFactory {
         transport: AccessInboundTransport = .http
     ) -> any AccessProxyEntryPublishing {
         do {
-            guard let retireDocuments, transport == .http || transport == .socks5 else {
+            guard let retireDocuments else {
                 return AccessFailClosedProxyEntryPublisher()
             }
-            let data = try lockData ?? loadBundledLockData()
-            let manifest = try AccessEmbeddedCoreManifest.load(from: data)
-            guard manifest.mayLink else {
-                return AccessFailClosedProxyEntryPublisher()
-            }
-            let core: any AccessEmbeddedCoreControlling
-            if let verifiedCore {
-                core = verifiedCore
-            } else {
-                core = try AccessGoEmbeddedCore()
-            }
-            let adapter = AccessEmbeddedCoreAdapter(manifest: manifest, verifiedCore: core)
-            guard adapter.mayDial else {
-                return AccessFailClosedProxyEntryPublisher()
-            }
+            let core = try validatedCore(lockData: lockData, supplied: verifiedCore, transport: transport)
             let session: AccessEmbeddedProxyEntrySession
             if let parameters {
                 session = AccessEmbeddedProxyEntrySession(core: core, parameters: parameters, retireDocuments: retireDocuments, transport: transport)
@@ -50,23 +36,60 @@ public enum AccessEmbeddedProxyEntryFactory {
                 let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: local.parameters)
                 session = AccessEmbeddedProxyEntrySession(core: core, outbound: outbound, transport: transport, retireDocuments: retireDocuments)
             }
-            return AccessProxyEntryPublisher(
-                provision: { generation, deadline in
-                    try await session.provision(generation: generation, deadline: deadline)
-                },
-                shutdown: { identity in
-                    session.shutdown(identity: identity)
-                },
-                activate: {
-                    (connectionAllowed?() ?? true) && session.activate()
-                },
-                healthCheck: {
-                    session.isRuntimeHealthy && (connectionAllowed?() ?? true)
-                }
-            )
+            return publisher(for: session, connectionAllowed: connectionAllowed)
         } catch {
             return AccessFailClosedProxyEntryPublisher()
         }
+    }
+
+    /// Used by the existing native test Profile after its channel and revision checks.
+    public static func makeInternalTestPublisher(
+        lockData: Data? = nil,
+        verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
+        node: @escaping @MainActor () async throws -> AccessInternalTestNode,
+        connectionAllowed: @escaping @MainActor () -> Bool,
+        retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void,
+        transport: AccessInboundTransport
+    ) -> any AccessProxyEntryPublishing {
+        do {
+            let core = try validatedCore(lockData: lockData, supplied: verifiedCore, transport: transport)
+            return publisher(for: AccessEmbeddedProxyEntrySession(core: core, internalNode: node,
+                retireDocuments: retireDocuments, transport: transport), connectionAllowed: connectionAllowed)
+        } catch {
+            return AccessFailClosedProxyEntryPublisher()
+        }
+    }
+
+    private static func validatedCore(
+        lockData: Data?, supplied: (any AccessEmbeddedCoreControlling)?, transport: AccessInboundTransport
+    ) throws -> any AccessEmbeddedCoreControlling {
+        guard transport == .http || transport == .socks5 else { throw AccessSiteSessionError.runtimeNotReady }
+        let manifest = try AccessEmbeddedCoreManifest.load(from: lockData ?? loadBundledLockData())
+        guard manifest.mayLink else { throw AccessSiteSessionError.runtimeNotReady }
+        let core = try supplied ?? AccessGoEmbeddedCore()
+        guard AccessEmbeddedCoreAdapter(manifest: manifest, verifiedCore: core).mayDial else {
+            throw AccessSiteSessionError.runtimeNotReady
+        }
+        return core
+    }
+
+    private static func publisher(
+        for session: AccessEmbeddedProxyEntrySession, connectionAllowed: (@MainActor () -> Bool)?
+    ) -> AccessProxyEntryPublisher {
+        AccessProxyEntryPublisher(
+            provision: { generation, deadline in
+                try await session.provision(generation: generation, deadline: deadline)
+            },
+            shutdown: { identity in
+                session.shutdown(identity: identity)
+            },
+            activate: {
+                (connectionAllowed?() ?? true) && session.activate()
+            },
+            healthCheck: {
+                session.isRuntimeHealthy && (connectionAllowed?() ?? true)
+            }
+        )
     }
 
     public static func loadBundledLockData(
@@ -86,7 +109,12 @@ public enum AccessEmbeddedProxyEntryFactory {
 @MainActor
 final class AccessEmbeddedProxyEntrySession {
     private let core: any AccessEmbeddedCoreControlling
-    private let loadOutbound: @MainActor () async throws -> AccessRealityVisionOutboundConfig
+    private enum Outbound {
+        case realityVision(AccessRealityVisionOutboundConfig)
+        case vlessWebSocketTLS(AccessVLESSWebSocketTLSParameters)
+    }
+
+    private let loadOutbound: @MainActor () async throws -> Outbound
     private var listener: AccessEmbeddedInboundListener?
     private let transport: AccessInboundTransport
     private var identity: String?
@@ -104,7 +132,7 @@ final class AccessEmbeddedProxyEntrySession {
         self.core = core
         self.transport = transport
         self.retireDocuments = retireDocuments
-        self.loadOutbound = { outbound }
+        self.loadOutbound = { .realityVision(outbound) }
         self.reserveSocket = { try await Self.reserveLoopbackSocket() }
     }
 
@@ -117,9 +145,30 @@ final class AccessEmbeddedProxyEntrySession {
          }) {
         self.core = core
         self.transport = transport
-        self.loadOutbound = { try AccessRealityVisionOutboundConfigBuilder.build(parameters: await parameters()) }
+        self.loadOutbound = { .realityVision(try AccessRealityVisionOutboundConfigBuilder.build(parameters: await parameters())) }
         self.retireDocuments = retireDocuments
         self.reserveSocket = reserveSocket
+    }
+
+    init(core: any AccessEmbeddedCoreControlling,
+         internalNode: @escaping @MainActor () async throws -> AccessInternalTestNode,
+         retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void,
+         transport: AccessInboundTransport,
+         reserveSocket: @escaping @MainActor () async throws -> NWListener = {
+             try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+         }) {
+        self.core = core
+        self.transport = transport
+        self.retireDocuments = retireDocuments
+        self.reserveSocket = reserveSocket
+        self.loadOutbound = {
+            switch try await internalNode() {
+            case .realityVision(let parameters):
+                return .realityVision(try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters))
+            case .vlessWebSocketTLS(let parameters):
+                return .vlessWebSocketTLS(parameters)
+            }
+        }
     }
 
     func provision(generation: UInt64, deadline: Duration) async throws -> AccessProxyEntryPublisher.Provision {
@@ -172,10 +221,15 @@ final class AccessEmbeddedProxyEntrySession {
             let outbound = try await loadOutbound()
             try Task.checkCancellation()
             do {
-                logLease = try await Self.startCoreWithDiagnostics(
-                    core: core, outbound: outbound, diagnostics: .shared,
-                    level: AccessDiagnosticLog.selectedLevel()
-                )
+                switch outbound {
+                case .realityVision(let config):
+                    logLease = try await Self.startCoreWithDiagnostics(
+                        core: core, outbound: config, diagnostics: .shared,
+                        level: AccessDiagnosticLog.selectedLevel()
+                    )
+                case .vlessWebSocketTLS(let parameters):
+                    try await core.start(configData: parameters.embeddedInstanceJSONData())
+                }
             } catch {
                 throw AccessSiteSessionError.prepareFailed("core.start: \(error)")
             }

@@ -338,7 +338,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
                      afterCommit: ((any AccessEmbeddedCoreControlling) async throws -> Void)? = nil,
                      resultCheckpoint: (Attempt) throws -> Void = { _ in }) async throws -> AttemptResult {
         let core = AccessCampaignMeteredCore(base: try AccessGoEmbeddedCore(isolated: true), budget: budget)
-        let page = AccessTestNodePage(repository: repository, testingCore: core, singleNavigation: true,
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core, singleNavigation: true,
                                       transport: transport, navigationAllowed: { budget.stopReason() == nil && permit() },
                                       onTransportLoss: { if permit() { budget.stop(.transportLost) } })
         let fence = Task { @MainActor in
@@ -467,7 +467,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             storage: AccessTestNodeKeychain(service: "com.gcsa.aegis.ios.access-common-pilot.v2"))
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
         let revision: UUID
-        if let saved = try? repository.savedNode(), try saved.parameters() == parameters {
+        if let saved = try? repository.savedNode(isPrivate: false), try saved.parameters() == parameters {
             revision = saved.revision
         } else {
             revision = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
