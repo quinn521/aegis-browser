@@ -195,12 +195,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
     /// App-issued document loads already handed to WebKit, newest last.
     private var deliveredDocumentLoads: [(navigationID: String, url: URL)] = []
-    /// A main-frame load already sent to this WebView. An address hold can set
-    /// isLoading before WebKit receives the new request.
+    /// A sent or policy-approved main-frame load. A staged address hold is
+    /// not active merely because the pending address is visible.
     public var activeMainFrameNavigationURL: URL? {
-        guard isLoading, pendingProxyRequest == nil, pendingNavigation != nil else { return nil }
-        return requestedURL
+        guard isLoading, pendingProxyRequest == nil else { return nil }
+        if pendingNavigation != nil { return requestedURL }
+        guard approvedMainFrameNavigationID == attempt.navigationID else { return nil }
+        return attempt.url
     }
+    private var approvedMainFrameNavigationID: String?
     /// The address the user is navigating or recovering, even when WebKit still
     /// displays an older document or its internal HTTPS warning page.
     public var addressBarURL: URL? {
@@ -529,6 +532,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private func bindNavigation(_ navigation: WKNavigation, to recorded: MainFrameAttempt) { navigationState.bind(navigation, to: recorded) }
     private func retireNavigationIdentity(_ navigation: WKNavigation?) { navigationState.retire(navigation) }
     private func retireAllNavigationIdentities() {
+        approvedMainFrameNavigationID = nil
         provisionalNavigation = nil
         provisionalDeadline?.cancel()
         navigationState.retireAll()
@@ -573,6 +577,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             continuesExistingNavigation: continuesExistingNavigation,
             hasReplayableBody: hasReplayableBody
         )
+        approvedMainFrameNavigationID = attempt.navigationID
     }
 
     /// Cancels a deferred `WKWebView.load` that has not been issued yet (Stop, revoke, tab close).
@@ -1765,6 +1770,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
                 ),
                 policyType: navigationAction.navigationType
             )
+            approvedMainFrameNavigationID = attempt.navigationID
             finish(.allow)
         case .blocked:
             blockNavigation(decision)
