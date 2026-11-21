@@ -31,8 +31,7 @@ final class AccessCampaignBudget: Sendable {
         self.byteLimit = bytes
     }
 
-    var chargedBytes: Int { state.withLock { $0.charged } }
-    var reservedBytes: Int { state.withLock { $0.reserved } }
+    var bytes: (charged: Int, reserved: Int) { state.withLock { ($0.charged, $0.reserved) } }
 
     func stopReason(at now: ContinuousClock.Instant = .now) -> Stop? {
         state.withLock {
@@ -80,14 +79,9 @@ final class AccessCampaignBudget: Sendable {
 final class AccessCampaignMeteredCore: AccessEmbeddedCoreControlling, Sendable {
     private let base: any AccessEmbeddedCoreControlling
     private let budget: AccessCampaignBudget
-    // Used only by the private certificate fixture. Pilot calls leave it nil.
-    private let certificateFixturePort: UInt16?
-
-    init(base: any AccessEmbeddedCoreControlling, budget: AccessCampaignBudget,
-         certificateFixturePort: UInt16? = nil) {
+    init(base: any AccessEmbeddedCoreControlling, budget: AccessCampaignBudget) {
         self.base = base
         self.budget = budget
-        self.certificateFixturePort = certificateFixturePort
     }
 
     var isRunning: Bool { base.isRunning }
@@ -99,8 +93,7 @@ final class AccessCampaignMeteredCore: AccessEmbeddedCoreControlling, Sendable {
 
     func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         if let reason = budget.stopReason() { throw reason }
-        let fixturePort = host == "aegis-campaign-cert.invalid" ? certificateFixturePort : nil
-        let stream = try await base.dial(host: fixturePort == nil ? host : "127.0.0.1", port: fixturePort ?? port)
+        let stream = try await base.dial(host: host, port: port)
         if let reason = budget.stopReason() {
             stream.close()
             throw reason
@@ -170,7 +163,7 @@ final class AccessCampaignBudgetTests: XCTestCase {
         meter.settle(secondRead, bytes: 15)
         XCTAssertNil(meter.stopReason())
         meter.settle(remaining, bytes: 50)
-        XCTAssertEqual(meter.chargedBytes, 100)
+        XCTAssertEqual(meter.bytes.charged, 100)
         XCTAssertEqual(meter.stopReason(), .byteLimit)
         XCTAssertThrowsError(try meter.reserve(1, wholeChunk: false))
     }
@@ -182,7 +175,7 @@ final class AccessCampaignBudgetTests: XCTestCase {
             XCTAssertEqual(error as? AccessCampaignBudget.Stop, .byteLimit)
         }
         meter.settle(read, bytes: 30)
-        XCTAssertEqual(meter.chargedBytes, 30)
+        XCTAssertEqual(meter.bytes.charged, 30)
         XCTAssertThrowsError(try meter.reserve(1, wholeChunk: true))
     }
 
@@ -194,7 +187,7 @@ final class AccessCampaignBudgetTests: XCTestCase {
         XCTAssertThrowsError(try meter.reserve(10, wholeChunk: true, at: meter.deadline))
         XCTAssertThrowsError(try meter.reserve(10, wholeChunk: false, at: meter.deadline))
         meter.settle(lastReservation, bytes: 4)
-        XCTAssertEqual(meter.chargedBytes, 4)
+        XCTAssertEqual(meter.bytes.charged, 4)
         XCTAssertEqual(meter.stopReason(at: meter.deadline), .timeLimit)
     }
 

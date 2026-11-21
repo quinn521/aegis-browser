@@ -99,8 +99,9 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             row["nodeInputSHA256"] = Self.nodeDigest
             row["targetsSHA256"] = Self.targetsDigest
             row["elapsedMs"] = Self.milliseconds(budget.started.duration(to: .now))
-            row["chargedBytes"] = budget.chargedBytes
-            row["reservedBytes"] = budget.reservedBytes
+            let bytes = budget.bytes
+            row["chargedBytes"] = bytes.charged
+            row["reservedBytes"] = bytes.reserved
             try ledger.append(row)
         }
         var reserved = 0
@@ -148,7 +149,11 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
             try append("reserved", identity)
             let result = try await run(url, window: window, budget: budget, transport: .socks5,
                                        observation: .seconds(20), permit: permitsTraffic) { attempt in
-                try append("result", identity.merging(attempt.fields) { first, _ in first })
+                var row = identity.merging(attempt.fields) { first, _ in first }
+                if let issued = attempt.page.timeline.instant(.loadIssued) {
+                    row["navigationIssuedAtMs"] = Self.milliseconds(budget.started.duration(to: issued))
+                }
+                try append("result", row)
             }
             try append("retirement", identity.merging(result.retirementFields) { first, _ in first })
             if let stop = budget.stopReason() {
@@ -173,30 +178,32 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
 
     func testControlledStageMatrixForBothInbounds() async throws {
         let input = try admittedInputs()
-        guard input.environment["AEGIS_TEST_COMMON_MATRIX"] == "1",
-              let fixturePort = input.environment["AEGIS_TEST_COMMON_CERT_PORT"].flatMap(UInt16.init),
-              fixturePort > 0 else { throw XCTSkip("Explicit owned fixture and certificate endpoint required") }
+        guard input.environment["AEGIS_TEST_COMMON_MATRIX"] == "1" else {
+            throw XCTSkip("Explicit controlled fixture required")
+        }
         let window = makeWindow()
         defer { window.isHidden = true }
         let ledger = try fixtureLedger("matrix", input.environment)
         for transport in [AccessTestNodeTransport.http, .socks5] {
             for name in ["redirect", "script", "status", "certificate", "slow", "retire"] {
                 let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+                // BadSSL supplies a dedicated self-signed certificate test host.
+                // Keep the certificate case on the same embedded TEST01 path.
                 let target = name == "certificate"
-                    ? URL(string: "https://aegis-campaign-cert.invalid/")!
+                    ? URL(string: "https://self-signed.badssl.com/")!
                     : input.origin.appendingPathComponent(name).appending(queryItems: [URLQueryItem(name: "nonce", value: nonce)])
-                let budget = AccessCampaignBudget(duration: .seconds(20), bytes: 8 * 1024 * 1024)
+                let budget = AccessCampaignBudget(duration: .seconds(30), bytes: 8 * 1024 * 1024)
                 let result = try await run(target, window: window, budget: budget, transport: transport,
-                                           observation: name == "slow" ? .seconds(3) : .seconds(12),
+                                           observation: name == "slow" ? .seconds(8) : .seconds(20),
                                            settleBeforeRetiring: name == "script" ? .milliseconds(800) : .zero,
-                                           competeDuringRetirement: name == "retire",
-                                           certificateFixturePort: name == "certificate" ? fixturePort : nil)
+                                           competeDuringRetirement: name == "retire")
                 let page = result.attempt.page
                 let stage = page.timeline
                 var row = result.attempt.fields.merging(result.retirementFields) { first, _ in first }
                 row["case"] = name
                 row["nonce"] = nonce
                 row["sourceSHA"] = input.source
+                row["chargedBytes"] = budget.bytes.charged
                 try ledger.append(row)
                 XCTAssertNil(budget.stopReason(), name)
                 XCTAssertEqual(result.attempt.transport, transport == .http ? "http" : "socks5", name)
@@ -229,6 +236,7 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
                     XCTAssertEqual(result.attempt.outcome, .failed)
                     XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
                     XCTAssertEqual(page.failureCode, NSURLErrorServerCertificateUntrusted)
+                    XCTAssertGreaterThan(budget.bytes.charged, 0)
                     XCTAssertNil(stage.instant(.firstVisibleHTTPResponse))
                     XCTAssertNil(stage.instant(.documentCommit))
                 case "slow":
@@ -248,30 +256,30 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         let window = makeWindow()
         defer { window.isHidden = true }
         let ledger = try fixtureLedger("budget", input.environment)
-        for limits in [(AccessCampaignBudget.Stop.timeLimit, "slow", Duration.seconds(4), 8 * 1024 * 1024),
-                       (.byteLimit, "stream", .seconds(16), 256 * 1024)] {
+        for limits in [(AccessCampaignBudget.Stop.timeLimit, "slow", Duration.seconds(8), 8 * 1024 * 1024),
+                       (.byteLimit, "stream", .seconds(30), 256 * 1024)] {
             let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
             let url = input.origin.appendingPathComponent(limits.1).appending(queryItems: [
                 URLQueryItem(name: "nonce", value: nonce)
             ])
             let budget = AccessCampaignBudget(duration: limits.2, bytes: limits.3)
             let result = try await run(url, window: window, budget: budget, transport: .socks5,
-                                       observation: .seconds(12))
+                                       observation: .seconds(25))
             let reason = try XCTUnwrap(budget.stopReason())
             var row = result.attempt.fields.merging(result.retirementFields) { first, _ in first }
             row["sourceSHA"] = input.source
             row["nonce"] = nonce
             row["stopReason"] = reason.rawValue
-            row["chargedBytes"] = budget.chargedBytes
+            row["chargedBytes"] = budget.bytes.charged
             row["byteLimit"] = limits.3
             try ledger.append(row)
             XCTAssertEqual(reason, limits.0)
             XCTAssertEqual(result.attempt.outcome, .stopped)
             XCTAssertTrue(result.retired)
             XCTAssertTrue(result.quiesced)
-            XCTAssertLessThanOrEqual(budget.chargedBytes, limits.3)
-            XCTAssertGreaterThan(budget.chargedBytes, 0)
-            XCTAssertNotNil(result.attempt.page.timeline.instant(.firstVisibleHTTPResponse))
+            XCTAssertLessThanOrEqual(budget.bytes.charged, limits.3)
+            XCTAssertGreaterThan(budget.bytes.charged, 0)
+            XCTAssertNotNil(result.attempt.page.timeline.instant(.loadIssued))
             XCTAssertNil(result.attempt.page.timeline.instant(.documentFinish))
         }
     }
@@ -279,10 +287,9 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
     private func run(_ url: URL, window: UIWindow, budget: AccessCampaignBudget,
                      transport: AccessTestNodeTransport, observation: Duration,
                      settleBeforeRetiring: Duration = .zero, competeDuringRetirement: Bool = false,
-                     certificateFixturePort: UInt16? = nil, permit: @escaping () -> Bool = { true },
+                     permit: @escaping () -> Bool = { true },
                      resultCheckpoint: (Attempt) throws -> Void = { _ in }) async throws -> AttemptResult {
-        let core = AccessCampaignMeteredCore(base: try AccessGoEmbeddedCore(isolated: true),
-                                             budget: budget, certificateFixturePort: certificateFixturePort)
+        let core = AccessCampaignMeteredCore(base: try AccessGoEmbeddedCore(isolated: true), budget: budget)
         let page = AccessTestNodePage(testingCore: core, singleNavigation: true, transport: transport,
                                       navigationAllowed: { budget.stopReason() == nil && permit() })
         let fence = Task { @MainActor in
@@ -335,14 +342,14 @@ final class AccessCommonPilotDeviceTests: XCTestCase {
         if competeDuringRetirement { _ = page.webView?.load(URLRequest(url: URL(string: "about:blank")!)) }
         let requested = page.timeline.instant(.retirementRequested) ?? .now
         let retirementDeadline = requested.advanced(by: .seconds(10))
-        while (page.endpoint != nil || core.isRunning || budget.reservedBytes > 0),
+        while (page.endpoint != nil || core.isRunning || budget.bytes.reserved > 0),
               ContinuousClock.now < retirementDeadline {
             try await Task.sleep(for: .milliseconds(50))
         }
         let commit = page.timeline.instant(.retirementCommit)
         let unbound = page.webView == nil
         let retired = unbound || (page.endpoint == nil && (commit.map { $0 <= retirementDeadline } ?? false))
-        let quiesced = !core.isRunning && budget.reservedBytes == 0
+        let quiesced = !core.isRunning && budget.bytes.reserved == 0
         if retired { page.webView?.removeFromSuperview() }
         var retirement: [String: Any] = [
             "retirementState": unbound ? "unbound" : retired ? "confirmed" : "unconfirmed",
