@@ -2132,15 +2132,15 @@ extension AccessHostRecoveryWebKitTests {
     }
 
     func testGeoSiteReviewSmartPreservesCommittedLegacyLanding() async throws {
-        try await verifyCommittedLegacyLanding()
+        try await verifyCommittedLegacyLanding(managedPort: 18_481)
     }
 
     func testGeoSiteClearingServiceOverridePreservesInheritedLanding() async throws {
-        try await verifyCommittedLegacyLanding(serviceOverride: .clearImmediately)
+        try await verifyCommittedLegacyLanding(managedPort: 18_777, serviceOverride: .clearImmediately)
     }
 
     func testGeoSiteClearingServiceOverrideAfterReloadPreservesInheritedLanding() async throws {
-        try await verifyCommittedLegacyLanding(serviceOverride: .reloadBeforeClearing)
+        try await verifyCommittedLegacyLanding(managedPort: 18_779, serviceOverride: .reloadBeforeClearing)
     }
 
     private enum LandingServiceOverride {
@@ -2148,9 +2148,9 @@ extension AccessHostRecoveryWebKitTests {
         case reloadBeforeClearing
     }
 
-    private func verifyCommittedLegacyLanding(serviceOverride: LandingServiceOverride? = nil) async throws {
-        let managedPort: UInt16 = 18_481
-        let originalPort: UInt16 = 18_482
+    private func verifyCommittedLegacyLanding(managedPort: UInt16, serviceOverride: LandingServiceOverride? = nil) async throws {
+        // NWListener cancels asynchronously, so consecutive scenarios use separate port pairs.
+        let originalPort = managedPort + 1
         let managed = AnsweringOpener(body: "<title>Legacy route</title>")
         let original = AnsweringOpener(finishAfterRecording: true)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
