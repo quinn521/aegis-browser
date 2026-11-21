@@ -4,16 +4,8 @@ on:
   pull_request:
     branches: [develop, main]
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-    paths:
-      - .github/workflows/android-java-coverage.yml
-      - apps/browser/**
-      - packages/core/**
   push:
     branches: [develop, main]
-    paths:
-      - .github/workflows/android-java-coverage.yml
-      - apps/browser/**
-      - packages/core/**
   workflow_dispatch:
 
 permissions:
@@ -24,15 +16,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  impact:
+    name: android-coverage-impact
+    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.route.outputs.run }}
+      pr_base: ${{ steps.route.outputs.pr_base }}
+      pr_head: ${{ steps.route.outputs.pr_head }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select Android coverage from the tested Git diff
+        id: route
+        env:
+          EVENT_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT_PUSH_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci/coverage-impact.sh android
   android-java-coverage:
     name: android-java-coverage
-    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
+    needs: impact
+    if: ${{ needs.impact.outputs.run == 'true' && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       AEGIS_TESTED_SHA: ${{ github.sha }}
-      AEGIS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-      AEGIS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+      AEGIS_PR_HEAD_SHA: ${{ needs.impact.outputs.pr_head }}
+      AEGIS_PR_BASE_SHA: ${{ needs.impact.outputs.pr_base }}
       EVIDENCE_DIR: ${{ github.workspace }}/.artifacts/android-java-coverage/github-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Check out exact tested source
@@ -115,8 +129,12 @@ jobs:
         run: |
           node --input-type=module -e '
             import fs from "node:fs";
+            const context = JSON.parse(fs.readFileSync(process.env.EVIDENCE_DIR + "/ci-context.json", "utf8"));
             const report = JSON.parse(fs.readFileSync(process.env.EVIDENCE_DIR + "/coverage/summary.json", "utf8"));
-            if (report.testedSha !== process.env.AEGIS_TESTED_SHA || report.repositoryDirtyAtBuild !== false ||
+            if (context.testedSha !== process.env.AEGIS_TESTED_SHA || context.eventName !== process.env.GITHUB_EVENT_NAME ||
+                (context.eventName === "pull_request" && ![context.pullRequestHeadSha, context.pullRequestBaseSha].every(
+                  (sha) => /^[0-9a-f]{40}$/.test(sha))) ||
+                report.testedSha !== context.testedSha || report.repositoryDirtyAtBuild !== false ||
                 report.selfTestCases !== 6 || report.browserTested !== false || report.passed !== true ||
                 report.line.covered <= 0 || report.line.total !== report.line.covered + report.line.missed) process.exit(1);
           '

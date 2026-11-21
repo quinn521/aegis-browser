@@ -3,30 +3,8 @@ on:
   pull_request:
     branches: [develop, main]
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-    paths:
-      - .github/workflows/ios-coverage.yml
-      - apps/ios/**
-      - apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/**
-      - packages/core/**
-      - scripts/ci/ios-*.mjs
-      - scripts/release/build-ios-access-core.sh
-      - scripts/release/ios_embedded_core.py
-      - scripts/release/prepare-ios-access-core.sh
-      - scripts/release/prepare-ios-package-core.sh
-      - scripts/release/record-ios-access-core-digests.sh
   push:
     branches: [develop, main]
-    paths:
-      - .github/workflows/ios-coverage.yml
-      - apps/ios/**
-      - apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/**
-      - packages/core/**
-      - scripts/ci/ios-*.mjs
-      - scripts/release/build-ios-access-core.sh
-      - scripts/release/ios_embedded_core.py
-      - scripts/release/prepare-ios-access-core.sh
-      - scripts/release/prepare-ios-package-core.sh
-      - scripts/release/record-ios-access-core-digests.sh
   workflow_dispatch: null
 permissions:
   contents: read
@@ -35,9 +13,29 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  impact:
+    name: ios-coverage-impact
+    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.route.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select iOS coverage from the tested Git diff
+        id: route
+        env:
+          EVENT_PR_BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT_PUSH_BEFORE: ${{ github.event.before }}
+        run: bash scripts/ci/coverage-impact.sh ios
   ios-coverage:
     name: ios-coverage
-    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
+    needs: impact
+    if: ${{ needs.impact.outputs.run == 'true' && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -62,6 +60,19 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: false
+      - name: Install pinned XcodeGen
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
+            --noproxy "${no_proxy:-},${NO_PROXY:-},github.com,.github.com,githubusercontent.com,.githubusercontent.com" \
+            --output "$archive" https://github.com/yonaskolb/XcodeGen/releases/download/2.48.0/xcodegen.zip
+          printf '%s  %s\n' 620c9f0dc10849f94728ab5df52d225ebab8187439dd6fee1925e59e80dff892 "$archive" | shasum -a 256 --check
+          ditto -x -k "$archive" "$RUNNER_TEMP/aegis-xcodegen"
+          bin="$RUNNER_TEMP/aegis-xcodegen/xcodegen/bin"
+          "$bin/xcodegen" --version
+          printf '%s\n' "$bin" >> "$GITHUB_PATH"
       - name: Run iPhone and iPad tests with Swift coverage
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer

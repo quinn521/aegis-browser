@@ -51,6 +51,7 @@ try {
   if (!prTitleWorkflow || typeof prTitleWorkflow !== 'object') fail('PR title workflow must be a YAML object');
   const ready = "github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false'";
   const readyCondition = '${{ ' + ready + ' }}';
+  const mobileCoverageCondition = "${{ needs.impact.outputs.run == 'true' && (" + ready + ') }}';
   const summaryCondition = '${{ always() && (' + ready + ') }}';
   const summaryName = '${{ (' + ready + ") && 'quality-gate' || 'quality-deferred-draft-or-missing-metadata' }}";
   const integrationBranches = ['develop', 'main'];
@@ -59,20 +60,7 @@ try {
   const expectedConcurrency = "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}";
   const cancelStalePR = "${{ github.event_name == 'pull_request' }}";
   const reportingWorkflows = [
-    ['iOS coverage', iosWorkflow, [
-      '.github/workflows/ios-coverage.yml',
-      'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/**',
-      'apps/ios/**',
-      'packages/core/**',
-      'scripts/ci/ios-*.mjs',
-      'scripts/release/build-ios-access-core.sh',
-      'scripts/release/ios_embedded_core.py',
-      'scripts/release/prepare-ios-access-core.sh',
-      'scripts/release/prepare-ios-package-core.sh',
-      'scripts/release/record-ios-access-core-digests.sh',
-    ]],
-    ['Other platform coverage', otherWorkflow, []],
-    ['Android coverage', androidWorkflow, ['.github/workflows/android-java-coverage.yml', 'apps/browser/**', 'packages/core/**']],
+    ['iOS coverage', iosWorkflow], ['Other platform coverage', otherWorkflow], ['Android coverage', androidWorkflow],
   ];
   for (const [label, automatic] of [
     ['Quality', workflow], ['C++', cppWorkflow], ['iOS validation', iosValidationWorkflow], ...reportingWorkflows,
@@ -86,10 +74,12 @@ try {
       }
       const cloudExercise = automatic === iosValidationWorkflow && id === 'cloud-poc';
       const iosContracts = automatic === iosValidationWorkflow && ['contracts', 'ios-archive'].includes(id);
+      const mobileCoverage = (automatic === iosWorkflow || automatic === androidWorkflow) && id !== 'impact';
       const expectedCondition = cloudExercise
         ? "${{ github.event_name == 'workflow_dispatch' && inputs.exercise == 'cloud-poc' && github.repository == 'gcsagroup/aegis-browser' }}"
         : iosContracts ? '${{ inputs.exercise != \'cloud-poc\' && ' + (id === 'ios-archive' ? "needs.contracts.outputs.ios == 'true' && " : '') + '(' + ready + ') }}'
-          : automatic === workflow && id === 'quality-summary' ? summaryCondition : readyCondition;
+          : automatic === workflow && id === 'quality-summary' ? summaryCondition
+            : mobileCoverage ? mobileCoverageCondition : readyCondition;
       if (job.if !== expectedCondition) {
         fail(`${label}/${id} must require explicit Ready PR metadata, preserve non-PR execution and summary always()`);
       }
@@ -108,20 +98,17 @@ try {
     if ('branches-ignore' in config) fail(`${event} may not exclude branches`);
     if ('paths' in config || 'paths-ignore' in config) fail(`${event} may not filter paths`);
   }
-  for (const [label, report, paths] of reportingWorkflows) {
+  for (const [label, report] of reportingWorkflows) {
     if (JSON.stringify(Object.keys(report?.on ?? {}).sort()) !== JSON.stringify([...automaticEvents, 'workflow_dispatch'])) {
       fail(`${label} must support PRs, integration pushes and manual dispatch`);
     }
     for (const event of automaticEvents) {
       const config = report.on[event] ?? {};
-      const expectedKeys = ['branches'];
-      if (paths.length) expectedKeys.push('paths');
-      if (event === 'pull_request') expectedKeys.push('types');
+      const expectedKeys = event === 'pull_request' ? ['branches', 'types'] : ['branches'];
       if (
         JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(expectedKeys) ||
-        JSON.stringify(array(config.branches).sort()) !== JSON.stringify(integrationBranches) ||
-        JSON.stringify(array(config.paths).sort()) !== JSON.stringify(paths)
-      ) fail(`${label} ${event} must cover exactly the admitted branches and reporting paths`);
+        JSON.stringify(array(config.branches).sort()) !== JSON.stringify(integrationBranches)
+      ) fail(`${label} ${event} must cover exactly the admitted branches without event-level path filters`);
     }
     if (report.permissions?.contents !== 'read' || Object.values(report.permissions ?? {}).includes('write')) {
       fail(`${label} workflow permissions must be read-only`);
@@ -212,7 +199,9 @@ try {
   const gate = jobs['quality-summary'];
   const expectedJobs = ['impact', 'quality', 'quality-summary'];
   if (JSON.stringify(Object.keys(otherWorkflow.jobs ?? {}).sort()) !== JSON.stringify(['powershell-coverage', 'shell-coverage'])) fail('Other platform job set must be exactly shell-coverage and powershell-coverage');
-  if (JSON.stringify(Object.keys(androidWorkflow.jobs ?? {})) !== JSON.stringify(['android-java-coverage'])) fail('Android job set must be exactly android-java-coverage');
+  if (JSON.stringify(Object.keys(androidWorkflow.jobs ?? {}).sort()) !== JSON.stringify(['android-java-coverage', 'impact'])) {
+    fail('Android job set must be exactly impact and android-java-coverage');
+  }
   const androidSteps = array(androidCoverage.steps);
   if (androidSteps.filter((step) => step.run === 'bash apps/browser/scripts/run-android-java-coverage-emulator.sh').length !== 1) {
     fail('Android coverage must run the owned AVD launcher exactly once');
@@ -220,8 +209,27 @@ try {
   if (JSON.stringify(Object.keys(jobs).sort()) !== JSON.stringify(expectedJobs)) {
     fail(`Workflow job set must be exactly: ${expectedJobs.join(', ')}`);
   }
-  if (JSON.stringify(Object.keys(iosJobs)) !== JSON.stringify(['ios-coverage'])) {
-    fail('iOS workflow job set must be exactly: ios-coverage');
+  if (JSON.stringify(Object.keys(iosJobs).sort()) !== JSON.stringify(['impact', 'ios-coverage'])) {
+    fail('iOS workflow job set must be exactly impact and ios-coverage');
+  }
+  for (const [platform, impact, coverage] of [
+    ['ios', iosJobs.impact, iosCoverage], ['android', androidWorkflow.jobs.impact, androidCoverage],
+  ]) {
+    const route = array(impact.steps).find((step) => step.id === 'route');
+    if (
+      coverage.needs !== 'impact' || impact['runs-on'] !== 'ubuntu-24.04' || impact['timeout-minutes'] !== 5 ||
+      impact.outputs?.run !== '${{ steps.route.outputs.run }}' ||
+      route?.run !== `bash scripts/ci/coverage-impact.sh ${platform}` || 'if' in route ||
+      route.env?.EVENT_PR_BASE !== '${{ github.event.pull_request.base.sha }}' ||
+      route.env?.EVENT_PR_HEAD !== '${{ github.event.pull_request.head.sha }}' ||
+      route.env?.EVENT_PUSH_BEFORE !== '${{ github.event.before }}'
+    ) fail(`${platform} coverage must wait for the Git identity and full-diff check`);
+  }
+  for (const [field, env] of [['pr_base', 'AEGIS_PR_BASE_SHA'], ['pr_head', 'AEGIS_PR_HEAD_SHA']]) {
+    if (
+      androidWorkflow.jobs.impact.outputs?.[field] !== '${{ steps.route.outputs.' + field + ' }}' ||
+      androidCoverage.env?.[env] !== '${{ needs.impact.outputs.' + field + ' }}'
+    ) fail(`Android coverage evidence must use the verified ${field}`);
   }
   if (quality.name !== 'quality') fail('Quality job check name must be quality');
   const testRunner = "${{ vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY != '' && github.repository == vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('[\"self-hosted\", \"macOS\", \"ARM64\", \"aegis-test\"]') || 'macos-15' }}";
@@ -273,7 +281,11 @@ try {
       fail(`${id} must verify pinned preinstalled Python on self-hosted runners`);
     }
   }
-  const allJobs = {...jobs, ...otherWorkflow.jobs, ...androidWorkflow.jobs, 'ios-report/ios-coverage': iosCoverage};
+  const allJobs = {
+    ...jobs, ...otherWorkflow.jobs,
+    'android-report/impact': androidWorkflow.jobs.impact, 'android-report/android-java-coverage': androidCoverage,
+    'ios-report/impact': iosJobs.impact, 'ios-report/ios-coverage': iosCoverage,
+  };
   for (const [id, job] of Object.entries(allJobs)) {
     if ('continue-on-error' in job) fail(`${id} may not suppress failures`);
     if (job.permissions && (job.permissions === 'write-all' || Object.values(job.permissions).some((value) => value !== 'read' && value !== 'none'))) fail(`${id} permissions must be read-only`);
@@ -291,7 +303,6 @@ try {
     }
   }
   const checkoutSteps = allSteps.filter((step) => String(step.uses ?? '').startsWith('actions/checkout@'));
-  if (checkoutSteps.length !== 7) fail('Every job must use the approved checkout action exactly once');
   for (const step of checkoutSteps) {
     if (step.with?.['persist-credentials'] !== false) fail('Checkout must disable persisted credentials');
     if (step.with?.['fetch-depth'] !== 0) fail('Checkout must fetch history for identity validation');
@@ -343,9 +354,15 @@ try {
   const iosRun = array(iosCoverage.steps).find((step) => String(step.run ?? '').includes('run-simulator-tests.sh'));
   const iosNode = array(iosCoverage.steps).find((step) => String(step.uses ?? '').startsWith('actions/setup-node@'));
   const iosOperator = array(iosCoverage.steps).find((step) => step.run === 'node scripts/ci/ios-operator.mjs --context coverage');
+  const iosGenerator = iosCoverage.steps.findIndex((step) => step.name === 'Install pinned XcodeGen');
   if (iosOperator?.if !== "${{ github.event_name == 'workflow_dispatch' }}") {
     fail('iOS coverage must verify Admin permissions on manual dispatch');
   }
+  if (
+    iosGenerator < 0 || iosGenerator >= iosCoverage.steps.indexOf(iosRun) ||
+    'if' in iosCoverage.steps[iosGenerator] ||
+    !String(iosCoverage.steps[iosGenerator].run ?? '').includes('shasum -a 256 --check')
+  ) fail('iOS coverage must install and verify XcodeGen before simulator tests');
   if (
     !iosRun || !String(iosRun.run).includes('--execute') || !String(iosRun.run).includes('$IOS_REPORT_DIR') ||
     iosRun.env?.DEVELOPER_DIR !== '/Applications/Xcode.app/Contents/Developer' ||

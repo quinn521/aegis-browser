@@ -453,7 +453,10 @@ test('workflow validator enforces automatic platform reporting and its execution
   assert.notEqual(validate(paths).status, 0, 'the iOS workflow path cannot be overridden');
   const directory = mkdtempSync(join(tmpdir(), 'aegis-workflow-test-'));
   const prTypes = ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft'];
-  const reportingJobs = [[1, 'ios-coverage'], [2, 'shell-coverage'], [2, 'powershell-coverage'], [3, 'android-java-coverage']];
+  const reportingJobs = [
+    [1, 'impact'], [1, 'ios-coverage'], [2, 'shell-coverage'], [2, 'powershell-coverage'],
+    [3, 'impact'], [3, 'android-java-coverage'],
+  ];
   const automaticJobs = [
     [0, 'impact'], [0, 'quality'], [0, 'quality-summary'], ...reportingJobs,
     [5, 'cpp-unit-tests'], [6, 'contracts'], [6, 'ios-archive'],
@@ -553,9 +556,12 @@ test('workflow validator enforces automatic platform reporting and its execution
     ...reportingJobs.map(([index, job]) => [index, (w) => {
       w.jobs[job]['runs-on'] = ['self-hosted', 'macOS', 'ARM64', 'aegis-test'];
     }, `${job} must run on the declared hosted platform`]),
-    [1, (w) => { delete w.on.pull_request.paths; }, 'a documentation-only PR must not allocate a coverage Mac'],
+    [1, (w) => { w.on.pull_request.paths = ['apps/ios/**']; }, 'event-level filters can omit changed mobile inputs'],
     [2, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'desktop reports must also cover shared changes'],
-    [3, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'Android reporting misses shared and workflow changes'],
+    [3, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'Android routing must inspect the complete push diff'],
+    [1, (w) => { delete w.jobs['ios-coverage'].needs; }, 'simulator allocation must wait for routing'],
+    [3, (w) => { w.jobs.impact.outputs.pr_base = '${{ github.event.pull_request.base.sha }}'; }, 'router must emit the exact merge base'],
+    [3, (w) => { w.jobs['android-java-coverage'].env.AEGIS_PR_HEAD_SHA = '${{ github.event.pull_request.head.sha }}'; }, 'report must use the verified second parent'],
     [3, (w) => {
       const step = w.jobs['android-java-coverage'].steps.find((entry) => entry.name === 'Run six fixtures and collect real Java coverage');
       delete step.run;
@@ -568,6 +574,9 @@ test('workflow validator enforces automatic platform reporting and its execution
     [1, (w) => {
       w.jobs['ios-coverage'].steps = w.jobs['ios-coverage'].steps.filter((step) => !step.run?.endsWith('--context coverage'));
     }, 'manual coverage loses the Admin check'],
+    [1, (w) => {
+      w.jobs['ios-coverage'].steps = w.jobs['ios-coverage'].steps.filter((step) => step.name !== 'Install pinned XcodeGen');
+    }, 'hosted simulator requires XcodeGen'],
     [4, (w) => { w.on.pull_request_target.branches = ['main']; }],
     [4, (w) => { w.on.pull_request = {}; }],
     [4, (w) => { w.permissions.contents = 'write'; }],

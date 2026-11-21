@@ -8,6 +8,76 @@ import YAML from 'yaml';
 import {readFileSync} from 'node:fs';
 
 const script = resolve('scripts/ci/platform-impact.mjs');
+test('mobile coverage uses the complete tested diff and the actual PR parents', () => {
+  const root = mkdtempSync(join(tmpdir(), 'coverage-impact-'));
+  const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
+  const save = (path, text) => {
+    mkdirSync(join(root, path, '..'), {recursive: true});
+    writeFileSync(join(root, path), text);
+  };
+  const commit = (message) => {
+    git('add', '-A');
+    git('commit', '-m', message);
+    return git('rev-parse', 'HEAD');
+  };
+  const outputFile = join(root, '.git', 'coverage-output');
+  const route = (platform, event) => {
+    writeFileSync(outputFile, '');
+    const result = spawnSync('bash', [resolve('scripts/ci/coverage-impact.sh'), platform], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {...process.env, GITHUB_OUTPUT: outputFile, ...event},
+    });
+    return {result, output: readFileSync(outputFile, 'utf8')};
+  };
+  try {
+    git('init', '-b', 'develop');
+    git('config', 'user.name', 'Coverage Test');
+    git('config', 'user.email', 'coverage@example.invalid');
+    save('apps/ios/Feature.swift', 'old');
+    const eventBase = commit('initial');
+    save('apps/ios/Feature.swift', 'new');
+    const actualBase = commit('iOS change already on develop');
+
+    git('checkout', '-b', 'candidate', eventBase);
+    save('apps/ios/Feature.swift', 'new');
+    save('scripts/ci/ios-release-preflight.mjs', '// release only');
+    for (let index = 0; index < 305; index += 1) save(`aaa/docs/file-${index}.md`, 'unrelated');
+    const head = commit('same iOS change plus docs and release preflight');
+    git('checkout', 'develop');
+    git('merge', '--no-ff', 'candidate', '-m', 'first tested merge');
+    const tested = git('rev-parse', 'HEAD');
+    const event = {GITHUB_EVENT_NAME: 'pull_request', GITHUB_SHA: tested, EVENT_PR_BASE: eventBase, EVENT_PR_HEAD: head};
+    const first = route('ios', event);
+    assert.equal(first.result.status, 0, first.result.stderr);
+    assert.equal(first.output, `run=false\npr_base=${actualBase}\npr_head=${head}\n`);
+    assert.notEqual(route('ios', {...event, EVENT_PR_HEAD: eventBase}).result.status, 0);
+    assert.notEqual(route('ios', {...event, GITHUB_SHA: head}).result.status, 0);
+
+    git('reset', '--hard', actualBase);
+    git('checkout', 'candidate');
+    save('apps/ios/Later.swift', 'new iOS input after the other 305 paths');
+    save('apps/browser/scripts/android-ui-driver/Driver.java', 'new Android input');
+    const changedHead = commit('add platform inputs');
+    git('checkout', 'develop');
+    git('merge', '--no-ff', 'candidate', '-m', 'second tested merge');
+    const changedTested = git('rev-parse', 'HEAD');
+    for (const platform of ['ios', 'android']) {
+      const pr = route(platform, {...event, GITHUB_SHA: changedTested, EVENT_PR_HEAD: changedHead});
+      assert.equal(pr.result.status, 0, pr.result.stderr);
+      assert.equal(pr.output, `run=true\npr_base=${actualBase}\npr_head=${changedHead}\n`);
+      const push = route(platform, {GITHUB_EVENT_NAME: 'push', GITHUB_SHA: changedTested, EVENT_PUSH_BEFORE: actualBase});
+      assert.equal(push.result.status, 0, push.result.stderr);
+      assert.equal(push.output, 'run=true\npr_base=\npr_head=\n');
+    }
+    const manual = route('ios', {GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: changedTested});
+    assert.equal(manual.result.status, 0, manual.result.stderr);
+    assert.equal(manual.output, 'run=true\npr_base=\npr_head=\n');
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
 test('platform routing binds real merge parents and rejects hidden product changes', () => {
   const root = mkdtempSync(join(tmpdir(), 'platform-impact-'));
   const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8'}).trim();
