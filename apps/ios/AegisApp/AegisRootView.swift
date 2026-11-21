@@ -648,7 +648,7 @@ struct PageLoadFailureBanner: View {
     var autoRecoveryOn: Bool = false
     var autoRecoveryLine: String? = nil
     var setAutoRecovery: ((BrowserTab, Bool) -> Void)? = nil
-    var addressProxyPreparing = false
+    var pendingAddressProxyState: ((BrowserTab, BrowserPendingAddressNavigation) -> AccessHostStoreCoordinator.PendingAddressProxyState)? = nil
     var openAddressViaProxy: ((BrowserTab, BrowserPendingAddressNavigation) -> Void)? = nil
     var editAddress: (() -> Void)? = nil
     var proxyRetry: (BrowserTab) -> Void
@@ -732,25 +732,27 @@ struct PageLoadFailureBanner: View {
             .padding(12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-reload-refused")
-        } else if (offersLocationService || addressProxyPreparing), let pending = tab.pendingAddressNavigation,
-                  tab.matchesPendingAddressNavigation(pending),
+        } else if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending),
                   let openAddressViaProxy {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(verbatim: AccessSiteDisplayName.title(pending.url.host(percentEncoded: true)))
-                    .font(.callout.weight(.semibold))
-                    .accessibilityIdentifier("page-load-pending-host")
-                Text(AegisLocalization.string(addressProxyPreparing ? "正在准备连接…" : "正在连接…"))
-                    .font(.caption)
-                    .accessibilityIdentifier("page-load-pending-status")
-                if !addressProxyPreparing {
-                    ProxyRetryButton(title: AegisLocalization.string("隐藏位置并打开")) { openAddressViaProxy(tab, pending) }
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            let state = pendingAddressProxyState?(tab, pending) ?? (offersLocationService ? .available : .unavailable)
+            if offersLocationService || state == .preparing {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(verbatim: AccessSiteDisplayName.title(pending.url.host(percentEncoded: true)))
+                        .font(.callout.weight(.semibold))
+                        .accessibilityIdentifier("page-load-pending-host")
+                    Text(AegisLocalization.string(state == .preparing ? "正在准备连接…" : "正在连接…"))
+                        .font(.caption)
+                        .accessibilityIdentifier("page-load-pending-status")
+                    if state == .available {
+                        ProxyRetryButton(title: AegisLocalization.string("隐藏位置并打开")) { openAddressViaProxy(tab, pending) }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
                 }
+                .padding(12)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("page-load-pending-proxy")
             }
-            .padding(12)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("page-load-pending-proxy")
         }
     }
 
@@ -782,7 +784,7 @@ private struct BrowserPageShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-private struct ActiveTabView: View {
+struct ActiveTabView: View {
     @ObservedObject var tab: BrowserTab
     @Binding var address: String
     let addressIsEditing: Bool
@@ -806,7 +808,7 @@ private struct ActiveTabView: View {
                 setAutoRecovery: { failed, enabled in
                     _ = hostStores.setAutoRecoveryEnabled(enabled, for: failed)
                 },
-                addressProxyPreparing: hostStores.isPreparingAddressProxy(tab: tab),
+                pendingAddressProxyState: { hostStores.pendingAddressProxyState(tab: $0, pending: $1) },
                 openAddressViaProxy: { pendingTab, pending in
                     _ = hostStores.openPendingAddressViaProxy(tab: pendingTab, pending: pending)
                 },
