@@ -1,18 +1,32 @@
 name: Android Java Coverage
 
 on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    paths:
+      - .github/workflows/android-java-coverage.yml
+      - apps/browser/**
+      - packages/core/**
+  push:
+    branches: [develop, main]
+    paths:
+      - .github/workflows/android-java-coverage.yml
+      - apps/browser/**
+      - packages/core/**
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   android-java-coverage:
     name: android-java-coverage
+    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -53,6 +67,8 @@ jobs:
           node --test apps/browser/scripts/android-agent-ui_test.mjs apps/browser/scripts/verify-android-agent-target_test.mjs \
             apps/browser/scripts/run-android-java-coverage-emulator_test.mjs
           bash -n apps/browser/scripts/run-android-java-coverage-emulator.sh
+          bash apps/browser/scripts/package-android-guards_test.sh
+          bash -n apps/browser/scripts/package-android.sh
 
       - name: Fetch fixed JaCoCo and build both helper modes
         run: |

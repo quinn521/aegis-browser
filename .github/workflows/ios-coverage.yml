@@ -1,15 +1,43 @@
 name: iOS Coverage
 on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+    paths:
+      - .github/workflows/ios-coverage.yml
+      - apps/ios/**
+      - apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/**
+      - packages/core/**
+      - scripts/ci/ios-*.mjs
+      - scripts/release/build-ios-access-core.sh
+      - scripts/release/ios_embedded_core.py
+      - scripts/release/prepare-ios-access-core.sh
+      - scripts/release/prepare-ios-package-core.sh
+      - scripts/release/record-ios-access-core-digests.sh
+  push:
+    branches: [develop, main]
+    paths:
+      - .github/workflows/ios-coverage.yml
+      - apps/ios/**
+      - apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/**
+      - packages/core/**
+      - scripts/ci/ios-*.mjs
+      - scripts/release/build-ios-access-core.sh
+      - scripts/release/ios_embedded_core.py
+      - scripts/release/prepare-ios-access-core.sh
+      - scripts/release/prepare-ios-package-core.sh
+      - scripts/release/record-ios-access-core-digests.sh
   workflow_dispatch: null
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && 'main' || format('dispatch-{0}', github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   ios-coverage:
     name: ios-coverage
+    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -25,6 +53,7 @@ jobs:
         with:
           node-version: 22.23.1
       - name: Require repository Admin for manual operation
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/ci/ios-operator.mjs --context coverage
         env:
           GH_TOKEN: ${{ github.token }}

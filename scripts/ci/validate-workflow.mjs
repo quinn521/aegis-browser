@@ -53,8 +53,30 @@ try {
   const readyCondition = '${{ ' + ready + ' }}';
   const summaryCondition = '${{ always() && (' + ready + ') }}';
   const summaryName = '${{ (' + ready + ") && 'quality-gate' || 'quality-deferred-draft-or-missing-metadata' }}";
+  const integrationBranches = ['develop', 'main'];
+  const automaticEvents = ['pull_request', 'push'];
   const prTypes = ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft'].sort();
-  for (const [label, automatic] of [['Quality', workflow], ['C++', cppWorkflow], ['iOS validation', iosValidationWorkflow]]) {
+  const expectedConcurrency = "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}";
+  const cancelStalePR = "${{ github.event_name == 'pull_request' }}";
+  const reportingWorkflows = [
+    ['iOS coverage', iosWorkflow, [
+      '.github/workflows/ios-coverage.yml',
+      'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/**',
+      'apps/ios/**',
+      'packages/core/**',
+      'scripts/ci/ios-*.mjs',
+      'scripts/release/build-ios-access-core.sh',
+      'scripts/release/ios_embedded_core.py',
+      'scripts/release/prepare-ios-access-core.sh',
+      'scripts/release/prepare-ios-package-core.sh',
+      'scripts/release/record-ios-access-core-digests.sh',
+    ]],
+    ['Other platform coverage', otherWorkflow, []],
+    ['Android coverage', androidWorkflow, ['.github/workflows/android-java-coverage.yml', 'apps/browser/**', 'packages/core/**']],
+  ];
+  for (const [label, automatic] of [
+    ['Quality', workflow], ['C++', cppWorkflow], ['iOS validation', iosValidationWorkflow], ...reportingWorkflows,
+  ]) {
     if (JSON.stringify(array(automatic?.on?.pull_request?.types).sort()) !== JSON.stringify(prTypes)) {
       fail(`${label} PR event types must be exactly opened, reopened, synchronize, ready_for_review and converted_to_draft`);
     }
@@ -79,22 +101,33 @@ try {
   if (JSON.stringify(triggerNames) !== JSON.stringify(['pull_request', 'push', 'workflow_dispatch'])) {
     fail(`Unexpected workflow triggers: ${triggerNames.join(', ')}`);
   }
-  for (const event of ['pull_request', 'push']) {
+  for (const event of automaticEvents) {
     const config = triggers[event] ?? {};
-    const expectedBranches = event === 'push' ? qualityBranchNames().sort() : ['develop', 'main'];
+    const expectedBranches = event === 'push' ? qualityBranchNames().sort() : integrationBranches;
     if (JSON.stringify(array(config.branches).sort()) !== JSON.stringify(expectedBranches)) fail(`${event} must target exactly its admitted quality branches`);
     if ('branches-ignore' in config) fail(`${event} may not exclude branches`);
     if ('paths' in config || 'paths-ignore' in config) fail(`${event} may not filter paths`);
   }
-  for (const [label, manual] of [['iOS', iosWorkflow], ['Other platform', otherWorkflow], ['Android', androidWorkflow]]) {
-    if (JSON.stringify(Object.keys(manual?.on ?? {})) !== JSON.stringify(['workflow_dispatch'])) {
-      fail(`${label} workflow must be manual-only`);
+  for (const [label, report, paths] of reportingWorkflows) {
+    if (JSON.stringify(Object.keys(report?.on ?? {}).sort()) !== JSON.stringify([...automaticEvents, 'workflow_dispatch'])) {
+      fail(`${label} must support PRs, integration pushes and manual dispatch`);
     }
-    if (manual.permissions?.contents !== 'read' || Object.values(manual.permissions ?? {}).includes('write')) {
+    for (const event of automaticEvents) {
+      const config = report.on[event] ?? {};
+      const expectedKeys = ['branches'];
+      if (paths.length) expectedKeys.push('paths');
+      if (event === 'pull_request') expectedKeys.push('types');
+      if (
+        JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(expectedKeys) ||
+        JSON.stringify(array(config.branches).sort()) !== JSON.stringify(integrationBranches) ||
+        JSON.stringify(array(config.paths).sort()) !== JSON.stringify(paths)
+      ) fail(`${label} ${event} must cover exactly the admitted branches and reporting paths`);
+    }
+    if (report.permissions?.contents !== 'read' || Object.values(report.permissions ?? {}).includes('write')) {
       fail(`${label} workflow permissions must be read-only`);
     }
-    if (!manual.concurrency || manual.concurrency['cancel-in-progress'] == null) {
-      fail(`${label} workflow must define concurrency and cancellation policy`);
+    if (report.concurrency?.group !== expectedConcurrency || report.concurrency?.['cancel-in-progress'] !== cancelStalePR) {
+      fail(`${label} must isolate each target SHA and dispatch, and cancel only stale PR runs`);
     }
   }
   const prTitleTriggers = prTitleWorkflow.on ?? {};
@@ -162,8 +195,7 @@ try {
   for (const [name, permission] of Object.entries(iosWorkflow.permissions ?? {})) {
     if (permission === 'write') fail(`iOS workflow permission ${name} may not be write`);
   }
-  const expectedConcurrency = "${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}";
-  if (workflow.concurrency?.group !== expectedConcurrency || workflow.concurrency?.['cancel-in-progress'] !== "${{ github.event_name == 'pull_request' }}") {
+  if (workflow.concurrency?.group !== expectedConcurrency || workflow.concurrency?.['cancel-in-progress'] !== cancelStalePR) {
     fail('Workflow concurrency must isolate branch pushes, PRs and diagnostic runs; cancel only stale PR runs');
   }
   if (!iosWorkflow.concurrency || iosWorkflow.concurrency['cancel-in-progress'] == null) {
@@ -176,11 +208,12 @@ try {
   const iosCoverage = iosJobs['ios-coverage'];
   const shellCoverage = otherWorkflow.jobs?.['shell-coverage'];
   const powershellCoverage = otherWorkflow.jobs?.['powershell-coverage'];
+  const androidCoverage = androidWorkflow.jobs?.['android-java-coverage'];
   const gate = jobs['quality-summary'];
   const expectedJobs = ['impact', 'quality', 'quality-summary'];
   if (JSON.stringify(Object.keys(otherWorkflow.jobs ?? {}).sort()) !== JSON.stringify(['powershell-coverage', 'shell-coverage'])) fail('Other platform job set must be exactly shell-coverage and powershell-coverage');
   if (JSON.stringify(Object.keys(androidWorkflow.jobs ?? {})) !== JSON.stringify(['android-java-coverage'])) fail('Android job set must be exactly android-java-coverage');
-  const androidSteps = array(androidWorkflow.jobs['android-java-coverage'].steps);
+  const androidSteps = array(androidCoverage.steps);
   if (androidSteps.filter((step) => step.run === 'bash apps/browser/scripts/run-android-java-coverage-emulator.sh').length !== 1) {
     fail('Android coverage must run the owned AVD launcher exactly once');
   }
@@ -201,19 +234,15 @@ try {
   }
   if (quality['timeout-minutes'] !== 40) fail('Quality job timeout must be 40 minutes');
   for (const [id, job, runner, timeout] of [
+    ['android-java-coverage', androidCoverage, 'ubuntu-24.04', 35],
+    ['ios-coverage', iosCoverage, 'macos-26', 60],
     ['shell-coverage', shellCoverage, 'ubuntu-24.04', 30],
     ['powershell-coverage', powershellCoverage, 'windows-2025', 20],
   ]) {
     if (job?.name !== id) fail(`${id} job check name must be ${id}`);
     if (job?.['runs-on'] !== runner) fail(`${id} job must use ${runner}`);
     if (job?.['timeout-minutes'] !== timeout) fail(`${id} timeout must be ${timeout} minutes`);
-    if ('if' in job) fail(`Manual ${id} job may not be conditional`);
   }
-  if (iosCoverage?.name !== 'ios-coverage') fail('iOS report job check name must be ios-coverage');
-  if (iosCoverage?.['runs-on'] !== 'macos-26') fail('iOS report job must use macos-26');
-  if (iosCoverage?.['timeout-minutes'] !== 60) fail('iOS report timeout must be 60 minutes');
-  if ('if' in iosCoverage) fail('iOS report job may not be conditional within its manual workflow');
-  if ('continue-on-error' in iosCoverage) fail('iOS report job must preserve test failures');
   if (gate.name !== summaryName) fail('Required summary check name must be quality-gate only for non-PR or explicit Ready PR; otherwise use the deferred label');
   const expectedNeeds = ['quality'];
   if (JSON.stringify(array(gate.needs).sort()) !== JSON.stringify(expectedNeeds)) {
@@ -313,6 +342,10 @@ try {
   }
   const iosRun = array(iosCoverage.steps).find((step) => String(step.run ?? '').includes('run-simulator-tests.sh'));
   const iosNode = array(iosCoverage.steps).find((step) => String(step.uses ?? '').startsWith('actions/setup-node@'));
+  const iosOperator = array(iosCoverage.steps).find((step) => step.run === 'node scripts/ci/ios-operator.mjs --context coverage');
+  if (iosOperator?.if !== "${{ github.event_name == 'workflow_dispatch' }}") {
+    fail('iOS coverage must verify Admin permissions on manual dispatch');
+  }
   if (
     !iosRun || !String(iosRun.run).includes('--execute') || !String(iosRun.run).includes('$IOS_REPORT_DIR') ||
     iosRun.env?.DEVELOPER_DIR !== '/Applications/Xcode.app/Contents/Developer' ||

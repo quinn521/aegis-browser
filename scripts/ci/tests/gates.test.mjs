@@ -442,7 +442,7 @@ test('push and dispatch identity admit configured maintenance lines while reject
   for (const event of ['push', 'workflow_dispatch']) assert.notEqual(verify(event, 'refs/heads/develop', unrelated).status, 0, 'unrelated base must fail');
 });
 
-test('workflow validator enforces Mac-only automatic gates and safe manual workflows', () => {
+test('workflow validator enforces automatic platform reporting and its execution boundaries', () => {
   const paths = ['quality.yml', 'ios-coverage.yml', 'other-platform-coverage.yml', 'android-java-coverage.yml', 'pr-title.yml', 'cpp-unit-tests.yml', 'ios-release-validation.yml']
     .map((name) => join(root, '.github/workflows', name));
   const originals = paths.map((path) => YAML.parse(readFileSync(path, 'utf8')));
@@ -453,9 +453,13 @@ test('workflow validator enforces Mac-only automatic gates and safe manual workf
   assert.notEqual(validate(paths).status, 0, 'the iOS workflow path cannot be overridden');
   const directory = mkdtempSync(join(tmpdir(), 'aegis-workflow-test-'));
   const prTypes = ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft'];
-  const automaticJobs = [[0, 'impact'], [0, 'quality'], [0, 'quality-summary'], [5, 'cpp-unit-tests'], [6, 'contracts'], [6, 'ios-archive']];
+  const reportingJobs = [[1, 'ios-coverage'], [2, 'shell-coverage'], [2, 'powershell-coverage'], [3, 'android-java-coverage']];
+  const automaticJobs = [
+    [0, 'impact'], [0, 'quality'], [0, 'quality-summary'], ...reportingJobs,
+    [5, 'cpp-unit-tests'], [6, 'contracts'], [6, 'ios-archive'],
+  ];
   const mutations = [
-    ...[0, 5, 6].flatMap((index) => [
+    ...[0, 1, 2, 3, 5, 6].flatMap((index) => [
       [index, (w) => { delete w.on.pull_request.types; }, 'missing PR event selection'],
       ...prTypes.map((type) => [index, (w) => {
         w.on.pull_request.types = prTypes.filter((value) => value !== type);
@@ -533,19 +537,37 @@ test('workflow validator enforces Mac-only automatic gates and safe manual workf
     [0, (w) => { w.jobs['quality-summary'].steps[1].run += ' || true'; }],
     [0, (w) => { w.jobs['quality-summary'].steps[1].if = '${{ false }}'; }],
     ...[1, 2, 3].flatMap((index) => [
-      [index, (w) => { w.on.push = {branches: ['main']}; }],
+      [index, (w) => { delete w.on.push; }, 'reporting loses post-merge coverage'],
+      [index, (w) => { delete w.on.workflow_dispatch; }, 'reporting loses manual diagnostics'],
+      [index, (w) => { w.on.push.branches = ['main']; }, 'reporting misses develop pushes'],
+      [index, (w) => { w.on.pull_request.branches.push('feature'); }, 'reporting admits unrelated PR base'],
+      [index, (w) => { w.on.push['tags-ignore'] = ['**']; }, 'reporting must specify only branch pushes'],
+      [index, (w) => { w.concurrency.group = 'report'; }, 'reporting loses SHA-specific concurrency'],
+      [index, (w) => { w.concurrency['cancel-in-progress'] = true; }, 'an automatic push must not cancel another push'],
       [index, (w) => { w.permissions.contents = 'write'; }],
       [index, (w) => { Object.values(w.jobs)[0]['continue-on-error'] = true; }],
       [index, (w) => { Object.values(w.jobs)[0].permissions = {'contents': 'write'}; }],
       [index, (w) => { Object.values(w.jobs)[0].steps[0].with['persist-credentials'] = true; }],
       [index, (w) => { Object.values(w.jobs)[0].steps[0].uses = 'actions/checkout@v7'; }],
     ]),
+    ...reportingJobs.map(([index, job]) => [index, (w) => {
+      w.jobs[job]['runs-on'] = ['self-hosted', 'macOS', 'ARM64', 'aegis-test'];
+    }, `${job} must run on the declared hosted platform`]),
+    [1, (w) => { delete w.on.pull_request.paths; }, 'a documentation-only PR must not allocate a coverage Mac'],
+    [2, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'desktop reports must also cover shared changes'],
+    [3, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'Android reporting misses shared and workflow changes'],
     [3, (w) => {
       const step = w.jobs['android-java-coverage'].steps.find((entry) => entry.name === 'Run six fixtures and collect real Java coverage');
       delete step.run;
       step.uses = 'reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d';
     }, 'old emulator action injects a key before AVD admission'],
     [1, (w) => { w.jobs['ios-coverage'].steps[1].with['node-version'] = '22.23.0'; }],
+    [1, (w) => {
+      delete w.jobs['ios-coverage'].steps.find((step) => step.run?.endsWith('--context coverage')).if;
+    }, 'the manual Admin check would reject automatic events'],
+    [1, (w) => {
+      w.jobs['ios-coverage'].steps = w.jobs['ios-coverage'].steps.filter((step) => !step.run?.endsWith('--context coverage'));
+    }, 'manual coverage loses the Admin check'],
     [4, (w) => { w.on.pull_request_target.branches = ['main']; }],
     [4, (w) => { w.on.pull_request = {}; }],
     [4, (w) => { w.permissions.contents = 'write'; }],
