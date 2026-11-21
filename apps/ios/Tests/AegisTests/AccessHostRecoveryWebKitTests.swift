@@ -2616,6 +2616,27 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(snapshot.toggleOn)
         XCTAssertEqual(snapshot.connection, .ready)
         XCTAssertFalse(snapshot.autoRecoveryEnabled)
+
+        coordinator.setWebsiteAccelerationMode(.smart, for: tab)
+        let explicit = coordinator.snapshot(for: tab)
+        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(explicit), "服务连接已就绪")
+        let next = target.appendingPathComponent("next")
+        tab.loadFromAddressBar(next)
+        try await waitUntil { tab.liveCommittedDocumentURL == next && !tab.isLoading }
+        XCTAssertTrue(coordinator.setAutoRecoveryEnabled(true, for: tab).isArmed)
+        XCTAssertEqual(coordinator.snapshot(for: tab).autoRecoveryLine, AccessAutoRecoveryCopy.armedOnCurrentConnection)
+    }
+
+    func testOverseasRecognizesAnApprovedActionBeforeItsProvisionalCallback() throws {
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let destination = try XCTUnwrap(URL(string: "https://overseas-awaiting-callback.invalid/submit"))
+        tab.adoptPolicyMainFrameNavigationForTests(url: destination, method: "POST", hasReplayableBody: true)
+        XCTAssertNil(tab.currentNavigationForTests)
+        XCTAssertEqual(tab.activeMainFrameNavigationURL, destination)
+        tab.stop()
+        XCTAssertNil(tab.activeMainFrameNavigationURL)
     }
 
     func testOverseasSwitchStopsSentHTTPSWhileAddressOfferRemainsVisible() async throws {
