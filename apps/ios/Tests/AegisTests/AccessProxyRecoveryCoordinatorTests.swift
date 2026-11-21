@@ -1281,6 +1281,62 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertNotNil(routed, "manual proxy intent must keep the host store after auto-recovery off")
     }
 
+    func testSafeFailureRetryFollowsTheWebsiteChoiceAndRetainsLocationPrivacy() throws {
+        let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev)
+        let host = try AccessSiteHost("failure-route.invalid")
+        let tab = try failedTab(coordinator: coordinator, url: "https://failure-route.invalid/path")
+        let failure = try XCTUnwrap(tab.lastMainFrameFailure)
+
+        XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .optional)
+        coordinator.setWebsiteRouteChoice(.service, for: tab, displayedHost: host)
+        XCTAssertFalse(coordinator.snapshot(for: tab, forLocationControl: true).toggleOn)
+        XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .required)
+        coordinator.setWebsiteRouteChoice(nil, for: tab, displayedHost: host)
+        XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .optional)
+
+        coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .required)
+        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: host)
+        XCTAssertTrue(coordinator.snapshot(for: tab, forLocationControl: true).toggleOn)
+        XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .unavailable)
+        XCTAssertNil(coordinator.retryViaProxy(tab: tab))
+        XCTAssertEqual(tab.lastMainFrameFailure, failure)
+
+        tab.reload()
+        XCTAssertNotEqual(tab.currentAttemptIDForTests, failure.navigationID)
+        XCTAssertEqual(tab.addressBarURL, failure.url)
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertNil(tab.lastMainFrameFailure)
+        XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .unavailable)
+    }
+
+    func testFailureRetryRejectsUnsafeReplayAndRestrictedErrors() throws {
+        let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let variants: [(url: String, method: String, authorization: String?, error: Int)] = [
+            ("https://example.invalid/form", "POST", nil, NSURLErrorTimedOut),
+            ("https://example.invalid/authenticated", "HEAD", "Bearer fixture", NSURLErrorTimedOut),
+            ("https://fixture@example.invalid/", "GET", nil, NSURLErrorTimedOut),
+            ("https://example.invalid/tls", "GET", nil, NSURLErrorSecureConnectionFailed),
+        ]
+        for variant in variants {
+            var request = URLRequest(url: try XCTUnwrap(URL(string: variant.url)))
+            request.httpMethod = variant.method
+            request.setValue(variant.authorization, forHTTPHeaderField: "Authorization")
+            tab.load(request)
+            tab.webView(tab.webView, didFailProvisionalNavigation: tab.currentNavigationForTests,
+                        withError: NSError(domain: NSURLErrorDomain, code: variant.error))
+            XCTAssertEqual(tab.lastMainFrameFailure?.url, request.url)
+            XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .unavailable, variant.url)
+            XCTAssertNil(coordinator.retryViaProxy(tab: tab), variant.url)
+            tab.stop()
+        }
+    }
+
     func testDuplicateFailureCallbackDoesNotPrepareTwice() async throws {
         let publisher = AccessProxyEntryPublisher { generation, _ in ready(generation, port: 18_112) }
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock())

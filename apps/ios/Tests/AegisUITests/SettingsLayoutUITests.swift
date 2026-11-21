@@ -47,6 +47,51 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue((field.value as? String ?? "").contains("example.invalid"))
     }
 
+    func testOriginalWebsiteChoiceOffersAnOriginalRetryWithLocationPrivacyEnabled() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launch()
+        defer { app.terminate() }
+
+        let address = app.textFields["address-field"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        address.typeText("https://example.invalid/\n")
+        let privacy = app.buttons["address-location-privacy"]
+        XCTAssertTrue(privacy.waitForExistence(timeout: 10))
+        XCTAssertFalse(privacy.isSelected)
+        privacy.tap()
+        let proxyRetry = app.buttons["page-load-proxy-retry"]
+        XCTAssertTrue(proxyRetry.waitForExistence(timeout: 12))
+        XCTAssertTrue(privacy.isSelected)
+
+        app.buttons["browser-more"].tap()
+        app.buttons["open-browser-settings"].tap()
+        let entry = app.buttons["domestic-acceleration-link"]
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        let original = app.buttons["使用原有连接"]
+        XCTAssertTrue(reveal(original, app))
+        original.tap()
+        XCTAssertTrue(original.isSelected)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["settings-done"].tap()
+
+        let retry = app.buttons["page-load-retry"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 8), "The explicit original route must have an actionable retry")
+        XCTAssertFalse(proxyRetry.exists)
+        let stopLoading = app.buttons["停止加载"]
+        XCTAssertFalse(stopLoading.exists)
+        retry.tap()
+
+        // WebKit may present its own HTTPS interstitial for this reserved host.
+        // Observe a new load instead of requiring a second app-level DNS error.
+        XCTAssertTrue(stopLoading.waitForExistence(timeout: 8))
+        XCTAssertTrue((address.value as? String ?? "").contains("example.invalid"))
+        XCTAssertTrue(privacy.isSelected)
+        XCTAssertFalse(proxyRetry.exists)
+    }
+
     func testLocationPrivacyControlsHideNodeDetailsAndKeepFailedTarget() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]

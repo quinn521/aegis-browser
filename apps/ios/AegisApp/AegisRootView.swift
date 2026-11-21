@@ -644,6 +644,7 @@ struct PageLoadFailureBanner: View {
     @ObservedObject var tab: BrowserTab
     var locationPrivacyOn = false
     var offersLocationService = true
+    var failureProxyRetry: AccessHostStoreCoordinator.FailureProxyRetry? = nil
     var autoRecoveryOn: Bool = false
     var autoRecoveryLine: String? = nil
     var setAutoRecovery: ((BrowserTab, Bool) -> Void)? = nil
@@ -652,26 +653,44 @@ struct PageLoadFailureBanner: View {
     var editAddress: (() -> Void)? = nil
     var proxyRetry: (BrowserTab) -> Void
 
+    private var availableProxyRetry: AccessHostStoreCoordinator.FailureProxyRetry {
+        guard tab.loadingErrorAllowsProxyRetry else { return .unavailable }
+        if let failureProxyRetry { return failureProxyRetry }
+        if locationPrivacyOn { return .required }
+        return offersLocationService ? .optional : .unavailable
+    }
+
     var body: some View {
         let _ = localizationLocale
         if let error = tab.loadingError {
+            let failure = tab.lastMainFrameFailure
+            let retry = availableProxyRetry
             VStack(alignment: .leading, spacing: 8) {
-                if let failure = tab.lastMainFrameFailure {
+                if let failure {
                     Text(verbatim: AccessSiteDisplayName.title(failure.url.host(percentEncoded: true)))
                         .font(.callout.weight(.semibold))
                         .accessibilityIdentifier("page-load-failed-host")
                 }
                 Label("页面暂时无法打开", systemImage: "exclamationmark.circle")
                     .font(.headline)
-                if tab.loadingErrorAllowsProxyRetry && (locationPrivacyOn || offersLocationService) {
-                    ProxyRetryButton(title: AegisLocalization.string(locationPrivacyOn ? "重试" : "隐藏位置并重试")) { proxyRetry(tab) }
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                if retry != .unavailable {
+                    ProxyRetryButton(title: AegisLocalization.string(retry == .required ? "重试" : "隐藏位置并重试")) {
+                        guard tab.loadingErrorAllowsProxyRetry, tab.lastMainFrameFailure == failure else { return }
+                        proxyRetry(tab)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 }
-                if !locationPrivacyOn || !tab.loadingErrorAllowsProxyRetry {
-                    if tab.safeRouteReloadRequest != nil {
-                        Button("重试") { tab.reload() }.frame(minHeight: 44)
-                            .accessibilityIdentifier("page-load-retry")
+                if retry != .required {
+                    if let request = tab.safeRouteReloadRequest,
+                       failure == nil || (request.url == failure?.url && request.httpMethod == failure?.method) {
+                        Button("重试") {
+                            guard !tab.isLoading, tab.loadingError != nil, tab.lastMainFrameFailure == failure,
+                                  tab.safeRouteReloadRequest == request else { return }
+                            tab.reload()
+                        }
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("page-load-retry")
                     } else {
                         resubmissionActions
                     }
@@ -776,13 +795,14 @@ private struct ActiveTabView: View {
     @Environment(\.locale) private var localizationLocale
     var body: some View {
         let _ = localizationLocale
+        let site = hostStores.snapshot(for: tab)
         VStack(spacing: 0) {
             PageLoadFailureBanner(
                 tab: tab,
-                locationPrivacyOn: hostStores.snapshot(for: tab, forLocationControl: true).toggleOn,
                 offersLocationService: hostStores.offersLocationService,
-                autoRecoveryOn: hostStores.snapshot(for: tab).autoRecoveryEnabled,
-                autoRecoveryLine: hostStores.snapshot(for: tab).autoRecoveryLine,
+                failureProxyRetry: hostStores.failureProxyRetry(for: tab),
+                autoRecoveryOn: site.autoRecoveryEnabled,
+                autoRecoveryLine: site.autoRecoveryLine,
                 setAutoRecovery: { failed, enabled in
                     _ = hostStores.setAutoRecoveryEnabled(enabled, for: failed)
                 },
