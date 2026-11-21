@@ -1338,3 +1338,210 @@ private final class WindowPrepareGate {
     }
     func finish() { released = true; let pending = continuation; continuation = nil; pending?.resume() }
 }
+
+extension AccessHostRecoveryWebKitTests {
+    private enum PinnedDebianGeoSite {
+        // Complete DEBIAN group from v2fly dlc.dat 20261121064510 (two Domain records).
+        private static let domains = ["debian.org", "dotdeb.org"]
+
+        static func matches(_ url: URL, projectedSuffix: String = "") -> Bool {
+            guard let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  var host = url.host?.lowercased() else {
+                return false
+            }
+            if host.hasSuffix(".") {
+                host.removeLast()
+            }
+            guard !host.isEmpty, !host.hasPrefix("."), !host.hasSuffix("."), !host.contains("..") else { return false }
+            return domains.contains { root in
+                let domain = root + projectedSuffix
+                return host == domain || host.hasSuffix("." + domain)
+            }
+        }
+    }
+
+    // Installed only by the XCTest. BrowserTab calls this hook before sending an explicit
+    // top-level load. The production coordinator owns preparation, lifetime and store choice.
+    @MainActor
+    private final class GeoSiteTopLevelCoordinator: BrowserHostStoreCoordinating {
+        let base: AccessHostStoreCoordinator
+        private var authorized = Set<AccessHostStoreKey>()
+
+        init(base: AccessHostStoreCoordinator) { self.base = base }
+
+        func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool {
+            if let url = request.url, PinnedDebianGeoSite.matches(url, projectedSuffix: ".geosite.invalid"),
+               let raw = url.host, let host = try? AccessSiteHost.normalize(raw) {
+                let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
+                if authorized.insert(key).inserted {
+                    base.setProxyEnabled(true, host: host, scopeID: key.scopeID, isPrivate: key.isPrivate)
+                }
+            }
+            return base.prepareProxyNavigation(tab: tab, request: request)
+        }
+
+        func requiresProxy(tab: BrowserTab, url: URL) -> Bool { base.requiresProxy(tab: tab, url: url) }
+        func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { base.requiresProxyPreparation(tab: tab, url: url) }
+        func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool { base.wouldSwitchStore(tab: tab, url: url) }
+        func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? {
+            base.dataStoreForMainFrame(tab: tab, url: url)
+        }
+        func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError) {
+            base.mainFrameFailed(tab: tab, failure: failure, error: error)
+        }
+        func pendingRecoveryInvalidated(tab: BrowserTab) { base.pendingRecoveryInvalidated(tab: tab) }
+        func tabClosed(_ tab: BrowserTab) { base.tabClosed(tab) }
+        func ordinaryHostStores() -> [WKWebsiteDataStore] { base.ordinaryHostStores() }
+        func endPrivateSession(scopeID: String) { base.endPrivateSession(scopeID: scopeID) }
+    }
+
+    func testGeoSitePinnedDomainClassification() throws {
+        let cases: [(String, Bool)] = [
+            ("https://debian.org/", true),
+            ("http://dotdeb.org/", true),
+            ("https://security.mirror.debian.org/", true),
+            ("https://archive.packages.dotdeb.org/", true),
+            ("https://MiRrOr.DeBiAn.OrG./", true),
+            ("https://notdebian.org/", false),
+            ("https://bad..debian.org/", false),
+            ("https://debian.org.attacker.invalid/", false),
+            ("https://dotdeb.org.attacker.invalid/", false),
+            ("https://outside.invalid/files/debian.org", false),
+            ("https://debian.org@outside.invalid/", false),
+            ("ftp://debian.org/", false),
+            ("file:///debian.org", false)
+        ]
+
+        for (address, expected) in cases {
+            let url = try XCTUnwrap(URL(string: address))
+            XCTAssertEqual(PinnedDebianGeoSite.matches(url), expected, address)
+        }
+    }
+
+    @MainActor
+    func testGeoSiteTopLevelNavigationSelectsManagedOrOriginal() async throws {
+        let managedPort: UInt16 = 18_471
+        let originalPort: UInt16 = 18_472
+        let managed = AnsweringOpener(finishAfterRecording: true)
+        let original = AnsweringOpener(finishAfterRecording: true)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        defer { try? managedListener.stop() }
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        defer { try? originalListener.stop() }
+
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try await managedListener.start(at: startedAt)
+        try await originalListener.start(at: startedAt)
+
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort))
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let trial = GeoSiteTopLevelCoordinator(base: coordinator)
+        session.hostCoordinator = trial
+        let tab = try XCTUnwrap(session.activeTab)
+        try await tab.prepareContentRulesForTests()
+
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer {
+            withExtendedLifetime(trial) { session.closeWindow() }
+            restoreOriginal()
+        }
+
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+
+        let cases: [(host: String, expectsManaged: Bool)] = [
+            ("debian.org.geosite.invalid", true),
+            ("notdebian.org.geosite.invalid", false),
+            ("packages.dotdeb.org.geosite.invalid", true),
+            ("debian.org.attacker.geosite.invalid", false)
+        ]
+
+        func assertRoute(for authority: String, expectsManaged: Bool) {
+            XCTAssertEqual(managed.authorities.contains(authority), expectsManaged, "Managed CONNECT \(authority)")
+            XCTAssertEqual(original.authorities.contains(authority), !expectsManaged, "Original CONNECT \(authority)")
+        }
+
+        // Both observers finish after recording CONNECT. The witness is proxy
+        // selection, with no TLS handshake or page-load assertion.
+        for (host, expectsManaged) in cases {
+            let authority = "\(host):443"
+            let url = try XCTUnwrap(URL(string: "https://\(authority)/"))
+            tab.stop()
+            tab.loadFromAddressBar(url)
+            try await waitUntil(seconds: 12, {
+                self.attach(tab.webView, to: window)
+                return managed.authorities.contains(authority) || original.authorities.contains(authority)
+            }, message: "Expected either listener to record CONNECT \(authority)")
+            try await waitUntil(seconds: 12, { !tab.webView.isLoading },
+                                message: "WebKit did not finish the controlled CONNECT attempt for \(authority)")
+            assertRoute(for: authority, expectsManaged: expectsManaged)
+        }
+
+        tab.stop()
+        let receipt = XCTAttachment(string: "managed=\(managed.authorities)\noriginal=\(original.authorities)")
+        receipt.name = "GeoSite top-level CONNECT witnesses"
+        receipt.lifetime = .keepAlways
+        add(receipt)
+
+        for (host, expectsManaged) in cases {
+            assertRoute(for: "\(host):443", expectsManaged: expectsManaged)
+        }
+    }
+
+    func testGeoSiteUnavailableEntryKeepsMatchedNavigationOffOriginal() async throws {
+        let port: UInt16 = 18_473
+        let original = AnsweringOpener(finishAfterRecording: true)
+        let listener = try await makeListener(port: port, tunnels: original)
+        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        defer { try? listener.stop() }
+
+        let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
+        let trial = GeoSiteTopLevelCoordinator(base: AccessHostStoreCoordinator(publisher: publisher))
+        let session = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        session.hostCoordinator = trial
+        let tab = try XCTUnwrap(session.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let restoreOriginal = try observeOriginalStore(of: tab, port: port)
+        defer {
+            withExtendedLifetime(trial) { session.closeWindow() }
+            restoreOriginal()
+        }
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+
+        let member = "security.debian.org.geosite.invalid"
+        let outside = "control.geosite.invalid"
+        tab.loadFromAddressBar(try XCTUnwrap(URL(string: "https://\(member)/")))
+        try await waitUntil(seconds: 12, {
+            self.attach(tab.webView, to: window)
+            return tab.loadingError != nil
+        }, message: "The unavailable managed entry must terminate the matched navigation")
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+
+        tab.loadFromAddressBar(try XCTUnwrap(URL(string: "https://\(outside)/")))
+        try await waitUntil(seconds: 12, {
+            self.attach(tab.webView, to: window)
+            return original.authorities.contains("\(outside):443")
+        }, message: "The original listener must positively witness the control navigation")
+        try await waitUntil(seconds: 12, { !tab.webView.isLoading },
+                            message: "WebKit did not finish the control navigation")
+        tab.stop()
+        XCTAssertFalse(original.authorities.contains("\(member):443"))
+        let receipt = XCTAttachment(string: "provisions=\(publisher.provisionCount)\noriginal=\(original.authorities)")
+        receipt.name = "GeoSite unavailable entry witness"
+        receipt.lifetime = .keepAlways
+        add(receipt)
+    }
+
+    private func observeOriginalStore(of tab: BrowserTab, port: UInt16) throws -> @MainActor () -> Void {
+        let store = tab.originalWebsiteDataStore
+        let saved = store.proxyConfigurations
+        let observerPort = try XCTUnwrap(NWEndpoint.Port(rawValue: port))
+        var observer = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: observerPort))
+        observer.allowFailover = false
+        store.proxyConfigurations = [observer]
+        return { store.proxyConfigurations = saved }
+    }
+}
