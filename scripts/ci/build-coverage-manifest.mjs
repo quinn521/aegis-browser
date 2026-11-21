@@ -234,7 +234,7 @@ try {
         totals: pythonTotals,
         note: 'Proxy, vector generators, upstream and build-source tools only; prototype workers are not measured',
       },
-      swift: {status: 'SEPARATE_REPORTING_WORKFLOW', totals: null, note: 'iOS Coverage produces product-only xccov from Swift tests on iPhone and iPad simulators'},
+      swift: {status: 'MANUAL_REPORTING_WORKFLOW', totals: null, note: 'Product-only xccov runs in the manual-only iOS Coverage workflow; it is outside the current Mac quality gate and Codacy conversion remains pending'},
       bash: {status: 'SEPARATE_REPORTING_WORKFLOW', totals: null, note: 'Other Platform Coverage produces Bash line coverage on Linux'},
       powershell: {status: 'SEPARATE_REPORTING_WORKFLOW', totals: null, note: 'Other Platform Coverage produces Pester coverage and targeted Windows installer fixture results'},
       java: {status: 'SEPARATE_REPORTING_WORKFLOW', totals: null, note: 'Android Java Coverage produces JaCoCo for the Driver.java instrumentation helper on the API 36 emulator'},

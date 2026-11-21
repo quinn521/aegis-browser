@@ -465,13 +465,21 @@ cleanup() {
 trap cleanup EXIT
 
 fixture_ready() {
-  python3 "${SCRIPT_DIR}/simulator-fixture-server.py" --probe --port 8768
+  python3 - <<'PYTHON'
+import json, urllib.request
+try:
+    with urllib.request.urlopen('http://127.0.0.1:8768/v1/models', timeout=2) as response:
+        value = json.load(response)
+    assert value['data'][0]['id'] == 'aegis-simulator-fixture'
+except Exception:
+    raise SystemExit(1)
+PYTHON
 }
-if ! fixture_ready 2>/dev/null; then
+if ! fixture_ready; then
   python3 "${SCRIPT_DIR}/simulator-fixture-server.py" --port 8768 > "${OUTPUT_DIR}/fixture.log" 2>&1 &
   fixture_pid=$!
   for _attempt in 1 2 3 4 5; do
-    fixture_ready 2>/dev/null && break
+    fixture_ready && break
     kill -0 "$fixture_pid" 2>/dev/null || die "验收服务启动失败，检查 8768 端口和 fixture.log"
     sleep 1
   done

@@ -5,6 +5,7 @@ This fixture uses a FilePath character-type shim for installer constants. It is
 not a Chromium GN build, a setup/mini_installer binary, or Explorer/token proof.
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -56,9 +57,11 @@ def pinned_headers(chromium_pin):
         raise RuntimeError(f"Update pinned fixture inputs for Chromium {chromium_pin}") from error
 
 
-def download(url, destination, expected_sha256):
+def download(url, destination, expected_sha256, *, gitiles_text=False):
     with urllib.request.urlopen(url, timeout=60) as response:
         data = response.read()
+    if gitiles_text:
+        data = base64.b64decode(b"".join(data.split()), validate=True)
     actual = digest(data)
     if actual != expected_sha256:
         raise RuntimeError(f"Pinned download mismatch: {destination.name}")
@@ -169,8 +172,8 @@ def main():
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes((overlay / name).read_bytes())
         report["chromiumHeaderSha256"] = {
-            name: download(f"https://raw.githubusercontent.com/chromium/chromium/{chromium_pin}/{name}",
-                           fixture / name, approved)
+            name: download(f"https://chromium.googlesource.com/chromium/src/+/{chromium_pin}/{name}?format=TEXT",
+                           fixture / name, approved, gitiles_text=True)
             for name, approved in headers.items()
         }
         archive = fixture / "googletest.zip"

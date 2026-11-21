@@ -8,7 +8,7 @@ import YAML from 'yaml';
 import {readFileSync} from 'node:fs';
 
 const script = resolve('scripts/ci/platform-impact.mjs');
-test('mobile coverage uses the complete tested diff and the actual PR parents', () => {
+test('Android coverage uses the complete tested diff and the actual PR parents', () => {
   const root = mkdtempSync(join(tmpdir(), 'coverage-impact-'));
   const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
   const save = (path, text) => {
@@ -22,19 +22,16 @@ test('mobile coverage uses the complete tested diff and the actual PR parents', 
   };
   const outputFile = join(root, '.git', 'coverage-output');
   const routeSource = readFileSync('scripts/ci/coverage-impact.sh', 'utf8');
-  const workflows = {
-    ios: YAML.parse(readFileSync('.github/workflows/ios-coverage.yml', 'utf8')),
-    android: YAML.parse(readFileSync('.github/workflows/android-java-coverage.yml', 'utf8')),
-  };
+  const workflow = YAML.parse(readFileSync('.github/workflows/android-java-coverage.yml', 'utf8'));
   const runShell = (run, env) => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', run], {
     cwd: root,
     encoding: 'utf8',
     env: {...process.env, RUNNER_TEMP: join(root, '.git'), GITHUB_OUTPUT: outputFile, ...env},
   });
-  const route = (platform, event) => {
+  const route = (event) => {
     writeFileSync(outputFile, '');
-    const step = workflows[platform].jobs.impact.steps.find(item => item.id === 'route');
-    const result = runShell(step.run, {...event, COVERAGE_PLATFORM: platform});
+    const step = workflow.jobs.impact.steps.find(item => item.id === 'route');
+    const result = runShell(step.run, event);
     return {result, output: readFileSync(outputFile, 'utf8')};
   };
   try {
@@ -60,15 +57,13 @@ test('mobile coverage uses the complete tested diff and the actual PR parents', 
     const tested = git('rev-parse', 'HEAD');
     const event = {GITHUB_EVENT_NAME: 'pull_request', GITHUB_SHA: tested, EVENT_PR_BASE: eventBase, EVENT_PR_HEAD: head};
     save('scripts/ci/coverage-impact.sh', 'exit 42');
-    for (const platform of ['ios', 'android']) {
-      const first = route(platform, event);
-      assert.equal(first.result.status, 0, first.result.stderr);
-      assert.equal(first.output, `run=false\npr_base=${actualBase}\npr_head=${head}\n`);
-    }
-    assert.notEqual(route('ios', {...event, EVENT_PR_HEAD: eventBase}).result.status, 0);
-    assert.notEqual(route('ios', {...event, GITHUB_SHA: head}).result.status, 0);
+    const first = route(event);
+    assert.equal(first.result.status, 0, first.result.stderr);
+    assert.equal(first.output, `run=false\npr_base=${actualBase}\npr_head=${head}\n`);
+    assert.notEqual(route({...event, EVENT_PR_HEAD: eventBase}).result.status, 0);
+    assert.notEqual(route({...event, GITHUB_SHA: head}).result.status, 0);
 
-    const exerciseSingleInput = (file, affectedPlatform) => {
+    const exerciseSingleInput = (file, selected) => {
       git('reset', '--hard', actualBase);
       git('checkout', '-B', 'candidate', head);
       save(file, 'new platform input after the other 305 paths');
@@ -76,27 +71,24 @@ test('mobile coverage uses the complete tested diff and the actual PR parents', 
       git('checkout', 'develop');
       git('merge', '--no-ff', 'candidate', '-m', 'tested single-platform merge');
       const changedTested = git('rev-parse', 'HEAD');
-      for (const platform of ['ios', 'android']) {
-        const selected = platform === affectedPlatform;
-        const pr = route(platform, {...event, GITHUB_SHA: changedTested, EVENT_PR_HEAD: changedHead});
-        assert.equal(pr.result.status, 0, pr.result.stderr);
-        assert.equal(pr.output, `run=${selected}\npr_base=${actualBase}\npr_head=${changedHead}\n`);
-        const push = route(platform, {GITHUB_EVENT_NAME: 'push', GITHUB_SHA: changedTested, EVENT_PUSH_BEFORE: actualBase});
-        assert.equal(push.result.status, 0, push.result.stderr);
-        assert.equal(push.output, `run=${selected}\npr_base=\npr_head=\n`);
-      }
+      const pr = route({...event, GITHUB_SHA: changedTested, EVENT_PR_HEAD: changedHead});
+      assert.equal(pr.result.status, 0, pr.result.stderr);
+      assert.equal(pr.output, `run=${selected}\npr_base=${actualBase}\npr_head=${changedHead}\n`);
+      const push = route({GITHUB_EVENT_NAME: 'push', GITHUB_SHA: changedTested, EVENT_PUSH_BEFORE: actualBase});
+      assert.equal(push.result.status, 0, push.result.stderr);
+      assert.equal(push.output, `run=${selected}\npr_base=\npr_head=\n`);
       return {changedHead, changedTested};
     };
-    exerciseSingleInput('apps/ios/Later.swift', 'ios');
-    exerciseSingleInput('apps/browser/CHROMIUM_VERSION', 'android');
+    exerciseSingleInput('apps/ios/Later.swift', false);
+    exerciseSingleInput('apps/browser/CHROMIUM_VERSION', true);
     const {changedHead, changedTested} = exerciseSingleInput(
-      'apps/browser/scripts/android-ui-driver/Driver.java', 'android');
-    const manual = route('ios', {GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: changedTested});
+      'apps/browser/scripts/android-ui-driver/Driver.java', true);
+    const manual = route({GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: changedTested});
     assert.equal(manual.result.status, 0, manual.result.stderr);
     assert.equal(manual.output, 'run=true\npr_base=\npr_head=\n');
 
     const evidence = join(root, '.git', 'android-report');
-    const verify = workflows.android.jobs['android-java-coverage'].steps.find(step =>
+    const verify = workflow.jobs['android-java-coverage'].steps.find(step =>
       step.name === 'Bind report to exact SHA and scope');
     save('.git/android-report/coverage/summary.json', JSON.stringify({
       testedSha: changedTested, repositoryDirtyAtBuild: false, selfTestCases: 6,
@@ -115,13 +107,15 @@ test('mobile coverage uses the complete tested diff and the actual PR parents', 
     git('checkout', '--detach', eventBase);
     git('merge', '--no-ff', 'candidate', '-m', 'first rollout before baseline has routing');
     const rolloutEvent = {...event, GITHUB_SHA: git('rev-parse', 'HEAD'), EVENT_PR_HEAD: changedHead};
-    assert.equal(route('ios', rolloutEvent).output, `run=true\npr_base=${eventBase}\npr_head=${changedHead}\n`);
+    const rollout = route(rolloutEvent);
+    assert.equal(rollout.result.status, 0, rollout.result.stderr);
+    assert.equal(rollout.output, `run=true\npr_base=${eventBase}\npr_head=${changedHead}\n`);
 
     git('checkout', '--detach', eventBase);
     save('scripts/ci/coverage-impact.sh', 'exit 0');
     commit('trusted router with no decision');
     git('merge', '--no-ff', 'candidate', '-m', 'routing must fail rather than skip');
-    const silent = route('ios', {...rolloutEvent, GITHUB_SHA: git('rev-parse', 'HEAD')});
+    const silent = route({...rolloutEvent, GITHUB_SHA: git('rev-parse', 'HEAD')});
     assert.notEqual(silent.result.status, 0);
     assert.equal(silent.output, '');
   } finally {

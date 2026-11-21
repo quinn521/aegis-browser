@@ -3,14 +3,12 @@
 import argparse
 import hashlib
 import json
-import os
 import re
 import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.client import HTTPConnection
-from socketserver import TCPServer
 from urllib.parse import parse_qs, urlsplit
 
 PAYLOAD = b"Aegis Browser simulator download verification\n" * 1024
@@ -262,30 +260,8 @@ window.addEventListener('copy',e=>{window.copyBlocked=true;e.preventDefault();})
             return self.respond(400, {"error": "请求格式不正确"})
 
 
-class LoopbackFixtureServer(ThreadingHTTPServer):
-    def server_bind(self):
-        # macOS hosted runners can stall on the HTTPServer reverse lookup
-        # between bind() and listen(). The fixture uses a numeric address.
-        TCPServer.server_bind(self)
-        self.server_name, self.server_port = self.server_address
-
-
-def probe(port):
-    connection = HTTPConnection("127.0.0.1", port, timeout=2)
-    try:
-        connection.request("GET", "/v1/models")
-        response = connection.getresponse()
-        if response.status != 200 or json.load(response)["data"][0]["id"] != "aegis-simulator-fixture":
-            raise ValueError(f"unexpected fixture response (HTTP {response.status})")
-    finally:
-        connection.close()
-
-
 def self_test():
-    from unittest.mock import patch
-
-    with patch("socket.getfqdn", side_effect=AssertionError("Fixture bind must not resolve a hostname")):
-        server = LoopbackFixtureServer(("127.0.0.1", 0), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     # 仅连接刚启动的本机服务，不接受 URL，也不自动跟随重定向。
@@ -351,12 +327,7 @@ def self_test():
         for route in ("login", "safe", "dynamic", "canvas"):
             if "<title>" not in request("GET", "/security/" + route).decode():
                 raise AssertionError("安全页面样例缺失")
-        with socket.socket() as unavailable_proxy:
-            unavailable_proxy.bind(("127.0.0.1", 0))
-            proxy_url = f"http://127.0.0.1:{unavailable_proxy.getsockname()[1]}"
-            with patch.dict(os.environ, {"http_proxy": proxy_url, "no_proxy": "", "NO_PROXY": ""}):
-                probe(server.server_port)
-        print("SIMULATOR_FIXTURE_SELF_TEST=PASS cases=21")
+        print("SIMULATOR_FIXTURE_SELF_TEST=PASS cases=20")
     finally:
         server.shutdown()
         server.server_close()
@@ -365,18 +336,11 @@ def self_test():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8768)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--self-test", action="store_true")
-    mode.add_argument("--probe", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
         self_test()
-    elif args.probe:
-        try:
-            probe(args.port)
-        except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
-            parser.exit(1, f"Simulator fixture readiness: {error}\n")
     else:
-        server = LoopbackFixtureServer(("127.0.0.1", args.port), Handler)
+        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
         print(json.dumps({"base_url": f"http://127.0.0.1:{server.server_port}", "download_sha256": hashlib.sha256(PAYLOAD).hexdigest(), "model": "aegis-simulator-fixture"}), flush=True)
         server.serve_forever()

@@ -36,30 +36,43 @@ jobs:
           EVENT_PR_BASE: ${{ github.event.pull_request.base.sha }}
           EVENT_PR_HEAD: ${{ github.event.pull_request.head.sha }}
           EVENT_PUSH_BEFORE: ${{ github.event.before }}
-          COVERAGE_PLATFORM: android
         shell: bash
         run: |
           router=scripts/ci/coverage-impact.sh
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          base=''
           pr_base=''
           pr_head=''
-          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
-            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-            parents="$(git show -s --format=%P HEAD)"
-            read -r pr_base pr_head extra <<< "$parents"
-            [[ -n "$pr_base" && -n "$pr_head" && -z "$extra" && "$pr_head" == "$EVENT_PR_HEAD" ]]
-            [[ "$EVENT_PR_BASE" =~ ^[0-9a-f]{40}$ ]]
-            git merge-base --is-ancestor "$EVENT_PR_BASE" "$pr_base"
-            if ! git cat-file -e "$pr_base:$router"; then
-              printf 'run=true\npr_base=%s\npr_head=%s\n' "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            git show "$pr_base:$router" > "$RUNNER_TEMP/coverage-impact.sh"
-            router="$RUNNER_TEMP/coverage-impact.sh"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              parents="$(git show -s --format=%P HEAD)"
+              read -r pr_base pr_head extra <<< "$parents"
+              [[ -n "$pr_base" && -n "$pr_head" && -z "$extra" && "$pr_head" == "$EVENT_PR_HEAD" ]]
+              [[ "$EVENT_PR_BASE" =~ ^[0-9a-f]{40}$ ]]
+              git merge-base --is-ancestor "$EVENT_PR_BASE" "$pr_base"
+              if git cat-file -e "$pr_base:$router"; then
+                git show "$pr_base:$router" > "$RUNNER_TEMP/coverage-impact.sh"
+                router="$RUNNER_TEMP/coverage-impact.sh"
+                base="$pr_base"
+              fi
+              ;;
+            push)
+              [[ "$EVENT_PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+              if [[ "$EVENT_PUSH_BEFORE" != '0000000000000000000000000000000000000000' ]]; then
+                git merge-base --is-ancestor "$EVENT_PUSH_BEFORE" "$GITHUB_SHA"
+                base="$EVENT_PUSH_BEFORE"
+              fi
+              ;;
+            workflow_dispatch) ;;
+            *) exit 2 ;;
+          esac
+          decision='run=true'
+          if [[ -n "$base" ]]; then
+            output="$(mktemp "$RUNNER_TEMP/coverage-route.XXXXXX")"
+            GITHUB_OUTPUT="$output" bash "$router" "$base" "$GITHUB_SHA"
+            decision="$(grep '^run=' "$output")"
+            [[ "$decision" == 'run=true' || "$decision" == 'run=false' ]]
           fi
-          output="$(mktemp "$RUNNER_TEMP/coverage-route.XXXXXX")"
-          GITHUB_OUTPUT="$output" bash "$router" "$COVERAGE_PLATFORM"
-          decision="$(grep '^run=' "$output")"
-          [[ "$decision" == 'run=true' || "$decision" == 'run=false' ]]
           printf '%s\npr_base=%s\npr_head=%s\n' "$decision" "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
   android-java-coverage:
     name: android-java-coverage

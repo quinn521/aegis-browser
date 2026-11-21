@@ -1,65 +1,15 @@
 name: iOS Coverage
 on:
-  pull_request:
-    branches: [develop, main]
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
-  push:
-    branches: [develop, main]
   workflow_dispatch: null
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}-{1}', github.ref, github.sha) || format('dispatch-{0}', github.run_id) }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && 'main' || format('dispatch-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  impact:
-    name: ios-coverage-impact
-    if: ${{ github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      run: ${{ steps.route.outputs.run }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Select iOS coverage from the tested Git diff
-        id: route
-        env:
-          EVENT_PR_BASE: ${{ github.event.pull_request.base.sha }}
-          EVENT_PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          EVENT_PUSH_BEFORE: ${{ github.event.before }}
-          COVERAGE_PLATFORM: ios
-        shell: bash
-        run: |
-          router=scripts/ci/coverage-impact.sh
-          pr_base=''
-          pr_head=''
-          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
-            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-            parents="$(git show -s --format=%P HEAD)"
-            read -r pr_base pr_head extra <<< "$parents"
-            [[ -n "$pr_base" && -n "$pr_head" && -z "$extra" && "$pr_head" == "$EVENT_PR_HEAD" ]]
-            [[ "$EVENT_PR_BASE" =~ ^[0-9a-f]{40}$ ]]
-            git merge-base --is-ancestor "$EVENT_PR_BASE" "$pr_base"
-            if ! git cat-file -e "$pr_base:$router"; then
-              printf 'run=true\npr_base=%s\npr_head=%s\n' "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            git show "$pr_base:$router" > "$RUNNER_TEMP/coverage-impact.sh"
-            router="$RUNNER_TEMP/coverage-impact.sh"
-          fi
-          output="$(mktemp "$RUNNER_TEMP/coverage-route.XXXXXX")"
-          GITHUB_OUTPUT="$output" bash "$router" "$COVERAGE_PLATFORM"
-          decision="$(grep '^run=' "$output")"
-          [[ "$decision" == 'run=true' || "$decision" == 'run=false' ]]
-          printf '%s\npr_base=%s\npr_head=%s\n' "$decision" "$pr_base" "$pr_head" >> "$GITHUB_OUTPUT"
   ios-coverage:
     name: ios-coverage
-    needs: impact
-    if: ${{ needs.impact.outputs.run == 'true' && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
@@ -75,7 +25,6 @@ jobs:
         with:
           node-version: 22.23.1
       - name: Require repository Admin for manual operation
-        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: node scripts/ci/ios-operator.mjs --context coverage
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,19 +33,6 @@ jobs:
         with:
           go-version: '1.27.3'
           cache: false
-      - name: Install pinned XcodeGen
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          archive="$RUNNER_TEMP/xcodegen.zip"
-          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 --retry 3 \
-            --noproxy "${no_proxy:-},${NO_PROXY:-},github.com,.github.com,githubusercontent.com,.githubusercontent.com" \
-            --output "$archive" https://github.com/yonaskolb/XcodeGen/releases/download/2.48.0/xcodegen.zip
-          printf '%s  %s\n' 620c9f0dc10849f94728ab5df52d225ebab8187439dd6fee1925e59e80dff892 "$archive" | shasum -a 256 --check
-          ditto -x -k "$archive" "$RUNNER_TEMP/aegis-xcodegen"
-          bin="$RUNNER_TEMP/aegis-xcodegen/xcodegen/bin"
-          "$bin/xcodegen" --version
-          printf '%s\n' "$bin" >> "$GITHUB_PATH"
       - name: Run iPhone and iPad tests with Swift coverage
         env:
           DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
@@ -115,7 +51,5 @@ jobs:
             ${{ env.IOS_REPORT_DIR }}/ios-input-sha256-*.txt
             ${{ env.IOS_REPORT_DIR }}/run-metadata.txt
             ${{ env.IOS_REPORT_DIR }}/simulator-runtime.json
-            ${{ env.IOS_REPORT_DIR }}/fixture.log
-            ${{ env.IOS_REPORT_DIR }}/build.log
           if-no-files-found: error
           retention-days: 14

@@ -96,11 +96,11 @@ DEV 阶段另提供 `mise exec -- pnpm run quality:static` 作为本地只读静
 | JavaScript | `scripts/ci`、core 工具与 `apps/browser/scripts` 中受控的 Node `.js/.mjs/.cjs` | c8 从同次 Node 子进程的 V8 数据生成报告，并用 `--all` 纳入未执行生产脚本；renderer/WebUI JavaScript 未测。 |
 | C++ | `aegis_access` standalone 的 `access_route_planner.cc`、`site_proxy_rule_group.cc`、`request_ownership_registry.cc`、`request_dispatch_gate.cc` 与 `browser_request_metadata_seed.cc` | 同次 native binary 执行路由/协议组合同、RequestOwnershipRegistry、dispatch gate 以及 browser-owned metadata seed 的单元与回归合同，并使用匹配 clang/llvm profile 生成 LCOV；完整 Chromium、GURL/SQLite、GN/GTest 和浏览器集成证据仍单独记录。 |
 | Python | `local-pypi-proxy.py` 与两个 Access vector generators | 固定 coverage.py 隔离 venv；复用 proxy 4 项测试和 native 生成器调用，另有两个拒绝 fixture，combine 后生成 XML/JSON/LCOV/text；两个 prototype worker 未测。 |
-| Swift | `apps/ios` 的产品 Swift 文件 | `iOS Coverage` 在 iPhone 和 iPad Simulator 上测试并生成 xccov JSON。 |
+| Swift | `apps/ios` 的产品 Swift 文件 | 手动 `iOS Coverage` 在 iPhone 和 iPad Simulator 上测试并生成 xccov JSON。 |
 | Bash / PowerShell | Linux kcov 与 Windows Pester | `Other Platform Coverage` 记录列明脚本的行为和行覆盖，并保存 Windows 安装器 fixture 报告。 |
 | Java | `Driver.java` Android instrumentation 验收工具 | `Android Java Coverage` 在专用 API 36 emulator 上执行六项 fixture 并生成 JaCoCo exec/XML。 |
 
-清单用 `SEPARATE_REPORTING_WORKFLOW` 标记上述独立报告。核验时分别查看各 workflow 的结论与测试 SHA。Chromium 原生集成、实机、签名和发布各自使用对应的验收证据。
+清单用 `SEPARATE_REPORTING_WORKFLOW` 标记 Bash、PowerShell 和 Java 的独立报告。Swift 标为 `MANUAL_REPORTING_WORKFLOW`。核验时分别查看各 workflow 的结论与测试 SHA。Chromium 原生集成、实机、签名和发布各自使用对应的验收证据。
 
 HTML、CSS、JSON/data 与 GN/GNI 按静态/数据输入单列，不伪造行覆盖率。native 分类仍可对未知产品路径给出 `REVIEW_REQUIRED`；本质量工作不会把它改成 `NOT_APPLICABLE`。
 
@@ -130,11 +130,11 @@ quality 汇总 job 使用中性 ID `quality-summary`，条件为 `always() && (�
 
 主机端准入按 workflow 文件名与 `GITHUB_JOB` 的组合匹配；`GITHUB_JOB` 是 YAML 中 `jobs` 的键，不是 job 的 `name` 显示名。例如 `cpp-unit-tests.yml` 使用键 `cpp-unit-tests`，检查显示名为 `c++-unit-tests`，不能互换。维护准入钩子时，验证合法 quality/C++ 作业可进入，同时验证错误仓库、外部 fork、错误 workflow/job 组合和不允许的 ref 仍被拒绝。
 
-三个覆盖率 workflow 支持指向 `develop` 或 `main` 的 Ready PR、这两条分支的 push，以及手动 `workflow_dispatch`。Draft 暂缓分配 runner，转为 Ready 会触发适用作业。同一 PR 的后续触发取消旧运行，每个 push SHA 和手动运行各有独立分组。协调者分别核对平台结果和服务端 required checks。
+`Android Java Coverage` 和 `Other Platform Coverage` 支持指向 `develop` 或 `main` 的 Ready PR、这两条分支的 push，以及手动 `workflow_dispatch`。Draft 暂缓分配 runner，转为 Ready 会触发适用作业。同一 PR 的后续触发取消旧运行，每个 push SHA 和手动运行各有独立分组。协调者分别核对平台结果和服务端 required checks。
 
-移动端先在 Linux 用 Git 对象确认被测 SHA，并核验 PR 的两个合并父提交。PR 以第一父提交中的规则比较完整差异，首次接入时执行平台测试。Push 按前一个提交比较差异，手动运行直接执行平台测试。
+Android 先在 Linux 用 Git 对象确认被测 SHA，并核验 PR 的两个合并父提交。PR 以第一父提交中的规则比较完整差异，首次接入时执行平台测试。Push 按前一个提交比较差异，手动运行直接执行平台测试。
 
-- `iOS Coverage` 按 iOS 源码、共享测试资源、EmbeddedCore 构建脚本和 CI 入口的变更分配托管 Mac。作业校验固定 XcodeGen 发布包的 SHA-256。手动运行需仓库 Admin。报告记录双模拟器测试和 Swift 覆盖率。
+- `iOS Coverage` 通过仓库 Admin 手动启动。报告记录双模拟器测试和 Swift 覆盖率。
 - `Android Java Coverage` 按 Android instrumentation 工具、打包守卫、相关脚本和 CI 入口变更分配模拟器。作业核验 normal 与 coverage 两种 APK 的 JaCoCo 边界，在同一 API 36 ADB transport 确认 AVD 身份后运行六项 fixture，并保存 tested SHA、实际 PR 父提交、JaCoCo exec/XML、原始 class 摘要与模拟器日志。报告的 `browserTested=false` 表示覆盖率范围为 instrumentation 工具。
 - `Other Platform Coverage` 在上述 PR 与 push 运行 Linux Bash 和 Windows PowerShell 覆盖率。Windows 安装器 fixture 从被测提交读取 Chromium pin，并保存实际输入头文件的已核验哈希。
 

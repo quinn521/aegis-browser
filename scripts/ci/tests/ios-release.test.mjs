@@ -167,18 +167,11 @@ test('every protected delivery route depends on Admin admission and normalized o
   assert(!JSON.stringify(workflow.on).includes('branches'));
   for (const name of ['ios-release-validation', 'ios-coverage']) {
     const quality = parse(readFileSync('.github/workflows/'+name+'.yml', 'utf8'));
-    for (const [id, job] of Object.entries(quality.jobs)) {
-      if (name === 'ios-coverage' && id === 'impact') {
-        assert.equal(job['runs-on'], 'ubuntu-24.04');
-        assert.equal(job.environment, undefined);
-        assert.equal(quality.jobs['ios-coverage'].needs, id);
-        continue;
-      }
+    for (const job of Object.values(quality.jobs)) {
       const guard = job.steps.findIndex(s => s.run?.includes('ios-operator.mjs --context') || s.run?.includes('ios-cloud-poc-admission.mjs'));
       assert(guard >= 0, name+' requires manual Admin guard');
-      if (job.environment !== 'aegis-ios-cloud-poc') assert.equal(job.steps[guard].if, "${{ github.event_name == 'workflow_dispatch' }}");
-      const expensive = job.steps.findIndex(s => s.run?.includes('bundle exec') || s.run?.includes('xcodebuild ') ||
-        s.name === 'Install pinned XcodeGen' || s.run?.includes('run-simulator-tests.sh'));
+      if (name === 'ios-release-validation' && job.environment !== 'aegis-ios-cloud-poc') assert.equal(job.steps[guard].if, "${{ github.event_name == 'workflow_dispatch' }}");
+      const expensive = job.steps.findIndex(s => s.run?.includes('bundle exec') || s.run?.includes('xcodebuild ') || s.run?.includes('run-simulator-tests.sh'));
       assert(guard < expensive, name+' must authorize before expensive work');
     }
   }

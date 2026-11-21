@@ -454,7 +454,7 @@ test('workflow validator enforces automatic platform reporting and its execution
   const directory = mkdtempSync(join(tmpdir(), 'aegis-workflow-test-'));
   const prTypes = ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft'];
   const reportingJobs = [
-    [1, 'impact'], [1, 'ios-coverage'], [2, 'shell-coverage'], [2, 'powershell-coverage'],
+    [2, 'shell-coverage'], [2, 'powershell-coverage'],
     [3, 'impact'], [3, 'android-java-coverage'],
   ];
   const automaticJobs = [
@@ -462,7 +462,7 @@ test('workflow validator enforces automatic platform reporting and its execution
     [5, 'cpp-unit-tests'], [6, 'contracts'], [6, 'ios-archive'],
   ];
   const mutations = [
-    ...[0, 1, 2, 3, 5, 6].flatMap((index) => [
+    ...[0, 2, 3, 5, 6].flatMap((index) => [
       [index, (w) => { delete w.on.pull_request.types; }, 'missing PR event selection'],
       ...prTypes.map((type) => [index, (w) => {
         w.on.pull_request.types = prTypes.filter((value) => value !== type);
@@ -539,7 +539,7 @@ test('workflow validator enforces automatic platform reporting and its execution
       [0, (w) => { w.jobs['quality-summary'].steps[1].env.REQUIRED_RESULTS = value; }]),
     [0, (w) => { w.jobs['quality-summary'].steps[1].run += ' || true'; }],
     [0, (w) => { w.jobs['quality-summary'].steps[1].if = '${{ false }}'; }],
-    ...[1, 2, 3].flatMap((index) => [
+    ...[2, 3].flatMap((index) => [
       [index, (w) => { delete w.on.push; }, 'reporting loses post-merge coverage'],
       [index, (w) => { delete w.on.workflow_dispatch; }, 'reporting loses manual diagnostics'],
       [index, (w) => { w.on.push.branches = ['main']; }, 'reporting misses develop pushes'],
@@ -556,10 +556,10 @@ test('workflow validator enforces automatic platform reporting and its execution
     ...reportingJobs.map(([index, job]) => [index, (w) => {
       w.jobs[job]['runs-on'] = ['self-hosted', 'macOS', 'ARM64', 'aegis-test'];
     }, `${job} must run on the declared hosted platform`]),
-    [1, (w) => { w.on.pull_request.paths = ['apps/ios/**']; }, 'event-level filters can omit changed mobile inputs'],
+    [1, (w) => { w.on.push = {branches: ['main']}; }, 'iOS coverage remains manual'],
     [2, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'desktop reports must also cover shared changes'],
     [3, (w) => { w.on.push.paths = ['apps/browser/**']; }, 'Android routing must inspect the complete push diff'],
-    [1, (w) => { delete w.jobs['ios-coverage'].needs; }, 'simulator allocation must wait for routing'],
+    [3, (w) => { delete w.jobs['android-java-coverage'].needs; }, 'emulator allocation must wait for routing'],
     [3, (w) => { w.jobs.impact.outputs.pr_base = '${{ github.event.pull_request.base.sha }}'; }, 'router must emit the exact merge base'],
     [3, (w) => { w.jobs['android-java-coverage'].env.AEGIS_PR_HEAD_SHA = '${{ github.event.pull_request.head.sha }}'; }, 'report must use the verified second parent'],
     [3, (w) => {
@@ -568,15 +568,6 @@ test('workflow validator enforces automatic platform reporting and its execution
       step.uses = 'reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d';
     }, 'old emulator action injects a key before AVD admission'],
     [1, (w) => { w.jobs['ios-coverage'].steps[1].with['node-version'] = '22.23.0'; }],
-    [1, (w) => {
-      delete w.jobs['ios-coverage'].steps.find((step) => step.run?.endsWith('--context coverage')).if;
-    }, 'the manual Admin check would reject automatic events'],
-    [1, (w) => {
-      w.jobs['ios-coverage'].steps = w.jobs['ios-coverage'].steps.filter((step) => !step.run?.endsWith('--context coverage'));
-    }, 'manual coverage loses the Admin check'],
-    [1, (w) => {
-      w.jobs['ios-coverage'].steps = w.jobs['ios-coverage'].steps.filter((step) => step.name !== 'Install pinned XcodeGen');
-    }, 'hosted simulator requires XcodeGen'],
     [4, (w) => { w.on.pull_request_target.branches = ['main']; }],
     [4, (w) => { w.on.pull_request = {}; }],
     [4, (w) => { w.permissions.contents = 'write'; }],
