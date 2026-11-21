@@ -84,6 +84,18 @@ struct AccessTestNodeRecord: Codable {
         case requestHost, path, alpn
     }
 
+    private struct StoredIdentity: Decodable {
+        let version: Int
+        let revision: UUID
+    }
+
+    /// Revise or remove a known record even if its outbound can no longer run.
+    static func storedRevision(in data: Data) throws -> UUID {
+        let identity = try JSONDecoder().decode(StoredIdentity.self, from: data)
+        guard identity.version == 1 || identity.version == 2 else { throw AccessTestNodeError.storageUnavailable }
+        return identity.revision
+    }
+
     init(_ node: AccessInternalTestNode) {
         revision = UUID()
         self.node = node
@@ -158,8 +170,15 @@ struct AccessTestNodeRecord: Codable {
 @MainActor
 protocol AccessTestNodeStoring {
     func read(channel: AccessInternalOptions) throws -> AccessTestNodeRecord?
+    func revision(channel: AccessInternalOptions) throws -> UUID?
     func write(_ record: AccessTestNodeRecord, channel: AccessInternalOptions) throws
     func remove(channel: AccessInternalOptions) throws
+}
+
+extension AccessTestNodeStoring {
+    func revision(channel: AccessInternalOptions) throws -> UUID? {
+        try read(channel: channel)?.revision
+    }
 }
 
 struct AccessTestNodeKeychain: AccessTestNodeStoring {
@@ -172,7 +191,7 @@ struct AccessTestNodeKeychain: AccessTestNodeStoring {
          kSecAttrSynchronizable as String: false]
     }
 
-    func read(channel: AccessInternalOptions) throws -> AccessTestNodeRecord? {
+    private func data(channel: AccessInternalOptions) throws -> Data? {
         var request = query(for: channel)
         request[kSecReturnData as String] = true
         var item: CFTypeRef?
@@ -181,7 +200,15 @@ struct AccessTestNodeKeychain: AccessTestNodeStoring {
         guard status == errSecSuccess, let data = item as? Data else {
             throw AccessTestNodeError.storageUnavailable
         }
-        return try JSONDecoder().decode(AccessTestNodeRecord.self, from: data)
+        return data
+    }
+
+    func read(channel: AccessInternalOptions) throws -> AccessTestNodeRecord? {
+        try data(channel: channel).map { try JSONDecoder().decode(AccessTestNodeRecord.self, from: $0) }
+    }
+
+    func revision(channel: AccessInternalOptions) throws -> UUID? {
+        try data(channel: channel).map(AccessTestNodeRecord.storedRevision(in:))
     }
 
     func write(_ record: AccessTestNodeRecord, channel: AccessInternalOptions) throws {
@@ -261,7 +288,7 @@ final class AccessTestNodeRepository {
 
     func revision(isPrivate: Bool) throws -> UUID? {
         guard let channel, !isPrivate else { throw AccessTestNodeError.unavailable }
-        return try storage.read(channel: channel)?.revision
+        return try storage.revision(channel: channel)
     }
 
     func apply(_ draft: AccessRealityVisionParameters, expectedRevision: UUID?, isPrivate: Bool) throws -> UUID {

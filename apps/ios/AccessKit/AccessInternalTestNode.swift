@@ -21,8 +21,7 @@ public enum AccessInternalTestNode: Equatable, Sendable {
         }
         // Only the path query may contain a nested URL. The display label
         // is discarded, but may not contain a concatenated link.
-        guard share.dropFirst("vless://".count).range(of: "vless://", options: .caseInsensitive) == nil,
-              !link[uri.endIndex...].contains("://"),
+        guard !link[uri.endIndex...].contains("://"),
               let components = URLComponents(string: share, encodingInvalidCharacters: false),
               components.percentEncodedPassword == nil,
               components.percentEncodedPath.isEmpty || components.percentEncodedPath == "/" else {
@@ -33,7 +32,9 @@ public enum AccessInternalTestNode: Equatable, Sendable {
         let names = Set(items.map(\.name))
         guard names.count == items.count, names.isSubset(of: permitted),
               items.allSatisfy({ $0.value != nil }),
-              let address = components.encodedHost, let rawPort = components.port, let port = UInt16(exactly: rawPort),
+              let host = components.encodedHost,
+              let address = host.hasPrefix("[") ? host : host.removingPercentEncoding,
+              let rawPort = components.port, let port = UInt16(exactly: rawPort),
               let id = components.user else { throw AccessLocalV2RayConfigError.invalidJSON }
         let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
         guard query["type"] == "ws", query["security"] == "tls", [nil, "", "none"].contains(query["encryption"]),
@@ -70,7 +71,8 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
             }
             normalizedAddress = literal
         } else {
-            guard Self.isDNSName(address) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
+            let dnsLabels = address.hasSuffix(".") ? String(address.dropLast()) : address
+            guard Self.isDNSName(dnsLabels) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
                 throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
             }
             normalizedAddress = address
@@ -79,13 +81,7 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         guard Self.isDNSName(serverName), Self.isHTTPAuthority(requestHost) else {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("tls-host")
         }
-        guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("#"), !path.contains("\\"),
-              path.utf8.count <= 2_048, path.utf8.allSatisfy({ (33...126).contains($0) }),
-              let decoded = path.removingPercentEncoding,
-              decoded.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }),
-              let parts = URLComponents(string: path, encodingInvalidCharacters: false),
-              parts.string == path,
-              (parts.queryItems ?? []).allSatisfy({ $0.name != "ed" }) else {
+        guard Self.isWebSocketRequestTarget(path) else {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("path")
         }
         guard ["", "chrome", "firefox", "safari", "ios", "android", "edge"].contains(fingerprint),
@@ -117,7 +113,26 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         return value
     }
 
+    private static func isWebSocketRequestTarget(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), !path.hasPrefix("//"), !path.contains("#"), !path.contains("\\"),
+              path.utf8.count <= 2_048, path.utf8.allSatisfy({ (33...126).contains($0) }),
+              path.range(of: #"%(?![A-Fa-f0-9]{2})|%(?:[01][A-Fa-f0-9]|7[Ff])"#, options: .regularExpression) == nil,
+              URLComponents(string: path, encodingInvalidCharacters: false)?.string == path else { return false }
+        // A callback URL can be a path value. A second proxy share cannot.
+        let withoutWebSchemes = path.replacingOccurrences(of: #"(?i)(?<![a-z0-9+.-])https?://"#, with: "",
+                                                         options: .regularExpression)
+        guard !withoutWebSchemes.contains("://") else { return false }
+        guard let query = path.firstIndex(of: "?") else { return true }
+        // Decode names independently to match Xray's Go query lookup even
+        // when an unrelated value contains an opaque, non-UTF-8 octet.
+        return path[path.index(after: query)...].split(separator: "&").allSatisfy { field in
+            let name = String(field.prefix(while: { $0 != "=" }))
+            return name.removingPercentEncoding != "ed"
+        }
+    }
+
     private static func isHTTPAuthority(_ authority: String) -> Bool {
+        guard !authority.contains("%") else { return false }
         let hostEnd: String.Index
         if authority.hasPrefix("[") {
             guard let close = authority.firstIndex(of: "]") else { return false }

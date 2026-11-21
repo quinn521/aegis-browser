@@ -50,6 +50,54 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertThrowsError(try AccessInternalTestNode.parseSingleShareURI(share + webSocketLink))
     }
 
+    func testWebSocketValidatesRequestTargetBytesAndBothAddressFields() throws {
+        let source = webSocketLink.replacingOccurrences(of: "198.51.100.20", with: "r%6Fute.example.")
+            .replacingOccurrences(of: "path=%2Finside", with: "path=%2Fupgrade%3Ftag%3D%25E9")
+        guard case .vlessWebSocketTLS(let node) = try AccessInternalTestNode.parseSingleShareURI(source)
+        else { return XCTFail("Expected a WebSocket profile") }
+        XCTAssertEqual(node.address, "route.example.")
+        XCTAssertEqual(node.path, "/upgrade?tag=%E9")
+
+        let withPathLast = String(webSocketLink.prefix(while: { $0 != "#" }))
+            .replacingOccurrences(of: "&path=%2Finside", with: "") + "&path=/upgrade"
+        for scheme in ["vless", "ss", "trojan", "vmess"] {
+            XCTAssertThrowsError(try AccessInternalTestNode.parseSingleShareURI(withPathLast + scheme + "://example.invalid"))
+        }
+        let forbiddenHost = source.replacingOccurrences(of: "host=ws.example.com", with: "host=169.254.8.8%25en0")
+        XCTAssertThrowsError(try AccessInternalTestNode.parseSingleShareURI(forbiddenHost))
+        let earlyData = source.replacingOccurrences(of: "tag%3D%25E9", with: "tag%3D%25E9%26e%2564%3D1")
+        XCTAssertThrowsError(try AccessInternalTestNode.parseSingleShareURI(earlyData))
+    }
+
+    func testUnsupportedSavedWebSocketAddressCannotRunAndCanBeRemovedOrReplaced() throws {
+        let node = try AccessInternalTestNode.parseSingleShareURI(webSocketLink)
+        let original = AccessTestNodeRecord(node)
+        let data = try JSONEncoder().encode(original)
+        var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        fields["address"] = "fe80::1%lo0"
+        let invalid = try JSONSerialization.data(withJSONObject: fields)
+        let storage = Storage()
+        storage.encodedValue = invalid
+        let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        XCTAssertThrowsError(try repository.savedNode(isPrivate: false))
+        XCTAssertEqual(try repository.revision(isPrivate: false), original.revision)
+        XCTAssertThrowsError(try repository.remove(expectedRevision: UUID(), isPrivate: false))
+        editor.openProfile()
+        XCTAssertTrue(editor.hasSavedNode)
+        editor.removeSavedNode()
+        XCTAssertNil(storage.encodedValue)
+        XCTAssertFalse(editor.hasSavedNode)
+
+        storage.encodedValue = invalid
+        editor.openProfile()
+        editor.preview(webSocketLink)
+        XCTAssertTrue(editor.canApply)
+        editor.apply()
+        XCTAssertEqual(try repository.savedNode(isPrivate: false).node, node)
+        XCTAssertNotEqual(try repository.revision(isPrivate: false), original.revision)
+    }
+
     func testWebSocketProfileImportsOneShareAndPreservesVersionedRecords() throws {
         let store = Storage()
         let repository = AccessTestNodeRepository(channel: .dev, storage: store)
@@ -994,6 +1042,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
 
     private final class Storage: AccessTestNodeStoring {
         var value: AccessTestNodeRecord?
+        var encodedValue: Data?
         var reads = 0
         var writes = 0
         var removals = 0
@@ -1003,17 +1052,25 @@ final class AccessTestNodeEditorTests: XCTestCase {
         func read(channel: AccessInternalOptions) throws -> AccessTestNodeRecord? {
             reads += 1
             beforeRead?()
+            if let encodedValue { return try JSONDecoder().decode(AccessTestNodeRecord.self, from: encodedValue) }
             return value
+        }
+
+        func revision(channel: AccessInternalOptions) throws -> UUID? {
+            if let encodedValue { return try AccessTestNodeRecord.storedRevision(in: encodedValue) }
+            return try read(channel: channel)?.revision
         }
 
         func write(_ record: AccessTestNodeRecord, channel: AccessInternalOptions) throws {
             if failWrite { throw AccessTestNodeError.storageUnavailable }
             writes += 1
+            encodedValue = nil
             value = record
         }
 
         func remove(channel: AccessInternalOptions) throws {
             removals += 1
+            encodedValue = nil
             value = nil
         }
     }
