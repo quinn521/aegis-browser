@@ -35,6 +35,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     // Website preparation and inherited landings can warm an endpoint.
     // Legacy default privacy and recovery need their own authorization.
     private var websiteOnlyEndpoints: Set<AccessHostStoreKey> = []
+    // Bindings selected by a website route without an existing direct legacy binding.
     private var websiteBindings: [String: AccessHostStoreKey] = [:]
     private var landingBindings: [String: LandingRoute] = [:]
     private var defaultProtectedHosts: Set<AccessHostStoreKey> = []
@@ -507,8 +508,13 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         return ready
     }
 
-    private func legacyRouteIntent(tab: BrowserTab, key: AccessHostStoreKey) -> AccessProxyIntentState {
-        routeIntent(key: key, boundToTarget: tab.boundHostName == key.host.rawValue, tabID: tab.instanceID.uuidString)
+    private func legacyStoreBinding(tab: BrowserTab, key: AccessHostStoreKey) -> WKWebsiteDataStore? {
+        let tabID = tab.instanceID.uuidString
+        guard tab.boundHostName == key.host.rawValue, websiteBindings[tabID] != key,
+              registry.isBound(tabID, to: key),
+              let store = registry.store(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate),
+              store === tab.websiteDataStore else { return nil }
+        return store
     }
 
     private func navigationIntent(tab: BrowserTab, key: AccessHostStoreKey, route: WebsiteRoute) -> AccessProxyIntentState {
@@ -719,6 +725,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
            let release = registry.retainRetiringDocument(scopeID: key.scopeID, host: bound, isPrivate: key.isPrivate) {
             tab.afterCurrentDocumentBecomesInert(release)
         }
+        // Store selection can attach a new tab to an existing host store.
+        let previousLegacyStore = route.requiredPreparation == nil ? nil : legacyStoreBinding(tab: tab, key: key)
         let store = registry.storeForTab(
             tabID: tabID,
             scopeID: tab.browsingScopeID,
@@ -727,11 +735,13 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             boundHost: bound,
             intent: intent
         )
-        if store != nil {
+        if let store {
             if case .landing(let landing) = route { landingBindings[tabID] = landing }
             switch route {
             case .service, .landing:
-                if accelerationAllowed(for: key) { websiteBindings[tabID] = key }
+                if accelerationAllowed(for: key) {
+                    websiteBindings[tabID] = store === previousLegacyStore ? nil : key
+                }
             default:
                 websiteBindings.removeValue(forKey: tabID)
             }
@@ -1653,7 +1663,14 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 tab.clearProxyLanding()
                 landingBindings.removeValue(forKey: tabID)
                 let landing = AccessHostStoreKey(scopeID: key.scopeID, host: host, isPrivate: key.isPrivate)
-                if hasIndependentRoute(landing) || executingTabs[tabID] == landing {
+                // Reevaluate this tab after withdrawing its inherited grant.
+                let independentlyProtected = if accelerationAllowed(for: landing),
+                    let url = URL(string: "https://\(host.rawValue)/") {
+                    requiresProxy(tab: tab, url: url)
+                } else {
+                    hasIndependentRoute(landing) || executingTabs[tabID] == landing
+                }
+                if independentlyProtected {
                     if interruptsLanding { tab.pauseAfterWebsiteRouteChange(detachStore: false) }
                     continue
                 }
@@ -1663,6 +1680,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 }
             }
             registry.unbind(tabID)
+            websiteBindings.removeValue(forKey: tabID)
             landingBindings.removeValue(forKey: tabID)
             if executingTabs[tabID] == key { executingTabs.removeValue(forKey: tabID) }
             if !interruptsLanding, let pending = tab.pendingAddressNavigation, let target = Self.httpHost(pending.url),
@@ -1796,15 +1814,17 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         case failed
     }
 
-    private func routeIntent(
-        key: AccessHostStoreKey,
-        boundToTarget: Bool,
-        tabID: String
-    ) -> AccessProxyIntentState {
+    private func legacyRouteIntent(tab: BrowserTab, key: AccessHostStoreKey) -> AccessProxyIntentState {
         if explicitDirect.contains(key) { return .off }
-        let legacyBound = boundToTarget && websiteBindings[tabID] != key
-        if websitePrivacyEnabled(for: key) || (legacyBound && !websiteOnlyEndpoints.contains(key)
-            && (usesDefaultRoute(key) || defaultProtectedHosts.contains(key))) { return .on }
+        let tabID = tab.instanceID.uuidString
+        let legacyBound = if accelerationAllowed(for: key) {
+            legacyStoreBinding(tab: tab, key: key) != nil
+        } else {
+            tab.boundHostName == key.host.rawValue
+        }
+        if websitePrivacyEnabled(for: key) { return .on }
+        if legacyBound, intents[key] == nil, !websiteOnlyEndpoints.contains(key),
+           usesDefaultRoute(key) || defaultProtectedHosts.contains(key) { return .on }
         // Only the tab that recovered this exact host may keep using its host store.
         if executingTabs[tabID] == key, groupStillLists(key) || intents[key] == .on || executing.contains(key) {
             return .on
