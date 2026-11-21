@@ -131,7 +131,9 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         // A callback URL can be a path value. A second proxy share cannot.
         let withoutWebSchemes = decoded.replacingOccurrences(of: #"(?i)(?<![a-z0-9+.-])https?://"#, with: "",
                                                          options: .regularExpression)
-        guard !withoutWebSchemes.contains("://") else { return false }
+        guard withoutWebSchemes.range(of: #"[A-Za-z][A-Za-z0-9+.-]*://"#, options: .regularExpression) == nil else {
+            return false
+        }
         guard let query = path.firstIndex(of: "?") else { return true }
         // Decode names independently to match Xray's Go query lookup even
         // when an unrelated value contains an opaque, non-UTF-8 octet.
