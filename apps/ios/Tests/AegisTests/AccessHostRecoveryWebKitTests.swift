@@ -1574,6 +1574,35 @@ private final class WindowPrepareGate {
 }
 
 extension AccessHostRecoveryWebKitTests {
+    func testExactWebsiteChoiceRequiresTheOwningCoordinator() throws {
+        let name = "test.geosite.exact-owner." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let url = try XCTUnwrap(URL(string: "https://choice.example.invalid/"))
+        defaults.set(["choice.example.invalid": "service"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let owner = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false, locationPreferences: defaults)
+        let otherOwner = AccessHostStoreCoordinator(channel: .dev, defaultLocationPrivacy: false)
+        let tab = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        defer { tab.dispose {} }
+
+        tab.hostCoordinator = owner
+        XCTAssertTrue(owner.offersWebsiteAcceleration(for: tab))
+        XCTAssertTrue(owner.requiresProxy(tab: tab, url: url))
+        XCTAssertTrue(owner.requiresProxyPreparation(tab: tab, url: url))
+
+        tab.hostCoordinator = otherOwner
+        XCTAssertFalse(owner.offersWebsiteAcceleration(for: tab))
+        XCTAssertFalse(owner.requiresProxy(tab: tab, url: url))
+        XCTAssertFalse(owner.requiresProxyPreparation(tab: tab, url: url))
+        XCTAssertTrue(otherOwner.offersWebsiteAcceleration(for: tab))
+        XCTAssertFalse(otherOwner.requiresProxy(tab: tab, url: url))
+
+        tab.hostCoordinator = nil
+        XCTAssertFalse(owner.offersWebsiteAcceleration(for: tab))
+        XCTAssertFalse(owner.requiresProxy(tab: tab, url: url))
+        XCTAssertFalse(owner.requiresProxyPreparation(tab: tab, url: url))
+    }
+
     func testWebsiteAccelerationSmartPreferenceSelectsMemberAndSkipsDefaultOnMiss() throws {
         let suiteName = "test.websiteAcceleration." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
