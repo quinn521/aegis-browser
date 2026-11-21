@@ -108,12 +108,241 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-progress"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["access-proxy-configured-node"].exists)
-        let emptyState = app.descendants(matching: .any).matching(identifier: "access-usage-unlinked").firstMatch
-        XCTAssertTrue(emptyState.waitForExistence(timeout: 5))
+        let unavailable = language == "en"
+            ? "Allowance query unavailable; this does not mean the balance is zero" : "额度查询不可用，不代表余额为零"
+        let emptyState = app.staticTexts[unavailable]
+        XCTAssertTrue(reveal(emptyState, app))
         assertInsideWindow(emptyState, app)
-        XCTAssertFalse(app.buttons["access-usage-refresh"].exists)
+        let refresh = app.buttons["access-usage-refresh"]
+        XCTAssertTrue(reveal(refresh, app))
+        refresh.tap()
+        XCTAssertTrue(emptyState.exists)
+        XCTAssertFalse(app.descendants(matching: .any)["access-usage-used"].exists)
         capture("账号与用量-\(language)-\(largeText ? "最大字体" : "普通字体")", app)
     }
+
+    #if DEBUG
+    func testWebsiteAccelerationBetaIsReadableAtLargestTextSize() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(en)",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
+        app.launch()
+        defer { app.terminate() }
+        let domestic = app.buttons["domestic-acceleration-link"]
+        XCTAssertTrue(reveal(domestic, app))
+        domestic.tap()
+        let smart = app.buttons["website-acceleration-smart"]
+        XCTAssertTrue(reveal(smart, app))
+        smart.tap()
+        let categories = app.buttons["website-acceleration-categories"]
+        XCTAssertTrue(reveal(categories, app))
+        XCTAssertEqual(categories.label, "Acceleration Categories Beta")
+        XCTAssertEqual(categories.value as? String, "Debian")
+        assertInsideWindow(categories, app)
+        capture("Acceleration Categories Beta - Largest Text", app)
+        XCTAssertFalse(app.staticTexts["Beta"].exists, "The visual tag is part of the single accessible navigation row")
+        categories.tap()
+        let meituan = app.buttons["website-acceleration-category-MEITUAN"]
+        XCTAssertTrue(reveal(meituan, app))
+        assertInsideWindow(meituan, app)
+        XCTAssertEqual(meituan.value as? String, "Includes Dianping")
+        capture("Acceleration Categories - Largest Text", app)
+    }
+
+    func testWebsiteAccelerationBetaIsHiddenInPrivateSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
+        app.launch()
+        defer { app.terminate() }
+        let more = app.buttons["browser-more"]
+        XCTAssertTrue(more.waitForExistence(timeout: 10))
+        openSettings(app)
+        let domestic = app.buttons["domestic-acceleration-link"]
+        XCTAssertTrue(reveal(domestic, app))
+        domestic.tap()
+        let smart = app.buttons["website-acceleration-smart"]
+        XCTAssertTrue(reveal(smart, app))
+        smart.tap()
+        XCTAssertTrue(app.buttons["website-acceleration-categories"].waitForExistence(timeout: 5))
+        app.navigationBars["国内加速"].buttons.element(boundBy: 0).tap()
+        app.buttons["settings-done"].tap()
+
+        more.tap()
+        let profiles = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "profile-menu", "普通")).firstMatch
+        XCTAssertTrue(profiles.waitForExistence(timeout: 5))
+        profiles.tap()
+        let privateProfile = app.buttons["私密"]
+        XCTAssertTrue(privateProfile.waitForExistence(timeout: 5))
+        privateProfile.tap()
+        XCTAssertEqual(app.buttons["page-protection"].value as? String, "私密浏览：不记录历史，保存和发送资料前需确认")
+        openSettings(app)
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+        XCTAssertFalse(domestic.exists)
+        XCTAssertFalse(app.buttons["website-acceleration-categories"].exists)
+        capture("私密浏览-设置隐藏国内加速", app)
+    }
+
+    func testWebsiteAccelerationBetaSelectionAndPersistence() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
+        app.launch()
+        defer { app.terminate() }
+
+        func openDomesticAcceleration() {
+            XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+            let entry = app.buttons["domestic-acceleration-link"]
+            XCTAssertTrue(reveal(entry, app))
+            entry.tap()
+        }
+
+        openDomesticAcceleration()
+        let manual = app.buttons["website-acceleration-manual"]
+        let smart = app.buttons["website-acceleration-smart"]
+        let categories = app.buttons["website-acceleration-categories"]
+        XCTAssertTrue(manual.waitForExistence(timeout: 5))
+        XCTAssertTrue(manual.isSelected)
+        XCTAssertFalse(categories.exists)
+        XCTAssertTrue(reveal(smart, app))
+        smart.tap()
+        capture("网站加速-智能-Beta 入口", app)
+        XCTAssertTrue(categories.waitForExistence(timeout: 5), "智能模式必须显示可导航的加速分类 Beta")
+        XCTAssertEqual(categories.label, "加速分类 Beta")
+        XCTAssertEqual(categories.value as? String, "Debian")
+        XCTAssertTrue(reveal(categories, app))
+        categories.tap()
+
+        let debian = app.buttons["website-acceleration-category-DEBIAN"]
+        let douban = app.buttons["website-acceleration-category-DOUBAN"]
+        let meituan = app.buttons["website-acceleration-category-MEITUAN"]
+        XCTAssertTrue(app.navigationBars["加速分类"].waitForExistence(timeout: 5))
+        XCTAssertTrue(debian.isSelected)
+        XCTAssertFalse(douban.isSelected)
+        XCTAssertFalse(meituan.isSelected)
+        XCTAssertEqual(douban.label, "豆瓣")
+        XCTAssertEqual(meituan.label, "美团")
+        XCTAssertEqual(meituan.value as? String, "含大众点评")
+        douban.tap()
+        XCTAssertTrue(douban.isSelected)
+        debian.tap()
+        XCTAssertFalse(debian.isSelected)
+        meituan.tap()
+        XCTAssertTrue(meituan.isSelected)
+        meituan.tap()
+        XCTAssertFalse(meituan.isSelected)
+        capture("加速分类-豆瓣单选", app)
+
+        let back = app.navigationBars["加速分类"].buttons.element(boundBy: 0)
+        back.tap()
+        XCTAssertEqual(categories.value as? String, "豆瓣")
+        manual.tap()
+        XCTAssertFalse(categories.exists)
+        smart.tap()
+        XCTAssertTrue(reveal(categories, app))
+        XCTAssertEqual(categories.value as? String, "豆瓣")
+        categories.tap()
+        douban.tap()
+        XCTAssertFalse(douban.isSelected)
+        back.tap()
+        XCTAssertEqual(categories.value as? String, "未选择")
+        XCTAssertTrue(app.staticTexts["未选择加速分类。"].exists)
+
+        app.terminate()
+        app.launchArguments.append("--ui-testing-preferences-keep")
+        app.launch()
+        openDomesticAcceleration()
+        XCTAssertTrue(reveal(categories, app))
+        XCTAssertEqual(categories.value as? String, "未选择")
+        categories.tap()
+        XCTAssertFalse(debian.isSelected)
+        XCTAssertFalse(douban.isSelected)
+        XCTAssertFalse(meituan.isSelected)
+        capture("加速分类-重新启动后保留空选", app)
+    }
+
+    func testWebsiteAccelerationModesInDevSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
+        app.launch()
+        defer { app.terminate() }
+
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+        let entry = app.buttons["domestic-acceleration-link"]
+        XCTAssertTrue(reveal(entry, app), "设置中的国内加速入口必须可见且可点击")
+        assertInsideWindow(entry, app)
+        XCTAssertEqual(entry.label, "国内加速")
+        entry.tap()
+        XCTAssertTrue(app.navigationBars["国内加速"].waitForExistence(timeout: 5))
+        let website = app.descendants(matching: .any)["website-acceleration-section"]
+        XCTAssertTrue(website.waitForExistence(timeout: 5))
+        XCTAssertEqual(website.label, "网站加速")
+        XCTAssertFalse(app.staticTexts["位置加速"].exists)
+
+        let manual = app.buttons["website-acceleration-manual"]
+        let smart = app.buttons["website-acceleration-smart"]
+        let manualHint = app.staticTexts.matching(NSPredicate(format: "label == %@", "自行选择要加速的网站。"))
+        let smartHint = app.staticTexts.matching(NSPredicate(format: "label == %@", "按所选分类加速网站。"))
+        let serviceNotice = app.staticTexts.matching(NSPredicate(format: "label == %@", "加速服务未配置。"))
+        let engineeringDetails = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS[c] %@ OR label CONTAINS %@ OR label CONTAINS %@",
+            "debian.org", "系统代理", "原有的选路规则"
+        ))
+        XCTAssertTrue(manual.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.waitForExistence(timeout: 5))
+        XCTAssertEqual(manual.label, "手动")
+        XCTAssertEqual(smart.label, "智能")
+        // --ui-testing resets the isolated preferences suite on launch.
+        XCTAssertTrue(manual.isSelected)
+        XCTAssertFalse(smart.isSelected)
+        XCTAssertEqual(manualHint.count, 1)
+        XCTAssertFalse(smartHint.firstMatch.exists)
+        XCTAssertEqual(serviceNotice.count, 1)
+        XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
+        capture("国内加速-网站加速-手动", app)
+
+        XCTAssertTrue(reveal(smart, app))
+        smart.tap()
+        XCTAssertTrue(smart.isSelected)
+        XCTAssertFalse(manual.isSelected)
+        XCTAssertEqual(smartHint.count, 1)
+        XCTAssertFalse(manualHint.firstMatch.exists)
+        XCTAssertFalse(engineeringDetails.firstMatch.exists)
+        XCTAssertEqual(serviceNotice.count, 1)
+        XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
+        capture("国内加速-网站加速-智能", app)
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        XCTAssertTrue(smart.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.isSelected)
+        XCTAssertEqual(smartHint.count, 1)
+        XCTAssertFalse(manualHint.firstMatch.exists)
+
+        app.terminate()
+        app.launchArguments.append("--ui-testing-preferences-keep")
+        app.launch()
+        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+        XCTAssertTrue(reveal(entry, app))
+        entry.tap()
+        XCTAssertTrue(smart.waitForExistence(timeout: 5))
+        XCTAssertTrue(smart.isSelected)
+        XCTAssertFalse(manual.isSelected)
+        XCTAssertEqual(smartHint.count, 1)
+        XCTAssertFalse(manualHint.firstMatch.exists)
+
+        XCTAssertTrue(reveal(manual, app))
+        manual.tap()
+        XCTAssertTrue(manual.isSelected)
+        XCTAssertFalse(smart.isSelected)
+        XCTAssertEqual(manualHint.count, 1)
+        XCTAssertFalse(smartHint.firstMatch.exists)
+    }
+    #endif
 
     func testSettingsPagesAtStandardSize() {
         inspectSettings(largeText: false)
