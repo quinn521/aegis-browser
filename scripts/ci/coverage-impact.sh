@@ -20,9 +20,12 @@ case "${1:-}" in
   android)
     paths+=(
       .github/workflows/android-java-coverage.yml
+      apps/browser/CHROMIUM_VERSION
       apps/browser/scripts/android-agent-ui.mjs
       apps/browser/scripts/android-agent-ui_test.mjs
-      apps/browser/scripts/android-ui-driver
+      apps/browser/scripts/android-ui-driver/AndroidManifest.xml
+      apps/browser/scripts/android-ui-driver/Driver.java
+      apps/browser/scripts/android-ui-driver/jacoco-agent.properties
       apps/browser/scripts/common.sh
       apps/browser/scripts/package-android.sh
       apps/browser/scripts/package-android-guards_test.sh
@@ -30,7 +33,6 @@ case "${1:-}" in
       apps/browser/scripts/run-android-java-coverage-emulator_test.mjs
       apps/browser/scripts/verify-android-agent-target.mjs
       apps/browser/scripts/verify-android-agent-target_test.mjs
-      apps/browser/scripts/write-build-identity.mjs
     )
     ;;
   *)

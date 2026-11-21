@@ -51,6 +51,8 @@ test('mobile coverage uses the complete tested diff and the actual PR parents', 
     save('apps/ios/Feature.swift', 'new');
     save('scripts/ci/ios-release-preflight.mjs', '// release only');
     save('apps/browser/scripts/windows-installer-fixture.py', '# Windows only');
+    save('apps/browser/scripts/android-ui-driver/README.md', 'documentation only');
+    save('apps/browser/scripts/write-build-identity.mjs', '// stubbed by the package guard');
     for (let index = 0; index < 305; index += 1) save(`aaa/docs/file-${index}.md`, 'unrelated');
     const head = commit('same iOS change plus docs and release preflight');
     git('checkout', 'develop');
@@ -66,22 +68,29 @@ test('mobile coverage uses the complete tested diff and the actual PR parents', 
     assert.notEqual(route('ios', {...event, EVENT_PR_HEAD: eventBase}).result.status, 0);
     assert.notEqual(route('ios', {...event, GITHUB_SHA: head}).result.status, 0);
 
-    git('reset', '--hard', actualBase);
-    git('checkout', 'candidate');
-    save('apps/ios/Later.swift', 'new iOS input after the other 305 paths');
-    save('apps/browser/scripts/android-ui-driver/Driver.java', 'new Android input');
-    const changedHead = commit('add platform inputs');
-    git('checkout', 'develop');
-    git('merge', '--no-ff', 'candidate', '-m', 'second tested merge');
-    const changedTested = git('rev-parse', 'HEAD');
-    for (const platform of ['ios', 'android']) {
-      const pr = route(platform, {...event, GITHUB_SHA: changedTested, EVENT_PR_HEAD: changedHead});
-      assert.equal(pr.result.status, 0, pr.result.stderr);
-      assert.equal(pr.output, `run=true\npr_base=${actualBase}\npr_head=${changedHead}\n`);
-      const push = route(platform, {GITHUB_EVENT_NAME: 'push', GITHUB_SHA: changedTested, EVENT_PUSH_BEFORE: actualBase});
-      assert.equal(push.result.status, 0, push.result.stderr);
-      assert.equal(push.output, 'run=true\npr_base=\npr_head=\n');
-    }
+    const exerciseSingleInput = (file, affectedPlatform) => {
+      git('reset', '--hard', actualBase);
+      git('checkout', '-B', 'candidate', head);
+      save(file, 'new platform input after the other 305 paths');
+      const changedHead = commit('add single platform input');
+      git('checkout', 'develop');
+      git('merge', '--no-ff', 'candidate', '-m', 'tested single-platform merge');
+      const changedTested = git('rev-parse', 'HEAD');
+      for (const platform of ['ios', 'android']) {
+        const selected = platform === affectedPlatform;
+        const pr = route(platform, {...event, GITHUB_SHA: changedTested, EVENT_PR_HEAD: changedHead});
+        assert.equal(pr.result.status, 0, pr.result.stderr);
+        assert.equal(pr.output, `run=${selected}\npr_base=${actualBase}\npr_head=${changedHead}\n`);
+        const push = route(platform, {GITHUB_EVENT_NAME: 'push', GITHUB_SHA: changedTested, EVENT_PUSH_BEFORE: actualBase});
+        assert.equal(push.result.status, 0, push.result.stderr);
+        assert.equal(push.output, `run=${selected}\npr_base=\npr_head=\n`);
+      }
+      return {changedHead, changedTested};
+    };
+    exerciseSingleInput('apps/ios/Later.swift', 'ios');
+    exerciseSingleInput('apps/browser/CHROMIUM_VERSION', 'android');
+    const {changedHead, changedTested} = exerciseSingleInput(
+      'apps/browser/scripts/android-ui-driver/Driver.java', 'android');
     const manual = route('ios', {GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: changedTested});
     assert.equal(manual.result.status, 0, manual.result.stderr);
     assert.equal(manual.output, 'run=true\npr_base=\npr_head=\n');
