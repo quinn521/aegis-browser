@@ -69,7 +69,7 @@ public enum AccessHostRoutingPolicy {
     }
 }
 
-public enum AccessWebsiteAccelerationMode: String, Sendable {
+public enum AccessWebsiteAccelerationMode: String, Codable, Sendable {
     case manual
     case smart
 }

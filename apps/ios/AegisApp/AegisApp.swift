@@ -109,16 +109,33 @@ struct AegisApp: App {
         let subscription = AccessSubscriptionUsageSession.product()
         _subscriptionUsage = StateObject(wrappedValue: subscription)
         let publisher = AccessThreeXUIWebEntry.makePublisher(for: subscription)
+        let channel = AccessProductChannel.resolve()
+        let geoSiteCache = Self.makeGeoSiteCache(channel: channel, isUITest: isTest)
         let hostStores = AccessHostStoreCoordinator(
             publisher: publisher,
-            channel: AccessProductChannel.resolve(),
+            channel: channel,
             defaultLocationPrivacy: !(publisher is AccessFailClosedProxyEntryPublisher),
-            locationPreferences: defaults
+            locationPreferences: defaults,
+            geoSiteCache: geoSiteCache
         )
         registry.hostRouting = hostStores
         hostStores.startForegroundSweep()
         _accessSiteProxyRegistry = StateObject(wrappedValue: registry)
         _hostStores = StateObject(wrappedValue: hostStores)
+    }
+
+    private static func makeGeoSiteCache(channel: AccessReleaseChannel, isUITest: Bool) -> AccessGeoSiteCache? {
+        guard channel == .dev else { return nil }
+#if DEBUG
+        if isUITest {
+            let arguments = ProcessInfo.processInfo.arguments
+            guard arguments.contains("--ui-testing-geosite-cache"),
+                  let storage = try? AccessGeoSiteStorage.uiTest(keep: arguments.contains("--ui-testing-geosite-cache-keep"))
+            else { return nil }
+            return AccessGeoSiteCache(storage: storage)
+        }
+#endif
+        return AccessGeoSiteCache(storage: .product())
     }
 
     var body: some Scene {
@@ -145,6 +162,7 @@ struct AegisApp: App {
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             subscriptionUsage.setActive(phase == .active)
+            if phase == .active { hostStores.checkpointGeoSiteClock() }
         }
     }
 

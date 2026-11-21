@@ -99,6 +99,7 @@ public struct BrowserPendingAddressNavigation: Equatable, Sendable {
 public protocol BrowserHostStoreCoordinating: AnyObject {
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool
+    func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
@@ -113,6 +114,7 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
 public extension BrowserHostStoreCoordinating {
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool { false }
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { false }
+    func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool { false }
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool { true }
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool { false }
 }
@@ -163,6 +165,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public weak var hostCoordinator: BrowserHostStoreCoordinating?
     private typealias MainFrameAttempt = MainFrameNavigationState.Attempt
     private var committedRequest: MainFrameAttempt?
+    private weak var committedDocumentView: WKWebView?
     private var committedDocumentEpoch: UInt64?
     private var websiteRoutePause: (navigationID: String, documentEpoch: UInt64, editableAddress: URL?)?
     private var restoreURL: URL?
@@ -287,6 +290,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let scheme = recorded.url.scheme?.lowercased() ?? ""
         guard ["http", "https"].contains(scheme) else { return }
         committedRequest = recorded
+        committedDocumentView = loadedWebView
         committedDocumentEpoch = navigationEpoch
         committedMainFrameURL = recorded.url
         url = recorded.url
@@ -384,6 +388,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public private(set) var requestedURL: URL?
     /// HTTP(S) main document that reached `didCommit`. In-flight `requestedURL` is not authorization.
     public private(set) var committedMainFrameURL: URL?
+    /// The actual committed document in the resident view, including built-in
+    /// pages. A provisional navigation does not replace this document.
+    public var liveCommittedDocumentURL: URL? {
+        guard let view = loadedWebView, view === committedDocumentView else { return nil }
+        return committedRequest?.url
+    }
     @Published public private(set) var protectionIncident: PageProtectionIncident?
     @Published private var protectionNoticePresentation: AegisLocalizedMessage?
     public var protectionNotice: String? { protectionNoticePresentation?.text }
@@ -577,6 +587,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func alignStore(for url: URL, previous: URL?, safeToReplay: Bool) -> Bool {
         guard !isDisposed else { return false }
+        guard !rejectIndeterminateRoute(url) else { return false }
         let host = Self.routingHost(of: url)
         let previousHost = previous.flatMap(Self.routingHost)
         let hostChanged = previousHost != nil && host != nil && previousHost != host
@@ -596,6 +607,13 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             return false
         }
         rebindWebsiteDataStore(desired, host: routed == nil ? nil : host)
+        return true
+    }
+
+    private func rejectIndeterminateRoute(_ url: URL) -> Bool {
+        guard hostCoordinator?.isMainFrameRouteIndeterminate(tab: self, url: url) == true else { return false }
+        loadingErrorAllowsProxyRetry = false
+        loadingErrorPresentation = .resource("连接暂不可用")
         return true
     }
 
@@ -754,6 +772,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
                 return
             }
             let requiresProxy = hostCoordinator.requiresProxy(tab: self, url: url)
+            if rejectIndeterminateRoute(url) {
+                retireUnboundAttempt(navigationID: attempt.navigationID)
+                isLoading = false
+                return
+            }
             if !hostCoordinator.canSendMainFrame(tab: self, url: url)
                 || hostCoordinator.wouldSwitchStore(tab: self, url: url)
                 || (requiresProxy && (boundHostName == nil || hostCoordinator.requiresProxyPreparation(tab: self, url: url))) {
@@ -1514,6 +1537,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             finish(.cancel)
             return
         }
+        if rejectIndeterminateRoute(requestURL) {
+            isLoading = false
+            finish(.cancel)
+            return
+        }
         let previousLanding = (proxyLandingParent, proxyLandingTarget)
         if decision.kind != .blocked, navigationAction.navigationType == .other,
            boundHostName != nil, let parent = proxyLandingParent ?? boundHostName, let target = Self.routingHost(of: requestURL),
@@ -1740,6 +1768,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if let navigation, let recorded = navigationState.recorded(for: navigation) {
             let scheme = recorded.url.scheme?.lowercased() ?? ""
             committedRequest = recorded
+            committedDocumentView = webView
             committedDocumentEpoch = navigationEpoch
             if ["http", "https"].contains(scheme) {
                 committedMainFrameURL = recorded.url

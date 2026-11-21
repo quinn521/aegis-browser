@@ -1,14 +1,14 @@
 /// A complete, admitted GeoSite category. The raw values are upstream IDs and
 /// are also the stable values used for local selection.
-public enum AccessGeoSiteCategory: String, CaseIterable, Sendable {
+public enum AccessGeoSiteCategory: String, CaseIterable, Codable, Sendable {
     case debian = "DEBIAN"
     case douban = "DOUBAN"
     case meituan = "MEITUAN"
 }
 
 public struct AccessGeoSiteCatalogue: Equatable, Sendable {
-    public struct Rule: Equatable, Sendable {
-        public enum Kind: String, Sendable {
+    public struct Rule: Equatable, Codable, Sendable {
+        public enum Kind: String, Codable, Sendable {
             case domain
             case full
         }
@@ -16,12 +16,12 @@ public struct AccessGeoSiteCatalogue: Equatable, Sendable {
         public let kind: Kind
         public let host: String
 
-        func matches(_ candidate: String) -> Bool {
+        public func matches(_ candidate: String) -> Bool {
             candidate == host || (kind == .domain && candidate.hasSuffix("." + host))
         }
     }
 
-    public struct Group: Equatable, Sendable {
+    public struct Group: Equatable, Codable, Sendable {
         public let typedSHA256: String
         public let rules: [Rule]
     }
@@ -30,6 +30,13 @@ public struct AccessGeoSiteCatalogue: Equatable, Sendable {
     public let publishedAt: String
     public let rawSHA256: String
     public let groups: [AccessGeoSiteCategory: Group]
+
+    public init(tag: String, publishedAt: String, rawSHA256: String, groups: [AccessGeoSiteCategory: Group]) {
+        self.tag = tag
+        self.publishedAt = publishedAt
+        self.rawSHA256 = rawSHA256
+        self.groups = groups
+    }
 
     // Standard geosite.dat from XTLS/Xray-rules-dat release 20261120235103
     // (453302649), GeoSite source d74acca73490cb57a937674ce8a8709d2a3021ba.

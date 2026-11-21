@@ -1625,7 +1625,12 @@ extension AccessHostRecoveryWebKitTests {
         try await assertSelectingDoubanDuringDebianHold(managedPort: 18_633, cancelDebian: true)
     }
 
-    private func assertSelectingDoubanDuringDebianHold(managedPort: UInt16, cancelDebian: Bool) async throws {
+    func testSelectingDoubanDoesNotRetireTheLiveStartPage() async throws {
+        try await assertSelectingDoubanDuringDebianHold(managedPort: 18_635, cancelDebian: false, visitingStart: true)
+    }
+
+    private func assertSelectingDoubanDuringDebianHold(managedPort: UInt16, cancelDebian: Bool,
+                                                       visitingStart: Bool = false) async throws {
         let originalPort = managedPort + 1
         let marker = UUID().uuidString
         let html = """
@@ -1713,6 +1718,27 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
         XCTAssertTrue(original.authorities.contains("www.douban.com:443"))
         XCTAssertTrue(managed.authorities.isEmpty)
+
+        if visitingStart {
+            let start = URL(string: "aegis://start")!
+            tab.load(start)
+            try await waitUntil({ originalView.url == start && !tab.isLoading },
+                                message: "The built-in start page must commit in the original view")
+            let document = try await originalView.evaluateJavaScript("window.categoryTestMarker = '\(marker)'")
+            XCTAssertEqual(document as? String, marker)
+            let initial = try XCTUnwrap(coordinator.websiteCategories(for: sibling))
+            coordinator.setWebsiteCategory(.douban, selected: true, from: initial, for: sibling)
+            XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: douban))
+            XCTAssertTrue(tab.isResident)
+            XCTAssertTrue(originalView.superview === window)
+            XCTAssertNil(tab.loadingError)
+            let retained = try await originalView.evaluateJavaScript("window.categoryTestMarker")
+            XCTAssertEqual(retained as? String, marker, "The same start-page realm must stay alive")
+            XCTAssertEqual(originalView.url, start)
+            XCTAssertTrue(managed.authorities.isEmpty)
+            XCTAssertFalse(original.authorities.contains("debian.org:443"))
+            return
+        }
 
         tab.loadFromAddressBar(debian)
         try await waitUntil({ gate.started }, message: "Debian must await the held publisher")

@@ -179,6 +179,14 @@ private struct DomesticAccelerationSettingsView: View {
                             Text("加速服务未配置。")
                                 .accessibilityIdentifier("website-acceleration-service-unavailable")
                         }
+                        switch hostStores.geoSiteStatus {
+                        case .unsaved:
+                            Text("设置未保存，请重试。")
+                        case .unavailable, .clockRollback:
+                            Text("连接暂不可用")
+                        default:
+                            EmptyView()
+                        }
                     }
                 }
                 if let host = hostStores.websiteAccelerationHost(for: tab) {
@@ -300,18 +308,26 @@ private struct WebsiteCategoriesView: View {
             if browser.activeTab === tab, let categories = hostStores.websiteCategories(for: tab) {
                 Section {
                     ForEach(AccessGeoSiteCategory.allCases, id: \.self) { category in
-                        if categories.catalogue.groups[category] != nil {
+                        if categories.scopes != nil || categories.catalogue.groups[category] != nil {
                             categoryButton(category, categories: categories)
                         }
                     }
                 }
                 Section {
                     DisclosureGroup("分类范围") {
-                        LabeledContent("版本", value: categories.catalogue.tag)
-                        Text("含所列域名的子域名。").font(.footnote).foregroundStyle(.secondary)
+                        if categories.scopes == nil {
+                            LabeledContent("版本", value: categories.catalogue.tag)
+                        }
                         ForEach(AccessGeoSiteCategory.allCases, id: \.self) { category in
                             if let group = categories.catalogue.groups[category] {
-                                scopeDetails(category, group: group)
+                                scopeDetails(category, group: group, version: version(for: category, in: categories))
+                            } else if let scope = categories.scopes?[category] {
+                                LabeledContent {
+                                    if case .withdrawn = scope { Text("暂无规则") }
+                                    else { Text("暂不可用") }
+                                } label: {
+                                    Text(verbatim: AegisLocalization.string(category.displayName))
+                                }
                             }
                         }
                     }
@@ -349,14 +365,34 @@ private struct WebsiteCategoriesView: View {
         .accessibilityIdentifier("website-acceleration-category-\(category.rawValue)")
     }
 
-    private func scopeDetails(_ category: AccessGeoSiteCategory, group: AccessGeoSiteCatalogue.Group) -> some View {
+    private func version(for category: AccessGeoSiteCategory,
+                         in categories: AccessHostStoreCoordinator.WebsiteCategories) -> String? {
+        guard case .available(_, let version) = categories.scopes?[category] else { return nil }
+        return version?.release.tag ?? categories.catalogue.tag
+    }
+
+    private func scopeDetails(_ category: AccessGeoSiteCategory, group: AccessGeoSiteCatalogue.Group, version: String?) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(verbatim: AegisLocalization.string(category.displayName)).font(.headline)
+            if let version { LabeledContent("版本", value: version) }
             LabeledContent("域名数", value: group.rules.count.formatted(.number.locale(locale)))
-            Text(verbatim: group.rules.map(\.host).joined(separator: "\n"))
-                .font(.footnote)
-                .fixedSize(horizontal: false, vertical: true)
+            let domains = group.rules.filter { $0.kind == .domain }
+            let exact = group.rules.filter { $0.kind == .full }
+            if !domains.isEmpty {
+                Text("含所列域名的子域名。").font(.footnote).foregroundStyle(.secondary)
+                domainList(domains)
+            }
+            if !exact.isEmpty {
+                if !domains.isEmpty { Divider() }
+                domainList(exact)
+            }
         }
+    }
+
+    private func domainList(_ rules: [AccessGeoSiteCatalogue.Rule]) -> some View {
+        Text(verbatim: rules.map(\.host).joined(separator: "\n"))
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 

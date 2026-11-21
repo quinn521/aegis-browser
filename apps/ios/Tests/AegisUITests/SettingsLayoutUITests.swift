@@ -186,7 +186,8 @@ final class SettingsLayoutUITests: XCTestCase {
 
     func testWebsiteAccelerationBetaSelectionAndPersistence() {
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "--ui-testing-geosite-cache",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
         app.launch()
         defer { app.terminate() }
@@ -250,7 +251,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["未选择加速分类。"].exists)
 
         app.terminate()
-        app.launchArguments.append("--ui-testing-preferences-keep")
+        app.launchArguments.append("--ui-testing-geosite-cache-keep")
         app.launch()
         openDomesticAcceleration()
         XCTAssertTrue(reveal(categories, app))
