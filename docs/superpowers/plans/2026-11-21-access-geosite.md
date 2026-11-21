@@ -72,7 +72,7 @@ xcrun xcresulttool export attachments --path "$RESULT_ROOT/GeoSite.xcresult" \
 
 前置试件的回执保留在第 1 节。产品候选先在旧 App 上得到 3 个行为失败，分别是设置入口缺失、普通窗口智能目标未选择服务、非成员仍尝试全站默认服务。接线后的首轮 6 个 XCTest 全部通过。同一标签页四个受控 HTTPS 顶层目标各有 8 次 CONNECT 到达预期监听器，另一侧均为零；这里统计的是 WebKit 重试，样本为四个目标。服务准备失败时，仅独立对照域到达原设置侧。
 
-第二轮 4 个 XCTest 覆盖了本站选择跨窗口与重建、操作中切换设置或离开、受管超时、可完成的 HTTP 重定向与跨域资源，以及切换存储时保护 POST。另有一项行为测试先复现无服务时无法为失败网站选择原连接，再验证用户可更改或清除该选择，原请求保持停止。完整 iOS 回归、签名包摘要及最终提交的 CI 记录在[产品 PR](https://github.com/quinn521/aegis-browser/pull/402)。
+第二轮 4 个 XCTest 覆盖了本站选择跨窗口与重建、操作中切换设置或离开、受管超时、可完成的 HTTP 重定向与跨域资源，以及切换存储时保护 POST。另有一项行为测试先复现无服务时无法为失败网站选择原连接，再验证用户可更改或清除该选择，原请求保持停止。独立审查还发现三个边界：失去服务代次后重开规范重定向页面、修改站点 A 时保留另一窗口站点 B 的进行中请求、切换智能后保留已提交页面从上级域继承的保护。三项用例在原候选逐项失败。修复后，关闭旧回环入口再重新加载，目标由新入口收到，另两项也通过。完整 iOS 回归、签名包摘要及最终提交的 CI 记录在[产品 PR](https://github.com/quinn521/aegis-browser/pull/402)。
 
 在仓库根目录准备固定核心和新的绝对输出目录，使用专用模拟器。打开「设置 → 国内加速」，在「网站加速」下切换「手动／智能」，重启后核对选择。真机 Debug 构建需要匹配主 App 和两个扩展的开发描述文件。分享扩展与 App 共用现有 App Group。账户服务按原有 DEV 构建配置提供；无配置时，选中服务的顶层导航会报告不可用。[DEV 订阅与核心构建说明](../../development/ios-alpha-quota.zh-CN.md)
 
@@ -122,4 +122,6 @@ M2 从 `PrivatePslPreventsCrossTenantSuffix` 和 `WebsiteMainNavigationReevaluat
 | H2 回环实传 | 先要求目标双向回执失败，再接入受控 QUIC/UDP 端点并验证服务证书、HY2 身份、租约、真实 TCP CONNECT 到自有 marker。关闭 UDP、拒绝认证、撤销或耗尽时不得向 marker 发送业务 | 关联候选、用户、租约、generation、目标 marker 及两端网络字节。用服务端账户账本核对计量、关闭及迟到结算；无账户映射最多登记传输成功 |
 | H3 代际切换与可选 iOS | 注入确认前、持久化前、提交后故障及 kill switch。仅已 ACK 且已持久化的新 generation 接新请求；旧流排空或明确失败。POST 和旧事务均不重放 | 主/备传输、旧/新流、原设置侧与账户账本同时取证，观察错误出口为零。专用 iOS 试件还须证明 singleton 不会因 Stop/Start 中断无关流；未满足前保持实验关闭 |
 
-H1–H3 均待执行。模拟器的 HTTP CONNECT 回执不能替代 HY2 握手、业务实传或额度验证。进入产品评审前，需在同一候选上完成对应构建、集成与功能验证，提供完整 diff、源文件及回执摘要，运行独立只读 review。候选变化后按影响复核；本地结果、最终 SHA 的 CI、真机与发布各自登记。[Hysteria 2 协议](https://hysteria.network/docs/developers/Protocol/) · [现有桥接生命周期](../../../apps/ios/EmbeddedCore/bridge/bridge.go) · [计量实现](../../../services/access_account/xray_meter/xray.patch)
+H2 的独立回环传输已验证。用固定的 Xray v26.11.9 在 macOS 上运行客户端与服务端，证书和认证通过时，自有 HTTP 目标收到一次请求并返回预期的 28 字节正文。阻断 UDP、认证拒绝、证书名称错误三个对照中，目标各收到零次请求。账户签名、租约、撤销和额度计量仍待验证，H1、H3 及可选 iOS 试件尚待实施。[四场实验与构建摘要](https://github.com/gcsagroup/aegis-browser/issues/213#issuecomment-7062599250)
+
+进入产品评审前，需在同一候选上完成对应构建、集成与功能验证，提供完整 diff、源文件及回执摘要，运行独立只读 review。候选变化后按影响复核；本地结果、最终 SHA 的 CI、真机与发布各自登记。[Hysteria 2 协议](https://hysteria.network/docs/developers/Protocol/) · [现有桥接生命周期](../../../apps/ios/EmbeddedCore/bridge/bridge.go) · [计量实现](../../../services/access_account/xray_meter/xray.patch)

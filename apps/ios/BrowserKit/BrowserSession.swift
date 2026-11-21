@@ -196,16 +196,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public var websiteRouteControlURL: URL? {
         guard !isDisposed, protectionIncident == nil, pendingAddressNavigation == nil,
               let address = addressBarURL, Self.safeProxyURL(address) else { return nil }
+        if let pause = websiteRoutePause {
+            guard !isLoading, pause.navigationID == attempt.navigationID, attempt.url == address,
+                  pause.documentEpoch == navigationEpoch, pause.editableAddress == address else { return nil }
+            return address
+        }
         if let failure = lastMainFrameFailure {
             guard !isLoading, loadingErrorPresentation != nil, loadingErrorAllowsProxyRetry,
                   failure.navigationID == attempt.navigationID, failure.url == address,
                   !failure.hasReplayableBody, let request = safeRouteReloadRequest,
                   request.url == address, request.httpMethod == failure.method else { return nil }
-            return address
-        }
-        if let pause = websiteRoutePause {
-            guard !isLoading, pause.navigationID == attempt.navigationID, attempt.url == address,
-                  pause.documentEpoch == navigationEpoch, pause.editableAddress == address else { return nil }
             return address
         }
         guard loadingErrorPresentation == nil, let committedRequest, isLatestAttempt(committedRequest),
@@ -924,15 +924,20 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Cancel the load and keep the verified address available for editing the next route.
     public func pauseAfterWebsiteRouteChange(detachStore: Bool) {
         let editableAddress = websiteRouteControlURL
-        // A verified terminal failure already owns its displayed address and has no load to stop.
         let keepsTerminalFailure = lastMainFrameFailure != nil && editableAddress != nil
         if !keepsTerminalFailure { stop() }
-        if detachStore { rebindWebsiteDataStore(originalWebsiteDataStore, host: nil) }
-        guard !keepsTerminalFailure else { return }
+        if detachStore {
+            if keepsTerminalFailure { hostCoordinator?.pendingRecoveryInvalidated(tab: self) }
+            rebindWebsiteDataStore(originalWebsiteDataStore, host: nil)
+            loadingErrorAllowsProxyRetry = false
+        }
+        guard detachStore || !keepsTerminalFailure else { return }
         // Bind the control to the paused tab state after Stop and any store teardown.
         // The old request and document identities stay retired.
         websiteRoutePause = (attempt.navigationID, navigationEpoch, editableAddress)
-        loadingErrorPresentation = .resource("网站连接方式已更改，请重新打开此页面。")
+        if !keepsTerminalFailure {
+            loadingErrorPresentation = .resource("网站连接方式已更改，请重新打开此页面。")
+        }
     }
 
     private func terminateCurrentDocument() {
@@ -1512,7 +1517,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let hostMismatch = requestedURL.map { Self.routingHost(of: $0) != Self.routingHost(of: requestURL) } ?? false
         // WebKit can present a redirect from a write as a GET. Do not move it
         // across stores while the original write is still in flight.
-        let redirectFromUnsafe = navigationAction.navigationType == .other && provisionalNavigation != nil
+        let redirectFromUnsafe = navigationAction.navigationType == .other && pendingNavigation != nil
+            && committedRequest.map(isLatestAttempt) != true
             && (!["GET", "HEAD"].contains(attempt.method) || attempt.hasReplayableBody)
         let safeToReplay = Self.canReplayForRoute(navigationAction.request) && !redirectFromUnsafe
         if !safeToReplay,

@@ -1192,7 +1192,13 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
     }
     private let lock = OSAllocatedUnfairLock(initialState: "")
     private let authorityLock = OSAllocatedUnfairLock(initialState: [String]())
+    private let heldTLS = OSAllocatedUnfairLock(initialState: [String: [AnsweringStream]]())
     var authorities: [String] { authorityLock.withLock { $0 } }
+
+    func finishObservedTLS(to host: String) {
+        let streams = heldTLS.withLock { $0.removeValue(forKey: host) ?? [] }
+        for stream in streams { stream.close() }
+    }
     var transcript: String {
         lock.withLock { $0 }
     }
@@ -1201,6 +1207,7 @@ private final class AnsweringOpener: AccessHTTPTunnelOpening, @unchecked Sendabl
         authorityLock.withLock { $0.append("\(host):\(port)") }
         if finishAfterRecording { throw URLError(.secureConnectionFailed) }
         let stream = AnsweringStream(host: host, body: body, redirects: redirects)
+        if port == 443 { heldTLS.withLock { $0[host, default: []].append(stream) } }
         stream.onRequest = { [weak self] request in
             self?.append(request)
         }
@@ -1823,6 +1830,324 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: final), "An armed group does not inherit a Smart-only binding")
         XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
         XCTAssertTrue(coordinator.snapshot(for: tab).autoRecoveryEnabled, "The independent recovery grant stays armed")
+    }
+
+    func testGeoSiteReviewReloadRepreparesAuthorizedLanding() async throws {
+        let initialPort: UInt16 = 18_476
+        let replacementPort: UInt16 = 18_477
+        let originalPort: UInt16 = 18_478
+        let initial = AnsweringOpener(body: "<title>Initial entry</title>")
+        let replacement = AnsweringOpener(body: "<title>Replacement entry</title>")
+        let original = AnsweringOpener(body: "<title>Original route</title>")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let initialListener = try await makeListener(port: initialPort, tunnels: initial)
+        try await initialListener.start(at: now)
+        defer { try? initialListener.stop() }
+        let replacementListener = try await makeListener(port: replacementPort, tunnels: replacement)
+        try await replacementListener.start(at: now)
+        defer { try? replacementListener.stop() }
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        try await originalListener.start(at: now)
+        defer { try? originalListener.stop() }
+
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            if generation == 2 { throw AccessSiteSessionError.nodeUnavailable }
+            return .init(endpoint: .init(identity: "review-landing-\(generation)", generation: generation,
+                loopbackHost: "127.0.0.1", port: generation == 1 ? initialPort : replacementPort, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, locationPreferences: defaults,
+                                                     websiteRoutePolicy: .geositeFixture)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+            preferences: BrowserPreferences(defaults: defaults), hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(browser.activeTab)
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer { browser.closeWindow(); restoreOriginal() }
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+
+        // Grant service through Settings on a committed reserved apex. The child inherits this choice.
+        let parent = try AccessSiteHost("review-landing.invalid")
+        let child = try AccessSiteHost("www.review-landing.invalid")
+        let settings = try XCTUnwrap(URL(string: "https://\(parent.rawValue)/review-settings"))
+        let start = try XCTUnwrap(URL(string: "https://\(parent.rawValue)/review-start"))
+        let landing = try XCTUnwrap(URL(string: "https://\(child.rawValue)/review-landing"))
+        let childAuthority = "\(child.rawValue):443"
+        tab.loadFromAddressBar(settings)
+        try await commitGeoSiteReviewConnect(settings, tab: tab, window: window, observer: original)
+        XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertEqual(coordinator.websiteAccelerationHost(for: tab), parent)
+        coordinator.setWebsiteRouteChoice(.service, for: tab, displayedHost: parent)
+        XCTAssertEqual(coordinator.websiteRouteChoice(for: tab), .service)
+
+        tab.loadFromAddressBar(start)
+        try await commitGeoSiteReviewConnect(start, tab: tab, window: window, observer: initial)
+        let firstEntry = try XCTUnwrap(publisher.currentEndpoint)
+        let parentKey = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: parent, isPrivate: false)
+        let childKey = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: child, isPrivate: false)
+        XCTAssertEqual(tab.boundHostName, parent.rawValue)
+        XCTAssertEqual(coordinator.registry.endpointSnapshot[parentKey], firstEntry)
+        let parentStore = tab.websiteDataStore
+        _ = try XCTUnwrap(tab.webView.load(URLRequest(url: landing)))
+        try await commitGeoSiteReviewConnect(landing, tab: tab, window: window, observer: initial)
+        XCTAssertEqual(tab.parentForProxyLanding(landing), parent.rawValue)
+        XCTAssertEqual(tab.boundHostName, child.rawValue)
+        XCTAssertFalse(tab.websiteDataStore === parentStore)
+        XCTAssertFalse(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertEqual(coordinator.registry.endpointSnapshot[childKey], firstEntry)
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertFalse(original.authorities.contains(childAuthority))
+
+        publisher.closeCurrentGeneration()
+        // Closing the old listener models the transport loss independently of the publisher state.
+        try initialListener.stop()
+        try await waitUntil { coordinator.registry.endpointSnapshot[childKey]?.state == .failed }
+        XCTAssertNil(publisher.currentEndpoint)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: landing))
+        tab.reload()
+        try await waitUntil({ !tab.isLoading && tab.loadingError != nil },
+                            message: "A failed replacement must settle the authorized landing reload")
+        XCTAssertEqual(publisher.provisionCount, 2, "Reload must attempt to prepare the unavailable landing")
+        XCTAssertEqual(tab.lastMainFrameFailure?.url, landing)
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+        XCTAssertEqual(coordinator.websiteAccelerationHost(for: tab), child)
+        XCTAssertFalse(original.authorities.contains(childAuthority))
+
+        tab.reload()
+        try await waitUntil({
+            self.attach(tab.webView, to: window)
+            return replacement.authorities.contains(childAuthority) || (!tab.isLoading && tab.loadingError != nil)
+        }, message: "The next reload must reach a replacement entry or report a failure")
+        XCTAssertTrue(replacement.authorities.contains(childAuthority), "Reload must use the replacement entry.")
+        XCTAssertFalse(original.authorities.contains(childAuthority))
+        XCTAssertEqual(tab.boundHostName, child.rawValue)
+        XCTAssertEqual(tab.parentForProxyLanding(landing), parent.rawValue)
+        XCTAssertFalse(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        XCTAssertEqual(publisher.provisionCount, 3)
+        let restored = try XCTUnwrap(publisher.currentEndpoint)
+        XCTAssertGreaterThan(restored.generation, firstEntry.generation)
+        XCTAssertEqual(coordinator.registry.endpointSnapshot[childKey], restored)
+    }
+
+    func testGeoSiteReviewSiteChoicePreservesUnrelatedPreparation() async throws {
+        let managedPort: UInt16 = 18_479
+        let originalPort: UInt16 = 18_480
+        let managed = AnsweringOpener(body: "<title>Managed site B</title>")
+        let original = AnsweringOpener(body: "<title>Original site A</title>")
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        try await managedListener.start(at: now)
+        defer { try? managedListener.stop() }
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        try await originalListener.start(at: now)
+        defer { try? originalListener.stop() }
+
+        let gate = WindowPrepareGate()
+        defer { gate.finish() }
+        let publisher = AccessProxyEntryPublisher { generation, _ in
+            await gate.wait()
+            return .init(endpoint: .init(identity: "review-site-choice", generation: generation,
+                loopbackHost: "127.0.0.1", port: managedPort, state: .ready),
+                listenerReady: true, runtimeHealthy: true, bridgeInstalled: true)
+        }
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessManualPreparationClock(), channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let preferences = BrowserPreferences(defaults: defaults)
+        let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences, hostCoordinator: coordinator)
+        let second = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences, hostCoordinator: coordinator)
+        let a = try XCTUnwrap(first.activeTab)
+        let b = try XCTUnwrap(second.activeTab)
+        let restoreOriginal = try observeOriginalStore(of: a, port: originalPort)
+        defer { first.closeWindow(); second.closeWindow(); restoreOriginal() }
+        try await a.prepareContentRulesForTests()
+        try await b.prepareContentRulesForTests()
+        let aWindow = show(a.webView)
+        let bWindow = show(b.webView)
+        defer { aWindow.isHidden = true; bWindow.isHidden = true }
+
+        let siteA = try AccessSiteHost("review-site-a.invalid")
+        let siteB = try AccessSiteHost("dotdeb.org.geosite.invalid")
+        let aURL = try XCTUnwrap(URL(string: "https://\(siteA.rawValue)/review-site-a"))
+        let bURL = try XCTUnwrap(URL(string: "http://\(siteB.rawValue)/review-held-b"))
+        a.loadFromAddressBar(aURL)
+        try await commitGeoSiteReviewConnect(aURL, tab: a, window: aWindow, observer: original)
+        XCTAssertTrue(a.websiteDataStore === a.originalWebsiteDataStore)
+        XCTAssertEqual(coordinator.websiteAccelerationHost(for: a), siteA)
+        coordinator.setWebsiteRouteChoice(.service, for: a, displayedHost: siteA)
+        XCTAssertEqual(coordinator.websiteRouteChoice(for: a), .service)
+
+        b.loadFromAddressBar(bURL)
+        try await waitUntil({ gate.started }, message: "Independent site B must reach the real publisher preparation")
+        let pending = try XCTUnwrap(b.pendingAddressNavigation)
+        XCTAssertEqual(pending.url, bURL)
+        XCTAssertEqual(b.heldProxyRequestForTests?.url, bURL)
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: b))
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertNil(publisher.currentEndpoint)
+
+        coordinator.setWebsiteRouteChoice(nil, for: a, displayedHost: siteA)
+        XCTAssertNil(coordinator.websiteRouteChoice(for: a))
+        XCTAssertFalse(coordinator.requiresProxy(tab: a, url: aURL))
+        XCTAssertTrue(coordinator.requiresProxy(tab: b, url: bURL))
+        XCTAssertTrue(coordinator.isPreparingAddressProxy(tab: b), "Clearing A must keep B's operation live")
+        XCTAssertEqual(b.pendingAddressNavigation, pending)
+        XCTAssertEqual(b.heldProxyRequestForTests?.url, bURL)
+        XCTAssertNil(b.loadingError)
+
+        gate.finish()
+        // A fresh authority distinguishes the new original-side CONNECT from an earlier pooled socket.
+        let aAfterClear = try XCTUnwrap(URL(string: "https://\(siteA.rawValue):8443/review-site-a/cleared"))
+        a.loadFromAddressBar(aAfterClear)
+        try await waitUntil(seconds: 12, {
+            self.attach(a.webView, to: aWindow)
+            return original.authorities.contains("\(siteA.rawValue):8443")
+        }, message: "A must send its reopened request through the original connection")
+        XCTAssertEqual(a.requestedURL, aAfterClear)
+        try await waitUntil(seconds: 12, {
+            self.attach(b.webView, to: bWindow)
+            return !b.isLoading && (b.committedMainFrameURL == bURL || b.loadingError != nil)
+        }, message: "B must finish its original authorized navigation")
+        XCTAssertTrue(a.websiteDataStore === a.originalWebsiteDataStore)
+        XCTAssertEqual(b.committedMainFrameURL, bURL, "The surviving operation must still pass policy validation")
+        XCTAssertEqual(b.currentAttemptIDForTests, pending.navigationID)
+        XCTAssertEqual(b.recoveryLoadCount, 1)
+        XCTAssertEqual(b.boundHostName, siteB.rawValue)
+        XCTAssertFalse(b.websiteDataStore === b.originalWebsiteDataStore)
+        XCTAssertNil(b.loadingError)
+        XCTAssertEqual(publisher.provisionCount, 1)
+        XCTAssertTrue(managed.transcript.contains("GET /review-held-b "))
+        XCTAssertFalse(original.authorities.contains { $0.hasPrefix("\(siteB.rawValue):") })
+        XCTAssertFalse(managed.authorities.contains { $0.hasPrefix("\(siteA.rawValue):") })
+    }
+
+    func testGeoSiteReviewSmartPreservesCommittedLegacyLanding() async throws {
+        let managedPort: UInt16 = 18_481
+        let originalPort: UInt16 = 18_482
+        let managed = AnsweringOpener(body: "<title>Legacy route</title>")
+        let original = AnsweringOpener(finishAfterRecording: true)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let managedListener = try await makeListener(port: managedPort, tunnels: managed)
+        try await managedListener.start(at: now)
+        defer { try? managedListener.stop() }
+        let originalListener = try await makeListener(port: originalPort, tunnels: original)
+        try await originalListener.start(at: now)
+        defer { try? originalListener.stop() }
+
+        let (defaults, suite) = try makeSmartPreferences()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(AccessWebsiteAccelerationMode.manual.rawValue, forKey: "browser.websiteAcceleration.mode")
+        let publisher = readyPublisher(port: managedPort)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev,
+            defaultLocationPrivacy: true, locationPreferences: defaults, websiteRoutePolicy: .geositeFixture)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+            preferences: BrowserPreferences(defaults: defaults), hostCoordinator: coordinator)
+        let tab = try XCTUnwrap(browser.activeTab)
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer { browser.closeWindow(); restoreOriginal() }
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+
+        let parent = try AccessSiteHost("review-legacy.invalid")
+        let child = try AccessSiteHost("www.review-legacy.invalid")
+        let start = try XCTUnwrap(URL(string: "https://\(parent.rawValue)/review-start"))
+        let landing = try XCTUnwrap(URL(string: "https://\(child.rawValue)/review-landing"))
+        let childAuthority = "\(child.rawValue):443"
+        XCTAssertEqual(coordinator.websiteAccelerationMode, .manual)
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: start))
+        XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: start))
+        tab.loadFromAddressBar(start)
+        try await commitGeoSiteReviewConnect(start, tab: tab, window: window, observer: managed)
+        let entry = try XCTUnwrap(publisher.currentEndpoint)
+        XCTAssertEqual(tab.boundHostName, parent.rawValue)
+        XCTAssertNil(coordinator.websiteRouteChoice(for: tab))
+        XCTAssertEqual(coordinator.registry.endpoint(scopeID: tab.browsingScopeID, host: parent, isPrivate: false), entry)
+        let parentStore = tab.websiteDataStore
+        _ = try XCTUnwrap(tab.webView.load(URLRequest(url: landing)))
+        try await commitGeoSiteReviewConnect(landing, tab: tab, window: window, observer: managed)
+        XCTAssertEqual(tab.parentForProxyLanding(landing), parent.rawValue)
+        XCTAssertEqual(tab.boundHostName, child.rawValue)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: landing))
+        XCTAssertEqual(coordinator.registry.endpoint(scopeID: tab.browsingScopeID, host: child, isPrivate: false), entry)
+        let childStore = tab.websiteDataStore
+        XCTAssertFalse(childStore === parentStore)
+        let childView = tab.webView
+        let childEpoch = tab.navigationEpoch
+
+        coordinator.setWebsiteAccelerationMode(.smart, for: tab)
+        XCTAssertEqual(coordinator.websiteAccelerationMode, .smart)
+        XCTAssertEqual(tab.boundHostName, child.rawValue)
+        XCTAssertEqual(tab.parentForProxyLanding(landing), parent.rawValue)
+        XCTAssertTrue(tab.websiteDataStore === childStore)
+        XCTAssertTrue(tab.webView === childView)
+        XCTAssertEqual(tab.navigationEpoch, childEpoch)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: landing))
+        XCTAssertNil(tab.loadingError)
+
+        let priorManagedConnects = managed.authorities.filter { $0 == childAuthority }.count
+        tab.reload()
+        try await waitUntil({
+            self.attach(tab.webView, to: window)
+            return managed.authorities.filter { $0 == childAuthority }.count > priorManagedConnects
+                || original.authorities.contains(childAuthority) || (!tab.isLoading && tab.loadingError != nil)
+        }, message: "The committed legacy landing must remain reloadable in Smart mode")
+        XCTAssertGreaterThan(managed.authorities.filter { $0 == childAuthority }.count, priorManagedConnects)
+        XCTAssertFalse(original.authorities.contains(childAuthority))
+        XCTAssertEqual(publisher.provisionCount, 1)
+        tab.stop()
+
+        let cold = browser.newTab()
+        try await cold.prepareContentRulesForTests()
+        for target in [start, landing] {
+            XCTAssertFalse(coordinator.requiresProxy(tab: cold, url: target))
+            XCTAssertFalse(coordinator.requiresProxyPreparation(tab: cold, url: target))
+        }
+        let priorOriginalConnects = original.authorities.filter { $0 == childAuthority }.count
+        let beforeColdLoad = managed.authorities.filter { $0 == childAuthority }.count
+        attach(cold.webView, to: window)
+        cold.load(landing)
+        try await waitUntil({ original.authorities.filter { $0 == childAuthority }.count > priorOriginalConnects },
+                            message: "An independent cold tab must use its original store for the same host")
+        XCTAssertTrue(cold.websiteDataStore === cold.originalWebsiteDataStore)
+        XCTAssertNil(cold.parentForProxyLanding(landing))
+        XCTAssertEqual(managed.authorities.filter { $0 == childAuthority }.count, beforeColdLoad)
+
+        browser.switchProfile(to: .privateMode)
+        let privateTab = try XCTUnwrap(browser.activeTab)
+        XCTAssertTrue(privateTab.profile.isPrivate)
+        XCTAssertFalse(coordinator.offersWebsiteAcceleration(for: privateTab))
+        XCTAssertTrue(privateTab.websiteDataStore === privateTab.originalWebsiteDataStore)
+        for (host, target) in [(parent, start), (child, landing)] {
+            XCTAssertFalse(coordinator.requiresProxy(tab: privateTab, url: target))
+            XCTAssertTrue(coordinator.requiresProxyPreparation(tab: privateTab, url: target),
+                          "Private windows keep their own optional legacy preparation")
+            XCTAssertNil(coordinator.registry.endpoint(scopeID: privateTab.browsingScopeID, host: host, isPrivate: true))
+        }
+    }
+
+    private func commitGeoSiteReviewConnect(_ url: URL, tab: BrowserTab, window: UIWindow,
+                                           observer: AnsweringOpener) async throws {
+        let host = try XCTUnwrap(url.host)
+        try await waitUntil(seconds: 12, {
+            self.attach(tab.webView, to: window)
+            return tab.requestedURL == url && tab.webView.url == url
+                && tab.currentNavigationForTests != nil && observer.authorities.contains("\(host):443")
+        }, message: "The owned WebKit navigation must send CONNECT for \(host)")
+        let navigation = try XCTUnwrap(tab.currentNavigationForTests)
+        let view = tab.webView
+        // This listener records CONNECT and holds the tunnel. Model completion of that exact attempt.
+        tab.commitPendingMainFrameForTests()
+        tab.webView(view, didFinish: navigation)
+        view.stopLoading()
+        observer.finishObservedTLS(to: host)
+        XCTAssertEqual(tab.committedMainFrameURL, url)
+        XCTAssertEqual(tab.websiteRouteControlURL, url)
+        XCTAssertFalse(tab.isLoading)
     }
     #endif
 
