@@ -163,7 +163,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public weak var hostCoordinator: BrowserHostStoreCoordinating?
     private typealias MainFrameAttempt = MainFrameNavigationState.Attempt
     private var committedRequest: MainFrameAttempt?
-    private var committedDocumentEpoch: UInt64?
+    /// Only the unit-test commit seam records a document without a WebKit view identity.
+    private var committedDocument: (epoch: UInt64, viewID: ObjectIdentifier?)?
     private var websiteRoutePause: (navigationID: String, documentEpoch: UInt64, editableAddress: URL?)?
     private var restoreURL: URL?
     private let navigationState = MainFrameNavigationState()
@@ -209,11 +210,21 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             return address
         }
         guard loadingErrorPresentation == nil, let committedRequest, isLatestAttempt(committedRequest),
-              committedDocumentEpoch == navigationEpoch, committedMainFrameURL == address,
-              committedRequest.url == address, attempt.url == address,
+              let committedDocument, committedDocument.epoch == navigationEpoch,
+              let committedURL = committedMainFrameURL, attempt.url == committedURL,
               ["GET", "HEAD"].contains(committedRequest.method), attempt.method == committedRequest.method,
               !committedRequest.hasReplayableBody, !attempt.hasReplayableBody else { return nil }
-        return address
+        guard let viewID = committedDocument.viewID else {
+            return committedURL == address && committedRequest.url == address ? address : nil
+        }
+        // History API updates can change the live URL without starting a navigation.
+        guard restoreURL == nil, let view = loadedWebView, ObjectIdentifier(view) == viewID,
+              let liveURL = view.url, let origin = BrowserPreferences.origin(committedURL),
+              BrowserPreferences.origin(liveURL) == origin, BrowserPreferences.origin(address) == origin else { return nil }
+        if isLoading {
+            return liveURL == committedURL && liveURL == address ? liveURL : nil
+        }
+        return view.isLoading ? nil : liveURL
     }
 
     private var pendingProxyRequest: URLRequest?
@@ -287,7 +298,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         let scheme = recorded.url.scheme?.lowercased() ?? ""
         guard ["http", "https"].contains(scheme) else { return }
         committedRequest = recorded
-        committedDocumentEpoch = navigationEpoch
+        committedDocument = (navigationEpoch, nil)
         committedMainFrameURL = recorded.url
         url = recorded.url
         clearPendingAddressNavigation()
@@ -923,7 +934,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     /// Cancel the load and keep the verified address available for editing the next route.
     public func pauseAfterWebsiteRouteChange(detachStore: Bool) {
-        let editableAddress = websiteRouteControlURL
+        // Stop retains the address bar's snapshot of the verified site.
+        let editableAddress = websiteRouteControlURL == nil ? nil : addressBarURL
         let keepsTerminalFailure = lastMainFrameFailure != nil && editableAddress != nil
         if !keepsTerminalFailure { stop() }
         if detachStore {
@@ -1727,7 +1739,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if let navigation, let recorded = navigationState.recorded(for: navigation) {
             let scheme = recorded.url.scheme?.lowercased() ?? ""
             committedRequest = recorded
-            committedDocumentEpoch = navigationEpoch
+            committedDocument = (navigationEpoch, ObjectIdentifier(webView))
             if ["http", "https"].contains(scheme) {
                 committedMainFrameURL = recorded.url
                 url = recorded.url
