@@ -1,73 +1,79 @@
-# GeoSite 热更新、冷缓存与切换 SDD
+# 网站加速 Beta 分类与 Xray 官方更新设计
 
-首期在 iOS DEV 验证，基线为 `24c3b9a1d4ff80c16966883de43976bc780f1afc`。本方案承接 [iOS PR #402](https://github.com/quinn521/aegis-browser/pull/402) 的顶层选路和简洁界面，随后由 macOS、Android 接入同一更新合同。Hysteria 2 独立验证。[网站加速 SDD](2026-11-21-access-geosite-design.md) · [原实施计划](../plans/2026-11-21-access-geosite.md) · [更新实施计划](../plans/2026-11-21-geosite-updates.md) · [工作单 #212](https://github.com/gcsagroup/aegis-browser/issues/212)
+首期范围为普通 iOS DEV，代码基线 `24c3b9a1d4ff80c16966883de43976bc780f1afc`。历史前版 [d046ab4e](https://github.com/quinn521/aegis-browser/commit/d046ab4e454919f52de1a828639e0983a0282e3d) 的假定团队 Ed25519 信封由本文替换。[iOS #402](https://github.com/quinn521/aegis-browser/pull/402) 与 [macOS 静态 #403](https://github.com/quinn521/aegis-browser/pull/403) 是已验证的 **V2Fly** 实现，不能追记成 Xray 下载证据。
 
-## 1. 不变项与复用边界
+主负责人先发布本设计与[实施计划](../plans/2026-11-21-geosite-updates.md)，再写产品代码；先交付内置三组的可用分类入口，再接完整更新闭环，随后迁移 macOS 来源、接入 Android。HY2 独立；既有 owner、FIRST、期限、累计预算和失败记录不变。[既有产品规格与历史证据](2026-11-21-access-geosite-design.md)继续用于原功能，本次分类与更新约束以本文为准。
 
-当前普通 DEV App 已编入 Swift 分类器，`AccessWebsiteRoutePolicy` 的应用签名内置基线是 `DEBIAN` 的 `domain:debian.org`、`domain:dotdeb.org`；不把它描述为已实现远端签名包。保留默认手动、exact 选择优先、未选中走原设置、选中而 transport 失败则关闭请求，以及独立位置保护、恢复与已授权 landing。多个 BrowserWindow 共用协调器，但实际 WebKit store 属于各文档；现有 `changeWebsitePolicy`、`policyEpoch` 是切换入口，不另起一套状态机绕过它们。[路由](../../../apps/ios/AccessKit/AccessHostRoutingPolicy.swift) · [协调器](../../../apps/ios/AegisApp/AccessHostStoreCoordinator.swift)
+## 产品与授权
 
-沿用「设置 → 国内加速 → 网站加速 → 手动／智能」及简短所选模式提示。精确根域、租户风险和协议放在本规格；界面只在待确认扩围或不可用时展示必要的临时说明，不增工程设置区。更新触发、候选选择、缓存恢复、确认、激活及异步回调均验证 ordinary owner 与可信 DEV 身份；private、Guest、其他渠道、unknown/冲突身份不能借直接调用启用，也不能由私密窗口的前台事件触发普通更新。
+入口保持「设置 → 国内加速 → 网站加速 → 手动／智能」。智能下增加可导航的「加速分类」行，旁置非交互 Beta 标记；行值显示已选名称、数量或「未选择」，打开原生小型多选列表。VoiceOver 行名只读一次 Beta，具有导航语义与当前值；分类项有本地化名称、选择状态和 selected trait，支持 Dynamic Type 换行。三个选项均真实可用，不列未实现的占位项；此入口不增加网络诊断。
 
-复用 [RegisteredDomain](../../../apps/ios/AegisPolicyKit/RegisteredDomain.swift) 的 ICANN+PRIVATE PSL 数据和匹配语义；资源 SHA-256 固定为 `ba7d836c0ea57a8bcf9f1fcb868066a7554bed029b441ecc6204ad8494a32612`。现有 `normalizedHost` 会去除多余首尾点，`of` 在空 PSL 时仍有默认后缀行为，**不能直接作为准入判定**。新增严格、可失败的 PSL 查询，显式暴露资源有效性、后缀及后缀祖先；不改变既有调用者行为。复用 [SecurityRules](../../../apps/ios/BrowserKit/SecurityRules.swift) 的 CryptoKit Ed25519 原字节验签方式，不复用其 `allowExpired`、大小上限或签名 key。[Apple 验签 API](https://developer.apple.com/documentation/cryptokit/curve25519/signing/publickey/isvalidsignature(_:for:))
+新安装默认手动、分类预选 DEBIAN；升级仅在选择字段缺失时迁移为 DEBIAN，保留已有手动／智能与 exact 覆盖。显式空集合独立于缺失／迁移状态，允许取消最后一项并持久保存；智能空选提示「未选择加速分类。」，非空提示「按所选分类加速网站。」；#402 的「仅 Debian」提示只属于 Beta 前版本。未配置服务时仍保留既有简短提示。
 
-## 2. 小包与共同准入合同
+同一普通 owner 的所有普通窗口共享选择并跨重启保存；手动忽略分类并保留选择。private、Guest、非 DEV（含 release）、unknown／冲突身份及其他 owner 不能读取、修改或触发该状态，UI 与原生入口都校验身份。零选择和手动均不触发更新网络；零选择后的显式新增选择可进入取数／确认流程，未获准前不贡献路由。
 
-独立分支 `codex/macos-dev-geosite-rules` 的 `d49749e77e140db313fd7219da519ecf71ecb293:scripts/dev/compile-geosite.mjs` 只作静态编译合同参照，不复制 JS、不合并该分支。保留其 catalogue 的 `schemaVersion=1`、`compiler`、`inputs` 来源 pins、`group`、`ruleCount`、排序的 `{type,value}` 与 `payloadSha256`。摘要为按 type、value ASCII 升序的 `type:value\n` UTF-8 字节 SHA-256。其 Chromium PSL pin 与本 iOS PSL 不同：各平台的准入版本及向量须显式绑定所用 PSL，不能声称两份资产等价。运行时只接收已编译 JSON，不下载 DAT/protobuf。
+勾选即确认屏幕展示的**已验证当前版本及完整分类**，不是授权该组未来任意内容。列表优先显示名称与勾选状态，美团注明含大众点评。规则数量、含子域语义、版本及完整范围收在可展开的详情中。首次启用智能即可从分类行看到默认 Debian；已授权且等价的升级迁移保留选择。打开列表后候选变化须刷新并重新操作，旧点击不能批准新内容。取消勾选立即影响新导航，并停止失去唯一授权的旧操作；重叠分类按 OR 合并，exact 用户选择优先，独立有效授权继续保留。
 
-传输信封固定为 `{keyId, payloadBase64, signatureBase64}`。`B` 是解码后的原始 UTF-8 JSON 字节，签名精确覆盖 `UTF8("AEGIS-GEOSITE-UPDATE-V1\n") || B`；不重新序列化后验签。`candidateID=SHA256(同一签名输入)`，64 字节签名由包内配置的 32 字节 Ed25519 公钥验证；内外 `keyId` 必须一致。`B` 必填：
+## 官方来源与首批完整分类
 
-```text
-updateSchemaVersion=1, admissionVersion=1, keyId, sourceId, group=DEBIAN,
-channel=dev, sequence, issuedAt, expiresAt, action, scope, catalogue
-replace / rollback: scope={ownerClass:ordinary, unit:topLevelDocument,
-                           route:requireService, rulesSha256:catalogue.payloadSha256}
-rollback 另含 rollbackOfPayloadSha256；revoke 不含 catalogue，
-scope={ownerClass:ordinary, unit:topLevelDocument, extent:wholeGroup}, revokesThrough
-```
+选用 XTLS/Xray-rules-dat 官方 **standard geosite.dat**。[固定 README](https://github.com/XTLS/Xray-rules-dat/blob/0f8082e3b11bbe8ee65f26de86cbd2e0d510c983/README.md)说明标准数据随 Xray 捆绑，expanded 为可选；[固定 Xray-install](https://github.com/XTLS/Xray-install/blob/9d3ad49a3294d4c1d042f1fb6a16360b4d1befd1/install-release.sh)的 Linux update-geodata 选 expanded，不要求本产品跟随。
 
-上述字段、catalogue 内全部来源 pins、typed rules、数量及摘要都在签名内。`sourceId` 必须映射到应用包固定的 HTTPS URL、公钥及允许的来源项目；签名中的 group 与请求的唯一已启用组一致。pins 记录来源 revision、版本、输入摘要、许可和 PSL；其可追溯性由离线签发流程复现，运行时不把一个第三方摘要当作授权。未知字段/版本、重复 JSON key、错误类型、非法 UTF-8、摘要不符及任一坏规则均拒绝整组；禁止验签后“清洗”部分规则再发布。
+2026-11-21 已核验[官方发布 20261120235103](https://github.com/XTLS/Xray-rules-dat/releases/tag/20261120235103)：release id `453302649`，published_at `2026-11-20T23:52:15Z`，immutable=false，tag commit `0f8082e3b11bbe8ee65f26de86cbd2e0d510c983`，GeoSite source `d74acca73490cb57a937674ce8a8709d2a3021ba`。raw DAT 为 **7,750,066 字节**，SHA-256 `6fb761384d0141a9bd7dc3c18caf74b70516018ca91e3c36af11afefb543dcf9`；gzip 为 2,408,476 字节。两资产均核对 API SHA 与配对校验文件，gzip 解压等于 raw；独立 protobuf 解析得到 1,572 组。这是原始来源证据，尚非产品更新验收。
 
-v1 上限是信封 128 KiB、解码载荷 96 KiB、JSON 深度 8、非空组 128 条、DNS 主机 253 字节/标签 63 字节；先限流累计字节再解码，不能 `data(for:)` 全量读完才检查。拒绝非 identity 压缩、HTTP 206 部分内容及声明或实际超限，未知长度也逐块计数；不信任 `Content-Length`。规则只接受 canonical 小写 ASCII/IDNA A-label，禁止重复与非排序输入。请求 URL 可经平台 IDNA 转换、去除一个根点后严格验证；规则输入本身必须已规范化。IP、单标签、本地域、空标签、URL 分隔符、转义、属性、keyword/regexp/未知类型均拒绝。`full` 精确命中，`domain` 仅按标签边界覆盖子域；两者都拒绝公共后缀，`domain` 还拒绝覆盖嵌套 ICANN/PRIVATE 边界的祖先。`github.io`、`toolforge.org` 等共享后缀不能获准；具体租户也不能扩成父域，PSL 未列出的共享托管风险仍须签发方审核和用户扩围确认。PSL 缺失/坏 hash 拒绝远端准入，不能以 eTLD+1 猜测补救。
+| 原生名称／官方组 | 完整条数 | canonical typed SHA-256 |
+| --- | ---: | --- |
+| Debian／DEBIAN | 2 | `d865d67c829d0f13bf508e152ef402d5d9634227ed12a8b49434d231baf5a643` |
+| 豆瓣／DOUBAN | 3 | `62cfcbf5e006744783206139a2cbb6a3dffb05dbc366f1784a193e887e038619` |
+| 美团／MEITUAN | 19 | `7f23061fb1a46f4150077aa56c369188cfda5bb49bd99649264c5bfb7bf8efa9` |
 
-`sequence` 是无前导零的 UInt64 十进制字符串，网络包从 1 开始；版本名称不参与排序。UTC 秒整数满足 `issuedAt <= now+300`、`issuedAt < expiresAt <= issuedAt+7天` 且 `now < expiresAt`。新候选必须高于已准入水位；同序列只允许同一 candidateID 的恢复/重传，异内容拒绝。回滚必须以更高序列重签完整旧内容、新期限及 rollback 目标，重新检查范围；revoke 以更高序列撤销该组所有 `<= revokesThrough=sequence-1` 的版本，包括内置序列 0。已持久化撤销不随撤销包到期失效，恢复须更高序列及重新授权。缺签名、坏签名、过期、低序列或 unsolicited group 从不发布。
+上述规则全部为无属性的 domain，且已逐条通过固定真实 iOS PSL。DEBIAN 完整为 debian.org、dotdeb.org；DOUBAN 完整为 douban.com、douban.fm、doubanio.com；MEITUAN 完整为 100.me、51ping.com、baobaoaichi.cn、ddcorp.net、ddfresh.net、ddimg.mobi、ddmaicai.net、ddmc.mobi、dduser.mobi、ddxq.mobi、dianping.com、dpfile.com、imaicai.mobi、maoyan.com、meituan.com、meituan.net、mtyun.com、neixin.cn、sankuai.com。typed 摘要取按 type/value ASCII 排序的 `type:value\n` UTF-8 字节。
 
-## 3. 异步刷新与真实传输
+U1a 只把这三组小快照及来源清单放入 App 签名范围，豆瓣、美团初始不选；内置信任来自应用签名。保留[继承的 V2Fly MIT](https://github.com/XTLS/Xray-rules-dat/blob/d74acca73490cb57a937674ce8a8709d2a3021ba/LICENSE-inherited)、[官方分类来源说明](https://github.com/XTLS/Xray-rules-dat/blob/d74acca73490cb57a937674ce8a8709d2a3021ba/README.md)及 XTLS 版本、来源、许可元数据。其他官方组常含属性、regexp、共享后缀或过大集合，不能过滤坏行后冒充完整组；新菜单项经相同完整准入、许可和产品验证后再加入。
 
-应用签名内的可选 `GeoSiteUpdateConfiguration` 固定 DEV origin、路径、sourceId、公钥与组白名单；缺配置时零更新网络请求，使用下节允许的内置离线路径。设置、订阅、远端响应和环境变量不能改源或换 key；不提供生产域名、付费服务或新部署。生产 feed、密钥保管/轮换、撤销运维与 rollout 另行交付。
+## 最小更新线与准入
 
-只在普通前台 owner 已选智能时由启用/前台事件触发；冷启动先读本地，不等 HTTP。同 owner/group 单 flight，多个窗口和相邻事件合并；导航只读快照，不拉取。成功后在 `max(now+60秒, min(now+24小时, expiresAt-300秒))` 再检查；失败按 1 分钟、5 分钟、30 分钟、6 小时退避，加 0–20% 抖动但封顶 6 小时，持久化 nextAttempt，开关/重启不重置。仅合资格前台期间允许定时重试。切手动、取消、失去最后一个普通前台窗口或 owner/channel 改变，撤销更新代次并取消任务；迟到响应不能落地激活。
+远端信任是系统验证的 GitHub HTTPS、固定官方仓库的发布权限，以及 API asset SHA-256 与同 tag 的 `.sha256sum` 一致性；摘要不是独立签名，不能防官方账号／发布链被攻破。上游没有独立 Ed25519 信封、expiry 或 revoke；不需要团队 URL、公钥、发布服务或新信任部署。本地时限、用户授权和水位是本产品约束。
 
-规则文件属于浏览器控制面。使用临时 `URLSession` 向包内指定的 HTTPS 地址发条件 GET，遵守系统证书、系统代理和企业网络策略。更新独立于页面与订阅节点，首次启动和节点不可用时也可从已配置的更新源取得签名规则。会话禁用 cookie、持久凭据和 URLCache，拒绝重定向；请求仅携带协议必需字段及已验证版本的 ETag。它不发送页面 URL、浏览历史或账户 token，不为更新源递归运行 GeoSite，也不触碰标签页的连接租约。整个操作最多 30 秒。[Access 控制面合同](../../plans/access-service-v1.0/spec.zh-CN.md) · [Apple 流式接收](https://developer.apple.com/documentation/foundation/urlsessiondatadelegate)
+元数据固定 GET `https://api.github.com/repos/XTLS/Xray-rules-dat/releases/latest`；只接受非 draft、非 prerelease 的预期 schema。唯一数据资产名为 `geosite.dat`，配对 `geosite.dat.sha256sum`，两者必须属于同一 release/tag，名称唯一、API SHA 与长度齐全。构造或逐字符验证 `https://github.com/XTLS/Xray-rules-dat/releases/download/<tag>/<name>`；元数据不重定向，资产仅允许该 URL 到精确 `release-assets.githubusercontent.com` 的一次 HTTPS/443 跳转，使用 GitHub 返回的临时签名 URL，拒绝 userinfo、fragment、其他主机／端口及再次跳转。
 
-只保存强 ETag，最多 256 字节且无控制字符，与已完整验证的 `(origin/path, source, group, candidateID, bytes)` 绑定。只有该表示仍可读取、重新验证且未到期，才发 `If-None-Match`。304 无载荷，仅表示可复用先前表示；使用同一条件请求绑定的已验证表示，再次检查期限、水位和 owner 代次；响应附带 ETag 时必须匹配。304、Date、Cache-Control 均不能修改签名 expiresAt 或授权范围；无可用表示/ETag 不匹配的 304 失败，下次受退避约束的请求不带条件，不立即循环补拉。[RFC 9110 §15.4.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.4.5)
+使用独立 ephemeral URLSession、系统 TLS／代理／企业策略，禁用 cookie、凭据、URLCache，不发送 Referer、页面 URL、历史、账户 token 或跟踪字段。启用且到刷新时点才访问上述三个主机；关闭／手动／空选立即取消，已发出的请求无法收回，随后无新更新流量。更新不经 GeoSite、订阅节点或页面 lease，节点未配置也能更新；日志不记录 CDN 签名参数或浏览轨迹，隐私默认不变。
 
-## 4. 冷缓存、时间与防复活
+首版仅 raw DAT，无 gzip 解析器；请求 identity，拒绝压缩、206 与非预期状态。逐块累计并计算完整 SHA，下载到 EOF 后与 API 及校验文件三方核对，切换前完成；不信任 Content-Length。限元数据 256 KiB、校验文件 4 KiB、DAT 16 MiB、单次更新 30 秒；校验文件自身也核对 API digest，只接受对应文件名的一条 SHA。protobuf 上限：4,096 组、累计 4,000,000 字段／记录、深度 8、varint 10 字节、组名 64 字节、每目标组 128 条；所有长度受剩余文件约束并检查溢出。完整扫描外层到 EOF 和组标识，安全跳过非菜单组载荷，不能因找到目标就提前成功；单值字段重复、目标大小写伪装／重复、截断、坏 wire、超限或任一目标坏行拒绝整次候选，旧有效 active 不受损。
 
-可清理 blob 缓存只留 active 与一个 staged candidate，文件以 candidateID 命名，保存原信封及绑定的 ETag。另以本机 Keychain 小记录保存 source/group/channel 的最高准入 `H`、撤销水位 `D`、内置是否已退休，以及每 owner 的已提交 `P/id/expiresAt/acceptedScopeDigest/mode/状态`、clockFloor；普通偏好镜像不作安全权威。记录与 cache 生命周期独立，删除坏包、退出账户、切换模式和清理网站数据均不能清掉水位。Keychain 使用本机不可同步属性；访问失败不能解释成首次安装。[Apple 本机 Keychain 属性](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly)
+目标只接受 domain/full，拒绝属性、keyword、regexp、未知类型、重复行及不规范主机；输出排序而不要求上游行序。主机必须为 canonical 小写 ASCII/IDNA A-label，长度 ≤253、标签 1–63；拒绝 IP、本地域、单标签、空标签、URL／转义字符。URL 端可经平台 IDNA 与单个根点规范化；full 精确命中，domain 按 DNS 标签边界命中。PSL 公共后缀、domain 跨嵌套 ICANN/PRIVATE 边界及租户范围不明均拒绝整组，不能推算成更宽父域。
 
-写入顺序：后台完整验签/准入 → 同目录临时文件有界写入、flush/fsync、rename 并同步目录 → 主协调器检查 candidate/owner/模式/代次/期限 → 无 await 的短提交区原子更新安全记录 → 替换不可变内存快照。待确认候选只推进 H，不改 P/accepted scope；获准发布才提交 P。所有提交、手动切换、撤销在同一生命周期入口串行化；异步文件完成不能直接改变路由。文件阶段可取消；提交区是线性化点，之后到来的取消作为下一次切换处理。持久化失败不宣布生效；关闭动作先在内存停止新发送并报保存失败，不能声称重启已保存；撤销记录写失败同样不能报告持久撤销成功。
+复用 [RegisteredDomain](../../../apps/ios/AegisPolicyKit/RegisteredDomain.swift) 数据，增加可失败的严格查询；不能用其宽松 normalizedHost／空资源回退做准入。iOS ICANN+PRIVATE PSL SHA-256 固定 `ba7d836c0ea57a8bcf9f1fcb868066a7554bed029b441ecc6204ad8494a32612`，缺失／不符即拒绝新准入。各平台绑定自己的可信来源、实际 PSL digest 与准入版本；macOS Chromium 的 PSL 不能声称与 iOS 资产相同。
 
-重启按安全记录找**精确的** active id，重新验证签名、大小、来源、PSL、scope digest、期限和水位，再建立快照；`P<H` 只允许恢复此前已经提交且仍有效的同一 active，不能把低版本作为新候选。崩溃在安全记录提交前使用旧提交；提交后 blob 缺失/损坏则智能不可用，绝不扫描目录找一个较旧“好包”。首次确认为干净安装（无安全记录且无既存安装/迁移状态）先初始化记录，再使用应用内置基线；已有版本升级可从已知固定基线迁移。只要发布过网络版或收到有效撤销，就永久退休自动内置回退。既存安装标记与安全记录不一致时同样关闭智能；删除缓存不能复活已撤销、到期或被新版移除的范围。
+## 版本、刷新与官方移除
 
-期限以墙钟检查，不用“最近下载时间+TTL”。启动、回前台、发布及到期时维护持久 clockFloor，判断使用 `max(Date(), clockFloor)`；倒退超过 300 秒暂停更新/激活，已观察到的到期成为持久终态，不因调回时钟复活。前台到期定时器不因回拨延后，每次授权/发送前另检查本地期限，后台恢复先检查再放行。此保证覆盖 cache 丢失及应用中断，不声称抵御应用数据、Keychain 与系统时钟一起被外部回滚。
+tag 必须恰为 14 位 ASCII 数字并解析为有效 UTC 日历时间；published_at 为有效 UTC，满足 `tagTime ≤ published_at ≤ tagTime+24h`、`published_at ≤ now+300s`。远端快照有效期为 `published_at+7天`，下载、重启和 304 均不延长。尚未采用远端版本的干净安装可以离线使用随 App 签名交付的三组内置规则，内置发布日记录来源，不设七天安装期限。一旦某组正式采用官方远端快照或收到官方完整移除，持久退休它的内置副本；过期、损坏和重装缓存均不能恢复该副本。
 
-| 情况 | 发布/离线选择 | 页面决定 |
-|---|---|---|
-| 干净安装，无 origin/key | 内置两根域，仍默认手动 | 智能命中才要求服务 |
-| 坏更新/离线/合法 304 | 保留仍有效且获准的 active；不延寿 | 不改变原决定 |
-| 有效新版，范围相等或收窄 | 完整提交新版及收窄后的 accepted scope | 新动作按新版；被撤回的在途动作暂停 |
-| 新版扩大 typed 覆盖范围 | staged，确认前保持有效旧版 | 不提前准备新增主机 |
-| 到期/revoke/已发布后 cache 丢失 | 持久关闭对应版本；无自动内置回退 | 智能无法确定授权时暂停，不能当作未命中直连 |
+持久保存官方高水位 H（tag、release id、两项 asset id/digest、首次认可的 published_at）。新 tag 必须高于 H；同 tag 仅允许原回执、原字节的幂等恢复，改字节或改发布时间拒绝；低 tag、坏 checksum 拒绝。完整验证才推进 H，待确认候选不替换已有授权。官方以更高 tag 重新发布旧内容可接受，但仍须新时限与通常范围同意；不提供本地降级绕过水位。
 
-## 5. 同意、不可变快照与在途切换
+普通 owner 选智能且非空、至少一个普通前台窗口存活才可刷新：首次合资格启用异步检查，后续启用／前台遵守 nextAttempt 并合并为单次在途任务，导航只读快照；成功后 24h 再查。失败退避 1min、5min、30min、6h，持久保存 nextAttempt，抖动后仍封顶 6h；开关和重启不重置。失去最后一个合资格窗口、切手动、空选、退出 owner／DEV 时取消任务并使代次失效；关一个窗口不取消另一个仍合资格窗口，迟到回调不能发布。
 
-accepted scope 是 owner 已接受的 **typed 覆盖集合**，不是组名或“永远接受 Debian”。覆盖判断保留 full/domain 差别：父 domain 可覆盖其子规则，full 不能授权 domain；无法证明子集就视作扩围。旧版收窄后接受集合同步收窄，不保留历史授权并集。恢复撤销/到期版本也须重新确认。一次确认最多展示 8 条新增/扩大的规则，显示“仅此网站／含子域”、新增数量及同页第三方资源随文档出口的说明，列全、不截断；超过上限整候选不激活，需签发更小候选。不能缩取半组发布。确认令牌绑定 `(owner, candidateID, previousSnapshotID, acceptedScopeDigest, policyRevision, deltaDigest)`；任一变化、到期、取消或切手动使其失效，新版必须重问。
+元数据可用强或弱 ETag（≤256 字节、无控制字符），只表示 API 表示的新鲜度，不证明 DAT 字节。If-None-Match 必须绑定可读取回执和仍有效 active；304 仅复用同一绑定，不延长 published_at／寿命，不引入新 scope。丢回执、丢 active、冲突 ETag 或到期的 304 按失败退避，下一次无条件请求，不立即循环补拉。
 
-协调器持有 `DecisionSnapshot(ownerID, mode, candidateID/sequence, policyEpoch, acceptedScope, immutableIndex, expiresAt, manualChoices+hostRevisions, independentGrants)`。owner 来自可信普通 Profile/scope；窗口和 tab 是消费者，不各自下载或覆盖共享快照。每次导航/准备还固定 tab 实例、navigation/document ID、host、依赖的规则/手动 revision 与 transport generation；在 await 返回、绑定、发送、受信重定向及续租时再次比较。更新代次、策略 epoch 与 transport generation 分开，不以新 transport 证明旧授权仍有效。
+网络错误、404、限流／认证门禁、未知 schema、坏文件表示未知，不构成官方撤回，保留仍有效 active。只有 SHA、完整外层遍历和所有目标组准入均成功的较新整库，才可把**缺组或合法空组**确定为移除：原子持久记录该组贡献为空及内置回退退休，保留用户勾选并提示「暂无规则」；新的用户导航按 exact／其他有效组求值。所选组格式错误或不支持不是移除，整候选拒绝。移除状态不随回执到期失效；之后更高版本恢复该范围须重新同意，不能由重启或删除缓存复活。
 
-- **新增/改变决定**：先关闭受影响请求的发送入口，再经 `changeWebsitePolicy` 提交快照；新动作才可申请新 lease。已在原 store 中加载、现在应受服务保护的文档也须暂停/终止，不能放任脚本继续原连接。所有共享协调器的窗口共同过屏障，失败的消费者保持暂停。
-- **未变决定**：在同 owner、范围、手动 revision、独立授权和 transport 都有效时，可继续旧文档/lease；准备中的操作须显式验证等价并换发新快照令牌，不能无条件豁免旧 epoch。续租受新有效期约束。编辑 A 的 exact choice 只处理依赖 A 的操作，保留 B 的准备；模式变化仍保留独立 legacy landing，不把它推广给冷标签。
-- **撤回/到期/撤销/切手动**：失去唯一授权的准备操作取消；依赖它的文档先停止并使 realm inert，终止相关流，保留 retiring store 的代理配置及 lease 到 inert 回执。随后释放**自己的** consumer；禁止先清 `proxyConfigurations`、先释放共享 transport 或把旧请求转往 original。无法确认 inert 则保持封闭，禁止复用该 store；独立仍有效授权不随组退休。
-- **动作安全**：发布不批量重载。所有被中断的请求都不自动迁移重发，尤其 POST/有正文/下载/长连接；提交结果不确定须告知用户。用户再次打开时，仅既有安全规则允许的 GET/HEAD 可重新求值；POST 必须用户重新提交。新版明确收窄后，新的用户导航可按未选中走原设置；到期、cache 损坏或 transport 失败不等于这种主动收窄。显式要求服务的 exact/legacy 决定始终不回落直连。
+## 冷快照与原子持久化
 
-实现须保留 #402 三项定向 P2：已授权 landing 失去入口后 reload 能重新准备；修改 A 不取消 B 的准备；切智能保留已提交的 legacy landing，而同 host 冷标签不继承。WebKit 按文档共用 store，不能仅凭 reducer 或 `stopLoading()` 声称所有子资源/worker 已静默；集成验收必须观察真实文档退场及两侧网络，失败则不开放更新激活。诊断仅记录版本、代次、状态与脱敏原因，不上传主机浏览轨迹。
+共享 DAT 每版本只下载一次并抽取三个完整目标组；不按勾选分类各下载一份。缓存只保存有界的聚合 committed/staged 快照及来源回执，包含每组版本、typed digest、获准范围、状态与期限。一次更新中等价／收窄组可提交，扩围组保留仍有效原 active 等待同意，缺／空组立即退役；一次原子快照记录这些组决定，不能发布半组或扩展历史授权并集。
+
+安全权威是本机不可同步 Keychain 账本：安装／迁移状态、H、模式与选择（区分空）、每组已提交版本及获准 scope、内置退休／到期状态、聚合文件 hash、clockFloor、nextAttempt。偏好与 NSURLCache 均非权威；清网站数据、模式切换、删缓存不清水位。首次干净初始化／已知基线迁移才建账本；读取失败或安装标记冲突不能解释为首次安装。
+
+后台验证 → 同目录临时文件写完、fsync、rename、同步目录 → 既有主协调器复核 owner／选择 revision／候选／期限 → 无 await 的短提交区更新单条账本 → 替换不可变快照。账本是线性化点：之前崩溃恢复旧提交，之后只恢复它指向的精确文件，重验 hash、scope、来源、PSL 与期限；文件缺失／损坏不能扫描较旧包补救。持久化失败不宣布生效；关闭先在内存封住受影响发送并报告未保存。首个官方提交或明确移除后，该组不能自动回退内置；H 较高时只允许恢复此前已经提交且仍有效的旧 active。
+
+冷启动异步读取、重验并恢复当前获准快照，不等待 HTTP、不阻塞界面；未恢复前暂停依赖智能且不能安全判定的发送。过期、损坏或范围不明时，已知受保护／无法判定的目标 fail closed；能证明不依赖该范围的目标与 exact／独立授权照常求值。官方确认收窄／移除不同于未知失败。有效时间取 `max(墙钟, clockFloor)`，启动／前台／提交维护水位；回拨 >300s 暂停依赖智能的发送和新激活，会话内单调到期定时器不随回拨延后。已观察到的到期持久记录，每次发送／回前台重验，不能调时复活；不声称抵御账本、应用数据和系统时钟同时被外部回滚。
+
+## 范围同意与 WebKit 切换
+
+同意绑定 `(owner, 选择revision, candidateID, 旧snapshotID, typed范围digest, deltaDigest)`；candidateID 绑定来源回执、raw digest 与准入版本。新增覆盖才需确认，full→domain、父域扩展和不能证明子集均按扩围处理；一次确认最多 32 条增量，列出数量／域名／含子域与同页资源随文档出口说明，可在详情中完整查看。超限或拒绝时整组保留有效旧范围；绝不裁剪坏行或把同意授予未来贡献。取消、候选／选择变化、owner 失效、到期均使令牌作废；收窄后授权同步收窄。
+
+复用 [AccessHostRoutingPolicy](../../../apps/ios/AccessKit/AccessHostRoutingPolicy.swift)、[AccessHostStoreCoordinator](../../../apps/ios/AegisApp/AccessHostStoreCoordinator.swift) 的 changeWebsitePolicy／policyEpoch 与现有 lease。快照绑定 owner、模式、选择 revision、各组获准 scope/期限、exact revisions、独立 grants；异步准备、绑定、发送、重定向及续租重验文档和 transport generation。更新代次不等于 transport 代次，旧请求不能发布新策略。
+
+只处理决定变化的依赖：取消选择／收窄／过期先阻止受影响准备和发送；新增保护也先停止仍走原设置的受影响文档，不能留旧连接继续。让文档及 worker/流真正 inert，再释放自己的 consumer；退场前保留 store 代理配置和 lease，不能先清代理或释放共享 transport。失败消费者保持封闭，其他分类 grant 与无关准备不受损；等价数据不全量重载，等价操作复核后换发令牌。停止请求不自动迁移重发，尤其 POST、正文、下载和长连接；结果不确定告知用户，POST 只能由用户重新提交。
+
+保留 #402 原三项回归：landing reload 重新准备、编辑 A 不取消 B 准备、切智能保留已提交 legacy landing 且冷标签不继承。另补后续 P2：exact service／clear 只增删对应 exact 依赖，独立有效的已提交 landing 仍存活；不得把它推广为同 host 新文档的授权。WebKit 文档退场和两侧网络见证为验收条件，reducer 或 stopLoading() 不足以证明闭环。
+
+验收按原始来源、完整产品集成、模拟器、签名 DEV 产物、真机、最终 SHA CI、发布分别登记。先完成对应功能、构建、集成及功能测试，才对精确候选做最终独立只读审查；本次文档修订不代表实现、设备或发布通过。

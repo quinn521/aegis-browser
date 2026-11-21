@@ -1,64 +1,86 @@
-# GeoSite 更新的 RED/GREEN 实施计划
+# 网站加速 Beta 分类与官方更新实施计划
 
-实施基线为 `24c3b9a1d4ff80c16966883de43976bc780f1afc`。按 U1 至 U5 先写失败用例，再实现并验证，记录模拟器、构建和真实网络各自的结果。[本次 SDD](../specs/2026-11-21-geosite-updates-design.md) · [原 SDD](../specs/2026-11-21-access-geosite-design.md) · [原计划](2026-11-21-access-geosite.md) · [#212](https://github.com/gcsagroup/aegis-browser/issues/212)
+主负责人先发布[本次设计](../specs/2026-11-21-geosite-updates-design.md)和本计划，再开始产品代码。代码参考基线 `24c3b9a1d4ff80c16966883de43976bc780f1afc`；[d046ab4e](https://github.com/quinn521/aegis-browser/commit/d046ab4e454919f52de1a828639e0983a0282e3d)仅为已替换的历史计划，不再准备团队信封、URL、密钥或发布服务。iOS #402、macOS #403 的既有 V2Fly 证据保持原身份。
 
-## U1：固定 wire 与严格准入
+按 **U1a 可用分类 → U1b 官方准入 → U2 冷恢复 → U3 原生 HTTPS → U4 联合切换 → U5 交付** 执行。每步保存能暴露行为差异的 RED，再最小实现并重跑同一用例为 GREEN；构建失败／未发现测试不算 RED。新增单元与历史回归均须实际执行，保留失败、预算、owner 和 FIRST，不借其他平台成绩验收。
 
-**RED**：新增 `apps/ios/Tests/AegisTests/AccessGeoSitePackageTests.swift`，用一次性私有签名 key 验证原字节覆盖：逐项更改来源、组、渠道、sequence、期限、action、scope、pins 或规则必拒绝；再测错 key、无签名、同序列异内容、重复 JSON key、错误 UTF-8、乱序/重复/混入非法规则、上限及空组。`AccessGeoSiteAdmissionTests.swift` 覆盖真实 PSL hash、PRIVATE、通配/例外、IDNA、多个根点、标签混淆、父域包含嵌套租户边界及 full→domain 扩权，不能只用玩具 PSL。
+## U1a：先交付真正可选的 Beta 分类
 
-**GREEN**：新增 `apps/ios/AegisPolicyKit/GeoSitePackage.swift`、`GeoSiteAdmission.swift`；在 `RegisteredDomain.swift` 提供严格查询但保留既有 API。新增 `packages/core/src/access/geosite-update-v1.vectors.json` 作为平台无关逻辑向量，记录输入字节、期望判定及 scope 包含关系，不放私钥。将 `apps/ios/AccessKit/AccessHostRoutingPolicy.swift` 改为接受已准入的 immutable typed index，默认仍为两根域。参照独立 Mac 编译器输出合同，不复制/移植 JS。回归 `WebKitProtectionTests` 的 PSL/landing 及 `AccessHostStorePolicyTests`、既有 GeoSite 分类向量。
+**RED**：在现有 [SettingsLayoutUITests](../../../apps/ios/Tests/AegisUITests/SettingsLayoutUITests.swift) 与 [AccessHostRecoveryWebKitTests](../../../apps/ios/Tests/AegisTests/AccessHostRecoveryWebKitTests.swift) 新增行为用例。实际打开「设置 → 国内加速 → 网站加速」，智能下能进入「加速分类 Beta」，看到 Debian／豆瓣／美团并增删选择；核对导航、Beta 只读一次、名称／值／selected trait、大字体换行、非空／未选择提示。记录旧 App 缺入口及新增分类不影响路由的失败。
 
-## U2：持久化、撤销与可中断恢复
+**RED**：拟增 AccessGeoSiteSelectionTests，覆盖首次手动+DEBIAN、已有手动／智能迁移、exact 保留、显式空集合与缺字段不同、最后一项可取消、重启仍为空、手动保留选择、双普通窗口同步、重叠 OR。private／Guest／非 DEV／unknown／其他 owner 从 UI 与原生直接调用均不能读写／触发；候选在列表打开后变化，旧勾选不能授权。
 
-**RED**：新增 `AccessGeoSiteCacheTests.swift`、`AccessGeoSitePublicationTests.swift`：分别在临时写、flush、rename、安全记录提交前后中断；破坏/删除 active、留旧包、恢复备份偏好、缺安全记录、Keychain 锁定/写失败。覆盖干净安装基线、升级迁移、离线重启、刚到期、时钟后退、撤销包到期、收窄后删 cache、较高序列 rollback、待确认候选高于仍有效 active。断言无半包发布，无旧范围复活，也无“无法恢复=original”的降级。
+**GREEN**：从设计固定的官方 raw DAT 提取完整 DEBIAN 2、DOUBAN 3、MEITUAN 19 条，校对三个 typed SHA 与真实 iOS PSL；只捆绑三组小快照、来源清单及继承 MIT／XTLS 元数据。新增最小 GeoSiteCatalogue／选择模型，在 [BrowserSettings](../../../apps/ios/AegisApp/BrowserSettings.swift)、[路由策略](../../../apps/ios/AccessKit/AccessHostRoutingPolicy.swift)与[协调器](../../../apps/ios/AegisApp/AccessHostStoreCoordinator.swift)接线，复用既有模式／exact／lease，加入首次使用的本机初始化与原子选择保存；U2 再扩展官方版本账本。此阶段无更新网络，不能以空页面或无动作勾选交付。
 
-**GREEN**：新增 `apps/ios/AegisApp/GeoSiteCache.swift`、`GeoSiteSecurityLedger.swift`、`GeoSiteUpdateCoordinator.swift`。注入文件系统、墙钟、Keychain 与故障点；真实持久化适配器也要经历进程终止/重启，内存 fake 不能替代冷启动证据。实现 source 水位与 owner 提交记录、原子文件、候选 ID、期限终态和串行提交。回归旧版未到期时坏包不影响页面；记录每个中断点的文件/记录状态，不清历史失败。
+**GREEN**：列表保留名称和勾选状态，美团注明含大众点评；展开详情可查看版本、条数、含子域说明和完整范围。用户新增选择即绑定当前完整分类，不另弹重复初始确认。用实际控件启用／取消后，真实 BrowserTab 输入标准 URL `https://debian.org/`、`https://www.douban.com/`、`https://www.meituan.com/`、`https://www.dianping.com/`；不得只靠改写为 `.geosite.invalid` 的域名证明产品接线。受控双出口记录目标 authority，正确侧 >0、错误侧 0；每轮用独立未命中 URL 正对照证明原路径确实可观测，取消唯一分类后的新导航与 exact service/original/clear 分别核对。
 
-## U3 条件 HTTPS 与后台刷新
+**完成条件**：可安装普通 DEV 中三组确实改变路由，空选择与跨窗／重启生效，未选的豆瓣／美团不贡献规则；UI、数据模型、路由测试和受影响回归全绿。U1a 仅证明签名内置分类，不登记为官方热更新完成；验证未更新的新安装在离线时可用 App 签名的内置分类；已采用远端版本的分类按七天期限与退休状态恢复。
 
-**RED**。用 `AccessGeoSiteUpdateTransportTests.swift` 让真实 URLSession 访问自有 HTTPS 服务。无订阅节点时也应收到 200，持久化后下次携带 If-None-Match 并接受 304，重复 304 不延长签名期限。覆盖错证书、错签名、重定向、HTTP 206、分块超限、错误长度、压缩、慢流超时、取消后的回调、无有效本地表示或冲突 ETag 的 304。更新源记录请求，页面服务出口记录更新请求数为零。
+## U1b：官方 wire 与严格准入
 
-**GREEN**。在 `GeoSiteUpdateTransport.swift`、`GeoSiteUpdateConfiguration.swift` 接入包内固定的更新源和公钥、独立临时 URLSession、有界流式接收、条件请求、退避及单次在途合并。保留系统和企业网络配置。普通前台窗口向协调器报告生命周期。浏览器请求路径继续只读取当前快照。
+**RED**：拟增 AccessGeoSiteAdmissionTests／SourceTests，输入真实 7,750,066 字节 DAT 及同 tag API／checksum 回执，检查完整 1,572 组和三组精确摘要；同时覆盖 full/domain、标签混淆、IDNA、根点、实际 PSL 的 ICANN/PRIVATE／通配／例外、共享后缀和不明租户。构造属性／regexp／未知类型、重复目标、坏行、截断／部分文件、恶意 varint／长度／深度／计数／16 MiB 超限；非菜单组含不支持语义可安全跳过，所选目标任一坏行必须整候选失败。
 
-独立 `AccessGeoSiteEligibilityTests.swift` 从 UI 和后端直接调用 foreground、enable、choose、restore、activate：手动/禁用、private、非 DEV、unknown、无配置时更新器网络计数必须为零；先关再开不能重置退避。两普通窗口同时前台/启用只发一次；最后普通窗口离开、切私密、切账户、旧 generation 回调均不得发布。普通已配置 DEV App 使用不可变 bundle 配置走同一传输实现，不能只把 fetch 注入测试后宣称产品已接通。
+**RED**：校验同 tag 两资产、唯一名称、API SHA 与 checksum 一致；错库／错 URL／缺 SHA／低 tag／同 tag 异字节或修改发布时间拒绝。14 位 ASCII tag 的非法日期、Unicode 数字、future published_at、超七天均失败。较高 tag 重发旧内容可准入；完整新版缺组／空组产生持久移除，坏组不等同移除，404／门禁／未知 schema 不撤回有效 active。
 
-测试私钥在测试进程内生成，或置于仓库及 App/XCTest 产物之外的私有临时目录；不提交、不打包、不打印。受控服务可持有该 key，只把公钥交给测试配置。TLS 测试信任仅限该测试 session 的回环端点/证书，错误 host/key 仍拒绝；不修改机器 trust、DNS、代理或全局 ATS。普通 DEV 使用团队已有 HTTPS origin/key；未提供时保留 bundle 离线能力，不虚构地址，也不把回环证据当作生产 feed/密钥运维验收。
+**GREEN**：在 AegisPolicyKit 增加有界 raw protobuf 读取、官方回执与 immutable typed index；扩展 RegisteredDomain 的严格失败查询，保留旧调用语义。所有上限、canonical digest、固定来源及时间条件以设计为唯一合同。应用仍只展示已批准三组，不把整个官方 registry 当作可选菜单；不增加 gzip、远端自定义来源或新规则种类。
 
-## U4：owner 快照、确认与真实 WebKit 切换
+**完成条件**：真实官方输入和敌对 fixture 均得到预期结果，全部字节校验先于切换；三组原始行／摘要／许可与 bundle 清单可重现。原始下载解析成功只登记来源准入，不替代原生网络或产品行为。
 
-**RED**：新增 `AccessGeoSiteSwitchingTests.swift`，扩展现有 `AccessHostRecoveryWebKitTests.swift`，覆盖新增、撤回、未变三种域及 active/retiring lease。交错下载完成与手动/取消、confirm 与下一候选、两窗口 exact 编辑、准备与新 epoch、发送与到期、失效后离线重启；旧同意令牌不能批准新 candidate。同 scope 更新应保留等价操作，失去授权的文档不再产生原连接流量；POST/长连接中断不能自动重发，不能用清空代理退场。
+## U2：离线启动与可崩溃的原子安全持久化
 
-**GREEN**：在 `AccessHostStoreCoordinator.swift` 的 `changeWebsitePolicy`/`policyEpoch` 上发布不可变快照；按依赖精确取消/换发令牌，接入 `AccessHostDataStoreRegistry.swift`、`BrowserKit/BrowserSession.swift` 的实际文档退场与 consumer 生命周期。`BrowserSettings.swift` 只增加一次性扩围确认/必要失败反馈，保持两模式与简短提示；`SettingsLayoutUITests` 新增确认候选变更、取消、8 条上限及 private/release 无入口用例。
+**RED**：拟增 AccessGeoSiteCacheTests／PublicationTests，覆盖首次初始化、旧偏好迁移、主动空选、离线重启、待确认 H 高于有效 active、较高官方 tag 重发旧内容。分别在临时写、fsync、rename、账本提交前后终止进程；注入磁盘失败、Keychain 锁定／写失败、偏好回滚、账本冲突、active 丢失／损坏且目录残留旧包、时钟回拨与到期后调回。
 
-以下既有 #402 方法必须原样保留并实际复跑，再增加热更新交错版本，不能只测新 reducer：
+**RED**：完整新版删除／清空一个已选组，同时另一组扩围待确认；移除必须立即持久，另一组旧有效授权保留。删除缓存、重启、切手动再回智能不能复活被移除／退休的内置或已到期的远端版本；失效或不能恢复不能变成 original 放行。关闭持久化失败须显示未保存，不宣布重启仍关闭；普通恢复不能读取别的 owner 选择。
 
-- `testGeoSiteReviewReloadRepreparesAuthorizedLanding`
-- `testGeoSiteReviewSiteChoicePreservesUnrelatedPreparation`
-- `testGeoSiteReviewSmartPreservesCommittedLegacyLanding`
+**GREEN**：在 AegisApp 增加最小 GeoSiteCache／SecurityLedger／UpdateCoordinator，使用同目录原子聚合文件与本机不可同步 Keychain 单条提交记录；存模式、选择、每组 scope／版本／状态、H、文件 hash、clockFloor 和退避。一次 DAT 抽取多个组，按版本／授权范围聚合保存；不按组重复下载或保存整份 DAT。账本提交串行化于现有生命周期入口，冷启动只读当前已提交快照、不等待 HTTP。
 
-## U5：最小 DEV 闭环与交付门
+**完成条件**：真实文件与原生安全存储经过进程终止／重启，而非仅内存 fake；每个断点可判断恢复旧提交或精确新提交，决不出现半快照、旧包扫描回退或重复安装续期。继续有效 active 可抗坏更新；范围不明和已知保护路径封闭，其他独立授权仍可用。
 
-最小功能阶段必须连通 **普通 iOS DEV 设置启用 → 原生控制面 HTTPS 200 → 验签/确认 → 持久提交 → 多窗口真实 WebKit 路由 → 304 → 离线重启 → 撤销/到期不复活**。缺 origin 的独立路径证明零更新 egress 与内置基线可用。实际受控页返回独有 marker，并记录两侧请求直到文档 inert；仅 CONNECT 建连、mock、编译或源码审查均不足以验收。后续真机普通 DEV 安装验证另记 exact App hash，不能从模拟器推定。
+## U3：普通 DEV 的真实官方 HTTPS
 
-每个 U 先执行可暴露缺陷的测试并保存 RED，再做最小实现、重跑同一选择记录 GREEN；构建失败/测试未发现不是行为 RED。将新文件注册到 `apps/ios/project.yml`/生成工程；拟用现有 `Aegis-Debug` 入口按类筛选：
+**RED**：拟增 AccessGeoSiteUpdateTransportTests／EligibilityTests，让产品同一 URLSession 实现访问固定官方 latest、同 tag checksum 与 raw DAT；保存 HTTP 状态／主机跳转／字节／摘要回执。覆盖真实 200、强／弱 ETag、有效 304、丢回执／过期 active 后 304，以及退避后的无条件恢复；连续 304 不能改变官方发布时间和到期点。
 
-```bash
-# 以下仅为后续命令模板；RESULT_ROOT、SIM_UDID 与 CORE_PRODUCTS 由实施阶段核定。
+**RED**：以隔离 HTTP/TLS fixtures 测错证书／host、元数据重定向、资产错误 CDN／二次跳转、206、压缩、慢流、错误长度、分块超限、404、限流和取消迟到回调。测试信任只限 fixture session，不改全局 ATS、信任库、DNS 或代理；这些失败夹具不是产品发布服务，不需要上游私钥。
+
+**GREEN**：GeoSiteUpdateTransport 固定官方 API／资产构造与受限 GitHub→release-assets 跳转；无 cookie、credentials、Referer、跟踪或页面信息，使用系统 TLS／网络策略。流式有界哈希、单次在途、24h 刷新、持久退避与七天有效期进入普通 DEV 产品配置；不依赖账户节点，不借 mock fetch 宣称接通。
+
+**完成条件**：三个已选组只有一份 DAT 下载；手动／零选／private／非 DEV／unknown／其他 owner 的触发网络为零。两个普通窗口合并请求，关一个不误停另一个，最后普通窗口离开／切手动／取消最后分类后无新请求且旧回调不能发布。原生记录核对启用时仅 api.github.com、github.com 和预期 CDN 控制面流量，禁用后无新增；浏览器服务出口不承载更新。真实官方 happy path 与受控失败 fixture 分开登记。
+
+## U4：候选同意、全窗口与实际 WebKit 联合切换
+
+**RED**：拟增 AccessGeoSiteSwitchingTests 并扩展真实 WebKit 回归：下载与取消／空选交错、列表打开后候选变化、确认与下一版本交错、exact 编辑 A 与窗口 B 准备、共享域多组授权、缺／空组与另一组扩围、同 scope 新版本、到期／坏缓存后的离线恢复。确认只批准展示的候选和新增 typed 覆盖，超过 32 条、拒绝或旧令牌保留仍有效旧范围；取消一组不能撤掉另一组或独立 landing 的 grant。
+
+**GREEN**：在 changeWebsitePolicy／policyEpoch 上一次提交共享快照，按依赖取消／复核，不新建平行路由状态机。接入 [store registry](../../../apps/ios/AccessKit/AccessHostDataStoreRegistry.swift) 与 [BrowserSession](../../../apps/ios/BrowserKit/BrowserSession.swift)的文档退场：封发送、保持代理和 lease 至 inert 回执、再释放自己的 consumer；等价更新不批量 reload，POST／下载／长连接不自动重放。更新状态仅用简短用户提示，保留真实分类与本站 exact 控件。
+
+**必须保留的 #402 回归**（在 AccessHostRecoveryWebKitTests 原样复跑，再增加更新交错版本）：
+
+- `testGeoSiteReviewReloadRepreparesAuthorizedLanding`：失去入口后 landing reload 重新准备。
+- `testGeoSiteReviewSiteChoicePreservesUnrelatedPreparation`：编辑 A 不取消 B。
+- `testGeoSiteReviewSmartPreservesCommittedLegacyLanding`：切智能保留已提交 legacy，冷标签不继承。
+- 后续 P2 新增：独立有效的已提交 landing 跨 exact service／clear 保留，清除 exact 不清独立 grant，也不授权同 host 冷文档。
+
+**完成条件**：由真实设置与分类／本站控件驱动 U1a 的标准 host 流量，覆盖多窗口、重启、选／取消／空选及服务故障。受控 HTTP(S) 页面返回唯一 marker，双出口观察至真实文档／worker 退场；每场有独立正向见证，错误出口为零。检查重定向、子资源、准备暂停、共享 transport 与 POST 无重放；仅 CONNECT、reducer 或 stopLoading() 不能验收全部行为。
+
+## U5：证据、DEV 产物与交付
+
+完整闭环为：普通 DEV 实际启用／选分类 → 官方 HTTPS → 全文件准入／必要范围同意 → 原子保存 → 多窗口真实 WebKit → 304 → 离线重启 → 官方缺／空组或到期后不复活；手动和空选另证零更新网络。按同一候选完成相应功能、构建、集成及功能测试后，才运行最终独立只读内置 codex review；交原需求、本设计、完整精确 diff、文件 hash 与原始回执，不依赖实现聊天。修复／rebase 后携带旧发现复审最终候选；未完成审查仍是开放门。
+
+后续新增类均注册到 apps/ios/project.yml／生成工程；用现有 Aegis-Debug 入口逐类 RED/GREEN，输出至新任务目录。实施者核定 SIM_UDID、RESULT_ROOT、CORE_PRODUCTS、RUN_ID、TEST_CLASS，先按[既有 DEV 构建入口](2026-11-21-access-geosite.md#2-ios-dev-的网站加速)准备固定核心：
+
+```sh
 xcodebuild test -project apps/ios/Aegis.xcodeproj -scheme Aegis-Debug \
   -configuration Debug -destination "platform=iOS Simulator,id=$SIM_UDID" \
   -derivedDataPath "$RESULT_ROOT/DerivedData" -parallel-testing-enabled NO \
-  -onlyUsePackageVersionsFromResolvedFile \
-  "AEGIS_EMBEDDED_CORE_PRODUCTS=$CORE_PRODUCTS" \
-  -resultBundlePath "$RESULT_ROOT/$RUN_ID.xcresult" \
-  -only-testing:"AegisTests/$TEST_CLASS"
+  -onlyUsePackageVersionsFromResolvedFile "AEGIS_EMBEDDED_CORE_PRODUCTS=$CORE_PRODUCTS" \
+  -resultBundlePath "$RESULT_ROOT/$RUN_ID.xcresult" -only-testing:"AegisTests/$TEST_CLASS"
 ```
 
-对 U1–U4 全部拟增类（均在 `apps/ios/Tests/AegisTests/`）及受影响旧类逐一执行，核对预期方法实际运行、零跳过；U4 加跑整个 `AccessHostRecoveryWebKitTests`、`AccessHostWebKitRouteTests` 和设置 UI 回归。产品包构建/签名检查沿用[原计划的 iOS DEV 入口](2026-11-21-access-geosite.md#2-ios-dev-的网站加速)，另验证普通 DEV bundle 的配置、PSL/规则/公钥 hash、无测试私钥/测试 trust，以及非 DEV 包不能激活更新。受控传输、模拟器、真机、最终 SHA CI、签名与生产发布分开登记。
+复跑所有新增类、AccessHostRecoveryWebKitTests、AccessHostWebKitRouteTests、AccessHostStorePolicyTests、受影响 PSL／WebKitProtectionTests 及设置 UI；UI 用对应 AegisUITests 选择。核对预期用例实际执行、零跳过；保存命令、退出码、xcresult 与网络附件。DEV 包检查三组清单、raw 来源 digest、PSL、许可、非 DEV 身份门，无测试 trust；保留既有 App Groups／扩展／开发签名，签名产物记录 App hash，真机安装验证按 exact build 单列。
 
-完成代码、构建、集成和功能测试后，对最终提交的完整差异及原始验证记录运行独立只读审查。修复或更新基线后复审，再运行适用仓库门和 PR 检查。[CI 指南](../../development/ci.zh-CN.md)
+分别报告：原始来源／完整集成／模拟器／签名 DEV 产物／真机／最终 SHA CI／发布。缺任何所需证据不能借其他栏通过；本计划各阶段待实施，来源核验不代表产品通过。后续交付时刷新并遵循 [origin/develop 的 CI 指南](../../development/ci.zh-CN.md)，普通功能 PR squash 到 develop；合并与发布维持原授权。
 
 ## 后续平台
 
-macOS 在其独立静态规则/路由/UI 可交付后接续：消费同一 envelope、typed scope、候选 ID、水位/期限及确认向量；在 `access_policy_evaluator_unittest.cc`、Options 服务测试和 `access_browser_request_adapter_browsertest.cc` 增加真实 owner/partition、OTR、跨请求切换与控制面更新的 RED/GREEN。平台 PSL/admission 必须匹配合同，不重新解释签名字段。由 [#209](https://github.com/gcsagroup/aegis-browser/issues/209) 原 owner 按 FIRST 和原预算安排 GN/浏览器验证，本补丁不构建 macOS。
+macOS 在 #403 已验证 V2Fly 静态实现上另做 Xray 来源迁移：真实 standard DAT 7.75 MB 已超过 scripts/dev/compile-geosite.mjs 的旧 4 MiB 上限，先为实际文件与超限攻击做 RED，再有界调整并核对三组、来源／许可／链接测试及平台 PSL；随后接相同分类、更新、范围同意与持久化合同。按 #209 原 owner／FIRST／预算安排 GN、编译、链接和浏览器证据，不能把 iOS 摘要或 JS 通过当作 Mac 编译成功。
 
-Android 随后由 [#210](https://github.com/gcsagroup/aegis-browser/issues/210) 原 owner 接入同一逻辑格式及 native Profile/Incognito、持久安全记录、条件 HTTPS 与设备网络见证，不借用 iOS/macOS 成绩，不改变现有 ARM 环境前提或预算。本补丁不构建 Android；HY2 继续独立。
+Android 随后按 #210 原 owner、环境与预算接原生 Profile／Incognito、分类 UI、官方传输和安全存储，并取自己的构建／设备出口证据。HY2 的传输、账户计量与切换仍独立，不并入此功能。
