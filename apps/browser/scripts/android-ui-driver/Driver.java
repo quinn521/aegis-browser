@@ -293,6 +293,28 @@ public final class Driver extends Instrumentation {
     results.put(item);
   }
 
+  private JSONObject stableFixtureSnapshot() throws Exception {
+    String previousDigest = null;
+    String lastFailure = "快照尚未稳定";
+    long deadline = SystemClock.uptimeMillis() + 5000;
+    do {
+      try {
+        check(Fixture.focused, "自测窗口尚未聚焦");
+        JSONObject state = snapshot(HELPER);
+        String digest = state.getString("snapshotSha256");
+        if (digest.equals(previousDigest)) return state;
+        previousDigest = digest;
+        lastFailure = "快照尚未稳定";
+      } catch (GuardFailure error) {
+        previousDigest = null;
+        lastFailure = error.getMessage();
+      }
+      SystemClock.sleep(50);
+    } while (SystemClock.uptimeMillis() < deadline);
+    throw new GuardFailure("界面未就绪；" + Fixture.lifecycle() +
+        ";category=" + lastFailure + ";activePackage=" + activeWindowPackage());
+  }
+
   private JSONObject selfTest() throws Exception {
     Fixture.resetLifecycle();
     Activity[] fixture = new Activity[1];
@@ -307,25 +329,16 @@ public final class Driver extends Instrumentation {
     }
     check(fixture[0] != null, "自测 Activity 未创建");
     Activity activity = fixture[0];
+    String phase = "首次观察";
     try {
       waitForIdleSync();
       JSONArray results = new JSONArray();
-      JSONObject initial = null;
-      String lastFailure = "尚未观察";
-      long deadline = SystemClock.uptimeMillis() + 5000;
-      do {
-        try { initial = snapshot(HELPER); break; }
-        catch (GuardFailure error) {
-          lastFailure = error.getMessage();
-          SystemClock.sleep(50);
-        }
-      } while (SystemClock.uptimeMillis() < deadline);
-      check(initial != null, "自测界面未就绪；" + Fixture.lifecycle() + ";category=" + lastFailure +
-          ";activePackage=" + activeWindowPackage());
+      JSONObject initial = stableFixtureSnapshot();
       String input = find(initial, "label", "中文目标输入");
       String text = "帮我总结页面内容：电池续航18小时 🔋";
+      phase = "Unicode 输入";
       perform(HELPER, initial, initial.getString("snapshotSha256"), input, "set-text", text);
-      JSONObject edited = snapshot(HELPER);
+      JSONObject edited = stableFixtureSnapshot();
       find(edited, "text", text);
       passed(results, "unicode-input");
       boolean refused = false;
@@ -343,8 +356,10 @@ public final class Driver extends Instrumentation {
       catch (GuardFailure expected) { refused = true; }
       check(refused, "密码框写入没有被拒绝");
       passed(results, "password-edit-rejected");
-      perform(HELPER, edited, edited.getString("snapshotSha256"), find(edited, "text", "确认中文输入"), "click", "");
-      JSONObject finalState = snapshot(HELPER);
+      phase = "点击";
+      JSONObject beforeClick = stableFixtureSnapshot();
+      perform(HELPER, beforeClick, beforeClick.getString("snapshotSha256"), find(beforeClick, "text", "确认中文输入"), "click", "");
+      JSONObject finalState = stableFixtureSnapshot();
       find(finalState, "text", "已收到：" + text);
       passed(results, "click-updates-result");
       check(!finalState.toString().contains("fixture-password"), "密码框内容没有正确隐藏");
@@ -353,6 +368,8 @@ public final class Driver extends Instrumentation {
       finalState.put("selfTestResults", results);
       finalState.put("browserTested", false);
       return finalState;
+    } catch (GuardFailure error) {
+      throw new GuardFailure("自测" + phase + "：" + error.getMessage());
     } finally {
       runOnMainSync(activity::finish);
     }
@@ -387,9 +404,12 @@ public final class Driver extends Instrumentation {
       EditText input = new EditText(this);
       input.setContentDescription("中文目标输入");
       input.setSingleLine(false);
+      // Only accessibility actions drive this synthetic fixture's text fields.
+      input.setShowSoftInputOnFocus(false);
       EditText password = new EditText(this);
       password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
       password.setText("fixture-password");
+      password.setShowSoftInputOnFocus(false);
       Button button = new Button(this);
       button.setText("确认中文输入");
       TextView result = new TextView(this);
