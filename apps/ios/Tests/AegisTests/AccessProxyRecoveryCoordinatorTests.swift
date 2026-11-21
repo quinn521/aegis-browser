@@ -724,8 +724,12 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         browser.hostCoordinator = coordinator
         let tab = try XCTUnwrap(browser.activeTab)
         let original = tab.websiteDataStore
-        tab.load(URLRequest(url: URL(string: "https://example.invalid/prepare-only")!))
+        // This case begins with a healthy committed page. A live .invalid load
+        // could deliver a failure after the manual choice and start recovery.
+        let page = try XCTUnwrap(URL(string: "https://example.invalid/prepare-only"))
+        tab.adoptPolicyMainFrameNavigationForTests(url: page)
         tab.commitPendingMainFrameForTests()
+        XCTAssertEqual(tab.committedMainFrameURL, page)
         XCTAssertFalse(tab.loadingErrorAllowsProxyRetry)
         coordinator.setProxyEnabled(true, for: tab)
         await settle {
