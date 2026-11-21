@@ -117,20 +117,37 @@ final class AccessGeoSiteSelectionTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("smart", forKey: modeKey)
         defaults.set(["DOUBAN"], forKey: selectionKey)
+        let explicitOriginal = try XCTUnwrap(URL(string: "https://override.douban.com/"))
+        let explicitService = try XCTUnwrap(URL(string: "https://override.example.invalid/"))
+        defaults.set(["override.douban.com": "original", "override.example.invalid": "service"], forKey: exactKey)
         let owner = AccessHostStoreCoordinator(channel: .dev, locationPreferences: defaults)
-        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: owner)
+        let preferences = BrowserPreferences(defaults: defaults)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences, hostCoordinator: owner)
         defer { browser.closeWindow() }
         let ordinary = try XCTUnwrap(browser.activeTab)
         let presented = try XCTUnwrap(owner.websiteCategories(for: ordinary))
         let target = try XCTUnwrap(URL(string: "https://www.douban.com/"))
+        XCTAssertTrue(owner.requiresProxy(tab: ordinary, url: target))
+        XCTAssertFalse(owner.requiresProxy(tab: ordinary, url: explicitOriginal))
+        XCTAssertTrue(owner.requiresProxy(tab: ordinary, url: explicitService))
 
         for channel in [AccessReleaseChannel.release, .alpha, .beta, .unknown, .dev] {
             let otherOwner = AccessHostStoreCoordinator(channel: channel, locationPreferences: defaults)
-            let otherBrowser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: otherOwner)
+            let otherBrowser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences,
+                                              hostCoordinator: otherOwner)
             defer { otherBrowser.closeWindow() }
             let otherTab = try XCTUnwrap(otherBrowser.activeTab)
             XCTAssertNil(owner.websiteCategories(for: otherTab))
             XCTAssertFalse(owner.requiresProxy(tab: otherTab, url: target))
+            XCTAssertFalse(owner.requiresProxy(tab: otherTab, url: explicitService))
+            XCTAssertFalse(owner.requiresProxyPreparation(tab: otherTab, url: explicitService))
+            for url in [explicitOriginal, explicitService] {
+                otherTab.adoptPolicyMainFrameNavigationForTests(url: url)
+                otherTab.commitPendingMainFrameForTests()
+                XCTAssertFalse(owner.offersWebsiteAcceleration(for: otherTab))
+                XCTAssertNil(owner.websiteRouteChoice(for: otherTab))
+                XCTAssertNil(owner.websiteRouteSelection(for: otherTab))
+            }
             if channel != .dev {
                 XCTAssertNil(otherOwner.websiteCategories(for: otherTab))
                 XCTAssertFalse(otherOwner.requiresProxy(tab: otherTab, url: target))
