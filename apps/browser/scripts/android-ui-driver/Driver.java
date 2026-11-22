@@ -303,6 +303,8 @@ public final class Driver extends Instrumentation {
         JSONObject state = snapshot(HELPER);
         // A settled accessibility tree may still predate the fixture's UI update.
         find(state, property, value);
+        // The fixture always includes one password field, which must be observed and redacted.
+        find(state, "password", true);
         String digest = state.getString("snapshotSha256");
         if (digest.equals(previousDigest)) return state;
         previousDigest = digest;
@@ -341,6 +343,7 @@ public final class Driver extends Instrumentation {
       String text = "帮我总结页面内容：电池续航18小时 🔋";
       phase = "Unicode 输入";
       perform(HELPER, initial, initial.getString("snapshotSha256"), input, "set-text", text);
+      phase = "核对输入与密码框";
       JSONObject edited = stableFixtureSnapshot("text", text);
       passed(results, "unicode-input");
       phase = "过期快照";
