@@ -293,7 +293,7 @@ public final class Driver extends Instrumentation {
     results.put(item);
   }
 
-  private JSONObject stableFixtureSnapshot() throws Exception {
+  private JSONObject stableFixtureSnapshot(String property, Object value) throws Exception {
     String previousDigest = null;
     String lastFailure = "快照尚未稳定";
     long deadline = SystemClock.uptimeMillis() + 5000;
@@ -301,6 +301,8 @@ public final class Driver extends Instrumentation {
       try {
         check(Fixture.focused, "自测窗口尚未聚焦");
         JSONObject state = snapshot(HELPER);
+        // A settled accessibility tree may still predate the fixture's UI update.
+        find(state, property, value);
         String digest = state.getString("snapshotSha256");
         if (digest.equals(previousDigest)) return state;
         previousDigest = digest;
@@ -333,34 +335,40 @@ public final class Driver extends Instrumentation {
     try {
       waitForIdleSync();
       JSONArray results = new JSONArray();
-      JSONObject initial = stableFixtureSnapshot();
-      String input = find(initial, "label", "中文目标输入");
+      String inputLabel = "中文目标输入";
+      JSONObject initial = stableFixtureSnapshot("label", inputLabel);
+      String input = find(initial, "label", inputLabel);
       String text = "帮我总结页面内容：电池续航18小时 🔋";
       phase = "Unicode 输入";
       perform(HELPER, initial, initial.getString("snapshotSha256"), input, "set-text", text);
-      JSONObject edited = stableFixtureSnapshot();
-      find(edited, "text", text);
+      JSONObject edited = stableFixtureSnapshot("text", text);
       passed(results, "unicode-input");
+      phase = "过期快照";
       boolean refused = false;
       try { perform(HELPER, edited, initial.getString("snapshotSha256"), input, "set-text", "不应写入"); }
       catch (GuardFailure expected) { refused = true; }
       check(refused, "过期快照没有被拒绝");
       passed(results, "stale-snapshot-rejected");
+      phase = "错误应用";
+      AccessibilityNodeInfo fixtureRoot = root(HELPER);
       refused = false;
-      try { requirePackage(root(HELPER), BROWSER); }
+      try { requirePackage(fixtureRoot, BROWSER); }
       catch (GuardFailure expected) { refused = true; }
       check(refused, "错误应用没有被拒绝");
       passed(results, "wrong-package-rejected");
+      phase = "密码框";
+      String password = find(edited, "password", true);
       refused = false;
-      try { perform(HELPER, edited, edited.getString("snapshotSha256"), find(edited, "password", true), "set-text", "不应写入"); }
-      catch (GuardFailure expected) { refused = true; }
+      try { perform(HELPER, edited, edited.getString("snapshotSha256"), password, "set-text", "不应写入"); }
+      catch (GuardFailure expected) { refused = expected.getMessage().equals("节点不可操作，或属于密码框"); }
       check(refused, "密码框写入没有被拒绝");
       passed(results, "password-edit-rejected");
       phase = "点击";
-      JSONObject beforeClick = stableFixtureSnapshot();
-      perform(HELPER, beforeClick, beforeClick.getString("snapshotSha256"), find(beforeClick, "text", "确认中文输入"), "click", "");
-      JSONObject finalState = stableFixtureSnapshot();
-      find(finalState, "text", "已收到：" + text);
+      String clickLabel = "确认中文输入";
+      JSONObject beforeClick = stableFixtureSnapshot("text", clickLabel);
+      perform(HELPER, beforeClick, beforeClick.getString("snapshotSha256"), find(beforeClick, "text", clickLabel), "click", "");
+      phase = "核对点击结果";
+      JSONObject finalState = stableFixtureSnapshot("text", "已收到：" + text);
       passed(results, "click-updates-result");
       check(!finalState.toString().contains("fixture-password"), "密码框内容没有正确隐藏");
       passed(results, "password-value-hidden");
