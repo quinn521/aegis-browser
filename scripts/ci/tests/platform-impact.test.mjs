@@ -118,9 +118,62 @@ test('Android coverage uses the complete tested diff and the actual PR parents',
     const silent = route({...rolloutEvent, GITHUB_SHA: git('rev-parse', 'HEAD')});
     assert.notEqual(silent.result.status, 0);
     assert.equal(silent.output, '');
+
+    git('checkout', '-b', 'candidate-router', actualBase);
+    save('scripts/ci/coverage-impact.sh', 'echo run=false >> "$GITHUB_OUTPUT"\n');
+    save('apps/browser/scripts/android-ui-driver/Driver.java', 'changed Android driver');
+    const changedRouterHead = commit('change the Android driver and replace the router');
+    git('checkout', '--detach', actualBase);
+    git('merge', '--no-ff', 'candidate-router', '-m', 'tested merge with a replaced router');
+    const trusted = route({...event, GITHUB_SHA: git('rev-parse', 'HEAD'), EVENT_PR_HEAD: changedRouterHead});
+    assert.equal(trusted.result.status, 0, trusted.result.stderr);
+    assert.equal(trusted.output, `run=true\npr_base=${actualBase}\npr_head=${changedRouterHead}\n`);
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
+});
+
+test('Windows fixture verifies Gitiles headers against the selected Chromium pin', () => {
+  const result = spawnSync('python3', ['-B', '-c', `
+import base64
+import hashlib
+import io
+import runpy
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import TestCase
+from unittest.mock import patch
+
+fixture = runpy.run_path("apps/browser/scripts/windows-installer-fixture.py")
+pinned_headers = fixture["pinned_headers"]
+download = fixture["download"]
+header = fixture["UTIL_CONSTANTS"]
+contents = {
+    "43a195105613ac83c21d3f14de279f4a045c7da0": b"first fixture header",
+    "b8c2be851f62f6a394ec57955d7f31335d7cb6d4": b"second fixture header",
+}
+assert len({pinned_headers(pin)[header] for pin in contents}) == len(contents)
+digests = {pin: hashlib.sha256(data).hexdigest() for pin, data in contents.items()}
+case = TestCase()
+with TemporaryDirectory() as root, patch.dict(fixture["UTIL_CONSTANTS_SHA256"], digests, clear=True):
+    for pin, source in contents.items():
+        expected = pinned_headers(pin)[header]
+        assert expected == digests[pin]
+        url = f"https://fixture.invalid/{pin}/{header}?format=TEXT"
+        destination = Path(root) / pin / "util_constants.h"
+        with patch("urllib.request.urlopen", return_value=io.BytesIO(base64.b64encode(source))):
+            assert download(url, destination, expected, gitiles_text=True) == expected
+        assert destination.read_bytes() == source
+        other = next(data for other_pin, data in contents.items() if other_pin != pin)
+        rejected = destination.with_name("rejected.h")
+        with patch("urllib.request.urlopen", return_value=io.BytesIO(base64.b64encode(other))):
+            with case.assertRaisesRegex(RuntimeError, "Pinned download mismatch"):
+                download(url, rejected, expected, gitiles_text=True)
+        assert not rejected.exists()
+    with case.assertRaisesRegex(RuntimeError, "Update pinned fixture inputs"):
+        pinned_headers("f" * 40)
+`], {encoding: 'utf8'});
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
 });
 
 test('platform routing binds real merge parents and rejects hidden product changes', () => {
