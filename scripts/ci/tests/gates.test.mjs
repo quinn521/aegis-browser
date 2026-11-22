@@ -547,11 +547,21 @@ test('workflow validator enforces automatic platform reporting and its execution
       [index, (w) => { w.on.push['tags-ignore'] = ['**']; }, 'reporting must specify only branch pushes'],
       [index, (w) => { w.concurrency.group = 'report'; }, 'reporting loses SHA-specific concurrency'],
       [index, (w) => { w.concurrency['cancel-in-progress'] = true; }, 'an automatic push must not cancel another push'],
-      [index, (w) => { w.permissions.contents = 'write'; }],
-      [index, (w) => { Object.values(w.jobs)[0]['continue-on-error'] = true; }],
-      [index, (w) => { Object.values(w.jobs)[0].permissions = {'contents': 'write'}; }],
-      [index, (w) => { Object.values(w.jobs)[0].steps[0].with['persist-credentials'] = true; }],
-      [index, (w) => { Object.values(w.jobs)[0].steps[0].uses = 'actions/checkout@v7'; }],
+    ]),
+    ...[1, 2, 3].map(index => [index, (w) => {
+      w.permissions.contents = 'write';
+    }, 'coverage workflow must have read-only permissions']),
+    ...[[1, 'ios-coverage'], ...reportingJobs].flatMap(([index, job]) => [
+      [index, (w) => { w.jobs[job]['continue-on-error'] = true; }, `${job} ignores failure`],
+      [index, (w) => { w.jobs[job].permissions = {contents: 'write'}; }, `${job} gains write permissions`],
+      [index, (w) => {
+        const checkout = w.jobs[job].steps.find(step => step.uses?.startsWith('actions/checkout@'));
+        checkout.with['persist-credentials'] = true;
+      }, `${job} retains checkout credentials`],
+      [index, (w) => {
+        const checkout = w.jobs[job].steps.find(step => step.uses?.startsWith('actions/checkout@'));
+        checkout.uses = 'actions/checkout@v7';
+      }, `${job} uses an unpinned action`],
     ]),
     ...reportingJobs.map(([index, job]) => [index, (w) => {
       w.jobs[job]['runs-on'] = ['self-hosted', 'macOS', 'ARM64', 'aegis-test'];

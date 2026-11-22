@@ -148,17 +148,24 @@ fixture = runpy.run_path("apps/browser/scripts/windows-installer-fixture.py")
 pinned_headers = fixture["pinned_headers"]
 download = fixture["download"]
 header = fixture["UTIL_CONSTANTS"]
-contents = {
-    "43a195105613ac83c21d3f14de279f4a045c7da0": b"first fixture header",
-    "b8c2be851f62f6a394ec57955d7f31335d7cb6d4": b"second fixture header",
+gitiles_digests = {
+    "43a195105613ac83c21d3f14de279f4a045c7da0":
+        "f40b2e5872bb326970857f23949b411964a902fa76f9feabe07b40bfaec2c749",
+    "b8c2be851f62f6a394ec57955d7f31335d7cb6d4":
+        "a0afe0f69ad9165af8d2f21680568df9eac95294ef8d493e1a6c4b07f121a859",
 }
-assert len({pinned_headers(pin)[header] for pin in contents}) == len(contents)
-digests = {pin: hashlib.sha256(data).hexdigest() for pin, data in contents.items()}
 case = TestCase()
-with TemporaryDirectory() as root, patch.dict(fixture["UTIL_CONSTANTS_SHA256"], digests, clear=True):
+for pin, expected in gitiles_digests.items():
+    case.assertEqual(pinned_headers(pin)[header], expected, pin)
+with case.assertRaisesRegex(RuntimeError, "Update pinned fixture inputs"):
+    pinned_headers("f" * 40)
+
+contents = {pin: f"fixture header for {pin}".encode("ascii") for pin in gitiles_digests}
+fixture_digests = {pin: hashlib.sha256(data).hexdigest() for pin, data in contents.items()}
+with TemporaryDirectory() as root, patch.dict(fixture["UTIL_CONSTANTS_SHA256"], fixture_digests, clear=True):
     for pin, source in contents.items():
         expected = pinned_headers(pin)[header]
-        assert expected == digests[pin]
+        assert expected == fixture_digests[pin]
         url = f"https://fixture.invalid/{pin}/{header}?format=TEXT"
         destination = Path(root) / pin / "util_constants.h"
         with patch("urllib.request.urlopen", return_value=io.BytesIO(base64.b64encode(source))):
@@ -170,8 +177,6 @@ with TemporaryDirectory() as root, patch.dict(fixture["UTIL_CONSTANTS_SHA256"], 
             with case.assertRaisesRegex(RuntimeError, "Pinned download mismatch"):
                 download(url, rejected, expected, gitiles_text=True)
         assert not rejected.exists()
-    with case.assertRaisesRegex(RuntimeError, "Update pinned fixture inputs"):
-        pinned_headers("f" * 40)
 `], {encoding: 'utf8'});
   assert.equal(result.status, 0, result.error?.message ?? result.stderr);
 });
