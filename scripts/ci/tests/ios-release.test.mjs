@@ -166,7 +166,7 @@ test('archive EmbeddedCore preparation uses the private script, bridge root and 
   const receipt = join(root, 'fixture-receipt.txt');
   const lock = 'apps/ios/EmbeddedCore/embedded-core-lock.json';
   const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
-  const heads = new Map();
+  const identities = new Map();
   try {
     for (const [checkout, marker] of [[shared, 'shared'], [source, 'private']]) {
       const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.autocrlf=false',
@@ -180,14 +180,17 @@ test('archive EmbeddedCore preparation uses the private script, bridge root and 
       writeFileSync(join(checkout, 'apps/ios/EmbeddedCore/bridge/origin'), marker);
       writeFileSync(join(checkout, 'scripts/release/prepare-ios-access-core.sh'), `#!/bin/bash
 set -euo pipefail
-printf '%s\\n' '${marker}' "$(cat apps/ios/EmbeddedCore/bridge/origin)" "$(git rev-parse HEAD)" \
+source_sha="$(git rev-parse HEAD)"
+source_tree="$(git rev-parse 'HEAD^{tree}')"
+git diff-index --cached --quiet HEAD --
+printf '%s\\n' '${marker}' "$(cat apps/ios/EmbeddedCore/bridge/origin)" "$source_sha" "$source_tree" \
   "$PWD" "$1" "$AEGIS_EMBEDDED_CORE_DIGEST_MODE" > "$EMBEDDED_TEST_RECEIPT"
 mkdir -p "$2/AegisEmbeddedCore.xcframework"
 `);
       git('init', '--quiet', '--template=');
       git('add', '--', 'apps', 'scripts');
       git('commit', '--quiet', '--no-gpg-sign', '-m', `${marker} fixture`);
-      heads.set(marker, git('rev-parse', 'HEAD'));
+      identities.set(marker, git('rev-parse', 'HEAD', 'HEAD^{tree}').split('\n'));
     }
     mkdirSync(bin);
     writeFileSync(join(bin, 'go'), '#!/bin/bash\n[[ "$*" == version ]] || exit 2\necho "go version go1.27.3 fixture"\n', {mode: 0o755});
@@ -197,12 +200,13 @@ mkdir -p "$2/AegisEmbeddedCore.xcframework"
     const run = privateSource => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', prepare.run], {
       cwd: shared, encoding: 'utf8', env: {...gitEnv, PATH: `${bin}:${process.env.PATH}`,
         GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
+        GIT_OBJECT_DIRECTORY: join(shared, '.git', 'objects'), GIT_INDEX_FILE: join(shared, '.git', 'index'),
         IOS_CI_ROOT: root, IOS_CI_SOURCE: privateSource, EMBEDDED_TEST_RECEIPT: receipt},
     });
     const prepared = run(source);
     assert.equal(prepared.status, 0, prepared.stderr);
     assert.deepEqual(readFileSync(receipt, 'utf8').trim().split('\n'),
-      ['private', 'private', heads.get('private'), source, join(source, lock), 'ci-rebuild']);
+      ['private', 'private', ...identities.get('private'), source, join(source, lock), 'ci-rebuild']);
     rmSync(receipt);
     const missing = run(join(root, 'missing'));
     assert.equal(missing.status, 1, missing.stderr);

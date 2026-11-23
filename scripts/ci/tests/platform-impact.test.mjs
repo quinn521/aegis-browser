@@ -555,16 +555,21 @@ test('archive compiler diagnostics reach Actions and retain exit status before s
   writeFileSync(join(shared, archiveScript), 'exit 99\n');
   const source = prepareArchiveFixture(root);
   const python = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
+  const rejectGitSelectors = `for name in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_IMPLICIT_WORK_TREE GIT_INDEX_FILE \\
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH \\
+  GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_SHALLOW_FILE \\
+  GIT_NAMESPACE GIT_ATTR_SOURCE; do
+  if [[ "\${!name+x}" ]]; then exit 98; fi
+done
+`;
   writeFileSync(join(bin, 'python3'), `#!/bin/bash
-if [[ "\${GIT_DIR+x}\${GIT_WORK_TREE+x}\${GIT_COMMON_DIR+x}" ]]; then exit 98; fi
-${delegateArchiveSupervisor}printf '%s\\n' "$*" >> "$ARCHIVE_TEST_TRACE"
+${rejectGitSelectors}${delegateArchiveSupervisor}printf '%s\\n' "$*" >> "$ARCHIVE_TEST_TRACE"
 if [[ "$ARCHIVE_TEST_SOURCE_CHANGE" == 1 && "$2" == */ios_embedded_core.py && "$3" == verify ]]; then
   mv -- "$IOS_CI_SOURCE" "$IOS_CI_ROOT/MovedSource"
 fi
 `);
   writeFileSync(join(bin, 'xcodebuild'), `#!/bin/bash
-if [[ "\${GIT_DIR+x}\${GIT_WORK_TREE+x}\${GIT_COMMON_DIR+x}" ]]; then exit 98; fi
-pwd -P > "$ARCHIVE_TEST_LAUNCH"
+${rejectGitSelectors}pwd -P > "$ARCHIVE_TEST_LAUNCH"
 printf 'archive-compiler-diagnostic\\n' >&2
 if [[ "$ARCHIVE_TEST_LOG_FAILURE" == write ]]; then printf '%16384s\\n' ''; fi
 exit "$ARCHIVE_TEST_EXIT"
@@ -575,6 +580,10 @@ exit "$ARCHIVE_TEST_EXIT"
     cwd: shared, encoding: 'utf8', timeout: 10000, env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
       GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
+      GIT_OBJECT_DIRECTORY: join(shared, '.git', 'objects'), GIT_INDEX_FILE: join(shared, '.git', 'index'),
+      GIT_IMPLICIT_WORK_TREE: '0', GIT_ALTERNATE_OBJECT_DIRECTORIES: shared, GIT_QUARANTINE_PATH: shared,
+      GIT_GRAFT_FILE: join(shared, 'grafts'), GIT_REPLACE_REF_BASE: 'refs/fixture/', GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_SHALLOW_FILE: join(shared, 'shallow'), GIT_NAMESPACE: 'fixture', GIT_ATTR_SOURCE: 'wrong-tree',
       ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_LAUNCH: launch,
       ...overrides,
     },

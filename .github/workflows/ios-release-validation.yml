@@ -252,7 +252,10 @@ jobs:
         run: |
           cd -P -- "$IOS_CI_SOURCE" || exit 1
           test "$PWD" = "$IOS_CI_SOURCE" || exit 1
-          unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+          unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_IMPLICIT_WORK_TREE GIT_INDEX_FILE \
+            GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH \
+            GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_SHALLOW_FILE \
+            GIT_NAMESPACE GIT_ATTR_SOURCE
           export MISE_TRUSTED_CONFIG_PATHS="${MISE_TRUSTED_CONFIG_PATHS:-$PWD}"
           if command -v mise >/dev/null 2>&1; then
             GOROOT="$(mise where go@1.27.3 2>/dev/null || true)"

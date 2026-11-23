@@ -23,7 +23,11 @@ if [[ "$REPO_ROOT" != "$SOURCE" ]]; then
   printf 'archive wrapper must run from the admitted Source tree\n' >&2
   exit 1
 fi
-unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
+# Use the admitted checkout's storage without discarding Git transport policy.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_IMPLICIT_WORK_TREE GIT_INDEX_FILE \
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH \
+  GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_SHALLOW_FILE \
+  GIT_NAMESPACE GIT_ATTR_SOURCE
 
 enter_source() {
   cd -P -- "$SOURCE" || exit 1
@@ -45,7 +49,8 @@ fi
 
 # shellcheck source=apps/browser/scripts/common.sh
 source "$REPO_ROOT/apps/browser/scripts/common.sh"
-configure_git_for_chromium_fetch
+# Suppress informational stdout before the best-effort console is installed.
+configure_git_for_chromium_fetch >/dev/null
 
 export TMPDIR="$IOS_CI_ROOT/tmp"
 export CLANG_MODULE_CACHE_PATH="$IOS_CI_ROOT/ModuleCache"
@@ -53,7 +58,7 @@ mkdir -p "$TMPDIR" "$CLANG_MODULE_CACHE_PATH"
 
 python3 -B "$REPO_ROOT/scripts/release/ios_embedded_core.py" verify --root "$SOURCE" \
   --source-lock "$SOURCE/apps/ios/EmbeddedCore/embedded-core-lock.json" \
-  --products "$IOS_CI_ROOT/EmbeddedCore"
+  --products "$IOS_CI_ROOT/EmbeddedCore" >/dev/null
 
 enter_source
 compiler="$(command -v xcodebuild)"
