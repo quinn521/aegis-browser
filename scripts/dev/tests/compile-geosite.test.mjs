@@ -6,7 +6,7 @@ import {
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
-import {basename, dirname, join} from 'node:path';
+import {basename, delimiter, dirname, join} from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {compileGroup, matchesHost} from '../compile-geosite.mjs';
@@ -164,6 +164,15 @@ test('importing the compiler by a positional filesystem path is inert', (t) => {
   }
 });
 
+test('the shebang invokes the CLI directly', {skip: process.platform === 'win32'}, () => {
+  const env = {...process.env, PATH: [dirname(process.execPath), process.env.PATH].filter(Boolean).join(delimiter)};
+  const result = spawnSync(cli, ['--help'], {encoding: 'utf8', env});
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
+  assert.equal(result.stderr, '');
+});
+
 test('preloading the CLI runs the entry once and leaves syntax checks, eval and print inert', () => {
   const run = (...args) => spawnSync(process.execPath, args, {encoding: 'utf8'});
   const direct = run(cli, '--help');
@@ -171,11 +180,14 @@ test('preloading the CLI runs the entry once and leaves syntax checks, eval and 
   assert.equal(direct.status, 0, direct.stderr);
   assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
   assert.equal(direct.stderr, '');
-  const preloaded = run('--import', cli, cli, '--help');
-  assert.ifError(preloaded.error);
-  assert.equal(preloaded.status, 0, preloaded.stderr);
-  assert.equal(preloaded.stdout, direct.stdout);
-  assert.equal(preloaded.stderr, '');
+  const cliUrl = new URL('../compile-geosite.mjs', import.meta.url);
+  for (const preload of [cli, cliUrl.href + '?preload', cliUrl.href + '#preload', cliUrl.href + '?']) {
+    const result = run('--import', preload, cli, '--help');
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, direct.stdout, preload);
+    assert.equal(result.stderr, '');
+  }
 
   for (const [flags, stdout] of [
     [['--check'], ''], [['-c'], ''], [['--check=true'], ''],
@@ -490,7 +502,7 @@ test('configured fixture directories resolve relative symlink and parent segment
     // Run a standalone test runner instead of inheriting the parent's worker mode.
     delete env.NODE_TEST_CONTEXT;
     const result = spawnSync(process.execPath,
-      ['--test', `--test-name-pattern=^${authenticXrayTest}$`, fileURLToPath(import.meta.url)],
+      ['--test', '--test-reporter=tap', `--test-name-pattern=^${authenticXrayTest}$`, fileURLToPath(import.meta.url)],
       {cwd: dir, encoding: 'utf8', env});
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -632,11 +644,21 @@ test('atomic publication preserves entries introduced at the publish syscall',
     const preload = join(dir, 'publish.cjs');
     const candidate = join(dir, 'incoming');
     const output = join(dir, 'catalogue.json');
+    const winningStage = join(dir, 'winning-stage');
     writeFileSync(preload, `
       const assert = require('node:assert/strict');
       const fs = require('node:fs');
       const rename = fs.renameSync;
       const fsync = fs.fsyncSync;
+      const open = fs.openSync;
+      fs.openSync = (path, ...args) => {
+        const fd = open(path, ...args);
+        if (path === ${JSON.stringify(output)} && fs.existsSync(${JSON.stringify(winningStage)})) {
+          // The winning publisher is cleaning up its hard link after publication.
+          fs.unlinkSync(${JSON.stringify(winningStage)});
+        }
+        return fd;
+      };
       let flushedInode;
       fs.fsyncSync = (fd) => {
         fsync(fd);
@@ -654,6 +676,8 @@ test('atomic publication preserves entries introduced at the publish syscall',
       fs.renameSync = inject(rename);
       require('node:module').syncBuiltinESMExports();
     `);
+    const publishIdentical = () => writeFileSync(candidate, expected);
+    const checkIdentical = () => assert.deepEqual(readFileSync(output), expected);
     for (const [setup, check, diagnostic] of [
       [() => writeFileSync(candidate, 'different catalogue\n'),
         () => assert.equal(readFileSync(output, 'utf8'), 'different catalogue\n'), /fresh --output path/i],
@@ -661,8 +685,11 @@ test('atomic publication preserves entries introduced at the publish syscall',
         () => assert.equal(readlinkSync(output), known), /output.*regular file/i],
       [() => mkdirSync(candidate),
         () => assert.ok(lstatSync(output).isDirectory()), /output.*regular file/i],
-      [() => writeFileSync(candidate, expected),
-        () => assert.deepEqual(readFileSync(output), expected)],
+      [publishIdentical, checkIdentical],
+      [() => {
+        publishIdentical();
+        linkSync(candidate, winningStage);
+      }, checkIdentical],
     ]) {
       setup();
       const inode = lstatSync(candidate, {bigint: true}).ino;
@@ -691,7 +718,7 @@ test('publication creates its temporary file beside the filesystem-resolved dest
     const lexical = join(dir, 'catalogue.json');
     writeFileSync(lexical, 'lexical destination\n');
 
-    // Assert temp placement even on hosts where both directories use the same filesystem.
+    // Assert private staging beside the canonical destination, even on a single filesystem.
     const preload = join(dir, 'directory.cjs');
     writeFileSync(preload, `
       const assert = require('node:assert/strict');
@@ -700,7 +727,11 @@ test('publication creates its temporary file beside the filesystem-resolved dest
       const {dirname} = require('node:path');
       const openSync = fs.openSync;
       fs.openSync = (path, flags, ...args) => {
-        if (flags === 'wx') assert.equal(dirname(path), ${JSON.stringify(realpathSync.native(actual))});
+        if (flags === 'wx') {
+          const staging = dirname(path);
+          assert.equal(dirname(staging), ${JSON.stringify(realpathSync.native(actual))});
+          assert.equal(fs.lstatSync(staging).mode & 0o777, 0o700);
+        }
         return openSync(path, flags, ...args);
       };
       syncBuiltinESMExports();

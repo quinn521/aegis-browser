@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import {createHash, randomUUID} from 'node:crypto';
+import {createHash} from 'node:crypto';
 import {
-  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, realpathSync, rmSync, statSync,
-  writeFileSync,
+  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync,
+  rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
 import {isIP} from 'node:net';
 import {basename, dirname, join} from 'node:path';
@@ -356,18 +356,26 @@ function checkOutput(path, namedPath, inputs) {
 
 function checkExistingCatalogue(path, expected, existing) {
   const conflict = 'Existing output changed or differs from the pinned build: ' + path + '. Use a fresh --output path.';
-  if (existing?.size !== BigInt(expected.length)) throw new Error(conflict);
-  let opened;
-  try {
-    opened = readExactFile(path, expected.length, 'Existing output', constants.O_NOFOLLOW);
-  } catch (error) {
-    throw new Error(conflict, {cause: error});
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (existing?.size !== BigInt(expected.length)) throw new Error(conflict);
+    let opened;
+    try {
+      opened = readExactFile(path, expected.length, 'Existing output', constants.O_NOFOLLOW);
+    } catch (error) {
+      throw new Error(conflict, {cause: error});
+    }
+    const {data, info} = opened;
+    const current = lstatSync(path, {bigint: true, throwIfNoEntry: false});
+    const sameContentVersion = (other) => other?.dev === info.dev && other.ino === info.ino &&
+      other.size === info.size && other.mtimeNs === info.mtimeNs;
+    if (!sameContentVersion(existing) || !sameContentVersion(current) || !data.equals(expected)) {
+      throw new Error(conflict);
+    }
+    if (existing.ctimeNs === info.ctimeNs && current.ctimeNs === info.ctimeNs) return;
+    // Unlinking the winning publisher's staging name changes ctime on the shared inode.
+    existing = current;
   }
-  const {data, info} = opened;
-  const current = lstatSync(path, {bigint: true, throwIfNoEntry: false});
-  const sameVersion = (other) => other?.dev === info.dev && other.ino === info.ino &&
-    other.size === info.size && other.ctimeNs === info.ctimeNs && other.mtimeNs === info.mtimeNs;
-  if (!sameVersion(existing) || !data.equals(expected) || !sameVersion(current)) throw new Error(conflict);
+  throw new Error(conflict);
 }
 
 function writeAtomically(path, data, inputs) {
@@ -383,9 +391,11 @@ function writeAtomically(path, data, inputs) {
     checkExistingCatalogue(destination, data, existing);
     return;
   }
-  const temporary = join(directory, '.geosite-' + randomUUID() + '.tmp');
-  const fd = openSync(temporary, 'wx', 0o644);
+  // mkdtemp creates an owner-only directory on the destination filesystem.
+  const staging = mkdtempSync(join(directory, '.geosite-'));
+  const temporary = join(staging, 'catalogue');
   try {
+    const fd = openSync(temporary, 'wx', 0o644);
     try {
       writeFileSync(fd, data);
       fsyncSync(fd);
@@ -402,6 +412,7 @@ function writeAtomically(path, data, inputs) {
     }
   } finally {
     rmSync(temporary, {force: true});
+    rmdirSync(staging);
   }
 }
 
@@ -464,8 +475,11 @@ function isMain() {
   // Syntax checks, eval, and print can also have the CLI path in argv[1].
   const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
   if (!process.argv[1] || process.execArgv.some((arg) => nonEntryMode.test(arg))) return false;
+  // A query or fragment identifies a separate module instance from the CLI entry.
+  const moduleUrl = import.meta.url;
+  if (moduleUrl.includes('?') || moduleUrl.includes('#')) return false;
   try {
-    return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
+    return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(moduleUrl));
   } catch {
     return false;
   }
