@@ -86,7 +86,14 @@ jobs:
         with:
           python-version: 3.11.9
       - name: Test candidate orchestration on Windows
-        run: python -B -m unittest discover -s apps/browser/scripts/ci -p '*_test.py'
+        if: ${{ inputs.lane == 'windows' }}
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: UTF-8
+        run: |
+          python -B -m unittest discover -s apps/browser/scripts/ci -p '*_test.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B apps/browser/scripts/release-contract_test.py
       - name: Run WinRM model relay self-test
         shell: bash
         run: |

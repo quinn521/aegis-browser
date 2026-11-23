@@ -63,6 +63,15 @@ class CandidateTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ci.validate_receipt(value, 'aaa', '1')
 
+    def test_required_android_pin_cannot_fall_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            browser = Path(directory)
+            (browser / 'CHROMIUM_VERSION').write_text('158.0.8127.37', encoding='ascii')
+            (browser / 'CHROMIUM_COMMIT').write_text('a' * 40, encoding='ascii')
+            with self.assertRaisesRegex(ValueError, '缺少独立平台 pin'):
+                ci.read_candidate_pin('android', browser, require_override=True)
+            self.assertEqual(ci.read_candidate_pin('windows', browser)[0]['version'], '158.0.8127.37')
+
     def test_platform_pin_does_not_borrow_desktop_version(self):
         with tempfile.TemporaryDirectory() as directory:
             browser = Path(directory)

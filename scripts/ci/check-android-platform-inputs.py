@@ -9,7 +9,7 @@ import runpy
 def main():
     candidate = runpy.run_path("apps/browser/scripts/ci/candidate.py")
     delivery = runpy.run_path("scripts/release/android-delivery.py")
-    pin, patches = candidate["read_candidate_pin"]("android")
+    pin, patches = candidate["read_candidate_pin"]("android", require_override=True)
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", pin["version"]):
         raise ValueError("Invalid Android Chromium version")
     if not re.fullmatch(r"[0-9a-f]{40}", pin["commit"]):

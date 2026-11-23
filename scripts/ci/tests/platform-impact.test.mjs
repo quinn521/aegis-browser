@@ -357,6 +357,7 @@ test('paths select platforms and commit types select stage depth', () => {
       'scripts/release/android-delivery.py', 'scripts/release/android_product_delivery.py',
       'scripts/release/test_android_release_matrix.py', 'scripts/release/runner.rb', 'scripts/release/verify-aab.py',
       aabCertificate, 'scripts/ci/run-android-release-tests.py', 'scripts/ci/tests/android-release.test.mjs',
+      'scripts/ci/release-preflight.mjs', '.github/android-public-release-tag-ruleset.json',
     ]) {
       assert.deepEqual(route(pr(() => save(path, 'android'), 'fix: repair android release')), androidRoute, path);
     }
@@ -391,6 +392,8 @@ test('paths select platforms and commit types select stage depth', () => {
       'scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py',
       'scripts/release/test_ios_profile_trust.py', 'scripts/release/test_development_signing.py',
       'scripts/release/test_development_key_access.py',
+      'apps/ios/scripts/firebase_config.py', 'apps/ios/scripts/private_test_node.py',
+      'apps/ios/scripts/private_test_subscription.py',
       'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/core.js',
     ]) assert.equal(pr(() => save(file, 'updated'), 'chore: change archive consumer').deep, true, file);
     for (const file of ['scripts/release/ios-action.py', 'scripts/release/test_ios_action.py',
@@ -398,13 +401,16 @@ test('paths select platforms and commit types select stage depth', () => {
       'scripts/release/hosted-signing.py', 'scripts/release/test_hosted_signing.py',
       'scripts/release/verify-ipa.py', 'scripts/release/test_verify_ipa.py',
       'scripts/release/test_verify_ios_dsyms.py', 'scripts/release/test_verify_signed_ios.py',
-      'apps/ios/scripts/run-simulator-tests.sh']) {
+      'apps/ios/scripts/run-simulator-tests.sh', 'scripts/ci/tests/ios-release.test.mjs',
+      'scripts/release/fixtures/safari-icon-xcode.png', '.github/ios-public-release-tag-ruleset.json',
+      'scripts/release/cloud-archive.py', 'scripts/release/test_cloud_archive.py']) {
       assert.deepEqual(route(pr(() => save(file, 'updated'), 'fix: repair iOS contract')), {...iosRoute, deep: false});
     }
     for (const file of [
       'apps/browser/overlay/chrome/browser/ui/views/uninstall_view.cc',
       'apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/chromium.ico',
       'apps/browser/CHROMIUM_COMMIT',
+      'apps/browser/overlay/chrome/browser/aegis/access/access_local_core_win_unittest.cc',
     ]) {
       const onlyWindowsInput = pr(() => save(file, 'updated'), 'chore: update Windows input');
       assert.equal(onlyWindowsInput.windows, true, file);
@@ -415,7 +421,8 @@ test('paths select platforms and commit types select stage depth', () => {
     const desktopVersion = 'apps/browser/CHROMIUM_VERSION';
     const productVersion = 'apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h';
     for (const file of [desktopVersion, 'apps/browser/scripts/ci/candidate.py',
-      'apps/browser/scripts/ci/candidate_test.py', 'apps/browser/scripts/release-contract.py']) {
+      'apps/browser/scripts/ci/candidate_test.py', 'apps/browser/scripts/release-contract.py',
+      'apps/browser/scripts/release-contract_test.py', 'apps/browser/release-feature-contract.json']) {
       assert.deepEqual(route(pr(() => save(file, 'update'), 'fix: update shared candidate input')),
         {...desktopRoute, android: true}, file);
     }
@@ -425,6 +432,10 @@ test('paths select platforms and commit types select stage depth', () => {
       assert.deepEqual(route(pr(() => save(file, '# update'), 'fix: update covered script')),
         {...iosRoute, ios: false, linux: true, macos: true}, file);
     }
+    const workspaceLock = pr(() => save('pnpm-lock.yaml', 'changed lockfile'), 'fix: refresh lock');
+    assert.deepEqual(route(workspaceLock), {...iosRoute, android: true, macos: true, deep: false});
+    const ripgrep = pr(() => save('scripts/ci/install-ripgrep.sh', 'new checksum'), 'fix: update ripgrep');
+    assert.equal(ripgrep.linux, true);
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');
     assert.equal(linux.linux, true); assert.equal(linux.macos, false); assert.equal(linux.deep, true);
     const shared = pr(() => save('packages/core/src/core.ts', 'core'), 'build: refresh core');

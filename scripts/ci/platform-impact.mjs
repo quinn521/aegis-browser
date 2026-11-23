@@ -127,6 +127,17 @@ const candidateInputs = new Set([
   'apps/browser/scripts/ci/candidate.py',
   'apps/browser/scripts/ci/candidate_test.py',
   'apps/browser/scripts/release-contract.py',
+  'apps/browser/scripts/release-contract_test.py',
+  'apps/browser/release-feature-contract.json',
+]);
+const nodeWorkspaceInputs = new Set([
+  '.mise.toml', '.node-version', '.npmrc', 'pnpm-lock.yaml', 'pnpm-workspace.yaml',
+  'package.json', 'apps/browser/package.json', 'packages/core/package.json',
+]);
+const iosSimulatorTools = new Set([
+  'apps/ios/scripts/run-simulator-tests.sh', 'apps/ios/scripts/simulator-input-manifest.mjs',
+  'apps/ios/scripts/simulator-fixture-server.py', 'apps/ios/scripts/summarize-xccov.mjs',
+  'apps/ios/scripts/test-simulator-input-evidence.mjs', 'apps/ios/scripts/test-summarize-xccov.mjs',
 ]);
 const desktopPatch = path => path.startsWith('apps/browser/patches/');
 const browserShellInput = path => /^apps\/browser\/scripts\/[^/]+\.sh$/u.test(path);
@@ -138,6 +149,10 @@ const iosArchiveRuntime = new Set([
   'scripts/release/test_development_key_access.py',
 ]);
 const iosReleaseContracts = new Set([
+  '.github/ios-public-release-tag-ruleset.json',
+  'scripts/release/fixtures/safari-icon-xcode.png',
+  'scripts/release/cloud-archive.py',
+  'scripts/release/test_cloud_archive.py',
   'scripts/release/cli.rb',
   'scripts/release/hosted-signing.py',
   'scripts/release/test_hosted_signing.py',
@@ -151,6 +166,8 @@ const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('.github/workflows/ios-')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
+  || path.startsWith('scripts/ci/tests/ios-')
+  || nodeWorkspaceInputs.has(path)
   || path === browserCommonScript
   || iosArchiveInputs.has(path)
   || iosReleaseContracts.has(path)
@@ -163,7 +180,7 @@ const selectsIos = path => path.startsWith('apps/ios/')
 const needsIosCompile = path => sharedIosProductInput(path)
   || iosArchiveRuntime.has(path)
   || (path.startsWith('apps/ios/') && !path.startsWith('apps/ios/Tests/')
-    && !path.startsWith('apps/ios/scripts/') && !path.endsWith('.md'))
+    && !iosSimulatorTools.has(path) && !path.endsWith('.md'))
   || (iosArchiveInputs.has(path) && !path.startsWith('scripts/release/test_'))
   || path === browserCommonScript
   || path === '.github/workflows/ios-release-validation.yml';
@@ -171,6 +188,9 @@ const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || path === 'apps/browser/ci-pins/android.json'
   || path === 'apps/browser/args/aegis-android.gn'
   || path === 'scripts/ci/check-android-platform-inputs.py'
+  || path === 'scripts/ci/release-preflight.mjs'
+  || path === '.github/android-public-release-tag-ruleset.json'
+  || nodeWorkspaceInputs.has(path)
   || candidateInputs.has(path)
   || path === chromiumVersion
   || path === productVersionHeader
@@ -190,9 +210,20 @@ const selectsMacos = path => path.startsWith('.github/workflows/macos-')
   || desktopPins.has(path)
   || candidateInputs.has(path)
   || path === browserCommonScript
-  || (browserShellInput(path) && !selectsAndroid(path))
+  || (browserShellInput(path) && !path.toLowerCase().includes('android'))
+  || nodeWorkspaceInputs.has(path)
+  || /^scripts\/ci\/(?:run-|tests\/)?macos-/u.test(path)
   || (path.startsWith('scripts/release/') && path.toLowerCase().includes('macos'));
+const windowsCandidateSources = new Set([
+  'apps/browser/overlay/chrome/browser/aegis/enhancements/enhancement_browsertest.cc',
+  'apps/browser/overlay/chrome/browser/aegis/access/access_core_log_disk_win_unittest.cc',
+  'apps/browser/overlay/chrome/browser/aegis/access/access_log_export_dialog_win_unittest.cc',
+  'apps/browser/overlay/chrome/browser/aegis/access/access_local_core_win_unittest.cc',
+  'apps/browser/overlay/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc',
+  'apps/browser/overlay/chrome/browser/aegis/access/access_private_publication_unittest.cc',
+]);
 const selectsWindows = path => path.endsWith('.ps1')
+  || windowsCandidateSources.has(path)
   || desktopPins.has(path)
   || candidateInputs.has(path)
   || path.startsWith('apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/')
@@ -205,6 +236,7 @@ const selectsWindows = path => path.endsWith('.ps1')
   || path.startsWith('apps/browser/scripts/ci/windows')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
 const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh'
+  || path === 'scripts/ci/install-ripgrep.sh'
   || path.startsWith('scripts/ci/platform-tests/kcov-')
   || browserShellInput(path);
 const selectsShared = path => path.startsWith('packages/core/')

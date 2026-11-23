@@ -139,7 +139,7 @@ def verify_tree(src, base, patches):
         return actual
 
 
-def read_candidate_pin(name, browser=BROWSER):
+def read_candidate_pin(name, browser=BROWSER, *, require_override=False):
     # 不同平台发布补丁号可能不同；可在审核后的候选分支提供独立 pin 与补丁目录。
     override = browser / 'ci-pins' / (name + '.json')
     if override.exists():
@@ -147,6 +147,8 @@ def read_candidate_pin(name, browser=BROWSER):
         patch_dir = (browser / pin['patchDirectory']).resolve()
         if not patch_dir.is_relative_to(browser.resolve()):
             raise ValueError('补丁目录必须位于 apps/browser 内')
+    elif require_override:
+        raise ValueError('缺少独立平台 pin：' + name)
     else:
         pin = {'version': (browser / 'CHROMIUM_VERSION').read_text().strip(),
                'commit': (browser / 'CHROMIUM_COMMIT').read_text().strip()}

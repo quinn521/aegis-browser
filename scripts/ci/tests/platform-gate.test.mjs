@@ -79,7 +79,7 @@ test('the observational check is separate from quality and always summarizes its
   for (const fixture of [
     'test_verify_ios_archive.py', 'test_verify_signed_ios.py', 'test_verify_ios_dsyms.py',
     'test_development_signing.py', 'test_development_key_access.py',
-    'test_verify_ipa.py', 'test_hosted_signing.py',
+    'test_verify_ipa.py', 'test_hosted_signing.py', 'test_cloud_archive.py',
   ]) assert.ok(ios.run.includes('scripts/release/' + fixture), fixture);
   assert.match(ios.run, /generate-tracker-rules\.mjs --check/u);
   assert.ok(workflow.jobs.ios.steps.some(step => step.run === 'pnpm install --frozen-lockfile --ignore-scripts'));
@@ -88,8 +88,11 @@ test('the observational check is separate from quality and always summarizes its
     assert.deepEqual(job.with, {lane: name});
   }
   const nativeCoverage = YAML.parse(readFileSync('.github/workflows/other-platform-coverage.yml', 'utf8'));
-  assert.ok(nativeCoverage.jobs['powershell-coverage'].steps.some(step =>
-    step.run === "python -B -m unittest discover -s apps/browser/scripts/ci -p '*_test.py'"));
+  const windowsCandidate = nativeCoverage.jobs['powershell-coverage'].steps.find(step =>
+    step.name === 'Test candidate orchestration on Windows');
+  assert.equal(windowsCandidate.env.PYTHONUTF8, '1');
+  assert.match(windowsCandidate.run, /unittest discover -s apps\/browser\/scripts\/ci/u);
+  assert.match(windowsCandidate.run, /release-contract_test\.py/u);
   const report = nativeCoverage.jobs['lane-result'];
   assert.deepEqual(report.needs, ['shell-coverage', 'powershell-coverage']);
   assert.match(report.steps[0].run, /test "\$LINUX_RESULT" = success && test "\$WINDOWS_RESULT" = skipped/u);
