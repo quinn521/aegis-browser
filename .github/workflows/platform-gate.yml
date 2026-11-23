@@ -112,7 +112,7 @@ jobs:
         run: |
           bundle exec ruby -e 'Dir["fastlane/tests/*_test.rb"].sort.each { |p| require_relative p }'
           python3 -B -m unittest discover -s scripts/release -p 'test_ios*.py'
-          python3 -B -m unittest scripts/release/test_verify_ios_archive.py scripts/release/test_development_signing.py scripts/release/test_development_key_access.py
+          PYTHONPATH=scripts/release python3 -B -m unittest scripts/release/test_verify_ios_archive.py scripts/release/test_development_signing.py scripts/release/test_development_key_access.py
           node --test apps/ios/Tests/SharedWebExtension/SafariNavigationIdentityTests.mjs
 
   macos:
