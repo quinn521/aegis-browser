@@ -59,7 +59,13 @@ const explanationPaths = new Set([
   'docs/plans/macos-access-toolbar-bubble-NOTES.md',
   'docs/plans/macos-access-bubble-session-NOTES.md',
 ]);
-const routerPath = 'scripts/ci/platform-impact.mjs';
+const routeInputs = new Set([
+  'scripts/ci/platform-impact.mjs',
+  'scripts/ci/fill-platform-route-defaults.mjs',
+  'scripts/ci/check-platform-gate.mjs',
+  '.github/workflows/platform-gate.yml',
+  '.github/workflows/other-platform-coverage.yml',
+]);
 const conventionalTypes = new Set(['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'release', 'revert', 'style', 'test']);
 const isTypeName = value => {
   if (value.length === 0 || value.charCodeAt(0) < 97 || value.charCodeAt(0) > 122) return false;
@@ -110,13 +116,26 @@ const iosArchiveInputs = new Set([
   'scripts/release/verify-ios-archive.py',
   'scripts/release/verify-signed-ios.py',
 ]);
+const sharedIosInputs = path => path === 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json'
+  || path.startsWith('apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/');
 const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('.github/workflows/ios-')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
   || path === browserCommonScript
-  || iosArchiveInputs.has(path);
+  || iosArchiveInputs.has(path)
+  || sharedIosInputs(path)
+  || path.startsWith('fastlane/')
+  || path.startsWith('.github/actions/ensure-ios-ruby/')
+  || path === 'Gemfile' || path === 'Gemfile.lock';
+const needsIosCompile = path => sharedIosInputs(path)
+  || (path.startsWith('apps/ios/') && !path.startsWith('apps/ios/Tests/') && !path.endsWith('.md'))
+  || (iosArchiveInputs.has(path) && !path.startsWith('scripts/release/test_'))
+  || path === browserCommonScript
+  || path === '.github/workflows/ios-release-validation.yml';
 const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
+  || path === 'apps/browser/ci-pins/android.json'
+  || path === 'apps/browser/args/aegis-android.gn'
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('android'))
   || path === browserCommonScript
   || path.startsWith('.github/workflows/android-')
@@ -133,6 +152,11 @@ const selectsMacos = path => path.startsWith('.github/workflows/macos-')
   || path === browserCommonScript
   || (path.startsWith('scripts/release/') && path.toLowerCase().includes('macos'));
 const selectsWindows = path => path.endsWith('.ps1')
+  || path === 'apps/browser/args/aegis-windows.gn'
+  || path.startsWith('apps/browser/overlay/chrome/installer/')
+  || /^apps\/browser\/overlay\/chrome\/browser\/ui\/views\/(?:aegis_uninstall_test_main|uninstall_view(?:_unittest)?)\.(?:cc|h)$/u.test(path)
+  || (path.startsWith('apps/browser/patches/') && /(?:^|[-_/])windows(?:[-_.]|$)/u.test(path))
+  || path.startsWith('apps/browser/scripts/windows-')
   || path.startsWith('scripts/ci/platform-tests/windows-')
   || path.startsWith('apps/browser/scripts/ci/windows')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
@@ -142,7 +166,6 @@ const selectsShared = path => path.startsWith('packages/core/')
   || (path.startsWith('apps/browser/patches/') && !path.startsWith('apps/browser/patches-android/'));
 const classifyPath = path => {
   const selected = blankPlatforms();
-  if (explanationPaths.has(path) || path === routerPath) return selected;
   if (selectsIos(path)) selected.ios = true;
   if (selectsAndroid(path)) selected.android = true;
   if (selectsMacos(path)) selected.macos = true;
@@ -179,7 +202,7 @@ for (const subject of subjects) {
 if (!legacyFull && changes.length > 0 && subjects.length === 0) nonConventional = true;
 const contentEdit = change => change.status === 'M' && change.beforeMode === '100644' && change.afterMode === '100644';
 const explanationOnly = changes.length > 0 && changes.every(change => explanationPaths.has(change.path) && contentEdit(change));
-const selfEdit = changes.some(change => change.path === routerPath);
+const selfEdit = changes.some(change => routeInputs.has(change.path));
 const unsafe = changes.some(isUnsafe);
 const strict = selfEdit || unsafe || nonConventional;
 const docs = event === 'pull_request' && explanationOnly && !strict && process.env.CI_LIGHTWEIGHT_ADMITTED === 'true';
@@ -197,9 +220,13 @@ else if (selfEdit) {
 } else if (legacyFull) {
   reason = 'full-platform-fallback';
   platforms.ios = true;
+  platforms.android = event === 'push';
   platforms.macos = true;
+  platforms.windows = event === 'push';
+  platforms.linux = event === 'push';
 } else if (!explanationOnly) {
   for (const change of changes) {
+    if (explanationPaths.has(change.path) && contentEdit(change)) continue;
     const selected = classifyPath(change.path);
     if (selected.ios) platforms.ios = true;
     if (selected.android) platforms.android = true;
@@ -210,11 +237,16 @@ else if (selfEdit) {
   if (strict) reason = 'strict-change';
 }
 const typeList = [...types];
-const deepen = !docs && (legacyFull || event === 'push' || strict || typeList.some(type => deepTypes.has(type)));
-const integrate = deepen || (!docs && (legacyFull || event === 'push' || strict || typeList.some(type => integrateTypes.has(type))));
-const deep = deepen;
+const actualInputs = changes.filter(change => !explanationPaths.has(change.path) || !contentEdit(change));
+const pathRequiresContracts = actualInputs.some(({path}) =>
+  selectsIos(path) || selectsAndroid(path) || selectsMacos(path) || selectsWindows(path) || selectsLinux(path) || selectsShared(path));
+const pathRequiresArchive = actualInputs.some(({path}) => needsIosCompile(path));
+const deepByType = typeList.some(type => deepTypes.has(type));
+const deep = !docs && (legacyFull || selfEdit || pathRequiresArchive || strict
+  || (!platforms.ios && (event === 'push' || deepByType)));
+const integrate = deep || (!docs && (pathRequiresContracts || event === 'push' || typeList.some(type => integrateTypes.has(type))));
 const plan = {
-  schemaVersion: 2, event, base, head, tested, rulesSha: event === 'pull_request' ? base : tested, changes,
+  schemaVersion: 3, event, base, head, tested, rulesSha: event === 'pull_request' ? base : tested, changes,
   types: [...types].sort(), strict, docs, ...platforms, gate: true, integrate, deep, reason,
 };
 console.log(JSON.stringify(plan, null, 2));
