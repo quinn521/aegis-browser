@@ -358,3 +358,4 @@
 0358-assert-scoped-request-cancellation.patch
 0359-preserve-access-routing-and-platform-coverage.patch
 0360-open-android-access-options-from-trusted-tab.patch
+0361-revoke-access-options-on-document-replacement.patch

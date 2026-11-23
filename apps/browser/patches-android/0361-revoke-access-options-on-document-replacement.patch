@@ -1,0 +1,199 @@
+From 139ff64b8a264ccb41da1d7b6ed215d450a5e0e6 Mon Sep 17 00:00:00 2001
+From: Aegis Development <development@example.invalid>
+Date: Mon, 23 Nov 2026 18:32:53 +0800
+Subject: [PATCH] fix(android): revoke Access Options on primary document
+ replacement
+
+---
+ .../chrome/browser/ChromeTabbedActivity.java  |  4 ++++
+ .../settings/AegisAccessOptionsFragment.java  | 22 +++++++++++++++++
+ .../android/aegis_access_options_bridge.cc    |  1 +
+ .../render_frame_host_delegate.h              |  3 +++
+ .../renderer_host/render_frame_host_impl.cc   |  1 +
+ .../browser/web_contents/web_contents_impl.cc |  8 +++++++
+ .../browser/web_contents/web_contents_impl.h  |  1 +
+ .../web_contents_impl_browsertest.cc          | 24 +++++++++++++++++++
+ .../public/browser/web_contents_observer.h    |  4 ++++
+ 9 files changed, 68 insertions(+)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 1074503a4c4956c565857e00294a6cc3179d57c0..ab7d55f791cdd07e2e396446202635b5426da142 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -1770,6 +1770,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+         }
+ 
+         super.onResumeWithNative();
++        AegisAccessOptionsFragment.restoreUnavailableIfRequested(
++                getSupportFragmentManager(), getSavedInstanceState());
+ 
+         DefaultBrowserPromoUtils.getInstance().maybeRecordDeepLinkOutcome();
+ 
+@@ -5561,6 +5563,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     public void onSaveInstanceState(Bundle outState) {
+         try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.onSaveInstanceState")) {
+             super.onSaveInstanceState(outState);
++            AegisAccessOptionsFragment.saveUnavailableHint(
++                    getSupportFragmentManager(), outState, getSavedInstanceState());
+             CipherLazyHolder.sCipherInstance.saveToBundle(outState);
+             saveToBaseBundle(outState);
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
+index cd83a8afd39c9db726b115c61d23c650c48b15ce..ce854333a2e79595cfdee1550cb169364f955bc1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
+@@ -28,6 +28,7 @@ import org.chromium.content_public.browser.WebContents;
+ @NullMarked
+ public final class AegisAccessOptionsFragment extends DialogFragment {
+     private static final String TAG = "aegis_access_options";
++    private static final String RESTORE_UNAVAILABLE = "aegis_access_options_restore_unavailable";
+ 
+     private final Callback<TabModel> mModelChanged = this::onModelChanged;
+     private @Nullable MonotonicObservableSupplier<TabModel> mModels;
+@@ -62,6 +63,27 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+         fragment.showNow(manager, TAG);
+     }
+ 
++    /** Retains a presentation hint in Activity state, without persisting an editor. */
++    public static void saveUnavailableHint(
++            FragmentManager manager, Bundle outState, @Nullable Bundle previousState) {
++        boolean awaitingRestore =
++                previousState != null && previousState.getBoolean(RESTORE_UNAVAILABLE);
++        if (awaitingRestore || manager.findFragmentByTag(TAG) != null) {
++            outState.putBoolean(RESTORE_UNAVAILABLE, true);
++        }
++    }
++
++    public static void restoreUnavailableIfRequested(
++            FragmentManager manager, @Nullable Bundle state) {
++        if (state == null || !state.getBoolean(RESTORE_UNAVAILABLE) || manager.isStateSaved()) {
++            return;
++        }
++        state.remove(RESTORE_UNAVAILABLE);
++        if (manager.findFragmentByTag(TAG) == null) {
++            new AegisAccessOptionsFragment().showNow(manager, TAG);
++        }
++    }
++
+     @Override
+     public Dialog onCreateDialog(@Nullable Bundle state) {
+         boolean canRead =
+diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
+index f97335d3d2c756a0fd15c1b1437218c7e7394b8c..12b85bb6e231cc784e30209d02446bb4958fe444 100644
+--- a/chrome/browser/android/aegis_access_options_bridge.cc
++++ b/chrome/browser/android/aegis_access_options_bridge.cc
+@@ -105,6 +105,7 @@ class EditorSession final : public content::WebContentsObserver {
+ 
+  private:
+   void PrimaryPageChanged(content::Page&) override { Revoke(); }
++  void PrimaryMainFrameDocumentReplaced() override { Revoke(); }
+   void DidFinishNavigation(content::NavigationHandle* navigation) override {
+     if (navigation->HasCommitted() && navigation->IsInPrimaryMainFrame()) {
+       Revoke();
+diff --git a/content/browser/renderer_host/render_frame_host_delegate.h b/content/browser/renderer_host/render_frame_host_delegate.h
+index d30f1f5e08c5f66a0c1d585c526f946eb06fa979..2840160e5316dce12363687417155ede355f951c 100644
+--- a/content/browser/renderer_host/render_frame_host_delegate.h
++++ b/content/browser/renderer_host/render_frame_host_delegate.h
+@@ -229,6 +229,9 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
+       const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+       blink::mojom::FaviconUpdateReason reason) {}
+ 
++  // The frame replaced its document without an ordinary navigation commit.
++  virtual void DidReplaceDocument(RenderFrameHostImpl* render_frame_host) {}
++
+   // The frame changed its window.name property.
+   virtual void DidChangeName(RenderFrameHostImpl* render_frame_host,
+                              const std::string& name) {}
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index c0d35e8d4bb8a6b67b74be3ce4735b608672d8c4..6056170f38a0f712e99f62679191bf58e8db3aa5 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -6942,6 +6942,7 @@ void RenderFrameHostImpl::DidCommitDocumentReplacement() {
+   if (ModelContextUserData::GetForCurrentDocument(this)) {
+     ModelContextUserData::DeleteForCurrentDocument(this);
+   }
++  delegate_->DidReplaceDocument(this);
+ }
+ 
+ RenderWidgetHostImpl* RenderFrameHostImpl::GetRenderWidgetHost() {
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index a2638c29d409ebe008a9c3487aa6dfb093c36500..2def4d196ec40e8949df6751203fc8e3b48f82d1 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -10863,6 +10863,14 @@ void WebContentsImpl::SetSupportsForwardTransitionAnimation(bool supports) {
+ }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++void WebContentsImpl::DidReplaceDocument(
++    RenderFrameHostImpl* render_frame_host) {
++  if (render_frame_host == GetPrimaryMainFrame()) {
++    observers_.NotifyObservers(
++        &WebContentsObserver::PrimaryMainFrameDocumentReplaced);
++  }
++}
++
+ void WebContentsImpl::DidChangeName(RenderFrameHostImpl* render_frame_host,
+                                     const std::string& name) {
+   OPTIONAL_TRACE_EVENT2("content", "WebContentsImpl::DidChangeName",
+diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
+index 928d746f122ef71ab26f31881aabb55c5fa72307..6dd8087516d4cafcf77bd20993c78e0b9d60af95 100644
+--- a/content/browser/web_contents/web_contents_impl.h
++++ b/content/browser/web_contents/web_contents_impl.h
+@@ -743,6 +743,7 @@ class CONTENT_EXPORT WebContentsImpl
+       RenderFrameHostImpl* render_frame_host,
+       bool is_reload,
+       JavaScriptDialogCallback response_callback) override;
++  void DidReplaceDocument(RenderFrameHostImpl* render_frame_host) override;
+   void DidChangeName(RenderFrameHostImpl* render_frame_host,
+                      const std::string& name) override;
+   void DidReceiveUserActivation(
+diff --git a/content/browser/web_contents/web_contents_impl_browsertest.cc b/content/browser/web_contents/web_contents_impl_browsertest.cc
+index 23ae692aa98f39882d5e3186dc4b148c8cca5537..213c5a1f9cb5dcd84beeaf21c0a699001026eab0 100644
+--- a/content/browser/web_contents/web_contents_impl_browsertest.cc
++++ b/content/browser/web_contents/web_contents_impl_browsertest.cc
+@@ -201,6 +201,30 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
+   base::test::ScopedFeatureList scoped_feature_list_;
+ };
+ 
++IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
++                       NotifiesPrimaryDocumentReplacement) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(
++      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++
++  class ReplacementObserver : public WebContentsObserver {
++   public:
++    explicit ReplacementObserver(WebContents* contents)
++        : WebContentsObserver(contents) {}
++    void PrimaryMainFrameDocumentReplaced() override { run_loop_.Quit(); }
++    void Wait() { run_loop_.Run(); }
++
++   private:
++    base::RunLoop run_loop_;
++  };
++
++  ReplacementObserver observer(shell()->web_contents());
++  ExecuteScriptAsync(shell()->web_contents(),
++                     "location.href = 'javascript:\"replacement\"';");
++  observer.Wait();
++  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
++}
++
+ // Starts a new navigation as soon as the current one commits, but does not
+ // wait for it to complete.  This allows us to observe DidStopLoading while
+ // a pending entry is present.
+diff --git a/content/public/browser/web_contents_observer.h b/content/public/browser/web_contents_observer.h
+index 4a7e6555fd1e9af16c35b365f33df8185b84b81e..3737cc1ed06a244727f6aa4b0a767db7f93e8b13 100644
+--- a/content/public/browser/web_contents_observer.h
++++ b/content/public/browser/web_contents_observer.h
+@@ -186,6 +186,10 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
+   // DidFinishNavigation is recommended).
+   virtual void PrimaryPageChanged(Page& page) {}
+ 
++  // The renderer replaced the primary main frame's document without a
++  // NavigationHandle, such as a javascript: URL returning a string.
++  virtual void PrimaryMainFrameDocumentReplaced() {}
++
+   // This method is invoked when the primary page of a WebContents is about to
+   // be deactivated. This happens when the primary page is being replaced by
+   // another page (due to a commit of a navigation). Note that this will not be
