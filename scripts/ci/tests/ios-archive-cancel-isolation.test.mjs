@@ -12,6 +12,7 @@ const supervisorFixture = resolve('scripts/ci/tests/ios-archive-supervisor-fixtu
 const proxyUser = 'fixture-proxy-user';
 const proxyToken = 'fixture-proxy-token%21';
 const authenticatedProxy = `http://${proxyUser}:${proxyToken}@proxy.example.invalid:8080`;
+const withheld = 'archive diagnostics withheld';
 
 function running(pid) {
   try {
@@ -65,7 +66,9 @@ if os.fork() == 0:
         os.setpgid(0, 0)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        os.write(2, b"separate-group grandchild holds compiler output\n")
+        os.write(2, b"separate-group grandchild diagnostic\n")
+        if "HTTPS_PROXY" in os.environ:
+            os.write(2, os.environ["HTTPS_PROXY"].encode())
         mark("grandchild")
     else:
         mark("helper")
@@ -147,11 +150,8 @@ with open(sys.argv[1], "rb") as log:
     });
     const roles = ['compiler', 'helper', 'grandchild'];
     const ready = () => [loggerReady, ...roles.map(role => join(root, role))].every(path => existsSync(path));
-    const marker = 'separate-group grandchild holds compiler output';
-    const visible = proxy ? 'archive diagnostics withheld' : marker;
-
     try {
-      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(visible)), 'process markers and live diagnostic');
+      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(withheld)), 'process markers and status notice');
       assert(ready(), diagnostic);
       const [[compilerPid, supervisorPid, group, session], [helperPid, compilerParent, helperGroup, helperSession],
         [grandchildPid, helperParent, grandchildGroup, grandchildSession]] = roles.map(role =>
@@ -163,17 +163,18 @@ with open(sys.argv[1], "rb") as log:
       assert.deepEqual([helperSession, grandchildSession], [session, session]);
 
       if (signal) {
-        assert(stdout.includes(visible), diagnostic);
+        assert(stdout.includes(withheld), diagnostic);
         assert.equal(child.kill(signal), true);
       }
       await waitFor(() => nextCheckoutStarted, 'wrapper exit and next-checkout probe');
       assert.equal(child.exitCode, exitCode, diagnostic);
       const retained = readFileSync(log, 'utf8');
-      assert(retained.includes(visible));
-      if (signal) {
-        for (const sink of [retained, stdout]) assert(sink.includes('wrapper cancelled with status ' + exitCode));
+      for (const sink of [retained, stdout + diagnostic]) {
+        assert(sink.includes(withheld));
+        assert(sink.includes('compiler exited with status ' + (signal ? 143 : exitCode)));
+        if (signal) assert(sink.includes('wrapper cancelled with status ' + exitCode));
+        assert(!sink.includes('separate-group grandchild diagnostic') && !sink.includes(authenticatedProxy));
       }
-      if (proxy) assert(!retained.includes(marker) && !stdout.includes(marker));
       for (const pid of [compilerPid, helperPid, grandchildPid]) {
         assert.equal(running(pid), false, `archive descendant ${pid} survived wrapper exit`);
       }
@@ -227,12 +228,11 @@ fi
       const proxy = success ? 'http://plain-proxy.example.invalid:8080' : authenticatedProxy;
       const tracePath = join(root, 'trace.json');
       const tls = proxyTlsNames.includes(input);
+      env.ARCHIVE_TEST_LEAF_COMPILER = '1';
       env.ARCHIVE_TEST_INPUT = tls ? 'tls' : (['included-config', 'injected-config'].includes(input) ? 'config' : input);
       if (tls) {
         env.ARCHIVE_TEST_TLS_NAME = input;
         env[input] = proxy;
-        env.ARCHIVE_TEST_LEAF_COMPILER = '1';
-        env.ARCHIVE_TEST_DEVELOPER = join(root, 'Synthetic Developer');
       }
       env.ARCHIVE_TEST_EXPECTED_TRANSPORT = proxy;
       env.ARCHIVE_TEST_EXIT = success ? '0' : '65';
@@ -275,7 +275,7 @@ fi
   });
 }
 
-test('archive without transport overrides retains compiler output while disabling Git tracing', () => {
+test('archive without transport overrides retains a status log and disables Git tracing', () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-quiet-git-'));
   try {
     const {env, wrapper} = prepareFixture(root, '#!/bin/bash\n/usr/bin/git config --get fixture.diagnostic\n');
@@ -283,12 +283,13 @@ test('archive without transport overrides retains compiler output while disablin
     writeFileSync(env.GIT_CONFIG_GLOBAL, '[trace2]\neventTarget = ' + tracePath + '\n[fixture]\ndiagnostic = ordinary compiler output\n');
     env.GIT_TRACE = '1';
     env.GIT_CURL_VERBOSE = '1';
+    env.ARCHIVE_TEST_LEAF_COMPILER = '1';
     const child = spawnSync('bash', [wrapper], {env, encoding: 'utf8', timeout: 20000});
     assert.ifError(child.error);
     assert.equal(child.status, 0);
-    assert.match(child.stdout, /(?:^|\n)ordinary compiler output\n$/u);
-    assert.doesNotMatch(child.stdout, /trace:/u);
-    assert.equal(child.stderr, '');
+    assert.match(child.stdout, /compiler exited with status 0/u);
+    assert.doesNotMatch(child.stdout + child.stderr, /ordinary compiler output|trace:/u);
+    assert.match(child.stderr, /verification exited with status 0/u);
     assert.equal(readFileSync(join(root, 'xcodebuild.log'), 'utf8'), child.stdout);
     assert.equal(existsSync(tracePath), false, 'Git must not retain a config-specified trace file');
   } finally {
@@ -322,83 +323,122 @@ function runTransportFixture(root, fixture, status) {
   return [child.stdout + child.stderr, readFileSync(join(root, 'xcodebuild.log'), 'utf8')];
 }
 
-function assertTransportOutput(sinks, privateOutput) {
-  for (const sink of sinks) {
-    assert.equal(sink.includes('archive diagnostics withheld'), privateOutput);
-    for (const value of [authenticatedProxy, 'compiler stdout:', 'compiler stderr:']) {
-      assert.equal(sink.includes(value), !privateOutput);
+function assertNoRawDiagnostics([console, retained], pattern) {
+  const sinks = [['console', console], ['xcodebuild.log', retained]];
+  assert.deepEqual(sinks.filter(([, output]) => pattern.test(output)).map(([name]) => name), [],
+    'sinks containing raw transport diagnostics');
+}
+
+test('archive contains a SwiftPM mirror path token with the mirror file as the only transport override', () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-mirror-'));
+  try {
+    const {env, wrapper} = prepareFixture(root, String.raw`#!/bin/bash
+exec "$ARCHIVE_TEST_PYTHON" -I -B -c '
+import json, os, sys
+with open(os.environ["SWIFTPM_MIRROR_CONFIG"]) as config:
+    mirror = json.load(config)["object"][0]["mirror"]
+assert "fixture-mirror-path-token" in mirror
+print("mirror fetch failed: " + mirror)
+print("mirror fetch failed: " + mirror, file=sys.stderr)
+sys.exit(65)
+'
+`);
+    const mirror = 'https://mirror.example.invalid/packages/fixture-mirror-path-token/Firebase.git';
+    env.SWIFTPM_MIRROR_CONFIG = join(root, 'mirrors.json');
+    env.ARCHIVE_TEST_LEAF_COMPILER = '1';
+    writeFileSync(env.SWIFTPM_MIRROR_CONFIG, JSON.stringify({
+      version: 1, object: [{original: 'https://git.example.invalid/Firebase.git', mirror}],
+    }));
+    const sinks = runTransportFixture(root, {env, wrapper}, 65);
+    assertNoRawDiagnostics(sinks, /mirror fetch failed|mirror\.example\.invalid|fixture-mirror-path-token/u);
+    for (const sink of sinks) {
+      assert.match(sink, /compiler exited with status 65/u);
     }
+  } finally {
+    rmSync(root, {recursive: true, force: true});
   }
-}
+});
 
-const clearPolicy = {HTTPSEnable: 0, ProxyAutoConfigEnable: false, ExceptionsList: ['*.local'],
-  __SCOPED__: {en0: {FTPPassive: 1, ProxyAutoDiscoveryEnable: 0}}};
-for (const [name, policy, privateOutput = true] of [
-  ['clear scoped policy', clearPolicy, false],
-  ['enabled HTTPS', {HTTPSEnable: 1, HTTPSProxy: authenticatedProxy}],
-  ['PAC URL presence', {ProxyAutoConfigURLString: authenticatedProxy}],
-  ['auto discovery', {ProxyAutoDiscoveryEnable: 1}],
-  ['scoped PAC script', {__SCOPED__: {en0: {ProxyAutoConfigJavaScript: authenticatedProxy}}}],
-  ['supplemental policy', {__SUPPLEMENTAL__: [{HTTPSEnable: 1, HTTPSProxy: authenticatedProxy}]}],
-  ['malformed enable flag', {HTTPSEnable: '0'}],
-  ['unknown policy', {NewPolicy: authenticatedProxy}],
-  ['missing result', null],
-  ['probe timeout', 'timeout'],
-  ['unavailable probe', 'unavailable'],
-]) {
-  test('archive diagnostics with synthetic macOS policy: ' + name, {skip: process.platform !== 'darwin'}, () => {
-    const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-system-proxy-'));
+for (const [compilerStatus, wrapperStatus] of [[65, 65], [0, 79]]) {
+  test('archive contains transport changes first read after startup with compiler status ' + compilerStatus, () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-late-config-'));
     try {
-      const fixture = transportFixture(root, 0);
-      fixture.env.ARCHIVE_TEST_SYSTEM_POLICY = typeof policy === 'string' ? policy : JSON.stringify(policy);
-      const sinks = runTransportFixture(root, fixture, 0);
-      assertTransportOutput(sinks, privateOutput);
-      assert.equal(existsSync(join(root, 'verified')), true);
-      assert.equal(sinks[0].includes('verifier output:'), !privateOutput);
-      assert.equal(sinks[1].includes('verifier output:'), false);
+      const compilerScript = String.raw`#!/bin/bash
+if git config --get http.proxy; then exit 68; fi
+printf '[http]\nproxy = %s\n' "$ARCHIVE_TEST_DIAGNOSTIC" > "$GIT_CONFIG_GLOBAL"
+proxy="$(git config --get http.proxy)" || exit 69
+test "$proxy" = "$ARCHIVE_TEST_DIAGNOSTIC" || exit 70
+printf 'late compiler stdout: %s\n' "$proxy"
+printf 'late compiler stderr: %s\n' "$proxy" >&2
+exit "$ARCHIVE_TEST_EXIT"
+`;
+      const verifierScript = String.raw`
+if [[ "$1" == */verify-ios-archive.py ]]; then
+  proxy="$(git config --get http.proxy)" || exit 71
+  test "$proxy" = "$ARCHIVE_TEST_DIAGNOSTIC" || exit 72
+  touch "$IOS_CI_ROOT/verified"
+  printf 'late verifier stdout: %s\n' "$proxy"
+  printf 'late verifier stderr: %s\n' "$proxy" >&2
+  exit 79
+fi
+if [[ "$3" == */ios-ci-storage.py ]]; then touch "$IOS_CI_ROOT/sealed"; fi
+`;
+      const {env, wrapper} = prepareFixture(root, compilerScript, verifierScript);
+      Object.assign(env, {ARCHIVE_TEST_LEAF_COMPILER: '1', ARCHIVE_TEST_DIAGNOSTIC: authenticatedProxy,
+        ARCHIVE_TEST_EXIT: String(compilerStatus)});
+      writeFileSync(env.GIT_CONFIG_GLOBAL, '');
+      const sinks = runTransportFixture(root, {env, wrapper}, wrapperStatus);
+      assertNoRawDiagnostics(sinks, /late (compiler|verifier)|fixture-proxy|proxy\.example\.invalid/u);
+      for (const sink of sinks) {
+        assert(sink.includes('compiler exited with status ' + compilerStatus));
+      }
+      const [console] = sinks;
+      assert.equal(console.includes('verification exited with status 79'), compilerStatus === 0);
+      assert.equal(existsSync(join(root, 'verified')), compilerStatus === 0);
+      assert.equal(existsSync(join(root, 'sealed')), false);
     } finally {
       rmSync(root, {recursive: true, force: true});
     }
   });
 }
 
-for (const [name, helper, override] of [
-  ['stock helper', 'osxkeychain'],
-  ['custom bundled helper', '!echo ' + authenticatedProxy],
-  ['empty additional helper', 'osxkeychain\nhelper ='],
-  ['global helper', 'osxkeychain', 'global'],
-  ['explicit system override', 'osxkeychain', 'system'],
-]) {
-  test('archive diagnostics with synthetic Xcode Git: ' + name, {skip: process.platform !== 'darwin'}, () => {
-    const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-xcode-git-'));
-    try {
-      const fixture = transportFixture(root, 65);
-      const developer = join(root, 'Synthetic Xcode', 'Developer');
-      const bundled = join(developer, 'usr/share/git-core/gitconfig');
-      mkdirSync(join(bundled, '..'), {recursive: true});
-      writeFileSync(bundled, '[credential]\nhelper = ' + helper + '\n');
-      fixture.env.ARCHIVE_TEST_DEVELOPER = developer;
-      delete fixture.env.GIT_CONFIG_NOSYSTEM;
-      if (override === 'global') writeFileSync(fixture.env.GIT_CONFIG_GLOBAL, '[credential]\nhelper = osxkeychain\n');
-      if (override === 'system') fixture.env.GIT_CONFIG_SYSTEM = bundled;
-      const sinks = runTransportFixture(root, fixture, 65);
-      assertTransportOutput(sinks, name !== 'stock helper');
-      assert.equal(existsSync(join(root, 'verified')), false);
-    } finally {
-      rmSync(root, {recursive: true, force: true});
+test('archive preserves the selected Xcode Git on PATH and emits safe failure status', () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-xcode-git-'));
+  try {
+    const compilerScript = String.raw`#!/bin/bash
+test "$(command -v git)" = "$DEVELOPER_DIR/usr/bin/git" || exit 68
+exec git fixture-fetch
+`;
+    const {env, wrapper} = prepareFixture(root, compilerScript);
+    const developer = join(root, 'Synthetic Xcode', 'Developer');
+    const git = join(developer, 'usr/bin/git');
+    mkdirSync(join(git, '..'), {recursive: true});
+    writeFileSync(git, String.raw`#!/bin/bash
+test "$1" = fixture-fetch || exit 69
+touch "$IOS_CI_ROOT/xcode-git-used"
+printf 'synthetic Xcode Git diagnostic: %s\n' "$ARCHIVE_TEST_DIAGNOSTIC" >&2
+exit 65
+`, {mode: 0o755});
+    Object.assign(env, {DEVELOPER_DIR: developer, PATH: join(developer, 'usr/bin') + ':' + env.PATH,
+      ARCHIVE_TEST_LEAF_COMPILER: '1', ARCHIVE_TEST_DIAGNOSTIC: authenticatedProxy});
+    for (const sink of runTransportFixture(root, {env, wrapper}, 65)) {
+      assert.match(sink, /archive diagnostics withheld because transport settings can change/u);
+      assert.match(sink, /compiler exited with status 65/u);
+      assert.doesNotMatch(sink, /synthetic Xcode Git diagnostic|fixture-proxy/u);
     }
-  });
-}
+    assert.equal(existsSync(join(root, 'xcode-git-used')), true);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
 
-for (const [phase, wrapperStatus] of [['config-probe', 143], ['after-waitpid', 130]]) {
+for (const [phase, wrapperStatus] of [['before-spawn', 143], ['after-waitpid', 130]]) {
   test('private archive separates cancellation from compiler status at ' + phase, () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-wrapper-status-'));
     try {
       const fixture = transportFixture(root, 65);
       fixture.env.ARCHIVE_TEST_CANCELLATION = phase;
       const spawned = phase === 'after-waitpid';
-      if (spawned) fixture.env.HTTPS_PROXY = authenticatedProxy;
-      else writeFileSync(fixture.env.GIT_CONFIG_GLOBAL, '[http]\nproxy = ' + authenticatedProxy + '\n');
       const sinks = runTransportFixture(root, fixture, wrapperStatus);
       assert.equal(existsSync(join(root, 'compiler-started')), spawned);
       assert.equal(existsSync(join(root, 'verified')), false);
@@ -415,7 +455,7 @@ for (const [phase, wrapperStatus] of [['config-probe', 143], ['after-waitpid', 1
   });
 }
 
-test('a stalled Actions console cannot throttle the compiler log or cancellation', async () => {
+test('a stalled Actions console cannot throttle compiler output disposal or cancellation', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-stalled-console-'));
   const {env, wrapper} = prepareFixture(root, `#!/bin/bash
 exec "$ARCHIVE_TEST_PYTHON" -c '
@@ -426,6 +466,7 @@ pathlib.Path(os.environ["IOS_CI_ROOT"], "flood-complete").write_text(str(os.getp
 time.sleep(15)
 '
 `);
+  env.ARCHIVE_TEST_LEAF_COMPILER = '1';
   const child = spawn('bash', [wrapper], {env, stdio: ['ignore', 'pipe', 'pipe']});
   const ready = join(root, 'flood-complete');
   let diagnostic = '';
@@ -438,7 +479,8 @@ time.sleep(15)
     await waitFor(() => child.exitCode !== null, 'cancellation with stdout blocked');
     assert.equal(child.exitCode, 143, diagnostic);
     const retained = readFileSync(join(root, 'xcodebuild.log'), 'utf8');
-    assert.match(retained, /end of flood\nunsigned archive compiler exited with status 143\nunsigned archive wrapper cancelled with status 143\n$/u);
+    assert.doesNotMatch(retained, /end of flood/u);
+    assert.match(retained, /unsigned archive compiler exited with status 143\nunsigned archive wrapper cancelled with status 143\n$/u);
     assert.equal(running(Number(readFileSync(ready, 'utf8'))), false);
   } finally {
     child.stdout.resume();
@@ -455,6 +497,7 @@ printf 'compiler stdout\\n'
 printf 'compiler stderr\\n' >&2
 exit 65
 `);
+    env.ARCHIVE_TEST_LEAF_COMPILER = '1';
     const options = {env, timeout: 10000, stdio: ['ignore', 'pipe', 'pipe']};
     try {
       if (console === 'closed descriptors') {
@@ -472,7 +515,9 @@ exit 65
           if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
         }
       }
-      assert.equal(readFileSync(join(root, 'xcodebuild.log'), 'utf8'), 'compiler stdout\ncompiler stderr\n');
+      const retained = readFileSync(join(root, 'xcodebuild.log'), 'utf8');
+      assert.match(retained, /compiler exited with status 65/u);
+      assert.doesNotMatch(retained, /compiler stdout|compiler stderr/u);
     } finally {
       rmSync(root, {recursive: true, force: true});
     }
@@ -506,7 +551,8 @@ for (const [phase, selector] of [
   test(`cancel during ${phase} drains the stage session and its separate group`, async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), `ios-archive-${phase}-`));
     const {env, wrapper} = prepareFixture(root, '#!/bin/bash\necho compiler complete\n',
-      `if ${selector}; then\n${stageProcess}\nfi`);
+      `if ${selector}; then\nprintf 'synthetic stage diagnostic: %s\\n' "$ARCHIVE_TEST_DIAGNOSTIC" >&2\n${stageProcess}\nfi`);
+    env.ARCHIVE_TEST_DIAGNOSTIC = authenticatedProxy;
     const child = spawn('bash', [wrapper], {env, stdio: ['ignore', 'pipe', 'pipe']});
     let diagnostic = '';
     child.stderr.on('data', data => { diagnostic += data; });
@@ -524,7 +570,10 @@ for (const [phase, selector] of [
       await waitFor(() => child.exitCode !== null, `${phase} cleanup`);
       assert.equal(child.exitCode, 143, diagnostic);
       for (const pid of new Set([stage, worker, helper])) assert.equal(running(pid), false, `stage process ${pid} survived`);
-      assert.equal(readFileSync(join(root, 'xcodebuild.log'), 'utf8'), 'compiler complete\n');
+      const retained = readFileSync(join(root, 'xcodebuild.log'), 'utf8');
+      assert.match(retained, /compiler exited with status 0/u);
+      assert.match(diagnostic, /wrapper cancelled with status 143/u);
+      assert.doesNotMatch(retained + diagnostic, /compiler complete|synthetic stage diagnostic|fixture-proxy/u);
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
       rmSync(root, {recursive: true, force: true});
