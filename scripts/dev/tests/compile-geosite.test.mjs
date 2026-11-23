@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
-  copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync,
-  symlinkSync, writeFileSync,
+  chmodSync, copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync,
+  realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import {basename, delimiter, dirname, join} from 'node:path';
@@ -197,6 +197,32 @@ test('preloading the CLI runs the entry once and leaves syntax checks, eval and 
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, stdout, flags[0]);
+    assert.equal(result.stderr, '');
+  }
+});
+
+test('preloaded aliases do not dispatch a different CLI entry', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-entry-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const alias = join(dir, 'geosite.mjs');
+  symlinkSync(cli, alias, 'file');
+  const direct = spawnSync(process.execPath, [cli, '--help'], {encoding: 'utf8'});
+  assert.equal(direct.status, 0, direct.stderr);
+  for (const {flags, preload, entry, nodeOptions = ''} of [
+    {flags: [], preload: cli, entry: alias},
+    {flags: ['--preserve-symlinks-main'], preload: cli, entry: alias},
+    {flags: [], preload: cli, entry: alias, nodeOptions: '"--preserve-symlinks-main"'},
+    {flags: ['--preserve_symlinks_main=false'], preload: cli, entry: alias},
+    {flags: ['--no-preserve-symlinks-main'], preload: cli, entry: alias, nodeOptions: '--preserve-symlinks-main'},
+    {flags: ['--preserve-symlinks'], preload: alias, entry: cli},
+    {flags: ['--preserve-symlinks', '--preserve-symlinks-main'], preload: alias, entry: alias},
+  ]) {
+    const result = spawnSync(process.execPath, [...flags, '--import', preload, entry, '--help'], {
+      encoding: 'utf8', env: {...process.env, NODE_OPTIONS: nodeOptions},
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, direct.stdout, JSON.stringify({flags, preload, entry, nodeOptions}));
     assert.equal(result.stderr, '');
   }
 });
@@ -703,6 +729,34 @@ test('atomic publication preserves entries introduced at the publish syscall',
       assert.deepEqual(readdirSync(dir).sort(), ['catalogue.json', 'known.json', 'publish.cjs']);
       rmSync(output, {recursive: true});
     }
+  });
+
+test('publication requires a protected output directory chain',
+  {skip: !pinnedInputs && 'set AEGIS_GEOSITE_INPUT_DIR to the two captured pinned files'}, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-permissions-test-'));
+    t.after(() => rmSync(dir, {recursive: true, force: true}));
+    const shared = join(dir, 'shared');
+    const nested = join(shared, 'nested');
+    mkdirSync(nested, {recursive: true});
+    chmodSync(shared, 0o777);
+    const args = [cli, '--dlc', join(pinnedInputs, 'dlc.dat'),
+      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output'];
+    for (const parent of [shared, nested]) {
+      const result = spawnSync(process.execPath, [...args, join(parent, 'catalogue.json')], {encoding: 'utf8'});
+      assert.ifError(result.error);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /trusted output directory/i);
+    }
+    assert.deepEqual(readdirSync(shared), ['nested']);
+    assert.deepEqual(readdirSync(nested), []);
+
+    chmodSync(shared, 0o1777);
+    const output = join(nested, 'catalogue.json');
+    const result = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(readFileSync(output, 'utf8')).group, 'DEBIAN');
+    assert.deepEqual(readdirSync(nested), ['catalogue.json']);
   });
 
 test('publication creates its temporary file beside the filesystem-resolved destination',

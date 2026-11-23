@@ -6,7 +6,7 @@ import {
   rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
 import {isIP} from 'node:net';
-import {basename, dirname, join} from 'node:path';
+import {basename, dirname, join, resolve} from 'node:path';
 import {domainToASCII, fileURLToPath, URL} from 'node:url';
 import {parseArgs} from 'node:util';
 
@@ -378,6 +378,18 @@ function checkExistingCatalogue(path, expected, existing) {
   throw new Error(conflict);
 }
 
+function requireTrustedOutputDirectory(path, uid) {
+  if (uid === undefined) throw new Error('Publishing requires POSIX directory permissions');
+  const parent = dirname(path);
+  if (parent !== path) requireTrustedOutputDirectory(parent, uid);
+  const info = lstatSync(path);
+  const trustedOwner = info.uid === uid || info.uid === 0;
+  const sharedWithoutStickyBit = (info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0;
+  if (!info.isDirectory() || !trustedOwner || sharedWithoutStickyBit) {
+    throw new Error('Choose a trusted output directory: ' + path);
+  }
+}
+
 function writeAtomically(path, data, inputs) {
   const name = basename(path);
   if (!name || name === '.' || name === '..' || !path.endsWith(name)) {
@@ -391,6 +403,7 @@ function writeAtomically(path, data, inputs) {
     checkExistingCatalogue(destination, data, existing);
     return;
   }
+  requireTrustedOutputDirectory(directory, process.geteuid?.());
   // mkdtemp creates an owner-only directory on the destination filesystem.
   const staging = mkdtempSync(join(directory, '.geosite-'));
   const temporary = join(staging, 'catalogue');
@@ -470,6 +483,19 @@ function main() {
   }
 }
 
+function mainEntryPath(argument) {
+  // Node reads NODE_OPTIONS first, with command-line singleton flags taking precedence.
+  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
+  const preserveFlag = '--preserve-symlinks-main';
+  const preserveOption = [...environment.map((flag) => flag.replaceAll('"', '')), ...process.execArgv]
+    .map((flag) => flag.split('=', 1)[0].replaceAll('_', '-'))
+    .findLast((flag) => flag === preserveFlag || flag === '--no-preserve-symlinks-main');
+  if (preserveOption === preserveFlag) {
+    return resolve(argument);
+  }
+  return realpathSync.native(argument);
+}
+
 function isMain() {
   // A preloaded entry is evaluated only once, with import.meta.main set to false.
   // Syntax checks, eval, and print can also have the CLI path in argv[1].
@@ -479,7 +505,7 @@ function isMain() {
   const moduleUrl = import.meta.url;
   if (moduleUrl.includes('?') || moduleUrl.includes('#')) return false;
   try {
-    return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(moduleUrl));
+    return mainEntryPath(process.argv[1]) === fileURLToPath(moduleUrl);
   } catch {
     return false;
   }
