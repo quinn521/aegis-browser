@@ -1,23 +1,12 @@
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
 
 const root = resolve(import.meta.dirname, '../../..');
 const scripts = join(root, 'scripts/ci');
-
-test('shell coverage runner parses and its Bash parent and child enforce the fixture contract', () => {
-  execFileSync('bash', ['-n', join(scripts, 'run-shell-coverage.sh')]);
-  const parent = join(scripts, 'platform-tests/kcov-parent-fixture.sh');
-  const child = join(scripts, 'platform-tests/kcov-child-fixture.sh');
-  const entry = lstatSync(parent);
-  assert.ok(entry.isFile());
-  assert.equal(entry.mode & 0o111, 0);
-  assert.equal(execFileSync('bash', [parent], {encoding: 'utf8'}), 'parent-and-child-covered\n');
-  assert.equal(spawnSync('bash', [child, 'wrong-value']).status, 1);
-});
 
 test('Bash coverage keeps only real production shell sources and retains zero-hit files', () => {
   const runnerPath = join(scripts, 'run-shell-coverage.sh');

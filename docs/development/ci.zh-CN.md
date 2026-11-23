@@ -246,7 +246,7 @@ Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS
 
 旧目标分支缺少补全脚本时，workflow 使用内嵌的兼容版本。只有缺失的字段才补全，显式输出的 `false` 会保留。缺失的 `integrate` 和 `deep` 跟随旧版的 `ios` 或 `macos` 结果。Android、Windows、Linux 的缺省值均为 `false`。
 
-平台取所有改动路径的并集。Conventional Commit 类型决定阶段，scope 不参与。非 Conventional 或空主题、删除、重命名、模式变化和符号链接都会提高阶段。分类器或缺省补全脚本变更时，五个平台都选中并进入深度阶段。文档轻量路由仅适用于已准入 PR 中的白名单普通内容修改。
+平台取所有改动路径的并集。Conventional Commit 类型决定阶段，scope 不参与。非 Conventional 或空主题、删除、重命名、模式变化和符号链接都会提高阶段。分类器自身变更时，五个平台都进入深度阶段。缺省补全脚本也影响五个平台，其普通内容修改按提交类型选择阶段。文档轻量路由仅适用于已准入 PR 中的白名单普通内容修改。
 
 | 平台 | 选中路径 |
 | --- | --- |

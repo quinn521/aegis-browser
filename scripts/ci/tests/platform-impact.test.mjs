@@ -308,7 +308,8 @@ test('paths select platforms and commit types select stage depth', () => {
     const aabCertificate = 'scripts/release/VerifiedAabCertificate.java';
     save('README.md', 'base');
     save('docs/ios-webkit-protection.en.md', 'initial');
-    for (const path of [commonScript, ...iosArchiveTests, aabCertificate]) save(path, 'initial');
+    const defaultsPath = 'scripts/ci/fill-platform-route-defaults.mjs';
+    for (const path of [commonScript, ...iosArchiveTests, aabCertificate, defaultsPath]) save(path, 'initial');
     git('add', '.'); git('commit', '-m', 'base');
     const before = git('rev-parse', 'HEAD');
     const pr = (mutate, message) => {
@@ -364,8 +365,12 @@ test('paths select platforms and commit types select stage depth', () => {
       ]) save(path, 'changed');
     }, 'test(android): cover release helpers');
     assert.deepEqual(route(releaseContracts), {...iosRoute, deep: false});
-    const defaults = pr(() => save('scripts/ci/fill-platform-route-defaults.mjs', '// edited'), 'ci: update routing defaults');
-    assert.deepEqual(route(defaults), {...iosRoute, android: true, macos: true, windows: true, linux: true});
+    const allPlatforms = {...iosRoute, android: true, windows: true, linux: true, macos: true};
+    for (const [type, integrate, deep] of [['ci', false, false], ['test', true, false], ['fix', true, true]]) {
+      const defaults = pr(() => save(defaultsPath, '// edit'), `${type}: update routing defaults`);
+      assert.deepEqual(route(defaults), {...allPlatforms, integrate, deep});
+      assert.equal(defaults.strict, false);
+    }
     const unknownRelease = pr(() => save('scripts/release/prepare-ios-access-core-extra.sh', 'unknown'), 'fix: repair helper');
     assert.deepEqual(route(unknownRelease), {...iosRoute, ios: false, macos: true});
     const mixedRelease = pr(() => {

@@ -554,7 +554,8 @@ test('Mac quality chain retains shared tests and isolates platform-specific exec
   for (const name of ['test:android-target', 'test:android-ui', 'test:scripts:android']) assert.ok(rootScripts['quality:android'].includes(name));
   assert.doesNotMatch(rootScripts['quality:android'], /winrm/u);
   assert.equal(rootScripts['quality:windows'], 'corepack pnpm --filter @gcsa-aegis/browser test:winrm-model-relay');
-  assert.equal(rootScripts['quality:linux'], 'node --test scripts/ci/tests/shell-coverage.test.mjs');
+  assert.doesNotMatch(rootScripts['ci:test'], /platform-tests|quality:linux/u);
+  assert.equal(rootScripts['quality:linux'], 'node --test scripts/ci/platform-tests/kcov-fixture.test.mjs scripts/ci/tests/shell-coverage.test.mjs');
 });
 
 test('required Android Python runner requires suite success and a complete Android case', () => {

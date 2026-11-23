@@ -59,10 +59,8 @@ const explanationPaths = new Set([
   'docs/plans/macos-access-toolbar-bubble-NOTES.md',
   'docs/plans/macos-access-bubble-session-NOTES.md',
 ]);
-const routeInputs = new Set([
-  'scripts/ci/platform-impact.mjs',
-  'scripts/ci/fill-platform-route-defaults.mjs',
-]);
+const routerPath = 'scripts/ci/platform-impact.mjs';
+const defaultsPath = 'scripts/ci/fill-platform-route-defaults.mjs';
 const conventionalTypes = new Set(['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'release', 'revert', 'style', 'test']);
 const isTypeName = value => {
   if (value.length === 0 || value.charCodeAt(0) < 97 || value.charCodeAt(0) > 122) return false;
@@ -215,7 +213,8 @@ for (const subject of subjects) {
 if (!legacyFull && changes.length > 0 && subjects.length === 0) nonConventional = true;
 const contentEdit = change => change.status === 'M' && change.beforeMode === '100644' && change.afterMode === '100644';
 const explanationOnly = changes.length > 0 && changes.every(change => explanationPaths.has(change.path) && contentEdit(change));
-const selfEdit = changes.some(change => routeInputs.has(change.path));
+const selfEdit = changes.some(change => change.path === routerPath);
+const defaultsEdit = changes.some(change => change.path === defaultsPath);
 const unsafe = changes.some(isUnsafe);
 const strict = selfEdit || unsafe || nonConventional;
 const docs = event === 'pull_request' && explanationOnly && !strict && process.env.CI_LIGHTWEIGHT_ADMITTED === 'true';
@@ -223,8 +222,8 @@ const platforms = blankPlatforms();
 let reason = 'path-and-type';
 if (docs) reason = 'verified-document-content';
 else if (event === 'pull_request' && explanationOnly && !strict) reason = 'document-content-unadmitted';
-else if (selfEdit) {
-  reason = 'router-self-edit';
+else if (selfEdit || defaultsEdit) {
+  reason = selfEdit ? 'router-self-edit' : 'route-defaults-edit';
   platforms.ios = true;
   platforms.android = true;
   platforms.macos = true;
