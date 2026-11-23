@@ -3,7 +3,7 @@
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
-  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync,
+  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync,
   rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
 import Module from 'node:module';
@@ -520,54 +520,27 @@ function main() {
   }
 }
 
-function readNodeConfig() {
-  // Read only a configuration file explicitly enabled in the Node command line.
-  const index = process.execArgv.findLastIndex((arg) => /^--(?:experimental[-_])?config[-_]file(?:=|$)/u.test(arg));
-  const flag = process.execArgv[index];
-  if (!flag && !readNodeOption('experimental-default-config-file')) return {};
-  const major = Number(process.versions.node.split('.')[0]);
-  const inlinePath = flag?.includes('=') ? flag.slice(flag.indexOf('=') + 1) : undefined;
-  // Older Node accepts a separate filename. In default-file mode the next token is another flag.
-  const next = process.execArgv[index + 1];
-  const separatePath = flag && next && !next.startsWith('-') ? next : undefined;
-  const path = inlinePath ?? separatePath ?? 'node.config.json';
-  const settings = JSON.parse(readFileSync(path, 'utf8'));
-  const selected = settings.configs?.find((item) => item.nodeVersion === major)?.config ?? settings;
-  return selected.nodeOptions ?? {};
-}
-
-function readNodeOption(name, config = {}) {
+function readNodeOption(name) {
   const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
   const enabled = '--' + name;
   const disabled = '--no-' + name;
   const option = [...environment.map((flag) => flag.replaceAll('"', '')), ...process.execArgv]
     .map((flag) => flag.split('=', 1)[0].replaceAll('_', '-'))
     .findLast((flag) => flag === enabled || flag === disabled);
-  return option === undefined ? config[name] : option === enabled;
+  return option === undefined ? undefined : option === enabled;
 }
 
-function entryReference(argument, config) {
-  // In URL-entry mode Node can leave the positional entry relative or as a URL.
-  if (readNodeOption('entry-url', config) ?? !isAbsolute(argument)) {
-    return new URL(argument, pathToFileURL(process.cwd() + sep));
-  }
-  return pathToFileURL(argument);
+function urlEntryReference(argument) {
+  return new URL(argument, pathToFileURL(process.cwd() + sep));
 }
 
-function isMain() {
-  if (import.meta.main === true) return true;
-  // A preloaded entry is evaluated only once, with import.meta.main set to false.
-  // Syntax checks, eval, and print can also have the CLI path in argv[1].
-  const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
-  if (!process.argv[1] || process.execArgv.some((arg) => nonEntryMode.test(arg))) return false;
+function legacyEntryMatches(argument) {
   try {
-    const config = readNodeConfig();
-    const reference = entryReference(process.argv[1], config);
-    const preserveMain = readNodeOption('preserve-symlinks-main', config) ??
+    const reference = (readNodeOption('entry-url') ?? !isAbsolute(argument))
+      ? urlEntryReference(argument) : pathToFileURL(argument);
+    const preserveMain = readNodeOption('preserve-symlinks-main') ??
       process.env.NODE_PRESERVE_SYMLINKS_MAIN === '1';
-    // With symlink preservation, Node retains the entry's serialized URL verbatim.
     if (preserveMain) return reference.href === import.meta.url;
-    // Reuse the loader's main-path resolution when a preload owns the entry module instance.
     const entry = Module._findPath(fileURLToPath(reference), null, true);
     if (!entry) return false;
     const url = pathToFileURL(entry);
@@ -579,7 +552,26 @@ function isMain() {
   }
 }
 
-if (isMain()) {
+function entrySource(reference) {
+  try {
+    return realpathSync.native(fileURLToPath(reference()));
+  } catch {
+    return undefined;
+  }
+}
+
+function couldBeEntry(argument) {
+  const moduleSource = entrySource(() => import.meta.url);
+  if (!moduleSource) return false;
+  // Node can interpret an argument as a path or a URL. Require an unambiguous file.
+  const candidates = new Set([
+    entrySource(() => pathToFileURL(argument)),
+    entrySource(() => urlEntryReference(argument)),
+  ].filter(Boolean));
+  return candidates.size === 1 && candidates.has(moduleSource);
+}
+
+function runCLI() {
   try {
     main();
   } catch (error) {
@@ -587,3 +579,46 @@ if (isMain()) {
     process.exitCode = 1;
   }
 }
+
+function dispatchCLI() {
+  if (import.meta.main === true) {
+    runCLI();
+    return;
+  }
+  const argument = process.argv[1];
+  // Syntax checks, eval, and print can also have the CLI path in argv[1].
+  const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
+  if (!argument || argument === '-' || process.execArgv.some((arg) => nonEntryMode.test(arg))) return;
+
+  if (typeof Module.registerHooks !== 'function') {
+    if (legacyEntryMatches(argument)) runCLI();
+    return;
+  }
+  if (!couldBeEntry(argument)) return;
+
+  // A preloaded module is evaluated once. Observe Node's actual root resolution
+  // to distinguish the CLI entry from a distinct URL of the same source.
+  const hook = Module.registerHooks({
+    resolve(specifier, context, nextResolve) {
+      if (context.parentURL !== undefined) return nextResolve(specifier, context);
+      try {
+        const resolution = nextResolve(specifier, context);
+        if (resolution.url === import.meta.url) runCLI();
+        return resolution;
+      } finally {
+        hook.deregister();
+        process.removeListener('beforeExit', finishLegacyEntry);
+      }
+    },
+  });
+
+  function finishLegacyEntry() {
+    hook.deregister();
+    runCLI();
+  }
+  // Node 22.15–22.17 have hooks but no public main marker. A direct entry has
+  // already been resolved when this file evaluates, so it has no later root hook.
+  if (import.meta.main === undefined) process.once('beforeExit', finishLegacyEntry);
+}
+
+dispatchCLI();

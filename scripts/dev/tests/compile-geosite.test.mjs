@@ -871,32 +871,47 @@ test('a Node config file can select a preloaded URL entry for verification',
     const output = join(dir, 'missing-catalogue.json');
     const args = ['--import', preload, cli + '?variant', '--dlc', join(pinnedInputs, 'dlc.dat'),
       '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output', output, '--verify'];
-    const env = {...process.env, NODE_OPTIONS: '', NODE_NO_WARNINGS: '1'};
-    const verifyMissing = (...flags) => {
-      const result = spawnSync(process.execPath, [...flags, ...args], {cwd: dir, encoding: 'utf8', env});
+    const env = {...process.env, NODE_NO_WARNINGS: '1'};
+    delete env.NODE_OPTIONS;
+    const verifyMissing = (flags, input) => {
+      const result = spawnSync(process.execPath, [...flags, ...args], {cwd: dir, encoding: 'utf8', env, input});
       assert.ifError(result.error);
       assert.equal(result.status, 1, result.stderr);
       assert.match(result.stderr, /ENOENT.*missing-catalogue\.json/);
       assert.equal(existsSync(output), false);
     };
-    verifyMissing(configFlag + '=' + config);
+    verifyMissing([configFlag + '=' + config]);
+    const disabled = spawnSync(process.execPath, [configFlag + '=' + config, ...args], {
+      cwd: dir, encoding: 'utf8', env: {...env, NODE_OPTIONS: '--no-entry-url'},
+    });
+    assert.ifError(disabled.error);
+    assert.equal(disabled.status, 1, disabled.stderr);
+    assert.match(disabled.stderr, /ERR_MODULE_NOT_FOUND/);
+    assert.doesNotMatch(disabled.stderr, /^compile-geosite:/m);
+
     const major = Number(process.versions.node.split('.')[0]);
     if (major < 26) {
       // Older runtimes consume a following config filename.
-      verifyMissing(configFlag, config);
+      verifyMissing([configFlag, config]);
     } else {
       const versioned = join(dir, 'versioned-options.json');
       writeFileSync(versioned, JSON.stringify({configs: [
         {nodeVersion: major + 1, config: {nodeOptions: {'entry-url': false}}},
         {nodeVersion: major, config: options},
       ]}));
-      verifyMissing(configFlag + '=' + versioned);
+      verifyMissing([configFlag + '=' + versioned]);
+      verifyMissing([configFlag + '=/dev/stdin'], JSON.stringify(options));
+    }
+    if (major === 22 && Number(process.versions.node.split('.')[1]) >= 23) {
+      const dotenv = join(dir, 'entry-options.env');
+      writeFileSync(dotenv, 'NODE_OPTIONS=--no-entry-url\n');
+      verifyMissing(['--env-file=' + dotenv, configFlag + '=' + config]);
     }
     const defaultFlag = '--experimental-default-config-file';
     if (help.stdout.includes(defaultFlag) || configFlag === '--config-file') {
       writeFileSync(join(dir, 'node.config.json'), JSON.stringify(options));
-      verifyMissing(help.stdout.includes(defaultFlag) ? defaultFlag : configFlag);
-      if (major >= 26 && configFlag !== '--config-file') verifyMissing(configFlag);
+      verifyMissing([help.stdout.includes(defaultFlag) ? defaultFlag : configFlag]);
+      if (major >= 26 && configFlag !== '--config-file') verifyMissing([configFlag]);
     }
   });
 
