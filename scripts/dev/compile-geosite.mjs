@@ -2,7 +2,7 @@
 
 import {createHash, randomUUID} from 'node:crypto';
 import {
-  closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync, statSync,
+  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, realpathSync, rmSync, statSync,
   writeFileSync,
 } from 'node:fs';
 import {isIP} from 'node:net';
@@ -309,8 +309,8 @@ function sha256(data) {
   return createHash('sha256').update(data).digest('hex');
 }
 
-function readExactFile(path, size, label) {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+function readExactFile(path, size, label, flags = 0) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | flags);
   try {
     const info = fstatSync(fd, {bigint: true});
     if (!info.isFile() || info.size !== BigInt(size)) throw new Error(label + ' must be a regular file of ' + size + ' bytes');
@@ -338,7 +338,9 @@ function readPinned(path, pin, label) {
 
 function checkOutput(path, namedPath, inputs) {
   const destination = lstatSync(path, {bigint: true, throwIfNoEntry: false});
-  if (destination && !destination.isFile()) throw new Error('Output destination must be a regular file');
+  if (destination && !destination.isFile()) {
+    throw new Error('Output destination must be a regular file. Use a fresh --output path.');
+  }
   const canonicalPath = destination ? realpathSync.native(path) : path;
   const sameFile = ({dev, ino}) => destination?.dev === dev && destination.ino === ino;
   if (inputs.some((input) => {
@@ -349,6 +351,23 @@ function checkOutput(path, namedPath, inputs) {
   })) {
     throw new Error('Output must be separate from the pinned input files');
   }
+  return destination;
+}
+
+function checkExistingCatalogue(path, expected, existing) {
+  const conflict = 'Existing output changed or differs from the pinned build: ' + path + '. Use a fresh --output path.';
+  if (existing?.size !== BigInt(expected.length)) throw new Error(conflict);
+  let opened;
+  try {
+    opened = readExactFile(path, expected.length, 'Existing output', constants.O_NOFOLLOW);
+  } catch (error) {
+    throw new Error(conflict, {cause: error});
+  }
+  const {data, info} = opened;
+  const current = lstatSync(path, {bigint: true, throwIfNoEntry: false});
+  const sameVersion = (other) => other?.dev === info.dev && other.ino === info.ino &&
+    other.size === info.size && other.ctimeNs === info.ctimeNs && other.mtimeNs === info.mtimeNs;
+  if (!sameVersion(existing) || !data.equals(expected) || !sameVersion(current)) throw new Error(conflict);
 }
 
 function writeAtomically(path, data, inputs) {
@@ -359,10 +378,13 @@ function writeAtomically(path, data, inputs) {
   // Resolve symlinks before processing any subsequent parent-directory segments.
   const directory = realpathSync.native(dirname(path));
   const destination = join(directory, name);
-  checkOutput(destination, path, inputs);
+  const existing = checkOutput(destination, path, inputs);
+  if (existing) {
+    checkExistingCatalogue(destination, data, existing);
+    return;
+  }
   const temporary = join(directory, '.geosite-' + randomUUID() + '.tmp');
   const fd = openSync(temporary, 'wx', 0o644);
-  let renamed = false;
   try {
     try {
       writeFileSync(fd, data);
@@ -371,10 +393,15 @@ function writeAtomically(path, data, inputs) {
       closeSync(fd);
     }
     checkOutput(destination, path, inputs);
-    renameSync(temporary, destination);
-    renamed = true;
+    // The filesystem creates the destination only if its name is still free.
+    try {
+      linkSync(temporary, destination);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      checkExistingCatalogue(destination, data, checkOutput(destination, path, inputs));
+    }
   } finally {
-    if (!renamed) rmSync(temporary, {force: true});
+    rmSync(temporary, {force: true});
   }
 }
 
@@ -433,9 +460,10 @@ function main() {
 }
 
 function isMain() {
-  if (typeof import.meta.main === 'boolean') return import.meta.main;
-  // Older Node exposes the source for both eval and print modes on process._eval.
-  if (process._eval !== undefined || !process.argv[1]) return false;
+  // A preloaded entry is evaluated only once, with import.meta.main set to false.
+  // Syntax checks, eval, and print can also have the CLI path in argv[1].
+  const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
+  if (!process.argv[1] || process.execArgv.some((arg) => nonEntryMode.test(arg))) return false;
   try {
     return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
   } catch {
