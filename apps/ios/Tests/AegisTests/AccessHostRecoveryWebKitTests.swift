@@ -19,11 +19,26 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     }
 
     private func assertDeferredLoadRetiredWithoutWebView(warmRules: Bool) async throws {
-        let coordinator = AccessHostStoreCoordinator(defaultLocationPrivacy: false)
-        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        let publisher = AccessProxyEntryPublisher { _, _ in
+            throw AccessSiteSessionError.nodeUnavailable
+        }
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, defaultLocationPrivacy: false)
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let windows = BrowserWindowStore()
+        let windowID = UUID()
+        let startup = SavedBrowserTab(id: UUID(), url: nil, groupID: nil)
+        let inactive = SavedBrowserTab(id: UUID(), url: nil, groupID: nil)
+        try windows.save(BrowserWindowSnapshot(id: windowID, tabs: [startup, inactive], activeTabID: startup.id))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     windowID: windowID, windowStore: windows,
+                                     preferences: BrowserPreferences(defaults: defaults))
         defer { browser.closeWindow() }
         browser.hostCoordinator = coordinator
-        let tab = try XCTUnwrap(browser.activeTab)
+        // The active tab creates a startup view. This tab has never owned one.
+        let tab = try XCTUnwrap(browser.standardTabs.first { $0.id == inactive.id })
+        XCTAssertFalse(tab.isResident)
         if warmRules { try await tab.prepareContentRulesForTests() }
         let host = try AccessSiteHost("localhost")
         arm(tab, host: host, port: 18_253, coordinator: coordinator)
@@ -35,25 +50,30 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertTrue(tab.isLoading)
         XCTAssertFalse(tab.isResident)
         XCTAssertFalse(store.proxyConfigurations.isEmpty)
+        XCTAssertEqual(tab.pendingAttachedLoadForTests?.url, warmRules ? url : nil)
 
-        var acknowledged = false
+        var receipt: (isLoading: Bool, loadingError: String?, isResident: Bool, parked: URLRequest?)?
         coordinator.retireManagedDocuments(identity: "window-terminal") {
-            acknowledged = true
-            XCTAssertFalse(tab.isLoading, "Pending navigation must be fenced before acknowledging retirement")
-            XCTAssertNotNil(tab.loadingError)
-            XCTAssertFalse(tab.isResident)
+            receipt = (tab.isLoading, tab.loadingError, tab.isResident, tab.pendingAttachedLoadForTests)
         }
-        XCTAssertTrue(acknowledged)
         XCTAssertTrue(store.proxyConfigurations.isEmpty)
+        let retired = try XCTUnwrap(receipt, "A tab that never owned a document must acknowledge synchronously")
+        XCTAssertFalse(retired.isLoading, "Pending navigation must be fenced before acknowledging retirement")
+        XCTAssertNotNil(retired.loadingError)
+        XCTAssertFalse(retired.isResident)
+        XCTAssertNil(retired.parked)
 
+        browser.activate(tab.id)
         let window = show(tab.webView)
         defer { window.isHidden = true }
         try await tab.prepareContentRulesForTests()
         await Task.yield()
         XCTAssertNil(tab.currentNavigationForTests)
         XCTAssertNil(tab.heldProxyRequestForTests)
+        XCTAssertNil(tab.pendingAttachedLoadForTests)
         XCTAssertFalse(tab.isLoading)
         XCTAssertNil(tab.webView.url)
+        XCTAssertEqual(publisher.provisionCount, 0)
     }
 
     func testFirstPublicNavigationUsesTheDefaultProtectedRoute() async throws {
@@ -731,11 +751,13 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let listenerPort: UInt16 = 18_254
         let listener = try await makeListener(port: listenerPort, tunnels: opener)
         try await listener.start()
-        defer { try? listener.stop() }
+        var cleanupListener: () -> Void = { try? listener.stop() }
+        defer { cleanupListener() }
         let origin = OriginReceipt(port: 18_255)
         try await origin.start()
         defer { origin.stop() }
-        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: listenerPort))
+        let publisher = readyPublisher(port: listenerPort)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher)
         let suite = UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -749,9 +771,14 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let url = try XCTUnwrap(URL(string: "http://localhost:\(origin.port)/managed-retirement"))
         let endpoint = AccessManagedProxyEndpoint(identity: "detached-document", generation: 1,
             loopbackHost: "127.0.0.1", port: listenerPort, state: .ready)
+        func retireListener(_ finish: @escaping @MainActor () -> Void) {
+            listener.suspend()
+            coordinator.retireManagedDocuments(identity: endpoint.identity, finish: finish)
+        }
         let scope = tab.browsingScopeID
         coordinator.setProxyEnabled(true, host: host, scopeID: scope, isPrivate: false)
         XCTAssertTrue(coordinator.registry.setEndpoint(endpoint, scopeID: scope, host: host, isPrivate: false))
+        cleanupListener = { retireListener { try? listener.stop() } }
         tab.load(url)
         let window = show(tab.webView)
         defer { window.isHidden = true }
@@ -777,6 +804,11 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             tab.load(blocked)
             XCTAssertEqual(tab.protectionIncident?.url, blocked)
             XCTAssertFalse(tab.isResident)
+            // Queue a navigation behind this exact document's terminal receipt.
+            // Retiring its listener must cancel it before the receipt arrives.
+            tab.load(url)
+            XCTAssertTrue(tab.isLoading)
+            XCTAssertFalse(tab.isResident)
         case .internalNavigation:
             tab.load(blank)
             XCTAssertNil(tab.boundHostName)
@@ -784,11 +816,16 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         }
         // Mirror the listener's production shutdown ordering. Keep the real
         // loopback socket bound until the registry supplies the document receipt.
-        listener.suspend()
         var socketStop: Result<Void, Error>?
-        coordinator.retireManagedDocuments(identity: endpoint.identity) {
-            XCTAssertTrue(store.proxyConfigurations.isEmpty)
+        var clearedStoreAtReceipt = false
+        cleanupListener = {}
+        retireListener {
+            clearedStoreAtReceipt = store.proxyConfigurations.isEmpty
             socketStop = Result { try listener.stop() }
+        }
+        if exit == .protectionIncident {
+            XCTAssertFalse(tab.isLoading)
+            XCTAssertNotNil(tab.loadingError)
         }
         XCTAssertNil(socketStop, "Dropping the tab reference is not a document receipt")
         XCTAssertEqual(listener.boundPort, listenerPort)
@@ -804,10 +841,17 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertNil(retainedView.loadHTMLString("<title>Cannot replace terminal navigation</title>", baseURL: nil))
         try await waitUntil(seconds: 10, { socketStop != nil }, message: "The retained view's terminal commit did not release the socket")
         try XCTUnwrap(socketStop).get()
+        XCTAssertTrue(clearedStoreAtReceipt)
         XCTAssertNil(listener.boundPort)
         XCTAssertNil(coordinator.registry.store(scopeID: scope, host: host, isPrivate: false))
         XCTAssertTrue(store.proxyConfigurations.isEmpty)
         XCTAssertEqual(retainedView.url, blank)
+        if exit == .protectionIncident {
+            XCTAssertFalse(tab.isResident)
+            XCTAssertFalse(tab.isLoading)
+            XCTAssertNotNil(tab.loadingError)
+            XCTAssertEqual(publisher.provisionCount, 0)
+        }
     }
 
     func testRetainedClosedPageStopsBeforeHostStoreRetirement() async throws {
@@ -1093,15 +1137,21 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
                 return URLSession(configuration: .ephemeral)
             }))
         let delayed = DelayedWindowTabCleanup(coordinator)
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
         let windows = BrowserWindowStore()
         let first = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
-                                   windowID: try windows.createWindow(), windowStore: windows)
+                                   windowID: try windows.createWindow(), windowStore: windows,
+                                   preferences: preferences)
         first.hostCoordinator = delayed
+        defer { first.closeWindow(); delayed.finish() }
         let old = try XCTUnwrap(first.activeTab), host = try AccessSiteHost("localhost")
         arm(old, host: host, port: 18_262, coordinator: coordinator)
         old.load(URL(string: "http://localhost:18263/page")!)
         let window = show(old.webView)
-        defer { window.isHidden = true; first.closeWindow() }
+        defer { window.isHidden = true }
         try await waitUntil {
             attach(old.webView, to: window)
             return old.url?.path == "/page" && !old.isLoading
@@ -1109,7 +1159,8 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let oldView = old.webView, oldStore = old.websiteDataStore
         first.closeWindow()
         try await waitUntil { delayed.pending.count == 1 }
-        let restored = BrowserSession(dataStore: first.dataStore, windowID: first.windowID, windowStore: windows)
+        let restored = BrowserSession(dataStore: first.dataStore, windowID: first.windowID, windowStore: windows,
+                                      preferences: preferences)
         restored.hostCoordinator = coordinator
         defer { restored.closeWindow() }
         let new = try XCTUnwrap(restored.activeTab)
@@ -1127,7 +1178,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         new.adoptPolicyMainFrameNavigationForTests(url: URL(string: "http://localhost:18263/recover")!)
         new.webView(new.webView, didFailProvisionalNavigation: nil,
                     withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotFindHost))
-        XCTAssertNotNil(coordinator.retryViaProxy(tab: new))
+        _ = try XCTUnwrap(coordinator.retryViaProxy(tab: new))
         try await waitUntil { gate.started }
         XCTAssertTrue(coordinator.runProbe(for: new, candidates: [host]))
         XCTAssertTrue(coordinator.snapshot(for: new).probeBusy)
@@ -1480,16 +1531,25 @@ private final class AnsweringStream: AccessRealityPathStream, @unchecked Sendabl
 @MainActor
 private final class DelayedWindowTabCleanup: BrowserHostStoreCoordinating {
     let base: AccessHostStoreCoordinator
-    var pending: [BrowserTab] = []
+    private(set) var pending: [BrowserTab] = []
+    private var released = false
     init(_ base: AccessHostStoreCoordinator) { self.base = base }
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool { base.wouldSwitchStore(tab: tab, url: url) }
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore? { base.dataStoreForMainFrame(tab: tab, url: url) }
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError) { base.mainFrameFailed(tab: tab, failure: failure, error: error) }
     func pendingRecoveryInvalidated(tab: BrowserTab) { base.pendingRecoveryInvalidated(tab: tab) }
-    func tabClosed(_ tab: BrowserTab) { pending.append(tab) }
+    func tabClosed(_ tab: BrowserTab) {
+        if released { base.tabClosed(tab) }
+        else { pending.append(tab) }
+    }
     func ordinaryHostStores() -> [WKWebsiteDataStore] { base.ordinaryHostStores() }
     func endPrivateSession(scopeID: String) { base.endPrivateSession(scopeID: scopeID) }
-    func finish() { let tabs = pending; pending = []; tabs.forEach { base.tabClosed($0) } }
+    func finish() {
+        released = true
+        let tabs = pending
+        pending = []
+        tabs.forEach { base.tabClosed($0) }
+    }
 }
 
 @MainActor

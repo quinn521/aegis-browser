@@ -20,7 +20,9 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         bridge.mkdir(parents=True)
         (bridge / "bridge.go").write_text("package bridge\n")
         self.lock = bridge.parent / "embedded-core-lock.json"
+        self.toolchain = {"go": "1.27.3", "gomobile": "golang.org/x/mobile@v0.0.0-20261011034528-197770444867"}
         self.lock.write_text(json.dumps({"status": "verified_build", "xrayCore": {"commit": "a" * 40},
+                                         "toolchain": self.toolchain,
                                          "artifacts": {key: "0" * 64 for key in core.SLICE_KEYS.values()}}))
         self.original = self.lock.read_bytes()
         self.products = self.root / "separate-build-output"
@@ -37,7 +39,15 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
 
     def record(self, **kwargs):
         def tool_output(args, **_kwargs):
-            return "\tmod\tgolang.org/x/mobile\tv-fixture\n" if args[:3] == ["go", "version", "-m"] else "fixture toolchain/source\n"
+            if args[:4] == ["go", "version", "-m", "-json"]:
+                path, version = self.toolchain["gomobile"].split("@")
+                return json.dumps({"Path": f"{path}/cmd/gomobile", "Main": {"Path": path, "Version": version}})
+            return {
+                "go": f"go version go{self.toolchain['go']} darwin/arm64\n",
+                "git": "a" * 40 + "\n",
+                "xcodebuild": "Xcode 27.0\nBuild version 27A266a\n",
+                "xcrun": "27.0\n",
+            }[args[0]]
         with patch.object(core.shutil, "which", return_value="/fixture/gomobile"), \
                 patch.object(core.subprocess, "check_output", side_effect=tool_output):
             return core.record(self.root, self.lock, self.products, "ci-rebuild", **kwargs)

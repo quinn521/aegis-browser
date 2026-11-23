@@ -251,6 +251,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     var currentAttemptIDForTests: String { attempt.navigationID }
     var currentNavigationForTests: WKNavigation? { pendingNavigation }
     var heldProxyRequestForTests: URLRequest? { pendingProxyRequest }
+    var pendingAttachedLoadForTests: URLRequest? { pendingAttachedLoad }
 
     /// Records the pending main-frame URL as committed. Unit tests have no WebKit commit callback.
     public func commitPendingMainFrameForTests() {
@@ -872,9 +873,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Keep the failed route selected while its document is fenced. An
     /// explicit navigation can acquire a replacement on its normal route.
     public func retireFailedProxyDocument(_ acknowledge: @escaping @MainActor () -> Void) {
-        loadTask?.cancel()
-        invalidateDeferredDocumentLoad()
-        isLoading = false
+        // Stop also cancels navigation waiting behind an older document's
+        // terminal receipt and invalidates any in-flight proxy recovery.
+        stop()
         loadingErrorPresentation = .resource("代理入口还不能使用")
         let hasDocument = loadedWebView != nil
         afterCurrentDocumentBecomesInert(acknowledge)

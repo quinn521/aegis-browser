@@ -3,15 +3,20 @@ set -euo pipefail
 # Builds AegisEmbeddedCore.xcframework from the thin StartInstance/Dial bridge.
 # Verifies the lock pin, then records digests. Refuses source_candidate packaging.
 usage() {
-  echo "usage: $0 --lock <embedded-core-lock.json> --output <dir>" >&2
+  echo "usage: $0 --lock <embedded-core-lock.json> --output <dir> [--record-for <xcode-root> <xcode-lock>]" >&2
   exit 2
 }
 lock=""
 output=""
+xcode_root=""
+xcode_lock=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --lock) lock="${2:-}"; shift 2 ;;
     --output) output="${2:-}"; shift 2 ;;
+    --record-for)
+      [[ -n "${2:-}" && -n "${3:-}" ]] || usage
+      xcode_root="$2"; xcode_lock="$3"; shift 3 ;;
     *) usage ;;
   esac
 done
@@ -19,6 +24,7 @@ done
 [[ -f "$lock" ]] || { echo "missing lock: $lock" >&2; exit 2; }
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+CALLER_DIR="$PWD"
 BRIDGE="$ROOT/apps/ios/EmbeddedCore/bridge"
 [[ -d "$BRIDGE" ]] || { echo "missing bridge: $BRIDGE" >&2; exit 2; }
 
@@ -38,12 +44,12 @@ PY
 
 COMMIT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["xrayCore"]["commit"])' "$lock")"
 export MISE_TRUSTED_CONFIG_PATHS="${MISE_TRUSTED_CONFIG_PATHS:-$ROOT}"
-if command -v mise >/dev/null 2>&1; then
+if [[ -z "${GOROOT:-}" ]] && command -v mise >/dev/null 2>&1; then
   GOROOT="$(mise where go@1.27.3 2>/dev/null || true)"
-  if [[ -n "${GOROOT:-}" ]]; then
-    export GOROOT
-    export PATH="$GOROOT/bin:$PATH:${GOPATH:-$HOME/go}/bin"
-  fi
+fi
+if [[ -n "${GOROOT:-}" ]]; then
+  export GOROOT
+  export PATH="$GOROOT/bin:$PATH:${GOPATH:-$HOME/go}/bin"
 fi
 export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 command -v go >/dev/null || { echo "go missing" >&2; exit 2; }
@@ -97,3 +103,10 @@ mv "$WORK/AegisEmbeddedCore.xcframework" "$DEST"
 printf '%s\n' "$BRIDGE_SHA256" > "$output/compiled-bridge.sha256"
 echo "wrote $DEST"
 echo "NOTE: freeze digests into the lock as verified_build before linking the app."
+if [[ -n "$xcode_root" ]]; then
+  cd "$CALLER_DIR"
+  # Record with the same selected Go and gomobile as the build above.
+  python3 -B "$ROOT/scripts/release/ios_embedded_core.py" record \
+    --root "$ROOT" --source-lock "$lock" --products "$output" \
+    --xcode-root "$xcode_root" --xcode-lock "$xcode_lock" --mode "${AEGIS_EMBEDDED_CORE_DIGEST_MODE:-strict}"
+fi
