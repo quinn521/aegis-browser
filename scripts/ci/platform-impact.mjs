@@ -238,8 +238,7 @@ else if (selfEdit) {
 }
 const typeList = [...types];
 const actualInputs = changes.filter(change => !explanationPaths.has(change.path) || !contentEdit(change));
-const pathRequiresContracts = actualInputs.some(({path}) =>
-  selectsIos(path) || selectsAndroid(path) || selectsMacos(path) || selectsWindows(path) || selectsLinux(path) || selectsShared(path));
+const pathRequiresContracts = actualInputs.length > 0;
 const pathRequiresArchive = actualInputs.some(({path}) => needsIosCompile(path));
 const deepByType = typeList.some(type => deepTypes.has(type));
 const deep = !docs && (legacyFull || selfEdit || pathRequiresArchive || strict

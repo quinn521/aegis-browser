@@ -267,25 +267,25 @@ test('platform routing binds real merge parents and rejects hidden product chang
     }
     run(() => { for (const path of [doc, ...iosDocs, ...macDocs]) save(path, 'updated'); }, documented);
     for (const path of executableDocs) {
-      const plan = run(() => {save(iosDocs[0], 'updated'); save(path, 'changed input');}, {...closed, macos: true, integrate: false, deep: false});
+      const plan = run(() => {save(iosDocs[0], 'updated'); save(path, 'changed input');}, {...closed, macos: true, integrate: true, deep: false});
       assert.equal(plan.macos, true, `unregistered or consumed document keeps the macOS contract route: ${path}`);
       assert.equal(plan.ios, false, `unregistered document must not open iOS archive: ${path}`);
     }
     run(() => {save(iosDocs[0], 'updated'); save('scripts/ci/platform-impact.mjs', 'console.log("docs=true")');}, {docs: false, ios: true, android: true, macos: true, windows: true, linux: true, integrate: true, deep: true});
-    run(() => {save(iosDocs[0], 'updated'); save('docs/ios-webkit-protection.new.md', 'new explanation');}, {...closed, macos: true, integrate: false, deep: false});
-    run(() => {save(macDocs[0], 'updated'); save('docs/plans/macos-access-phase1-evidence-NOTES.md', 'unreviewed neighbor');}, {...closed, macos: true, integrate: false, deep: false});
+    run(() => {save(iosDocs[0], 'updated'); save('docs/ios-webkit-protection.new.md', 'new explanation');}, {...closed, macos: true, integrate: true, deep: false});
+    run(() => {save(macDocs[0], 'updated'); save('docs/plans/macos-access-phase1-evidence-NOTES.md', 'unreviewed neighbor');}, {...closed, macos: true, integrate: true, deep: false});
     run(() => git('mv', '-f', iosDocs[0], iosDocs[1]), strictClosed);
     run(() => {save(doc, 'updated'); save('apps/ios/Feature.swift', 'invalid');}, {...closed, ios: true, integrate: true, deep: true});
     const iosOnly = run(() => save('apps/ios/Feature.swift', 'feature'), {...closed, ios: true, integrate: true, deep: true});
     assert.equal(iosOnly.macos, false);
-    run(() => save('unknown.file', 'unknown'), {...closed, macos: true, integrate: false, deep: false});
+    run(() => save('unknown.file', 'unknown'), {...closed, macos: true, integrate: true, deep: false});
     run(() => rmSync(join(root, doc)), strictClosed);
     run(() => git('mv', doc, 'docs/renamed.md'), {...closed, macos: true, integrate: true, deep: true});
     run(() => chmodSync(join(root, doc), 0o755), strictClosed);
     run(() => save('scripts/ci/platform-impact.mjs', 'console.log("ios=false")'), {docs: false, ios: true, android: true, macos: true, windows: true, linux: true, integrate: true, deep: true});
     git('rm', iosDocs[0]); git('commit', '-m', 'remove explanation from base');
     base = git('rev-parse', 'HEAD');
-    run(() => save(iosDocs[0], 'new registered path'), {...closed, macos: true, integrate: false, deep: false});
+    run(() => save(iosDocs[0], 'new registered path'), {...closed, macos: true, integrate: true, deep: false});
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
