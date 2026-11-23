@@ -142,11 +142,14 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(apply.isEnabled)
         let remove = app.buttons["access-test-node-remove"]
         XCTAssertTrue(reveal(remove, app, dragOffsetX: 0.96))
+        XCTAssertTrue(remove.isEnabled)
         remove.tap()
         // UIKit may expose both a popup wrapper and its button with this identifier.
         let confirm = app.sheets.buttons.matching(identifier: "access-test-node-confirm-remove").firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "One tap on Remove must present confirmation")
         confirm.tap()
+        XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(remove.waitForNonExistence(timeout: 5), "Confirmation must remove the visible saved-node action")
         XCTAssertTrue(saved.waitForNonExistence(timeout: 5))
     }
 

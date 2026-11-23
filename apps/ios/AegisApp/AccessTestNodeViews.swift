@@ -126,6 +126,8 @@ private struct AccessTestNodeDetailView: View {
                     confirmsRemoval = true
                 } label: {
                     Text("移除已保存的节点", tableName: "AccessTestNode")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(.interaction, Rectangle())
                 }
                 .disabled(editor.scan != nil)
                 .accessibilityIdentifier("access-test-node-remove")
