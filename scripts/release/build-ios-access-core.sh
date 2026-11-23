@@ -38,12 +38,12 @@ PY
 
 COMMIT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["xrayCore"]["commit"])' "$lock")"
 export MISE_TRUSTED_CONFIG_PATHS="${MISE_TRUSTED_CONFIG_PATHS:-$ROOT}"
-if command -v mise >/dev/null 2>&1; then
+if [[ -z "${GOROOT:-}" ]] && command -v mise >/dev/null 2>&1; then
   GOROOT="$(mise where go@1.27.3 2>/dev/null || true)"
-  if [[ -n "${GOROOT:-}" ]]; then
-    export GOROOT
-    export PATH="$GOROOT/bin:$PATH:${GOPATH:-$HOME/go}/bin"
-  fi
+fi
+if [[ -n "${GOROOT:-}" ]]; then
+  export GOROOT
+  export PATH="$GOROOT/bin:$PATH:${GOPATH:-$HOME/go}/bin"
 fi
 export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 command -v go >/dev/null || { echo "go missing" >&2; exit 2; }

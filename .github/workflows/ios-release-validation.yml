@@ -239,12 +239,7 @@ jobs:
           CI_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           CI_RUNNER_NAME: ${{ runner.name }}
         run: python3 -I -B scripts/ci/ios-ci-storage.py prepare --runner-environment "$CI_RUNNER_ENVIRONMENT" --runner-name "$CI_RUNNER_NAME"
-      # Fork PRs land on macos-26 without mise Go; pin the lock's toolchain for both hosted and self-hosted.
-      - name: Install Go for EmbeddedCore prepare
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
-        with:
-          go-version: '1.27.3'
-          cache: false
+      # The supervised worker installs the locked Go release on both runner types.
       - name: Prepare locked EmbeddedCore XCFramework
         env:
           IOS_CI_ROOT: ${{ steps.storage.outputs.root }}

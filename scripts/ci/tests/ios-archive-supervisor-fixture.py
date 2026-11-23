@@ -11,6 +11,7 @@ spec = importlib.util.spec_from_file_location("supervisor", sys.argv[1])
 supervisor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(supervisor)
 stop_and_reap = supervisor.stop_and_reap
+reaped_stages = 0
 
 
 def cancel_before_spawn():
@@ -19,8 +20,11 @@ def cancel_before_spawn():
 
 
 def reap_then_cancel(pid, signal_worker):
+    global reaped_stages
     status = stop_and_reap(pid, signal_worker)
-    os.kill(os.getpid(), signal.SIGINT)
+    reaped_stages += 1
+    if reaped_stages == 2:  # Compiler, after the successful pre-compile check.
+        os.kill(os.getpid(), signal.SIGINT)
     return status
 
 

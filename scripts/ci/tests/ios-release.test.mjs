@@ -148,9 +148,8 @@ test('unsigned archive isolates fork PRs and tolerates missing runner labels', (
   assert(trusted >= 0 && trusted < selfHosted, 'fork PRs must select the hosted fallback');
   assert(route.endsWith("|| 'macos-26' }}"), 'unsigned validation uses the standard hosted Mac fallback');
   assert(!workflow.jobs['ios-archive'].environment, 'unsigned validation must not require a protected signing environment');
-  const goSetup = workflow.jobs['ios-archive'].steps.find(s => String(s.uses ?? '').startsWith('actions/setup-go@'));
-  assert.equal(goSetup?.with?.['go-version'], '1.27.3', 'hosted archive must install lock Go before prepare');
-  assert.equal(goSetup?.with?.cache, false, 'archive Go install must not rely on module cache restoration');
+  assert(!workflow.jobs['ios-archive'].steps.some(s => String(s.uses ?? '').startsWith('actions/setup-go@')),
+    'unsigned archive must keep Go setup inside the supervisor');
   const prepare = workflow.jobs['ios-archive'].steps.find(s => s.name === 'Prepare locked EmbeddedCore XCFramework');
   assert.match(prepare?.run ?? '', /--prepare-embedded-core/u, 'prepare must run behind the iOS archive supervisor');
   assert.equal(prepare?.env?.IOS_CI_SOURCE, '${{ steps.storage.outputs.source }}');
@@ -197,10 +196,9 @@ mkdir -p "$2/AegisEmbeddedCore.xcframework"
       copyFileSync(`scripts/ci/${file}`, join(source, 'scripts/ci', file));
     }
     mkdirSync(bin);
-    writeFileSync(join(bin, 'go'), '#!/bin/bash\n[[ "$*" == version ]] || exit 2\necho "go version go1.27.3 fixture"\n', {mode: 0o755});
-    for (const tool of ['mise', 'gomobile']) {
-      writeFileSync(join(bin, tool), '#!/bin/bash\nexit 2\n', {mode: 0o755});
-    }
+    writeFileSync(join(source, 'scripts/ci/ios-archive-go.py'), `import sys\nfrom pathlib import Path\n`
+      + `root = Path(sys.argv[2]) / "go/bin"\nroot.mkdir(parents=True)\n`);
+    writeFileSync(join(bin, 'gomobile'), '#!/bin/bash\nexit 2\n', {mode: 0o755});
     const run = privateSource => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', prepare.run], {
       cwd: shared, encoding: 'utf8', env: {...gitEnv, PATH: `${bin}:${process.env.PATH}`,
         GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),

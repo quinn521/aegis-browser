@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import shutil
 
@@ -56,6 +57,36 @@ def input_list(root, source_lock, products, framework):
     return "".join(str(path) + "\n" for path in inputs)
 
 
+def tool_field(field, command, pattern, *, cwd=None):
+    value = subprocess.check_output(command, cwd=cwd, text=True).removesuffix("\n")
+    if not re.fullmatch(pattern, value, flags=re.ASCII):
+        raise ValueError(f"unexpected EmbeddedCore {field} output")
+    return value
+
+
+def tool_metadata(root, toolchain):
+    binding = shutil.which("gomobile")
+    if not binding:
+        raise ValueError("gomobile build tool is missing")
+    metadata = json.loads(subprocess.check_output(["go", "version", "-m", "-json", binding]))
+    module = metadata["Main"]
+    path, version = toolchain["gomobile"].split("@", 1)
+    if (metadata.get("Path") != "golang.org/x/mobile/cmd/gomobile"
+            or module.get("Path") != path or module.get("Version") != version or module.get("Replace") is not None):
+        raise ValueError("actual gomobile module differs from the source pin")
+    version_pattern = r"[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}"
+    return {
+        "sourceCommit": tool_field("source commit", ["git", "rev-parse", "HEAD"], r"[0-9a-f]{40}", cwd=root),
+        "goVersion": tool_field("Go version", ["go", "version"],
+                                rf"go version go{re.escape(toolchain['go'])} darwin/(?:arm64|amd64)"),
+        "xcodeVersion": tool_field("Xcode version", ["xcodebuild", "-version"],
+                                   rf"Xcode {version_pattern}\nBuild version [0-9]{{1,3}}[A-Z][0-9]{{1,6}}[a-z]?"),
+        "gomobileModule": toolchain["gomobile"],
+        "sdkVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-version"], version_pattern)
+                        for sdk in ("iphoneos", "iphonesimulator")},
+    }
+
+
 def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
     root, source_lock, products = Path(root).resolve(), Path(source_lock).resolve(), Path(products).resolve()
     lock = json.loads(source_lock.read_text())
@@ -65,36 +96,22 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
     actual = slice_digests(framework)
     if mode == "strict" and any(lock["artifacts"].get(key) != value for key, value in actual.items()):
         raise ValueError("actual EmbeddedCore slices differ from frozen digests")
+    metadata = tool_metadata(root, lock["toolchain"])
     effective = {**lock, "artifacts": {**lock["artifacts"], **actual}}
     write_json(products / "embedded-core-lock.json", effective)
     (products / "build-inputs.xcfilelist").write_text(input_list(
         Path(xcode_root or root).resolve(), Path(xcode_lock or source_lock).resolve(), products, framework))
-    binding = shutil.which("gomobile")
-    if not binding:
-        raise ValueError("gomobile build tool is missing")
-    metadata = subprocess.check_output(["go", "version", "-m", binding], text=True)
-    modules = [line.split()[1:3] for line in metadata.splitlines() if line.split()[:1] == ["mod"]]
-    if len(modules) != 1:
-        raise ValueError("cannot identify the actual gomobile module")
-    binding_module = "@".join(modules[0])
-    if lock.get("toolchain", {}).get("gomobile", binding_module) != binding_module:
-        raise ValueError("actual gomobile module differs from the source pin")
     manifest = {
         "schemaVersion": 1,
         "kind": "ios-embedded-core-build",
         "digestMode": mode,
-        "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "sourceLockSha256": file_digest(source_lock),
         "bridgeSha256": directory_digest(root / "apps/ios/EmbeddedCore/bridge"),
         "effectiveLockSha256": file_digest(products / "embedded-core-lock.json"),
         "frameworkSha256": directory_digest(framework),
         "slices": actual,
         "inputFileListSha256": file_digest(products / "build-inputs.xcfilelist"),
-        "goVersion": subprocess.check_output(["go", "version"], text=True).strip(),
-        "xcodeVersion": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
-        "gomobileModule": binding_module,
-        "sdkVersions": {sdk: subprocess.check_output(["xcrun", "--sdk", sdk, "--show-sdk-version"], text=True).strip()
-                        for sdk in ("iphoneos", "iphonesimulator")},
+        **metadata,
     }
     write_json(products / "build-manifest.json", manifest)
     return manifest

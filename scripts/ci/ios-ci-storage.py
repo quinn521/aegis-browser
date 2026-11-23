@@ -303,7 +303,7 @@ def prepare(environment, runner_environment, runner_name, *, config_path=CONFIG)
     ordinary_directory(root)
     require(root.stat().st_dev == volume.stat().st_dev, "job backing differs from its admitted volume")
     require(not acl_entries(root), "new private job directory has an ACL")
-    for name in ("tmp", "DerivedData", "SourcePackages", "PackageCache", "ModuleCache"):
+    for name in ("SourcePackages", "PackageCache", "ModuleCache"):
         (root / name).mkdir(mode=0o700)
     checkout_archive_source(root, environment, metadata)
     seed_digest, seed_count = (seed_artifacts(base, root / "PackageCache", volume)

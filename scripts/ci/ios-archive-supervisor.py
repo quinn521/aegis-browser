@@ -4,10 +4,14 @@
 import ctypes
 import errno
 import os
+from pathlib import Path
 import select
+import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -296,6 +300,90 @@ def run_stage(command, environment, cancelled, signal_worker):
     return code
 
 
+def directory_identity(path, *, private):
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or path.resolve(strict=True) != path:
+        raise OSError(errno.EINVAL, "scratch directory is not canonical")
+    if private:
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise OSError(errno.EPERM, "scratch directory is not private")
+    elif info.st_uid not in (os.getuid(), 0) or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX):
+        raise OSError(errno.EPERM, "scratch parent is unsafe")
+    return info.st_dev, info.st_ino
+
+
+class JobScratch:
+    def __init__(self, root):
+        # Storage admission has already checked the job hierarchy and ACLs.
+        # Keep sensitive diagnostics outside the retained job root, on its volume.
+        root_device, _ = directory_identity(root, private=True)
+        self.parent_identity = directory_identity(root.parent, private=False)
+        if root_device != self.parent_identity[0] or not shutil.rmtree.avoids_symlink_attacks:
+            raise OSError(errno.EPERM, "scratch lacks a same-volume parent or safe removal")
+        self.path = Path(tempfile.mkdtemp(prefix=".aegis-ios-scratch-", dir=root.parent))
+        self.identity = directory_identity(self.path, private=True)
+
+    def environment(self, environment):
+        temporary = self.path / "tmp"
+        temporary.mkdir(mode=0o700)
+        return dict(environment, TMPDIR=str(temporary), IOS_CI_SCRATCH=str(self.path))
+
+    def clean(self):
+        try:
+            if (directory_identity(self.path.parent, private=False) != self.parent_identity
+                    or directory_identity(self.path, private=True) != self.identity):
+                raise OSError(errno.EPERM, "scratch directory identity changed")
+            shutil.rmtree(self.path)
+        except OSError as error:
+            report(f"failed to remove private iOS job scratch (errno {error.errno})")
+            return False
+        return True
+
+
+def prepare_embedded_core(shell, worker, environment, cancelled, signal_worker):
+    source = Path(environment["IOS_CI_SOURCE"])
+    report("EmbeddedCore preparation starting (tool diagnostics withheld)")
+    code = run_stage([sys.executable, "-I", "-B", str(source / "scripts/ci/ios-archive-go.py"),
+                      str(source / "apps/ios/EmbeddedCore/embedded-core-lock.json"), environment["IOS_CI_SCRATCH"]],
+                     environment, cancelled, signal_worker)
+    if code is not None:
+        report(f"locked Go setup exited with status {code}")
+    if code == 0 and not cancelled():
+        code = run_stage([shell, worker], environment, cancelled, signal_worker)
+    if code is not None:
+        report(f"EmbeddedCore preparation exited with status {code}")
+    return code
+
+
+def archive(log, shell, wrapper, environment, cancelled, signal_worker, cancel_status):
+    output = ArchiveOutput(log)
+    try:
+        output.notice("unsigned archive diagnostics withheld because transport settings can change during archive")
+        code = run_stage([shell, wrapper, "--verify-embedded-core"], environment, cancelled, signal_worker)
+        if code is not None:
+            output.notice(f"pre-compile EmbeddedCore verification exited with status {code}")
+        if code == 0 and not cancelled():
+            if Path.cwd() != Path(environment["IOS_CI_SOURCE"]):
+                output.notice("unsigned archive source became unavailable before compilation")
+                return 1, False
+            code = run_stage([shell, wrapper, "--compile-archive"], environment, cancelled, signal_worker)
+            if code is not None:
+                output.notice(f"unsigned archive compiler exited with status {code}")
+        if cancelled():
+            status = cancel_status()
+            output.notice(cancellation_notice(status))
+            return status, True
+    finally:
+        output.close()
+    if cancelled() or code or output.failed:
+        return code or os.EX_IOERR, False
+    report("unsigned archive verification starting")
+    code = run_stage([shell, wrapper, "--verify-archive"], environment, cancelled, signal_worker)
+    if code is not None:
+        report(f"unsigned archive verification exited with status {code}")
+    return code, False
+
+
 def main(*arguments):
     received = 0
 
@@ -312,46 +400,28 @@ def main(*arguments):
 
     signal_worker = worker_signaler()
     environment = archive_environment()
-    if arguments[0] == "--prepare-embedded-core":
-        _, shell, worker = arguments
-        report("EmbeddedCore preparation starting (tool diagnostics withheld)")
-        code = run_stage([shell, worker], environment, cancelled, signal_worker)
-        if code is not None:
-            report(f"EmbeddedCore preparation exited with status {code}")
-        if received:
-            status = 128 + received
-            report(f"EmbeddedCore preparation cancelled with status {status}")
-            return status
-        return code
-
-    log, shell, wrapper, *command = arguments
-    output = ArchiveOutput(log)
+    scratch = JobScratch(Path(environment["IOS_CI_ROOT"]))
+    preparing = arguments[0] == "--prepare-embedded-core"
+    session_stopped = True
+    cancellation_reported = False
     try:
-        output.notice("unsigned archive diagnostics withheld because transport settings can change during archive")
-        code = run_stage(command, environment, cancelled, signal_worker)
-        if code is not None:
-            output.notice(f"unsigned archive compiler exited with status {code}")
-        if received:
-            status = 128 + received
-            output.notice(cancellation_notice(status))
-            return status
+        environment = scratch.environment(environment)
+        if preparing:
+            code = prepare_embedded_core(*arguments[1:], environment, cancelled, signal_worker)
+        else:
+            code, cancellation_reported = archive(*arguments, environment, cancelled, signal_worker, lambda: 128 + received)
+    except OSError as error:
+        # Do not remove an active session's scratch if its stop could not be confirmed.
+        session_stopped = error.errno != errno.EBUSY
+        raise
     finally:
-        output.close()
+        cleaned = session_stopped and scratch.clean()
     if received:
         status = 128 + received
-        report(cancellation_notice(status))
+        if not cancellation_reported:
+            report(f"EmbeddedCore preparation cancelled with status {status}" if preparing else cancellation_notice(status))
         return status
-    if code or output.failed:
-        return code or os.EX_IOERR
-    report("unsigned archive verification starting")
-    code = run_stage([shell, wrapper, "--verify-archive"], environment, cancelled, signal_worker)
-    if code is not None:
-        report(f"unsigned archive verification exited with status {code}")
-    if received:
-        status = 128 + received
-        report(cancellation_notice(status))
-        return status
-    return code
+    return code or (0 if cleaned else os.EX_IOERR)
 
 
 def cli(*arguments):

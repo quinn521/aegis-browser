@@ -432,6 +432,129 @@ exit 65
   }
 });
 
+test('pre-compile verification withholds diagnostics and gates the compiler and seal', t => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-precompile-'));
+  t.after(() => rmSync(root, {recursive: true, force: true}));
+  const {env, wrapper} = prepareFixture(root, '#!/bin/bash\ntouch "$IOS_CI_ROOT/compiler-started"\n', String.raw`
+if [[ "$2" == */ios_embedded_core.py ]]; then
+  echo "$ARCHIVE_TEST_DIAGNOSTIC"
+  echo "$ARCHIVE_TEST_DIAGNOSTIC" >&2
+  exit 47
+fi
+touch "$IOS_CI_ROOT/post-archive-started"
+`);
+  Object.assign(env, {ARCHIVE_TEST_LEAF_COMPILER: '1', ARCHIVE_TEST_DIAGNOSTIC: authenticatedProxy});
+  const sinks = runTransportFixture(root, {env, wrapper}, 47);
+  for (const sink of sinks) {
+    assert.match(sink, /pre-compile EmbeddedCore verification exited with status 47/u);
+    assert.doesNotMatch(sink, /fixture-proxy|compiler exited|archive verification starting/u);
+  }
+  assert(!existsSync(join(root, 'compiler-started')));
+  assert(!existsSync(join(root, 'post-archive-started')));
+});
+
+const fileBackedCompiler = String.raw`#!/bin/bash
+set -eu
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -resultBundlePath) result="$2"; shift ;;
+    -derivedDataPath) derived="$2"; shift ;;
+  esac
+  shift
+done
+test "$TMPDIR" = "$IOS_CI_SCRATCH/tmp"
+test "$result" = "$IOS_CI_SCRATCH/Aegis.xcresult"
+test "$derived" = "$IOS_CI_SCRATCH/DerivedData"
+if [[ "$(uname -s)" == Darwin ]]; then
+  mode="$(/usr/bin/stat -f '%Lp' "$IOS_CI_SCRATCH")"
+else
+  mode="$(/usr/bin/stat -c '%a' "$IOS_CI_SCRATCH")"
+fi
+test "$mode" = 700
+mkdir -p "$result" "$derived/Logs" "$TMPDIR/ResultBundle_fixture.xcresult"
+for file in "$result/diagnostics" "$derived/Logs/archive.xcactivitylog" "$TMPDIR/ResultBundle_fixture.xcresult/diagnostics"; do
+  printf '%s\n' "$ARCHIVE_TEST_DIAGNOSTIC" > "$file"
+done
+ln -s "$ARCHIVE_TEST_HISTORICAL_ROOT" "$IOS_CI_SCRATCH/unrelated-job"
+printf '%s\n' "$IOS_CI_SCRATCH" > "$IOS_CI_ROOT/diagnostics-ready"
+if [[ "$ARCHIVE_TEST_DIAGNOSTICS_MODE" == cancel ]]; then exec /bin/sleep 15; fi
+exit "$ARCHIVE_TEST_EXIT"
+`;
+
+for (const [mode, exitCode] of [['success', 0], ['failure', 65], ['cancel', 143]]) {
+  test(`archive confines file-backed Xcode diagnostics on ${mode}`, async t => {
+    const parent = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-files-'));
+    t.after(() => rmSync(parent, {recursive: true, force: true}));
+    const root = join(parent, 'current job');
+    const historical = join(parent, 'historical job');
+    mkdirSync(root, {mode: 0o700});
+    mkdirSync(historical, {mode: 0o700});
+    const priorBundle = join(historical, 'ResultBundle_prior.xcresult');
+    const priorDiagnostic = join(root, 'tmp/ResultBundle_previous.xcresult');
+    mkdirSync(join(root, 'tmp'));
+    for (const path of [priorBundle, priorDiagnostic]) writeFileSync(path, 'retained evidence');
+    const {env, wrapper} = prepareFixture(root, fileBackedCompiler, String.raw`
+if [[ "$2" == */test_ios_linked_bundle.py ]]; then
+  test "$5" = "$IOS_CI_SCRATCH/DerivedData" && test -f "$5/Logs/archive.xcactivitylog" || exit 73
+  touch "$IOS_CI_ROOT/linked-verified"
+fi
+if [[ "$3" == */ios-ci-storage.py && "$4" == seal ]]; then
+  touch "$IOS_CI_ROOT/sealed"
+fi
+`);
+    Object.assign(env, {ARCHIVE_TEST_LEAF_COMPILER: '1', ARCHIVE_TEST_DIAGNOSTIC: authenticatedProxy,
+      ARCHIVE_TEST_DIAGNOSTICS_MODE: mode, ARCHIVE_TEST_EXIT: String(exitCode), ARCHIVE_TEST_HISTORICAL_ROOT: historical});
+    const ready = join(root, 'diagnostics-ready');
+    if (mode === 'cancel') {
+      const child = spawn('bash', [wrapper], {env, stdio: ['ignore', 'pipe', 'pipe']});
+      child.stdout.resume();
+      let stderr = '';
+      child.stderr.on('data', data => { stderr += data; });
+      t.after(() => { if (child.exitCode === null) child.kill('SIGTERM'); });
+      await waitFor(() => existsSync(ready) || child.exitCode !== null, 'file-backed diagnostic');
+      assert(existsSync(ready), stderr);
+      const scratch = readFileSync(ready, 'utf8').trim();
+      assert.equal(readFileSync(join(scratch, 'Aegis.xcresult/diagnostics'), 'utf8').trim(), authenticatedProxy);
+      assert(child.kill('SIGTERM'));
+      await waitFor(() => child.exitCode !== null, 'file-backed cancellation cleanup');
+      assert.equal(child.exitCode, exitCode, stderr);
+      assert.doesNotMatch(stderr, /fixture-proxy/u);
+    } else {
+      for (const sink of runTransportFixture(root, {env, wrapper}, exitCode)) {
+        assert.doesNotMatch(sink, /fixture-proxy/u);
+      }
+    }
+    const scratch = readFileSync(ready, 'utf8').trim();
+    assert(scratch.startsWith(join(parent, '.aegis-ios-scratch-')));
+    assert(!existsSync(scratch));
+    assert.equal(existsSync(join(root, 'linked-verified')), mode === 'success');
+    assert.equal(existsSync(join(root, 'sealed')), mode === 'success');
+    for (const path of [priorBundle, priorDiagnostic]) assert.equal(readFileSync(path, 'utf8'), 'retained evidence');
+  });
+}
+
+test('archive scratch cleanup refuses a substituted directory', t => {
+  const parent = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-scratch-identity-'));
+  t.after(() => rmSync(parent, {recursive: true, force: true}));
+  execFileSync('python3', ['-I', '-B', '-c', String.raw`
+from pathlib import Path
+import runpy
+import sys
+
+scratch_type = runpy.run_path(sys.argv[1])["JobScratch"]
+root = Path(sys.argv[2]) / "job"
+root.mkdir(mode=0o700)
+scratch = scratch_type(root)
+old = scratch.path.rename(scratch.path.with_name("original"))
+(old / "owned").touch()
+scratch.path.mkdir(mode=0o700)
+(scratch.path / "unrelated").touch()
+assert scratch.clean() is False
+assert (scratch.path / "unrelated").exists()
+assert (old / "owned").exists()
+`, supervisorScript, parent]);
+});
+
 for (const [phase, wrapperStatus] of [['before-spawn', 143], ['after-waitpid', 130]]) {
   test('private archive separates cancellation from compiler status at ' + phase, () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-wrapper-status-'));
@@ -545,6 +668,7 @@ time.sleep(15)
 '`;
 
 for (const [phase, selector] of [
+  ['pre-compile verification', '[[ "$2" == */ios_embedded_core.py ]]'],
   ['verification', '[[ "$1" == */verify-ios-archive.py ]]'],
   ['sealing', '[[ "$3" == */ios-ci-storage.py && "$4" == seal ]]'],
 ]) {
@@ -571,8 +695,14 @@ for (const [phase, selector] of [
       assert.equal(child.exitCode, 143, diagnostic);
       for (const pid of new Set([stage, worker, helper])) assert.equal(running(pid), false, `stage process ${pid} survived`);
       const retained = readFileSync(join(root, 'xcodebuild.log'), 'utf8');
-      assert.match(retained, /compiler exited with status 0/u);
-      assert.match(diagnostic, /wrapper cancelled with status 143/u);
+      if (phase === 'pre-compile verification') {
+        assert.match(retained, /pre-compile EmbeddedCore verification exited with status 143/u);
+        assert.doesNotMatch(retained, /compiler exited/u);
+        assert.match(retained, /wrapper cancelled with status 143/u);
+      } else {
+        assert.match(retained, /compiler exited with status 0/u);
+        assert.match(diagnostic, /wrapper cancelled with status 143/u);
+      }
       assert.doesNotMatch(retained + diagnostic, /compiler complete|synthetic stage diagnostic|fixture-proxy/u);
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');

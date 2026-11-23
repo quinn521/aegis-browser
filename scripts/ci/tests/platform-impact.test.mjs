@@ -346,7 +346,7 @@ test('paths select platforms and commit types select stage depth', () => {
       save('unknown.file', 'updated');
     }, 'fix: repair browser setup and iOS');
     assert.deepEqual(route(sharedSetupWithIos), {...iosRoute, android: true, macos: true});
-    for (const path of ['scripts/ci/ios-archive-supervisor.py', 'scripts/ci/run-ios-unsigned-archive.sh',
+    for (const path of ['scripts/ci/ios-archive-go.py', 'scripts/ci/ios-archive-supervisor.py', 'scripts/ci/run-ios-unsigned-archive.sh',
       iosPrepareWorker, '.github/workflows/ios-release-validation.yml']) {
       assert.deepEqual(route(pr(() => save(path, 'updated'), 'fix: protect archive logs')), iosRoute, path);
     }
@@ -648,7 +648,8 @@ exit "$ARCHIVE_TEST_EXIT"
     assert.equal(readFileSync(trace, 'utf8'), '');
     const vanished = run({ARCHIVE_TEST_SOURCE_CHANGE: '1', ARCHIVE_TEST_EXIT: '0'});
     assert.equal(vanished.status, 1, vanished.stderr);
-    assert.match(vanished.stderr, /cd:.*Source/u);
+    assert.match(vanished.stdout, /pre-compile EmbeddedCore verification exited with status 0/u);
+    assert.match(vanished.stdout, /source became unavailable before compilation/u);
     assert.throws(() => readFileSync(launch), {code: 'ENOENT'});
     assert.doesNotMatch(readFileSync(trace, 'utf8'), /verify-ios-archive\.py|ios-ci-storage\.py seal/u);
     renameSync(join(root, 'MovedSource'), source);
@@ -681,7 +682,7 @@ exit "$ARCHIVE_TEST_EXIT"
       }
       const calls = readFileSync(trace, 'utf8').trim().split('\n');
       const succeeded = compilerExit === 0 && !logFailure;
-      assert.equal(console.includes('verification exited with status 0'), succeeded);
+      assert.equal(console.includes('unsigned archive verification exited with status 0'), succeeded);
       assert(calls[0].startsWith(`-B ${source}/scripts/release/ios_embedded_core.py verify `));
       assert.equal(calls.some(line => line.startsWith(`${source}/scripts/release/verify-ios-archive.py `)), succeeded);
       assert.equal(calls.some(line => line.startsWith(`-B ${source}/scripts/release/test_ios_linked_bundle.py `)), succeeded);
