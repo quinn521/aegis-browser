@@ -3,7 +3,7 @@
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
-  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync,
+  closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync,
   rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
 import Module from 'node:module';
@@ -392,12 +392,14 @@ function readMacOutputDirectory(path) {
       encoding: 'utf8', env: {...process.env, RUBYOPT: '', RUBYLIB: ''},
     });
     info = JSON.parse(output);
-    if (!Number.isInteger(info.uid) || !Number.isInteger(info.mode) || typeof info.acl !== 'string') {
+    if (!Number.isInteger(info.uid) || !Number.isInteger(info.mode) || typeof info.acl !== 'string' ||
+        typeof info.ignoresOwnership !== 'boolean') {
       throw new Error('Invalid macOS directory metadata');
     }
   } catch (error) {
     throw new Error('Could not read macOS ACL for output directory: ' + path, {cause: error});
   }
+  if (info.ignoresOwnership) throw new Error('Output volume ignores ownership: ' + path);
   if (!info.acl) return info;
   const [header, ...records] = info.acl.trimEnd().split('\n');
   const diagnostic = 'Choose a trusted output directory with a read-only macOS ACL: ' + path;
@@ -518,19 +520,27 @@ function main() {
   }
 }
 
-function readNodeOption(name) {
+function readNodeConfig() {
+  // Read only a configuration file explicitly enabled in the Node command line.
+  const flag = process.execArgv.findLast((arg) => /^--(?:experimental[-_])?config[-_]file(?:=|$)/u.test(arg));
+  if (!flag && !readNodeOption('experimental-default-config-file')) return {};
+  const path = flag?.includes('=') ? flag.slice(flag.indexOf('=') + 1) : 'node.config.json';
+  return JSON.parse(readFileSync(path, 'utf8')).nodeOptions ?? {};
+}
+
+function readNodeOption(name, config = {}) {
   const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
   const enabled = '--' + name;
   const disabled = '--no-' + name;
   const option = [...environment.map((flag) => flag.replaceAll('"', '')), ...process.execArgv]
     .map((flag) => flag.split('=', 1)[0].replaceAll('_', '-'))
     .findLast((flag) => flag === enabled || flag === disabled);
-  return option === undefined ? undefined : option === enabled;
+  return option === undefined ? config[name] : option === enabled;
 }
 
-function entryReference(argument) {
+function entryReference(argument, config) {
   // In URL-entry mode Node can leave the positional entry relative or as a URL.
-  if (readNodeOption('entry-url') ?? !isAbsolute(argument)) {
+  if (readNodeOption('entry-url', config) ?? !isAbsolute(argument)) {
     return new URL(argument, pathToFileURL(process.cwd() + sep));
   }
   return pathToFileURL(argument);
@@ -543,8 +553,9 @@ function isMain() {
   const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
   if (!process.argv[1] || process.execArgv.some((arg) => nonEntryMode.test(arg))) return false;
   try {
-    const reference = entryReference(process.argv[1]);
-    const preserveMain = readNodeOption('preserve-symlinks-main') ??
+    const config = readNodeConfig();
+    const reference = entryReference(process.argv[1], config);
+    const preserveMain = readNodeOption('preserve-symlinks-main', config) ??
       process.env.NODE_PRESERVE_SYMLINKS_MAIN === '1';
     // With symlink preservation, Node retains the entry's serialized URL verbatim.
     if (preserveMain) return reference.href === import.meta.url;

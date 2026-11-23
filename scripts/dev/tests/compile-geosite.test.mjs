@@ -820,7 +820,12 @@ test('publication requires readable, nonmutating macOS ACLs',
       '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output'];
     const output = join(nested, 'catalogue.json');
     const unreadable = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
+    const helper = join(dirname(cli), 'read-macos-acl.rb');
+    const native = spawnSync('/usr/bin/ruby', ['--disable-gems', helper, shared], {encoding: 'utf8'});
     setACL('-N', shared);
+    assert.ifError(native.error);
+    assert.equal(native.status, 1);
+    assert.match(native.stderr, /acl_get_fd_np.*Errno::EACCES/u);
     assert.ifError(unreadable.error);
     assert.equal(unreadable.status, 1);
     assert.match(unreadable.stderr, /could not read.*ACL/i);
@@ -844,6 +849,62 @@ test('publication requires readable, nonmutating macOS ACLs',
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(readFileSync(output, 'utf8')).group, 'DEBIAN');
     assert.deepEqual(readdirSync(nested), ['catalogue.json']);
+  });
+
+test('a Node config file can select a preloaded URL entry for verification',
+  {skip: !pinnedInputs || !process.allowedNodeEnvironmentFlags.has('--entry-url')}, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-node-config-test-'));
+    t.after(() => rmSync(dir, {recursive: true, force: true}));
+    const config = join(dir, 'node.config.json');
+    writeFileSync(config, JSON.stringify({nodeOptions: {'entry-url': true}}));
+    const preload = pathToFileURL(cli).href + '?variant';
+    const output = join(dir, 'missing-catalogue.json');
+    const args = ['--import', preload, cli + '?variant', '--dlc', join(pinnedInputs, 'dlc.dat'),
+      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output', output, '--verify'];
+    const env = {...process.env, NODE_OPTIONS: '', NODE_NO_WARNINGS: '1'};
+    for (const flag of ['--experimental-config-file=' + config, '--experimental-default-config-file']) {
+      const result = spawnSync(process.execPath, [flag, ...args], {cwd: dir, encoding: 'utf8', env});
+      assert.ifError(result.error);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /ENOENT.*missing-catalogue\.json/);
+      assert.equal(existsSync(output), false);
+    }
+  });
+
+test('new publication requires a volume that respects ownership',
+  {skip: process.platform !== 'darwin' || !pinnedInputs}, (t) => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'aegis-geosite-mount-test-')));
+    t.after(() => rmSync(dir, {recursive: true, force: true}));
+    const preload = join(dir, 'volume.cjs');
+    writeFileSync(preload, `
+      const child = require('node:child_process');
+      const execute = child.execFileSync;
+      child.execFileSync = (command, args, options) => {
+        const result = execute(command, args, options);
+        if (command !== '/usr/bin/ruby' || args.at(-1) !== ${JSON.stringify(dir)}) return result;
+        return JSON.stringify({...JSON.parse(result), ignoresOwnership: true});
+      };
+      require('node:module').syncBuiltinESMExports();
+    `);
+    const args = [cli, '--dlc', join(pinnedInputs, 'dlc.dat'),
+      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output'];
+    const existing = join(dir, 'existing.json');
+    const missing = join(dir, 'missing.json');
+    const seed = spawnSync(process.execPath, [...args, existing], {encoding: 'utf8'});
+    assert.equal(seed.status, 0, seed.stderr);
+
+    const refused = spawnSync(process.execPath, ['--require', preload, ...args, missing], {encoding: 'utf8'});
+    assert.ifError(refused.error);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /volume.*ignores ownership/i);
+    assert.equal(existsSync(missing), false);
+
+    for (const options of [[], ['--verify']]) {
+      const result = spawnSync(process.execPath, ['--require', preload, ...args, existing, ...options], {
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+    }
   });
 
 test('publication creates its temporary file beside the filesystem-resolved destination',
