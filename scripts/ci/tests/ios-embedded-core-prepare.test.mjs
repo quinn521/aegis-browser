@@ -5,6 +5,7 @@ import {once} from 'node:events';
 import {copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
+import {performance} from 'node:perf_hooks';
 import test from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
 import YAML from 'yaml';
@@ -559,7 +560,7 @@ async function waitForToolReady(child, ready, diagnostics) {
 }
 
 async function waitForCancellation(closed) {
-  const timer = new AbortController();
+  const timer = new globalThis.AbortController();
   try {
     return await Promise.race([closed, delay(cancellationAllowanceMs, undefined, {signal: timer.signal}).then(() => {
       assert.fail(`Cancellation did not finish within ${cancellationAllowanceMs} ms of the signal`);
