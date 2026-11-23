@@ -564,7 +564,7 @@ esac
 
 function prepareArchiveFixture(root) {
   const source = join(root, 'Source');
-  for (const path of [archiveScript, 'scripts/ci/ios-archive-supervisor.py', 'apps/browser/scripts/common.sh']) {
+  for (const path of [archiveScript, 'scripts/ci/ios-archive-supervisor.py']) {
     mkdirSync(join(source, path, '..'), {recursive: true});
     copyFileSync(path, join(source, path));
   }
@@ -669,7 +669,7 @@ exit "$ARCHIVE_TEST_EXIT"
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
-test('archive package resolution inherits the existing GitHub transport policy', () => {
+test('archive package resolution preserves runner proxy and Git configuration', () => {
   const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
   const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
   assert.match(step.run, /run-ios-unsigned-archive\.sh/u);
@@ -681,16 +681,18 @@ test('archive package resolution inherits the existing GitHub transport policy',
   const args = join(root, 'xcode-args.txt');
   const config = join(root, 'gitconfig');
   const python = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
-  writeFileSync(config, '[http]\n proxy = http://127.0.0.1:9\n[credential]\n helper = retained-fixture-helper\n');
+  const gitConfig = '[http]\n proxy = http://127.0.0.1:9\n version = HTTP/2\n[credential]\n helper = retained-fixture-helper\n';
+  writeFileSync(config, gitConfig);
   const executables = {
     python3: `#!/bin/bash\n${delegateArchiveSupervisor}exit 0\n`,
-    scutil: '#!/bin/bash\nexit 0\n',
     xcodebuild: `#!/bin/bash
 printf 'proxy=%s\\n' "$(git config --get-urlmatch http.proxy https://github.com/firebase/firebase-ios-sdk.git)" > "$ARCHIVE_TEST_TRACE"
 printf 'http=%s\\n' "$(git config --get http.version)" >> "$ARCHIVE_TEST_TRACE"
 printf 'credential=%s\\n' "$(git config --get credential.helper)" >> "$ARCHIVE_TEST_TRACE"
 printf 'prompt=%s\\n' "\${GIT_TERMINAL_PROMPT-}" >> "$ARCHIVE_TEST_TRACE"
-printf 'bypass=%s\\n' "\${NO_PROXY-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'https_proxy=%s\\n' "\${https_proxy-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'no_proxy=%s\\n' "\${no_proxy-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'NO_PROXY=%s\\n' "\${NO_PROXY-}" >> "$ARCHIVE_TEST_TRACE"
 printf '%s\\n' "$*" > "$ARCHIVE_TEST_ARGS"
 exit 65
 `,
@@ -704,16 +706,20 @@ exit 65
       ...environment, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
       IOS_CI_SOURCE: source,
       GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1',
+      https_proxy: 'http://127.0.0.1:10', HTTPS_PROXY: 'http://127.0.0.1:10',
+      no_proxy: 'localhost', NO_PROXY: 'localhost',
       ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
     }});
     assert.equal(result.status, 65, result.stderr);
     const policy = readFileSync(trace, 'utf8');
-    assert.match(policy, /^proxy=$/mu);
-    assert.match(policy, /^http=HTTP\/1\.1$/mu);
+    assert.match(policy, /^proxy=http:\/\/127\.0\.0\.1:9$/mu);
+    assert.match(policy, /^http=HTTP\/2$/mu);
     assert.match(policy, /^credential=retained-fixture-helper$/mu);
     assert.match(policy, /^prompt=0$/mu);
-    assert.match(policy, /bypass=.*github\.com/u);
+    assert.match(policy, /^https_proxy=http:\/\/127\.0\.0\.1:10$/mu);
+    assert.match(policy, /^no_proxy=localhost$/mu);
+    assert.match(policy, /^NO_PROXY=localhost$/mu);
     assert.match(readFileSync(args, 'utf8'), /-scmProvider system/u);
-    assert.equal(readFileSync(config, 'utf8'), '[http]\n proxy = http://127.0.0.1:9\n[credential]\n helper = retained-fixture-helper\n');
+    assert.equal(readFileSync(config, 'utf8'), gitConfig);
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
