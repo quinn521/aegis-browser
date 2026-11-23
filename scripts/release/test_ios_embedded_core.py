@@ -1,6 +1,7 @@
 """Binary provenance and live-leaf regression checks; no Xcode or private node required."""
 import copy
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -27,6 +28,9 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
                                          "toolchain": self.toolchain,
                                          "artifacts": {key: "0" * 64 for key in core.SLICE_KEYS.values()}}))
         self.original = self.lock.read_bytes()
+        self.compiler = self.root / "Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+        self.compiler.parent.mkdir(parents=True)
+        self.compiler.write_bytes(b"synthetic compiler identity")
         self.products = self.root / "separate-build-output"
         self.build_bridge = self.products / "work/bridge"
         for name in core.SLICE_KEYS:
@@ -49,11 +53,14 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
                 "go": f"go version go{self.toolchain['go']} darwin/arm64\n",
                 "git": "a" * 40 + "\n",
                 "xcodebuild": "Xcode 27.0\nBuild version 27A266a\n",
-                "xcrun": "24A222\n" if args[-1] == "--show-sdk-build-version" else "27.0\n",
+                "xcrun": str(self.compiler) + "\n" if args[-1] == "clang" else
+                    "24A222\n" if args[-1] == "--show-sdk-build-version" else "27.0\n",
             }[args[0]]
-        with patch.object(core.shutil, "which", side_effect=lambda name: f"/fixture/{name}"), \
+        with patch.dict(os.environ, {"DEVELOPER_DIR": str(self.root), "TOOLCHAINS": "org.fixture.alternative"}), \
+                patch.object(core.shutil, "which", side_effect=lambda name: f"/fixture/{name}"), \
                 patch.object(core.subprocess, "check_output", side_effect=tool_output):
-            return core.record(self.root, self.lock, self.products, "ci-rebuild", **kwargs)
+            apple = core.apple_metadata(core.apple_build_environment(os.environ))
+            return core.record(self.root, self.lock, self.products, "ci-rebuild", apple=apple, **kwargs)
 
     def test_hosted_rebuild_keeps_source_lock_and_binds_the_actual_slices(self):
         self.record()
@@ -61,6 +68,23 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         self.assertEqual(self.original, self.lock.read_bytes())
         self.assertEqual(verified["slices"], core.slice_digests(self.products / "AegisEmbeddedCore.xcframework"))
         self.assertNotEqual(verified["slices"]["iosArm64Sha256"], "0" * 64)
+        self.assertEqual(verified["appleToolchain"], core.APPLE_TOOLCHAIN)
+        self.assertEqual(verified["clangSha256"], dict.fromkeys(core.IOS_SDKS, core.file_digest(self.compiler)))
+
+    def test_compiler_outside_selected_default_toolchain_is_rejected(self):
+        other_compiler = self.root / "alternate-toolchain-clang"
+        other_compiler.write_bytes(b"synthetic alternate compiler")
+        with patch.object(core.subprocess, "check_output", return_value=str(other_compiler) + "\n"):
+            with self.assertRaisesRegex(ValueError, "outside the pinned Xcode toolchain"):
+                core.apple_metadata({"DEVELOPER_DIR": str(self.root), "TOOLCHAINS": core.APPLE_TOOLCHAIN})
+
+    def test_cached_receipt_requires_the_pinned_apple_toolchain_and_both_clang_identities(self):
+        recorded = self.record()
+        for changed in (dict(recorded, appleToolchain="org.fixture.alternative"),
+                        dict(recorded, clangSha256={"iphoneos": "a" * 64})):
+            core.write_json(self.products / "build-manifest.json", changed)
+            with self.assertRaisesRegex(ValueError, "Apple compiler provenance"):
+                core.verify(self.root, self.lock, self.products)
 
     def test_packaging_work_uses_its_own_xcode_inputs_and_verifies_staged_sources(self):
         from shutil import copytree
@@ -77,7 +101,7 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
 
     def test_strict_build_does_not_accept_a_new_binary_digest(self):
         with self.assertRaisesRegex(ValueError, "frozen digests"):
-            core.record(self.root, self.lock, self.products, "strict")
+            core.record(self.root, self.lock, self.products, "strict", apple={})
         self.assertEqual(self.original, self.lock.read_bytes())
 
     def test_strict_apple_metadata_enforces_the_frozen_xcode_and_any_sdk_pins(self):

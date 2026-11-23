@@ -123,7 +123,6 @@ final class AccessEmbeddedProxyEntrySession {
         // generation must not observe the old core as running and reuse it.
         if let pendingStop {
             await pendingStop.value
-            self.pendingStop = nil
         }
         try Task.checkCancellation()
         if let listener, let identity {
@@ -148,6 +147,8 @@ final class AccessEmbeddedProxyEntrySession {
             )
         }
 
+        // A session must own the core it will drain before releasing its port.
+        guard startedCore || !core.isRunning else { throw AccessSiteSessionError.runtimeNotReady }
         if !core.isRunning {
             // Fetch account-selected credentials only when a new core generation is needed.
             // Failure propagates; never reuse a bundled static node in this path.
@@ -292,26 +293,32 @@ final class AccessEmbeddedProxyEntrySession {
 
     func shutdown(identity: String) {
         guard self.identity == identity else { return }
-        if let listener {
-            if published, let retireDocuments {
-                listener.suspend()
-                retireDocuments(identity) { try? listener.stop() }
-            } else {
-                try? listener.stop()
-            }
-        }
-        listener = nil
+        let listener = self.listener
+        listener?.suspend()
+        let retire = published ? retireDocuments : nil
+        self.listener = nil
         self.identity = nil
         published = false
-        if startedCore {
-            startedCore = false
-            let lease = logLease
-            logLease = nil
+        let ownsCore = startedCore
+        startedCore = false
+        let lease = logLease
+        logLease = nil
+
+        let retirement = listener.map { AccessEmbeddedListenerRetirement(listener: $0) }
+        if retire == nil { retirement?.received(.documents) }
+        if !ownsCore {
+            retirement?.received(.native)
+        }
+        if ownsCore {
             // Publisher shutdown is synchronous; stop the core without blocking callers.
-            pendingStop = Task {
+            pendingStop = Task { @MainActor [core] in
                 await core.stop()
                 if let lease { AccessDiagnosticLog.shared.stop(lease: lease) }
+                retirement?.received(.native)
             }
+        }
+        retire?(identity) {
+            retirement?.received(.documents)
         }
     }
 
@@ -427,6 +434,28 @@ private final class AccessEmbeddedTunnelOpener: AccessHTTPTunnelOpening, @unchec
 
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         try await dialer.dial(host: host, port: port)
+    }
+}
+
+/// Missing receipts leave the old socket fenced and held, even if the
+/// publisher and session have already been released.
+@MainActor
+private final class AccessEmbeddedListenerRetirement {
+    enum Receipt { case documents, native }
+
+    private static var held: [ObjectIdentifier: AccessEmbeddedListenerRetirement] = [:]
+    private let listener: AccessEmbeddedInboundListener
+    private var pending: Set<Receipt> = [.documents, .native]
+
+    init(listener: AccessEmbeddedInboundListener) {
+        self.listener = listener
+        Self.held[ObjectIdentifier(self)] = self
+    }
+
+    func received(_ receipt: Receipt) {
+        guard pending.remove(receipt) != nil, pending.isEmpty else { return }
+        try? listener.stop()
+        Self.held.removeValue(forKey: ObjectIdentifier(self))
     }
 }
 

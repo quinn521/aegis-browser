@@ -327,7 +327,7 @@ class JobScratch:
         temporary = self.path / "tmp"
         temporary.mkdir(mode=0o700)
         device, inode = self.identity
-        result = dict(environment, TMPDIR=str(temporary), IOS_CI_SCRATCH=str(self.path),
+        result = dict(environment, TMPDIR=str(temporary), GOTMPDIR=str(temporary), IOS_CI_SCRATCH=str(self.path),
                       IOS_CI_SCRATCH_ID=f"{device}:{inode}")
         if for_archive:
             derived = self.path / "DerivedData"

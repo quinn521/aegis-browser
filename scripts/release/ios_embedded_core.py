@@ -9,6 +9,8 @@ import shutil
 
 
 SLICE_KEYS = {"ios-arm64": "iosArm64Sha256", "ios-arm64-simulator": "iosArm64SimulatorSha256"}
+APPLE_TOOLCHAIN = "com.apple.dt.toolchain.XcodeDefault"
+IOS_SDKS = ("iphoneos", "iphonesimulator")
 
 
 def file_digest(path):
@@ -57,8 +59,8 @@ def input_list(root, source_lock, products, framework):
     return "".join(str(path) + "\n" for path in inputs)
 
 
-def tool_field(field, command, pattern, *, cwd=None):
-    value = subprocess.check_output(command, cwd=cwd, text=True).removesuffix("\n")
+def tool_field(field, command, pattern, *, cwd=None, env=None):
+    value = subprocess.check_output(command, cwd=cwd, env=env, text=True).removesuffix("\n")
     if not re.fullmatch(pattern, value, flags=re.ASCII):
         raise ValueError(f"unexpected EmbeddedCore {field} output")
     return value
@@ -78,16 +80,44 @@ def check_mobile_tool(go, executable, name, toolchain, bridge, *, env=None):
         raise ValueError(f"actual {name} toolchain or module differs from the source pin")
 
 
-def apple_metadata():
+def apple_build_environment(environment):
+    """Use the same default toolchain in gomobile, xcrun and the receipt."""
+    env = dict(environment, TOOLCHAINS=APPLE_TOOLCHAIN)
+    selected = env.get("DEVELOPER_DIR") or subprocess.check_output(["xcode-select", "-p"], env=env, text=True).strip()
+    developer = Path(selected)
+    if developer.suffix == ".app":
+        developer /= "Contents/Developer"
+    if not developer.is_absolute() or not developer.is_dir():
+        raise ValueError("Apple developer directory must be an existing absolute path")
+    env["DEVELOPER_DIR"] = str(developer.resolve(strict=True))
+    return env
+
+
+def apple_metadata(env):
+    if env.get("TOOLCHAINS") != APPLE_TOOLCHAIN or not env.get("DEVELOPER_DIR"):
+        raise ValueError("Apple build does not select the pinned toolchain")
     version_pattern = r"[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}"
+    compiler_root = Path(env["DEVELOPER_DIR"]) / "Toolchains/XcodeDefault.xctoolchain/usr/bin"
+    digests = {}
+    clang = {}
+    for sdk in IOS_SDKS:
+        path = Path(tool_field(sdk + " clang", ["xcrun", "--sdk", sdk, "--find", "clang"],
+                               r"/[^\r\n]+", env=env)).resolve(strict=True)
+        if not path.is_relative_to(compiler_root) or not path.is_file():
+            raise ValueError("clang is outside the pinned Xcode toolchain")
+        if path not in digests:
+            digests[path] = file_digest(path)
+        clang[sdk] = digests[path]
     return {
+        "appleToolchain": APPLE_TOOLCHAIN,
+        "clangSha256": clang,
         "xcodeVersion": tool_field("Xcode version", ["xcodebuild", "-version"],
-                                   rf"Xcode {version_pattern}\nBuild version [0-9]{{1,3}}[A-Z][0-9]{{1,6}}[a-z]?"),
-        "sdkVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-version"], version_pattern)
-                        for sdk in ("iphoneos", "iphonesimulator")},
+                                   rf"Xcode {version_pattern}\nBuild version [0-9]{{1,3}}[A-Z][0-9]{{1,6}}[a-z]?", env=env),
+        "sdkVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-version"], version_pattern, env=env)
+                        for sdk in IOS_SDKS},
         "sdkBuildVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-build-version"],
-                                            r"[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?")
-                             for sdk in ("iphoneos", "iphonesimulator")},
+                                            r"[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?", env=env)
+                             for sdk in IOS_SDKS},
     }
 
 
@@ -98,23 +128,23 @@ def verify_apple_pin(metadata, toolchain):
         raise ValueError("actual Apple toolchain differs from the source pin")
 
 
-def tool_metadata(root, toolchain, bridge):
+def tool_metadata(root, toolchain, bridge, apple):
     for name in ("gomobile", "gobind"):
         executable = shutil.which(name)
         if not executable:
             raise ValueError(f"{name} build tool is missing")
         check_mobile_tool("go", executable, name, toolchain, bridge)
     return {
-        "sourceCommit": tool_field("source commit", ["git", "rev-parse", "HEAD"], r"[0-9a-f]{40}", cwd=root),
+        "sourceCommit": tool_field("source commit", ["git", "--no-replace-objects", "rev-parse", "HEAD"], r"[0-9a-f]{40}", cwd=root),
         "goVersion": tool_field("Go version", ["go", "version"],
                                 rf"go version go{re.escape(toolchain['go'])} darwin/(?:arm64|amd64)"),
         "gomobileModule": toolchain["gomobile"],
         "gobindModule": toolchain["gomobile"],
-        **apple_metadata(),
+        **apple,
     }
 
 
-def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
+def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None, *, apple):
     root, source_lock, products = Path(root).resolve(), Path(source_lock).resolve(), Path(products).resolve()
     lock = json.loads(source_lock.read_text())
     if lock.get("status") != "verified_build":
@@ -126,7 +156,7 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
     compiled_bridge = directory_digest(products / "work/bridge")
     if (products / "compiled-bridge.sha256").read_text().strip() != compiled_bridge:
         raise ValueError("EmbeddedCore bridge copy differs from the gomobile build input")
-    metadata = tool_metadata(root, lock["toolchain"], products / "work/bridge")
+    metadata = tool_metadata(root, lock["toolchain"], products / "work/bridge", apple)
     if mode == "strict":
         verify_apple_pin(metadata, lock["toolchain"])
     effective = {**lock, "artifacts": {**lock["artifacts"], **actual}}
@@ -174,6 +204,11 @@ def verify(root, source_lock, products, mode=None):
     toolchain = source["toolchain"]
     if any(manifest.get(key) != toolchain["gomobile"] for key in ("gomobileModule", "gobindModule")):
         raise ValueError("recorded binding tools differ from the source pin")
+    clang = manifest.get("clangSha256")
+    if (manifest.get("appleToolchain") != APPLE_TOOLCHAIN or not isinstance(clang, dict)
+            or set(clang) != set(IOS_SDKS)
+            or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in clang.values())):
+        raise ValueError("missing pinned Apple compiler provenance")
     if mode == "strict" and any(source["artifacts"].get(k) != v for k, v in expected["slices"].items()):
         raise ValueError("cached slices differ from frozen digests")
     if mode == "strict":
@@ -212,7 +247,7 @@ def verify_prepared_source(manifest, root, commit):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("record", "verify", "install"))
+    parser.add_argument("operation", choices=("verify", "install"))
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--source-lock", required=True, type=Path)
     parser.add_argument("--products", required=True, type=Path)
@@ -221,15 +256,11 @@ def main():
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--derived", type=Path)
     parser.add_argument("--platform", choices=("device", "simulator"))
-    parser.add_argument("--xcode-root", type=Path)
-    parser.add_argument("--xcode-lock", type=Path)
     parser.add_argument("--prepared-source", nargs=2, metavar=("ROOT", "COMMIT"))
     args = parser.parse_args()
     if args.prepared_source and args.operation != "install":
         parser.error("--prepared-source requires install")
-    result = (record(args.root, args.source_lock, args.products, args.mode or "strict",
-                     args.xcode_root, args.xcode_lock) if args.operation == "record"
-              else verify(args.root, args.source_lock, args.products, args.mode))
+    result = verify(args.root, args.source_lock, args.products, args.mode)
     if args.operation == "install":
         if not args.bundle:
             parser.error("install requires --bundle")

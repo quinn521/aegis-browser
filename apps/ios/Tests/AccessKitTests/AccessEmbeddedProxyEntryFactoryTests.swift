@@ -458,6 +458,81 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         XCTAssertEqual(core.stopCount, 2)
         core.finishStop()
     }
+
+    func testSynchronousDocumentReceiptKeepsPortUntilCoreStop() async throws {
+        try await assertPortRetirementWaitsForBoth(documentFirst: true)
+    }
+
+    func testCompletedCoreStopKeepsPortUntilDocumentReceipt() async throws {
+        try await assertPortRetirementWaitsForBoth(documentFirst: false)
+    }
+
+    func testProvisionCannotAdoptAnAlreadyRunningCoreItDoesNotOwn() async throws {
+        let core = DelayedStopCore()
+        core.start(configData: Data())
+        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: {
+            XCTFail("A foreign core must fail before authorization")
+            throw URLError(.userAuthenticationRequired)
+        })
+        do {
+            _ = try await session.provision(generation: 1, deadline: .seconds(2))
+            XCTFail("A foreign core cannot be published under this session")
+        } catch AccessSiteSessionError.runtimeNotReady {}
+        await session.stopUnpublished()
+        XCTAssertTrue(core.isRunning)
+        XCTAssertEqual(core.stopCount, 0)
+    }
+
+    private func assertPortRetirementWaitsForBoth(documentFirst: Bool) async throws {
+        let core = DelayedStopCore()
+        let stopStarted = expectation(description: "native stop entered")
+        let stopFinished = expectation(description: "native stop finished")
+        core.onStop = { _ in stopStarted.fulfill() }
+        core.onStopFinished = { _ in stopFinished.fulfill() }
+        let parameters = try AccessRealityVisionParameters(address: "node.invalid", port: 443,
+            userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
+        var documentReceipt: (@MainActor () -> Void)?
+        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters }, retireDocuments: { _, receipt in
+            if documentFirst { receipt() } else { documentReceipt = receipt }
+        })
+        let provision = try await session.provision(generation: 1, deadline: .seconds(3))
+        let port = try XCTUnwrap(NWEndpoint.Port(rawValue: provision.endpoint.port))
+        XCTAssertTrue(session.activate())
+        session.shutdown(identity: provision.endpoint.identity)
+        defer { core.finishStop(); documentReceipt?() }
+        XCTAssertFalse(session.isRuntimeHealthy)
+        await fulfillment(of: [stopStarted], timeout: 2)
+        let boundDuringStop = await Self.canBind(port)
+        XCTAssertFalse(boundDuringStop)
+        core.finishStop()
+        await fulfillment(of: [stopFinished], timeout: 2)
+        if !documentFirst {
+            let boundBeforeReceipt = await Self.canBind(port)
+            XCTAssertFalse(boundBeforeReceipt)
+            try XCTUnwrap(documentReceipt)()
+            documentReceipt = nil
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if await Self.canBind(port) { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("Both completed retirement obligations must release the old port")
+    }
+
+    private static func canBind(_ port: NWEndpoint.Port) async -> Bool {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+        guard let listener = try? NWListener(using: parameters) else { return false }
+        listener.newConnectionHandler = { $0.cancel() }
+        defer { listener.cancel() }
+        do {
+            try await AccessNWListenerBootstrap.awaitReady(listener, on: .global())
+            return true
+        } catch {
+            return false
+        }
+    }
 }
 
 private final class DelayedStopCore: AccessEmbeddedCoreControlling, @unchecked Sendable {

@@ -1,11 +1,13 @@
 """Offline preparation tests; no device, signing or Apple operations."""
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import tarfile
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -125,12 +127,26 @@ class AlphaDeviceProjectTest(unittest.TestCase):
         git("-c", "user.name=Synthetic Fixture", "-c", "user.email=fixture@example.invalid",
             "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
         commit = git("rev-parse", "HEAD")
+        files_to_mutate[0].write_text("// replacement bytes must not compile\n")
+        git("add", str(files_to_mutate[0]))
+        replacement = git("-c", "user.name=Synthetic Fixture", "-c", "user.email=fixture@example.invalid",
+                          "-c", "commit.gpgSign=false", "commit-tree", git("write-tree"), "-m", "replacement")
+        git("restore", "--staged", "--worktree", str(files_to_mutate[0]))
+        git("replace", commit, replacement)
+        archive_git = ["git", "-C", str(self.root), "archive", commit, "--", *module.SNAPSHOT_PATHS]
+        replaced = subprocess.check_output(archive_git)
+        with tarfile.open(fileobj=io.BytesIO(replaced)) as archive:
+            synthetic = archive.extractfile(str(files_to_mutate[0].relative_to(self.root))).read()
+        self.assertEqual(synthetic, b"// replacement bytes must not compile\n")
+        original = subprocess.check_output([archive_git[0], "--no-replace-objects", *archive_git[1:]])
+        self.assertNotEqual(replaced, original)
+        self.assertEqual(module.prepared_source_commit(self.root), commit)
         (self.ios / "AegisApp/Ignored.swift").write_text("// ignored input must never compile\n")
         receipt = self.prepare()
         variant = module.load_spec(self.out / "project.yml")
         app_info = self.out / "overlay/AegisApp/Info.plist"
         self.assertEqual(receipt["sourceCommit"], commit)
-        self.assertEqual(len(receipt["sourceArchiveSha256"]), 64)
+        self.assertEqual(receipt["sourceArchiveSha256"], hashlib.sha256(original).hexdigest())
         self.assertEqual(plistlib.loads(app_info.read_bytes())["AegisPreparedSourceCommit"], commit)
         for target in ("AegisTests", "AegisUITests"):
             info = Path(variant["targets"][target]["settings"]["base"]["INFOPLIST_FILE"])
@@ -150,7 +166,7 @@ class AlphaDeviceProjectTest(unittest.TestCase):
             self.assertEqual(compiled.parent.stat().st_mode & 0o777, 0o555)
         self.assertFalse((self.out / "source/apps/ios/AegisApp/Ignored.swift").exists())
         for path in files_to_mutate:
-            git("restore", str(path))
+            git("--no-replace-objects", "restore", str(path))
         extra = self.ios / "untracked.swift"
         extra.write_text("// synthetic untracked input\n")
         self.assertIsNone(module.prepared_source_commit(self.root))

@@ -46,7 +46,7 @@ public final class AccessHostDataStoreRegistry {
     private struct Entry {
         var store: WKWebsiteDataStore
         var record: AccessHostStoreRecord
-        var appliedGeneration: UInt64?
+        var appliedEndpoint: AccessManagedProxyEndpoint
         var retiringDocuments: Set<UUID> = []
     }
 
@@ -77,7 +77,8 @@ public final class AccessHostDataStoreRegistry {
             return false
         }
         if endpoint.state == .ready {
-            if let identity = endpoints[storeKey]?.identity, listenerRetirements[identity] != nil { return false }
+            if listenerRetirements[endpoint.identity] != nil { return false }
+            if let applied = entries[storeKey]?.appliedEndpoint, listenerRetirements[applied.identity] != nil { return false }
             guard let configuration = configuration(for: endpoint) else {
                 var rejected = endpoint
                 rejected.state = .failed
@@ -86,7 +87,7 @@ public final class AccessHostDataStoreRegistry {
             }
             if let entry = entries[storeKey] {
                 entry.store.proxyConfigurations = [configuration]
-                entries[storeKey]?.appliedGeneration = endpoint.generation
+                entries[storeKey]?.appliedEndpoint = endpoint
             }
         }
         endpoints[storeKey] = endpoint
@@ -234,7 +235,9 @@ public final class AccessHostDataStoreRegistry {
         var bound: [AccessHostStoreKey: Set<String>] = [:]
         for (key, endpoint) in endpoints where endpoint.identity == identity {
             if endpoint.state == .ready { endpoints[key]?.state = .failed }
-            if let entry = entries[key] { bound[key] = entry.record.boundTabIDs }
+        }
+        for (key, entry) in entries where entry.appliedEndpoint.identity == identity {
+            bound[key] = entry.record.boundTabIDs
         }
         listenerRetirements[identity] = finish
         finishListenerRetirements()
@@ -242,14 +245,14 @@ public final class AccessHostDataStoreRegistry {
     }
 
     public func acknowledgeRetiredTab(_ tabID: String, key: AccessHostStoreKey, identity: String) {
-        guard endpoints[key]?.identity == identity, listenerRetirements[identity] != nil else { return }
+        guard entries[key]?.appliedEndpoint.identity == identity, listenerRetirements[identity] != nil else { return }
         entries[key]?.record.boundTabIDs.remove(tabID)
         finishListenerRetirements()
     }
 
     private func finishListenerRetirements() {
         for (identity, finish) in listenerRetirements {
-            let keys = endpoints.keys.filter { endpoints[$0]?.identity == identity && entries[$0] != nil }
+            let keys = entries.keys.filter { entries[$0]?.appliedEndpoint.identity == identity }
             guard keys.allSatisfy({ key in
                 entries[key]?.record.boundTabIDs.isEmpty == true && entries[key]?.retiringDocuments.isEmpty == true
             }) else { continue }
@@ -308,6 +311,7 @@ public final class AccessHostDataStoreRegistry {
         let storeKey = key(scopeID, host, isPrivate)
         let endpoint = endpoints[storeKey]
         if let endpoint, !endpoint.hasAdmittedBinding { return nil }
+        if let applied = entries[storeKey]?.appliedEndpoint, listenerRetirements[applied.identity] != nil { return nil }
         if let endpoint, listenerRetirements[endpoint.identity] != nil { return nil }
         if entries[storeKey] == nil {
             guard let endpoint, let configuration = configuration(for: endpoint) else { return nil }
@@ -321,16 +325,16 @@ public final class AccessHostDataStoreRegistry {
                     proxyEnabled: true,
                     idleSince: nil
                 ),
-                appliedGeneration: endpoint.generation
+                appliedEndpoint: endpoint
             )
         }
         guard var entry = entries[storeKey] else { return nil }
         entry.record.boundTabIDs.insert(tabID)
         entry.record.idleSince = nil
-        if let endpoint, endpoint.state == .ready, entry.appliedGeneration != endpoint.generation {
+        if let endpoint, endpoint.state == .ready, entry.appliedEndpoint != endpoint {
             guard let configuration = configuration(for: endpoint) else { return nil }
             entry.store.proxyConfigurations = [configuration]
-            entry.appliedGeneration = endpoint.generation
+            entry.appliedEndpoint = endpoint
         }
         entries[storeKey] = entry
         _ = now

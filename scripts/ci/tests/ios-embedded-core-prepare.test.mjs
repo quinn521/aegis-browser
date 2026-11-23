@@ -119,7 +119,13 @@ case "$tool:$1" in
       [[ "$3" == -json ]]
       [[ "$PREP_SCENARIO" == record && -f "$IOS_CI_ROOT/EmbeddedCore/slice-digests.txt" ]] && fail 47
       binding="$(basename "$4")"
-      [[ "$PREP_SCENARIO:$binding" == wrong-gobind:gobind ]] && PREP_MODULE_SUM='h1:invalid'
+      if [[ "$binding" == gobind ]]; then
+        case "$PREP_SCENARIO:$4" in
+          wrong-gobind:*"/go path/"*|stale-install:*"/go path/"*|wrong-private-gobind:*"/go path/"*)
+            PREP_MODULE_SUM='h1:invalid' ;;
+          wrong-private-gobind:*/tools/gobind) PREP_MODULE_SUM='h1:invalid' ;;
+        esac
+      fi
       printf '{"GoVersion":"go1.27.3","Path":"golang.org/x/mobile/cmd/%s","Main":{"Path":"golang.org/x/mobile","Version":"%s","Sum":"%s"}}\n' "$binding" "$PREP_MODULE_VERSION" "$PREP_MODULE_SUM"
       if [[ "$PREP_SCENARIO" == metadata-gomobile ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     elif [[ "$PREP_SCENARIO" == version-failure ]]; then
@@ -141,12 +147,14 @@ case "$tool:$1" in
     ;;
   go:env)
     [[ "$2" == -json ]]
-    printf '{"GOFLAGS":"%s","GOBIN":"","GOPATH":"%s","GOPROXY":"%s","GONOPROXY":"%s"}\n' "$GOFLAGS" "$GOPATH" "$GOPROXY" "$GONOPROXY"
+    printf '{"GOFLAGS":"%s","GOBIN":"%s","GOPATH":"%s","GOPROXY":"%s","GONOPROXY":"%s"}\n' "$GOFLAGS" "$GOBIN" "$GOPATH" "$GOPROXY" "$GONOPROXY"
     ;;
   go:install)
     [[ "$#" == 3 && "$2" == "golang.org/x/mobile/cmd/gomobile@$PREP_MODULE_VERSION"       && "$3" == "golang.org/x/mobile/cmd/gobind@$PREP_MODULE_VERSION" ]]
     [[ "$GOBIN" == "$IOS_CI_SCRATCH/tmp/"*/tools || -z "$IOS_CI_SCRATCH" ]]
-    [[ "$PREP_SCENARIO" == install ]] && fail 43
+    [[ "$GOTMPDIR" == "$PWD/go-tmp" && -d "$GOTMPDIR" && "$GOTMPDIR" != "$PREP_FOREIGN_TMP" ]]
+    printf '%s\n' 'synthetic compiler intermediate' > "$GOTMPDIR/install-work"
+    [[ "$PREP_SCENARIO" == install || "$PREP_SCENARIO" == stale-install ]] && fail 43
     diagnostic
     cp "$PREP_TOOLS" "$GOBIN/gomobile"
     cp "$PREP_TOOLS" "$GOBIN/gobind"
@@ -167,6 +175,9 @@ case "$tool:$1" in
     diagnostic
     ;;
   gomobile:bind)
+    [[ "$TOOLCHAINS" == com.apple.dt.toolchain.XcodeDefault && "$DEVELOPER_DIR" == "$PREP_DEVELOPER" ]]
+    [[ "$GOPACKAGESDRIVER" == off && -d "$GOTMPDIR" && "$GOTMPDIR" == "$(dirname "$PWD")/go-tmp" ]]
+    printf '%s\n' 'synthetic binding intermediate' > "$GOTMPDIR/bind-work"
     [[ "$PREP_SCENARIO" == bind ]] && fail 46
     diagnostic
     if [[ "$PREP_SCENARIO" == cancel ]]; then
@@ -176,22 +187,29 @@ case "$tool:$1" in
     if [[ "$PREP_SCENARIO" == changed-bridge ]]; then
       printf '\n// changed during bind\n' >> go.mod
     fi
+    if [[ "$PREP_SCENARIO" == changed-clang ]]; then printf 'replacement compiler' >> "$PREP_CLANG"; fi
     while [[ "$1" != -o ]]; do shift; done
     python3 "$PREP_PACKAGE" generate "$2"
     ;;
   xcodebuild:-create-xcframework)
+    [[ "$TOOLCHAINS" == com.apple.dt.toolchain.XcodeDefault && "$DEVELOPER_DIR" == "$PREP_DEVELOPER" ]]
     python3 "$PREP_PACKAGE" pack "$@"
     ;;
-  git:rev-parse)
+  git:--no-replace-objects)
+    [[ "$2" == rev-parse ]]
     printf '%s\n' "$PREP_SOURCE_COMMIT"
     if [[ "$PREP_SCENARIO" == metadata-commit ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     ;;
   xcodebuild:-version)
+    [[ "$TOOLCHAINS" == com.apple.dt.toolchain.XcodeDefault && "$DEVELOPER_DIR" == "$PREP_DEVELOPER" ]]
     printf 'Xcode 27.0\nBuild version 27A266a\n'
     if [[ "$PREP_SCENARIO" == metadata-xcode ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     ;;
   xcrun:--sdk)
-    if [[ "$3" == "--show-sdk-build-version" ]]; then
+    [[ "$TOOLCHAINS" == com.apple.dt.toolchain.XcodeDefault && "$DEVELOPER_DIR" == "$PREP_DEVELOPER" ]]
+    if [[ "$3 $4" == "--find clang" ]]; then
+      printf '%s\n' "$PREP_CLANG"
+    elif [[ "$3" == "--show-sdk-build-version" ]]; then
       printf '24A111\n'
     else
       printf '27.0\n'
@@ -213,12 +231,18 @@ function fixture(t, scenario) {
   const archive = join(root, goArchive);
   const catalog = join(root, 'catalog');
   const toolScript = join(root, 'tool-stub');
+  const clang = join(bin, 'Toolchains/XcodeDefault.xctoolchain/usr/bin/clang');
+  const foreignTemp = join(root, 'foreign-go-tmp');
   const calls = join(root, 'calls');
   const ready = join(root, 'ready');
   const products = join(job, 'EmbeddedCore');
   const trace = join(job, 'git-trace.log');
   const python = execFileSync('python3', ['-I', '-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
   mkdirSync(job, {mode: 0o700});
+  mkdirSync(foreignTemp);
+  writeFileSync(join(foreignTemp, 'sentinel'), 'other job temp\n');
+  mkdirSync(dirname(clang), {recursive: true});
+  writeFileSync(clang, 'selected fixture compiler\n');
   for (const directory of [bin, join(goPath, 'bin'), join(distribution, 'go/bin')]) mkdirSync(directory, {recursive: true});
   for (const file of [
     lock,
@@ -254,9 +278,9 @@ function fixture(t, scenario) {
   if (scenario === 'bad-size') entry.size += 1;
   const files = scenario === 'missing-release' ? [] : scenario === 'duplicate-release' ? [entry, entry] : [entry];
   writeFileSync(catalog, JSON.stringify([{version: entry.version, files}]));
-  if (scenario === 'installed-gomobile' || scenario === 'wrong-gobind') {
-    for (const name of ['gomobile', 'gobind']) copyFileSync(toolScript, join(goPath, 'bin', name));
-  }
+  const warm = ['installed-gomobile', 'wrong-gobind', 'wrong-private-gobind', 'stale-install'].includes(scenario);
+  const globalPair = warm ? ['gomobile', 'gobind'].map(name => join(goPath, 'bin', name)) : [];
+  for (const path of globalPair) copyFileSync(toolScript, path);
   const packageScript = join(root, 'package.py');
   writeFileSync(packageScript, packageFixture);
   const shared = join(goPath, 'pkg/gomobile');
@@ -264,20 +288,24 @@ function fixture(t, scenario) {
   writeFileSync(join(shared, 'sentinel'), 'runner-owned gomobile state\n');
   writeFileSync(join(bin, 'python3'), '#!/bin/bash\nexec "$PREP_PYTHON" "$@"\n', {mode: 0o755});
   const options = {cwd: root, encoding: 'utf8', env: {
-    PATH: `${bin}:/usr/bin:/bin`, HOME: root, GOPATH: goPath, GOPROXY: 'direct', GONOPROXY: 'example.invalid/*', GOTOOLCHAIN: 'auto',
+    PATH: `${bin}:/usr/bin:/bin`, HOME: root, GOPATH: goPath, GOBIN: join(goPath, 'bin'),
+    GOPROXY: 'direct', GONOPROXY: 'example.invalid/*', GOTOOLCHAIN: 'auto',
+    TOOLCHAINS: 'org.fixture.alternative', DEVELOPER_DIR: bin, GOTMPDIR: foreignTemp,
+    GOPACKAGESDRIVER: 'must-not-run',
     HTTPS_PROXY: proxy, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.proxy', GIT_CONFIG_VALUE_0: proxy,
     GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file', GIT_DIR: join(root, 'wrong checkout'), GIT_TRACE: trace,
     IOS_CI_ROOT: job, IOS_CI_SOURCE: source, PREP_SCENARIO: scenario, PREP_PYTHON: python,
     PREP_ARCH: arch, PREP_ARCHIVE: archive, PREP_ARCHIVE_NAME: goArchive, PREP_CATALOG: catalog,
     PREP_MODULE_VERSION: moduleVersion, PREP_MODULE_SUM: moduleSum, PREP_PACKAGE: packageScript, PREP_SOURCE_COMMIT: sourceCommit, PREP_TOOLS: toolScript, PREP_PROXY: proxy,
-    PREP_CALLS: calls, PREP_READY: ready,
+    PREP_CALLS: calls, PREP_READY: ready, PREP_CLANG: clang, PREP_DEVELOPER: bin, PREP_FOREIGN_TMP: foreignTemp,
   }};
-  return {options, job, products, trace, calls, ready, shared};
+  return {options, job, products, trace, calls, ready, shared, clang, foreignTemp, globalPair,
+    globalToolBytes: readFileSync(toolScript)};
 }
 
 const bash = ['-e', '-o', 'pipefail', '-c', prepare.run];
 
-function assertPrivate({job, trace}, stdout, stderr) {
+function assertPrivate({job, trace, foreignTemp, globalPair, globalToolBytes}, stdout, stderr) {
   const sinks = [];
   if (stdout.includes(token)) sinks.push('Actions stdout');
   if (stderr.includes(token)) sinks.push('Actions stderr');
@@ -288,6 +316,9 @@ function assertPrivate({job, trace}, stdout, stderr) {
   assert.deepEqual(sinks, [], 'tool diagnostics escaped the supervisor');
   assert(!existsSync(trace), 'Git tracing created a diagnostic file');
   assert(!readdirSync(dirname(job)).some(name => name.startsWith('.aegis-ios-scratch-')), 'private setup scratch survived');
+  assert.deepEqual(readdirSync(foreignTemp), ['sentinel']);
+  assert.equal(readFileSync(join(foreignTemp, 'sentinel'), 'utf8'), 'other job temp\n');
+  for (const path of globalPair) assert.deepEqual(readFileSync(path), globalToolBytes);
   assert.equal(stdout, '');
 }
 
@@ -299,7 +330,8 @@ for (const [scenario, phase, status] of [
   ['version-failure', 'go version', 42],
   ['version-mismatch', 'go version', 2],
   ['install', 'go install', 43],
-  ['wrong-gobind', 'go version -m', 1],
+  ['wrong-private-gobind', 'go install', 1],
+  ['stale-install', 'go install', 43],
   ['tidy', 'git fixture-fetch', 45],
   ['bind', 'gomobile bind', 46],
   ['changed-bridge', 'gomobile bind', 1],
@@ -308,7 +340,8 @@ for (const [scenario, phase, status] of [
   ['changed-packaged-slice', 'xcodebuild -create-xcframework', 1],
   ['record', 'go version -m', 47],
   ['metadata-go', 'go version -m', 1],
-  ['metadata-commit', 'git rev-parse', 1],
+  ['metadata-commit', 'git --no-replace-objects rev-parse', 1],
+  ['changed-clang', 'gomobile bind', 1],
   ['metadata-xcode', 'xcodebuild -version', 1],
   ['metadata-iphoneos', 'xcrun --sdk iphoneos', 1],
   ['metadata-iphonesimulator', 'xcrun --sdk iphonesimulator', 1],
@@ -346,7 +379,7 @@ for (const [scenario, status, reachesArchive] of [
   });
 }
 
-for (const scenario of ['cold-install', 'installed-gomobile']) {
+for (const scenario of ['cold-install', 'installed-gomobile', 'wrong-gobind']) {
   test(`EmbeddedCore preparation retains the archive inputs on ${scenario}`, t => {
     const setup = fixture(t, scenario);
     const result = spawnSync('bash', bash, {...setup.options, timeout: 20000});
@@ -358,7 +391,7 @@ for (const scenario of ['cold-install', 'installed-gomobile']) {
     assert.match(calls, /catalog\n/u);
     assert.match(calls, /archive\n/u);
     assert.doesNotMatch(calls, /unexpected tool selection/u);
-    assert.equal(calls.includes('go install'), scenario === 'cold-install');
+    assert.equal(calls.includes('go install'), scenario !== 'installed-gomobile');
     assert(!calls.includes('gomobile init'));
     assert.equal(readFileSync(join(setup.shared, 'sentinel'), 'utf8'), 'runner-owned gomobile state\n');
     const manifest = JSON.parse(readFileSync(join(setup.products, 'build-manifest.json'), 'utf8'));
@@ -371,6 +404,9 @@ for (const scenario of ['cold-install', 'installed-gomobile']) {
     assert.equal(manifest.gobindModule, manifest.gomobileModule);
     assert.equal(manifest.goVersion, `go version go1.27.3 darwin/${arch}`);
     assert.equal(manifest.xcodeVersion, 'Xcode 27.0\nBuild version 27A266a');
+    assert.equal(manifest.appleToolchain, 'com.apple.dt.toolchain.XcodeDefault');
+    const clangHash = createHash('sha256').update(readFileSync(setup.clang)).digest('hex');
+    assert.deepEqual(manifest.clangSha256, {iphoneos: clangHash, iphonesimulator: clangHash});
     assert.deepEqual(manifest.sdkVersions, {iphoneos: '27.0', iphonesimulator: '27.0'});
     const archive = archiveSteps.find(step => step.name === 'Compile uncredentialed native archive');
     assert(archiveSteps.indexOf(prepare) < archiveSteps.indexOf(archive));
@@ -407,6 +443,54 @@ test('local EmbeddedCore preparation records the toolchain selected by the build
   const calls = readFileSync(setup.calls, 'utf8');
   assert.doesNotMatch(calls, /unexpected tool selection/u);
   assert.match(calls, /go mod tidy[\s\S]+gomobile bind[\s\S]+go version -m/u);
+});
+
+test('offline preparation worker replaces a stale pair once and fails closed on bad private tools or compiler drift', async t => {
+  const worker = String.raw`
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+
+source = Path(os.environ["IOS_CI_SOURCE"])
+supervisor = runpy.run_path(str(source / "scripts/ci/ios-archive-supervisor.py"))
+scratch = supervisor["JobScratch"](Path(os.environ["IOS_CI_ROOT"]))
+try:
+    env = scratch.environment(supervisor["archive_environment"]())
+    assert env["GOTMPDIR"] == env["TMPDIR"] == str(scratch.path / "tmp")
+    shutil.copytree(os.environ["PREP_LOCAL_GO"], scratch.path / "go")
+    status = subprocess.run(["/bin/bash", "scripts/ci/run-ios-embedded-core-prepare.sh"], cwd=source, env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode
+finally:
+    assert scratch.clean()
+raise SystemExit(status)
+`;
+  for (const [scenario, expected] of [['wrong-gobind', 0], ['stale-install', 43],
+    ['wrong-private-gobind', 1], ['changed-clang', 1]]) {
+    await t.test(scenario, subtest => {
+      const setup = fixture(subtest, scenario);
+      const {cwd, env} = setup.options;
+      const result = spawnSync(env.PREP_PYTHON, ['-I', '-B', '-c', worker], {
+        ...setup.options, timeout: 18000,
+        env: {...env, PREP_LOCAL_GO: join(cwd, 'distribution', 'go')},
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, expected, result.stderr);
+      assertPrivate(setup, result.stdout, result.stderr);
+      const calls = readFileSync(setup.calls, 'utf8');
+      assert.equal(calls.split('\n').filter(line => line.startsWith('go install ')).length, 1);
+      const manifest = join(setup.products, 'build-manifest.json');
+      if (expected === 0) {
+        const receipt = JSON.parse(readFileSync(manifest, 'utf8'));
+        assert.equal(receipt.gobindModule, `golang.org/x/mobile@${moduleVersion}`);
+        assert.equal(receipt.appleToolchain, 'com.apple.dt.toolchain.XcodeDefault');
+      } else {
+        assert(!existsSync(manifest));
+      }
+      if (scenario === 'wrong-private-gobind' || scenario === 'stale-install') assert(!calls.includes('gomobile bind'));
+    });
+  }
 });
 
 for (const [scenario, signal, status] of [['cancel', 'SIGINT', 130], ['cancel', 'SIGTERM', 143], ['download-cancel', 'SIGTERM', 143]]) {

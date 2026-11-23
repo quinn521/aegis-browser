@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Synchronization
 
 #if canImport(AegisEmbeddedCore)
@@ -15,6 +16,7 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
     }
 
     private let native: any AccessGoNativeCore
+    private let operations = AccessGoOperationLifetime()
 
     public init(isolated: Bool = false) throws {
         #if canImport(AegisEmbeddedCore)
@@ -61,25 +63,27 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
         guard let json = String(data: configData, encoding: .utf8) else {
             throw AccessEmbeddedCoreError.unverifiedAsset
         }
-        try await native.start(json)
+        try await operations.start(native, config: json)
     }
 
     public func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
-        guard isRunning else { throw AccessEmbeddedCoreError.unverifiedAsset }
+        guard isRunning, let generation = operations.begin() else { throw AccessEmbeddedCoreError.unverifiedAsset }
+        defer { operations.end() }
         let id = try await native.dial(host: host, port: port)
-        if Task.isCancelled {
-            native.close(id)
+        if Task.isCancelled || !operations.isCurrent(generation) {
+            operations.close(id, generation: generation, native: native)
             throw CancellationError()
         }
-        return AccessGoEmbeddedStream(streamID: id, native: native)
+        return AccessGoEmbeddedStream(streamID: id, generation: generation, native: native, operations: operations)
     }
 
     public func stop() async {
-        await native.stop()
+        await operations.stop(native)
     }
 }
 
-/// Socket waits are owned by Go goroutines. No Swift or dispatch thread parks.
+/// Read, write, dial and stop run in Go. The synchronous close gives Swift an
+/// acknowledgement on its dedicated close queue without waiting on a caller.
 protocol AccessGoNativeCore: Sendable {
     var isRunning: Bool { get }
     func start(_ json: String) async throws
@@ -90,26 +94,105 @@ protocol AccessGoNativeCore: Sendable {
     func stop() async
 }
 
-private final class AccessGoEmbeddedStream: AccessRealityPathStream, @unchecked Sendable {
-    private let streamID: Int64
-    private let native: any AccessGoNativeCore
-    private let closed = Mutex(false)
-
-    init(streamID: Int64, native: any AccessGoNativeCore) {
-        self.streamID = streamID
-        self.native = native
+private final class AccessGoOperationLifetime: Sendable {
+    private struct State {
+        var generation: UInt64 = 0
+        var startup: Task<Void, Error>?
+        var stop: Task<Void, Never>?
     }
 
-    var isOpen: Bool { closed.withLock { !$0 } }
+    private let state = Mutex(State())
+    private let active = DispatchGroup()
+    private let closes = DispatchQueue(label: "aegis.access.native-close", qos: .utility)
+
+    func begin(generation: UInt64? = nil) -> UInt64? {
+        state.withLock {
+            guard $0.startup == nil, $0.stop == nil, generation == nil || generation == $0.generation else { return nil }
+            active.enter()
+            return $0.generation
+        }
+    }
+
+    func end() { active.leave() }
+
+    func isCurrent(_ generation: UInt64) -> Bool {
+        state.withLock { $0.startup == nil && $0.stop == nil && $0.generation == generation }
+    }
+
+    func close(_ id: Int64, generation: UInt64, native: any AccessGoNativeCore) {
+        guard begin(generation: generation) != nil else { return }
+        closes.async { [active] in
+            native.close(id)
+            active.leave()
+        }
+    }
+
+    func start(_ native: any AccessGoNativeCore, config: String) async throws {
+        try Task.checkCancellation()
+        let startup = try state.withLock { state -> Task<Void, Error> in
+            guard state.startup == nil else { throw AccessEmbeddedCoreError.unverifiedAsset }
+            let priorStop = state.stop
+            if priorStop != nil { state.generation &+= 1 }
+            let task = Task {
+                await priorStop?.value
+                try await native.start(config)
+            }
+            state.startup = task
+            state.stop = nil
+            return task
+        }
+        defer { state.withLock { $0.startup = nil } }
+        try await startup.value
+    }
+
+    func stop(_ native: any AccessGoNativeCore) async {
+        let stop = state.withLock { state -> Task<Void, Never> in
+            if let existing = state.stop { return existing }
+            let startup = state.startup
+            let task = Task { [active] in
+                _ = await startup?.result
+                // Stop drains the native registry. A close which already
+                // removed its handle from that registry can still be running.
+                await native.stop()
+                await withCheckedContinuation { continuation in
+                    active.notify(queue: .global()) { continuation.resume() }
+                }
+            }
+            state.stop = task
+            return task
+        }
+        await stop.value
+    }
+}
+
+private final class AccessGoEmbeddedStream: AccessRealityPathStream, @unchecked Sendable {
+    private let streamID: Int64
+    private let generation: UInt64
+    private let native: any AccessGoNativeCore
+    private let operations: AccessGoOperationLifetime
+    private let closed = Mutex(false)
+
+    init(streamID: Int64, generation: UInt64, native: any AccessGoNativeCore, operations: AccessGoOperationLifetime) {
+        self.streamID = streamID
+        self.generation = generation
+        self.native = native
+        self.operations = operations
+    }
+
+    var isOpen: Bool { closed.withLock { !$0 } && operations.isCurrent(generation) }
 
     func read(maxBytes: Int) async throws -> Data? {
-        try await withTaskCancellationHandler {
+        guard operations.begin(generation: generation) != nil else { return nil }
+        defer { operations.end() }
+        return try await withTaskCancellationHandler {
             let data = try await native.read(streamID, maxBytes: maxBytes)
             return data?.isEmpty == true ? nil : data
         } onCancel: { self.close() }
     }
 
     func write(_ data: Data) async throws {
+        guard operations.begin(generation: generation) != nil else { throw CancellationError() }
+        defer { operations.end() }
         try await withTaskCancellationHandler {
             try await native.write(streamID, data: data)
         } onCancel: { self.close() }
@@ -122,7 +205,7 @@ private final class AccessGoEmbeddedStream: AccessRealityPathStream, @unchecked 
             return true
         }
         guard shouldClose else { return }
-        native.close(streamID)
+        operations.close(streamID, generation: generation, native: native)
     }
 
     deinit { close() }
@@ -158,13 +241,19 @@ private struct AccessGomobileCore: AccessGoNativeCore, @unchecked Sendable {
         }
     }
     func close(_ id: Int64) {
-        if let runtime { runtime.closeStreamAsync(id) }
-        else { EmbeddedcoreCloseStreamAsync(id) }
+        if let runtime { runtime.closeStream(id) }
+        else { EmbeddedcoreCloseStream(id) }
     }
     func stop() async {
-        _ = try? await result { callback in
-            if let runtime { runtime.stopAsync(callback) }
-            else { EmbeddedcoreStopAsync(callback) }
+        do {
+            _ = try await result { callback in
+                if let runtime { runtime.stopAsync(callback) }
+                else { EmbeddedcoreStopAsync(callback) }
+            }
+        } catch {
+            // Go has already detached the instance and closed its stream table.
+            // Report the instance-close error without including native details.
+            Logger(subsystem: "com.gcsa.aegis", category: "Access").error("Embedded core instance close reported an error")
         }
     }
 

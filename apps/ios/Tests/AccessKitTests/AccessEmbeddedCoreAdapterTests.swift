@@ -135,6 +135,37 @@ final class AccessGoSchedulingTests: XCTestCase {
         let eof = try await stream.read(maxBytes: 1)
         XCTAssertNil(eof)
     }
+
+    func testStopJoinsAStreamCloseAlreadyRemovedFromTheNativeRegistry() async throws {
+        let closing = expectation(description: "stream close is in flight outside the native registry")
+        let registryStopped = expectation(description: "native stop returned after draining the registry")
+        let allowClose = DispatchSemaphore(value: 0)
+        let stopped = Mutex(false)
+        let native = ControlledAsyncNativeCore(onRead: {}, onClose: {
+            closing.fulfill()
+            _ = allowClose.wait(timeout: .now() + 5)
+        }, onStop: { registryStopped.fulfill() })
+        let core = AccessGoEmbeddedCore(native: native)
+        defer { allowClose.signal() }
+        try await core.start(configData: Data("{}".utf8))
+        let stream = try await core.dial(host: "controlled.invalid", port: 443)
+        // Close runs outside the caller and can take longer than the core stop receipt.
+        Task.detached { stream.close() }
+        await fulfillment(of: [closing], timeout: 2)
+        let completion = expectation(description: "full teardown")
+        let stop = Task {
+            await core.stop()
+            stopped.withLock { $0 = true }
+            completion.fulfill()
+        }
+        await fulfillment(of: [registryStopped], timeout: 2)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertFalse(stopped.withLock { $0 })
+        XCTAssertFalse(stream.isOpen)
+        allowClose.signal()
+        await fulfillment(of: [completion], timeout: 2)
+        await stop.value
+    }
 }
 
 /// Native callback contract double. Actual blocking saturation is exercised by
@@ -151,7 +182,14 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
     }
     private let state = Mutex(State())
     private let onRead: @Sendable () -> Void
-    init(onRead: @escaping @Sendable () -> Void) { self.onRead = onRead }
+    private let onClose: @Sendable () -> Void
+    private let onStop: @Sendable () -> Void
+    init(onRead: @escaping @Sendable () -> Void, onClose: @escaping @Sendable () -> Void = {},
+         onStop: @escaping @Sendable () -> Void = {}) {
+        self.onRead = onRead
+        self.onClose = onClose
+        self.onStop = onStop
+    }
     var snapshot: State { state.withLock { $0 } }
     var isRunning: Bool { snapshot.running }
     func start(_ json: String) async { state.withLock { $0.running = true } }
@@ -184,9 +222,10 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
             if read != nil { $0.finished += 1 }
             return read
         }
+        onClose()
         read?.resume(returning: Data())
     }
-    func stop() async { finishAll() }
+    func stop() async { finishAll(); onStop() }
     func finishAll() {
         let reads = state.withLock {
             $0.running = false

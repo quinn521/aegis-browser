@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-from ios_embedded_core import apple_metadata, check_mobile_tool, directory_digest, record, verify_apple_pin
+from ios_embedded_core import apple_build_environment, apple_metadata, check_mobile_tool, directory_digest, record, verify_apple_pin
 
 NAME = "AegisEmbeddedCore"
 FRAMEWORK = NAME + ".framework"
@@ -128,7 +128,7 @@ def binding_environment(go, environment):
             "unapproved GOFLAGS for attributed EmbeddedCore build")
     # Preserve Go's effective transport and cache settings, including values from
     # GOENV. Disable that file for compilation so it cannot inject other inputs.
-    environment.update(effective, GOENV="off", GO111MODULE="on", GOWORK="off", GOTOOLCHAIN="local",
+    environment.update(effective, GOENV="off", GO111MODULE="on", GOWORK="off", GOTOOLCHAIN="local", GOPACKAGESDRIVER="off",
                        GOFLAGS=" ".join(["-trimpath", "-buildvcs=false", *workers]), ZERO_AR_DATE="1",
                        SOURCE_DATE_EPOCH="0")
     for key in COMPILE_OVERRIDES:
@@ -272,19 +272,28 @@ def normalize_xcframework(path):
 def mobile_tools(go, toolchain, root, env, bridge):
     names = ("gomobile", "gobind")
     selected = [shutil.which(name, path=env["PATH"]) for name in names]
-    if not all(selected):
-        private_bin = root / "tools"
-        private_bin.mkdir(mode=0o700)
-        module, version = toolchain["gomobile"].split("@", 1)
-        require(module == "golang.org/x/mobile" and re.fullmatch(r"v0\.0\.0-[0-9]{14}-[0-9a-f]{12}", version),
-                "invalid pinned mobile module")
-        run([go, "install", *(f"{module}/cmd/{name}@{version}" for name in names)],
-            cwd=root, env=dict(env, GOBIN=str(private_bin)))
-        selected = [str(private_bin / name) for name in names]
-    for name, executable in zip(names, selected):
-        # Check and invoke the same resolved executables. gomobile locates gobind via PATH.
-        check_mobile_tool(go, executable, name, toolchain, bridge, env=env)
-    return selected
+
+    def validate_pair(paths):
+        resolved = [Path(path).resolve(strict=True) for path in paths]
+        for name, executable in zip(names, resolved):
+            require(executable.is_file() and os.access(executable, os.X_OK), f"{name} is not executable")
+            check_mobile_tool(go, executable, name, toolchain, bridge, env=env)
+        return resolved
+
+    if all(selected):
+        try:
+            return validate_pair(selected)
+        except (OSError, KeyError, TypeError, ValueError, subprocess.CalledProcessError):
+            print("Installed binding tools failed provenance; installing the locked pair in private scratch.", flush=True)
+
+    private_bin = root / "tools"
+    private_bin.mkdir(mode=0o700)
+    module, version = toolchain["gomobile"].split("@", 1)
+    require(module == "golang.org/x/mobile" and re.fullmatch(r"v0\.0\.0-[0-9]{14}-[0-9a-f]{12}", version),
+            "invalid pinned mobile module")
+    run([go, "install", *(f"{module}/cmd/{name}@{version}" for name in names)],
+        cwd=root, env=dict(env, GOBIN=str(private_bin)))
+    return validate_pair([plain(private_bin / name) for name in names])
 
 
 def publish(root, output, digest):
@@ -321,14 +330,15 @@ def build(repo, lock, output, record_for):
     require(mode in {"strict", "ci-rebuild"}, "unexpected EmbeddedCore digest mode")
     if record_for:
         require(source["status"] == "verified_build", "source lock must be verified_build")
-        if mode == "strict":
-            verify_apple_pin(apple_metadata(), toolchain)
     source_bridge = repo / "apps/ios/EmbeddedCore/bridge"
     plain_tree(source_bridge)
     require(not (source_bridge / "vendor").exists(), "vendored bridge overrides are unsupported")
     require(not output.is_relative_to(source_bridge) and not source_bridge.is_relative_to(output),
             "EmbeddedCore output overlaps the bridge source")
-    environment = os.environ.copy()
+    environment = apple_build_environment(os.environ)
+    apple = apple_metadata(environment)
+    if record_for and mode == "strict":
+        verify_apple_pin(apple, toolchain)
     go = selected_go(toolchain["go"], repo, environment)
     env = binding_environment(go, environment)
     packager = shutil.which("xcodebuild", path=env["PATH"])
@@ -339,6 +349,9 @@ def build(repo, lock, output, record_for):
         require(output == Path(env["IOS_CI_ROOT"]) / "EmbeddedCore", "build output is outside the admitted job")
     with tempfile.TemporaryDirectory(prefix="aegis-core-", dir=scratch_parent) as tmp:
         root = Path(tmp)
+        go_temp = root / "go-tmp"
+        go_temp.mkdir(mode=0o700)
+        env["GOTMPDIR"] = str(go_temp)
         bridge = root / "bridge"
         shutil.copytree(source_bridge, bridge)
         module = module_file(go, bridge, env)
@@ -371,6 +384,7 @@ def build(repo, lock, output, record_for):
         plain_tree(bridge)
         require(directory_digest(bridge) == digest, "EmbeddedCore build copy changed during gomobile bind")
         normalize_xcframework(root / XCFRAMEWORK)
+        require(apple_metadata(env) == apple, "Apple compiler or SDK changed during binding")
         publish(root, output, digest)
         result = capture([repo / "scripts/release/record-ios-access-core-digests.sh", "--xcframework", output / XCFRAMEWORK])
         (output / "slice-digests.txt").write_text(result)
@@ -379,7 +393,7 @@ def build(repo, lock, output, record_for):
             # Validate and record against the same native Go and binding tools.
             os.environ.clear()
             os.environ.update(env, PATH=f"{go.parent}:{tool_aliases}:{env['PATH']}")
-            manifest = record(repo, lock, output, mode, *record_for)
+            manifest = record(repo, lock, output, mode, *record_for, apple=apple)
             print(json.dumps(manifest, sort_keys=True))
 
 

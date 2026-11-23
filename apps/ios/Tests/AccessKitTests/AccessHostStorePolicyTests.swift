@@ -357,6 +357,38 @@ final class AccessHostStorePolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testRejectedReplacementKeepsTheAppliedListenerUntilBothDocumentsRetire() throws {
+        let registry = AccessHostDataStoreRegistry()
+        let host = try self.host("example.com")
+        let key = AccessHostStoreKey(scopeID: "ordinary", host: host, isPrivate: false)
+        let old = readyEndpoint(generation: 1)
+        var rejected = readyEndpoint(generation: 2, port: 1080)
+        rejected.transport = .socks5
+        XCTAssertTrue(registry.setEndpoint(old, scopeID: key.scopeID, host: host, isPrivate: false))
+        func bind(_ id: String) -> WKWebsiteDataStore? {
+            registry.storeForTab(tabID: id, scopeID: key.scopeID, isPrivate: false,
+                targetHost: host, boundHost: nil, intent: .on)
+        }
+        let store = try XCTUnwrap(bind("bound"))
+        XCTAssertTrue(bind("detached") === store)
+        let detached = try XCTUnwrap(registry.detachTab("detached", from: store))
+        XCTAssertFalse(registry.setEndpoint(rejected, scopeID: key.scopeID, host: host, isPrivate: false))
+        XCTAssertEqual(registry.endpoint(scopeID: key.scopeID, host: host, isPrivate: false)?.identity, rejected.identity)
+        var finished = 0
+        XCTAssertEqual(registry.retireListener(identity: old.identity) { finished += 1 }, [key: ["bound"]])
+        XCTAssertEqual(finished, 0)
+        XCTAssertEqual(store.proxyConfigurations.count, 1)
+        XCTAssertNil(bind("new"))
+        XCTAssertFalse(registry.setEndpoint(readyEndpoint(generation: 3), scopeID: key.scopeID, host: host, isPrivate: false))
+        registry.acknowledgeRetiredTab("bound", key: key, identity: rejected.identity)
+        detached()
+        XCTAssertEqual(finished, 0)
+        registry.acknowledgeRetiredTab("bound", key: key, identity: old.identity)
+        XCTAssertEqual(finished, 1)
+        XCTAssertTrue(store.proxyConfigurations.isEmpty)
+    }
+
+    @MainActor
     func testFailedEndpointKeepsTheDedicatedStore() throws {
         let registry = AccessHostDataStoreRegistry()
         let host = try self.host("example.com")

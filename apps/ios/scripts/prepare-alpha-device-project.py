@@ -70,14 +70,15 @@ def private_path(path):
 
 
 def prepared_source_commit(root):
-    result = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel", "HEAD"],  # nosec B603 B607
+    git = ["git", "--no-replace-objects", "-C", str(root)]
+    result = subprocess.run([*git, "rev-parse", "--show-toplevel", "HEAD"],  # nosec B603 B607
                             capture_output=True, text=True, check=False)
     if result.returncode:
         return None
     lines = result.stdout.splitlines()
     if len(lines) != 2 or Path(lines[0]).resolve() != root or not re.fullmatch(r"[0-9a-f]{40}", lines[1]):
         return None
-    status = subprocess.run(["git", "--no-optional-locks", "-C", str(root), "status", "--porcelain",  # nosec B603 B607
+    status = subprocess.run([*git, "--no-optional-locks", "status", "--porcelain",  # nosec B603 B607
                              "--untracked-files=normal", "--", "apps/ios"],
                             capture_output=True, text=True, check=False)
     return lines[1] if status.returncode == 0 and not status.stdout else None
@@ -86,7 +87,8 @@ def prepared_source_commit(root):
 def snapshot_source(root, commit, destination):
     # Use Git objects so ignored files and changes racing with preparation
     # cannot enter a source-attributed project.
-    data = subprocess.check_output(["git", "-C", str(root), "archive", commit, "--", *SNAPSHOT_PATHS])  # nosec B603 B607
+    data = subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), "archive",  # nosec B603 B607
+                                    commit, "--", *SNAPSHOT_PATHS])
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         for member in archive:
             relative = Path(member.name)

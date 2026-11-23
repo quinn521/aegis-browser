@@ -5,6 +5,7 @@ public protocol AccessEmbeddedCoreControlling: AnyObject, Sendable {
     var isRunning: Bool { get }
     func start(configData: Data) async throws
     func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream
+    /// Returns after the owned instance and its native stream operations have stopped.
     func stop() async
 }
 

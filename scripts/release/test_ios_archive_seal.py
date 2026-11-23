@@ -61,7 +61,8 @@ class ArchiveSealTests(unittest.TestCase):
             "bridgeSha256": bridge_hash, "compiledBridgeSha256": bridge_hash, "sourceLockSha256": core.file_digest(lock),
             "effectiveLockSha256": core.file_digest(effective), "inputFileListSha256": core.file_digest(inputs),
             "frameworkSha256": core.directory_digest(framework), "slices": source["artifacts"],
-            "gomobileModule": pin["gomobile"], "gobindModule": pin["gomobile"]})
+            "gomobileModule": pin["gomobile"], "gobindModule": pin["gomobile"],
+            "appleToolchain": core.APPLE_TOOLCHAIN, "clangSha256": dict.fromkeys(core.IOS_SDKS, "1" * 64)})
         self.bundle = self.root / "Aegis.xcarchive/Products/Applications/Aegis.app"
         bundled = self.bundle / "Frameworks" / linked.ACCESS
         bundled.parent.mkdir(parents=True)
