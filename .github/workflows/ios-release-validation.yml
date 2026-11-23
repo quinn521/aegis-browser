@@ -250,6 +250,9 @@ jobs:
           IOS_CI_ROOT: ${{ steps.storage.outputs.root }}
           IOS_CI_SOURCE: ${{ steps.storage.outputs.source }}
         run: |
+          cd -P -- "$IOS_CI_SOURCE" || exit 1
+          test "$PWD" = "$IOS_CI_SOURCE" || exit 1
+          unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR
           export MISE_TRUSTED_CONFIG_PATHS="${MISE_TRUSTED_CONFIG_PATHS:-$PWD}"
           if command -v mise >/dev/null 2>&1; then
             GOROOT="$(mise where go@1.27.3 2>/dev/null || true)"
@@ -266,13 +269,11 @@ jobs:
             export PATH="${GOPATH:-$HOME/go}/bin:$PATH"
             gomobile init
           fi
-          # Build against the job-private Source tree so archive verify/seal see the
-          # same absolute Xcode inputs after cancel isolation.
+          # Both the bridge and its receipt must use the job-private checkout.
           AEGIS_EMBEDDED_CORE_DIGEST_MODE=ci-rebuild \
             bash scripts/release/prepare-ios-access-core.sh \
-              "$IOS_CI_SOURCE/apps/ios/EmbeddedCore/embedded-core-lock.json" \
-              "$IOS_CI_ROOT/EmbeddedCore" \
-              "$IOS_CI_SOURCE"
+              "$PWD/apps/ios/EmbeddedCore/embedded-core-lock.json" \
+              "$IOS_CI_ROOT/EmbeddedCore"
           test -d "$IOS_CI_ROOT/EmbeddedCore/AegisEmbeddedCore.xcframework"
       - name: Compile uncredentialed native archive
         env:

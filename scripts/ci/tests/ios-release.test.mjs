@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {readFileSync, mkdtempSync, rmSync} from 'node:fs';
-import {execFileSync} from 'node:child_process';
+import {readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {execFileSync, spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {parse} from 'yaml';
@@ -154,7 +154,55 @@ test('unsigned archive isolates fork PRs and tolerates missing runner labels', (
   const prepare = workflow.jobs['ios-archive'].steps.find(s => s.name === 'Prepare locked EmbeddedCore XCFramework');
   assert(String(prepare?.run ?? '').includes('expected go1.27.3'), 'prepare must refuse a mismatched Go toolchain');
   assert.equal(prepare?.env?.IOS_CI_SOURCE, '${{ steps.storage.outputs.source }}');
-  assert(String(prepare?.run ?? '').includes('"$IOS_CI_SOURCE"'), 'EmbeddedCore must record Xcode inputs from job-private Source');
+});
+
+test('archive EmbeddedCore preparation uses the private script, bridge root and Git HEAD', () => {
+  const workflow = parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
+  const prepare = workflow.jobs['ios-archive'].steps.find(step => step.name === 'Prepare locked EmbeddedCore XCFramework');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'embedded-core-source-'));
+  const shared = join(root, 'shared checkout');
+  const source = join(root, 'Source');
+  const bin = join(root, 'bin');
+  const receipt = join(root, 'fixture-receipt.txt');
+  const privateHead = 'c'.repeat(40);
+  const lock = 'apps/ios/EmbeddedCore/embedded-core-lock.json';
+  const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  try {
+    for (const [checkout, head, marker] of [[shared, 'b'.repeat(40), 'shared'], [source, privateHead, 'private']]) {
+      mkdirSync(join(checkout, 'scripts/release'), {recursive: true});
+      mkdirSync(join(checkout, 'apps/ios/EmbeddedCore/bridge'), {recursive: true});
+      writeFileSync(join(checkout, lock), '{}\n');
+      writeFileSync(join(checkout, 'apps/ios/EmbeddedCore/bridge/origin'), marker);
+      execFileSync('git', ['init', '--quiet', '--template='], {cwd: checkout, env: gitEnv});
+      writeFileSync(join(checkout, '.git/HEAD'), head + '\n');
+      writeFileSync(join(checkout, 'scripts/release/prepare-ios-access-core.sh'), `#!/bin/bash
+set -euo pipefail
+printf '%s\\n' '${marker}' "$(cat apps/ios/EmbeddedCore/bridge/origin)" "$(git rev-parse HEAD)" \
+  "$PWD" "$1" "$AEGIS_EMBEDDED_CORE_DIGEST_MODE" > "$EMBEDDED_TEST_RECEIPT"
+mkdir -p "$2/AegisEmbeddedCore.xcframework"
+`);
+    }
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'go'), '#!/bin/bash\n[[ "$*" == version ]] || exit 2\necho "go version go1.27.3 fixture"\n', {mode: 0o755});
+    for (const tool of ['mise', 'gomobile']) {
+      writeFileSync(join(bin, tool), '#!/bin/bash\nexit 2\n', {mode: 0o755});
+    }
+    const run = privateSource => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', prepare.run], {
+      cwd: shared, encoding: 'utf8', env: {...gitEnv, PATH: `${bin}:${process.env.PATH}`,
+        GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
+        IOS_CI_ROOT: root, IOS_CI_SOURCE: privateSource, EMBEDDED_TEST_RECEIPT: receipt},
+    });
+    const prepared = run(source);
+    assert.equal(prepared.status, 0, prepared.stderr);
+    assert.deepEqual(readFileSync(receipt, 'utf8').trim().split('\n'),
+      ['private', 'private', privateHead, source, join(source, lock), 'ci-rebuild']);
+    rmSync(receipt);
+    const missing = run(join(root, 'missing'));
+    assert.equal(missing.status, 1, missing.stderr);
+    assert.throws(() => readFileSync(receipt), {code: 'ENOENT'});
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
 });
 test('every protected delivery route depends on Admin admission and normalized operation', () => {
   const workflow = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));

@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Compile the uncredentialed iOS archive from the job-private Source tree.
-# Runner cancellation signals this entry process, then kills its process tree.
-# Keep xcodebuild in the same process group and reap by PID before exiting so a
-# cancelled archive cannot outlive the step or race the next checkout.
 set -euo pipefail
+
+if [[ "${1:-}" != --archive-worker ]]; then
+  # The entry PID becomes the supervisor that receives Actions cancellation.
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  exec python3 -I -B "$SCRIPT_DIR/ios-archive-supervisor.py" "$BASH" \
+    "$SCRIPT_DIR/run-ios-unsigned-archive.sh" --archive-worker
+fi
 
 : "${IOS_CI_ROOT:?IOS_CI_ROOT is required}"
 
@@ -30,92 +36,13 @@ python3 -B "$REPO_ROOT/scripts/release/ios_embedded_core.py" verify --root "$SOU
   --source-lock "$SOURCE/apps/ios/EmbeddedCore/embedded-core-lock.json" \
   --products "$IOS_CI_ROOT/EmbeddedCore"
 
-archive_status=0
-archive_pid=""
-tee_pid=""
+cd -P -- "$SOURCE" || exit 1
+if [[ "$PWD" != "$SOURCE" ]]; then
+  printf 'archive source does not match the admitted directory\n' >&2
+  exit 1
+fi
 
-signal_pid() {
-  local pid=$1 signal=$2
-  [[ -n "$pid" ]] || return 0
-  kill "-$signal" "$pid" 2>/dev/null || true
-}
-
-wait_pid() {
-  local pid=$1
-  [[ -n "$pid" ]] || return 0
-  local _
-  for _ in $(seq 1 8); do
-    kill -0 "$pid" 2>/dev/null || return 0
-    sleep 0.25
-  done
-}
-
-job_root_pids() {
-  [[ -n "$IOS_CI_ROOT" && "$IOS_CI_ROOT" == /* ]] || return 0
-  # ps is the portable enumerator; pgrep is preferred when the host allows it.
-  if command -v pgrep >/dev/null 2>&1; then
-    pgrep -f "$IOS_CI_ROOT" 2>/dev/null || true
-  fi
-  ps -axo pid=,command= 2>/dev/null | while IFS= read -r line; do
-    case "$line" in
-      *"$IOS_CI_ROOT"*)
-        # shellcheck disable=SC2086
-        set -- $line
-        printf '%s\n' "$1"
-        ;;
-    esac
-  done
-}
-
-reap_job_root() {
-  local signal=$1 pid
-  while IFS= read -r pid; do
-    [[ -n "$pid" && "$pid" != "$$" ]] || continue
-    kill "-$signal" "$pid" 2>/dev/null || true
-  done < <(job_root_pids | sort -u)
-}
-
-reap_archive() {
-  # Kill the pipeline subshell, its children, then any worker still bound to this
-  # job root. Do not create a separate process group: Actions tree-kill must see
-  # xcodebuild as part of the entry process tree.
-  if [[ -n "$archive_pid" ]]; then
-    pkill -TERM -P "$archive_pid" 2>/dev/null || true
-  fi
-  signal_pid "$archive_pid" TERM
-  signal_pid "$tee_pid" TERM
-  reap_job_root TERM
-  wait_pid "$archive_pid"
-  wait_pid "$tee_pid"
-  if [[ -n "$archive_pid" ]]; then
-    pkill -KILL -P "$archive_pid" 2>/dev/null || true
-  fi
-  signal_pid "$archive_pid" KILL
-  signal_pid "$tee_pid" KILL
-  reap_job_root KILL
-  wait 2>/dev/null || true
-  archive_pid=""
-  tee_pid=""
-}
-
-on_signal() {
-  local code=$1
-  trap - EXIT INT TERM
-  reap_archive
-  exit "$code"
-}
-
-trap 'on_signal 143' TERM
-trap 'on_signal 130' INT
-trap 'status=$?; trap - EXIT; reap_archive; exit "$status"' EXIT
-
-# Stay in the runner entry process group so Actions tree-kill reaches xcodebuild.
-# Capture status without set -e aborting before PIPESTATUS is read.
-set +e
-(
-  set +e
-  cd "$SOURCE"
-  xcodebuild -scmProvider system -onlyUsePackageVersionsFromResolvedFile \
+xcodebuild -scmProvider system -onlyUsePackageVersionsFromResolvedFile \
     -project apps/ios/Aegis.xcodeproj -scheme Aegis -configuration Release \
     -destination 'generic/platform=iOS' \
     -archivePath "$IOS_CI_ROOT/Aegis.xcarchive" \
@@ -125,24 +52,16 @@ set +e
     CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
     MARKETING_VERSION=1.0.0 CURRENT_PROJECT_VERSION=1 \
     AEGIS_EMBEDDED_CORE_PRODUCTS="$IOS_CI_ROOT/EmbeddedCore" \
-    archive 2>&1 | tee "$IOS_CI_ROOT/xcodebuild.log"
-  exit "${PIPESTATUS[0]}"
-) &
-archive_pid=$!
-# tee is the only durable sibling once xcodebuild is running; locate it by log path.
-sleep 0.1
-tee_pid=$(pgrep -f "tee ${IOS_CI_ROOT}/xcodebuild.log" | head -n 1 || true)
-
-wait "$archive_pid"
-archive_status=$?
-set -e
-archive_pid=""
-tee_pid=""
-trap - EXIT INT TERM
-
-if (( archive_status != 0 )); then
-  exit "$archive_status"
-fi
+    archive 2>&1 | tee "$IOS_CI_ROOT/xcodebuild.log" || {
+  archive_status=("${PIPESTATUS[@]}")
+  if (( archive_status[1] != 0 )); then
+    printf 'failed to retain xcodebuild.log (tee exit %s)\n' "${archive_status[1]}" >&2
+  fi
+  if (( archive_status[0] != 0 )); then
+    exit "${archive_status[0]}"
+  fi
+  exit "${archive_status[1]}"
+}
 
 python3 "$REPO_ROOT/scripts/release/verify-ios-archive.py" \
   "$IOS_CI_ROOT/Aegis.xcarchive" 1.0.0 1
