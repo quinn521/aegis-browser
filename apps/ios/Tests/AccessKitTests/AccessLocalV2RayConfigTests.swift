@@ -10,6 +10,18 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234"
         + "&headerType=none#demo-reality-vision"
 
+    func testManualShareRequiresExplicitVisionFlowWhileLegacyReadersKeepTheirDefault() throws {
+        let expected = try AccessLocalV2RayConfigLoader.parseSingleShareURI(sampleShareURI)
+        for flow in ["", "flow=&"] {
+            let legacy = sampleShareURI.replacingOccurrences(of: "flow=xtls-rprx-vision&", with: flow)
+            XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(legacy))
+            XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseShareURI(legacy), expected)
+            XCTAssertEqual(try AccessLocalV2RayConfigLoader.parse(text: legacy), expected)
+        }
+        XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(
+            sampleShareURI.replacingOccurrences(of: "xtls-rprx-vision", with: "xtls-rprx-origin")))
+    }
+
     func testOptionsParserRequiresTheEntireInputToBeOneShareLink() throws {
         let expected = try AccessLocalV2RayConfigLoader.parseShareURI(sampleShareURI)
         XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI("  " + sampleShareURI + "\n"), expected)

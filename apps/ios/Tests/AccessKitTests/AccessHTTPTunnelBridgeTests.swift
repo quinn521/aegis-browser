@@ -19,7 +19,7 @@ final class AccessHTTPTunnelBridgeTests: XCTestCase {
         let registration = try registration(port: port)
         let opener = RecordingOpener()
         let listener = try AccessHTTPInboundListener(registration: registration, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
 
         let received = expectation(description: "origin bytes")
@@ -67,7 +67,7 @@ final class AccessHTTPTunnelBridgeTests: XCTestCase {
         let registration = try registration(port: port)
         let opener = RecordingOpener()
         let listener = try AccessHTTPInboundListener(registration: registration, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let established = expectation(description: "200")
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
@@ -101,7 +101,7 @@ final class AccessHTTPTunnelBridgeTests: XCTestCase {
         let port: UInt16 = 18_221
         let registration = try registration(port: port)
         let listener = try AccessHTTPInboundListener(registration: registration, tunnels: FailingOpener())
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let response = expectation(description: "200 then close")
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
@@ -240,7 +240,7 @@ final class AccessHTTPTunnelBridgeTests: XCTestCase {
 
     private func makeListener(port: UInt16, tunnels: any AccessHTTPTunnelOpening) async throws -> AccessHTTPInboundListener {
         let listener = try AccessHTTPInboundListener(registration: try registration(port: port), tunnels: tunnels)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         return listener
     }
 
@@ -280,7 +280,7 @@ final class AccessHTTPTunnelBridgeTests: XCTestCase {
             transport: .http,
             endpoint: try AccessEndpoint(host: "127.0.0.1", port: port),
             credentialSlot: try AccessCredentialSlot(id: "cred-tunnel-\(port)"),
-            lease: try AccessLease(generation: 1, expiresAt: Date(timeIntervalSince1970: 1_700_000_060))
+            lease: try AccessLease(generation: 1, expiresAt: Date().addingTimeInterval(60))
         )
     }
 }

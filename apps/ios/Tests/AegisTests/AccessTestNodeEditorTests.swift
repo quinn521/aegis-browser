@@ -1,4 +1,8 @@
+#if DEBUG
+@testable import AccessKit
+#else
 import AccessKit
+#endif
 import CoreImage
 import WebKit
 import UIKit
@@ -225,6 +229,16 @@ final class AccessTestNodeEditorTests: XCTestCase {
         }
     }
 
+    func testRankedCampaignRequiresAnExplicitDispatchLimit() {
+        let count = 5
+        XCTAssertNil(AccessDomainCampaignInput.dispatchLimit(nil, hostCount: count, ranked: true))
+        XCTAssertEqual(AccessDomainCampaignInput.dispatchLimit(nil, hostCount: count, ranked: false), count)
+        XCTAssertEqual(AccessDomainCampaignInput.dispatchLimit("2", hostCount: count, ranked: true), 2)
+        for value in ["", "0", "-1", "6", "all"] {
+            XCTAssertNil(AccessDomainCampaignInput.dispatchLimit(value, hostCount: count, ranked: true))
+        }
+    }
+
     func testTwoWindowsCompareSavedRevisionAndFailedStoragePreservesDraft() {
         let storage = Storage()
         let repository = AccessTestNodeRepository(channel: .alpha, storage: storage)
@@ -418,6 +432,25 @@ final class AccessTestNodeEditorTests: XCTestCase {
 
     func testPreparationFailureBeforeDeadlineIsPreserved() async throws {
         try await assertPreparationFailure(timerDelayed: true, error: URLError(.cannotConnectToHost), expectTimeout: false)
+    }
+
+    func testCredentialRestorationConsumesTheAbsolutePreparationDeadline() async throws {
+        let storage = Storage()
+        let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
+                                 expectedRevision: nil, isPrivate: false)
+        let initialReads = storage.reads
+        storage.beforeRead = { Thread.sleep(forTimeInterval: 0.1) }
+        let core = PageCore(beforeStart: { XCTFail("An expired credential restore must never start the core") })
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core,
+                                      preparationTimeout: .milliseconds(40))
+        await page.open(URL(string: "https://example.invalid/restore")!)
+        XCTAssertEqual(storage.reads, initialReads + 1)
+        XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
+        XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
+        XCTAssertNil(page.initialBinding)
+        XCTAssertNil(page.webView)
+        XCTAssertFalse(core.isRunning)
     }
 
     private func assertPreparationFailure(timerDelayed: Bool, error: any Error, expectTimeout: Bool) async throws {
@@ -683,9 +716,11 @@ final class AccessTestNodeEditorTests: XCTestCase {
         var writes = 0
         var removals = 0
         var failWrite = false
+        var beforeRead: (() -> Void)?
 
         func read(channel: AccessInternalOptions) throws -> AccessTestNodeRecord? {
             reads += 1
+            beforeRead?()
             return value
         }
 
@@ -718,6 +753,13 @@ enum AccessDomainCampaignInput {
         guard hosts.count == canonical.count, Set(hosts).count == hosts.count,
               Set(hosts) == Set(canonical) else { throw CocoaError(.fileReadCorruptFile) }
         return hosts
+    }
+
+    static func dispatchLimit(_ value: String?, hostCount: Int, ranked: Bool) -> Int? {
+        guard hostCount > 0 else { return nil }
+        guard let value else { return ranked ? nil : hostCount }
+        guard let count = Int(value), (1...hostCount).contains(count) else { return nil }
+        return count
     }
 }
 
@@ -788,13 +830,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             let ordered = try Data(contentsOf: documents.appendingPathComponent("ios208-" + runID + ".domains.txt"))
             hosts = try AccessDomainCampaignInput.order(ordered, canonical: hosts, digest: orderDigest)
         } else if orderDigest != nil { XCTFail("Order requires an independent campaign identity"); return }
-        let limit: Int
-        if let value = env["AEGIS_TEST_CAMPAIGN_LIMIT"] {
-            guard let count = Int(value), (1...hosts.count).contains(count) else {
-                XCTFail("Invalid campaign phase limit"); return
-            }
-            limit = count
-        } else { limit = hosts.count }
+        guard let limit = AccessDomainCampaignInput.dispatchLimit(
+            env["AEGIS_TEST_CAMPAIGN_LIMIT"], hostCount: hosts.count, ranked: runID != nil
+        ) else { XCTFail("Invalid or missing campaign phase limit"); return }
         let validHosts = Set(hosts)
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else { XCTFail("Native admission denied"); return }
@@ -1012,6 +1050,14 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             "state": "probe-incomplete"
         ]
         defer { AccessProbeReceiptKind.controlledPath.writeAndAttach(receipt, attempt: attempt, to: self) }
+        guard let preference = Self.requestedTransport(environment["AEGIS_TEST_LOCAL_TRANSPORT"]) else {
+            receipt["state"] = "invalid-requested-transport"
+            XCTFail("Invalid explicit controlled-probe transport")
+            return
+        }
+        receipt["requestedTransport"] = preference.rawValue
+        let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
+        let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else {
             XCTFail("Native internal channel admission rejected this package")
@@ -1023,10 +1069,6 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         guard editor.canApply else { XCTFail("Authorized node did not produce a valid native draft"); return }
         editor.apply()
         guard editor.error == nil, editor.hasSavedNode else { XCTFail("Native Apply did not save the authorized node"); return }
-        let preference = AccessTestNodeTransport(rawValue: environment["AEGIS_TEST_LOCAL_TRANSPORT"] ?? "http") ?? .http
-        receipt["requestedTransport"] = preference.rawValue
-        let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
-        let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
         let core = try ObservedCore(mainHost: url.host ?? "")
         let singleNavigation = environment["AEGIS_TEST_SINGLE_NAVIGATION"] == "1"
         let expectPolicyBlock = environment["AEGIS_TEST_EXPECT_POLICY_BLOCK"] == "1"
@@ -1251,6 +1293,11 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         return fields
     }
 
+    fileprivate static func requestedTransport(_ value: String?) -> AccessTestNodeTransport? {
+        guard let value else { return .http }
+        return AccessTestNodeTransport(rawValue: value)
+    }
+
     fileprivate static func portIsOwned(_ port: UInt16) -> Bool {
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
@@ -1441,7 +1488,7 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
               let raw = env["AEGIS_TEST_CONTROLLED_URL"], let url = URL(string: raw),
               let host = url.host,
               let nonce = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
-                .first(where: { $0.name == "nonce" })?.value else {
+                .first(where: { $0.name == "nonce" })?.value, !nonce.isEmpty else {
             throw XCTSkip("Explicit physical SOCKS admission inputs required")
         }
         var system = utsname()
@@ -1472,8 +1519,13 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             credentialSlot: try AccessCredentialSlot(id: "socks-admission"),
             lease: try AccessLease(generation: 1, expiresAt: Date().addingTimeInterval(3600)))
         let listener = try AccessSOCKS5InboundListener(registration: registration, tunnels: FixtureTunnel(core: core))
+        let diagnostics = AccessDiagnosticLog.shared
+        var logLease: AccessDiagnosticLog.Lease?
+        defer { if let logLease { diagnostics.stop(lease: logLease) } }
         do {
-            try await core.start(configData: outbound.embeddedInstanceJSONData())
+            logLease = try await AccessEmbeddedProxyEntrySession.startCoreWithDiagnostics(
+                core: core, outbound: outbound, diagnostics: diagnostics, level: .none,
+                disableCaptureWhenQuiet: false)
             try await listener.start()
         } catch {
             result["errorDomain"] = (error as NSError).domain
@@ -1510,28 +1562,41 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         window.addSubview(view)
         window.makeKeyAndVisible()
+        let navigationDeadline = ContinuousClock.now.advanced(by: .seconds(30))
         view.load(URLRequest(url: url))
         do {
-            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-            while !observer.finished, observer.failure == nil, ContinuousClock.now < deadline {
+            while !observer.finished, observer.failure == nil, ContinuousClock.now < navigationDeadline {
                 try await Task.sleep(for: .milliseconds(100))
             }
         } catch {
             observer.failure = error as NSError
             XCTFail("SOCKS fixture navigation observation was interrupted")
         }
-        let html = observer.finished ? (try? await view.evaluateJavaScript("document.documentElement.textContent") as? String) : nil
+        let nonceObservation: NonceObservation
+        if observer.finished {
+            let deadline = min(navigationDeadline, ContinuousClock.now.advanced(by: .seconds(2)))
+            nonceObservation = await Self.observeNonce(until: deadline) { finish in
+                view.callAsyncJavaScript("return document.documentElement.textContent.includes(nonce)",
+                                         arguments: ["nonce": nonce], in: nil, in: .defaultClient, completionHandler: { result in
+                    finish((try? result.get()) as? Bool)
+                })
+            }
+        } else {
+            nonceObservation = .unavailable
+        }
         result["proxyCount"] = store.proxyConfigurations.count
         result["allowFailover"] = proxy.allowFailover
         result["httpStatus"] = observer.httpStatus ?? 0
-        result["documentContainsNonce"] = html?.contains(nonce) == true
-        result["status"] = observer.finished && observer.httpStatus == 200 && html?.contains(nonce) == true
+        result["nonceObservation"] = nonceObservation.rawValue
+        result["documentContainsNonce"] = nonceObservation == .matched
+        result["status"] = observer.finished && observer.httpStatus == 200 && nonceObservation == .matched
             ? "webkit-response-verified" : "webkit-not-admitted"
         if let failure = observer.failure {
             result["errorDomain"] = failure.domain
             result["errorCode"] = failure.code
         }
-        let stopDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+        let stopStarted = ContinuousClock.now
+        let stopDeadline = stopStarted.advanced(by: .seconds(10))
         listener.suspend()
         let portHeld = AccessTestNodeDeviceTests.portIsOwned(registration.endpoint.port)
         result["portHeldAtRetirement"] = portHeld
@@ -1547,20 +1612,75 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         XCTAssertTrue(outcome == .refused || outcome == .peerClosed, "The fenced fixture must refuse a new CONNECT")
         await core.stop()
         do {
-            while !observer.retired, ContinuousClock.now < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
+            while observer.retiredAt == nil, ContinuousClock.now < stopDeadline {
+                try await Task.sleep(for: .milliseconds(50))
+            }
         } catch {
             XCTFail("SOCKS fixture retirement observation was interrupted")
         }
-        result["retired"] = observer.retired
-        if observer.retired {
+        let retirement = Self.retirementOutcome(from: stopStarted, through: stopDeadline, commit: observer.retiredAt)
+        result["retired"] = retirement.confirmed
+        result["retirementCommitSeconds"] = retirement.seconds
+        if retirement.seconds != nil {
             view.removeFromSuperview()
             window.isHidden = true
             try listener.stop()
+            XCTAssertTrue(retirement.confirmed, "The exact SOCKS retirement commit missed its deadline")
         } else {
             Self.quarantined.append((view, listener, window))
             XCTFail("SOCKS fixture document retirement unconfirmed; fenced listener retained until process exit")
         }
+        if nonceObservation == .timedOut { XCTFail("SOCKS fixture nonce observation timed out") }
 #endif
+    }
+
+    fileprivate enum NonceObservation: String {
+        case matched, missing, unavailable, timedOut
+    }
+
+    fileprivate static func observeNonce(
+        until deadline: ContinuousClock.Instant,
+        evaluate: (@escaping @MainActor (Bool?) -> Void) -> Void
+    ) async -> NonceObservation {
+        guard ContinuousClock.now < deadline, !Task.isCancelled else { return .timedOut }
+        return await withCheckedContinuation { continuation in
+            let result = NonceResult(continuation)
+            result.timeout = Task {
+                try? await ContinuousClock().sleep(until: deadline)
+                guard !Task.isCancelled else { return }
+                result.finish(.timedOut)
+            }
+            evaluate { matched in
+                let outcome = matched.map { $0 ? NonceObservation.matched : .missing } ?? .unavailable
+                result.finish(ContinuousClock.now < deadline ? outcome : .timedOut)
+            }
+        }
+    }
+
+    @MainActor
+    private final class NonceResult {
+        var timeout: Task<Void, Never>?
+        private var continuation: CheckedContinuation<NonceObservation, Never>?
+
+        init(_ continuation: CheckedContinuation<NonceObservation, Never>) { self.continuation = continuation }
+
+        func finish(_ outcome: NonceObservation) {
+            guard let continuation else { return }
+            self.continuation = nil
+            timeout?.cancel()
+            timeout = nil
+            continuation.resume(returning: outcome)
+        }
+    }
+
+    fileprivate static func retirementOutcome(
+        from started: ContinuousClock.Instant, through deadline: ContinuousClock.Instant,
+        commit: ContinuousClock.Instant?
+    ) -> (confirmed: Bool, seconds: TimeInterval?) {
+        guard let commit, commit >= started else { return (false, nil) }
+        let elapsed = started.duration(to: commit).components
+        let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        return (commit <= deadline, seconds)
     }
 
     private final class FixtureTunnel: AccessHTTPTunnelOpening {
@@ -1607,10 +1727,10 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         var failure: NSError?
         var httpStatus: Int?
         var retirement: WKNavigation?
-        var retired = false
+        private(set) var retiredAt: ContinuousClock.Instant?
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finished = true }
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-            if let navigation, navigation === retirement { retired = true }
+            if retiredAt == nil, let navigation, navigation === retirement { retiredAt = .now }
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             failure = error as NSError
@@ -1629,6 +1749,46 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
 @MainActor
 final class AccessTestNodeEvidenceTests: XCTestCase {
     private typealias Probe = AccessTestNodeDeviceTests
+
+    func testPhysicalNonceObservationTimesOutWithoutAWebContentReply() async {
+        var reply: (@MainActor (Bool?) -> Void)?
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(100))
+        let outcome = await AccessPhysicalSOCKSAdmissionTests.observeNonce(until: deadline) { reply = $0 }
+        XCTAssertEqual(outcome, .timedOut)
+        XCTAssertNotNil(reply)
+        reply?(true)
+        let responsive = await AccessPhysicalSOCKSAdmissionTests.observeNonce(
+            until: ContinuousClock.now.advanced(by: .seconds(1))
+        ) { $0(true) }
+        XCTAssertEqual(responsive, .matched)
+        let expired = await AccessPhysicalSOCKSAdmissionTests.observeNonce(until: deadline) { _ in
+            XCTFail("An expired observation must never evaluate WebContent")
+        }
+        XCTAssertEqual(expired, .timedOut)
+    }
+
+    func testPhysicalRetirementDistinguishesLateCommitFromUnconfirmedAndOnTime() {
+        let started = ContinuousClock.now
+        let deadline = started.advanced(by: .seconds(10))
+        for (commit, confirmed, seconds) in [
+            (nil, false, nil), (-1.0, false, nil), (9.0, true, 9.0), (10.0, true, 10.0), (10.001, false, 10.001)
+        ] as [(Double?, Bool, Double?)] {
+            let result = AccessPhysicalSOCKSAdmissionTests.retirementOutcome(from: started, through: deadline,
+                commit: commit.map { started.advanced(by: .seconds($0)) })
+            XCTAssertEqual(result.confirmed, confirmed)
+            XCTAssertEqual(result.seconds, seconds)
+        }
+    }
+
+    func testControlledPathRejectsAnInvalidExplicitTransport() {
+        XCTAssertEqual(Probe.requestedTransport(nil), .http)
+        XCTAssertEqual(Probe.requestedTransport("http"), .http)
+        XCTAssertEqual(Probe.requestedTransport("socks5"), .socks5)
+        XCTAssertEqual(Probe.requestedTransport("automatic"), .automatic)
+        for invalid in ["", "https", "socks", "HTTP", " http"] {
+            XCTAssertNil(Probe.requestedTransport(invalid))
+        }
+    }
 
     func testRetirementBudgetsUseCommitTimeEvenWhenObservationIsLate() async throws {
         let started = ContinuousClock.now

@@ -21,15 +21,19 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         } catch { }
         for (socket, port) in [(first, firstPort), (second, secondPort)] {
             let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: port), preparedSocket: socket)
-            try await listener.start()
+            try await listener.start(at: Date(), accepting: false)
+            defer { try? listener.stop() }
             XCTAssertTrue(listener.boundSocketForTests === socket)
+            XCTAssertFalse(listener.isAccepting)
+            try await assertGreetingRefused(on: port)
+            XCTAssertEqual(listener.acceptedConnectionCount, 0)
+            XCTAssertTrue(listener.activate())
             let client = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
             client.start(queue: .global())
             try await Self.send(Data([5, 1, 0]), to: client)
             let reply = try await Self.receive(2, from: client)
             XCTAssertEqual(reply, Data([5, 0]))
             client.cancel()
-            try listener.stop()
         }
     }
 

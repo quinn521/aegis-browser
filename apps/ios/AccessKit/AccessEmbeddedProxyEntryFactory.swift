@@ -59,6 +59,9 @@ public enum AccessEmbeddedProxyEntryFactory {
                 shutdown: { identity in
                     session.shutdown(identity: identity)
                 },
+                activate: {
+                    (connectionAllowed?() ?? true) && session.activate()
+                },
                 healthCheck: {
                     session.isRuntimeHealthy && (connectionAllowed?() ?? true)
                 }
@@ -89,6 +92,7 @@ final class AccessEmbeddedProxyEntrySession {
     private var listener: AccessEmbeddedInboundListener?
     private let transport: AccessInboundTransport
     private var identity: String?
+    private var published = false
     private var startedCore = false
     private var pendingStop: Task<Void, Never>?
     private var logLease: AccessDiagnosticLog.Lease?
@@ -204,7 +208,7 @@ final class AccessEmbeddedProxyEntrySession {
             case .socks5: next = .socks5(try AccessSOCKS5InboundListener(registration: registration, preparedSocket: boundSocket, tunnels: opener))
             case .https: throw AccessSiteSessionError.runtimeNotReady
             }
-            try await next.start(at: Date())
+            try await next.startPaused(at: Date())
         } catch {
             throw AccessSiteSessionError.prepareFailed("listener.start: \(error)")
         }
@@ -239,11 +243,13 @@ final class AccessEmbeddedProxyEntrySession {
         core: any AccessEmbeddedCoreControlling,
         outbound: AccessRealityVisionOutboundConfig,
         diagnostics: AccessDiagnosticLog,
-        level: AccessLogLevel
+        level: AccessLogLevel,
+        disableCaptureWhenQuiet: Bool = true
     ) async throws -> AccessDiagnosticLog.Lease {
         let parameters = outbound.parameters
         let lease = diagnostics.acquireShared(
-            level: level, secrets: [parameters.userID, parameters.publicKey, parameters.shortID]
+            level: level, secrets: [parameters.userID, parameters.publicKey, parameters.shortID],
+            disableCaptureWhenQuiet: disableCaptureWhenQuiet
         )
         var started = false
         defer { if !started { diagnostics.stop(lease: lease) } }
@@ -277,10 +283,16 @@ final class AccessEmbeddedProxyEntrySession {
         return listener.isAccepting && core.isRunning
     }
 
+    func activate() -> Bool {
+        guard let listener, core.isRunning, listener.activate() else { return false }
+        published = true
+        return true
+    }
+
     func shutdown(identity: String) {
         guard self.identity == identity else { return }
         if let listener {
-            if let retireDocuments {
+            if published, let retireDocuments {
                 listener.suspend()
                 retireDocuments { try? listener.stop() }
             } else {
@@ -289,6 +301,7 @@ final class AccessEmbeddedProxyEntrySession {
         }
         listener = nil
         self.identity = nil
+        published = false
         if startedCore {
             startedCore = false
             let lease = logLease
@@ -422,13 +435,19 @@ private enum AccessEmbeddedInboundListener {
     case socks5(AccessSOCKS5InboundListener)
 
     var isAccepting: Bool {
-        switch self { case .http(let value): value.isListening; case .socks5(let value): value.isAccepting }
+        switch self { case .http(let value): value.isAccepting; case .socks5(let value): value.isAccepting }
     }
     var boundPort: UInt16? {
         switch self { case .http(let value): value.boundPort; case .socks5(let value): value.boundPort }
     }
-    func start(at now: Date) async throws {
-        switch self { case .http(let value): try await value.start(at: now); case .socks5(let value): try await value.start(at: now) }
+    func startPaused(at now: Date) async throws {
+        switch self {
+        case .http(let value): try await value.start(at: now, accepting: false)
+        case .socks5(let value): try await value.start(at: now, accepting: false)
+        }
+    }
+    func activate() -> Bool {
+        switch self { case .http(let value): value.activate(); case .socks5(let value): value.activate() }
     }
     func suspend() {
         switch self { case .http(let value): value.suspend(); case .socks5(let value): value.suspend() }

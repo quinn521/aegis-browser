@@ -461,52 +461,63 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func open(_ url: URL) async {
-        guard publisher == nil, !closed, url.scheme == "https", url.user == nil, url.password == nil,
+        let deadline = ContinuousClock.now.advanced(by: preparationTimeout)
+        guard publisher == nil, preparationDeadline == nil, !closed, url.scheme == "https", url.user == nil, url.password == nil,
               let rawHost = url.host, let host = try? AccessSiteHost(rawHost),
               repository.allowsEditing(isPrivate: isPrivate) else {
             status = "连接暂不可用"
             return
         }
+        preparationDeadline = deadline
         do {
             let transport = try transportPreference.select(socksAdmitted: socksAdmitted)
             selectedTransport = transport
             let record = try repository.savedNode(isPrivate: isPrivate)
+            guard !closed, ContinuousClock.now < deadline else { throw AccessTestNodeError.unavailable }
             let revision = record.revision
             observerID = repository.observeRevocation { [weak self] in self?.close() }
             let core = try testingCore ?? AccessGoEmbeddedCore(isolated: true)
             let newPublisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(
                 configPath: nil, verifiedCore: core,
                 parameters: { [repository, isPrivate] in
+                    guard ContinuousClock.now < deadline else { throw AccessTestNodeError.unavailable }
                     let current = try repository.savedNode(isPrivate: isPrivate)
                     guard current.revision == revision else { throw AccessTestNodeError.conflict }
-                    return try current.parameters()
+                    let parameters = try current.parameters()
+                    guard ContinuousClock.now < deadline else { throw AccessTestNodeError.unavailable }
+                    return parameters
                 },
                 connectionAllowed: { [weak self, repository] in
-                    guard let self, !self.closed else { return false }
+                    guard let self, !self.closed, !self.preparationDeadlineElapsed else { return false }
                     return (try? repository.revision(isPrivate: self.isPrivate)) == revision
+                        && !self.closed && !self.preparationDeadlineElapsed
                 },
                 retireDocuments: { [weak self] finish in
                     guard let self else { finish(); return }
                     self.retire(finish)
                 }, transport: transport)
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard !closed, remaining > .zero else { throw AccessTestNodeError.unavailable }
             publisher = newPublisher
             let operation = UUID()
             operationID = operation
-            let deadline = ContinuousClock.now.advanced(by: preparationTimeout)
-            preparationDeadline = deadline
             deadlineTask = Task { [weak self, waitForPreparationDeadline] in
                 try? await waitForPreparationDeadline(deadline)
                 guard !Task.isCancelled, let self, self.preparationDeadline == deadline,
                       ContinuousClock.now >= deadline else { return }
                 self.close()
             }
-            let request = AccessProxyEntryPrepareRequest(operationID: operation, deadline: preparationTimeout)
+            let request = AccessProxyEntryPrepareRequest(operationID: operation, deadline: remaining)
             let result = try await withCheckedThrowingContinuation { continuation in
                 preparationWaiter = continuation
                 // The publisher owns native startup and disposal of its late
                 // result. Closing this page only resolves its own wait.
                 Task { [weak self] in
                     guard self?.preparationWaiter != nil else { return }
+                    guard ContinuousClock.now < deadline else {
+                        self?.close()
+                        return
+                    }
                     do {
                         let result = try await newPublisher.prepare(request)
                         self?.finishPreparation(.success(result))
@@ -530,12 +541,13 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                 ContinuousClock.now < deadline else {
                 throw AccessTestNodeError.unavailable
             }
-            deadlineTask?.cancel()
-            preparationDeadline = nil
-            endpoint = result.endpoint
             let configuration = WKWebViewConfiguration()
             configuration.websiteDataStore = store
             let view = WKWebView(frame: .zero, configuration: configuration)
+            guard !closed, ContinuousClock.now < deadline else { throw AccessTestNodeError.unavailable }
+            deadlineTask?.cancel()
+            preparationDeadline = nil
+            endpoint = result.endpoint
             view.navigationDelegate = self
             webView = view
             initialBinding = result.endpoint

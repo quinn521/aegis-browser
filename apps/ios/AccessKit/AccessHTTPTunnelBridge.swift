@@ -31,13 +31,16 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
 
     /// Caller is the connection queue, which is where the 200 completion runs.
     public func start(host: String, port: UInt16, prelude: Data,
-                      successResponse: Data? = nil, onEstablished: (@Sendable () -> Void)? = nil) {
+                      successResponse: Data? = nil, mayOpen: @escaping @Sendable () -> Bool = { true },
+                      onEstablished: (@Sendable () -> Void)? = nil) {
         lock.lock()
         defer { lock.unlock() }
         guard !stopped, task == nil else { return }
         task = Task { [weak self] in
             guard let self else { return }
             do {
+                guard mayOpen() else { self.stop(); return }
+                try Task.checkCancellation()
                 let remote = try await self.opener.open(host: host, port: port)
                 guard self.storeRemote(remote) else {
                     remote.close()

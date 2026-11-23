@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import AccessKit
 
@@ -151,7 +152,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             signalThird()
             await thirdGate.wait()
             return ready
-        }, shutdown: { stopped.append($0); session.shutdown(identity: $0) })
+        }, shutdown: { stopped.append($0); session.shutdown(identity: $0) }, activate: { session.activate() })
         let cancelledID = UUID(), survivorID = UUID(), thirdID = UUID()
         let secondCallback = AccessProvisionTestGate(entered: XCTestExpectation(description: "second callback at publication"))
         publisher.beforeFlightPublication = { id in
@@ -255,7 +256,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         let finalStopFinished = expectation(description: "final stop completed")
         core.onStop = { count in if count <= stops.count { stops[count - 1].fulfill() } }
         core.onStopFinished = { count in if count == 3 { finalStopFinished.fulfill() } }
-        let gate = AccessProvisionTestGate(entered: expectation(description: "replacement listener is live"))
+        let gate = AccessProvisionTestGate(entered: expectation(description: "replacement socket is bound before publication"))
         defer { gate.finish() }
         let thirdEntered = expectation(description: "third preparation entered session")
         let parameters = try AccessRealityVisionParameters(address: "node.invalid", port: 443,
@@ -269,7 +270,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             let provisioned = try await session.provision(generation: generation, deadline: deadline)
             if generation == 2 { replacement = provisioned; await gate.wait() }
             return provisioned
-        }, shutdown: { identity in stopped.append(identity); session.shutdown(identity: identity) })
+        }, shutdown: { identity in stopped.append(identity); session.shutdown(identity: identity) }, activate: { session.activate() })
         let oldID = UUID(), replacementID = UUID(), thirdID = UUID()
         let first = try await publisher.prepare(.init(operationID: oldID, deadline: .seconds(5)))
         let oldHost = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("retained.invalid"), isPrivate: false)
@@ -283,8 +284,26 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         await fulfillment(of: [gate.entered], timeout: 2)
         let second = try XCTUnwrap(replacement)
         XCTAssertNotEqual(first.endpoint.identity, second.endpoint.identity)
-        XCTAssertTrue(session.isRuntimeHealthy); XCTAssertEqual(core.startCount, 2)
+        XCTAssertFalse(session.isRuntimeHealthy, "A bound replacement is paused before publication")
+        XCTAssertEqual(core.startCount, 2)
         publisher.cancel(operationID: replacementID)
+        let refused = expectation(description: "paused replacement closes a new connection")
+        let client = NWConnection(host: "127.0.0.1",
+                                  port: try XCTUnwrap(NWEndpoint.Port(rawValue: second.endpoint.port)), using: .tcp)
+        defer { client.cancel() }
+        client.stateUpdateHandler = { [weak client] state in
+            guard case .ready = state, let client else { return }
+            client.send(content: Data("CONNECT probe.invalid:443 HTTP/1.1\r\nHost: probe.invalid:443\r\n\r\n".utf8),
+                        completion: .contentProcessed { _ in })
+            client.receive(minimumIncompleteLength: 1, maximumLength: 256) { data, _, complete, error in
+                XCTAssertTrue(data?.isEmpty != false)
+                XCTAssertTrue(complete || error != nil)
+                refused.fulfill()
+            }
+        }
+        client.start(queue: .global())
+        await fulfillment(of: [refused], timeout: 2)
+        XCTAssertEqual(core.dialCount, 0, "A cancelled waiter's paused listener must never dial")
         gate.finish()
         do { _ = try await next.value; XCTFail("Cancelled replacement was published") }
         catch is CancellationError { }
@@ -322,7 +341,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             return parameters
         })
         let publisher = AccessProxyEntryPublisher(provision: { try await session.provision(generation: $0, deadline: $1) },
-            shutdown: { session.shutdown(identity: $0) }, healthCheck: { session.isRuntimeHealthy && authorized })
+            shutdown: { session.shutdown(identity: $0) }, activate: { session.activate() }, healthCheck: { session.isRuntimeHealthy && authorized })
         let firstID = UUID()
         let first = try await publisher.prepare(.init(operationID: firstID, deadline: .seconds(5)))
         let key = AccessHostStoreKey(scopeID: "retained", host: try AccessSiteHost("site.invalid"), isPrivate: false)
@@ -359,6 +378,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         let publisher = AccessProxyEntryPublisher(
             provision: { try await session.provision(generation: $0, deadline: $1) },
             shutdown: { session.shutdown(identity: $0) },
+            activate: { session.activate() },
             healthCheck: { session.isRuntimeHealthy }
         )
         let firstID = UUID()
@@ -421,12 +441,14 @@ private final class DelayedStopCore: AccessEmbeddedCoreControlling, @unchecked S
     @MainActor private var running = false
     @MainActor private(set) var startCount = 0
     @MainActor private(set) var stopCount = 0
+    @MainActor private(set) var dialCount = 0
     @MainActor private var stopContinuation: CheckedContinuation<Void, Never>?
     @MainActor var onStop: ((Int) -> Void)?
     @MainActor var onStopFinished: ((Int) -> Void)?
     var isRunning: Bool { MainActor.assumeIsolated { running } }
     @MainActor func start(configData: Data) { startCount += 1; running = true }
     @MainActor func dial(host: String, port: UInt16) throws -> any AccessRealityPathStream {
+        dialCount += 1
         guard running else { throw AccessEmbeddedCoreError.unverifiedAsset }
         return AccessMemoryRealityStream()
     }

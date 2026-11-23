@@ -235,21 +235,31 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         }
     }
 
-    func testDisabledSharedCaptureKeepsLiveLeasesWhenLoggingResumes() throws {
-        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
-        defer { log.stop() }
+    func testDisabledSharedCaptureKeepsLiveLeasesWhenLoggingResumes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info, pollInterval: .seconds(60))
         let subscription = log.acquireShared(level: .info, secrets: ["subscription-secret.example"])
+        defer { log.stop(lease: subscription) }
         let path = try XCTUnwrap(subscription.path)
         let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         defer { try? writer.close() }
         log.disableAndClear()
         let quietPage = log.acquireShared(level: .none, secrets: ["quiet-secret.example"])
+        defer { log.stop(lease: quietPage) }
         XCTAssertNil(quietPage.path)
         XCTAssertEqual(quietPage.level, .none)
         try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //disabled.example:443\n".utf8))
         let page = log.acquireShared(level: .info, secrets: ["page-secret.example"])
-        XCTAssertEqual(page.path, path)
-        try writer.write(contentsOf: Data((
+        defer { log.stop(lease: page) }
+        let newPath = try XCTUnwrap(page.path)
+        XCTAssertNotEqual(newPath, path)
+        // These bytes were queued by the old native logger during Off, but did
+        // not reach its FIFO until after the new capture was enabled.
+        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //delayed-off.example:443\n".utf8))
+        let resumed = try FileHandle(forWritingTo: URL(fileURLWithPath: newPath))
+        defer { try? resumed.close() }
+        try resumed.write(contentsOf: Data((
             "2026/11/11 00:00:00 from local accepted //subscription-secret.example:443\n" +
             "2026/11/11 00:00:00 from local accepted //page-secret.example:443\n" +
             "2026/11/11 00:00:00 from local accepted //quiet-secret.example:443\n" +
@@ -259,11 +269,17 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path))
         XCTAssertTrue(log.stop(lease: subscription))
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
-        XCTAssertTrue(log.snapshot().contains("resumed.example:443"))
-        XCTAssertFalse(log.snapshot().contains("disabled.example"))
-        XCTAssertFalse(log.snapshot().contains("subscription-secret.example"))
-        XCTAssertFalse(log.snapshot().contains("page-secret.example"))
-        XCTAssertFalse(log.snapshot().contains("quiet-secret.example"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: newPath))
+        try await log.flush()
+        let restored = AccessDiagnosticLog(storageDirectory: directory)
+        try await restored.flush()
+        for snapshot in [log.snapshot(), restored.snapshot()] {
+            XCTAssertTrue(snapshot.contains("resumed.example:443"))
+            for hidden in ["disabled.example", "delayed-off.example", "subscription-secret.example",
+                           "page-secret.example", "quiet-secret.example"] {
+                XCTAssertFalse(snapshot.contains(hidden))
+            }
+        }
     }
 
     @MainActor
@@ -307,6 +323,30 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertFalse(log.snapshot().contains("filtered.example"))
         XCTAssertFalse(log.snapshot().contains("1234abcd"))
         XCTAssertFalse(log.snapshot().contains("abcdef01"))
+    }
+
+    @MainActor
+    func testQuietFixtureRegistersAgainstAnActiveCaptureWithoutClearingIt() async throws {
+        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
+        let active = log.acquireShared(level: .info, secrets: [])
+        defer { log.stop(lease: active) }
+        let core = PersistenceRecordingCore()
+        let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: makeParameters(shortID: "f12e34a5"))
+        let quiet = try await AccessEmbeddedProxyEntrySession.startCoreWithDiagnostics(
+            core: core, outbound: outbound, diagnostics: log, level: .none, disableCaptureWhenQuiet: false)
+        addTeardownBlock { await core.stop(); log.stop(lease: quiet) }
+        XCTAssertNil(quiet.path)
+        let path = try XCTUnwrap(active.path)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        defer { try? writer.close() }
+        try writer.write(contentsOf: Data((
+            "2026/11/11 00:00:00 from local accepted //f12e34a5.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //still-capturing.example:443\n").utf8))
+        await core.stop()
+        XCTAssertTrue(log.stop(lease: quiet))
+        XCTAssertTrue(log.snapshot().contains("still-capturing.example"))
+        XCTAssertTrue(log.snapshot().contains("accepted [redacted]"))
+        XCTAssertFalse(log.snapshot().contains("f12e34a5"))
     }
 
     func testStartupCleanupRemovesAbandonedArchivesWithoutFollowingLinks() throws {

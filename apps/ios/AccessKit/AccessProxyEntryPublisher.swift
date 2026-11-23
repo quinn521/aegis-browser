@@ -24,6 +24,7 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
 
     private let provision: @MainActor (UInt64, Duration) async throws -> Provision
     private let shutdown: @MainActor (String) -> Void
+    private let activate: (@MainActor () -> Bool)?
     private let healthCheck: (@MainActor () -> Bool)?
     /// State lives only as long as a flight, callback, waiter or host owns this generation.
     /// Late completions share its terminal flags without retaining an ever-growing history.
@@ -56,10 +57,12 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
     public init(
         provision: @escaping @MainActor (UInt64, Duration) async throws -> Provision,
         shutdown: @escaping @MainActor (String) -> Void = { _ in },
+        activate: (@MainActor () -> Bool)? = nil,
         healthCheck: (@MainActor () -> Bool)? = nil
     ) {
         self.provision = provision
         self.shutdown = shutdown
+        self.activate = activate
         self.healthCheck = healthCheck
     }
 
@@ -131,6 +134,13 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
             waiters.removeValue(forKey: request.operationID)
             discardIfUnclaimed(publication)
             throw AccessSiteSessionError.prepareFailed("入口版本与这次准备不一致")
+        }
+        if instance?.generation !== generation, let activate {
+            guard isHealthy(provisioned), activate() else {
+                waiters.removeValue(forKey: request.operationID)
+                discardIfUnclaimed(publication)
+                throw AccessSiteSessionError.runtimeNotReady
+            }
         }
         instance = publication
         if inflight?.generation === generation { inflight = nil }

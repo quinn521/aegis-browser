@@ -217,22 +217,25 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         let port = try XCTUnwrap(listener.port?.rawValue)
         defer { listener.cancel(); connections.withLock { $0.forEach { $0.cancel() } } }
         let diagnostics = AccessDiagnosticLog()
-        defer { diagnostics.stop() }
-        let firstCapture = diagnostics.acquireShared(level: .info, secrets: [])
-        let path = try XCTUnwrap(firstCapture.path)
-        let config = try JSONSerialization.data(withJSONObject: [
-            "log": ["loglevel": "info", "access": path, "error": path],
-            "inbounds": [], "outbounds": [["protocol": "freedom"]]
-        ])
         // Test-only local transport: no external target or product DIRECT fallback.
         let first = try AccessGoEmbeddedCore(isolated: true)
         let second = try AccessGoEmbeddedCore(isolated: true)
-        addTeardownBlock { await first.stop(); await second.stop() }
-        try await first.start(configData: config)
+        let firstCapture = diagnostics.acquireShared(level: .info, secrets: [])
+        addTeardownBlock { await first.stop(); diagnostics.stop(lease: firstCapture) }
+        let path = try XCTUnwrap(firstCapture.path)
+        func config(path: String) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "log": ["loglevel": "info", "access": path, "error": path],
+                "inbounds": [], "outbounds": [["protocol": "freedom"]]
+            ])
+        }
+        try await first.start(configData: config(path: path))
         diagnostics.disableAndClear()
         let secondCapture = diagnostics.acquireShared(level: .info, secrets: [])
-        XCTAssertEqual(firstCapture.path, secondCapture.path)
-        try await second.start(configData: config)
+        addTeardownBlock { await second.stop(); diagnostics.stop(lease: secondCapture) }
+        let resumedPath = try XCTUnwrap(secondCapture.path)
+        XCTAssertNotEqual(path, resumedPath)
+        try await second.start(configData: config(path: resumedPath))
         await second.stop()
         XCTAssertTrue(diagnostics.stop(lease: secondCapture))
         XCTAssertTrue(first.isRunning)
@@ -243,8 +246,8 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         XCTAssertEqual(echoed, Data("surviving-core".utf8))
         // Core.Dial's local freedom fixture has no inbound access message.
         // The Go regression verifies native logger selection; this controlled
-        // record verifies the surviving Swift reader without inventing one.
-        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        // record verifies the new Swift reader without inventing one.
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: resumedPath))
         try writer.write(contentsOf: Data("2026/11/20 00:00:00 from local accepted //surviving-native.example:443\n".utf8))
         try writer.close()
         let deadline = Date().addingTimeInterval(3)

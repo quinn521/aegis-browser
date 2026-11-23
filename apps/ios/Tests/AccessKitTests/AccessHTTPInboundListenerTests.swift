@@ -13,12 +13,12 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         let registration = try makeRegistration(port: port)
         let rival = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
         do {
-            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try await rival.start()
             try? rival.stop()
             XCTFail("The assigned socket must hold its port before protocol adoption")
         } catch { }
         let listener = try AccessHTTPInboundListener(registration: registration, preparedSocket: socket, tunnels: HoldingTunnel())
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         XCTAssertTrue(listener.boundSocketForTests === socket)
         XCTAssertEqual(listener.boundPort, port)
@@ -31,7 +31,7 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         listener.acceptedConnectionObserverForTests = { connection in
             references.withLock { $0.append(WeakConnection(connection)) }
         }
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         var footprints = [["closedConnections": UInt64(0), "physicalFootprintBytes": try physicalFootprint()]]
         for index in 0..<60 {
@@ -72,13 +72,13 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
     func testSuspensionKeepsPortOwnedAndRejectsNewTraffic() async throws {
         let registration = try makeRegistration(port: 18_096)
         let listener = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         listener.suspend()
         XCTAssertTrue(listener.isListening)
         let rival = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
         do {
-            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try await rival.start()
             try? rival.stop()
             XCTFail("A suspended listener must retain its port until document retirement")
         } catch { }
@@ -92,6 +92,94 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         await fulfillment(of: [finished], timeout: 3)
         client.cancel()
         XCTAssertEqual(listener.acceptedConnectionCount, 0)
+    }
+
+    func testExpiredHTTPRegistrationFencesActiveAndNewFlowsWithoutReleasingItsSocket() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let registration = try makeRegistration(port: port)
+        let clock = OSAllocatedUnfairLock(initialState: Date())
+        let tunnel = RecordingHTTPExpiryTunnel()
+        let listener = try AccessHTTPInboundListener(registration: registration, tunnels: tunnel,
+            maximumConnections: 4, preparedSocket: socket, now: { clock.withLock { $0 } })
+        try await listener.start()
+        defer { try? listener.stop() }
+        XCTAssertTrue(listener.isAccepting)
+
+        let connected = expectation(description: "HTTP CONNECT established before expiry")
+        let client = try startPeer(port: port, sendConnect: true) { data, _, error in
+            XCTAssertNil(error)
+            XCTAssertTrue(data.map { String(decoding: $0, as: UTF8.self).hasPrefix("HTTP/1.1 200") } == true)
+            connected.fulfill()
+        }
+        defer { client.cancel() }
+        await fulfillment(of: [connected], timeout: 2)
+        XCTAssertTrue(tunnel.stream.isOpen)
+
+        clock.withLock { $0 = registration.leaseExpiry }
+        let refused = expectation(description: "expired HTTP peer closes without accepting CONNECT")
+        let newcomer = try startPeer(port: port, sendConnect: true) { data, complete, error in
+            XCTAssertTrue(data?.isEmpty != false)
+            XCTAssertTrue(complete || error != nil)
+            refused.fulfill()
+        }
+        defer { newcomer.cancel() }
+        await fulfillment(of: [refused], timeout: 2)
+        XCTAssertFalse(listener.isAccepting)
+        XCTAssertTrue(listener.isListening)
+        XCTAssertTrue(listener.boundSocketForTests === socket)
+        XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertEqual(listener.acceptedConnectionCount, 1)
+        XCTAssertEqual(tunnel.dialCount, 1)
+        clock.withLock { $0 = Date() }
+        XCTAssertFalse(listener.isAccepting, "The fenced lease must remain closed after a clock correction")
+    }
+
+    func testHTTPConnectAdmittedBeforeExpiryCannotOpenUpstreamAfterExpiry() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let registration = try makeRegistration(port: port)
+        let clock = OSAllocatedUnfairLock(initialState: Date())
+        let tunnel = RecordingHTTPExpiryTunnel()
+        let listener = try AccessHTTPInboundListener(registration: registration, tunnels: tunnel,
+            maximumConnections: 4, preparedSocket: socket, now: { clock.withLock { $0 } })
+        let accepted = expectation(description: "client accepted while lease is active")
+        listener.acceptedConnectionObserverForTests = { _ in accepted.fulfill() }
+        try await listener.start()
+        defer { try? listener.stop() }
+        let closed = expectation(description: "client closes when sending CONNECT after lease expiry")
+        let client = try startPeer(port: port, sendConnect: false) { data, complete, error in
+            XCTAssertTrue(data?.isEmpty != false)
+            XCTAssertTrue(complete || error != nil)
+            closed.fulfill()
+        }
+        defer { client.cancel() }
+        await fulfillment(of: [accepted], timeout: 2)
+        clock.withLock { $0 = registration.leaseExpiry }
+        client.send(content: Self.connectRequest, completion: .contentProcessed { _ in })
+        await fulfillment(of: [closed], timeout: 2)
+        XCTAssertEqual(tunnel.dialCount, 0)
+        XCTAssertFalse(listener.isAccepting)
+        XCTAssertTrue(listener.boundSocketForTests === socket)
+    }
+
+    private static let connectRequest = Data("CONNECT probe.invalid:443 HTTP/1.1\r\nHost: probe.invalid:443\r\n\r\n".utf8)
+
+    private func startPeer(port: UInt16, sendConnect: Bool,
+                           response: @escaping @Sendable (Data?, Bool, NWError?) -> Void) throws -> NWConnection {
+        let endpoint = try XCTUnwrap(NWEndpoint.Port(rawValue: port))
+        let client = NWConnection(host: "127.0.0.1", port: endpoint, using: .tcp)
+        client.stateUpdateHandler = { [weak client] state in
+            guard case .ready = state, let client else { return }
+            if sendConnect { client.send(content: Self.connectRequest, completion: .contentProcessed { _ in }) }
+            client.receive(minimumIncompleteLength: 12, maximumLength: 256) { data, _, complete, error in
+                response(data, complete, error)
+            }
+        }
+        client.start(queue: .global())
+        return client
     }
 
     private func physicalFootprint() throws -> UInt64 {
@@ -109,7 +197,7 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
     func testCapacityAndStopBoundAcceptedConnectionOwnership() async throws {
         let listener = try AccessHTTPInboundListener(registration: makeRegistration(port: 18_089),
                                                     tunnels: HoldingTunnel(), maximumConnections: 2)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         var clients: [NWConnection] = []
         defer { clients.forEach { $0.cancel() }; try? listener.stop() }
         for _ in 0..<3 {
@@ -143,7 +231,7 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
             credentialSlot: try AccessCredentialSlot(id: "cred-http-inbound"),
             lease: try AccessLease(
                 generation: 1,
-                expiresAt: Date(timeIntervalSince1970: 1_700_000_000 + leaseOffset)
+                expiresAt: Date().addingTimeInterval(leaseOffset)
             )
         )
     }
@@ -161,7 +249,7 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
     func testRejectsInactiveLeaseOnStart() async throws {
         let registration = try makeRegistration(port: 18_085, leaseOffset: 10)
         let listener = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
-        let afterExpiry = Date(timeIntervalSince1970: 1_700_000_000 + 30)
+        let afterExpiry = registration.leaseExpiry.addingTimeInterval(1)
         do {
             try await listener.start(at: afterExpiry)
             XCTFail("expected throw")
@@ -175,7 +263,7 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         let port: UInt16 = 18_086
         let registration = try makeRegistration(port: port)
         let listener = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel())
-        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let now = Date()
 
         try await listener.start(at: now)
         XCTAssertTrue(listener.isListening)
@@ -219,7 +307,7 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         let listener = try AccessHTTPInboundListener(
             registration: makeRegistration(port: 18_087), tunnels: HoldingTunnel()
         )
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         XCTAssertTrue(listener.isListening)
         let observer = try XCTUnwrap(listener.listenerStateObserverForTests)
@@ -245,5 +333,16 @@ private final class HoldingStream: AccessRealityPathStream, @unchecked Sendable 
 private final class HoldingTunnel: AccessHTTPTunnelOpening, @unchecked Sendable {
     func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         HoldingStream()
+    }
+}
+
+private final class RecordingHTTPExpiryTunnel: AccessHTTPTunnelOpening {
+    let stream = AccessMemoryRealityStream()
+    private let count = OSAllocatedUnfairLock(initialState: 0)
+    var dialCount: Int { count.withLock { $0 } }
+
+    func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+        count.withLock { $0 += 1 }
+        return stream
     }
 }

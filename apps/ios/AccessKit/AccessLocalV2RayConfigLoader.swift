@@ -124,6 +124,7 @@ public enum AccessLocalV2RayConfigLoader {
         let names = Set(items.map(\.name))
         guard names.count == items.count,
               names.isSubset(of: acceptedKeys),
+              items.contains(where: { $0.name == "flow" && $0.value == AccessRealityVisionParameters.admittedFlow }),
               aliasGroups.allSatisfy({ names.intersection($0).count <= 1 }),
               items.allSatisfy({ $0.value != nil && ($0.name != "headerType" || $0.value == "none")
                   && ($0.name != "pcks" || $0.value == "")

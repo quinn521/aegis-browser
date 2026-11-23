@@ -21,6 +21,8 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         /// Set when NWListener reports `.failed` after the initial ready handshake.
         var listenerFailed = false
         var suspended = false
+        var admissionOpen = false
+        var leaseDeadline: ContinuousClock.Instant?
         var expiry: Task<Void, Never>?
         var acceptedConnections: UInt64 = 0
         var establishedConnects: UInt64 = 0
@@ -60,19 +62,33 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
     }
 
     var isAccepting: Bool {
-        let listener = gate.withLock { state -> NWListener? in
-            state.listenerFailed || state.suspended ? nil : state.listener
-        }
-        guard let listener else { return false }
-        guard leaseIsActive else {
-            suspend(from: listener)
-            return false
-        }
-        return true
+        guard let listener = gate.withLock({ $0.listener }) else { return false }
+        return admitsTraffic(from: listener)
     }
 
-    private var leaseIsActive: Bool {
-        registration.isActive(at: now(), observedGeneration: registration.generation)
+    // Only the publisher opens a prepared socket after a live waiter claims it.
+    func activate() -> Bool {
+        gate.withLock { state in
+            guard state.listener != nil, !state.listenerFailed, !state.suspended,
+                  leaseIsActive(until: state.leaseDeadline) else { return false }
+            state.admissionOpen = true
+            return true
+        }
+    }
+
+    private func leaseIsActive(until deadline: ContinuousClock.Instant?) -> Bool {
+        guard let deadline, ContinuousClock.now < deadline else { return false }
+        return registration.isActive(at: now(), observedGeneration: registration.generation)
+    }
+
+    private func admitsTraffic(from listener: NWListener) -> Bool {
+        let (admitted, expired) = gate.withLock { state -> (Bool, Bool) in
+            guard state.listener === listener else { return (false, false) }
+            let expired = !leaseIsActive(until: state.leaseDeadline)
+            return (!expired && !state.listenerFailed && !state.suspended && state.admissionOpen, expired)
+        }
+        if expired { suspend(from: listener) }
+        return admitted
     }
 
     var listenerStateObserverForTests: (@Sendable (NWListener.State) -> Void)? {
@@ -103,9 +119,18 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
 
     /// Starts listening on the registration endpoint when the lease is active.
     public func start(at now: Date = Date()) async throws {
-        guard registration.isActive(at: now, observedGeneration: registration.generation), leaseIsActive else {
+        try await start(at: now, accepting: true)
+    }
+
+    func start(at now: Date, accepting: Bool) async throws {
+        let leaseTime = self.now()
+        let remaining = registration.leaseExpiry.timeIntervalSince(leaseTime)
+        guard remaining.isFinite, remaining < Double(Int64.max),
+              registration.isActive(at: now, observedGeneration: registration.generation),
+              registration.isActive(at: leaseTime, observedGeneration: registration.generation) else {
             throw AccessSOCKS5InboundError.leaseInactive
         }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(remaining))
         let mayStart = gate.withLock { state in
             guard state.listener == nil, !state.starting, !state.suspended else { return false }
             state.starting = true
@@ -150,6 +175,8 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
         let installed = gate.withLock { state -> Bool in
             if state.listener != nil { return false }
             state.listener = nwListener
+            state.admissionOpen = accepting
+            state.leaseDeadline = deadline
             state.listenerFailed = true // Not healthy until the ready event is observed.
             return true
         }
@@ -191,8 +218,7 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
             throw AccessSOCKS5InboundError.bindFailed("listener port differs from admitted registration")
         }
         let scheduled = gate.withLock { state in
-            guard state.listener === nwListener, !state.suspended, leaseIsActive else { return false }
-            let deadline = ContinuousClock.now.advanced(by: .seconds(max(0, registration.leaseExpiry.timeIntervalSince(self.now()))))
+            guard state.listener === nwListener, !state.suspended, leaseIsActive(until: deadline) else { return false }
             state.expiry = Task { [weak self, weak nwListener] in
                 do { try await ContinuousClock().sleep(until: deadline) }
                 catch { return }
@@ -259,14 +285,14 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection, from listener: NWListener) {
         let admitted = gate.withLock { state in
-            guard state.listener === listener, !state.listenerFailed, !state.suspended,
-                  leaseIsActive, state.openConnections.count < maximumConnections else { return false }
+            guard state.listener === listener, !state.listenerFailed, !state.suspended, state.admissionOpen,
+                  leaseIsActive(until: state.leaseDeadline), state.openConnections.count < maximumConnections else { return false }
             state.acceptedConnections &+= 1
             state.openConnections.append(connection)
             return true
         }
         guard admitted else {
-            if !leaseIsActive { suspend(from: listener) }
+            _ = admitsTraffic(from: listener) // Fence expired flows even when this peer was refused.
             connection.cancel()
             return
         }
@@ -295,8 +321,7 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
             guard let self, let connection, let listener else { return }
             switch outcome {
             case .admitted(let request, let remainder):
-                guard self.leaseIsActive else {
-                    self.suspend(from: listener)
+                guard self.admitsTraffic(from: listener) else {
                     connection.cancel()
                     return
                 }
@@ -311,7 +336,11 @@ public final class AccessSOCKS5InboundListener: @unchecked Sendable {
                 }
                 guard installed else { bridge.stop(); return }
                 bridge.start(host: request.host, port: request.port, prelude: remainder,
-                             successResponse: AccessSOCKS5InboundParser.successReply()) { [weak self] in
+                             successResponse: AccessSOCKS5InboundParser.successReply(),
+                             mayOpen: { [weak self, weak listener] in
+                                 guard let self, let listener else { return false }
+                                 return self.admitsTraffic(from: listener)
+                             }) { [weak self] in
                     self?.gate.withLock { $0.establishedConnects &+= 1 }
                 }
             case .established:

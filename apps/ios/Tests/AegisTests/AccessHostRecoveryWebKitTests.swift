@@ -13,7 +13,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testFirstPublicNavigationUsesTheDefaultProtectedRoute() async throws {
         let opener = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_277, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_277), defaultLocationPrivacy: true)
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
@@ -54,7 +54,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         // Instrument the original store with a loopback witness. The managed service always fails.
         let witness = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_278, tunnels: witness)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let original = tab.originalWebsiteDataStore
         let prior = original.proxyConfigurations
@@ -97,7 +97,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { origin.stop() }
         let witness = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_295, tunnels: witness)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let gate = WindowPrepareGate()
         defer { gate.finish() }
@@ -202,7 +202,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testExplicitSiteRoutesShareEntryAndTurningOneOffKeepsTheOtherProxied() async throws {
         let opener = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_273, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let publisher = readyPublisher(port: 18_273)
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .alpha)
@@ -261,7 +261,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testFirstPendingAddressChoiceFromOffUsesManagedWebViewAndConnectListener() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_271, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_271))
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
@@ -351,7 +351,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         let nonce = UUID().uuidString
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_240, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let publisher = readyPublisher(port: 18_240)
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessContinuousPreparationClock())
@@ -389,7 +389,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testUnreadyTabKeepsTheOriginalStore() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_244, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let publisher = AccessProxyEntryPublisher { _, _ in
             throw AccessSiteSessionError.nodeUnavailable
@@ -430,7 +430,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testHttpsReloadRecordsConnectAuthority() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_245, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let publisher = readyPublisher(port: 18_245)
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessContinuousPreparationClock())
@@ -466,7 +466,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testUnrelatedHostDoesNotEnterTheListener() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_241, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         defer { browser.standardTabs.forEach { $0.stop() } }
@@ -481,7 +481,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testFailedEndpointKeepsTheProxyAndDisallowsDirectFailover() async throws {
         let opener = AnsweringOpener(body: "<html><body>proxy ready</body></html>")
         let listener = try await makeListener(port: 18_242, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let publisher = readyPublisher(port: 18_242)
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, clock: AccessContinuousPreparationClock())
@@ -559,7 +559,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { origin.stop() }
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_246, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(
             publisher: readyPublisher(port: 18_246),
@@ -681,7 +681,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { origin.stop() }
         let opener = AnsweringOpener(body: html)
         let listener = try await makeListener(port: 18_256, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_256))
         let windows = BrowserWindowStore()
@@ -745,7 +745,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testClosingPrivateWindowDoesNotReactivateSuspendedOrdinaryTab() async throws {
         let opener = AnsweringOpener(body: "<title>Suspension fixture</title><p>safe</p>")
         let listener = try await makeListener(port: 18_258, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_258))
         let windows = BrowserWindowStore()
@@ -817,7 +817,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { origin.stop() }
         let opener = AnsweringOpener(body: html)
         let listener = try await makeListener(port: 18_260, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_260))
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
@@ -920,7 +920,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testOldInstanceCleanupCannotUnbindRestoredTabOrCancelItsRecoveryAndProbe() async throws {
         let opener = AnsweringOpener(body: "<title>Restore ownership</title>")
         let listener = try await makeListener(port: 18_262, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let gate = WindowPrepareGate()
         defer { gate.finish() }
@@ -999,7 +999,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     func testTerminalScrollSnapshotSurvivesDisappearAndCannotOverwriteRestoredWindow() async throws {
         let opener = AnsweringOpener(body: "<meta name='viewport' content='width=device-width'><div style='height:8000px'>Scroll restoration</div>")
         let listener = try await makeListener(port: 18_264, tunnels: opener)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         defer { try? listener.stop() }
         let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_264))
         let windows = BrowserWindowStore()
@@ -1074,7 +1074,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             transport: .http,
             endpoint: try AccessEndpoint(host: "127.0.0.1", port: port),
             credentialSlot: try AccessCredentialSlot(id: "cred-webkit-\(port)"),
-            lease: try AccessLease(generation: 1, expiresAt: Date(timeIntervalSince1970: 1_700_000_060))
+            lease: try AccessLease(generation: 1, expiresAt: Date().addingTimeInterval(60))
         )
         return try AccessHTTPInboundListener(registration: registration, tunnels: tunnels)
     }
