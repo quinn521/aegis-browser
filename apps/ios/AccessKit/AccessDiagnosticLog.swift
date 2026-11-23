@@ -9,6 +9,11 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         let path: String
         let level: AccessLogLevel
     }
+    struct Lease: Sendable {
+        let id: UUID
+        let path: String?
+        let level: AccessLogLevel
+    }
     public static let shared: AccessDiagnosticLog = {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("AccessDiagnostics", isDirectory: true)
@@ -27,15 +32,17 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     private var discardPrefix: Int? = 0
     private var enabled = false
     private var failed = false
-    // History can finish restoring after the current FIFO is retired.
+    private var standaloneSecrets: [String] = []
+    private var liveSecrets: [UUID: [String]] = [:]
     private var secrets: [String] = []
+    // A pending history read may outlast a core. Its redactors apply only to that read.
+    private var historySecrets: Set<String> = []
     private var reader: DispatchSourceTimer?
     private var readerFD: Int32?
     private var directory: URL?
     private var captureID: UUID?
     private let sharedLock = NSLock()
     private var sharedCapture: Capture?
-    private var sharedOwners: Set<UUID> = []
     private var minimumRank = 2
     private let storage: AccessDiagnosticLogStorage?
     private var storageReady: Bool
@@ -75,7 +82,9 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                         if self.storageGeneration == 0 {
                             switch result {
                             case .success(let restored):
+                                self.secrets = Array(Set(self.secrets).union(self.historySecrets))
                                 let safe = restored.compactMap(self.restoredLine)
+                                self.rebuildSecretSetLocked()
                                 if safe.count != restored.count { self.storageFailed = true }
                                 self.dirty = self.dirty || safe != restored
                                 self.lines = safe + self.lines
@@ -84,6 +93,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                                 self.storageFailed = true
                             }
                         }
+                        self.historySecrets.removeAll()
                         if self.dirty { self.scheduleSaveLocked() }
                         let waiters = self.flushWaiters
                         self.flushWaiters.removeAll()
@@ -120,17 +130,15 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     func start(level: AccessLogLevel, secrets: [String]) throws -> Capture? {
         let stopped = stop()
         queue.sync {
-            self.secrets = secrets.filter { !$0.isEmpty }
-            let sanitized = lines.compactMap(restoredLine)
-            if sanitized != lines {
-                lines = sanitized
-                trimLocked()
-                dirty = true
-                scheduleSaveLocked()
-            }
+            standaloneSecrets = secrets.filter { !$0.isEmpty }
+            updateRedactorLocked()
         }
         guard stopped else { throw POSIXError(.EIO) }
         guard level != .none else { clear(); return nil }
+        return try openCapture(level: level)
+    }
+
+    private func openCapture(level: AccessLogLevel) throws -> Capture {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("aegis-access-log-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false,
@@ -185,58 +193,98 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     @discardableResult
     func stop() -> Bool {
-        stop(ifID: nil)
+        stop(ifID: nil, clearStandaloneSecrets: true)
     }
 
     @discardableResult
     func stop(capture: Capture) -> Bool {
+        stop(ifID: capture.id, clearStandaloneSecrets: true)
+    }
+
+    @discardableResult
+    func stop(lease: Lease) -> Bool {
         sharedLock.lock()
-        if sharedOwners.remove(capture.id) != nil {
-            guard sharedOwners.isEmpty else { sharedLock.unlock(); return true }
-            let underlying = sharedCapture
-            sharedCapture = nil
-            sharedLock.unlock()
-            return underlying.map { stop(ifID: $0.id) } ?? true
+        defer { sharedLock.unlock() }
+        guard let lastOwner = queue.sync(execute: {
+            liveSecrets[lease.id].map { _ in liveSecrets.count == 1 }
+        }) else { return true }
+        let stopped: Bool
+        if lastOwner, let capture = sharedCapture {
+            stopped = stop(ifID: capture.id)
+            if stopped { sharedCapture = nil }
+        } else {
+            stopped = true
         }
-        sharedLock.unlock()
-        return stop(ifID: capture.id)
+        queue.sync {
+            if let readerFD {
+                // Drain final records with the retiring core's redactor.
+                // Discard any excess backlog and partial line before forgetting it.
+                if !drain(fd: readerFD, maximumReads: 64) { discardPrefix = nil }
+                discardingLine = discardingLine || !pending.isEmpty
+                pending.removeAll()
+            }
+            liveSecrets.removeValue(forKey: lease.id)
+            rebuildSecretSetLocked()
+        }
+        return stopped
     }
 
     /// Live embedded cores share Xray's process logger. Each owns a lease on
     /// the filtered FIFO, and all active credentials remain in its redactor.
-    func acquireShared(level: AccessLogLevel, secrets: [String]) throws -> Capture? {
+    func acquireShared(level: AccessLogLevel, secrets: [String]) -> Lease {
         sharedLock.lock()
         defer { sharedLock.unlock() }
-        if let capture = sharedCapture,
-           queue.sync(execute: { captureID == capture.id && readerFD != nil }) {
-            queue.sync {
-                self.secrets = Array(Set(self.secrets + secrets.filter { !$0.isEmpty }))
-                let safe = lines.compactMap(restoredLine)
-                if safe != lines { lines = safe; trimLocked(); dirty = true; scheduleSaveLocked() }
-                // Disabling ingestion does not release live cores' FIFO leases.
-                // Re-enable the same reader only after discarding bytes queued
-                // while logging was off; their old writers still own this path.
-                if level == .none {
-                    clearLocked(disable: true, completion: nil)
-                } else if !enabled && !failed {
+        let owner = UUID()
+        queue.sync {
+            liveSecrets[owner] = secrets.filter { !$0.isEmpty }
+            updateRedactorLocked()
+        }
+        if level == .none {
+            disableAndClear()
+            return Lease(id: owner, path: nil, level: .none)
+        }
+        if let capture = sharedCapture, queue.sync(execute: { captureID == capture.id && readerFD != nil }) {
+            let usable = queue.sync {
+                // Old writers still own this path. Discard bytes accumulated
+                // while ingestion was off before accepting new events.
+                if !enabled && !failed {
                     clearLocked(disable: false, completion: nil)
-                    minimumRank = Self.rank(level)
                     enabled = true
                 }
+                minimumRank = Self.rank(level)
+                return enabled
             }
-            let owner = Capture(id: UUID(), path: capture.path, level: capture.level)
-            sharedOwners.insert(owner.id)
-            return owner
+            return Lease(id: owner, path: usable ? capture.path : nil, level: usable ? level : .none)
         }
-        sharedOwners.removeAll()
-        sharedCapture = try start(level: level, secrets: secrets)
-        guard let capture = sharedCapture else { return nil }
-        let owner = Capture(id: UUID(), path: capture.path, level: capture.level)
-        sharedOwners.insert(owner.id)
-        return owner
+        do {
+            let capture = try openCapture(level: level)
+            sharedCapture = capture
+            return Lease(id: owner, path: capture.path, level: level)
+        } catch {
+            markUnavailable()
+            return Lease(id: owner, path: nil, level: .none)
+        }
     }
 
-    private func stop(ifID: UUID?) -> Bool {
+    private func updateRedactorLocked() {
+        rebuildSecretSetLocked()
+        if !storageReady && storageGeneration == 0 { historySecrets.formUnion(secrets) }
+        // History may have finished restoring before this owner registered.
+        // Redact it before exposing it through a snapshot or saving it again.
+        let safe = lines.compactMap(restoredLine)
+        if safe != lines {
+            lines = safe
+            trimLocked()
+            dirty = true
+            scheduleSaveLocked()
+        }
+    }
+
+    private func rebuildSecretSetLocked() {
+        secrets = Array(Set(standaloneSecrets + liveSecrets.values.flatMap { $0 }))
+    }
+
+    private func stop(ifID: UUID?, clearStandaloneSecrets: Bool = false) -> Bool {
         let result: (Bool, URL?) = queue.sync {
             if let ifID, captureID != ifID { return (true, nil) }
             // The core has stopped, but its final complete records may still
@@ -264,6 +312,10 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             pending.removeAll()
             directory = nil
             captureID = nil
+            if clearStandaloneSecrets {
+                standaloneSecrets.removeAll()
+                rebuildSecretSetLocked()
+            }
             return (true, retired)
         }
         if let retired = result.1 {
@@ -315,7 +367,8 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     func markUnavailable() { queue.sync { failed = true } }
 
-    private func drain(fd: Int32, maximumReads: Int) {
+    @discardableResult
+    private func drain(fd: Int32, maximumReads: Int) -> Bool {
         var bytes = [UInt8](repeating: 0, count: 4096)
         for _ in 0..<maximumReads {
             let count = read(fd, &bytes, bytes.count)
@@ -326,7 +379,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                 } else {
                     discardPrefix = 0
                 }
-                return
+                return true
             }
             let discard = min(discardPrefix ?? count, count)
             if discard > 0 {
@@ -346,6 +399,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                 }
             }
         }
+        return false
     }
 
     private func append(_ raw: String) {
@@ -479,6 +533,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         discardingLine = discardingLine || !pending.isEmpty
         pending.removeAll()
         storageGeneration &+= 1
+        historySecrets.removeAll()
         let generation = storageGeneration
         dirty = false
         saveWork?.cancel(); saveWork = nil; saveWorkID = nil

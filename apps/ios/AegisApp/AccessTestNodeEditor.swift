@@ -181,7 +181,27 @@ struct AccessTestNodeKeychain: AccessTestNodeStoring {
 
 @MainActor
 final class AccessTestNodeRepository {
-    static let shared = AccessTestNodeRepository()
+    static let shared = launchRepository(arguments: ProcessInfo.processInfo.arguments)
+
+    static func launchRepository(arguments: [String], channel: AccessInternalOptions? = AccessInternalOptions.installed,
+                                 persistentStorage: () -> any AccessTestNodeStoring = { AccessTestNodeKeychain() }) -> AccessTestNodeRepository {
+#if DEBUG
+        if arguments.contains("--ui-testing") {
+            return AccessTestNodeRepository(channel: channel, storage: UITestStorage())
+        }
+#endif
+        return AccessTestNodeRepository(channel: channel, storage: persistentStorage())
+    }
+
+#if DEBUG
+    private final class UITestStorage: AccessTestNodeStoring {
+        private var records: [AccessInternalOptions: AccessTestNodeRecord] = [:]
+
+        func read(channel: AccessInternalOptions) -> AccessTestNodeRecord? { records[channel] }
+        func write(_ record: AccessTestNodeRecord, channel: AccessInternalOptions) { records[channel] = record }
+        func remove(channel: AccessInternalOptions) { records.removeValue(forKey: channel) }
+    }
+#endif
     private let channel: AccessInternalOptions?
     private let storage: any AccessTestNodeStoring
     private var revocations: [UUID: @MainActor () -> Void] = [:]
@@ -381,6 +401,9 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var key: AccessHostStoreKey?
     private var operationID: UUID?
     private var observerID: UUID?
+    private let preparationTimeout: Duration
+    private let waitForPreparationDeadline: @MainActor (ContinuousClock.Instant) async throws -> Void
+    private var preparationDeadline: ContinuousClock.Instant?
     private var deadlineTask: Task<Void, Never>?
     private var retirement: (() -> Void)?
     private(set) var retirementNavigation: WKNavigation?
@@ -389,6 +412,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var retiringOwner: AccessTestNodePage?
     /// Bounded, secret-free lifecycle evidence; no URL or document content.
     private(set) var retirementEvents: [String] = []
+    private(set) var retirementCommittedAt: ContinuousClock.Instant?
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
     private(set) var localPolicyRejection: String?
@@ -416,12 +440,17 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
 
     init(repository: AccessTestNodeRepository = .shared, testingCore: (any AccessEmbeddedCoreControlling)? = nil,
          singleNavigation: Bool = false, transport: AccessTestNodeTransport = .automatic,
-         socksAdmitted: Bool? = nil) {
+         socksAdmitted: Bool? = nil, preparationTimeout: Duration = .seconds(15),
+         waitForPreparationDeadline: @escaping @MainActor (ContinuousClock.Instant) async throws -> Void = {
+             try await ContinuousClock().sleep(until: $0)
+         }) {
         self.transportPreference = transport
         self.socksAdmitted = socksAdmitted ?? AccessInternalSOCKSAdmission.current
         self.repository = repository
         self.testingCore = testingCore
         self.singleNavigation = singleNavigation
+        self.preparationTimeout = preparationTimeout
+        self.waitForPreparationDeadline = waitForPreparationDeadline
         super.init()
     }
 
@@ -457,15 +486,15 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             publisher = newPublisher
             let operation = UUID()
             operationID = operation
-            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
-            deadlineTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(15))
-                guard !Task.isCancelled, let self, self.endpoint == nil else { return }
-                self.failureDomain = NSURLErrorDomain
-                self.failureCode = NSURLErrorTimedOut
+            let deadline = ContinuousClock.now.advanced(by: preparationTimeout)
+            preparationDeadline = deadline
+            deadlineTask = Task { [weak self, waitForPreparationDeadline] in
+                try? await waitForPreparationDeadline(deadline)
+                guard !Task.isCancelled, let self, self.preparationDeadline == deadline,
+                      ContinuousClock.now >= deadline else { return }
                 self.close()
             }
-            let result = try await newPublisher.prepare(.init(operationID: operation, deadline: .seconds(15)))
+            let result = try await newPublisher.prepare(.init(operationID: operation, deadline: preparationTimeout))
             guard !closed, ContinuousClock.now < deadline,
                   (try? repository.savedNode().revision) == revision,
                   newPublisher.validateReady(result) else { throw AccessTestNodeError.unavailable }
@@ -476,10 +505,12 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             guard let store = registry.storeForTab(tabID: id.uuidString, scopeID: storeKey.scopeID,
                 isPrivate: false, targetHost: host, boundHost: nil, intent: .on),
                 store.proxyConfigurations.count == 1,
-                store.proxyConfigurations.first?.allowFailover == false else {
+                store.proxyConfigurations.first?.allowFailover == false,
+                ContinuousClock.now < deadline else {
                 throw AccessTestNodeError.unavailable
             }
             deadlineTask?.cancel()
+            preparationDeadline = nil
             endpoint = result.endpoint
             let configuration = WKWebViewConfiguration()
             configuration.websiteDataStore = store
@@ -490,19 +521,31 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
             status = "正在加载"
             currentNavigation = view.load(URLRequest(url: url))
         } catch {
-            failureDomain = (error as NSError).domain
-            failureCode = (error as NSError).code
+            guard !closed else { return }
+            if !preparationDeadlineElapsed {
+                failureDomain = (error as NSError).domain
+                failureCode = (error as NSError).code
+            }
             close()
         }
     }
 
+    private var preparationDeadlineElapsed: Bool {
+        preparationDeadline.map { ContinuousClock.now >= $0 } ?? false
+    }
+
     func close() {
         guard !closed else { return }
+        if failureDomain == nil, preparationDeadlineElapsed {
+            failureDomain = NSURLErrorDomain
+            failureCode = NSURLErrorTimedOut
+        }
         closed = true
         if let observerID { repository.removeObserver(observerID) }
         observerID = nil
         status = "连接暂不可用"
         deadlineTask?.cancel()
+        preparationDeadline = nil
         if let operationID { publisher?.cancel(operationID: operationID) }
         if let publisher = publisher as? AccessProxyEntryPublisher {
             publisher.closeCurrentGeneration()
@@ -558,16 +601,18 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        if retiring { recordRetirement(navigation != nil && navigation === retirementNavigation ? "replacement-committed" : "other-commit") }
-        if retiring, webView === self.webView, let navigation, navigation === retirementNavigation {
-            let finish = retirement
+        if retiring {
+            guard webView === self.webView, let navigation, navigation === retirementNavigation,
+                  let finish = retirement else { recordRetirement("other-commit"); return }
+            retirementCommittedAt = .now
+            recordRetirement("replacement-committed")
             retirement = nil
-            finish?()
+            finish()
             release()
             retiringOwner = nil
             return
         }
-        if !retiring, let navigation, navigation === currentNavigation { committedMainFrame = true }
+        if let navigation, navigation === currentNavigation { committedMainFrame = true }
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

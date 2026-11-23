@@ -90,6 +90,8 @@ final class SettingsLayoutUITests: XCTestCase {
         let profile = app.buttons["access-test-profile"]
         XCTAssertTrue(reveal(profile, app))
         profile.tap()
+        let saved = app.staticTexts["access-test-node-saved"]
+        XCTAssertFalse(saved.exists, "The UI test launch must start with an empty profile")
         let scan = app.buttons["access-test-node-scan"]
         XCTAssertTrue(reveal(scan, app))
         scan.tap()
@@ -132,7 +134,6 @@ final class SettingsLayoutUITests: XCTestCase {
         preview.tap()
         XCTAssertTrue(reveal(apply, app))
         apply.tap()
-        let saved = app.staticTexts["access-test-node-saved"]
         XCTAssertTrue(reveal(saved, app, scrollDown: true))
         XCTAssertEqual(saved.label, "Node saved.")
         // The saved section includes a URL TextField. Start below-viewport

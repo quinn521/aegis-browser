@@ -83,6 +83,33 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNotNil(try repository.revision(isPrivate: false))
     }
 
+#if DEBUG
+    func testUITestLaunchUsesOnlyItsOwnInMemoryNodeRepository() throws {
+        let persistent = Storage()
+        let ordinary = AccessTestNodeRepository.launchRepository(arguments: [], channel: .dev) { persistent }
+        let draft = try AccessLocalV2RayConfigLoader.parseSingleShareURI(link)
+        let ordinaryRevision = try ordinary.apply(draft, expectedRevision: nil, isPrivate: false)
+        var persistentOpens = 0
+        func makeUITestRepository() -> AccessTestNodeRepository {
+            AccessTestNodeRepository.launchRepository(arguments: ["--ui-testing"], channel: .dev) {
+                persistentOpens += 1
+                return persistent
+            }
+        }
+        let test = makeUITestRepository()
+        XCTAssertNil(try test.revision(isPrivate: false))
+        let firstRevision = try test.apply(draft, expectedRevision: nil, isPrivate: false)
+        XCTAssertEqual(try test.savedNode().revision, firstRevision)
+        XCTAssertNil(try makeUITestRepository().revision(isPrivate: false), "An interrupted run leaves no saved node")
+        try test.remove(expectedRevision: firstRevision, isPrivate: false)
+        XCTAssertNil(try test.revision(isPrivate: false))
+        XCTAssertEqual(persistentOpens, 0)
+        XCTAssertEqual(try ordinary.savedNode().revision, ordinaryRevision)
+        XCTAssertEqual(persistent.writes, 1)
+        XCTAssertEqual(persistent.removals, 0)
+    }
+#endif
+
     func testCameraDenialCancellationAndProfileSwitchDoNotReplaceSavedNode() throws {
         let storage = Storage()
         let repository = AccessTestNodeRepository(channel: .dev, storage: storage)
@@ -372,6 +399,76 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")))
     }
 
+    func testPreparationTimeoutSurvivesLateCancellationAndFailure() async throws {
+        try await assertPreparationFailure(timerDelayed: false, error: CancellationError(), expectTimeout: true)
+        try await assertPreparationFailure(timerDelayed: false, error: URLError(.cannotConnectToHost), expectTimeout: true)
+    }
+
+    func testExpiredPreparationIsTimedOutBeforeTheDelayedTimerRuns() async throws {
+        try await assertPreparationFailure(timerDelayed: true, error: URLError(.cannotConnectToHost), expectTimeout: true)
+    }
+
+    func testPreparationFailureBeforeDeadlineIsPreserved() async throws {
+        try await assertPreparationFailure(timerDelayed: true, error: URLError(.cannotConnectToHost), expectTimeout: false)
+    }
+
+    private func assertPreparationFailure(timerDelayed: Bool, error: any Error, expectTimeout: Bool) async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
+        let started = expectation(description: "core started preparing")
+        let release = XCTestExpectation(description: "allow core start to fail")
+        let timerEntered = expectation(description: "preparation timer received its deadline")
+        var actualDeadline: ContinuousClock.Instant?
+        let core = PageCore(beforeStart: {
+            started.fulfill()
+            let result = await XCTWaiter.fulfillment(of: [release], timeout: 3)
+            XCTAssertEqual(result, .completed)
+            throw error
+        })
+        let page = AccessTestNodePage(repository: repository, testingCore: core,
+                                      preparationTimeout: expectTimeout ? .milliseconds(100) : .seconds(15),
+                                      waitForPreparationDeadline: { deadline in
+            actualDeadline = deadline
+            timerEntered.fulfill()
+            if timerDelayed { try await Task.sleep(for: .seconds(10)) }
+            else { try await ContinuousClock().sleep(until: deadline) }
+        })
+        let completed = expectation(description: "open returned")
+        let opening = Task {
+            await page.open(URL(string: "https://example.invalid/prepare")!)
+            completed.fulfill()
+        }
+        defer { opening.cancel(); page.close() }
+        await fulfillment(of: [started, timerEntered], timeout: 2)
+        if expectTimeout {
+            let deadline = try XCTUnwrap(actualDeadline)
+            if timerDelayed {
+                try await ContinuousClock().sleep(until: deadline)
+                XCTAssertNil(page.failureCode, "The timer has not recorded its timeout")
+            } else {
+                let limit = deadline.advanced(by: .seconds(1))
+                while page.failureCode == nil, ContinuousClock.now < limit {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
+                XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
+            }
+        }
+        release.fulfill()
+        await fulfillment(of: [completed], timeout: 2)
+        if expectTimeout {
+            XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
+            XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
+        } else {
+            let failure = AccessSiteSessionError.prepareFailed("") as NSError
+            XCTAssertEqual(page.failureDomain, failure.domain)
+            XCTAssertEqual(page.failureCode, failure.code)
+        }
+        XCTAssertNil(page.initialBinding)
+        XCTAssertNil(page.webView)
+        XCTAssertFalse(core.isRunning)
+    }
+
     func testSupersededNavigationFailuresCannotCloseTheReplacement() throws {
         let page = AccessTestNodePage()
         let view = WKWebView()
@@ -417,10 +514,16 @@ final class AccessTestNodeEditorTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { view.removeFromSuperview(); window.isHidden = true }
         XCTAssertNotNil(page.endpoint)
+        let closeStarted = ContinuousClock.now
         page.close()
         let deadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "A proxy-bound pending document must retire before its port is released")
+        let commit = try XCTUnwrap(page.retirementCommittedAt)
+        XCTAssertGreaterThanOrEqual(commit, closeStarted)
+        let replacement = try XCTUnwrap(page.retirementNavigation)
+        page.webView(view, didCommit: replacement)
+        XCTAssertEqual(page.retirementCommittedAt, commit, "The first matching commit is immutable")
         XCTAssertNotNil(page.initialBinding, "Retirement must retain its immutable receipt identity")
         XCTAssertEqual(view.url?.host, "aegis.invalid")
         XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
@@ -470,6 +573,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         page.webView(view, didFailProvisionalNavigation: interrupted, withError: URLError(.cancelled))
         page.webView(view, didCommit: interrupted)
         XCTAssertNotNil(page.endpoint, "An interrupted replacement cannot release the binding")
+        XCTAssertNil(page.retirementCommittedAt)
         let deadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "Only a fresh local replacement commit may release the binding")
@@ -503,8 +607,13 @@ final class AccessTestNodeEditorTests: XCTestCase {
 
     private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
         let running = Mutex(false)
+        private let beforeStart: (@MainActor () async throws -> Void)?
+        init(beforeStart: (@MainActor () async throws -> Void)? = nil) { self.beforeStart = beforeStart }
         var isRunning: Bool { running.withLock { $0 } }
-        func start(configData: Data) async throws { running.withLock { $0 = true } }
+        func start(configData: Data) async throws {
+            if let beforeStart { try await beforeStart() }
+            running.withLock { $0 = true }
+        }
         func stop() async { running.withLock { $0 = false } }
         func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
             throw URLError(.cannotConnectToHost)
@@ -708,10 +817,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                         "network":network.0])
             consecutiveNetworkFailures = timedOut || page.failureDomain == NSURLErrorDomain ? consecutiveNetworkFailures + 1 : 0
             preparationFailures = page.webView == nil ? preparationFailures + 1 : 0
-            let retired = try await Self.observeRetirement(page) { supplement, confirmed, elapsed, events in
-                try append(["event":supplement ? "retirement-supplement" : "retirement",
-                            "host":host, "attempt":attempt, "retired":confirmed,
-                            "observationSeconds":elapsed, "events":events])
+            let retired = try await Self.observeRetirement(page) { checkpoint in
+                var row: [String: Any] = ["event":checkpoint.supplement ? "retirement-supplement" : "retirement",
+                    "host":host, "attempt":attempt, "retired":checkpoint.confirmed,
+                    "observationSeconds":checkpoint.observationSeconds, "events":page.retirementEvents]
+                row["commitSeconds"] = checkpoint.commitSeconds
+                try append(row)
             }
             guard retired else { XCTFail("Old document retirement unconfirmed; campaign stopped"); return }
             page.webView?.removeFromSuperview()
@@ -732,17 +843,40 @@ final class AccessTestNodeDeviceTests: XCTestCase {
     private static func observeRetirement(
         _ page: AccessTestNodePage,
         afterClose: () async throws -> Void = {},
-        checkpoint: (Bool, Bool, TimeInterval, [String]) throws -> Void
+        checkpoint: (RetirementCheckpoint) throws -> Void
     ) async throws -> Bool {
-        let started = Date()
+        let started = ContinuousClock.now
         page.close()
         try await afterClose()
-        for (index, limit) in [5.0, 10.0].enumerated() {
-            while page.endpoint != nil, Date().timeIntervalSince(started) < limit {
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            let confirmed = page.endpoint == nil
-            try checkpoint(index > 0, confirmed, Date().timeIntervalSince(started), page.retirementEvents)
+        return try await observeRetirement(started: started, hasBoundDocument: page.initialBinding != nil,
+            committedAt: { page.retirementCommittedAt }, checkpoint: checkpoint)
+    }
+
+    fileprivate struct RetirementCheckpoint {
+        let supplement: Bool
+        let confirmed: Bool
+        let observationSeconds: TimeInterval
+        let commitSeconds: TimeInterval?
+    }
+
+    fileprivate static func observeRetirement(
+        started: ContinuousClock.Instant, hasBoundDocument: Bool,
+        committedAt: () -> ContinuousClock.Instant?,
+        now: () -> ContinuousClock.Instant = { .now },
+        pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(50)) },
+        checkpoint: (RetirementCheckpoint) throws -> Void
+    ) async throws -> Bool {
+        func seconds(_ instant: ContinuousClock.Instant) -> TimeInterval {
+            let elapsed = started.duration(to: instant).components
+            return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+        }
+        for (index, budget) in [Duration.seconds(5), .seconds(10)].enumerated() {
+            let cutoff = started.advanced(by: budget)
+            while hasBoundDocument, committedAt() == nil, now() < cutoff { try await pause() }
+            let commit = committedAt()
+            let confirmed = !hasBoundDocument || commit.map { $0 <= cutoff } == true
+            try checkpoint(RetirementCheckpoint(supplement: index > 0, confirmed: confirmed,
+                observationSeconds: seconds(now()), commitSeconds: commit.map(seconds)))
             if confirmed { return true }
         }
         return false
@@ -782,6 +916,26 @@ final class AccessTestNodeDeviceTests: XCTestCase {
               let rawURL = environment["AEGIS_TEST_CONTROLLED_URL"], let url = URL(string: rawURL) else {
             throw XCTSkip("Explicit authorized node and independent controlled URL are required")
         }
+        let attempt = UUID()
+        let documents = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
+        var receipt: [String: Any] = [
+            "attempt": attempt.uuidString, "sourceSHA": environment["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
+            "destination": Self.controlledPathDestination(),
+            "nonce": URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "nonce" })?.value ?? "",
+            "state": "probe-incomplete"
+        ]
+        defer {
+            do {
+                let file = try Self.writeControlledPathReceipt(receipt, attempt: attempt, in: documents)
+                let attachment = XCTAttachment(contentsOfFile: file)
+                attachment.name = "ios208-controlled-path-\(attempt.uuidString)"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            } catch {
+                let failure = error as NSError
+                XCTFail("Controlled-path receipt \(attempt.uuidString) failed: \(failure.domain) \(failure.code)")
+            }
+        }
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else {
             XCTFail("Native internal channel admission rejected this package")
@@ -802,17 +956,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let page = AccessTestNodePage(repository: repository, testingCore: core,
                                      singleNavigation: singleNavigation,
                                      transport: preference, socksAdmitted: capabilityOverride)
-        var receipt: [String: Any] = ["sourceSHA": environment["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
-            "device": "ios-device-2d62695fc7", "protocol": expectedTransport == .socks5 ? "socks5" : "http",
-            "nonce": URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "nonce" })?.value ?? ""]
-        defer {
-            receipt["dnsObservation"] = core.observation
-            if let bytes = try? JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted]) {
-                let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                    .appendingPathComponent("ios208-controlled-path.json")
-                try? bytes.write(to: file, options: .atomic)
-            }
-        }
+        receipt["protocol"] = expectedTransport == .socks5 ? "socks5" : "http"
+        defer { receipt["dnsObservation"] = core.observation }
         await page.open(url)
         guard let webView = page.webView else { XCTFail("Authorized publisher did not bind a DataStore"); return }
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -870,6 +1015,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let normalCloseProbe = environment["AEGIS_TEST_NORMAL_CLOSE_PROBE"] == "1"
         var closeSession: URLSession?
         var oldFlow: LocalProxyPeer?
+        defer { closeSession?.invalidateAndCancel(); oldFlow?.cancel() }
         if normalCloseProbe {
             XCTAssertEqual(environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"], "1")
             let config = URLSessionConfiguration.ephemeral
@@ -884,11 +1030,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
             XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(receipt["nonce"] as? String ?? "missing"))
             let peer = LocalProxyPeer(port: try XCTUnwrap(page.initialBinding?.port))
-            try await peer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
             oldFlow = peer
+            let outcome = await peer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
+            receipt["oldProxyCONNECTOutcome"] = outcome.rawValue
+            guard outcome == .admitted else { XCTFail("Old probe did not establish CONNECT: \(outcome.rawValue)"); return }
             receipt["normalCloseProbe"] = true
         }
-        defer { closeSession?.invalidateAndCancel(); oldFlow?.cancel() }
         if let target = environment["AEGIS_TEST_REVOKED_URL"], !normalCloseProbe {
             await core.stop()
             receipt["coreStopped"] = !core.isRunning
@@ -932,11 +1079,17 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertTrue(oldClosed)
                 let newcomer = LocalProxyPeer(port: port)
                 defer { newcomer.cancel() }
-                var admitted = false
-                do { try await newcomer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport); admitted = true }
-                catch { }
-                receipt["newProxyCONNECTAdmitted"] = admitted
-                XCTAssertFalse(admitted)
+                let outcome = await newcomer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
+                receipt["newProxyCONNECTOutcome"] = outcome.rawValue
+                switch outcome {
+                case .refused, .peerClosed:
+                    receipt["newProxyCONNECTAdmitted"] = false
+                case .admitted:
+                    receipt["newProxyCONNECTAdmitted"] = true
+                    XCTFail("The retiring listener admitted a new CONNECT")
+                case .timedOut, .cancelled, .inconclusive:
+                    XCTFail("The new CONNECT probe is inconclusive: \(outcome.rawValue)")
+                }
                 if let target = environment["AEGIS_TEST_REVOKED_URL"], let targetURL = URL(string: target), let session = closeSession {
                     var received = false
                     do { _ = try await session.data(from: targetURL); received = true } catch { }
@@ -950,10 +1103,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 receipt["retirementInterferenceProbe"] = true
                 _ = webView.load(URLRequest(url: URL(string: "about:blank")!))
             }
-        }) { supplement, confirmed, elapsed, events in
-            var observation: [String: Any] = ["supplement":supplement, "confirmed":confirmed,
-                                             "observationSeconds":elapsed, "events":events]
-            if normalCloseProbe, !confirmed, let port = page.initialBinding?.port {
+        }) { checkpoint in
+            var observation: [String: Any] = ["supplement":checkpoint.supplement, "confirmed":checkpoint.confirmed,
+                "observationSeconds":checkpoint.observationSeconds, "events":page.retirementEvents]
+            observation["commitSeconds"] = checkpoint.commitSeconds
+            if normalCloseProbe, !checkpoint.confirmed, page.retirementCommittedAt == nil,
+               let port = page.initialBinding?.port {
                 observation["portStillOwned"] = Self.portIsOwned(port)
                 observation["sameEndpointStillHeld"] = page.endpoint == page.initialBinding
                 XCTAssertTrue(Self.portIsOwned(port))
@@ -979,6 +1134,39 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         XCTAssertNotNil(page.initialBinding)
     }
 
+    fileprivate static func controlledPathDestination() -> [String: String] {
+        var result = [
+            "model": UIDevice.current.model,
+            "os": ProcessInfo.processInfo.operatingSystemVersionString,
+            "bundle": Bundle.main.bundleIdentifier ?? "unknown"
+        ]
+        var system = utsname()
+        if uname(&system) == 0 {
+            result["machine"] = withUnsafeBytes(of: &system.machine) { bytes in
+                String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+            }
+        }
+#if targetEnvironment(simulator)
+        result["kind"] = "simulator"
+        let environment = ProcessInfo.processInfo.environment
+        result["simulatorModelIdentifier"] = environment["SIMULATOR_MODEL_IDENTIFIER"]
+        result["simulatorUDID"] = environment["SIMULATOR_UDID"].flatMap { UUID(uuidString: $0)?.uuidString }
+#else
+        result["kind"] = "physical-device"
+#endif
+        return result
+    }
+
+    fileprivate static func writeControlledPathReceipt(_ receipt: [String: Any], attempt: UUID, in documents: URL) throws -> URL {
+        guard JSONSerialization.isValidJSONObject(receipt) else { throw CocoaError(.propertyListWriteInvalid) }
+        let bytes = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted])
+        let directory = documents.appendingPathComponent("ios208-controlled-path-\(attempt.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let file = directory.appendingPathComponent("receipt.json")
+        try bytes.write(to: file, options: .atomic)
+        return file
+    }
+
     private static func portIsOwned(_ port: UInt16) -> Bool {
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
@@ -998,13 +1186,22 @@ final class AccessTestNodeDeviceTests: XCTestCase {
 
     /// App-native connection probes supplement the real WebKit page; they do not
     /// replace its publisher/DataStore or navigate any corpus member.
-    private final class LocalProxyPeer: @unchecked Sendable {
+    fileprivate final class LocalProxyPeer: @unchecked Sendable {
+        enum ConnectOutcome: String, Sendable {
+            case admitted, refused, peerClosed, timedOut, cancelled, inconclusive
+        }
+        private enum PeerError: Error { case closed }
+
         let connection: NWConnection
+        private let locallyCancelled = Mutex(false)
         init(port: UInt16) {
             connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
             connection.start(queue: DispatchQueue(label: "ios208-owned-proxy-probe"))
         }
-        func cancel() { connection.cancel() }
+        func cancel() {
+            locallyCancelled.withLock { $0 = true }
+            connection.cancel()
+        }
         func send(_ data: Data) async throws {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
                 connection.send(content: data, completion: .contentProcessed { error in
@@ -1014,31 +1211,78 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
         func receive(_ count: Int) async throws -> Data {
             try await withCheckedThrowingContinuation { c in
-                connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
+                connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, complete, error in
                     if let error { c.resume(throwing: error) }
                     else if let data, data.count == count { c.resume(returning: data) }
-                    else { c.resume(throwing: URLError(.networkConnectionLost)) }
+                    else if complete { c.resume(throwing: PeerError.closed) }
+                    else { c.resume(throwing: URLError(.badServerResponse)) }
                 }
             }
         }
-        func connect(host: String, transport: AccessInboundTransport) async throws {
-            let timeout = Task { try? await Task.sleep(for: .seconds(2)); if !Task.isCancelled { connection.cancel() } }
+        func connect(host: String, transport: AccessInboundTransport) async -> ConnectOutcome {
+            if locallyCancelled.withLock({ $0 }) || Task.isCancelled { return .cancelled }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            let timeout = Task {
+                try? await ContinuousClock().sleep(until: deadline)
+                if !Task.isCancelled { connection.cancel() }
+            }
             defer { timeout.cancel() }
+            let outcome: ConnectOutcome = await withTaskCancellationHandler {
+                do { return try await handshake(host: host, transport: transport) }
+                catch PeerError.closed { return .peerClosed }
+                catch let error as NWError {
+                    switch error {
+                    case .posix(.ECONNREFUSED): return .refused
+                    case .posix(.ECONNRESET): return .peerClosed
+                    default: return .inconclusive
+                    }
+                } catch { return .inconclusive }
+            } onCancel: {
+                cancel()
+            }
+            if locallyCancelled.withLock({ $0 }) || Task.isCancelled { return .cancelled }
+            if ContinuousClock.now >= deadline { return .timedOut }
+            return outcome
+        }
+
+        private func handshake(host: String, transport: AccessInboundTransport) async throws -> ConnectOutcome {
             if transport == .socks5 {
                 try await send(Data([5, 1, 0]))
-                guard try await receive(2) == Data([5, 0]), host.utf8.count < 256 else { throw URLError(.badServerResponse) }
+                let method = try await receive(2)
+                if method == Data([5, 255]) { return .refused }
+                guard method == Data([5, 0]), host.utf8.count < 256 else { return .inconclusive }
                 var request = Data([5, 1, 0, 3, UInt8(host.utf8.count)])
                 request.append(contentsOf: host.utf8); request.append(contentsOf: [1, 187])
                 try await send(request)
-                let reply = try await receive(10)
-                guard reply[0] == 5, reply[1] == 0 else { throw URLError(.cannotConnectToHost) }
+                let prefix = try await receive(4)
+                guard prefix[0] == 5, prefix[2] == 0 else { return .inconclusive }
+                switch prefix[3] {
+                case 1: _ = try await receive(6)
+                case 3:
+                    let count = try await receive(1)[0]
+                    guard count > 0 else { return .inconclusive }
+                    _ = try await receive(Int(count) + 2)
+                case 4: _ = try await receive(18)
+                default: return .inconclusive
+                }
+                if prefix[1] == 0 { return .admitted }
+                return (1...8).contains(prefix[1]) ? .refused : .inconclusive
             } else {
                 try await send(Data("CONNECT \(host):443 HTTP/1.1\r\nHost: \(host):443\r\n\r\n".utf8))
                 var header = Data()
-                while header.count < 4096, !header.suffix(4).elementsEqual([13, 10, 13, 10]) {
+                let end = [UInt8(13), 10, 13, 10]
+                while header.count < 4096, !header.suffix(4).elementsEqual(end) {
                     header.append(try await receive(1))
                 }
-                guard String(decoding: header, as: UTF8.self).hasPrefix("HTTP/1.1 200 ") else { throw URLError(.cannotConnectToHost) }
+                guard header.suffix(4).elementsEqual(end),
+                      let firstLine = String(decoding: header, as: UTF8.self).components(separatedBy: "\r\n").first else {
+                    return .inconclusive
+                }
+                let fields = firstLine.split(separator: " ", maxSplits: 2)
+                guard fields.count >= 2, fields[0] == "HTTP/1.1", fields[1].utf8.count == 3,
+                      let status = Int(fields[1]) else { return .inconclusive }
+                if status == 200 { return .admitted }
+                return (300...599).contains(status) ? .refused : .inconclusive
             }
         }
         func waitForClose() async -> Bool {
@@ -1259,6 +1503,114 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
                      decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
             if response.isForMainFrame { httpStatus = (response.response as? HTTPURLResponse)?.statusCode }
             decisionHandler(.allow)
+        }
+    }
+}
+#endif
+
+#if DEBUG
+@MainActor
+final class AccessTestNodeEvidenceTests: XCTestCase {
+    private typealias Probe = AccessTestNodeDeviceTests
+
+    func testRetirementBudgetsUseCommitTimeEvenWhenObservationIsLate() async throws {
+        let started = ContinuousClock.now
+        for (commit, observed, expected) in [(4.0, 6.0, [true]), (5.0, 6.0, [true]),
+            (5.5, 6.0, [false, true]), (10.0, 11.0, [false, true]), (10.5, 11.0, [false, false])] {
+            var checkpoints: [Probe.RetirementCheckpoint] = []
+            let retired = try await Probe.observeRetirement(started: started, hasBoundDocument: true,
+                committedAt: { started.advanced(by: .seconds(commit)) },
+                now: { started.advanced(by: .seconds(observed)) },
+                pause: { XCTFail("The commit was already observed") },
+                checkpoint: { checkpoints.append($0) })
+            XCTAssertEqual(checkpoints.map(\.confirmed), expected)
+            XCTAssertEqual(checkpoints.map(\.supplement), expected.indices.map { $0 > 0 })
+            XCTAssertEqual(checkpoints.map(\.commitSeconds), expected.map { _ in Optional(commit) })
+            XCTAssertEqual(checkpoints.map(\.observationSeconds), expected.map { _ in observed })
+            XCTAssertEqual(retired, expected.last)
+        }
+        var checkpoints: [Probe.RetirementCheckpoint] = []
+        var now = started
+        let retired = try await Probe.observeRetirement(started: started, hasBoundDocument: true,
+            committedAt: { nil }, now: { now }, pause: { now = now.advanced(by: .seconds(1)) },
+            checkpoint: { checkpoints.append($0) })
+        XCTAssertFalse(retired)
+        XCTAssertEqual(checkpoints.map(\.observationSeconds), [5, 10])
+        XCTAssertEqual(checkpoints.map(\.confirmed), [false, false])
+    }
+
+    func testControlledPathReceiptsKeepAttemptsAndReportSerializationAndWriteFailures() throws {
+        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: documents) }
+        let previous = documents.appendingPathComponent("ios208-controlled-path.json")
+        let oldBytes = Data("historical receipt".utf8)
+        try oldBytes.write(to: previous)
+        let first = UUID(), second = UUID()
+        let firstPath = try Probe.writeControlledPathReceipt(["attempt": first.uuidString], attempt: first, in: documents)
+        let secondPath = try Probe.writeControlledPathReceipt(["attempt": second.uuidString], attempt: second, in: documents)
+        XCTAssertNotEqual(firstPath, secondPath)
+        XCTAssertThrowsError(try Probe.writeControlledPathReceipt(["attempt": "collision"], attempt: first, in: documents))
+        XCTAssertThrowsError(try Probe.writeControlledPathReceipt(["invalid": Date()], attempt: UUID(), in: documents))
+        XCTAssertThrowsError(try Probe.writeControlledPathReceipt([:], attempt: UUID(), in: previous))
+        let firstReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: firstPath)) as? [String: String]
+        let secondReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: secondPath)) as? [String: String]
+        XCTAssertEqual(firstReceipt?["attempt"], first.uuidString)
+        XCTAssertEqual(secondReceipt?["attempt"], second.uuidString)
+        XCTAssertEqual(try Data(contentsOf: previous), oldBytes)
+    }
+
+    func testControlledPathDestinationReportsTheRunningTarget() {
+        let destination = Probe.controlledPathDestination()
+#if targetEnvironment(simulator)
+        XCTAssertEqual(destination["kind"], "simulator")
+#else
+        XCTAssertEqual(destination["kind"], "physical-device")
+        XCTAssertNil(destination["simulatorUDID"])
+#endif
+        XCTAssertNotNil(destination["machine"])
+        XCTAssertNotNil(destination["os"])
+    }
+
+    func testCONNECTProbeDistinguishesAdmissionRefusalAndLocalTimeout() async throws {
+        for (reply, expected) in [("HTTP/1.1 200 Connection Established\r\n\r\n", Probe.LocalProxyPeer.ConnectOutcome.admitted),
+                                  ("HTTP/1.1 503 Service Unavailable\r\n\r\n", .refused),
+                                  (nil, .peerClosed),
+                                  (nil, .timedOut)] {
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+            let listener = try NWListener(using: parameters)
+            let connection = Mutex<NWConnection?>(nil)
+            defer { listener.cancel(); connection.withLock { $0?.cancel() } }
+            let ready = expectation(description: "loopback CONNECT fixture ready")
+            let requested = expectation(description: "CONNECT sent to loopback fixture")
+            let queue = DispatchQueue(label: "ios208-connect-outcome-fixture")
+            listener.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+            listener.newConnectionHandler = { peer in
+                connection.withLock { $0 = peer }
+                peer.start(queue: queue)
+                peer.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
+                    if let data, !data.isEmpty { requested.fulfill() }
+                    if let reply { peer.send(content: Data(reply.utf8), completion: .contentProcessed { _ in }) }
+                    if expected == .peerClosed {
+                        peer.send(content: nil, contentContext: .finalMessage, isComplete: true,
+                                  completion: .contentProcessed { _ in })
+                    }
+                }
+            }
+            listener.start(queue: queue)
+            await fulfillment(of: [ready], timeout: 2)
+            let port = try XCTUnwrap(listener.port?.rawValue)
+            let probe = Probe.LocalProxyPeer(port: port)
+            defer { probe.cancel() }
+            let outcome = await probe.connect(host: "fixture.invalid", transport: .http)
+            await fulfillment(of: [requested], timeout: 2)
+            XCTAssertEqual(outcome, expected)
+            if expected == .timedOut {
+                probe.cancel()
+                let local = await probe.connect(host: "fixture.invalid", transport: .http)
+                XCTAssertEqual(local, .cancelled)
+            }
         }
     }
 }

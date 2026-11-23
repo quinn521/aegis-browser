@@ -91,7 +91,7 @@ final class AccessEmbeddedProxyEntrySession {
     private var identity: String?
     private var startedCore = false
     private var pendingStop: Task<Void, Never>?
-    private var logCapture: AccessDiagnosticLog.Capture?
+    private var logLease: AccessDiagnosticLog.Lease?
     private var retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
 
     init(core: any AccessEmbeddedCoreControlling, outbound: AccessRealityVisionOutboundConfig,
@@ -145,13 +145,11 @@ final class AccessEmbeddedProxyEntrySession {
             let outbound = try await loadOutbound()
             try Task.checkCancellation()
             do {
-                logCapture = try await Self.startCoreWithDiagnostics(
+                logLease = try await Self.startCoreWithDiagnostics(
                     core: core, outbound: outbound, diagnostics: .shared,
                     level: AccessDiagnosticLog.selectedLevel()
                 )
             } catch {
-                if let logCapture { AccessDiagnosticLog.shared.stop(capture: logCapture) }
-                logCapture = nil
                 throw AccessSiteSessionError.prepareFailed("core.start: \(error)")
             }
             startedCore = true
@@ -237,37 +235,36 @@ final class AccessEmbeddedProxyEntrySession {
         outbound: AccessRealityVisionOutboundConfig,
         diagnostics: AccessDiagnosticLog,
         level: AccessLogLevel
-    ) async throws -> AccessDiagnosticLog.Capture? {
+    ) async throws -> AccessDiagnosticLog.Lease {
         let parameters = outbound.parameters
-        let capture = try? diagnostics.acquireShared(
+        let lease = diagnostics.acquireShared(
             level: level, secrets: [parameters.userID, parameters.publicKey, parameters.shortID]
         )
-        if level != .none && capture == nil { diagnostics.markUnavailable() }
+        var started = false
+        defer { if !started { diagnostics.stop(lease: lease) } }
         do {
             let config = try outbound.embeddedInstanceJSONData(
-                logLevel: capture?.level ?? .none,
-                errorLogPath: capture?.path, includeAccessLog: true
+                logLevel: lease.level, errorLogPath: lease.path, includeAccessLog: true
             )
             try await core.start(configData: config)
-            return capture
         } catch {
-            if let capture { diagnostics.stop(capture: capture) }
             let text = (error as NSError).localizedDescription
             let loggerFailure = text.contains("failed to initialize access logger") ||
                 text.contains("failed to initialize error logger")
-            guard capture != nil, !core.isRunning, loggerFailure else { throw error }
+            guard lease.path != nil, !core.isRunning, loggerFailure else { throw error }
             diagnostics.markUnavailable()
             try await core.start(configData: outbound.embeddedInstanceJSONData())
-            return nil
         }
+        started = true
+        return lease
     }
 
     func stopUnpublished() async {
         guard identity == nil, startedCore else { return }
         startedCore = false
         await core.stop()
-        if let logCapture { AccessDiagnosticLog.shared.stop(capture: logCapture) }
-        logCapture = nil
+        if let logLease { AccessDiagnosticLog.shared.stop(lease: logLease) }
+        logLease = nil
     }
 
     var isRuntimeHealthy: Bool {
@@ -289,12 +286,12 @@ final class AccessEmbeddedProxyEntrySession {
         self.identity = nil
         if startedCore {
             startedCore = false
-            let capture = logCapture
-            logCapture = nil
+            let lease = logLease
+            logLease = nil
             // Publisher shutdown is synchronous; stop the core without blocking callers.
             pendingStop = Task {
                 await core.stop()
-                if let capture { AccessDiagnosticLog.shared.stop(capture: capture) }
+                if let lease { AccessDiagnosticLog.shared.stop(lease: lease) }
             }
         }
     }

@@ -218,9 +218,10 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         defer { listener.cancel(); connections.withLock { $0.forEach { $0.cancel() } } }
         let diagnostics = AccessDiagnosticLog()
         defer { diagnostics.stop() }
-        let firstCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
+        let firstCapture = diagnostics.acquireShared(level: .info, secrets: [])
+        let path = try XCTUnwrap(firstCapture.path)
         let config = try JSONSerialization.data(withJSONObject: [
-            "log": ["loglevel": "info", "access": firstCapture.path, "error": firstCapture.path],
+            "log": ["loglevel": "info", "access": path, "error": path],
             "inbounds": [], "outbounds": [["protocol": "freedom"]]
         ])
         // Test-only local transport: no external target or product DIRECT fallback.
@@ -229,11 +230,11 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         addTeardownBlock { await first.stop(); await second.stop() }
         try await first.start(configData: config)
         diagnostics.disableAndClear()
-        let secondCapture = try XCTUnwrap(diagnostics.acquireShared(level: .info, secrets: []))
+        let secondCapture = diagnostics.acquireShared(level: .info, secrets: [])
         XCTAssertEqual(firstCapture.path, secondCapture.path)
         try await second.start(configData: config)
         await second.stop()
-        XCTAssertTrue(diagnostics.stop(capture: secondCapture))
+        XCTAssertTrue(diagnostics.stop(lease: secondCapture))
         XCTAssertTrue(first.isRunning)
         let stream = try await first.dial(host: "127.0.0.1", port: port)
         defer { stream.close() }
@@ -243,7 +244,7 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         // Core.Dial's local freedom fixture has no inbound access message.
         // The Go regression verifies native logger selection; this controlled
         // record verifies the surviving Swift reader without inventing one.
-        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: firstCapture.path))
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         try writer.write(contentsOf: Data("2026/11/20 00:00:00 from local accepted //surviving-native.example:443\n".utf8))
         try writer.close()
         let deadline = Date().addingTimeInterval(3)
@@ -252,7 +253,7 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         }
         XCTAssertTrue(diagnostics.snapshot().contains("surviving-native.example:443"))
         await first.stop()
-        XCTAssertTrue(diagnostics.stop(capture: firstCapture))
+        XCTAssertTrue(diagnostics.stop(lease: firstCapture))
     }
 
     func testFreshNativeCallbacksSupportDuplexCancellationAndStop() async throws {

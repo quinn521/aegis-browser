@@ -106,14 +106,14 @@ private final class RecordingEmbeddedCoreForFactory: AccessEmbeddedCoreControlli
 @MainActor
 final class AccessEmbeddedTeardownTests: XCTestCase {
     func testThirdPrepareKeepsSharedListenerWhenCancelledWaiterResumesFirst() async throws {
-        try await assertThirdPrepareKeepsSharedListener(cancelledPriority: .high, survivorPriority: .medium)
+        try await assertThirdPrepareKeepsSharedListener(cancelledFirst: true)
     }
 
     func testThirdPrepareKeepsSharedListenerWhenSurvivorResumesFirst() async throws {
-        try await assertThirdPrepareKeepsSharedListener(cancelledPriority: .medium, survivorPriority: .high)
+        try await assertThirdPrepareKeepsSharedListener(cancelledFirst: false)
     }
 
-    private func assertThirdPrepareKeepsSharedListener(cancelledPriority: TaskPriority, survivorPriority: TaskPriority) async throws {
+    private func assertThirdPrepareKeepsSharedListener(cancelledFirst: Bool) async throws {
         let core = DelayedStopCore()
         let coreStopped = XCTestExpectation(description: "shared core stopped after last owner")
         core.onStop = { [weak core] _ in core?.finishStop(); coreStopped.fulfill() }
@@ -121,8 +121,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
         let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters })
         let deadline: Duration = .seconds(5)
-        // Stage the live listener before introducing unequal waiter priorities.
-        // Only the handoff of this provision is gated by the two waiters.
+        // Stage the real listener before controlling the two waiters' handoff.
         let initial: AccessProxyEntryPublisher.Provision
         do {
             initial = try await session.provision(generation: 1, deadline: deadline)
@@ -154,10 +153,20 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             return ready
         }, shutdown: { stopped.append($0); session.shutdown(identity: $0) })
         let cancelledID = UUID(), survivorID = UUID(), thirdID = UUID()
+        let secondCallback = AccessProvisionTestGate(entered: XCTestExpectation(description: "second callback at publication"))
+        publisher.beforeFlightPublication = { id in
+            if id == (cancelledFirst ? survivorID : cancelledID) { await secondCallback.wait() }
+        }
+        defer { secondCallback.finish() }
+        var callbackOrder: [UUID] = []
+        let survivorFinished = XCTestExpectation(description: "survivor prepare returned")
         let host = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("winner.invalid"), isPrivate: false)
-        let survivor = Task(priority: survivorPriority) {
+        let survivor = Task {
+            defer { survivorFinished.fulfill() }
             try Task.checkCancellation()
-            return try await publisher.prepare(.init(operationID: survivorID, deadline: deadline))
+            let result = try await publisher.prepare(.init(operationID: survivorID, deadline: deadline))
+            callbackOrder.append(survivorID)
+            return result
         }
         defer {
             survivor.cancel()
@@ -169,8 +178,10 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         }
         let cancelledEntered = XCTestExpectation(description: "cancelled caller joined shared flight")
         // Enter the third prepare in the same actor turn as the cancelled callback.
-        let third = Task(priority: cancelledPriority) { @MainActor () throws -> AccessProxyEntryPrepareResult in
+        let thirdFinished = XCTestExpectation(description: "third prepare returned")
+        let third = Task { @MainActor () throws -> AccessProxyEntryPrepareResult in
             defer { signalThird() }
+            defer { thirdFinished.fulfill() }
             try Task.checkCancellation()
             // prepare registers on MainActor before suspending on the flight.
             cancelledEntered.fulfill()
@@ -178,6 +189,12 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
                 _ = try await publisher.prepare(.init(operationID: cancelledID, deadline: deadline))
                 XCTFail("Cancelled caller claimed the provision")
             } catch is CancellationError {
+                callbackOrder.append(cancelledID)
+                if cancelledFirst {
+                    XCTAssertNil(publisher.currentEndpoint, "The cancelled callback must precede any publication")
+                } else {
+                    XCTAssertEqual(publisher.currentEndpoint, initial.endpoint)
+                }
                 try Task.checkCancellation()
                 return try await publisher.prepare(.init(operationID: thirdID, deadline: deadline))
             }
@@ -193,15 +210,29 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         }
         publisher.cancel(operationID: cancelledID)
         firstGate.finish()
-        // Hold any split flight after it provisions so cancellation exercises disposal.
-        guard await XCTWaiter.fulfillment(of: [thirdBoundary], timeout: 2) == .completed else {
-            return XCTFail("Third prepare did not settle or reach the split-flight gate")
+        guard await XCTWaiter.fulfillment(of: [secondCallback.entered], timeout: 2) == .completed else {
+            return XCTFail("Second callback did not reach the publication gate")
         }
+        let firstCompletion = cancelledFirst ? thirdBoundary : survivorFinished
+        guard await XCTWaiter.fulfillment(of: [firstCompletion], timeout: 2) == .completed else {
+            return XCTFail("First callback did not resolve while the second was held")
+        }
+        XCTAssertEqual(callbackOrder, [cancelledFirst ? cancelledID : survivorID])
+        secondCallback.finish()
+        // Hold any split flight after it provisions so cancellation exercises disposal.
+        let remainingCompletion = cancelledFirst ? survivorFinished : thirdBoundary
+        guard await XCTWaiter.fulfillment(of: [remainingCompletion], timeout: 2) == .completed else {
+            return XCTFail("Second callback did not resolve")
+        }
+        XCTAssertEqual(callbackOrder, cancelledFirst ? [cancelledID, survivorID] : [survivorID, cancelledID])
         let winner = try await survivor.value
         XCTAssertTrue(publisher.retain(winner.endpoint, for: host))
         publisher.cancel(operationID: survivorID)
         publisher.cancel(operationID: thirdID)
         thirdGate.finish()
+        guard await XCTWaiter.fulfillment(of: [thirdFinished], timeout: 2) == .completed else {
+            return XCTFail("Third prepare did not return after cleanup")
+        }
         do {
             let shared = try await third.value
             XCTAssertEqual(shared.endpoint, winner.endpoint)

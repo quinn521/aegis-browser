@@ -50,6 +50,8 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
     private var streamContinuation: AsyncStream<AccessManagedProxyEndpoint>.Continuation?
     private var cachedStream: AsyncStream<AccessManagedProxyEndpoint>?
     private var healthTask: Task<Void, Never>?
+    // Allows tests to gate a specific waiter after the shared flight completes.
+    var beforeFlightPublication: (@MainActor (UUID) async -> Void)?
 
     public init(
         provision: @escaping @MainActor (UInt64, Duration) async throws -> Provision,
@@ -109,6 +111,7 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
             }
             throw error
         }
+        if let beforeFlightPublication { await beforeFlightPublication(request.operationID) }
         let publication = Publication(provision: provisioned, generation: generation)
         guard waiters[request.operationID] === generation else {
             // Keep the completed flight available until a survivor publishes or the
