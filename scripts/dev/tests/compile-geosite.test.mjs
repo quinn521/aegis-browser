@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
-  chmodSync, copyFileSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync,
+  chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync,
   realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -201,6 +201,19 @@ test('preloading the CLI runs the entry once and leaves syntax checks, eval and 
   }
 });
 
+test('a case-variant CLI path runs on a case-insensitive filesystem', (t) => {
+  const variant = join(dirname(cli), basename(cli, '.mjs').toUpperCase() + '.mjs');
+  if (!existsSync(variant)) {
+    t.skip('requires a case-insensitive filesystem');
+    return;
+  }
+  const result = spawnSync(process.execPath, [variant, '--help'], {encoding: 'utf8'});
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
+  assert.equal(result.stderr, '');
+});
+
 test('preloaded aliases do not dispatch a different CLI entry', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-entry-test-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));
@@ -208,7 +221,7 @@ test('preloaded aliases do not dispatch a different CLI entry', (t) => {
   symlinkSync(cli, alias, 'file');
   const direct = spawnSync(process.execPath, [cli, '--help'], {encoding: 'utf8'});
   assert.equal(direct.status, 0, direct.stderr);
-  for (const {flags, preload, entry, nodeOptions = ''} of [
+  for (const {flags, preload, entry, nodeOptions = '', preserveMain = '0'} of [
     {flags: [], preload: cli, entry: alias},
     {flags: ['--preserve-symlinks-main'], preload: cli, entry: alias},
     {flags: [], preload: cli, entry: alias, nodeOptions: '"--preserve-symlinks-main"'},
@@ -216,13 +229,15 @@ test('preloaded aliases do not dispatch a different CLI entry', (t) => {
     {flags: ['--no-preserve-symlinks-main'], preload: cli, entry: alias, nodeOptions: '--preserve-symlinks-main'},
     {flags: ['--preserve-symlinks'], preload: alias, entry: cli},
     {flags: ['--preserve-symlinks', '--preserve-symlinks-main'], preload: alias, entry: alias},
+    {flags: [], entry: alias, preserveMain: '1'},
+    {flags: [], preload: cli, entry: alias, preserveMain: '1'},
   ]) {
-    const result = spawnSync(process.execPath, [...flags, '--import', preload, entry, '--help'], {
-      encoding: 'utf8', env: {...process.env, NODE_OPTIONS: nodeOptions},
-    });
+    const preloads = preload ? ['--import', preload] : [];
+    const env = {...process.env, NODE_OPTIONS: nodeOptions, NODE_PRESERVE_SYMLINKS_MAIN: preserveMain};
+    const result = spawnSync(process.execPath, [...flags, ...preloads, entry, '--help'], {encoding: 'utf8', env});
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, direct.stdout, JSON.stringify({flags, preload, entry, nodeOptions}));
+    assert.equal(result.stdout, direct.stdout, JSON.stringify({flags, preload, entry, nodeOptions, preserveMain}));
     assert.equal(result.stderr, '');
   }
 });

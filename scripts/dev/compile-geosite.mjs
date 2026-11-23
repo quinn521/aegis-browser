@@ -5,6 +5,7 @@ import {
   closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync,
   rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
+import Module from 'node:module';
 import {isIP} from 'node:net';
 import {basename, dirname, join, resolve} from 'node:path';
 import {domainToASCII, fileURLToPath, URL} from 'node:url';
@@ -483,20 +484,8 @@ function main() {
   }
 }
 
-function mainEntryPath(argument) {
-  // Node reads NODE_OPTIONS first, with command-line singleton flags taking precedence.
-  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
-  const preserveFlag = '--preserve-symlinks-main';
-  const preserveOption = [...environment.map((flag) => flag.replaceAll('"', '')), ...process.execArgv]
-    .map((flag) => flag.split('=', 1)[0].replaceAll('_', '-'))
-    .findLast((flag) => flag === preserveFlag || flag === '--no-preserve-symlinks-main');
-  if (preserveOption === preserveFlag) {
-    return resolve(argument);
-  }
-  return realpathSync.native(argument);
-}
-
 function isMain() {
+  if (import.meta.main === true) return true;
   // A preloaded entry is evaluated only once, with import.meta.main set to false.
   // Syntax checks, eval, and print can also have the CLI path in argv[1].
   const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
@@ -505,7 +494,9 @@ function isMain() {
   const moduleUrl = import.meta.url;
   if (moduleUrl.includes('?') || moduleUrl.includes('#')) return false;
   try {
-    return mainEntryPath(process.argv[1]) === fileURLToPath(moduleUrl);
+    // Node uses this resolver for its main path, including legacy releases and preload options.
+    const entry = Module._findPath(resolve(process.argv[1]), null, true);
+    return entry === fileURLToPath(moduleUrl);
   } catch {
     return false;
   }
