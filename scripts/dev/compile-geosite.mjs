@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import Module from 'node:module';
 import {isIP} from 'node:net';
-import {basename, dirname, isAbsolute, join, resolve, sep} from 'node:path';
+import {basename, dirname, isAbsolute, join, sep} from 'node:path';
 import {domainToASCII, fileURLToPath, pathToFileURL, URL} from 'node:url';
 import {parseArgs} from 'node:util';
 
@@ -381,40 +381,48 @@ function checkExistingCatalogue(path, expected, existing) {
 }
 
 const READ_ONLY_ACL_RIGHTS = new Set([
-  'directory_inherit', 'execute', 'file_inherit', 'limit_inherit', 'list', 'only_inherit',
-  'read', 'readattr', 'readextattr', 'readsecurity', 'search', 'synchronize',
+  'execute', 'list', 'read', 'readattr', 'readextattr', 'readsecurity', 'search', 'synchronize',
 ]);
 
-function checkMacOutputACL(path) {
-  const diagnostic = 'Choose a trusted output directory with a read-only macOS ACL: ' + path;
-  let listing;
+function readMacOutputDirectory(path) {
+  const helper = join(dirname(realpathSync.native(fileURLToPath(import.meta.url))), 'read-macos-acl.rb');
+  let info;
   try {
-    listing = execFileSync('/bin/ls', ['-ldneb', '--', path], {
-      encoding: 'utf8', env: {...process.env, LC_ALL: 'C'},
+    const output = execFileSync('/usr/bin/ruby', ['--disable-gems', helper, path], {
+      encoding: 'utf8', env: {...process.env, RUBYOPT: '', RUBYLIB: ''},
     });
+    info = JSON.parse(output);
+    if (!Number.isInteger(info.uid) || !Number.isInteger(info.mode) || typeof info.acl !== 'string') {
+      throw new Error('Invalid macOS directory metadata');
+    }
   } catch (error) {
-    throw new Error(diagnostic, {cause: error});
+    throw new Error('Could not read macOS ACL for output directory: ' + path, {cause: error});
   }
-  for (const line of listing.split('\n')) {
-    if (!/^\s+\d+:\s/u.test(line)) continue;
-    const entry = line.match(/^\s+\d+:\s+\S+(?:\s+inherited)?\s+(allow|deny)\s+([a-z_,]+)\s*$/u);
-    if (!entry || (entry[1] === 'allow' && entry[2].split(',').some((right) => !READ_ONLY_ACL_RIGHTS.has(right)))) {
+  if (!info.acl) return info;
+  const [header, ...records] = info.acl.trimEnd().split('\n');
+  const diagnostic = 'Choose a trusted output directory with a read-only macOS ACL: ' + path;
+  if (header !== '!#acl 1') throw new Error(diagnostic);
+  for (const record of records) {
+    const entry = record.match(/:(allow|deny)(?:,[a-z_]+)*:([a-z_,]*)$/u);
+    if (!entry || (entry[1] === 'allow' && entry[2] &&
+        entry[2].split(',').some((right) => !READ_ONLY_ACL_RIGHTS.has(right)))) {
       throw new Error(diagnostic);
     }
   }
+  return info;
 }
 
 function requireTrustedOutputDirectory(path, uid) {
   if (uid === undefined) throw new Error('Publishing requires POSIX directory permissions');
   const parent = dirname(path);
   if (parent !== path) requireTrustedOutputDirectory(parent, uid);
-  const info = lstatSync(path);
+  const info = process.platform === 'darwin' ? readMacOutputDirectory(path) : lstatSync(path);
+  const directory = (info.mode & constants.S_IFMT) === constants.S_IFDIR;
   const trustedOwner = info.uid === uid || info.uid === 0;
   const sharedWithoutStickyBit = (info.mode & 0o022) !== 0 && (info.mode & 0o1000) === 0;
-  if (!info.isDirectory() || !trustedOwner || sharedWithoutStickyBit) {
+  if (!directory || !trustedOwner || sharedWithoutStickyBit) {
     throw new Error('Choose a trusted output directory: ' + path);
   }
-  if (process.platform === 'darwin') checkMacOutputACL(path);
 }
 
 function writeAtomically(path, data, inputs) {
@@ -510,13 +518,19 @@ function main() {
   }
 }
 
+function readNodeOption(name) {
+  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
+  const enabled = '--' + name;
+  const disabled = '--no-' + name;
+  const option = [...environment.map((flag) => flag.replaceAll('"', '')), ...process.execArgv]
+    .map((flag) => flag.split('=', 1)[0].replaceAll('_', '-'))
+    .findLast((flag) => flag === enabled || flag === disabled);
+  return option === undefined ? undefined : option === enabled;
+}
+
 function entryReference(argument) {
   // In URL-entry mode Node can leave the positional entry relative or as a URL.
-  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
-  const urlOption = [...environment.map((option) => option.replaceAll('"', '')), ...process.execArgv]
-    .map((option) => option.split('=', 1)[0].replaceAll('_', '-'))
-    .findLast((option) => option === '--entry-url' || option === '--no-entry-url');
-  if (urlOption === '--entry-url' || (!urlOption && !isAbsolute(argument))) {
+  if (readNodeOption('entry-url') ?? !isAbsolute(argument)) {
     return new URL(argument, pathToFileURL(process.cwd() + sep));
   }
   return pathToFileURL(argument);
@@ -530,8 +544,12 @@ function isMain() {
   if (!process.argv[1] || process.execArgv.some((arg) => nonEntryMode.test(arg))) return false;
   try {
     const reference = entryReference(process.argv[1]);
+    const preserveMain = readNodeOption('preserve-symlinks-main') ??
+      process.env.NODE_PRESERVE_SYMLINKS_MAIN === '1';
+    // With symlink preservation, Node retains the entry's serialized URL verbatim.
+    if (preserveMain) return reference.href === import.meta.url;
     // Reuse the loader's main-path resolution when a preload owns the entry module instance.
-    const entry = Module._findPath(resolve(fileURLToPath(reference)), null, true);
+    const entry = Module._findPath(fileURLToPath(reference), null, true);
     if (!entry) return false;
     const url = pathToFileURL(entry);
     url.search = reference.search;

@@ -255,6 +255,9 @@ test('URL-entry mode dispatches a preloaded compiler exactly once',
       [['--entry-url'], url, url, ''],
       [[], url, url, '--entry-url'],
       [['--entry-url'], url + '?variant', url + '?variant', ''],
+      [['--entry-url', '--preserve-symlinks', '--preserve-symlinks-main'], url + '?', url + '?', ''],
+      [['--entry-url', '--preserve-symlinks', '--preserve-symlinks-main'], url + '#', url + '#', ''],
+      [['--entry-url', '--preserve-symlinks', '--no-preserve-symlinks-main'], url + '?', url + '?', ''],
       [['--entry-url'], cli + '#variant', url + '#variant', ''],
       [['--entry-url'], url, url + '?library', ''],
       [['--no-entry-url'], cli, url, '--entry-url'],
@@ -799,7 +802,7 @@ test('publication requires a protected output directory chain',
     assert.deepEqual(readdirSync(nested), ['catalogue.json']);
   });
 
-test('publication rejects mutating macOS ACLs and accepts read-only ACLs',
+test('publication requires readable, nonmutating macOS ACLs',
   {skip: process.platform !== 'darwin' || !pinnedInputs}, (t) => {
     const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-acl-test-'));
     t.after(() => rmSync(dir, {recursive: true, force: true}));
@@ -812,11 +815,19 @@ test('publication rejects mutating macOS ACLs and accepts read-only ACLs',
       assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr);
     };
-    setACL('+a', 'group:everyone allow add_subdirectory,delete_child', shared);
-    assert.equal(lstatSync(shared).mode & 0o777, 0o755);
+    setACL('+a', 'group:everyone deny readsecurity', shared);
     const args = [cli, '--dlc', join(pinnedInputs, 'dlc.dat'),
       '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output'];
     const output = join(nested, 'catalogue.json');
+    const unreadable = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
+    setACL('-N', shared);
+    assert.ifError(unreadable.error);
+    assert.equal(unreadable.status, 1);
+    assert.match(unreadable.stderr, /could not read.*ACL/i);
+    assert.deepEqual(readdirSync(nested), []);
+
+    setACL('+a', 'group:everyone allow add_subdirectory,delete_child', shared);
+    assert.equal(lstatSync(shared).mode & 0o777, 0o755);
     const refused = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
     assert.ifError(refused.error);
     assert.equal(refused.status, 1);
@@ -825,7 +836,10 @@ test('publication rejects mutating macOS ACLs and accepts read-only ACLs',
 
     setACL('-N', shared);
     setACL('+a', 'group:everyone allow list,search,readattr,readextattr,readsecurity', shared);
-    const result = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
+    const alias = join(dir, 'compiler.mjs');
+    symlinkSync(cli, alias, 'file');
+    const result = spawnSync(process.execPath, ['--preserve-symlinks-main', alias, ...args.slice(1), output],
+      {encoding: 'utf8'});
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(readFileSync(output, 'utf8')).group, 'DEBIAN');
