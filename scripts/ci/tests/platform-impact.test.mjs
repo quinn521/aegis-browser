@@ -377,6 +377,8 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.deepEqual(route(releaseHelper), {...iosRoute, deep: false});
     const sharedIos = pr(() => save('packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json', '{}'), 'chore: change shared vectors');
     assert.deepEqual(route(sharedIos), {...iosRoute, macos: true, deep: false});
+    const sharedTracker = pr(() => save('packages/core/src/tracker/builtin-rules.ts', 'tracker rules'), 'chore: change shared rules');
+    assert.deepEqual(route(sharedTracker), {...iosRoute, macos: true});
     for (const file of [
       'scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py',
       'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/core.js',

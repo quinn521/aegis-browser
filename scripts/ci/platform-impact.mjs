@@ -117,7 +117,8 @@ const iosArchiveInputs = new Set([
   'scripts/release/verify-signed-ios.py',
 ]);
 const sharedIosTestInput = 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json';
-const sharedIosProductInput = path => path.startsWith('apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/');
+const sharedIosProductInput = path => path === 'packages/core/src/tracker/builtin-rules.ts'
+  || path.startsWith('apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/');
 const desktopPin = 'apps/browser/CHROMIUM_COMMIT';
 const iosArchiveRuntime = new Set(['scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py']);
 const selectsIos = path => path.startsWith('apps/ios/')
