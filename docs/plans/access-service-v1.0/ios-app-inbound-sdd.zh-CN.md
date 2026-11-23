@@ -8,7 +8,7 @@
 
 | 组件 | 基线事实 | 实施增量 |
 | --- | --- | --- |
-| [产品入口工厂](../../../apps/ios/AccessKit/AccessEmbeddedProxyEntryFactory.swift)、[入口发布器](../../../apps/ios/AccessKit/AccessProxyEntryPublisher.swift) | 工厂启动内嵌核心和 HTTP listener，健康实例可由多个登记键引用 | 在授权、普通/私密作用域和 Profile 版本兼容时复用。为两种协议分别创建、持有、检查和退役真实监听 |
+| [产品入口工厂](../../../apps/ios/AccessKit/AccessEmbeddedProxyEntryFactory.swift)、[入口发布器](../../../apps/ios/AccessKit/AccessProxyEntryPublisher.swift) | 工厂启动内嵌核心和 HTTP listener，健康实例可由多个登记键引用 | 在授权、普通/私密作用域和 Profile 版本兼容且退役范围相同时复用。为两种协议分别创建、持有、检查和退役真实监听 |
 | [DataStore registry](../../../apps/ios/AccessKit/AccessHostDataStoreRegistry.swift) | 生产端点无协议字段。setEndpoint 与 attach 可向已有 store 应用就绪端点，apply 固定产生 HTTP CONNECT | 端点增加实际运输及归属。首次绑定原子安装一项配置。同一有效绑定可重用，协议、监听实例、授权或代次变化时创建新 store 并退役旧文档 |
 | [SOCKS 会话](../../../apps/ios/AccessKit/AccessSOCKS5InboundSession.swift)、[HTTP listener](../../../apps/ios/AccessKit/AccessHTTPInboundListener.swift) | SOCKS 夹具可以完成握手；现有 HTTP 产品入口可以向受控上游打开隧道 | SOCKS CONNECT 复用经过授权的核心拨号和双向流生命周期，拨号成功后才回成功，保留已收到的业务字节。两种入口分别覆盖取消、半关闭和内核退出 |
 | [Fixture builder](../../../apps/ios/AccessKit/AccessProxyConfigurationBuilder.swift)、[账户下载](../../../apps/ios/AegisApp/AccessAccountSession.swift) | builder 主动拒绝 SOCKS，独立下载通路有 TLS 和租约凭据 | 不把 fixture 错误计作 OS 拒绝。网页路径使用 `ProxyConfiguration(socksv5Proxy:)` 或 `httpCONNECTProxy:`，均设 `allowFailover = false`。下载租约按原有授权单验。[Apple 接口](https://developer.apple.com/documentation/network/proxyconfiguration) |
@@ -29,7 +29,7 @@ Apply 在更换活动文档的 DataStore 前显示受影响标签和表单状态
 
 1. 协调器冻结 tab、导航、顶层 host、普通/私密 scope、Profile 版本和授权 epoch，持有原操作时限。publisher 仅针对该快照准备候选。SOCKS 专属的不兼容可在绑定前触发独立 HTTP 准备。取消、授权失效和过期回调使操作作废。
 2. 监听持有实际回环 socket，完成受控上游流量验证后才产生 ready 端点。registry 核对快照与代次，创建专用非持久 DataStore，安装恰好一项配置，然后允许新 WKWebView 发起导航。准备失败的强制保护导航不得把空配置或 nil store 当作原连接继续。
-3. 协议或代次变更时阻止受影响文档的新派发，停止旧 WebView 工作、终止该代流并等待文档退役确认。旧 store 保留原配置直至无法再发包。释放最后引用后才能清空、释放端口。其他仍有效的文档和窗口保持其已绑定路线。退出私密会话、额度撤销、前后台切换或核心重启后按相同规则处理。
+3. 协议或代次变更时阻止受影响文档的新派发，停止旧 WebView 工作。需要独立退役的 DataStore 绑定各用独立监听，按该绑定持有的监听实例终止流。退役范围相同的兼容绑定可共享监听，释放单个引用时保留其余有效消费者的流。旧 store 保留原配置，待 WebKit 确认旧文档无法再派发后才清空配置并释放相应引用。该监听的旧绑定均确认退役、旧流终止且最后一个引用释放后，才关闭 socket、释放端口。其他仍有效的文档和窗口保持其已绑定路线。退出私密会话、额度撤销、前后台切换或核心重启后按相同规则处理。
 4. Apply 失败时保留持久的强制保护意图。旧授权仍有效且旧绑定尚未撤销时可继续该绑定；其余情形等待新的有效登记。切换 DataStore 按现有 UX 说明表单和登录状态的影响，自动恢复只使用已授权的单次 GET/HEAD。
 
 ## 交付切片与验收
@@ -37,9 +37,9 @@ Apply 在更换活动文档的 DataStore 前显示受影响标签和表单状态
 | 切片 | 正向回执 | 拒绝与关闭条件 |
 | --- | --- | --- |
 | I-F1 · 协议探测和真实拨号 | 最低支持 OS 和当前支持 OS 分列 SDK、系统/build、WebKit 实际页面、指定出口及独立标记。HTTP 和 SOCKS 各形成独立收据 | 仅 API 构造或 CONNECT 计数保持待验。密码法专用、BIND、UDP 拒绝。某 OS 的 SOCKS 未准入只限制该行 |
-| I-F3 · 端点和文档所有权 | 普通/私密、两个不同 Profile、同域两窗口、共享合法消费者分别绑定；记录端点实例和引用释放 | 占用端口、同端口新代、旧文档回调、后台回返、退出私密及内核重启均不得串流或直连 |
+| I-F3 · 端点和文档所有权 | 普通/私密、两个不同 Profile、同域两窗口、共享合法消费者分别绑定；记录端点实例和引用释放。单独退役一个绑定时，另一有效绑定的在途流继续完成 | 占用端口、同端口新代、旧文档回调、后台回返、退出私密及内核重启均不得串流或直连。旧文档退役确认延迟时，旧端口仍由原 socket 持有 |
 | I-F4 · 固定 HTTP / O3 | 从内部 Options 点 Apply，经无认证 HTTP 取得主文档与跨源资源标记，另开选原连接的顶层页取得独立对照 | 失效后强制路径原出口新增为零。本地无 407 或代理密码弹窗。上游 TLS/认证另验 |
-| I-F2 · 自动绑定 | 在已准入系统优先 SOCKS；仅协议能力不足时在绑定前成功选 HTTP，诊断显示实际结果 | 绑定后的断流、取消、超时和额度撤销均不切协议。显式锁定协议失败可见，POST/PATCH 无重放 |
+| I-F2 · 自动绑定 | 在已准入系统优先 SOCKS；仅协议能力不足时在绑定前选择已独立准入且通过准备检查的 HTTP，诊断显示实际结果 | 绑定后的断流、取消、超时和额度撤销均不切协议。显式锁定协议失败可见，POST/PATCH 无重放 |
 | I-F5 · O6 真机 | 同一候选包分别测 Wi-Fi、蜂窝、网络切换、前后台和私密结束。记录设备 OS、入口、上游和两个独立标记 | HTTP 与适用上游认证持续验收。SOCKS 长期未准入的平台可交付经真机验证的 HTTP-only 状态，不借另一协议或模拟器签字 |
 
 I-F0 对齐共同合同的冻结修订。默认自动选择须在该平台候选的监听退役、HTTP 回退与适用真机行有回执后开放。

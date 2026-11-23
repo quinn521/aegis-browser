@@ -4,7 +4,7 @@
 
 ## 当前能复用什么
 
-Android 产品目标是完整 Chromium 浏览器。自己的 [pin](../../../apps/browser/ci-pins/android.json) 为 155.0.8059.79 / `a49e2e3d4addfd84e765b52afe230bedb81096db`，[补丁序列](../../../apps/browser/patches-android/series) 在基线列至 0330。桌面为 155.0.8059.80，桌面 0350 的存在不证明 Android 产品包含该接线。先查 Android 实际重放后的源码、GN 目标及调用者，再确定可共享的 adapter、解析、所有权检查和 wire 合同。[Android 产品边界](../../../apps/browser/docs/android.zh-CN.md) · [Chromium 代理说明](https://chromium.googlesource.com/chromium/src/+/refs/heads/lkgr/net/docs/proxy.md)
+Android 产品目标是完整 Chromium 浏览器。历史基线 `c5b4257a` 的 Android pin 为 155.0.8059.79 / `a49e2e3d4addfd84e765b52afe230bedb81096db`，补丁序列列至共享能力补丁 0330。历史桌面为 155.0.8059.80，SOCKS5 补丁为 0350。本候选的 Android [pin](../../../apps/browser/ci-pins/android.json) 为 158.0.8127.42 / `52bdd21723d5db0c9ab11716d38feac74828cf84`，[补丁序列](../../../apps/browser/patches-android/series) 中的共享能力补丁为 0347。当前桌面为 158.0.8127.37，[SOCKS5 补丁 0366](../../../apps/browser/patches/0366-feat-access-socks5-inbound-no-auth.patch) 的存在不证明 Android 产品包含该接线。先查 Android 实际重放后的源码、GN 目标及调用者，再确定可共享的 adapter、解析、所有权检查和 wire 合同。[Android 产品边界](../../../apps/browser/docs/android.zh-CN.md) · [Chromium 代理说明](https://chromium.googlesource.com/chromium/src/+/refs/heads/lkgr/net/docs/proxy.md)
 
 共享 C++ 核心已有 Android NDK ELF 和模拟器 CTest 记录，另有 arm64 真机未完成的条目。这些回执绑定各自提交。现有仓库证据尚未证明本方案的 Android 浏览器 APK 能经两种入站到达指定出口。WebView 的进程级代理覆盖、系统代理设置和 VpnService 均不作为本产品路径。[核心证据与真机状态](../access-build-portability/acceptance.md) · [可移植范围](../access-build-portability/spec.md)
 
@@ -22,7 +22,7 @@ Android 产品目标是完整 Chromium 浏览器。自己的 [pin](../../../apps
 
 **产品入口。** 在已有 Aegis 原生设置的 Access 分组打开 Options。复用 Chromium Android 的 `AegisSettings` 与 Profile 绑定设置 Fragment；普通页面提供受信当前网站入口，无痕页面只访问本作用域。Fragment 展示 Profile、站点规则、本地入站、导入导出、诊断和账户入口。[Android 原生设置补丁](../../../apps/browser/patches-android/0319-native-settings-and-single-agent-entry-263.patch) · [三端 Options 合同](app-access-options-sdd.zh-CN.md)
 
-**原生接线。** Fragment 捕获实际浏览器 Profile/无痕作用域，用受信 native 接口读写版本化草稿、提交并订阅发布状态。协议选择自动、固定 SOCKS5、固定 HTTP，端口选择自动或指定。UI 从 native ACK 读取实际端点；配置文件、Intent、深链和 Java 层传入的渠道值均不能授予高级权限。执行能力不可用的内部构建可以保存允许的偏好并提示未准入；受限构建拒绝加载或激活内部设置。Android 的 0330 提供共享能力判定基础，产品 Fragment/JNI、存储与请求级安装需要本端接线。[共享能力补丁](../../../apps/browser/patches-android/0347-share-access-options-capability.patch)
+**原生接线。** Fragment 捕获实际浏览器 Profile/无痕作用域，用受信 native 接口读写版本化草稿、提交并订阅发布状态。协议选择自动、固定 SOCKS5、固定 HTTP，端口选择自动或指定。UI 从 native ACK 读取实际端点；配置文件、Intent、深链和 Java 层传入的渠道值均不能授予高级权限。执行能力不可用的内部构建可以保存允许的偏好并提示未准入；受限构建拒绝加载或激活内部设置。Android Chromium 158 的 0347 提供共享能力判定基础，产品 Fragment/JNI、存储与请求级安装需要本端接线。[共享能力补丁](../../../apps/browser/patches-android/0347-share-access-options-capability.patch)
 
 **3X-UI 测试节点。** DEV / 内部 Alpha 的普通 Profile 详情提供文本输入和“扫描节点二维码”。只在用户点击扫码时请求相机权限。拒绝或取消后返回同一草稿，可继续输入文本。设备本地解码，Fragment 把文本和扫描结果交给同一个受信校验入口。旋转后只将结果交回仍存活的原编辑操作。离开页面、切换 Profile 或进程死亡后丢弃失效结果，显式 Apply 前只保留草稿。用实际内部 APK 验证两种输入等价和失效阻断，用 Beta / Release 包验证 Intent、恢复状态和 JNI 调用均无法导入或激活手动节点。托管账户联调等待服务端同事交付。[测试节点与阶段交接](app-access-options-sdd.zh-CN.md)
 
