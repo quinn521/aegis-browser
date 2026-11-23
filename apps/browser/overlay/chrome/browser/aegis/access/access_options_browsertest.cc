@@ -23,7 +23,7 @@
 namespace aegis::access {
 namespace {
 
-void NavigateAndRewriteSiblingAsOptions(Browser* browser) {
+void NavigateAndRewriteSiblingAsOptions(BrowserWindowInterface* browser) {
   // The bare Aegis page redirects to chrome://settings on desktop.
   const GURL sibling("chrome://aegis/?workspace=protection");
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, sibling));

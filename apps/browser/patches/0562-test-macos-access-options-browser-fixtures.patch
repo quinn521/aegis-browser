@@ -1,6 +1,6 @@
-From f6b10f3e6ba6d14ee2d63d1108b83792ffe3eef3 Mon Sep 17 00:00:00 2001
+From 964e00566560efae9df5973033e6a12e81f29f61 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
-Date: Mon, 23 Nov 2026 22:51:19 +0800
+Date: Mon, 23 Nov 2026 23:00:58 +0800
 Subject: [PATCH] test(access): stabilize macOS Options browser fixtures
 
 ---
@@ -8,7 +8,7 @@ Subject: [PATCH] test(access): stabilize macOS Options browser fixtures
  1 file changed, 42 insertions(+), 16 deletions(-)
 
 diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
-index 265daa0bd2752212b62d7185cdfda94308d1c334..c59dccec200ad6bd7974fb446fe489f4037b9c2b 100644
+index 265daa0bd2752212b62d7185cdfda94308d1c334..030eb5a843f926bb8a34e1e9431aa8361f49b357 100644
 --- a/chrome/browser/aegis/access/access_options_browsertest.cc
 +++ b/chrome/browser/aegis/access/access_options_browsertest.cc
 @@ -2,6 +2,8 @@
@@ -26,7 +26,7 @@ index 265daa0bd2752212b62d7185cdfda94308d1c334..c59dccec200ad6bd7974fb446fe489f4
  namespace aegis::access {
 +namespace {
 +
-+void NavigateAndRewriteSiblingAsOptions(Browser* browser) {
++void NavigateAndRewriteSiblingAsOptions(BrowserWindowInterface* browser) {
 +  // The bare Aegis page redirects to chrome://settings on desktop.
 +  const GURL sibling("chrome://aegis/?workspace=protection");
 +  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, sibling));
