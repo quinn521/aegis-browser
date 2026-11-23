@@ -563,7 +563,8 @@ const archiveScript = 'scripts/ci/run-ios-unsigned-archive.sh';
 const delegateArchiveSupervisor = `case "$3" in
   */ios-archive-supervisor.py)
     if [[ "\${ARCHIVE_TEST_LOG_FAILURE:-}" == write ]]; then ulimit -f 8; fi
-    exec "$ARCHIVE_TEST_PYTHON" "$@"
+    shift 2
+    exec "$ARCHIVE_TEST_PYTHON" -I -B "$ARCHIVE_TEST_SUPERVISOR" "$@"
     ;;
 esac
 `;
@@ -622,7 +623,7 @@ exit "$ARCHIVE_TEST_EXIT"
   chmodSync(join(bin, 'xcodebuild'), 0o755);
   const run = overrides => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {
     cwd: shared, encoding: 'utf8', timeout: 10000, env: {
-      PATH: `${bin}:/usr/bin:/bin`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+      PATH: `${bin}:/usr/bin:/bin`, HOME: root, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
       GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
       GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
       GIT_OBJECT_DIRECTORY: join(shared, '.git', 'objects'), GIT_INDEX_FILE: join(shared, '.git', 'index'),
@@ -630,6 +631,7 @@ exit "$ARCHIVE_TEST_EXIT"
       GIT_GRAFT_FILE: join(shared, 'grafts'), GIT_REPLACE_REF_BASE: 'refs/fixture/', GIT_NO_REPLACE_OBJECTS: '1',
       GIT_SHALLOW_FILE: join(shared, 'shallow'), GIT_NAMESPACE: 'fixture', GIT_ATTR_SOURCE: 'wrong-tree',
       ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_LAUNCH: launch,
+      ARCHIVE_TEST_SUPERVISOR: resolve('scripts/ci/tests/ios-archive-supervisor-fixture.py'),
       ...overrides,
     },
   });
@@ -709,12 +711,13 @@ exit 65
   }
   try {
     const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {encoding: 'utf8', env: {
-      PATH: `${bin}:/usr/bin:/bin`, IOS_CI_ROOT: root,
+      PATH: `${bin}:/usr/bin:/bin`, HOME: root, IOS_CI_ROOT: root,
       IOS_CI_SOURCE: source,
       GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
       https_proxy: 'http://127.0.0.1:10', HTTPS_PROXY: 'http://127.0.0.1:10',
       no_proxy: 'localhost', NO_PROXY: 'localhost',
       ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
+      ARCHIVE_TEST_SUPERVISOR: resolve('scripts/ci/tests/ios-archive-supervisor-fixture.py'),
     }});
     assert.equal(result.status, 65, result.stderr);
     const policy = readFileSync(trace, 'utf8');

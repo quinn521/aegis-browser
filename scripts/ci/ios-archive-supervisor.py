@@ -16,9 +16,9 @@ POLL_INTERVAL = 0.05
 READ_SIZE = 64 * 1024
 TERM_GRACE = 0.5
 CENSUS_TIMEOUT = 2
-GIT_CONFIG_TIMEOUT = 2
+POLICY_PROBE_TIMEOUT = 2
 TRANSPORT_OVERRIDES = {
-    "GIT_PROXY_COMMAND", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
     "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
     "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "NETRC", "TOOLCHAINS",
 }
@@ -32,9 +32,85 @@ def archive_environment():
     return environment
 
 
+def copy_macos_proxy_settings():
+    network = ctypes.CDLL("/System/Library/Frameworks/CFNetwork.framework/CFNetwork")
+    copy_settings = network.CFNetworkCopySystemProxySettings
+    copy_settings.argtypes = ()
+    copy_settings.restype = ctypes.c_void_p
+    return copy_settings()
+
+
+def macos_proxy_policy_present():
+    core = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    ref = ctypes.c_void_p
+    index = ctypes.c_long
+
+    def bind(name, result, *arguments):
+        function = getattr(core, name)
+        function.restype = result
+        function.argtypes = arguments
+        return function
+
+    release = bind("CFRelease", None, ref)
+    type_id = bind("CFGetTypeID", ctypes.c_ulong, ref)
+    dictionary_id = bind("CFDictionaryGetTypeID", ctypes.c_ulong)()
+    number_id = bind("CFNumberGetTypeID", ctypes.c_ulong)()
+    false = ref.in_dll(core, "kCFBooleanFalse").value
+    count = bind("CFDictionaryGetCount", index, ref)
+    get = bind("CFDictionaryGetValue", ref, ref, ref)
+    members = bind("CFDictionaryGetKeysAndValues", None, ref, ctypes.POINTER(ref), ctypes.POINTER(ref))
+    string = bind("CFStringCreateWithCString", ref, ref, ctypes.c_char_p, ctypes.c_uint32)
+    number = bind("CFNumberGetValue", ctypes.c_bool, ref, index, ref)
+    contains = bind("CFDictionaryContainsKey", ctypes.c_bool, ref, ref)
+
+    def clear(dictionary, allow_scopes):
+        if not dictionary or type_id(dictionary) != dictionary_id:
+            return False
+        remaining = count(dictionary)
+        # The exception list and passive FTP flag do not configure a proxy.
+        # Read only enable flags and scope structure. Any other key, including
+        # an endpoint, PAC script, or supplemental policy, keeps logs private.
+        flags = (b"HTTPEnable", b"HTTPSEnable", b"FTPEnable", b"GopherEnable", b"RTSPEnable", b"SOCKSEnable",
+                 b"ProxyAutoConfigEnable", b"ProxyAutoDiscoveryEnable")
+        for name in (b"ExceptionsList", b"ExcludeSimpleHostnames", b"FTPPassive", b"__SCOPED__", *flags):
+            key = string(None, name, 0x0600)  # kCFStringEncodingASCII
+            if not key:
+                return False
+            try:
+                if not contains(dictionary, key):
+                    continue
+                remaining -= 1
+                if name in flags:
+                    value = get(dictionary, key)
+                    enabled = ctypes.c_int()
+                    if value != false and (type_id(value) != number_id
+                                           or not number(value, 9, ctypes.byref(enabled))  # kCFNumberIntType
+                                           or enabled.value != 0):
+                        return False
+                if name == b"__SCOPED__":
+                    scopes = get(dictionary, key)
+                    if not allow_scopes or type_id(scopes) != dictionary_id:
+                        return False
+                    policies = (ref * count(scopes))()
+                    members(scopes, None, policies)
+                    if not all(clear(policy, False) for policy in policies):
+                        return False
+            finally:
+                release(key)
+        return remaining == 0
+
+    settings = copy_macos_proxy_settings()
+    if not settings:
+        return True
+    try:
+        return not clear(settings, True)
+    finally:
+        release(settings)
+
+
 def needs_private_diagnostics(environment):
     if any(name.lower().endswith("_proxy") or name in TRANSPORT_OVERRIDES
-           or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_", "GIT_HTTP_", "GIT_SSL_"))
+           or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_", "GIT_HTTP_", "GIT_SSL_", "GIT_PROXY_"))
            for name in environment):
         return True
     # Relative locations can resolve differently inside package checkouts.
@@ -47,29 +123,62 @@ def needs_private_diagnostics(environment):
         return True
     try:
         git = "/usr/bin/git"
+        stock_config = None
         if sys.platform == "darwin":
+            # Binary artifacts can use URLSession, independently of Git. The
+            # bounded probe emits only an exit code and never evaluates PAC.
+            proxy = subprocess.run(  # nosec B603 - fixed local presence probe.
+                [sys.executable, "-I", "-B", __file__, "--check-system-proxy"],
+                env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=POLICY_PROBE_TIMEOUT)
+            if proxy.returncode:
+                return True
             # /usr/bin/git is an Xcode launcher. Probe the selected system Git
             # directly so a cold launcher cache cannot delay archive startup.
             developer = subprocess.check_output(  # nosec B603 - fixed Xcode selection query.
                 ["/usr/bin/xcode-select", "--print-path"], env=environment,
-                stderr=subprocess.DEVNULL, timeout=GIT_CONFIG_TIMEOUT)
+                stderr=subprocess.DEVNULL, timeout=POLICY_PROBE_TIMEOUT)
             directory = os.fsdecode(developer.removesuffix(b"\n"))
             if not os.path.isabs(directory) or "\n" in directory or "\0" in directory:
                 return True
             git = os.path.join(directory, "usr/bin/git")
+            if "GIT_CONFIG_SYSTEM" not in environment:
+                stock_config = os.path.join(directory, "usr/share/git-core/gitconfig")
         config = subprocess.run(  # nosec B603 - fixed, offline Git metadata query.
-            [git, "config", "--null", "--name-only", "--list", "--no-includes"],
+            [git, "config", "--null", "--show-scope", "--show-origin", "--name-only", "--list", "--no-includes"],
             env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            timeout=GIT_CONFIG_TIMEOUT)
+            timeout=POLICY_PROBE_TIMEOUT)
+        fields = config.stdout.split(b"\0")
+        if config.returncode or b"\n" in config.stdout or fields.pop() or len(fields) % 3:
+            return True
+        helper_seen = False
+        for scope, origin, key in zip(fields[::3], fields[1::3], fields[2::3]):
+            if scope not in (b"system", b"global", b"local", b"worktree", b"command", b"unknown") or not origin or not key:
+                return True
+            key = key.lower()
+            # Apple Git can report its bundled system config with unknown
+            # scope. In either case require the selected Xcode's exact file.
+            if (key == b"credential.helper" and scope in (b"system", b"unknown") and stock_config
+                    and origin == b"file:" + os.fsencode(stock_config) and not helper_seen):
+                helper_seen = True
+                continue
+            # Includes can become active only in a package checkout. Config
+            # key subsections can contain credentials. Never report the keys.
+            if (key.startswith((b"http.", b"credential.", b"url.", b"remote.", b"include.", b"includeif."))
+                    or key in (b"core.gitproxy", b"core.askpass", b"core.sshcommand", b"init.templatedir")):
+                return True
+        if helper_seen:
+            # Match only the stock helper in Git itself. No helper is invoked
+            # and no configuration value is returned to the supervisor.
+            helper = subprocess.run(  # nosec B603 - fixed, offline Git value match.
+                [git, "config", "--file", stock_config, "--no-includes", "--fixed-value", "--get-all",
+                 "credential.helper", "osxkeychain"],
+                env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=POLICY_PROBE_TIMEOUT)
+            return helper.returncode != 0
     except (OSError, subprocess.SubprocessError):
         return True
-    if config.returncode or b"\n" in config.stdout or (config.stdout and not config.stdout.endswith(b"\0")):
-        return True
-    # Includes can become active only in a package checkout. Config key
-    # subsections can themselves contain credentials, so never report the keys.
-    return any(key.startswith((b"http.", b"credential.", b"url.", b"remote.", b"include.", b"includeif."))
-               or key in (b"core.gitproxy", b"core.askpass", b"core.sshcommand", b"init.templatedir")
-               for key in config.stdout.lower().split(b"\0"))
+    return False
 
 
 def discard_output(_data):
@@ -255,6 +364,10 @@ def report(message):
     write_console(f"{message}\n".encode(errors="backslashreplace"), sys.stderr)
 
 
+def cancellation_notice(status):
+    return f"unsigned archive wrapper cancelled with status {status}"
+
+
 class ArchiveOutput:
     def __init__(self, path):
         self.log = None
@@ -333,14 +446,14 @@ def run_stage(command, environment, output, cancelled, signal_worker):
     # Verify process enumeration is available before starting anything that
     # might leave a helper in a second process group.
     if cancelled():
-        return 0
+        return None
     process_states()
     reader, writer = os.pipe()
     try:
         try:
             os.set_blocking(reader, False)
             if cancelled():
-                return 0
+                return None
             # Create the session atomically with spawn. The supervisor stays
             # the direct parent and passes the Actions tracking env intact.
             pid = os.posix_spawn(
@@ -385,26 +498,37 @@ def main(log, shell, wrapper, *command):
     output = ArchiveOutput(log)
     try:
         if private_diagnostics:
-            output.write(b"unsigned archive diagnostics withheld for proxy or unverified Git transport settings\n")
+            output.write(b"unsigned archive diagnostics withheld for proxy or unverified transport settings\n")
         code = run_stage(command, environment, discard_output if private_diagnostics else output.write,
                          cancelled, signal_worker)
-        if private_diagnostics:
-            status = 128 + received if received else code
-            output.write(f"unsigned archive compiler exited with status {status}\n".encode("ascii"))
+        if code is not None and (private_diagnostics or received):
+            output.write(f"unsigned archive compiler exited with status {code}\n".encode("ascii"))
+        if received:
+            status = 128 + received
+            output.write((cancellation_notice(status) + "\n").encode("ascii"))
+            return status
     finally:
         output.close()
     if received:
-        return 128 + received
+        status = 128 + received
+        report(cancellation_notice(status))
+        return status
     if code or output.failed:
         return code or os.EX_IOERR
     code = run_stage([shell, wrapper, "--verify-archive"], environment,
                      discard_output if private_diagnostics else write_console, cancelled, signal_worker)
     if private_diagnostics and code:
         report(f"unsigned archive verification exited with status {code}")
-    return 128 + received if received else code
+    if received:
+        status = 128 + received
+        report(cancellation_notice(status))
+        return status
+    return code
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--check-system-proxy"]:
+        sys.exit(int(macos_proxy_policy_present()))
     try:
         sys.exit(main(*sys.argv[1:]))
     except (OSError, subprocess.SubprocessError) as error:
