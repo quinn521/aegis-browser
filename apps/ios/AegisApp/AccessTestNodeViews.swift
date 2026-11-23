@@ -54,8 +54,10 @@ private struct AccessTestNodeDetailView: View {
     @State private var transport: AccessTestNodeTransport = .automatic
     @State private var page: AccessTestNodePage?
     @FocusState private var textFocused: Bool
+    private let isPrivate: Bool
 
     init(isPrivate: Bool) {
+        self.isPrivate = isPrivate
         _editor = State(initialValue: AccessTestNodeEditor(isPrivate: isPrivate))
     }
 
@@ -114,7 +116,7 @@ private struct AccessTestNodeDetailView: View {
                     .accessibilityIdentifier("access-test-page-url")
                 Button {
                     guard let url = URL(string: targetURL), url.scheme == "https" else { return }
-                    let session = AccessTestNodePage(transport: transport)
+                    let session = AccessTestNodePage(isPrivate: isPrivate, transport: transport)
                     page = session
                     Task { await session.open(url) }
                 } label: {
@@ -145,6 +147,10 @@ private struct AccessTestNodeDetailView: View {
                     .accessibilityIdentifier("access-test-node-confirm-remove")
                     Button("取消", role: .cancel) {}
                 }
+            }
+            if editor.showsEmptyProfile {
+                Text("尚未保存节点。", tableName: "AccessTestNode")
+                    .accessibilityIdentifier("access-test-node-empty")
             }
             if let error = editor.error {
                 Text(message(for: error)).foregroundStyle(.secondary)

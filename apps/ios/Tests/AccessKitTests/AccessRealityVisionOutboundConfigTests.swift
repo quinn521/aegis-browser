@@ -188,6 +188,36 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: path))
     }
 
+    func testLateNativeRecordsStayRedactedInSharedCaptureAndRestoredHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = AccessDiagnosticLog(storageDirectory: directory, pollInterval: .seconds(60))
+        let survivor = log.acquireShared(level: .info, secrets: [])
+        let retired = log.acquireShared(level: .info, secrets: ["c0decafe"])
+        addTeardownBlock { log.stop(lease: retired); log.stop(lease: survivor) }
+        let path = try XCTUnwrap(survivor.path)
+        XCTAssertEqual(retired.path, path)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        defer { try? writer.close() }
+
+        // Model a native logger message still queued when the core releases
+        // its lease. No bytes for this message are in the FIFO at that point.
+        XCTAssertTrue(log.stop(lease: retired))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        try writer.write(contentsOf: Data((
+            "2026/11/11 00:00:00 from local accepted //C0DECAFE.example:443\n" +
+            "2026/11/11 00:00:01 from local accepted //survivor.example:443\n").utf8))
+        XCTAssertTrue(log.stop(lease: survivor))
+        try await log.flush()
+        let restored = AccessDiagnosticLog(storageDirectory: directory)
+        try await restored.flush()
+        for snapshot in [log.snapshot(), restored.snapshot()] {
+            XCTAssertTrue(snapshot.contains("accepted [redacted]"))
+            XCTAssertTrue(snapshot.contains("survivor.example:443"))
+            XCTAssertFalse(snapshot.lowercased().contains("c0decafe"))
+        }
+    }
+
     func testStopDrainPreservesClearAndNoneDiscardBoundaries() throws {
         for disable in [false, true] {
             let log = AccessDiagnosticLog(pollInterval: .seconds(60))

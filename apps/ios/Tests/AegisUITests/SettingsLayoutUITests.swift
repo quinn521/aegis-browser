@@ -151,6 +151,18 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
         XCTAssertTrue(remove.waitForNonExistence(timeout: 5), "Confirmation must remove the visible saved-node action")
         XCTAssertTrue(saved.waitForNonExistence(timeout: 5))
+
+        let profileBar = app.navigationBars["3X-UI test profile"]
+        if profileBar.exists {
+            let back = profileBar.buttons.firstMatch
+            XCTAssertTrue(back.isHittable)
+            back.tap()
+        }
+        XCTAssertTrue(reveal(profile, app))
+        profile.tap()
+        let emptyProfile = app.staticTexts["access-test-node-empty"]
+        XCTAssertTrue(reveal(emptyProfile, app))
+        XCTAssertEqual(emptyProfile.label, "No node saved.")
     }
 
     func testAccountUsageEntryShowsHonestEmptyStateInChinese() {

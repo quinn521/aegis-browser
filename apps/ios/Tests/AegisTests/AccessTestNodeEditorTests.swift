@@ -99,12 +99,12 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let test = makeUITestRepository()
         XCTAssertNil(try test.revision(isPrivate: false))
         let firstRevision = try test.apply(draft, expectedRevision: nil, isPrivate: false)
-        XCTAssertEqual(try test.savedNode().revision, firstRevision)
+        XCTAssertEqual(try test.savedNode(isPrivate: false).revision, firstRevision)
         XCTAssertNil(try makeUITestRepository().revision(isPrivate: false), "An interrupted run leaves no saved node")
         try test.remove(expectedRevision: firstRevision, isPrivate: false)
         XCTAssertNil(try test.revision(isPrivate: false))
         XCTAssertEqual(persistentOpens, 0)
-        XCTAssertEqual(try ordinary.savedNode().revision, ordinaryRevision)
+        XCTAssertEqual(try ordinary.savedNode(isPrivate: false).revision, ordinaryRevision)
         XCTAssertEqual(persistent.writes, 1)
         XCTAssertEqual(persistent.removals, 0)
     }
@@ -152,7 +152,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(storage.writes, 0)
         editor.apply()
         XCTAssertEqual(storage.writes, 1)
-        XCTAssertEqual(try repository.savedNode().parameters(),
+        XCTAssertEqual(try repository.savedNode(isPrivate: false).parameters(),
                        try AccessLocalV2RayConfigLoader.parseSingleShareURI(scanned))
     }
 
@@ -199,7 +199,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
             XCTAssertEqual(storage.writes, 0)
             editor.apply()
             XCTAssertEqual(storage.writes, 1)
-            let restored = try AccessTestNodeRepository(channel: .dev, storage: storage).savedNode().parameters()
+            let restored = try AccessTestNodeRepository(channel: .dev, storage: storage).savedNode(isPrivate: false).parameters()
             XCTAssertEqual(restored, try AccessLocalV2RayConfigLoader.parseSingleShareURI(uri))
             XCTAssertEqual(restored.shortID, "")
             XCTAssertEqual(restored.spiderX, "/synthetic-path")
@@ -250,7 +250,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertFalse(second.canApply)
     }
 
-    func testDirectCommandsAndRestoreNeverTouchRestrictedOrPrivateStorage() throws {
+    func testDirectCommandsAndRestoreNeverTouchRestrictedOrPrivateStorage() async throws {
         let storage = Storage()
         let params = try AccessLocalV2RayConfigLoader.parseSingleShareURI(link)
         storage.value = AccessTestNodeRecord(params)
@@ -258,6 +258,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
             let repository = AccessTestNodeRepository(channel: channel, storage: storage)
             XCTAssertFalse(repository.allowsEditing(isPrivate: isPrivate))
             XCTAssertThrowsError(try repository.revision(isPrivate: isPrivate))
+            XCTAssertThrowsError(try repository.savedNode(isPrivate: isPrivate))
             XCTAssertThrowsError(try repository.apply(params, expectedRevision: nil, isPrivate: isPrivate))
             XCTAssertThrowsError(try repository.remove(expectedRevision: UUID(), isPrivate: isPrivate))
             let editor = AccessTestNodeEditor(isPrivate: isPrivate, repository: repository)
@@ -267,6 +268,13 @@ final class AccessTestNodeEditorTests: XCTestCase {
             editor.apply()
             XCTAssertFalse(editor.hasDraft)
             XCTAssertFalse(editor.hasSavedNode)
+            XCTAssertFalse(editor.showsEmptyProfile, "Denied storage is not an empty ordinary profile")
+            let core = PageCore(beforeStart: { XCTFail("A denied restore must not start its core") })
+            let page = AccessTestNodePage(isPrivate: isPrivate, repository: repository, testingCore: core)
+            await page.open(URL(string: "https://example.invalid/private-restore")!)
+            XCTAssertNil(page.initialBinding)
+            XCTAssertNil(page.webView)
+            XCTAssertFalse(core.isRunning)
         }
         XCTAssertEqual(storage.reads, 0)
         XCTAssertEqual(storage.writes, 0)
@@ -351,7 +359,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
                                  expectedRevision: nil, isPrivate: false)
         let core = PageCore()
-        let page = AccessTestNodePage(repository: repository, testingCore: core)
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core)
         await page.open(URL(string: "https://example.invalid/single")!)
         XCTAssertTrue(core.isRunning)
         XCTAssertNotNil(page.endpoint)
@@ -365,7 +373,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(page.status, "连接暂不可用", "Apply revokes old pages before returning")
 
         let deniedCore = PageCore()
-        let denied = AccessTestNodePage(repository: AccessTestNodeRepository(channel: nil, storage: storage),
+        let denied = AccessTestNodePage(isPrivate: false, repository: AccessTestNodeRepository(channel: nil, storage: storage),
                                        testingCore: deniedCore)
         await denied.open(URL(string: "https://example.invalid/")!)
         XCTAssertFalse(deniedCore.isRunning)
@@ -377,12 +385,12 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
         let rejectedCore = PageCore()
-        let rejected = AccessTestNodePage(repository: repository, testingCore: rejectedCore,
+        let rejected = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: rejectedCore,
                                          transport: .socks5, socksAdmitted: false)
         await rejected.open(URL(string: "https://example.invalid/")!)
         XCTAssertFalse(rejectedCore.isRunning)
         XCTAssertNil(rejected.webView)
-        let admitted = AccessTestNodePage(repository: repository, testingCore: PageCore(),
+        let admitted = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: PageCore(),
                                          transport: .socks5, socksAdmitted: true)
         await admitted.open(URL(string: "https://example.invalid/")!)
         XCTAssertEqual(admitted.endpoint?.transport, .socks5)
@@ -394,7 +402,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
     }
 
     func testPageExposesBothWebKitPolicySelectors() {
-        let page = AccessTestNodePage()
+        let page = AccessTestNodePage(isPrivate: false)
         XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationAction:decisionHandler:")))
         XCTAssertTrue(page.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")))
     }
@@ -425,7 +433,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
             XCTAssertEqual(result, .completed)
             throw error
         })
-        let page = AccessTestNodePage(repository: repository, testingCore: core,
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core,
                                       preparationTimeout: expectTimeout ? .milliseconds(100) : .seconds(15),
                                       waitForPreparationDeadline: { deadline in
             actualDeadline = deadline
@@ -446,16 +454,13 @@ final class AccessTestNodeEditorTests: XCTestCase {
                 try await ContinuousClock().sleep(until: deadline)
                 XCTAssertNil(page.failureCode, "The timer has not recorded its timeout")
             } else {
-                let limit = deadline.advanced(by: .seconds(1))
-                while page.failureCode == nil, ContinuousClock.now < limit {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
+                await fulfillment(of: [completed], timeout: 1)
                 XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
                 XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
             }
         }
         release.fulfill()
-        await fulfillment(of: [completed], timeout: 2)
+        if timerDelayed { await fulfillment(of: [completed], timeout: 2) }
         if expectTimeout {
             XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
             XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
@@ -469,8 +474,39 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertFalse(core.isRunning)
     }
 
+    func testPreparationDeadlineReturnsBeforeLateSuccessfulStartAndDisposesIt() async throws {
+        let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
+        _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
+                                 expectedRevision: nil, isPrivate: false)
+        let started = expectation(description: "native startup blocked")
+        let release = XCTestExpectation(description: "release native startup")
+        let stopped = expectation(description: "late core stopped by the publisher")
+        let core = PageCore(beforeStart: {
+            started.fulfill()
+            _ = await XCTWaiter.fulfillment(of: [release], timeout: 4)
+        }, afterStop: { stopped.fulfill() })
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core,
+                                      preparationTimeout: .milliseconds(300))
+        let returned = expectation(description: "open returned before native startup was released")
+        let opening = Task {
+            await page.open(URL(string: "https://example.invalid/prepare")!)
+            returned.fulfill()
+        }
+        defer { opening.cancel(); page.close() }
+        await fulfillment(of: [started, returned], timeout: 2, enforceOrder: true)
+        XCTAssertEqual(page.failureDomain, NSURLErrorDomain)
+        XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
+        XCTAssertNil(page.initialBinding)
+        release.fulfill()
+        await fulfillment(of: [stopped], timeout: 3)
+        XCTAssertFalse(core.isRunning)
+        XCTAssertNil(page.webView)
+        XCTAssertNil(page.initialBinding)
+        XCTAssertEqual(page.failureCode, NSURLErrorTimedOut)
+    }
+
     func testSupersededNavigationFailuresCannotCloseTheReplacement() throws {
-        let page = AccessTestNodePage()
+        let page = AccessTestNodePage(isPrivate: false)
         let view = WKWebView()
         let first = try XCTUnwrap(view.loadHTMLString("<p>first</p>", baseURL: URL(string: "https://aegis.invalid/first")))
         let replacement = try XCTUnwrap(view.loadHTMLString("<p>replacement</p>", baseURL: URL(string: "https://aegis.invalid/replacement")))
@@ -488,7 +524,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
     }
 
     func testPolicyInterruptionAttributionRemainsUnknownWithoutAnObservedDecision() throws {
-        let page = AccessTestNodePage()
+        let page = AccessTestNodePage(isPrivate: false)
         XCTAssertEqual(page.navigationPolicyObservation, "no-local-rejection-observed")
         let view = WKWebView()
         let navigation = try XCTUnwrap(view.loadHTMLString("<p>policy</p>", baseURL: URL(string: "https://aegis.invalid/policy")))
@@ -504,7 +540,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link),
                                  expectedRevision: nil, isPrivate: false)
-        let page = AccessTestNodePage(repository: repository, testingCore: PageCore())
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: PageCore())
         await page.open(URL(string: "https://example.invalid/pending")!)
         let view = try XCTUnwrap(page.webView)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -516,11 +552,13 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNotNil(page.endpoint)
         let closeStarted = ContinuousClock.now
         page.close()
+        let request = try XCTUnwrap(page.retirementRequestedAt)
+        XCTAssertGreaterThanOrEqual(request, closeStarted)
         let deadline = Date().addingTimeInterval(10)
         while page.endpoint != nil, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNil(page.endpoint, "A proxy-bound pending document must retire before its port is released")
         let commit = try XCTUnwrap(page.retirementCommittedAt)
-        XCTAssertGreaterThanOrEqual(commit, closeStarted)
+        XCTAssertGreaterThanOrEqual(commit, request)
         let replacement = try XCTUnwrap(page.retirementNavigation)
         page.webView(view, didCommit: replacement)
         XCTAssertEqual(page.retirementCommittedAt, commit, "The first matching commit is immutable")
@@ -533,7 +571,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
         let core = PageCore()
-        let page = AccessTestNodePage(repository: repository, testingCore: core)
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core)
         await page.open(URL(string: "https://example.invalid/pending")!)
         let view = try XCTUnwrap(page.webView)
         let binding = page.initialBinding
@@ -543,7 +581,9 @@ final class AccessTestNodeEditorTests: XCTestCase {
         defer { view.removeFromSuperview(); window.isHidden = true }
         page.webViewWebContentProcessDidTerminate(WKWebView())
         XCTAssertNotNil(page.endpoint, "Another view cannot revoke this binding")
+        XCTAssertNil(page.retirementRequestedAt)
         page.webViewWebContentProcessDidTerminate(view)
+        let request = try XCTUnwrap(page.retirementRequestedAt)
         XCTAssertEqual(page.failureDomain, WKError.errorDomain)
         XCTAssertEqual(page.failureCode, WKError.Code.webContentProcessTerminated.rawValue)
         XCTAssertNotNil(page.endpoint, "Process notification alone cannot release the port")
@@ -553,12 +593,22 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(page.initialBinding, binding)
         XCTAssertTrue(view.url?.path.hasPrefix("/retired/") == true)
         XCTAssertTrue(page.retirementEvents.contains("replacement-committed"))
+#if DEBUG
+        let commit = try XCTUnwrap(page.retirementCommittedAt)
+        var checkpoints: [AccessTestNodeDeviceTests.RetirementCheckpoint] = []
+        let retired = try await AccessTestNodeDeviceTests.observeRetirement(page) { checkpoints.append($0) }
+        XCTAssertTrue(retired)
+        XCTAssertEqual(page.retirementRequestedAt, request)
+        let elapsed = request.duration(to: commit).components
+        XCTAssertEqual(checkpoints.first?.commitSeconds, Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(checkpoints.first?.commitSeconds), 0)
+#endif
     }
 
     func testInterruptedRetirementRequiresFreshLocalCommitAndKeepsTheBinding() async throws {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
-        let page = AccessTestNodePage(repository: repository, testingCore: PageCore())
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: PageCore())
         await page.open(URL(string: "https://example.invalid/pending")!)
         let view = try XCTUnwrap(page.webView)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -584,7 +634,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
     func testCompetingLocalNavigationCannotStrandTheRetirementReplacement() async throws {
         let repository = AccessTestNodeRepository(channel: .dev, storage: Storage())
         _ = try repository.apply(AccessLocalV2RayConfigLoader.parseSingleShareURI(link), expectedRevision: nil, isPrivate: false)
-        let page = AccessTestNodePage(repository: repository, testingCore: PageCore())
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: PageCore())
         await page.open(URL(string: "https://example.invalid/pending")!)
         let view = try XCTUnwrap(page.webView)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
@@ -608,13 +658,20 @@ final class AccessTestNodeEditorTests: XCTestCase {
     private final class PageCore: AccessEmbeddedCoreControlling, @unchecked Sendable {
         let running = Mutex(false)
         private let beforeStart: (@MainActor () async throws -> Void)?
-        init(beforeStart: (@MainActor () async throws -> Void)? = nil) { self.beforeStart = beforeStart }
+        private let afterStop: (@MainActor () -> Void)?
+        init(beforeStart: (@MainActor () async throws -> Void)? = nil, afterStop: (@MainActor () -> Void)? = nil) {
+            self.beforeStart = beforeStart
+            self.afterStop = afterStop
+        }
         var isRunning: Bool { running.withLock { $0 } }
         func start(configData: Data) async throws {
             if let beforeStart { try await beforeStart() }
             running.withLock { $0 = true }
         }
-        func stop() async { running.withLock { $0 = false } }
+        func stop() async {
+            running.withLock { $0 = false }
+            if let afterStop { await afterStop() }
+        }
         func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
             throw URLError(.cannotConnectToHost)
         }
@@ -665,6 +722,37 @@ enum AccessDomainCampaignInput {
 }
 
 #if DEBUG
+private enum AccessProbeReceiptKind: String, CaseIterable {
+    case controlledPath = "ios208-controlled-path"
+    case socksAdmission = "ios208-socks-admission"
+
+    func write(_ receipt: [String: Any], attempt: UUID, in documents: URL) throws -> URL {
+        guard JSONSerialization.isValidJSONObject(receipt) else { throw CocoaError(.propertyListWriteInvalid) }
+        let bytes = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted])
+        let directory = documents.appendingPathComponent("\(rawValue)-\(attempt.uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let file = directory.appendingPathComponent("receipt.json")
+        try bytes.write(to: file, options: .atomic)
+        return file
+    }
+
+    @MainActor
+    func writeAndAttach(_ receipt: [String: Any], attempt: UUID, to test: XCTestCase) {
+        do {
+            let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+                                                        appropriateFor: nil, create: true)
+            let file = try write(receipt, attempt: attempt, in: documents)
+            let attachment = XCTAttachment(contentsOfFile: file)
+            attachment.name = "\(rawValue)-\(attempt.uuidString)"
+            attachment.lifetime = .keepAlways
+            test.add(attachment)
+        } catch {
+            let failure = error as NSError
+            XCTFail("\(rawValue) receipt \(attempt.uuidString) failed: \(failure.domain) \(failure.code)")
+        }
+    }
+}
+
 @MainActor
 final class AccessTestNodeDeviceTests: XCTestCase {
     func testPhysicalDomainCampaign() async throws {
@@ -711,7 +799,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else { XCTFail("Native admission denied"); return }
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
-        if (try? repository.savedNode().parameters()) != parameters {
+        if (try? repository.savedNode(isPrivate: false).parameters()) != parameters {
             _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
         let file = documents.appendingPathComponent(runID.map { "ios208-" + $0 + "-dispatch.jsonl" }
@@ -791,7 +879,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             try append(["event":"reserved", "host":host, "attempt":attempt, "network":network.0])
             reserved.insert(host)
             guard let url = URL(string: "https://" + host + "/") else { XCTFail("Invalid fixed hostname"); return }
-            let page = AccessTestNodePage(singleNavigation: true)
+            let page = AccessTestNodePage(isPrivate: false, singleNavigation: true)
             await page.open(url)
             if let view = page.webView { view.frame = window.bounds; window.addSubview(view) }
             let deadline = Date().addingTimeInterval(20)
@@ -840,13 +928,13 @@ final class AccessTestNodeDeviceTests: XCTestCase {
     /// The initial observation and eventual acknowledgement are separate facts.
     /// Keep the old view mounted and its port owned until the exact inert commit.
     /// Never retry the target or release anything to make a deadline appear green.
-    private static func observeRetirement(
+    fileprivate static func observeRetirement(
         _ page: AccessTestNodePage,
         afterClose: () async throws -> Void = {},
         checkpoint: (RetirementCheckpoint) throws -> Void
     ) async throws -> Bool {
-        let started = ContinuousClock.now
         page.close()
+        let started = try XCTUnwrap(page.retirementRequestedAt)
         try await afterClose()
         return try await observeRetirement(started: started, hasBoundDocument: page.initialBinding != nil,
             committedAt: { page.retirementCommittedAt }, checkpoint: checkpoint)
@@ -873,7 +961,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         for (index, budget) in [Duration.seconds(5), .seconds(10)].enumerated() {
             let cutoff = started.advanced(by: budget)
             while hasBoundDocument, committedAt() == nil, now() < cutoff { try await pause() }
-            let commit = committedAt()
+            let commit = committedAt().flatMap { $0 >= started ? $0 : nil }
             let confirmed = !hasBoundDocument || commit.map { $0 <= cutoff } == true
             try checkpoint(RetirementCheckpoint(supplement: index > 0, confirmed: confirmed,
                 observationSeconds: seconds(now()), commitSeconds: commit.map(seconds)))
@@ -917,25 +1005,13 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             throw XCTSkip("Explicit authorized node and independent controlled URL are required")
         }
         let attempt = UUID()
-        let documents = try XCTUnwrap(FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first)
         var receipt: [String: Any] = [
             "attempt": attempt.uuidString, "sourceSHA": environment["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
             "destination": Self.controlledPathDestination(),
             "nonce": URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "nonce" })?.value ?? "",
             "state": "probe-incomplete"
         ]
-        defer {
-            do {
-                let file = try Self.writeControlledPathReceipt(receipt, attempt: attempt, in: documents)
-                let attachment = XCTAttachment(contentsOfFile: file)
-                attachment.name = "ios208-controlled-path-\(attempt.uuidString)"
-                attachment.lifetime = .keepAlways
-                add(attachment)
-            } catch {
-                let failure = error as NSError
-                XCTFail("Controlled-path receipt \(attempt.uuidString) failed: \(failure.domain) \(failure.code)")
-            }
-        }
+        defer { AccessProbeReceiptKind.controlledPath.writeAndAttach(receipt, attempt: attempt, to: self) }
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else {
             XCTFail("Native internal channel admission rejected this package")
@@ -948,17 +1024,27 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         editor.apply()
         guard editor.error == nil, editor.hasSavedNode else { XCTFail("Native Apply did not save the authorized node"); return }
         let preference = AccessTestNodeTransport(rawValue: environment["AEGIS_TEST_LOCAL_TRANSPORT"] ?? "http") ?? .http
+        receipt["requestedTransport"] = preference.rawValue
         let capabilityOverride: Bool? = environment["AEGIS_TEST_FORCE_SOCKS_UNADMITTED"] == "1" ? false : nil
         let expectedTransport = try preference.select(socksAdmitted: capabilityOverride ?? AccessInternalSOCKSAdmission.current)
         let core = try ObservedCore(mainHost: url.host ?? "")
         let singleNavigation = environment["AEGIS_TEST_SINGLE_NAVIGATION"] == "1"
         let expectPolicyBlock = environment["AEGIS_TEST_EXPECT_POLICY_BLOCK"] == "1"
-        let page = AccessTestNodePage(repository: repository, testingCore: core,
+        let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core,
                                      singleNavigation: singleNavigation,
                                      transport: preference, socksAdmitted: capabilityOverride)
-        receipt["protocol"] = expectedTransport == .socks5 ? "socks5" : "http"
         defer { receipt["dnsObservation"] = core.observation }
+        defer { page.close() }
         await page.open(url)
+        receipt.merge(Self.bindingReceiptFields(selected: page.selectedTransport, binding: page.initialBinding)) { _, new in new }
+        receipt["state"] = page.status
+        receipt["failureDomain"] = page.failureDomain
+        receipt["failureCode"] = page.failureCode
+        guard let binding = page.initialBinding, binding.transport == expectedTransport,
+              page.selectedTransport == expectedTransport else {
+            XCTFail("The controlled path did not bind the selected transport")
+            return
+        }
         guard let webView = page.webView else { XCTFail("Authorized publisher did not bind a DataStore"); return }
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.windowScene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
@@ -975,6 +1061,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         receipt["singleNavigation"] = singleNavigation
         receipt["state"] = page.status
         receipt["failureDomain"] = page.failureDomain ?? ""
+        receipt["failureCode"] = page.failureCode
         receipt["navigationPolicy"] = page.navigationPolicyObservation
         receipt["localPolicyRejection"] = page.localPolicyRejection ?? ""
         receipt["initialHTTPStatus"] = page.initialHTTPStatus ?? 0
@@ -1002,14 +1089,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             receipt["documentContainsNonce"] = containsNonce == true
             XCTAssertEqual(containsNonce, true)
         }
-        XCTAssertNotNil(page.initialBinding)
-        XCTAssertEqual(page.selectedTransport, expectedTransport)
-        receipt["port"] = page.initialBinding?.port
-        receipt["endpoint"] = page.initialBinding?.identity
-        receipt["generation"] = page.initialBinding?.generation
         receipt["httpStatus"] = page.httpStatus
-        XCTAssertNotEqual(page.initialBinding?.port, 0)
-        if expectedTransport == .socks5 { XCTAssertNotEqual(page.initialBinding?.port, 1080) }
+        XCTAssertNotEqual(binding.port, 0)
+        if binding.transport == .socks5 { XCTAssertNotEqual(binding.port, 1080) }
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
         let normalCloseProbe = environment["AEGIS_TEST_NORMAL_CLOSE_PROBE"] == "1"
@@ -1031,7 +1113,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(receipt["nonce"] as? String ?? "missing"))
             let peer = LocalProxyPeer(port: try XCTUnwrap(page.initialBinding?.port))
             oldFlow = peer
-            let outcome = await peer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
+            let outcome = await peer.connect(host: try XCTUnwrap(url.host), transport: binding.transport)
             receipt["oldProxyCONNECTOutcome"] = outcome.rawValue
             guard outcome == .admitted else { XCTFail("Old probe did not establish CONNECT: \(outcome.rawValue)"); return }
             receipt["normalCloseProbe"] = true
@@ -1079,7 +1161,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertTrue(oldClosed)
                 let newcomer = LocalProxyPeer(port: port)
                 defer { newcomer.cancel() }
-                let outcome = await newcomer.connect(host: try XCTUnwrap(url.host), transport: expectedTransport)
+                let outcome = await newcomer.connect(host: try XCTUnwrap(url.host), transport: binding.transport)
                 receipt["newProxyCONNECTOutcome"] = outcome.rawValue
                 switch outcome {
                 case .refused, .peerClosed:
@@ -1157,17 +1239,19 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         return result
     }
 
-    fileprivate static func writeControlledPathReceipt(_ receipt: [String: Any], attempt: UUID, in documents: URL) throws -> URL {
-        guard JSONSerialization.isValidJSONObject(receipt) else { throw CocoaError(.propertyListWriteInvalid) }
-        let bytes = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys, .prettyPrinted])
-        let directory = documents.appendingPathComponent("ios208-controlled-path-\(attempt.uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        let file = directory.appendingPathComponent("receipt.json")
-        try bytes.write(to: file, options: .atomic)
-        return file
+    fileprivate static func bindingReceiptFields(selected: AccessInboundTransport?, binding: AccessManagedProxyEndpoint?) -> [String: Any] {
+        var fields: [String: Any] = [:]
+        fields["selectedTransport"] = selected.map { String(describing: $0) }
+        if let binding {
+            fields["protocol"] = String(describing: binding.transport)
+            fields["port"] = binding.port
+            fields["endpoint"] = binding.identity
+            fields["generation"] = binding.generation
+        }
+        return fields
     }
 
-    private static func portIsOwned(_ port: UInt16) -> Bool {
+    fileprivate static func portIsOwned(_ port: UInt16) -> Bool {
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { Darwin.close(fd) }
@@ -1345,7 +1429,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
 /// Explicit physical protocol admission, independent of the domain campaign.
 @MainActor
 final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
-    private static var quarantined: [(WKWebView, AccessGoEmbeddedCore, UIWindow)] = []
+    private static var quarantined: [(WKWebView, AccessSOCKS5InboundListener, UIWindow)] = []
 
     func testControlledSOCKSWebKitAdmission() async throws {
 #if targetEnvironment(simulator)
@@ -1366,35 +1450,41 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
         }
         guard model == "iPhone14,3" else { XCTFail("Wrong physical device model"); return }
-        let repository = AccessTestNodeRepository.shared
-        guard repository.allowsEditing(isPrivate: false) else { XCTFail("Internal admission required"); return }
-        let parameters = try repository.savedNode().parameters()
-        let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters)
-        var config = try XCTUnwrap(JSONSerialization.jsonObject(with: outbound.embeddedInstanceJSONData()) as? [String: Any])
-        // Fixed DEV admission fixture only; product listeners use assigned ports.
-        config["inbounds"] = [["listen": "127.0.0.1", "port": 10806, "protocol": "socks",
-                              "settings": ["auth": "noauth", "udp": false]]]
-        let core = try AccessGoEmbeddedCore(isolated: true)
-        var result: [String: Any] = ["device": "ios-device-2d62695fc7", "model": model,
+        let attempt = UUID()
+        var result: [String: Any] = ["attempt": attempt.uuidString, "device": "ios-device-2d62695fc7",
+            "model": model, "destination": AccessTestNodeDeviceTests.controlledPathDestination(),
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
             "sourceSHA": env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
-            "bundle": Bundle.main.bundleIdentifier ?? "unknown", "protocol": "socks5",
-            "port": 10806, "nonce": nonce, "status": "probe-incomplete"]
-        let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ios208-socks-admission.json")
-        defer {
-            if let bytes = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
-                try? bytes.write(to: file, options: .atomic)
-            }
-        }
-        do { try await core.start(configData: JSONSerialization.data(withJSONObject: config)) }
-        catch {
+            "bundle": Bundle.main.bundleIdentifier ?? "unknown", "nonce": nonce, "status": "probe-incomplete"]
+        defer { AccessProbeReceiptKind.socksAdmission.writeAndAttach(result, attempt: attempt, to: self) }
+
+        let repository = AccessTestNodeRepository.shared
+        guard repository.allowsEditing(isPrivate: false) else { XCTFail("Internal admission required"); return }
+        let parameters = try repository.savedNode(isPrivate: false).parameters()
+        let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters)
+        let core = try AccessGoEmbeddedCore(isolated: true)
+        // The native listener owns the fixed DEV port independently of Xray.
+        // That lets retirement fence both directions before releasing the socket.
+        let registration = AccessRegistration(
+            id: try AccessRegistrationID("socks-admission-\(attempt.uuidString)"),
+            owner: try AccessOwner(channel: 1, profile: "ordinary", partition: "socks-admission"),
+            transport: .socks5, endpoint: try AccessEndpoint(host: "127.0.0.1", port: 10806),
+            credentialSlot: try AccessCredentialSlot(id: "socks-admission"),
+            lease: try AccessLease(generation: 1, expiresAt: Date().addingTimeInterval(3600)))
+        let listener = try AccessSOCKS5InboundListener(registration: registration, tunnels: FixtureTunnel(core: core))
+        do {
+            try await core.start(configData: outbound.embeddedInstanceJSONData())
+            try await listener.start()
+        } catch {
             result["errorDomain"] = (error as NSError).domain
             result["errorCode"] = (error as NSError).code
+            try? listener.stop()
             await core.stop()
-            XCTFail("SOCKS fixture core could not start; no OS conclusion")
+            XCTFail("SOCKS fixture could not start; no OS conclusion")
             return
         }
+        result["protocol"] = "socks5"
+        result["port"] = listener.boundPort
         do {
             try await Self.nativeSOCKSConnect(host: host, port: 443)
             result["nativeConnect"] = true
@@ -1402,6 +1492,7 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             result["nativeConnect"] = false
             result["errorDomain"] = (error as NSError).domain
             result["errorCode"] = (error as NSError).code
+            try? listener.stop()
             await core.stop()
             XCTFail("Native SOCKS fixture did not admit CONNECT; no OS conclusion")
             return
@@ -1420,9 +1511,14 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         window.addSubview(view)
         window.makeKeyAndVisible()
         view.load(URLRequest(url: url))
-        let deadline = Date().addingTimeInterval(30)
-        while !observer.finished, observer.failure == nil, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(100))
+        do {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            while !observer.finished, observer.failure == nil, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        } catch {
+            observer.failure = error as NSError
+            XCTFail("SOCKS fixture navigation observation was interrupted")
         }
         let html = observer.finished ? (try? await view.evaluateJavaScript("document.documentElement.textContent") as? String) : nil
         result["proxyCount"] = store.proxyConfigurations.count
@@ -1435,23 +1531,44 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             result["errorDomain"] = failure.domain
             result["errorCode"] = failure.code
         }
-        // Keep ownership until the actual old document has been replaced.
-        observer.retirement = nil
+        let stopDeadline = ContinuousClock.now.advanced(by: .seconds(10))
+        listener.suspend()
+        let portHeld = AccessTestNodeDeviceTests.portIsOwned(registration.endpoint.port)
+        result["portHeldAtRetirement"] = portHeld
+        XCTAssertTrue(portHeld)
         view.stopLoading()
+        view.configuration.defaultWebpagePreferences.allowsContentJavaScript = false
         observer.retirement = view.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">",
                                                   baseURL: URL(string: "https://aegis.invalid/socks-retired"))
-        let stopDeadline = Date().addingTimeInterval(10)
-        while !observer.retired, Date() < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
+        let newcomer = AccessTestNodeDeviceTests.LocalProxyPeer(port: registration.endpoint.port)
+        let outcome = await newcomer.connect(host: host, transport: .socks5)
+        newcomer.cancel()
+        result["newProxyCONNECTOutcome"] = outcome.rawValue
+        XCTAssertTrue(outcome == .refused || outcome == .peerClosed, "The fenced fixture must refuse a new CONNECT")
+        await core.stop()
+        do {
+            while !observer.retired, ContinuousClock.now < stopDeadline { try await Task.sleep(for: .milliseconds(50)) }
+        } catch {
+            XCTFail("SOCKS fixture retirement observation was interrupted")
+        }
         result["retired"] = observer.retired
         if observer.retired {
-            await core.stop()
             view.removeFromSuperview()
             window.isHidden = true
+            try listener.stop()
         } else {
-            Self.quarantined.append((view, core, window))
-            XCTFail("SOCKS fixture document retirement unconfirmed; listener retained until process exit")
+            Self.quarantined.append((view, listener, window))
+            XCTFail("SOCKS fixture document retirement unconfirmed; fenced listener retained until process exit")
         }
 #endif
+    }
+
+    private final class FixtureTunnel: AccessHTTPTunnelOpening {
+        let core: AccessGoEmbeddedCore
+        init(core: AccessGoEmbeddedCore) { self.core = core }
+        func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+            try await core.dial(host: host, port: port)
+        }
     }
 
     private static func nativeSOCKSConnect(host: String, port: UInt16) async throws {
@@ -1515,7 +1632,7 @@ final class AccessTestNodeEvidenceTests: XCTestCase {
 
     func testRetirementBudgetsUseCommitTimeEvenWhenObservationIsLate() async throws {
         let started = ContinuousClock.now
-        for (commit, observed, expected) in [(4.0, 6.0, [true]), (5.0, 6.0, [true]),
+        for (commit, observed, expected) in [(-1.0, 11.0, [false, false]), (4.0, 6.0, [true]), (5.0, 6.0, [true]),
             (5.5, 6.0, [false, true]), (10.0, 11.0, [false, true]), (10.5, 11.0, [false, false])] {
             var checkpoints: [Probe.RetirementCheckpoint] = []
             let retired = try await Probe.observeRetirement(started: started, hasBoundDocument: true,
@@ -1525,7 +1642,7 @@ final class AccessTestNodeEvidenceTests: XCTestCase {
                 checkpoint: { checkpoints.append($0) })
             XCTAssertEqual(checkpoints.map(\.confirmed), expected)
             XCTAssertEqual(checkpoints.map(\.supplement), expected.indices.map { $0 > 0 })
-            XCTAssertEqual(checkpoints.map(\.commitSeconds), expected.map { _ in Optional(commit) })
+            XCTAssertEqual(checkpoints.map(\.commitSeconds), expected.map { _ in commit >= 0 ? commit : nil })
             XCTAssertEqual(checkpoints.map(\.observationSeconds), expected.map { _ in observed })
             XCTAssertEqual(retired, expected.last)
         }
@@ -1543,21 +1660,36 @@ final class AccessTestNodeEvidenceTests: XCTestCase {
         let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: documents) }
-        let previous = documents.appendingPathComponent("ios208-controlled-path.json")
         let oldBytes = Data("historical receipt".utf8)
-        try oldBytes.write(to: previous)
         let first = UUID(), second = UUID()
-        let firstPath = try Probe.writeControlledPathReceipt(["attempt": first.uuidString], attempt: first, in: documents)
-        let secondPath = try Probe.writeControlledPathReceipt(["attempt": second.uuidString], attempt: second, in: documents)
-        XCTAssertNotEqual(firstPath, secondPath)
-        XCTAssertThrowsError(try Probe.writeControlledPathReceipt(["attempt": "collision"], attempt: first, in: documents))
-        XCTAssertThrowsError(try Probe.writeControlledPathReceipt(["invalid": Date()], attempt: UUID(), in: documents))
-        XCTAssertThrowsError(try Probe.writeControlledPathReceipt([:], attempt: UUID(), in: previous))
-        let firstReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: firstPath)) as? [String: String]
-        let secondReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: secondPath)) as? [String: String]
-        XCTAssertEqual(firstReceipt?["attempt"], first.uuidString)
-        XCTAssertEqual(secondReceipt?["attempt"], second.uuidString)
-        XCTAssertEqual(try Data(contentsOf: previous), oldBytes)
+        for kind in AccessProbeReceiptKind.allCases {
+            let previous = documents.appendingPathComponent("\(kind.rawValue).json")
+            try oldBytes.write(to: previous)
+            let firstPath = try kind.write(["attempt": first.uuidString], attempt: first, in: documents)
+            let secondPath = try kind.write(["attempt": second.uuidString], attempt: second, in: documents)
+            XCTAssertNotEqual(firstPath, secondPath)
+            XCTAssertEqual(firstPath.deletingLastPathComponent().lastPathComponent, "\(kind.rawValue)-\(first.uuidString)")
+            XCTAssertThrowsError(try kind.write(["attempt": "collision"], attempt: first, in: documents))
+            XCTAssertThrowsError(try kind.write(["invalid": Date()], attempt: UUID(), in: documents))
+            XCTAssertThrowsError(try kind.write([:], attempt: UUID(), in: previous))
+            let firstReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: firstPath)) as? [String: String]
+            let secondReceipt = try JSONSerialization.jsonObject(with: Data(contentsOf: secondPath)) as? [String: String]
+            XCTAssertEqual(firstReceipt?["attempt"], first.uuidString)
+            XCTAssertEqual(secondReceipt?["attempt"], second.uuidString)
+            XCTAssertEqual(try Data(contentsOf: previous), oldBytes)
+        }
+    }
+
+    func testControlledPathReceiptUsesTheBoundTransportAndLeavesFailedPreparationUnbound() {
+        let endpoint = AccessManagedProxyEndpoint(identity: "fixture", generation: 1, loopbackHost: "127.0.0.1",
+                                                  port: 18081, state: .ready, transport: .http)
+        let bound = Probe.bindingReceiptFields(selected: .socks5, binding: endpoint)
+        XCTAssertEqual(bound["selectedTransport"] as? String, "socks5")
+        XCTAssertEqual(bound["protocol"] as? String, "http")
+        XCTAssertEqual(bound["port"] as? UInt16, endpoint.port)
+        let unbound = Probe.bindingReceiptFields(selected: .socks5, binding: nil)
+        XCTAssertEqual(unbound["selectedTransport"] as? String, "socks5")
+        for field in ["protocol", "port", "endpoint", "generation"] { XCTAssertNil(unbound[field]) }
     }
 
     func testControlledPathDestinationReportsTheRunningTarget() {

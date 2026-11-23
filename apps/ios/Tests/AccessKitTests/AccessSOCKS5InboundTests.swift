@@ -15,13 +15,13 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         for port in [firstPort, secondPort] { XCTAssertNotEqual(port, 0); XCTAssertNotEqual(port, 1080) }
         let rival = try AccessSOCKS5InboundListener(registration: makeRegistration(port: firstPort))
         do {
-            try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try await rival.start()
             try? rival.stop()
             XCTFail("The assigned SOCKS port must remain held before adoption")
         } catch { }
         for (socket, port) in [(first, firstPort), (second, secondPort)] {
             let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: port), preparedSocket: socket)
-            try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try await listener.start()
             XCTAssertTrue(listener.boundSocketForTests === socket)
             let client = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
             client.start(queue: .global())
@@ -40,7 +40,7 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         let listener = try AccessSOCKS5InboundListener(
             registration: makeRegistration(port: port == 65535 ? 65534 : port + 1), preparedSocket: socket)
         do {
-            try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+            try await listener.start()
             XCTFail("A prepared socket cannot be relabelled with another endpoint")
         } catch { }
         XCTAssertNil(listener.boundSocketForTests)
@@ -50,7 +50,7 @@ final class AccessSOCKS5InboundTests: XCTestCase {
     func testProductionTunnelWaitsForUpstreamAndPreservesPipelinedBytes() async throws {
         let tunnel = GatedTunnel()
         let listener = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806), tunnels: tunnel)
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
         let connection = NWConnection(host: "127.0.0.1", port: 10806, using: .tcp)
         connection.start(queue: .global())
         let deadline = Task { try? await Task.sleep(for: .seconds(5)); connection.cancel() }
@@ -87,10 +87,73 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         let closeDeadline = Date().addingTimeInterval(2)
         while tunnel.stream.isOpen, Date() < closeDeadline { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertFalse(listener.isAccepting)
+        try await assertGreetingRefused(on: 10806)
         XCTAssertTrue(listener.isListening, "Suspension retains the bound port until document retirement")
         let rival = try AccessSOCKS5InboundListener(registration: makeRegistration(port: 10806))
-        do { try await rival.start(at: Date(timeIntervalSince1970: 1_700_000_000)); try? rival.stop(); XCTFail("Port was released too early") }
+        do { try await rival.start(); try? rival.stop(); XCTFail("Port was released too early") }
         catch { }
+    }
+
+    func testExpiredSOCKSRegistrationFencesLiveAndNewFlowsWhileKeepingTheSocket() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let time = Date()
+        let clock = Mutex(time)
+        let cutoff = time.addingTimeInterval(60)
+        let tunnel = GatedTunnel()
+        let listener = try AccessSOCKS5InboundListener(
+            registration: makeRegistration(port: port, expiresAt: cutoff),
+            tunnels: tunnel, maximumConnections: 4, preparedSocket: socket, now: { clock.withLock { $0 } })
+        try await listener.start(at: time)
+        let connection = NWConnection(host: "127.0.0.1", port: try XCTUnwrap(NWEndpoint.Port(rawValue: port)), using: .tcp)
+        connection.start(queue: .global())
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled { connection.cancel() }
+        }
+        defer { deadline.cancel(); tunnel.release(); connection.cancel(); try? listener.stop() }
+
+        try await Self.send(Data([5, 1, 0]), to: connection)
+        let method = try await Self.receive(2, from: connection)
+        XCTAssertEqual(method, Data([5, 0]))
+        try await Self.send(Data([5, 1, 0, 1, 192, 0, 2, 1, 1, 187]), to: connection)
+        let dialDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !tunnel.isWaiting, ContinuousClock.now < dialDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(tunnel.isWaiting)
+        tunnel.release()
+        let reply = try await Self.receive(10, from: connection)
+        XCTAssertEqual(reply, AccessSOCKS5InboundParser.successReply())
+        XCTAssertTrue(tunnel.stream.isOpen)
+
+        clock.withLock { $0 = cutoff }
+        try await assertGreetingRefused(on: port)
+        XCTAssertFalse(listener.isAccepting)
+        XCTAssertEqual(listener.acceptedConnectionCount, 1)
+        XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertTrue(listener.boundSocketForTests === socket)
+        XCTAssertEqual(listener.boundPort, port)
+        clock.withLock { $0 = time }
+        XCTAssertFalse(listener.isAccepting, "A fenced lease must stay fenced after a clock correction")
+    }
+
+    private func assertGreetingRefused(on port: UInt16) async throws {
+        let connection = NWConnection(host: "127.0.0.1", port: try XCTUnwrap(NWEndpoint.Port(rawValue: port)), using: .tcp)
+        let timedOut = Mutex(false)
+        connection.start(queue: .global())
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled { timedOut.withLock { $0 = true }; connection.cancel() }
+        }
+        defer { deadline.cancel(); connection.cancel() }
+        do {
+            try await Self.send(Data([5, 1, 0]), to: connection)
+            _ = try await Self.receive(2, from: connection)
+            XCTFail("A fenced listener must refuse a new greeting")
+        } catch {
+            XCTAssertFalse(timedOut.withLock { $0 }, "Local cancellation is not proof of a peer fence")
+        }
     }
 
     private static func send(_ data: Data, to connection: NWConnection) async throws {
@@ -128,7 +191,8 @@ final class AccessSOCKS5InboundTests: XCTestCase {
 
     private func makeRegistration(
         transport: AccessInboundTransport = .socks5,
-        port: UInt16 = 18_805
+        port: UInt16 = 18_805,
+        expiresAt: Date = Date().addingTimeInterval(3600)
     ) throws -> AccessRegistration {
         AccessRegistration(
             id: try AccessRegistrationID("reg-socks5-\(port)"),
@@ -138,7 +202,7 @@ final class AccessSOCKS5InboundTests: XCTestCase {
             credentialSlot: try AccessCredentialSlot(id: "cred-socks5"),
             lease: try AccessLease(
                 generation: 1,
-                expiresAt: Date(timeIntervalSince1970: 1_700_000_000 + 60)
+                expiresAt: expiresAt
             )
         )
     }
@@ -199,7 +263,7 @@ final class AccessSOCKS5InboundTests: XCTestCase {
     func testListenerEstablishesNoAuthConnect() async throws {
         let port: UInt16 = 18_807
         let listener = try AccessSOCKS5InboundListener(registration: try makeRegistration(port: port))
-        try await listener.start(at: Date(timeIntervalSince1970: 1_700_000_000))
+        try await listener.start()
 
         let gotReply = expectation(description: "socks5 success reply")
         let connection = NWConnection(

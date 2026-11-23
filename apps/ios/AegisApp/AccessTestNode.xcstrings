@@ -1,6 +1,29 @@
 {
   "sourceLanguage": "zh-Hans",
   "strings": {
+    "尚未保存节点。": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未保存节点。"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No node saved."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未儲存節點。"
+          }
+        }
+      }
+    },
     "Access 连接设置": {
       "extractionState": "manual",
       "localizations": {

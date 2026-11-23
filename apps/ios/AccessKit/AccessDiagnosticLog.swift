@@ -34,6 +34,8 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     private var failed = false
     private var standaloneSecrets: [String] = []
     private var liveSecrets: [UUID: [String]] = [:]
+    // Xray's asynchronous writers can deliver records after Runtime.Stop returns.
+    private var retiredCaptureSecrets: Set<String> = []
     private var secrets: [String] = []
     // A pending history read may outlast a core. Its redactors apply only to that read.
     private var historySecrets: Set<String> = []
@@ -216,14 +218,16 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             stopped = true
         }
         queue.sync {
+            let retiring = liveSecrets.removeValue(forKey: lease.id) ?? []
             if let readerFD {
-                // Drain final records with the retiring core's redactor.
-                // Discard any excess backlog and partial line before forgetting it.
+                // The FIFO can still receive records from Xray's queue after this
+                // drain. Keep the retiring core's filters until the pipe is gone.
+                retiredCaptureSecrets.formUnion(retiring)
                 if !drain(fd: readerFD, maximumReads: 64) { discardPrefix = nil }
                 discardingLine = discardingLine || !pending.isEmpty
                 pending.removeAll()
             }
-            liveSecrets.removeValue(forKey: lease.id)
+            if lastOwner && stopped { retiredCaptureSecrets.removeAll() }
             rebuildSecretSetLocked()
         }
         return stopped
@@ -281,7 +285,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     }
 
     private func rebuildSecretSetLocked() {
-        secrets = Array(Set(standaloneSecrets + liveSecrets.values.flatMap { $0 }))
+        secrets = Array(retiredCaptureSecrets.union(standaloneSecrets).union(liveSecrets.values.flatMap { $0 }))
     }
 
     private func stop(ifID: UUID?, clearStandaloneSecrets: Bool = false) -> Bool {

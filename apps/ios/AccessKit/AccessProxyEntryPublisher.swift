@@ -64,7 +64,8 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
     }
 
     public var currentEndpoint: AccessManagedProxyEndpoint? {
-        guard let instance, isHealthy(instance.provision), !instance.generation.isClosed else { return nil }
+        guard let instance, isHealthy(instance.provision), !instance.generation.isClosed,
+              healthCheck?() ?? true else { return nil }
         return instance.provision.endpoint
     }
 
@@ -78,6 +79,9 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
     }
 
     public func prepare(_ request: AccessProxyEntryPrepareRequest) async throws -> AccessProxyEntryPrepareResult {
+        if instance?.generation.isClosed == false, healthCheck?() == false {
+            closeCurrentGeneration()
+        }
         if let current = currentEndpoint, let instance {
             waiters[request.operationID] = instance.generation
             return AccessProxyEntryPrepareResult(operationID: request.operationID, endpoint: current)
@@ -143,7 +147,7 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
 
     public func validateReady(_ result: AccessProxyEntryPrepareResult) -> Bool {
         guard let instance, waiters[result.operationID] === instance.generation else { return false }
-        guard !instance.generation.isClosed, isHealthy(instance.provision) else { return false }
+        guard !instance.generation.isClosed, isHealthy(instance.provision), healthCheck?() ?? true else { return false }
         guard result.endpoint == instance.provision.endpoint else { return false }
         guard result.endpoint.generation == instance.generation.number else { return false }
         guard result.endpoint.state == .ready else { return false }
@@ -153,7 +157,8 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
     }
 
     public func retain(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey) -> Bool {
-        guard let instance, !instance.generation.isClosed, isHealthy(instance.provision) else { return false }
+        guard let instance, !instance.generation.isClosed, isHealthy(instance.provision),
+              healthCheck?() ?? true else { return false }
         guard endpoint == instance.provision.endpoint,
               endpoint.generation == instance.generation.number
         else { return false }

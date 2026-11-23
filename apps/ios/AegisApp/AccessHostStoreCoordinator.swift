@@ -352,12 +352,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     /// A landing store owns its entry independently of the idle redirect source.
     func retainLandingEndpoint(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey) -> Bool {
-        guard endpoint.state == .ready else { return false }
+        guard endpoint.state == .ready, endpoint.hasAdmittedBinding else { return false }
         if let current = registry.endpoint(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate),
            current.generation > endpoint.generation { return false }
         guard publisher.retain(endpoint, for: key) else { return false }
-        registry.setEndpoint(endpoint, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
-        return true
+        return registry.setEndpoint(endpoint, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
     }
 
     @discardableResult
@@ -949,16 +948,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             publisher.cancel(operationID: operationID)
             return
         }
-        guard publisher.validateReady(result), publisher.retain(result.endpoint, for: operation.key) else {
+        guard publisher.validateReady(result), retainLandingEndpoint(result.endpoint, for: operation.key) else {
             fail(operationID, reason: "代理入口还不能使用")
             return
         }
-        registry.setEndpoint(
-            result.endpoint,
-            scopeID: operation.key.scopeID,
-            host: operation.key.host,
-            isPrivate: operation.key.isPrivate
-        )
         if let pending = operation.addressNavigation,
            let tab = BrowserSession.openTabs().first(where: { $0.instanceID.uuidString == operation.tabID }) {
             if !operation.automaticFirstVisit {

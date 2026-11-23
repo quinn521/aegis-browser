@@ -227,8 +227,8 @@ final class AccessTestNodeRepository {
 
     func allowsEditing(isPrivate: Bool) -> Bool { channel != nil && !isPrivate }
 
-    func savedNode() throws -> AccessTestNodeRecord {
-        guard let channel, let record = try storage.read(channel: channel) else {
+    func savedNode(isPrivate: Bool) throws -> AccessTestNodeRecord {
+        guard let channel, !isPrivate, let record = try storage.read(channel: channel) else {
             throw AccessTestNodeError.unavailable
         }
         return record
@@ -275,6 +275,7 @@ final class AccessTestNodeEditor {
     var allowsEditing: Bool { repository.allowsEditing(isPrivate: isPrivate) }
     var hasDraft: Bool { draft != nil }
     var hasSavedNode: Bool { baseRevision != nil }
+    var showsEmptyProfile: Bool { loaded && !hasSavedNode }
     var canApply: Bool { loaded && hasDraft && scan == nil }
 
     init(isPrivate: Bool, repository: AccessTestNodeRepository = .shared) {
@@ -395,6 +396,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     /// Read-only identity of the store actually created; survives retirement for receipts.
     private(set) var initialBinding: AccessManagedProxyEndpoint?
     private let repository: AccessTestNodeRepository
+    private let isPrivate: Bool
     private let registry = AccessHostDataStoreRegistry()
     private let testingCore: (any AccessEmbeddedCoreControlling)?
     private var publisher: (any AccessProxyEntryPublishing)?
@@ -405,6 +407,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private let waitForPreparationDeadline: @MainActor (ContinuousClock.Instant) async throws -> Void
     private var preparationDeadline: ContinuousClock.Instant?
     private var deadlineTask: Task<Void, Never>?
+    private var preparationWaiter: CheckedContinuation<AccessProxyEntryPrepareResult, Error>?
     private var retirement: (() -> Void)?
     private(set) var retirementNavigation: WKNavigation?
     private var retirementRetryUsed = false
@@ -412,6 +415,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var retiringOwner: AccessTestNodePage?
     /// Bounded, secret-free lifecycle evidence; no URL or document content.
     private(set) var retirementEvents: [String] = []
+    private(set) var retirementRequestedAt: ContinuousClock.Instant?
     private(set) var retirementCommittedAt: ContinuousClock.Instant?
     private(set) var failureDomain: String?
     private(set) var failureCode: Int?
@@ -438,7 +442,8 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     private var closed = false
     private var retiring = false
 
-    init(repository: AccessTestNodeRepository = .shared, testingCore: (any AccessEmbeddedCoreControlling)? = nil,
+    init(isPrivate: Bool, repository: AccessTestNodeRepository = .shared,
+         testingCore: (any AccessEmbeddedCoreControlling)? = nil,
          singleNavigation: Bool = false, transport: AccessTestNodeTransport = .automatic,
          socksAdmitted: Bool? = nil, preparationTimeout: Duration = .seconds(15),
          waitForPreparationDeadline: @escaping @MainActor (ContinuousClock.Instant) async throws -> Void = {
@@ -447,6 +452,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         self.transportPreference = transport
         self.socksAdmitted = socksAdmitted ?? AccessInternalSOCKSAdmission.current
         self.repository = repository
+        self.isPrivate = isPrivate
         self.testingCore = testingCore
         self.singleNavigation = singleNavigation
         self.preparationTimeout = preparationTimeout
@@ -457,27 +463,27 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
     func open(_ url: URL) async {
         guard publisher == nil, !closed, url.scheme == "https", url.user == nil, url.password == nil,
               let rawHost = url.host, let host = try? AccessSiteHost(rawHost),
-              repository.allowsEditing(isPrivate: false) else {
+              repository.allowsEditing(isPrivate: isPrivate) else {
             status = "连接暂不可用"
             return
         }
         do {
             let transport = try transportPreference.select(socksAdmitted: socksAdmitted)
             selectedTransport = transport
-            let record = try repository.savedNode()
+            let record = try repository.savedNode(isPrivate: isPrivate)
             let revision = record.revision
             observerID = repository.observeRevocation { [weak self] in self?.close() }
             let core = try testingCore ?? AccessGoEmbeddedCore(isolated: true)
             let newPublisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(
                 configPath: nil, verifiedCore: core,
-                parameters: { [repository] in
-                    let current = try repository.savedNode()
+                parameters: { [repository, isPrivate] in
+                    let current = try repository.savedNode(isPrivate: isPrivate)
                     guard current.revision == revision else { throw AccessTestNodeError.conflict }
                     return try current.parameters()
                 },
                 connectionAllowed: { [weak self, repository] in
                     guard let self, !self.closed else { return false }
-                    return (try? repository.savedNode().revision) == revision
+                    return (try? repository.revision(isPrivate: self.isPrivate)) == revision
                 },
                 retireDocuments: { [weak self] finish in
                     guard let self else { finish(); return }
@@ -494,16 +500,31 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                       ContinuousClock.now >= deadline else { return }
                 self.close()
             }
-            let result = try await newPublisher.prepare(.init(operationID: operation, deadline: preparationTimeout))
+            let request = AccessProxyEntryPrepareRequest(operationID: operation, deadline: preparationTimeout)
+            let result = try await withCheckedThrowingContinuation { continuation in
+                preparationWaiter = continuation
+                // The publisher owns native startup and disposal of its late
+                // result. Closing this page only resolves its own wait.
+                Task { [weak self] in
+                    guard self?.preparationWaiter != nil else { return }
+                    do {
+                        let result = try await newPublisher.prepare(request)
+                        self?.finishPreparation(.success(result))
+                    } catch {
+                        self?.finishPreparation(.failure(error))
+                    }
+                }
+            }
             guard !closed, ContinuousClock.now < deadline,
-                  (try? repository.savedNode().revision) == revision,
+                  (try? repository.revision(isPrivate: isPrivate)) == revision,
+                  result.endpoint.transport == transport,
                   newPublisher.validateReady(result) else { throw AccessTestNodeError.unavailable }
-            let storeKey = AccessHostStoreKey(scopeID: "test-" + id.uuidString, host: host, isPrivate: false)
+            let storeKey = AccessHostStoreKey(scopeID: "test-" + id.uuidString, host: host, isPrivate: isPrivate)
             guard newPublisher.retain(result.endpoint, for: storeKey) else { throw AccessTestNodeError.unavailable }
             key = storeKey
-            registry.setEndpoint(result.endpoint, scopeID: storeKey.scopeID, host: host, isPrivate: false)
-            guard let store = registry.storeForTab(tabID: id.uuidString, scopeID: storeKey.scopeID,
-                isPrivate: false, targetHost: host, boundHost: nil, intent: .on),
+            guard registry.setEndpoint(result.endpoint, scopeID: storeKey.scopeID, host: host, isPrivate: isPrivate),
+                let store = registry.storeForTab(tabID: id.uuidString, scopeID: storeKey.scopeID,
+                isPrivate: isPrivate, targetHost: host, boundHost: nil, intent: .on),
                 store.proxyConfigurations.count == 1,
                 store.proxyConfigurations.first?.allowFailover == false,
                 ContinuousClock.now < deadline else {
@@ -530,12 +551,19 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         }
     }
 
+    private func finishPreparation(_ result: Result<AccessProxyEntryPrepareResult, Error>) {
+        let waiter = preparationWaiter
+        preparationWaiter = nil
+        waiter?.resume(with: result)
+    }
+
     private var preparationDeadlineElapsed: Bool {
         preparationDeadline.map { ContinuousClock.now >= $0 } ?? false
     }
 
     func close() {
         guard !closed else { return }
+        if retirementRequestedAt == nil { retirementRequestedAt = .now }
         if failureDomain == nil, preparationDeadlineElapsed {
             failureDomain = NSURLErrorDomain
             failureCode = NSURLErrorTimedOut
@@ -547,12 +575,14 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
         deadlineTask?.cancel()
         preparationDeadline = nil
         if let operationID { publisher?.cancel(operationID: operationID) }
+        finishPreparation(.failure(CancellationError()))
         if let publisher = publisher as? AccessProxyEntryPublisher {
-            publisher.closeCurrentGeneration()
+            if key != nil { publisher.closeCurrentGeneration() }
         } else { retire {} }
     }
 
     private func retire(_ finish: @escaping () -> Void) {
+        if retirementRequestedAt == nil { retirementRequestedAt = .now }
         status = "连接暂不可用"
         retiring = true
         recordRetirement("requested")

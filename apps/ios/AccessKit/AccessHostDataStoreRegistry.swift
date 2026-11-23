@@ -11,6 +11,12 @@ public struct AccessManagedProxyEndpoint: Sendable, Equatable {
     public var state: AccessProxyEndpointState
     public var transport: AccessInboundTransport
 
+    public var hasAdmittedBinding: Bool {
+        !identity.isEmpty && generation != 0
+            && (loopbackHost == "127.0.0.1" || loopbackHost == "::1")
+            && port != 0 && (transport != .socks5 || port != 1080)
+    }
+
     public init(
         identity: String,
         generation: UInt64,
@@ -56,22 +62,33 @@ public final class AccessHostDataStoreRegistry {
         endpoints[key(scopeID, host, isPrivate)]
     }
 
-    /// Ignores a generation older than the one already accepted for this host.
+    /// Reports whether the registry accepted the endpoint. A rejected ready
+    /// generation blocks new attachments and leaves the old document's proxy intact.
+    @discardableResult
     public func setEndpoint(
         _ endpoint: AccessManagedProxyEndpoint,
         scopeID: String,
         host: AccessSiteHost,
         isPrivate: Bool
-    ) {
+    ) -> Bool {
         let storeKey = key(scopeID, host, isPrivate)
         if let current = endpoints[storeKey], endpoint.generation < current.generation {
-            return
+            return false
+        }
+        if endpoint.state == .ready {
+            guard let configuration = configuration(for: endpoint) else {
+                var rejected = endpoint
+                rejected.state = .failed
+                endpoints[storeKey] = rejected
+                return false
+            }
+            if let entry = entries[storeKey] {
+                entry.store.proxyConfigurations = [configuration]
+                entries[storeKey]?.appliedGeneration = endpoint.generation
+            }
         }
         endpoints[storeKey] = endpoint
-        if endpoint.state == .ready, let entry = entries[storeKey] {
-            apply(endpoint, to: entry.store)
-            entries[storeKey]?.appliedGeneration = endpoint.generation
-        }
+        return true
     }
 
     public func setProxyEnabled(
@@ -246,12 +263,11 @@ public final class AccessHostDataStoreRegistry {
     ) -> WKWebsiteDataStore? {
         let storeKey = key(scopeID, host, isPrivate)
         let endpoint = endpoints[storeKey]
+        if let endpoint, !endpoint.hasAdmittedBinding { return nil }
         if entries[storeKey] == nil {
-            guard endpoint?.state == .ready else { return nil }
+            guard let endpoint, let configuration = configuration(for: endpoint) else { return nil }
             let store = WKWebsiteDataStore.nonPersistent()
-            if let endpoint {
-                apply(endpoint, to: store)
-            }
+            store.proxyConfigurations = [configuration]
             entries[storeKey] = Entry(
                 store: store,
                 record: AccessHostStoreRecord(
@@ -260,14 +276,15 @@ public final class AccessHostDataStoreRegistry {
                     proxyEnabled: true,
                     idleSince: nil
                 ),
-                appliedGeneration: endpoint?.generation
+                appliedGeneration: endpoint.generation
             )
         }
         guard var entry = entries[storeKey] else { return nil }
         entry.record.boundTabIDs.insert(tabID)
         entry.record.idleSince = nil
         if let endpoint, endpoint.state == .ready, entry.appliedGeneration != endpoint.generation {
-            apply(endpoint, to: entry.store)
+            guard let configuration = configuration(for: endpoint) else { return nil }
+            entry.store.proxyConfigurations = [configuration]
             entry.appliedGeneration = endpoint.generation
         }
         entries[storeKey] = entry
@@ -308,12 +325,11 @@ public final class AccessHostDataStoreRegistry {
         onRetire?(key)
     }
 
-    private func apply(_ endpoint: AccessManagedProxyEndpoint, to store: WKWebsiteDataStore) {
+    private func configuration(for endpoint: AccessManagedProxyEndpoint) -> ProxyConfiguration? {
         guard endpoint.state == .ready,
-              endpoint.port != 0,
-              endpoint.transport != .socks5 || endpoint.port != 1080,
+              endpoint.hasAdmittedBinding,
               let port = NWEndpoint.Port(rawValue: endpoint.port)
-        else { return }
+        else { return nil }
         let address = NWEndpoint.hostPort(host: NWEndpoint.Host(endpoint.loopbackHost), port: port)
         var configuration: ProxyConfiguration
         switch endpoint.transport {
@@ -322,7 +338,7 @@ public final class AccessHostDataStoreRegistry {
         case .socks5: configuration = ProxyConfiguration(socksv5Proxy: address)
         }
         configuration.allowFailover = false
-        store.proxyConfigurations = [configuration]
+        return configuration
     }
 
     private func key(

@@ -267,6 +267,45 @@ final class AccessHostStorePolicyTests: XCTestCase {
     }
 
     @MainActor
+    func testInadmissibleReadyEndpointsCannotCreateOrReuseAHostStore() throws {
+        let host = try self.host("example.com")
+        var forbiddenSOCKS = readyEndpoint(generation: 2, port: 1080)
+        forbiddenSOCKS.transport = .socks5
+        var nonLoopback = readyEndpoint(generation: 2)
+        nonLoopback.loopbackHost = "192.0.2.1"
+        for rejected in [forbiddenSOCKS, nonLoopback, readyEndpoint(generation: 2, port: 0)] {
+            for hasExistingStore in [false, true] {
+                let registry = AccessHostDataStoreRegistry()
+                func attach(boundHost: AccessSiteHost?) -> WKWebsiteDataStore? {
+                    registry.storeForTab(tabID: "tab", scopeID: "ordinary", isPrivate: false,
+                                        targetHost: host, boundHost: boundHost, intent: .on)
+                }
+                let previous = readyEndpoint(generation: 1)
+                var oldStore: WKWebsiteDataStore?
+                if hasExistingStore {
+                    XCTAssertTrue(registry.setEndpoint(previous, scopeID: "ordinary", host: host, isPrivate: false))
+                    oldStore = try XCTUnwrap(attach(boundHost: nil))
+                }
+                XCTAssertFalse(registry.setEndpoint(rejected, scopeID: "ordinary", host: host, isPrivate: false))
+                XCTAssertEqual(registry.endpoint(scopeID: "ordinary", host: host, isPrivate: false)?.state, .failed)
+                XCTAssertNil(attach(boundHost: hasExistingStore ? host : nil))
+                XCTAssertFalse(registry.setEndpoint(previous, scopeID: "ordinary", host: host, isPrivate: false))
+                if let oldStore {
+                    XCTAssertEqual(oldStore.proxyConfigurations.count, 1)
+                    XCTAssertFalse(oldStore.proxyConfigurations.first?.allowFailover ?? true)
+                } else {
+                    XCTAssertNil(registry.store(scopeID: "ordinary", host: host, isPrivate: false))
+                }
+                XCTAssertTrue(registry.setEndpoint(readyEndpoint(generation: 3, port: 1080),
+                                                   scopeID: "ordinary", host: host, isPrivate: false))
+                let recovered = try XCTUnwrap(attach(boundHost: hasExistingStore ? host : nil))
+                XCTAssertEqual(recovered.proxyConfigurations.count, 1)
+                XCTAssertFalse(recovered.proxyConfigurations.first?.allowFailover ?? true)
+            }
+        }
+    }
+
+    @MainActor
     func testFailedEndpointKeepsTheDedicatedStore() throws {
         let registry = AccessHostDataStoreRegistry()
         let host = try self.host("example.com")

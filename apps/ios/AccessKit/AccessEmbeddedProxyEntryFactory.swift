@@ -122,8 +122,13 @@ final class AccessEmbeddedProxyEntrySession {
             self.pendingStop = nil
         }
         try Task.checkCancellation()
-        if let listener, let identity, listener.isListening,
-           let actualPort = listener.boundPort, actualPort != 0, core.isRunning {
+        if let listener, let identity {
+            // Preserve an unhealthy listener's ownership until the publisher
+            // fences it and hands it to the document retirement path.
+            guard listener.isAccepting, let actualPort = listener.boundPort,
+                  actualPort != 0, core.isRunning else {
+                throw AccessSiteSessionError.runtimeNotReady
+            }
             return AccessProxyEntryPublisher.Provision(
                 endpoint: AccessManagedProxyEndpoint(
                     identity: identity,
@@ -269,7 +274,7 @@ final class AccessEmbeddedProxyEntrySession {
 
     var isRuntimeHealthy: Bool {
         guard let listener, identity != nil else { return false }
-        return listener.isListening && core.isRunning
+        return listener.isAccepting && core.isRunning
     }
 
     func shutdown(identity: String) {
@@ -416,8 +421,8 @@ private enum AccessEmbeddedInboundListener {
     case http(AccessHTTPInboundListener)
     case socks5(AccessSOCKS5InboundListener)
 
-    var isListening: Bool {
-        switch self { case .http(let value): value.isListening; case .socks5(let value): value.isListening }
+    var isAccepting: Bool {
+        switch self { case .http(let value): value.isListening; case .socks5(let value): value.isAccepting }
     }
     var boundPort: UInt16? {
         switch self { case .http(let value): value.boundPort; case .socks5(let value): value.boundPort }
