@@ -115,11 +115,15 @@ def signal_primary_group(pid, signum):
         os.killpg(pid, signum)
     except ProcessLookupError:
         pass
+    except PermissionError as error:
+        # Darwin can deny signalling a reserved group containing only a zombie.
+        return error
+    return None
 
 
 def stop_and_reap(pid, signal_worker):
     # Keep the leader unreaped to reserve both the primary PGID and session ID.
-    signal_primary_group(pid, signal.SIGTERM)
+    primary_problem = signal_primary_group(pid, signal.SIGTERM)
     escalate_at = time.monotonic() + TERM_GRACE
     confirm_by = escalate_at + CENSUS_TIMEOUT
     sent_helper_term = False
@@ -129,10 +133,11 @@ def stop_and_reap(pid, signal_worker):
         now = time.monotonic()
         force = now >= escalate_at
         if force:
-            signal_primary_group(pid, signal.SIGKILL)
+            primary_problem = signal_primary_group(pid, signal.SIGKILL) or primary_problem
         if now >= confirm_by:
             os.waitpid(pid, os.WNOHANG)
-            detail = f": {problem}" if problem else ""
+            failure = problem or primary_problem
+            detail = f": {failure}" if failure else ""
             raise OSError(errno.EBUSY, f"could not confirm unsigned archive session {pid} stopped{detail}")
 
         boundary = confirm_by if force else escalate_at
