@@ -403,7 +403,9 @@ test('paths select platforms and commit types select stage depth', () => {
       'scripts/release/test_verify_ios_dsyms.py', 'scripts/release/test_verify_signed_ios.py',
       'apps/ios/scripts/run-simulator-tests.sh', 'scripts/ci/tests/ios-release.test.mjs',
       'scripts/release/fixtures/safari-icon-xcode.png', '.github/ios-public-release-tag-ruleset.json',
-      'scripts/release/cloud-archive.py', 'scripts/release/test_cloud_archive.py']) {
+      'scripts/release/cloud-archive.py', 'scripts/release/test_cloud_archive.py',
+      'scripts/release/artifact-transport.py', 'scripts/release/product_delivery.py',
+      'scripts/release/test_native_signing_session.py']) {
       assert.deepEqual(route(pr(() => save(file, 'updated'), 'fix: repair iOS contract')), {...iosRoute, deep: false});
     }
     for (const file of [
@@ -411,6 +413,7 @@ test('paths select platforms and commit types select stage depth', () => {
       'apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/chromium.ico',
       'apps/browser/CHROMIUM_COMMIT',
       'apps/browser/overlay/chrome/browser/aegis/access/access_local_core_win_unittest.cc',
+      'apps/browser/overlay/chrome/browser/aegis/agent/aegis_agent_browsertest.cc',
     ]) {
       const onlyWindowsInput = pr(() => save(file, 'updated'), 'chore: update Windows input');
       assert.equal(onlyWindowsInput.windows, true, file);
@@ -433,7 +436,9 @@ test('paths select platforms and commit types select stage depth', () => {
         {...iosRoute, ios: false, linux: true, macos: true}, file);
     }
     const workspaceLock = pr(() => save('pnpm-lock.yaml', 'changed lockfile'), 'fix: refresh lock');
-    assert.deepEqual(route(workspaceLock), {...iosRoute, android: true, macos: true, deep: false});
+    assert.deepEqual(route(workspaceLock), {...iosRoute, android: true, macos: true, linux: true, deep: false});
+    const sharedBot = pr(() => save('scripts/ci/ios-delivery-bot.mjs', 'updated'), 'fix: update bot transport');
+    assert.deepEqual(route(sharedBot), {...iosRoute, macos: true, deep: false});
     const ripgrep = pr(() => save('scripts/ci/install-ripgrep.sh', 'new checksum'), 'fix: update ripgrep');
     assert.equal(ripgrep.linux, true);
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');

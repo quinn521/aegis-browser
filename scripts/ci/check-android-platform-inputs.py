@@ -6,6 +6,18 @@ import re
 import runpy
 
 
+def verify_gn_settings(contents, expected):
+    assignments = {name: [] for name in expected}
+    for line in contents.splitlines():
+        name, separator, value = line.partition("#")[0].partition("=")
+        name = name.strip()
+        if separator and name in assignments:
+            assignments[name].append(value.strip())
+    for name, value in expected.items():
+        if assignments[name] != [json.dumps(value)]:
+            raise ValueError(f"Invalid Android GN value for {name}")
+
+
 def main():
     candidate = runpy.run_path("apps/browser/scripts/ci/candidate.py")
     delivery = runpy.run_path("scripts/release/android-delivery.py")
@@ -18,14 +30,11 @@ def main():
     v8_patch_names = candidate["series"](patches / "v8")
 
     gn = Path("apps/browser/args/aegis-android.gn").read_text(encoding="utf-8")
-    for name, expected in (
-        ("target_os", "android"),
-        ("target_cpu", "arm64"),
-        ("chrome_public_manifest_package", delivery["archive"].APPLICATION_ID),
-    ):
-        actual = re.findall(rf'^\s*{name}\s*=\s*"([^"]+)"\s*$', gn, re.MULTILINE)
-        if actual != [expected]:
-            raise ValueError(f"Invalid Android GN value for {name}")
+    verify_gn_settings(gn, {
+        "target_os": "android",
+        "target_cpu": "arm64",
+        "chrome_public_manifest_package": delivery["archive"].APPLICATION_ID,
+    })
 
     print(json.dumps(
         {"androidPin": pin, "patches": len(patch_names), "v8Patches": len(v8_patch_names),

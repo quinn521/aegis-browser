@@ -80,6 +80,7 @@ test('the observational check is separate from quality and always summarizes its
     'test_verify_ios_archive.py', 'test_verify_signed_ios.py', 'test_verify_ios_dsyms.py',
     'test_development_signing.py', 'test_development_key_access.py',
     'test_verify_ipa.py', 'test_hosted_signing.py', 'test_cloud_archive.py',
+    'test_native_signing_session.py', 'test_artifact_transport.py', 'test_product_delivery.py',
   ]) assert.ok(ios.run.includes('scripts/release/' + fixture), fixture);
   assert.match(ios.run, /generate-tracker-rules\.mjs --check/u);
   assert.ok(workflow.jobs.ios.steps.some(step => step.run === 'pnpm install --frozen-lockfile --ignore-scripts'));

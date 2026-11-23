@@ -153,6 +153,11 @@ const iosReleaseContracts = new Set([
   'scripts/release/fixtures/safari-icon-xcode.png',
   'scripts/release/cloud-archive.py',
   'scripts/release/test_cloud_archive.py',
+  'scripts/release/artifact-transport.py',
+  'scripts/release/test_artifact_transport.py',
+  'scripts/release/product_delivery.py',
+  'scripts/release/test_product_delivery.py',
+  'scripts/release/test_native_signing_session.py',
   'scripts/release/cli.rb',
   'scripts/release/hosted-signing.py',
   'scripts/release/test_hosted_signing.py',
@@ -213,17 +218,11 @@ const selectsMacos = path => path.startsWith('.github/workflows/macos-')
   || (browserShellInput(path) && !path.toLowerCase().includes('android'))
   || nodeWorkspaceInputs.has(path)
   || /^scripts\/ci\/(?:run-|tests\/)?macos-/u.test(path)
+  || path === 'scripts/ci/ios-delivery-bot.mjs'
   || (path.startsWith('scripts/release/') && path.toLowerCase().includes('macos'));
-const windowsCandidateSources = new Set([
-  'apps/browser/overlay/chrome/browser/aegis/enhancements/enhancement_browsertest.cc',
-  'apps/browser/overlay/chrome/browser/aegis/access/access_core_log_disk_win_unittest.cc',
-  'apps/browser/overlay/chrome/browser/aegis/access/access_log_export_dialog_win_unittest.cc',
-  'apps/browser/overlay/chrome/browser/aegis/access/access_local_core_win_unittest.cc',
-  'apps/browser/overlay/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc',
-  'apps/browser/overlay/chrome/browser/aegis/access/access_private_publication_unittest.cc',
-]);
+const desktopTestSource = path => path.startsWith('apps/browser/overlay/') && path.endsWith('test.cc');
 const selectsWindows = path => path.endsWith('.ps1')
-  || windowsCandidateSources.has(path)
+  || desktopTestSource(path)
   || desktopPins.has(path)
   || candidateInputs.has(path)
   || path.startsWith('apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/')
@@ -237,6 +236,7 @@ const selectsWindows = path => path.endsWith('.ps1')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
 const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh'
   || path === 'scripts/ci/install-ripgrep.sh'
+  || nodeWorkspaceInputs.has(path)
   || path.startsWith('scripts/ci/platform-tests/kcov-')
   || browserShellInput(path);
 const selectsShared = path => path.startsWith('packages/core/')
