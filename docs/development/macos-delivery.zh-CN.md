@@ -26,7 +26,7 @@ node scripts/dev/compile-geosite.mjs --dat geosite.dat --psl effective_tld_names
 
 可选组为 `DEBIAN`、`DOUBAN`、`MEITUAN`。首次编译须使用尚不存在的输出路径。输出卷须启用所有权检查，目录及其上级目录须由当前用户或 root 所有，允许其他用户写入的目录须设置 sticky bit。发布时使用 macOS 随附的系统 Ruby 读取目录 ACL。ACL 须可读取，且仅可授予读取和访问权限。重复编译时，已有普通文件的字节完全一致即可直接成功。若内容不同，或输出路径指向符号链接等非普通文件，请为 `--output` 指定一个新路径。加 `--verify` 可重建并逐字节核对现有清单。历史 `DEBIAN` 清单使用 V2Fly `20261121064510` 的 `--dlc dlc.dat` 复现。每次必须明确指定一个来源，编译器离线校验原文件与完整 typed 规则的摘要。[固定分类与来源规格](https://github.com/quinn521/aegis-browser/blob/54ce210fdcaf242b2df3bc74a24d77a820075a5c/docs/superpowers/specs/2026-11-21-geosite-updates-design.md#官方来源与首批完整分类)
 
-命令入口可与预加载和自定义 loader 一起使用。具备入口标记的 Node 版本会根据实际选中的模块实例执行一次。Node 22.15–22.17 对通过启动参数显式预加载的编译器等待入口导入结束。较早运行时根据命令指定的编译器源文件执行一次，适用于 loader 将入口重写为同一源文件的别名。
+CLI 和自动化校验均使用上述命令直接启动。代码复用可按普通模块导入 `compileGroup` 和 `matchesHost`。
 
 在 `node --test scripts/dev/tests/compile-geosite.test.mjs` 前设置 `AEGIS_XRAY_GEOSITE_INPUT_DIR`（`geosite.dat`）和 `AEGIS_GEOSITE_INPUT_DIR`（`dlc.dat`、`effective_tld_names.dat`）可运行真实输入回归。已认证的分类规则和摘要随测试夹具提供。
 

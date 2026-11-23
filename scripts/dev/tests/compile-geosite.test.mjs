@@ -5,11 +5,10 @@ import {
   chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync,
   realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
-import Module from 'node:module';
 import {tmpdir} from 'node:os';
-import {basename, delimiter, dirname, join} from 'node:path';
+import {delimiter, dirname, join} from 'node:path';
 import test from 'node:test';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 import {compileGroup, matchesHost} from '../compile-geosite.mjs';
 
 const cli = fileURLToPath(new URL('../compile-geosite.mjs', import.meta.url));
@@ -139,30 +138,20 @@ test('network URL matching works without URL.parse', () => {
   assert.equal(result.stderr, '');
 });
 
-test('importing the compiler by a positional filesystem path is inert', (t) => {
-  const source = `void import(require('node:url').pathToFileURL(process.argv[1]));`;
-  const moduleSource = `import {pathToFileURL} from 'node:url'; await import(pathToFileURL(process.argv[1]));`;
-  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-import-test-'));
-  t.after(() => rmSync(dir, {recursive: true, force: true}));
-  const importer = join(dir, 'importer.mjs');
-  writeFileSync(importer, moduleSource.replace('argv[1]', 'argv[2]'));
-  for (const [args, stdout] of [
-    [['-e', source], ''],
-    [['--eval', source], ''],
-    [[`--eval=${source}`], ''],
-    [['--input-type=module', '-e', moduleSource], ''],
-    [['--input-type=module', '--eval', moduleSource], ''],
-    [['-p', source], 'undefined\n'],
-    [['--print', source], 'undefined\n'],
-    [['-pe', source], 'undefined\n'],
-    [[importer], ''],
-  ]) {
-    const result = spawnSync(process.execPath, [...args, cli, '--help'], {encoding: 'utf8'});
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, stdout, args[0]);
-    assert.equal(result.stderr, '');
-  }
+test('ordinary library imports are inert', () => {
+  const source = `
+    import assert from 'node:assert/strict';
+    import {pathToFileURL} from 'node:url';
+    const {compileGroup, matchesHost} = await import(pathToFileURL(process.argv[1]));
+    assert.equal(typeof compileGroup, 'function');
+    assert.equal(typeof matchesHost, 'function');
+  `;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source, cli, '--help'],
+    {encoding: 'utf8'});
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
 });
 
 test('the shebang invokes the CLI directly', {skip: process.platform === 'win32'}, () => {
@@ -172,173 +161,6 @@ test('the shebang invokes the CLI directly', {skip: process.platform === 'win32'
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
   assert.equal(result.stderr, '');
-});
-
-test('preloading the CLI runs the entry once and leaves syntax checks, eval and print inert', () => {
-  const run = (...args) => spawnSync(process.execPath, args, {encoding: 'utf8'});
-  const direct = run(cli, '--help');
-  assert.ifError(direct.error);
-  assert.equal(direct.status, 0, direct.stderr);
-  assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
-  assert.equal(direct.stderr, '');
-  const canceledCheck = run('--import', cli, '--check', '--no-check', cli, '--help');
-  assert.ifError(canceledCheck.error);
-  assert.equal(canceledCheck.status, 0, canceledCheck.stderr);
-  assert.equal(canceledCheck.stdout, direct.stdout);
-  assert.equal(canceledCheck.stderr, '');
-  const cliUrl = new URL('../compile-geosite.mjs', import.meta.url);
-  for (const preload of [cli, cliUrl.href + '?preload', cliUrl.href + '#preload', cliUrl.href + '?']) {
-    const result = run('--import', preload, cli, '--help');
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, direct.stdout, preload);
-    assert.equal(result.stderr, '');
-  }
-
-  for (const [flags, stdout] of [
-    [['--check'], ''], [['-c'], ''], [['--check=true'], ''],
-    [['--eval=0'], ''], [['-pe', '0'], '0\n'],
-  ]) {
-    const result = run('--import', cli, ...flags, cli);
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, stdout, flags[0]);
-    assert.equal(result.stderr, '');
-  }
-});
-
-test('a case-variant CLI path runs on a case-insensitive filesystem', (t) => {
-  const variant = join(dirname(cli), basename(cli, '.mjs').toUpperCase() + '.mjs');
-  if (!existsSync(variant)) {
-    t.skip('requires a case-insensitive filesystem');
-    return;
-  }
-  const result = spawnSync(process.execPath, [variant, '--help'], {encoding: 'utf8'});
-  assert.ifError(result.error);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
-  assert.equal(result.stderr, '');
-});
-
-test('preloaded aliases do not dispatch a different CLI entry', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-entry-test-'));
-  t.after(() => rmSync(dir, {recursive: true, force: true}));
-  const alias = join(dir, 'geosite.mjs');
-  symlinkSync(cli, alias, 'file');
-  const direct = spawnSync(process.execPath, [cli, '--help'], {encoding: 'utf8'});
-  assert.equal(direct.status, 0, direct.stderr);
-  for (const {flags, preload, entry, nodeOptions = '', preserveMain = '0'} of [
-    {flags: [], preload: cli, entry: alias},
-    {flags: ['--preserve-symlinks-main'], preload: cli, entry: alias},
-    {flags: [], preload: cli, entry: alias, nodeOptions: '"--preserve-symlinks-main"'},
-    {flags: ['--preserve_symlinks_main=false'], preload: cli, entry: alias},
-    {flags: ['--no-preserve-symlinks-main'], preload: cli, entry: alias, nodeOptions: '--preserve-symlinks-main'},
-    {flags: ['--preserve-symlinks'], preload: alias, entry: cli},
-    {flags: ['--preserve-symlinks', '--preserve-symlinks-main'], preload: alias, entry: alias},
-    {flags: [], entry: alias, preserveMain: '1'},
-    {flags: [], preload: cli, entry: alias, preserveMain: '1'},
-  ]) {
-    const preloads = preload ? ['--import', preload] : [];
-    const env = {...process.env, NODE_OPTIONS: nodeOptions, NODE_PRESERVE_SYMLINKS_MAIN: preserveMain};
-    const result = spawnSync(process.execPath, [...flags, ...preloads, entry, '--help'], {encoding: 'utf8', env});
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, direct.stdout, JSON.stringify({flags, preload, entry, nodeOptions, preserveMain}));
-    assert.equal(result.stderr, '');
-  }
-});
-
-test('URL-entry mode dispatches a preloaded compiler exactly once',
-  {skip: !process.allowedNodeEnvironmentFlags.has('--entry-url')}, () => {
-    const url = pathToFileURL(cli).href;
-    const run = (args, nodeOptions = '') => spawnSync(process.execPath, args, {
-      encoding: 'utf8', env: {...process.env, NODE_OPTIONS: nodeOptions, NODE_NO_WARNINGS: '1'},
-    });
-    const direct = run([cli, '--help']);
-    assert.equal(direct.status, 0, direct.stderr);
-    assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
-    for (const [flags, entry, preload, nodeOptions] of [
-      [['--entry-url'], url, url, ''],
-      [[], url, url, '--entry-url'],
-      [['--entry-url'], url + '?variant', url + '?variant', ''],
-      [['--entry-url', '--preserve-symlinks', '--preserve-symlinks-main'], url + '?', url + '?', ''],
-      [['--entry-url', '--preserve-symlinks', '--preserve-symlinks-main'], url + '#', url + '#', ''],
-      [['--entry-url', '--preserve-symlinks', '--no-preserve-symlinks-main'], url + '?', url + '?', ''],
-      [['--entry-url'], cli + '#variant', url + '#variant', ''],
-      [['--entry-url'], cli + '#section/..', url + '#section/..', ''],
-      [['--entry-url'], url, url + '?library', ''],
-      [['--no-entry-url'], cli, url, '--entry-url'],
-    ]) {
-      const result = run([...flags, '--import', preload, entry, '--help'], nodeOptions);
-      assert.ifError(result.error);
-      assert.equal(result.status, 0, result.stderr);
-      assert.equal(result.stdout, direct.stdout, JSON.stringify({flags, entry, preload, nodeOptions}));
-      assert.equal(result.stderr, '');
-    }
-  });
-
-test('loader rewrites dispatch the resolved CLI once', (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-loader-test-'));
-  t.after(() => rmSync(dir, {recursive: true, force: true}));
-  const url = pathToFileURL(cli).href;
-  const asynchronous = join(dir, 'async-loader.mjs');
-  const synchronous = join(dir, 'sync-loader.mjs');
-  const unrelated = join(dir, 'unrelated.mjs');
-  writeFileSync(unrelated, `
-    export {compileGroup, matchesHost} from ${JSON.stringify(url)};
-    console.log('unrelated entry');
-  `);
-  const rewrite = `
-    const compiler = ${JSON.stringify(url)};
-    function rewrite(result, context) {
-      if (context.parentURL !== undefined || result.url !== compiler) return result;
-      return {...result, url: process.env.AEGIS_GEOSITE_TEST_ENTRY || compiler + '?instrumented'};
-    }
-  `;
-  writeFileSync(asynchronous, rewrite + `
-    export async function resolve(specifier, context, nextResolve) {
-      return rewrite(await nextResolve(specifier, context), context);
-    }
-  `);
-  writeFileSync(synchronous, rewrite + `
-    import {registerHooks} from 'node:module';
-    registerHooks({
-      resolve(specifier, context, nextResolve) {
-        return rewrite(nextResolve(specifier, context), context);
-      },
-    });
-  `);
-  const run = (flags, overrides) => spawnSync(process.execPath, [...flags, cli, '--help'], {
-    encoding: 'utf8', env: {...process.env, NODE_NO_WARNINGS: '1', ...overrides},
-  });
-  const direct = run([]);
-  assert.equal(direct.status, 0, direct.stderr);
-  assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
-  for (const flags of [
-    ['--experimental-loader', asynchronous],
-    ['--experimental-loader', asynchronous, '--import', cli],
-  ]) {
-    const result = run(flags);
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, direct.stdout, JSON.stringify(flags));
-  }
-  if (typeof Module.registerHooks !== 'function') return;
-  for (const preloads of [
-    ['--import', cli],
-    ['--import', url + '?instrumented', '--import', cli],
-  ]) {
-    const result = run([...preloads, '--import', synchronous]);
-    assert.ifError(result.error);
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, direct.stdout, JSON.stringify(preloads));
-  }
-  const redirected = run(['--import', cli, '--import', synchronous], {
-    AEGIS_GEOSITE_TEST_ENTRY: pathToFileURL(unrelated).href,
-  });
-  assert.ifError(redirected.error);
-  assert.equal(redirected.status, 0, redirected.stderr);
-  assert.equal(redirected.stdout, 'unrelated entry\n');
 });
 
 test('domain rules cannot cover a nested registry or wildcard tenants', () => {
@@ -531,20 +353,16 @@ test(authenticXrayTest,
     const pslPath = join(pinnedInputs, 'effective_tld_names.dat');
     const legacyPath = join(pinnedInputs, 'dlc.dat');
     const output = join(dir, 'debian.json');
-    const run = ({script = cli, nodeFlags = [], source = '--dat', dat = datPath, list = pslPath,
+    const run = ({source = '--dat', dat = datPath, list = pslPath,
       groupName = 'DEBIAN', path = output, extra = []} = {}) =>
       spawnSync(process.execPath,
-        [...nodeFlags, script, source, dat, '--psl', list, '--group', groupName, '--output', path, ...extra],
+        [cli, source, dat, '--psl', list, '--group', groupName, '--output', path, ...extra],
         {encoding: 'utf8'});
-    const cliDirectoryLink = join(dir, 'dev');
-    symlinkSync(dirname(cli), cliDirectoryLink, 'dir');
-    const cliAlias = join(cliDirectoryLink, basename(cli));
-    for (const nodeFlags of [[], ['--import', cli]]) {
-      const missing = run({script: cliAlias, nodeFlags, extra: ['--verify']});
-      assert.equal(missing.status, 1, missing.stderr);
-      assert.match(missing.stderr, /ENOENT/);
-      assert.equal(lstatSync(output, {throwIfNoEntry: false}), undefined);
-    }
+    const missing = run({extra: ['--verify']});
+    assert.ifError(missing.error);
+    assert.equal(missing.status, 1, missing.stderr);
+    assert.match(missing.stderr, /ENOENT/);
+    assert.equal(existsSync(output), false);
 
     const raw = readFileSync(datPath);
     const suffixes = readFileSync(pslPath);
@@ -912,94 +730,11 @@ test('publication requires readable, nonmutating macOS ACLs',
 
     setACL('-N', shared);
     setACL('+a', 'group:everyone allow list,search,readattr,readextattr,readsecurity', shared);
-    const alias = join(dir, 'compiler.mjs');
-    symlinkSync(cli, alias, 'file');
-    const result = spawnSync(process.execPath, ['--preserve-symlinks-main', alias, ...args.slice(1), output],
-      {encoding: 'utf8'});
+    const result = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(readFileSync(output, 'utf8')).group, 'DEBIAN');
     assert.deepEqual(readdirSync(nested), ['catalogue.json']);
-  });
-
-test('a Node config file can select a preloaded URL entry for verification',
-  {skip: !pinnedInputs || !process.allowedNodeEnvironmentFlags.has('--entry-url')}, (t) => {
-    const help = spawnSync(process.execPath, ['--help'], {encoding: 'utf8'});
-    assert.ifError(help.error);
-    assert.equal(help.status, 0, help.stderr);
-    const configFlag = ['--experimental-config-file', '--config-file']
-      .find((flag) => help.stdout.includes(flag));
-    if (!configFlag) {
-      t.skip('requires Node startup configuration');
-      return;
-    }
-    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-node-config-test-'));
-    t.after(() => rmSync(dir, {recursive: true, force: true}));
-    const config = join(dir, 'entry-options.json');
-    const options = {nodeOptions: {'entry-url': true}};
-    writeFileSync(config, JSON.stringify(options));
-    const preload = pathToFileURL(cli).href + '?variant';
-    const output = join(dir, 'missing-catalogue.json');
-    const args = ['--import', preload, cli + '?variant', '--dlc', join(pinnedInputs, 'dlc.dat'),
-      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output', output, '--verify'];
-    const env = {...process.env, NODE_NO_WARNINGS: '1'};
-    delete env.NODE_OPTIONS;
-    const verifyMissing = (flags, input) => {
-      const result = spawnSync(process.execPath, [...flags, ...args], {cwd: dir, encoding: 'utf8', env, input});
-      assert.ifError(result.error);
-      assert.equal(result.status, 1, result.stderr);
-      assert.match(result.stderr, /ENOENT.*missing-catalogue\.json/);
-      assert.equal(existsSync(output), false);
-    };
-    verifyMissing([configFlag + '=' + config]);
-    const disabled = spawnSync(process.execPath, [configFlag + '=' + config, ...args], {
-      cwd: dir, encoding: 'utf8', env: {...env, NODE_OPTIONS: '--no-entry-url'},
-    });
-    assert.ifError(disabled.error);
-    assert.equal(disabled.status, 1, disabled.stderr);
-    assert.match(disabled.stderr, /ERR_MODULE_NOT_FOUND/);
-    assert.doesNotMatch(disabled.stderr, /^compile-geosite:/m);
-
-    const major = Number(process.versions.node.split('.')[0]);
-    if (major < 26) {
-      // Older runtimes consume a following config filename.
-      verifyMissing([configFlag, config]);
-    } else {
-      const versioned = join(dir, 'versioned-options.json');
-      writeFileSync(versioned, JSON.stringify({configs: [
-        {nodeVersion: major + 1, config: {nodeOptions: {'entry-url': false}}},
-        {nodeVersion: major, config: options},
-      ]}));
-      verifyMissing([configFlag + '=' + versioned]);
-      verifyMissing([configFlag + '=/dev/stdin'], JSON.stringify(options));
-    }
-    if (major === 22 && Number(process.versions.node.split('.')[1]) >= 23) {
-      const dotenv = join(dir, 'entry-options.env');
-      writeFileSync(dotenv, 'NODE_OPTIONS=--no-entry-url\n');
-      verifyMissing(['--env-file=' + dotenv, configFlag + '=' + config]);
-    }
-    const defaultFlag = '--experimental-default-config-file';
-    if (help.stdout.includes(defaultFlag) || configFlag === '--config-file') {
-      writeFileSync(join(dir, 'node.config.json'), JSON.stringify(options));
-      verifyMissing([help.stdout.includes(defaultFlag) ? defaultFlag : configFlag]);
-      if (major >= 26 && configFlag !== '--config-file') verifyMissing([configFlag]);
-    }
-  });
-
-test('direct verification runs before preload shutdown handlers',
-  {skip: !pinnedInputs && 'requires pinned inputs'}, (t) => {
-    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-shutdown-test-'));
-    t.after(() => rmSync(dir, {recursive: true, force: true}));
-    const preload = join(dir, 'shutdown.mjs');
-    writeFileSync(preload, "process.once('beforeExit', () => process.exit());\n");
-    const output = join(dir, 'missing-catalogue.json');
-    const args = ['--import', preload, cli, '--dlc', join(pinnedInputs, 'dlc.dat'),
-      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN',
-      '--output', output, '--verify'];
-    const result = spawnSync(process.execPath, args, {encoding: 'utf8'});
-    assert.ifError(result.error);
-    assert.equal(result.status, 1, result.stderr);
-    assert.match(result.stderr, /ENOENT.*missing-catalogue\.json/);
   });
 
 test('new publication requires a volume that respects ownership',

@@ -2,15 +2,13 @@
 
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {channel} from 'node:diagnostics_channel';
 import {
   closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync,
   rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
-import Module from 'node:module';
 import {isIP} from 'node:net';
-import {basename, dirname, join, sep} from 'node:path';
-import {domainToASCII, fileURLToPath, pathToFileURL, URL} from 'node:url';
+import {basename, dirname, join} from 'node:path';
+import {domainToASCII, fileURLToPath, URL} from 'node:url';
 import {parseArgs} from 'node:util';
 
 const MAX_DAT_BYTES = 16 * 1024 * 1024;
@@ -521,58 +519,21 @@ function main() {
   }
 }
 
-function fileSource(reference) {
+function isDirectEntry() {
+  if (typeof import.meta.main === 'boolean') return import.meta.main;
+
+  // Node 20 exposes the entry path in argv when it runs a file directly.
+  const entry = process.argv[1];
+  const evaluation = /^(?:--(?:eval|print)|-[ep]|-pe)(?:=|$)/u;
+  if (!entry || process.execArgv.some((arg) => evaluation.test(arg))) return false;
   try {
-    const path = realpathSync.native(fileURLToPath(reference()));
-    return statSync(path).isFile() ? path : undefined;
+    return realpathSync.native(entry) === realpathSync.native(fileURLToPath(import.meta.url));
   } catch {
-    return undefined;
+    return false;
   }
 }
 
-function urlReference(argument) {
-  return new URL(argument, pathToFileURL(process.cwd() + sep));
-}
-
-function argumentSources(argument) {
-  const sources = new Set([fileSource(() => pathToFileURL(argument))]);
-  if (process.allowedNodeEnvironmentFlags.has('--entry-url')) {
-    sources.add(fileSource(() => urlReference(argument)));
-  }
-  sources.delete(undefined);
-  return sources;
-}
-
-function nonEntryMode() {
-  const flags = process.execArgv.map((arg) => arg.split('=', 1)[0].replaceAll('_', '-'));
-  if (flags.some((arg) => ['--eval', '-e', '--print', '-p', '-pe', '-ep'].includes(arg))) return true;
-  const check = flags.findLast((arg) => ['--check', '-c', '--no-check'].includes(arg));
-  return check === '--check' || check === '-c';
-}
-
-function explicitlyPreloaded(source) {
-  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
-  const args = [...environment.map((value) => value.replaceAll('"', '')), ...process.execArgv];
-  for (let index = 0; index < args.length; index++) {
-    const option = args[index];
-    const flag = option.split('=', 1)[0];
-    if (!['--import', '--require', '-r'].includes(flag)) continue;
-    const reference = option.includes('=') ? option.slice(flag.length + 1) : args[++index];
-    if (reference && (fileSource(() => urlReference(reference)) === source ||
-        fileSource(() => pathToFileURL(reference)) === source)) return true;
-  }
-  return false;
-}
-
-// The loader reports the selected module namespace. A default token identifies
-// this instance without resolving its URL again or being copied by export *.
-const cliModule = Symbol('GeoSite compiler module');
-export default cliModule;
-
-function runCLIOnce() {
-  const invoked = Symbol.for('aegis.geosite.cli.invoked');
-  if (process[invoked]) return;
-  process[invoked] = true;
+if (isDirectEntry()) {
   try {
     main();
   } catch (error) {
@@ -580,35 +541,3 @@ function runCLIOnce() {
     process.exitCode = 1;
   }
 }
-
-function observeEntry() {
-  const completion = channel('tracing:module.import:asyncEnd');
-  const onImportEnd = ({parentURL, result}) => {
-    if (parentURL !== undefined) return;
-    completion.unsubscribe(onImportEnd);
-    if (result?.default === cliModule) runCLIOnce();
-  };
-  completion.subscribe(onImportEnd);
-}
-
-function dispatchCLI() {
-  if (import.meta.main === true) {
-    runCLIOnce();
-    return;
-  }
-  const argument = process.argv[1];
-  if (!argument || argument === '-' || nonEntryMode()) return;
-  const source = fileSource(() => import.meta.url);
-  const candidates = argumentSources(argument);
-  if (!candidates.has(source)) return;
-
-  // Modern Node identifies direct entry modules itself. Node 22.15–22.17
-  // can also trace an explicitly preloaded entry, but lacks the main marker.
-  if (import.meta.main === false || (typeof Module.registerHooks === 'function' && explicitlyPreloaded(source))) {
-    observeEntry();
-  } else if (candidates.size === 1) {
-    runCLIOnce();
-  }
-}
-
-dispatchCLI();
