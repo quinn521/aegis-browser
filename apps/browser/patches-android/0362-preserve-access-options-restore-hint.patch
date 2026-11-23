@@ -1,4 +1,4 @@
-From cd8517d2593931cc72e4a0f76477f017d0dbf189 Mon Sep 17 00:00:00 2001
+From b5b0eeb53d569ac9b9df0eb1a8f4d4a44032d28b Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Mon, 23 Nov 2026 18:39:12 +0800
 Subject: [PATCH] test(android): preserve restore hint and exercise Access
@@ -13,7 +13,7 @@ Subject: [PATCH] test(android): preserve restore hint and exercise Access
  create mode 100644 chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index ab7d55f791cdd07e2e396446202635b5426da142..9c13ad4fdf0c35643773150aed70ed1ab9a934d9 100644
+index ab7d55f791cdd07e2e396446202635b5426da142..60c7bb905c83f289da7329b721c642040119b86b 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 @@ -703,6 +703,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
@@ -37,15 +37,15 @@ index ab7d55f791cdd07e2e396446202635b5426da142..9c13ad4fdf0c35643773150aed70ed1a
  
          DefaultBrowserPromoUtils.getInstance().maybeRecordDeepLinkOutcome();
  
-@@ -3484,6 +3487,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3483,6 +3486,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     @Override
      protected @Nullable Bundle transformSavedInstanceStateForOnCreate(
              @Nullable Bundle savedInstanceState) {
++        mRestoreUnavailableAccessOptions =
++                AegisAccessOptionsFragment.hasUnavailableHint(savedInstanceState);
          if (!ProfileManager.isInitialized()) {
-+            mRestoreUnavailableAccessOptions =
-+                    AegisAccessOptionsFragment.hasUnavailableHint(savedInstanceState);
              // Pass null to Activity.onCreate() so that it doesn't automatically restore the
              // FragmentManager state before native is initialized, as restored fragments (such as
-             // SettingsPage) may depend on native/profile and crash during onCreate(). This is the
 @@ -5564,7 +5569,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.onSaveInstanceState")) {
              super.onSaveInstanceState(outState);
@@ -119,7 +119,7 @@ index 41bc9f0279988191c79f1402c90b92c9b6c1331a..cc94c9b075c9b426ae405305437e819d
      "src/org/chromium/chrome/browser/settings/SettingsPageSigninTest.java",
 diff --git a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..d7cf829c3d72a740196b42da66abe8afeaa5596f
+index 0000000000000000000000000000000000000000..b697c1e9da5b2da2692bcefd3a00264014ea3a16
 --- /dev/null
 +++ b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 @@ -0,0 +1,78 @@
@@ -137,9 +137,9 @@ index 0000000000000000000000000000000000000000..d7cf829c3d72a740196b42da66abe8af
 +import org.junit.Test;
 +import org.junit.runner.RunWith;
 +
++import org.chromium.base.ThreadUtils;
 +import org.chromium.base.test.util.CriteriaHelper;
 +import org.chromium.base.test.util.Manual;
-+import org.chromium.base.test.util.TestThreadUtils;
 +import org.chromium.chrome.R;
 +import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 +import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
@@ -161,10 +161,10 @@ index 0000000000000000000000000000000000000000..d7cf829c3d72a740196b42da66abe8af
 +                mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
 +        var activity = mActivityRule.getActivity();
 +        WebContents contents =
-+                TestThreadUtils.runOnUiThreadBlocking(
++                ThreadUtils.runOnUiThreadBlocking(
 +                        () -> activity.getActivityTab().getWebContents());
 +        AegisAccessOptionsFragment editor =
-+                TestThreadUtils.runOnUiThreadBlocking(
++                ThreadUtils.runOnUiThreadBlocking(
 +                        () -> {
 +                            assertTrue(
 +                                    activity.onMenuOrKeyboardAction(
@@ -178,7 +178,7 @@ index 0000000000000000000000000000000000000000..d7cf829c3d72a740196b42da66abe8af
 +                                    .findFirst()
 +                                    .orElseThrow();
 +                        });
-+        assertTrue(TestThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
++        assertTrue(ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
 +        CriteriaHelper.pollUiThread(
 +                () -> hasMessage(editor, R.string.aegis_access_options_read_only),
 +                "The admitted editor must visibly display its read-only state.");
