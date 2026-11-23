@@ -76,6 +76,12 @@ public enum AccessGeoSiteAdmission {
         public let expiresAt: Date
         public let suffixListSHA256: String
         public let overseas: AccessOverseasCatalogue?
+        public let overseasSource: OverseasSource?
+    }
+
+    public struct OverseasSource: Sendable {
+        public let database: Data
+        public let checksum: Data
     }
 
     private struct ReleaseJSON: Decodable {
@@ -155,7 +161,8 @@ public enum AccessGeoSiteAdmission {
         }
         return Candidate(receipt: receipt, catalogue: AccessGeoSiteCatalogue(tag: receipt.tag,
             publishedAt: receipt.publishedAt, rawSHA256: digest, groups: groups), categoryCount: groupCount,
-            expiresAt: expiry, suffixListSHA256: suffixSHA, overseas: overseas)
+            expiresAt: expiry, suffixListSHA256: suffixSHA, overseas: overseas,
+            overseasSource: overseas.map { _ in OverseasSource(database: database, checksum: checksum) })
     }
 
     /// Rebuilds one complete group with the same typed contract used by wire

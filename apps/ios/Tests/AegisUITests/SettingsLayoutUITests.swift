@@ -455,23 +455,65 @@ final class SettingsLayoutUITests: XCTestCase {
         capture("加速分类-批准新增范围并重新启动", app)
     }
 
-    func testOverseasAccelerationOffersLocalListImportAndDefaultsOff() {
+    func testOverseasSettingsRequiresExplicitConfirmationAndRestoresChoice() throws {
+        guard ProcessInfo.processInfo.environment["AEGIS_OVERSEAS_UI_READY"] == "1" else {
+            throw XCTSkip("The hosted overseas snapshot fixture must be staged first")
+        }
         let app = XCUIApplication()
-        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments = ["--ui-testing", "--ui-testing-settings", "--ui-testing-overseas-fixture",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchEnvironment["AEGIS_ACCESS_LOCAL_V2RAY_CONFIG"] = ""
         app.launch()
         defer { app.terminate() }
-
-        XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
-        let entry = app.buttons["overseas-acceleration-link"]
-        XCTAssertTrue(reveal(entry, app))
-        XCTAssertEqual(entry.label, "国外加速")
-        entry.tap()
-        XCTAssertTrue(app.navigationBars["国外加速"].waitForExistence(timeout: 5))
-        let toggle = app.switches["overseas-acceleration-toggle"]
-        XCTAssertTrue(reveal(toggle, app))
-        XCTAssertEqual(toggle.value as? String, "0")
-        XCTAssertFalse(toggle.isEnabled)
-        XCTAssertTrue(reveal(app.buttons["overseas-acceleration-import"], app))
+        func open() {
+            XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
+            let domestic = app.buttons["domestic-acceleration-link"]
+            XCTAssertTrue(reveal(domestic, app))
+            let domesticPage = app.navigationBars["国内加速"]
+            // The first settings update after launch can recreate the link.
+            domestic.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+            if !domesticPage.waitForExistence(timeout: 3), domestic.exists, domestic.isHittable {
+                domestic.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+            }
+            XCTAssertTrue(domesticPage.waitForExistence(timeout: 5))
+            let smart = app.buttons["website-acceleration-smart"]
+            XCTAssertTrue(smart.waitForExistence(timeout: 5))
+            if !smart.isSelected { smart.tap() }
+            let overseas = app.buttons["overseas-acceleration-link"]
+            XCTAssertTrue(reveal(overseas, app))
+            overseas.tap()
+            XCTAssertTrue(app.navigationBars["海外加速（针对大陆地区）"].waitForExistence(timeout: 5))
+        }
+        open()
+        let disabled = app.staticTexts["overseas-disabled"]
+        XCTAssertTrue(disabled.exists)
+        let ai = app.switches["overseas-category-AI"]
+        XCTAssertTrue(reveal(ai, app))
+        XCTAssertEqual(ai.value as? String, "0")
+        ai.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(ai.value as? String, "1")
+        let review = app.buttons["overseas-review-choice"]
+        XCTAssertTrue(reveal(review, app))
+        review.tap()
+        let confirm = app.buttons["overseas-confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        app.buttons["取消"].tap()
+        XCTAssertTrue(reveal(disabled, app))
+        XCTAssertTrue(reveal(review, app))
+        review.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        let disable = app.buttons["overseas-disable"]
+        XCTAssertTrue(disable.waitForExistence(timeout: 10))
+        app.terminate()
+        app.launch()
+        open()
+        XCTAssertTrue(disable.waitForExistence(timeout: 10))
+        XCTAssertTrue(reveal(ai, app))
+        XCTAssertEqual(ai.value as? String, "1")
+        XCTAssertTrue(reveal(disable, app))
+        disable.tap()
+        XCTAssertTrue(disabled.waitForExistence(timeout: 5))
     }
 
     func testWebsiteAccelerationModesInDevSettings() {

@@ -2,7 +2,6 @@ import AgentKit
 import AccessKit
 import BrowserKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ImageOcrConfiguration: Codable {
     enum Mode: String, CaseIterable, Codable {
@@ -69,10 +68,6 @@ struct BrowserSettingsView: View {
                             if let current = browser.activeTab { DomesticAccelerationSettingsView(tab: current) }
                         }
                         .accessibilityIdentifier("domestic-acceleration-link")
-                        NavigationLink("国外加速") {
-                            if let current = browser.activeTab { OverseasAccelerationSettingsView(tab: current) }
-                        }
-                        .accessibilityIdentifier("overseas-acceleration-link")
                     }
                     Button("打开系统 App 设置") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -151,88 +146,6 @@ struct BrowserSettingsView: View {
 }
 
 
-private struct OverseasAccelerationSettingsView: View {
-    @EnvironmentObject private var browser: BrowserSession
-    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
-    @State private var importingList = false
-    @State private var importFailed = false
-    @State private var importTask: Task<Void, Never>?
-    let tab: BrowserTab
-
-    private var enabled: Binding<Bool> {
-        Binding(
-            get: { hostStores.overseasAccelerationEnabled },
-            set: { hostStores.setOverseasAccelerationEnabled($0, for: tab) }
-        )
-    }
-
-    var body: some View {
-        Form {
-            if browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) {
-                Section {
-                    Toggle("自动加速清单内网站", isOn: enabled)
-                        .disabled(hostStores.overseasAccelerationHostCount == 0 && !hostStores.overseasAccelerationEnabled)
-                        .accessibilityIdentifier("overseas-acceleration-toggle")
-                    Button("导入域名清单", systemImage: "square.and.arrow.down") { importingList = true }
-                        .disabled(importTask != nil)
-                        .accessibilityIdentifier("overseas-acceleration-import")
-                    if hostStores.overseasAccelerationHostCount > 0 {
-                        LabeledContent("域名数量", value: hostStores.overseasAccelerationHostCount.formatted())
-                    }
-                } footer: {
-                    if hostStores.overseasAccelerationHostCount == 0 {
-                        Text("请导入现有的国外加速域名清单。")
-                    } else {
-                        Text("开启后，清单网站及页面内资源会使用 Access。逐站选择优先。")
-                    }
-                    if !hostStores.offersLocationService { Text("加速服务未配置。") }
-                }
-            }
-        }
-        .localizedNavigationTitle("国外加速")
-        .fileImporter(isPresented: $importingList, allowedContentTypes: [.plainText], onCompletion: importList)
-        .onDisappear {
-            importTask?.cancel()
-            importTask = nil
-        }
-        .alert("域名清单无法验证。", isPresented: $importFailed) {
-            Button("确定", role: .cancel) {}
-        }
-    }
-
-    private func importList(_ result: Result<URL, Error>) {
-        guard browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) else { return }
-        guard case .success(let url) = result else {
-            importFailed = true
-            return
-        }
-        let read = Task.detached(priority: .userInitiated) { try Self.readList(at: url) }
-        importTask = Task { @MainActor in
-            let result = await read.result
-            guard !Task.isCancelled else { return }
-            importTask = nil
-            guard browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) else { return }
-            switch result {
-            case .success(let data):
-                importFailed = !hostStores.installOverseasAccelerationList(data, for: tab)
-            case .failure:
-                importFailed = true
-            }
-        }
-    }
-
-    private nonisolated static func readList(at url: URL) throws -> Data {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
-            throw CocoaError(.fileReadUnsupportedScheme)
-        }
-        let file = try FileHandle(forReadingFrom: url)
-        defer { try? file.close() }
-        return try file.read(upToCount: AccessOverseasRuleList.maximumInputBytes + 1) ?? Data()
-    }
-}
-
 // 功能名称与桌面一致，使用 iOS 的导航、触控尺寸和动态字号。
 private struct DomesticAccelerationSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
@@ -247,6 +160,10 @@ private struct DomesticAccelerationSettingsView: View {
                     modeButton(.smart, title: "智能", id: "website-acceleration-smart")
                     if let categories = hostStores.websiteCategories(for: tab) {
                         WebsiteCategoriesLink(tab: tab, selected: categories.selected)
+                    }
+                    if hostStores.geoSiteCache != nil, hostStores.websiteAccelerationMode == .smart {
+                        NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
+                            .accessibilityIdentifier("overseas-acceleration-link")
                     }
                 } header: {
                     Text("网站加速")

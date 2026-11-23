@@ -1,7 +1,9 @@
 import AccessKit
 import CryptoKit
+import Darwin
 import Foundation
 import XCTest
+@testable import Aegis
 
 final class AccessGeoSiteAdmissionTests: XCTestCase {
     typealias Vector = AccessGeoSiteTestVector
@@ -174,21 +176,9 @@ final class AccessGeoSiteAdmissionTests: XCTestCase {
 
 /// Select this suite explicitly with the geosite-official-data native fixture.
 final class AccessGeoSiteFullFrozenAdmissionTests: XCTestCase {
+    @MainActor
     func testFullFrozenOfficialDatabase() async throws {
-        guard let value = ProcessInfo.processInfo.environment["AEGIS_GEOSITE_VECTOR"] else {
-            throw XCTSkip("Run this suite with the geosite-official-data fixture")
-        }
-        let base = try XCTUnwrap(URL(string: value))
-        XCTAssertEqual(base.host, "127.0.0.1")
-        func fetch(_ name: String) async throws -> Data {
-            let (data, response) = try await URLSession.shared.data(from: base.appendingPathComponent(name))
-            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
-            return data
-        }
-        let metadata = try await fetch("metadata.json")
-        let database = try await fetch("geosite.dat")
-        let checksum = try await fetch("geosite.dat.sha256sum")
-        XCTAssertEqual(database.count, 7_750_066)
+        let (metadata, database, checksum) = try await AccessGeoSiteTestVector.frozenOfficialAssets()
         let candidate = try AccessGeoSiteAdmission.admit(metadata: metadata, database: database, checksum: checksum,
                                                          now: AccessGeoSiteTestVector.now)
         XCTAssertEqual(candidate.categoryCount, 1572)
@@ -209,13 +199,205 @@ final class AccessGeoSiteFullFrozenAdmissionTests: XCTestCase {
         XCTAssertEqual(overseas.counts.unsupported, 13)
         XCTAssertEqual(overseas.counts.exclusions, 32)
         XCTAssertEqual(overseas.hosts.values.reduce(0) { $0 + $1.count }, 30)
-        XCTAssertEqual(overseas.hosts[.development],
-            ["github.com", "gist.github.com", "raw.githubusercontent.com", "hub.docker.com"])
+        XCTAssertEqual(overseas.hosts, [
+            .video: ["www.youtube.com", "www.netflix.com", "vimeo.com", "www.twitch.tv"],
+            .ai: ["chatgpt.com", "claude.ai", "gemini.google.com", "www.perplexity.ai"],
+            .web: ["www.google.com", "duckduckgo.com", "search.yahoo.com"],
+            .social: ["x.com", "www.instagram.com", "t.me", "discord.com"],
+            .news: ["www.bbc.com", "www.nytimes.com", "www.reuters.com", "www.dw.com"],
+            .development: ["github.com", "gist.github.com", "raw.githubusercontent.com", "hub.docker.com"],
+            .reference: ["zh.wikipedia.org", "scholar.google.com", "archive.org"],
+            .cloud: ["drive.google.com", "docs.google.com", "www.dropbox.com", "onedrive.live.com"],
+        ])
+        try await checkOverseasColdCache(combined, name: "official DAT", positive: "ampproject.org",
+                                         exception: "www.ampproject.org")
+    }
+
+    @MainActor
+    func testOverseasColdCacheAtSourceRecordLimits() async throws {
+        typealias Vector = AccessGeoSiteTestVector
+        let positives = [Vector.rule(2, "example.com")]
+            + (1..<8_192).map { Vector.rule(3, "positive-\($0).example.net") }
+        let exclusions = (0..<512).map { Vector.rule(2, "exception-\($0).example.com") }
+        let data = Vector.group("GFWLIST-CN", rules: positives)
+            + Vector.group("GFWLIST-CN-EXCLUDE", rules: exclusions)
+        let candidate = try Vector.admit(data, newer: true, includeOverseas: true)
+        XCTAssertEqual(candidate.overseas?.counts.admitted, 8_192)
+        XCTAssertEqual(candidate.overseas?.counts.exclusions, 512)
+        try await checkOverseasColdCache(candidate, name: "source rule limits", positive: "example.com",
+                                         exception: "exception-0.example.com")
+    }
+
+    @MainActor
+    private func checkOverseasColdCache(_ candidate: AccessGeoSiteAdmission.Candidate, name: String,
+                                        positive positiveHost: String, exception exceptionHost: String) async throws {
+        let fixture = AccessGeoSiteCacheTests.Fixture()
+        defer { fixture.clean() }
+        let cache = fixture.cache()
+        await cache.restore(migrating: .init(mode: .smart, categories: []))
+        try cache.requestOverseasPreview()
+        try await cache.apply(candidate, using: XCTUnwrap(cache.updateContext()))
+        let choice = AccessOverseasSelection(enabled: true, mode: .all)
+        try await cache.confirmOverseas(cache.overseasConfirmation(for: choice)) { true }
+        let cold = fixture.cache()
+        let clock = ContinuousClock()
+        let started = clock.now
+        await cold.restore()
+        let load = started.duration(to: clock.now)
+        let active = cold.runtimeView().overseas
+        XCTAssertEqual(active.selection, choice)
+        let positive = try XCTUnwrap(URL(string: "https://\(positiveHost)/"))
+        let exception = try XCTUnwrap(URL(string: "https://\(exceptionHost)/"))
+        XCTAssertEqual(active.match(positive), .managed)
+        XCTAssertEqual(active.match(exception), .original)
+        let files = try FileManager.default.contentsOfDirectory(at: fixture.storage.directory, includingPropertiesForKeys: [.fileSizeKey])
+        let sizes = try files.filter { $0.lastPathComponent.hasPrefix("overseas-") && $0.pathExtension == "json" }
+            .map { try XCTUnwrap($0.resourceValues(forKeys: [.fileSizeKey]).fileSize) }
+        XCTAssertEqual(sizes.count, 2)
+        XCTAssertTrue(sizes.allSatisfy { (AccessGeoSiteStorage.blobLimit + 1...AccessGeoSiteStorage.overseasBlobLimit).contains($0) })
+        var samples: [Duration] = []
+        var matches = 0
+        for _ in 0..<1_000 {
+            let start = clock.now
+            if active.match(positive) == .managed { matches += 1 }
+            _ = active.match(exception)
+            samples.append(start.duration(to: clock.now))
+        }
+        XCTAssertEqual(matches, 1_000)
+        var usage = rusage()
+        XCTAssertEqual(getrusage(RUSAGE_SELF, &usage), 0)
+        print("Overseas \(name): blob sizes \(sizes.sorted()) bytes, offline cold restore \(load), hot hit+exception pair p95 \(samples.sorted()[949]), app test process peak RSS \(usage.ru_maxrss) bytes")
+        fixture.clock.advance(by: 8 * 86_400)
+        XCTAssertEqual(cold.runtimeView().overseas.match(positive), .indeterminate)
+        XCTAssertEqual(cold.runtimeView().overseas.match(exception), .original)
     }
 }
 
 final class AccessOverseasAdmissionTests: XCTestCase {
     private typealias Vector = AccessGeoSiteTestVector
+
+    func testExactCategoryDeltaOnlyReportsNewlyReachableHosts() throws {
+        let mother = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, "google.com"), Vector.rule(3, "chatgpt.com")])
+        let topic = Vector.group("GOOGLE-GEMINI", rules: [Vector.rule(3, "gemini.google.com")])
+        let oldExceptions = Vector.group("GFWLIST-CN-EXCLUDE", rules: (1...33).map { Vector.rule(2, "x-\($0).example.com") })
+        let prior = try XCTUnwrap(Vector.admit(mother + oldExceptions + topic, includeOverseas: true).overseas)
+        let newTopic = Vector.group("OPENAI", rules: [Vector.rule(3, "chatgpt.com")])
+        let newExceptions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [])
+        let offered = try XCTUnwrap(Vector.admit(mother + newExceptions + topic + newTopic, includeOverseas: true).overseas)
+        let previous = try prior.policy(for: .categories([.ai]))
+        let delta = try offered.policy(for: .categories([.ai])).expansion(over: previous)
+        XCTAssertEqual(delta.rules.map(\.value), ["chatgpt.com"])
+        XCTAssertEqual(delta.removedExclusions.count, 0)
+    }
+
+    func testAllModeDoesNotChargeNarrowerExceptionsThatStillCoverEveryPositiveHost() throws {
+        let exact = (1...33).map { "x.s\($0).example.net" }
+        let oldRules = [Vector.rule(2, "example.com")] + exact.map { Vector.rule(3, $0) }
+        let oldExceptions = (1...33).map { Vector.rule(2, "s\($0).example.net") }
+        let newExceptions = exact.map { Vector.rule(3, $0) }
+        func policy(_ rules: [Data], exclusions: [Data]) throws -> AccessOverseasCatalogue.Policy {
+            let data = Vector.group("GFWLIST-CN", rules: rules) + Vector.group("GFWLIST-CN-EXCLUDE", rules: exclusions)
+            return try XCTUnwrap(Vector.admit(data, includeOverseas: true).overseas).policy(for: .all)
+        }
+        let old = try policy(oldRules, exclusions: oldExceptions)
+        let offered = try policy(oldRules + [Vector.rule(3, "reachable.example.org")], exclusions: newExceptions)
+        let delta = offered.expansion(over: old)
+        XCTAssertEqual(delta.rules.map(\.value), ["reachable.example.org"])
+        XCTAssertTrue(delta.removedExclusions.isEmpty)
+        let root = "root.example.org"
+        let withRoot = oldRules + [Vector.rule(3, root)]
+        let excluded = try policy(withRoot, exclusions: oldExceptions + [Vector.rule(2, root)])
+        let admitted = try policy(withRoot, exclusions: newExceptions)
+        XCTAssertEqual(admitted.expansion(over: excluded).removedExclusions.map(\.value), [root])
+
+        let keep = Vector.rule(3, "keep.example.org")
+        let rootExclusion = Vector.rule(2, "example.com")
+        let oldKeywords = (1...33).map { Vector.rule(0, "blocked-\($0)") }
+        let raw = [Vector.rule(2, "example.com"), keep]
+        let finiteOld = try policy(raw, exclusions: [rootExclusion] + oldKeywords)
+        let finiteNew = try policy(raw + [Vector.rule(3, "new.example.org")], exclusions: [rootExclusion])
+        XCTAssertEqual(finiteNew.expansion(over: finiteOld).rules.map(\.value), ["new.example.org"])
+        XCTAssertTrue(finiteNew.expansion(over: finiteOld).removedExclusions.isEmpty)
+
+        let suffix = Vector.rule(2, "example.com")
+        let suffixOld = try policy([suffix], exclusions: oldKeywords)
+        let suffixNew = try policy([suffix, Vector.rule(2, "example.net")], exclusions: [Vector.rule(0, ".example.com")])
+        let apex = try XCTUnwrap(suffixNew.intersection(with: suffixOld))
+        XCTAssertEqual(apex.rules.map(\.value), ["example.com"])
+        XCTAssertEqual(apex.rules.map(\.kind), [.full])
+        for previous in [suffixOld, apex] {
+            let expansion = suffixNew.expansion(over: previous)
+            XCTAssertEqual(expansion.rules.map(\.value), ["example.net"])
+            XCTAssertTrue(expansion.removedExclusions.isEmpty)
+        }
+
+        let shared = (1...511).map { Vector.rule(2, "excluded-\($0).example.org") }
+        let mixedOld = try policy(raw, exclusions: shared + [Vector.rule(2, "old.example.org")])
+        let mixedNew = try policy([Vector.rule(2, "example.net"), keep],
+                                  exclusions: shared + [Vector.rule(2, "new.example.org")])
+        XCTAssertEqual(try XCTUnwrap(mixedNew.intersection(with: mixedOld)).rules.map(\.value), ["keep.example.org"])
+
+        let retainedDomain = Vector.rule(2, "example.com")
+        let domainOld = try policy([retainedDomain], exclusions: shared + [Vector.rule(2, "old.example.org")])
+        let domainNew = try policy([retainedDomain, Vector.rule(2, "example.net")],
+                                   exclusions: shared + [Vector.rule(2, "new.example.org")])
+        let intersection = try XCTUnwrap(domainNew.intersection(with: domainOld))
+        XCTAssertEqual(intersection.rules.map(\.value), ["example.com"])
+        XCTAssertTrue(intersection.exclusions.isEmpty)
+
+        let blockedExact = (1...17).map { Vector.rule(3, "formerly-blocked-\($0).example.org") }
+        let beforeRemoval = try policy([retainedDomain] + blockedExact, exclusions: blockedExact)
+        let afterRemoval = try policy([retainedDomain] + blockedExact, exclusions: [])
+        let retained = try XCTUnwrap(afterRemoval.intersection(with: beforeRemoval))
+        let newlyReachable = afterRemoval.expansion(over: retained)
+        XCTAssertEqual(newlyReachable.rules.count, 17)
+        XCTAssertTrue(newlyReachable.removedExclusions.isEmpty)
+
+        let redundant = (1...510).map { Vector.rule(3, "child-\($0).blocked.example.com") }
+        let deniedDomain = Vector.rule(2, "blocked.example.com")
+        let domainAccounts = [deniedDomain] + redundant
+        let unionOld = try policy([retainedDomain], exclusions: domainAccounts + [Vector.rule(3, "old.blocked.example.com")])
+        let unionNew = try policy([retainedDomain, Vector.rule(2, "example.net")],
+                                  exclusions: domainAccounts + [Vector.rule(3, "new.blocked.example.com")])
+        let compressed = try XCTUnwrap(unionNew.intersection(with: unionOld))
+        XCTAssertEqual(compressed.exclusions.map(\.value), ["blocked.example.com"])
+
+        let redundantHosts = (1...32).map { Vector.rule(3, "new-\($0).example.com") }
+        let baseline = try policy([Vector.rule(2, "example.org")], exclusions: [])
+        let expanded = try policy([Vector.rule(2, "example.org"), retainedDomain] + redundantHosts, exclusions: [])
+        XCTAssertEqual(expanded.expansion(over: baseline).rules.map(\.value), ["example.com"])
+
+        let permittedChild = Vector.rule(2, "sub.example.com")
+        let previousExclusions = (1...33).map { Vector.rule(2, "blocked-\($0).sub.example.com") }
+        let childPolicy = try policy([permittedChild], exclusions: previousExclusions)
+        let parentPolicy = try policy([retainedDomain], exclusions: [])
+        let narrower = try XCTUnwrap(parentPolicy.intersection(with: childPolicy))
+        let lift = parentPolicy.expansion(over: narrower)
+        XCTAssertEqual(lift.rules.map(\.value), ["example.com"])
+        XCTAssertEqual(lift.removedExclusions.count, 33)
+
+        let blockChildren = Vector.rule(0, ".example.com")
+        let unrelatedKeywords = (1...33).map { Vector.rule(0, "k\($0)") }
+        let apexBefore = try policy([retainedDomain], exclusions: [blockChildren] + unrelatedKeywords)
+        let apexAfter = try policy([retainedDomain, Vector.rule(3, "example.net")], exclusions: [blockChildren])
+        let apexDelta = apexAfter.expansion(over: try XCTUnwrap(apexAfter.intersection(with: apexBefore)))
+        XCTAssertEqual(apexDelta.rules.map(\.value), ["example.net"])
+        XCTAssertTrue(apexDelta.removedExclusions.isEmpty)
+
+        let combinedHosts = (1...33).map { "x\($0).example.com" }
+        let suffixExclusions = try policy([retainedDomain], exclusions: combinedHosts.map { Vector.rule(2, $0) })
+        let equivalent = try policy([retainedDomain, Vector.rule(3, "new.example.net")],
+            exclusions: combinedHosts.map { Vector.rule(3, $0) } + [Vector.rule(0, ".x")])
+        let combinedDelta = equivalent.expansion(over: suffixExclusions)
+        XCTAssertEqual(combinedDelta.rules.map(\.value), ["new.example.net"])
+        XCTAssertTrue(combinedDelta.removedExclusions.isEmpty)
+
+        let olderHosts = (1...4_200).map { Vector.rule(3, "old-\($0).example.com") }
+        let newerHosts = (1...4_200).map { Vector.rule(3, "new-\($0).example.com") }
+        let earlier = try policy([retainedDomain] + olderHosts, exclusions: [])
+        let later = try policy([retainedDomain, Vector.rule(2, "example.net")] + newerHosts, exclusions: [])
+        XCTAssertEqual(try XCTUnwrap(later.intersection(with: earlier)).rules.map(\.value), ["example.com"])
+    }
 
     func testCuratedRulesUseOnlyApprovedHTTPSHostsAndApplyBothExclusionTypes() throws {
         let positive = Vector.group("GFWLIST-CN", rules: [
@@ -293,6 +475,15 @@ final class AccessOverseasAdmissionTests: XCTestCase {
         }
     }
 
+    func testOversizedPositiveHostnameIsRejectedWithoutIndexingItsAncestors() throws {
+        let name = String(repeating: "label.", count: 4_096) + "example.com"
+        let positive = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, name), Vector.rule(2, "google.com")])
+        let exclusions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [])
+        let catalogue = try XCTUnwrap(Vector.admit(positive + exclusions, includeOverseas: true).overseas)
+        XCTAssertEqual(catalogue.counts.admitted, 1)
+        XCTAssertEqual(catalogue.counts.rejected, 1)
+    }
+
     func testLongUnsupportedPositivePatternHasItsOwnDisposition() throws {
         let pattern = "^" + String(repeating: "ab", count: 200) + "$"
         let positive = Vector.group("GFWLIST-CN", rules: [
@@ -342,6 +533,27 @@ final class AccessOverseasAdmissionTests: XCTestCase {
 
 enum AccessGeoSiteTestVector {
     static let now = Date(timeIntervalSince1970: 1_795_219_200)
+
+    static func frozenOfficialAssets() async throws -> (metadata: Data, database: Data, checksum: Data) {
+        guard let value = ProcessInfo.processInfo.environment["AEGIS_GEOSITE_VECTOR"] else {
+            throw XCTSkip("Run this test with the geosite-official-data fixture")
+        }
+        let base = try XCTUnwrap(URL(string: value).flatMap { url in
+            url.scheme == "http" && url.host == "127.0.0.1" ? url : nil
+        }, "Expected the local frozen GeoSite fixture")
+        func fetch(_ name: String) async throws -> Data {
+            let (data, response) = try await URLSession.shared.data(from: base.appendingPathComponent(name))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            return data
+        }
+        let metadata = try await fetch("metadata.json")
+        let database = try await fetch("geosite.dat")
+        let checksum = try await fetch("geosite.dat.sha256sum")
+        XCTAssertEqual(database.count, 7_750_066)
+        XCTAssertEqual(sha(database), AccessGeoSiteCatalogue.bundled.rawSHA256)
+        return (metadata, database, checksum)
+    }
+
     // Complete projected records from XTLS standard geosite.dat 20261120235103.
     // The full frozen source is tested separately through the native fixture.
     static let selectedProjection = Data(base64Encoded:

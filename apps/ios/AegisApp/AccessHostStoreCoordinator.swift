@@ -51,7 +51,21 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     // Legacy default privacy and recovery need their own authorization.
     private var websiteOnlyEndpoints: Set<AccessHostStoreKey> = []
     // Bindings selected by a website route without an existing direct legacy binding.
-    private var websiteBindings: [String: AccessHostStoreKey] = [:]
+    private struct WebsiteBinding {
+        let key: AccessHostStoreKey
+        let overseasGrant: AccessGeoSiteCache.OverseasView.Grant?
+        let reusesLegacyStore: Bool
+    }
+    private var websiteBindings: [String: WebsiteBinding] = [:]
+    private struct OverseasNavigationGrant {
+        let destination: URL
+        let sequence: UInt64
+        let key: AccessHostStoreKey
+        let store: ObjectIdentifier
+        let grant: AccessGeoSiteCache.OverseasView.Grant
+    }
+    private var approvedOverseasGrants: [String: OverseasNavigationGrant] = [:]
+    private var committedOverseasGrants: [String: OverseasNavigationGrant] = [:]
     private var landingBindings: [String: LandingRoute] = [:]
     private var defaultProtectedHosts: Set<AccessHostStoreKey> = []
     private var explicitDirect: Set<AccessHostStoreKey> = []
@@ -100,7 +114,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         self.geoSiteCache = channel == .dev ? geoSiteCache : nil
         self.geoSiteTransport = self.geoSiteCache == nil ? nil : geoSiteTransport
         geoSiteView = self.geoSiteCache?.view
-        if self.releaseChannel == .dev {
+        if self.releaseChannel == .dev, self.geoSiteCache == nil {
             if let stored = locationPreferences?.data(forKey: Self.overseasListKey) {
                 self.overseasRules = AccessOverseasRuleList(data: stored)
             } else {
@@ -231,14 +245,20 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         do {
             let conditional = await cache.conditionalReceipt(using: context)
             guard canPublishGeoSiteRefresh(context) else { return }
-            let result = try await transport.load(etag: conditional?.etag, highWater: cache.highWater, now: now)
-            guard canPublishGeoSiteRefresh(context) else { return }
+            let overseasFlight = try cache.beginOverseasRefresh(using: context)
+            defer { cache.endOverseasRefresh(overseasFlight) }
+            let result = try await transport.load(etag: conditional?.etag, highWater: cache.highWater, now: now,
+                                                  includeOverseas: cache.wantsOverseasRules) { admitted in
+                try? await cache.apply(admitted, using: context) { false }
+            }
             var refreshed = AccessGeoSiteCache.RefreshState(nextAttempt: cache.effectiveTime.addingTimeInterval(86_400),
                                                             lastRequest: now)
             switch result {
             case .candidate(let candidate, let etag):
                 refreshed.etag = etag
-                try await cache.apply(candidate, using: context, refreshed: refreshed)
+                try await cache.apply(candidate, using: context, refreshed: refreshed) {
+                    self.canPublishGeoSiteRefresh(context)
+                }
             case .notModified(let responseETag):
                 guard let conditional, responseETag == nil || responseETag == conditional.etag,
                       await cache.conditionalReceipt(using: context) == conditional,
@@ -295,6 +315,54 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             && accelerationAllowed(scopeID: tab.browsingScopeID, isPrivate: tab.profile.isPrivate)
     }
 
+    var overseasSettings: AccessGeoSiteCache.OverseasView { geoSiteView?.overseas ?? .init() }
+    var overseasPreview: AccessGeoSiteCache.OverseasPreview? { geoSiteCache?.overseasPreview }
+    var canFetchOverseasPreview: Bool { geoSiteTransport != nil && geoSiteStatus == .ready }
+
+    func requestOverseasPreview(for tab: BrowserTab) throws {
+        guard offersWebsiteAcceleration(for: tab), let cache = geoSiteCache, let transport = geoSiteTransport
+        else { throw AccessGeoSiteCache.Failure.ineligible }
+        try cache.requestOverseasPreview()
+        reconcileGeoSiteRefresh(using: transport)
+    }
+
+    struct OverseasSettingsConfirmation: Identifiable {
+        let offer: AccessGeoSiteCache.OverseasConfirmation
+        fileprivate let window: UUID
+        fileprivate let tabRevision: UInt64
+        fileprivate let tabID: UUID
+        var id: UUID { offer.id }
+    }
+
+    func overseasConfirmation(_ choice: AccessOverseasSelection, for browser: BrowserSession) async throws
+        -> OverseasSettingsConfirmation {
+        guard let tab = browser.activeTab, offersWebsiteAcceleration(for: tab), let geoSiteCache,
+              let epoch = geoSiteForegroundWindows[browser.standardProfileID]
+        else { throw AccessGeoSiteCache.Failure.ineligible }
+        let tabRevision = browser.tabSelectionRevision
+        let offer = try await geoSiteCache.overseasConfirmation(for: choice)
+        guard browser.activeTab === tab, browser.tabSelectionRevision == tabRevision,
+              geoSiteForegroundWindows[browser.standardProfileID] == epoch, offersWebsiteAcceleration(for: tab)
+        else { throw AccessGeoSiteCache.Failure.stale }
+        return OverseasSettingsConfirmation(offer: offer, window: epoch, tabRevision: tabRevision, tabID: tab.instanceID)
+    }
+
+    func confirmOverseas(_ confirmation: OverseasSettingsConfirmation, for browser: BrowserSession,
+                         whileValid: @MainActor () -> Bool) async throws {
+        guard let tab = browser.activeTab, let geoSiteCache else { throw AccessGeoSiteCache.Failure.ineligible }
+        try await geoSiteCache.confirmOverseas(confirmation.offer) {
+            self.geoSiteForegroundWindows[browser.standardProfileID] == confirmation.window
+                && browser.activeTab === tab && tab.instanceID == confirmation.tabID
+                && browser.tabSelectionRevision == confirmation.tabRevision
+                && self.offersWebsiteAcceleration(for: tab) && whileValid()
+        }
+    }
+
+    func disableOverseas(for tab: BrowserTab) throws {
+        guard offersWebsiteAcceleration(for: tab), let geoSiteCache else { throw AccessGeoSiteCache.Failure.ineligible }
+        try geoSiteCache.disableOverseas()
+    }
+
     // Ordinary DEV navigation can reach owner-scoped website policy and host stores.
     private func hasValidRouteOwner(for tab: BrowserTab) -> Bool {
         !accelerationAllowed(scopeID: tab.browsingScopeID, isPrivate: tab.profile.isPrivate)
@@ -303,7 +371,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     @discardableResult
     func installOverseasAccelerationList(_ data: Data, for tab: BrowserTab) -> Bool {
-        guard offersWebsiteAcceleration(for: tab), let rules = AccessOverseasRuleList(data: data) else { return false }
+        guard geoSiteCache == nil, offersWebsiteAcceleration(for: tab), let rules = AccessOverseasRuleList(data: data)
+        else { return false }
         if overseasRules?.canonicalData == rules.canonicalData { return true }
         changeWebsitePolicy(.catalogue) {
             self.overseasRules = rules
@@ -313,7 +382,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func setOverseasAccelerationEnabled(_ enabled: Bool, for tab: BrowserTab) {
-        guard offersWebsiteAcceleration(for: tab), overseasAccelerationEnabled != enabled,
+        guard geoSiteCache == nil, offersWebsiteAcceleration(for: tab), overseasAccelerationEnabled != enabled,
               !enabled || overseasRules != nil else { return }
         changeWebsitePolicy(.catalogue) {
             overseasAccelerationEnabled = enabled
@@ -682,10 +751,15 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         case original
         case indeterminate
         case service
-        case overseas
+        case overseas(AccessGeoSiteCache.OverseasView.Grant?)
         case landing(LandingRoute)
 
-        var isExactHostService: Bool { self == .service || self == .overseas }
+        var isOverseas: Bool {
+            if case .overseas = self { return true }
+            return false
+        }
+
+        var isExactHostService: Bool { self == .service || isOverseas }
 
         var requiredPreparation: RoutePreparation? {
             switch self {
@@ -723,20 +797,33 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         guard accelerationAllowed(for: key) else { return .legacy }
         let smart = smartMatch(url)
         if smart == .managed { return .service }
-        let overseas = overseasMatch(url)
-        if overseas == .managed { return .overseas }
+        let overseas = overseasRoute(url)
+        if overseas.match == .managed { return .overseas(overseas.grant) }
         // A one-shot address action, explicit recovery group, or an already
         // protected document retains its independent authorization.
         if legacyRouteIntent(tab: tab, key: key) == .on { return .legacy }
-        if smart == .indeterminate || overseas == .indeterminate { return .indeterminate }
+        if smart == .indeterminate || overseas.match == .indeterminate { return .indeterminate }
         return websiteAccelerationMode == .smart ? .original : .legacy
     }
 
-    private func overseasMatch(_ url: URL) -> AccessGeoSiteCache.Match {
+    private func overseasRoute(_ url: URL) -> (match: AccessGeoSiteCache.Match, grant: AccessGeoSiteCache.OverseasView.Grant?) {
+        if let geoSiteCache {
+            guard websiteAccelerationMode == .smart else { return (.original, nil) }
+            let view = comparingWebsitePolicy ? geoSiteView : geoSiteCache.runtimeView()
+            return view?.overseas.route(for: url) ?? (.indeterminate, nil)
+        }
         guard overseasAccelerationEnabled, let host = AccessWebsiteRoutePolicy.websiteHost(url),
-              AccessLocalSite.classify(host.rawValue) == nil else { return .original }
-        guard let rules = overseasRules else { return .indeterminate }
-        return rules.contains(host) ? .managed : .original
+              AccessLocalSite.classify(host.rawValue) == nil else { return (.original, nil) }
+        guard let rules = overseasRules else { return (.indeterminate, nil) }
+        return (rules.contains(host) ? .managed : .original, nil)
+    }
+
+    private func boundOverseasGrant(_ route: WebsiteRoute, destination: URL) -> AccessGeoSiteCache.OverseasView.Grant? {
+        switch route {
+        case .overseas(let grant): grant
+        case .service, .landing, .legacy: overseasRoute(destination).grant
+        case .original, .indeterminate: nil
+        }
     }
 
     private func smartMatch(_ url: URL) -> AccessGeoSiteCache.Match {
@@ -772,8 +859,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         }
         guard fromParent || inherited != nil else { return nil }
 
+        let websiteOnlyParent = websiteBindings[tabID].map { $0.key == parent && !$0.reusesLegacyStore } == true
         let inheritsDefault = inherited?.inheritsDefaultPrivacy == true || (fromParent
-            && websiteBindings[tabID] != parent && !websiteOnlyEndpoints.contains(parent)
+            && !websiteOnlyParent && !websiteOnlyEndpoints.contains(parent)
             && defaultProtectedHosts.contains(parent))
         let parentRoute = websiteRoute(tab: tab, url: parentURL, key: parent, allowLanding: false)
         if parentRoute != .service {
@@ -805,7 +893,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     private func legacyStoreBinding(tab: BrowserTab, key: AccessHostStoreKey) -> WKWebsiteDataStore? {
-        guard websiteBindings[tab.instanceID.uuidString] != key, ownsHostStore(tab: tab, key: key) else { return nil }
+        let binding = websiteBindings[tab.instanceID.uuidString]
+        if binding?.key == key, binding?.reusesLegacyStore == false { return nil }
+        guard ownsHostStore(tab: tab, key: key) else { return nil }
         return tab.websiteDataStore
     }
 
@@ -918,7 +1008,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         let boundUnavailable = attachment == .attachedUnavailable
         let activeWebsiteRoute = [tab.addressBarURL, tab.lastMainFrameFailure?.url, tab.committedMainFrameURL]
             .compactMap { $0 }.first { Self.httpHost($0) == host }.map { websiteRoute(tab: tab, url: $0, key: key) }
-        let requiresOverseas = activeWebsiteRoute == .overseas
+        let requiresOverseas = activeWebsiteRoute?.isOverseas == true
+        if let receipt = committedOverseasGrants[tab.instanceID.uuidString], receipt.key == key,
+           receipt.sequence == tab.liveCommittedDocumentSequence, receipt.store == ObjectIdentifier(tab.websiteDataStore),
+           ownsHostStore(tab: tab, key: key) {
+            snapshot.overseasGrant = receipt.grant
+        }
         let attachedDefault = usesDefaultRoute(key) && attachment != .notAttached
             && (!requiresOverseas || !websiteOnlyEndpoints.contains(key))
         let intentOn = (!requiresOverseas && websitePrivacyEnabled(for: key)) || inherited || attachedDefault
@@ -1060,8 +1155,14 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             switch route {
             case .service, .overseas, .landing:
                 if accelerationAllowed(for: key) {
-                    websiteBindings[tabID] = store === previousLegacyStore ? nil : key
+                    let reusesLegacy = store === previousLegacyStore
+                    let grant = boundOverseasGrant(route, destination: url)
+                    websiteBindings[tabID] = reusesLegacy && grant == nil ? nil
+                        : WebsiteBinding(key: key, overseasGrant: grant, reusesLegacyStore: reusesLegacy)
                 }
+            case .legacy:
+                let grant = accelerationAllowed(for: key) ? boundOverseasGrant(route, destination: url) : nil
+                websiteBindings[tabID] = grant.map { WebsiteBinding(key: key, overseasGrant: $0, reusesLegacyStore: true) }
             default:
                 websiteBindings.removeValue(forKey: tabID)
             }
@@ -1074,6 +1175,30 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             landingBindings.removeValue(forKey: tabID)
         }
         return store
+    }
+
+    func mainFrameRouteApproved(tab: BrowserTab, url: URL, sequence: UInt64) {
+        let id = tab.instanceID.uuidString
+        guard let binding = websiteBindings[id], binding.key.host == Self.httpHost(url),
+              let grant = binding.overseasGrant, ownsHostStore(tab: tab, key: binding.key) else {
+            approvedOverseasGrants.removeValue(forKey: id)
+            return
+        }
+        approvedOverseasGrants[id] = OverseasNavigationGrant(destination: url, sequence: sequence,
+            key: binding.key, store: ObjectIdentifier(tab.websiteDataStore), grant: grant)
+    }
+
+    func mainFrameRouteCommitted(tab: BrowserTab, url: URL, sequence: UInt64) {
+        let id = tab.instanceID.uuidString
+        let previous = committedOverseasGrants.removeValue(forKey: id)
+        if let receipt = approvedOverseasGrants[id], receipt.sequence == sequence {
+            approvedOverseasGrants.removeValue(forKey: id)
+            if receipt.destination == url, receipt.store == ObjectIdentifier(tab.websiteDataStore),
+               ownsHostStore(tab: tab, key: receipt.key) {
+                committedOverseasGrants[id] = receipt
+            }
+        }
+        if previous != nil || committedOverseasGrants[id] != nil { revision &+= 1 }
     }
 
     /// A landing store owns its entry independently of the idle redirect source.
@@ -1277,7 +1402,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         if let choice = websiteChoice(for: key) { return choice == .service }
         if accelerationAllowed(for: key), intents[key] != .off, !explicitDirect.contains(key),
            let url = URL(string: "https://\(host.rawValue)/"),
-           overseasMatch(url) != .original || (websiteAccelerationMode == .smart && smartMatch(url) == .managed) { return true }
+           overseasRoute(url).match != .original || (websiteAccelerationMode == .smart && smartMatch(url) == .managed) { return true }
         if BrowserSession.openTabs().contains(where: {
             $0.browsingScopeID == scopeID && $0.profile.isPrivate == isPrivate &&
                 $0.boundHostName == host.rawValue && $0.proxyLandingParent != nil
@@ -1590,6 +1715,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         registry.unbind(tab.instanceID.uuidString)
         executingTabs.removeValue(forKey: tab.instanceID.uuidString)
         websiteBindings.removeValue(forKey: tab.instanceID.uuidString)
+        approvedOverseasGrants.removeValue(forKey: tab.instanceID.uuidString)
+        committedOverseasGrants.removeValue(forKey: tab.instanceID.uuidString)
         landingBindings.removeValue(forKey: tab.instanceID.uuidString)
         cancelProbes(tabID: tab.instanceID.uuidString)
         phases.removeValue(forKey: tab.instanceID.uuidString)
@@ -1977,7 +2104,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                     self.websiteOnlyEndpoints.insert(key)
                     for tab in BrowserSession.openTabs() where tab.hostCoordinator === self
                         && self.ownsHostStore(tab: tab, key: key) {
-                        self.websiteBindings[tab.instanceID.uuidString] = key
+                        self.websiteBindings[tab.instanceID.uuidString] = WebsiteBinding(key: key, overseasGrant: nil, reusesLegacyStore: false)
                     }
                 }
             }
@@ -2068,7 +2195,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         if let choice = websiteChoice(for: key) { return choice == .service }
         if explicitDirect.contains(key) || intents[key] == .off { return false }
         if accelerationAllowed(for: key), let url = URL(string: "https://\(key.host.rawValue)/"),
-           overseasMatch(url) == .managed || (websiteAccelerationMode == .smart && smartMatch(url) == .managed) { return true }
+           overseasRoute(url).match == .managed || (websiteAccelerationMode == .smart && smartMatch(url) == .managed) { return true }
         return intents[key] == .on || defaultProtectedHosts.contains(key)
     }
 

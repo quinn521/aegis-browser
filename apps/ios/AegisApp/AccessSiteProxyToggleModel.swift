@@ -87,6 +87,8 @@ struct AccessSiteProxyToggleSnapshot: Equatable, Sendable {
     var connectionStatus: AccessSiteProxyConnectionStatusId = .idle
     var failureReason: String?
     var attachment: AccessProxyAttachment = .notAttached
+    /// Verified scope that authorized the bound document's overseas route.
+    var overseasGrant: AccessGeoSiteCache.OverseasView.Grant?
     /// 「本站打不开时自动重试」. Distinct from the explicit whole-page proxy intent.
     var autoRecoveryEnabled: Bool = false
     var autoRecoveryLine: String?
