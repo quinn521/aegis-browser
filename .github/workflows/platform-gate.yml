@@ -108,13 +108,23 @@ jobs:
         with:
           python-version: 3.11.9
       - uses: ./.github/actions/ensure-ios-ruby
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          version: 9.15.0
+          run_install: false
+      - name: Install locked dependencies for workflow contracts
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Run iOS release and WebExtension contracts
         run: |
           bundle exec ruby -e 'Dir["fastlane/tests/*_test.rb"].sort.each { |p| require_relative p }'
           python3 -B -m unittest discover -s scripts/release -p 'test_ios*.py'
-          PYTHONPATH=scripts/release python3 -B -m unittest scripts/release/test_verify_ios_archive.py scripts/release/test_development_signing.py scripts/release/test_development_key_access.py
+          PYTHONPATH=scripts/release python3 -B -m unittest \
+            scripts/release/test_verify_ios_archive.py scripts/release/test_verify_signed_ios.py \
+            scripts/release/test_verify_ios_dsyms.py scripts/release/test_development_signing.py \
+            scripts/release/test_development_key_access.py
           node apps/ios/scripts/generate-tracker-rules.mjs --check
           node --test apps/ios/Tests/SharedWebExtension/SafariNavigationIdentityTests.mjs
+          node --test scripts/ci/tests/ios-*.test.mjs
 
   macos:
     needs: plan
@@ -129,6 +139,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libstdc++-14-dev clang
       - name: Run standalone Access and DMG contracts
         run: |
+          python3 -B apps/browser/scripts/ci/candidate_test.py
           python3 -B -m unittest scripts/release/test_macos_dmg.py scripts/release/test_macos_dmg_delivery.py scripts/release/test_macos_developer_id.py
           bash scripts/release/macos-access-tests.sh
 

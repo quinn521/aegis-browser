@@ -253,11 +253,12 @@ PR 从被测合并提交的第一父提交读取规则和汇总程序，并校�
 | 输入 | 合同与原生证据 |
 | --- | --- |
 | iOS 产品源码、工程、EmbeddedCore 准备脚本与锁，以及构建直接消费的共享资源 | Linux 发布合同、WebExtension 测试和适用的无签名归档。XCTest 和它直接消费的共享向量需要对应模拟器证据。 |
-| Fastlane、Gemfile 或发布脚本 | 相关 Ruby/Python 合同。仅修改 iOS 发布合同的 PR 可省去无签名归档。 |
+| Fastlane、Gemfile 或发布脚本 | 相关 Ruby/Python 合同。Apple 原生信任测试保留 macOS 路径。仅修改模拟器工具或普通发布合同可省去无签名归档。 |
 | Android Chromium pin、GN 参数、补丁和相关脚本 | Android 主机脚本、pin 解析及发布回归。API 36 instrumentation 与真正 Chromium 构建分别验收。 |
 | Windows 安装与卸载视图、补丁、PowerShell 或 WinRM | Windows runner 上执行现有安装器 fixture、WinRM 自测与 Pester。修改卸载视图时还需核验 Chromium 的卸载视图目标与同次构建资源。 |
-| macOS 交付输入、共享 Chromium 路径或未识别路径 | 完整基础质量门及适用的 macOS standalone 与 DMG 合同。 |
-| Linux Bash 覆盖率入口及 kcov fixture | Linux 上运行现有 Bash 行覆盖率和行为检查。 |
+| 共享 Chromium 版本、补丁与候选编排 | 选择读取这些输入的 Android、macOS 或 Windows 合同。桌面补丁序列由 macOS 和 Windows 共同消费。 |
+| macOS 交付输入或未识别路径 | 完整基础质量门及适用的 macOS standalone 与 DMG 合同。 |
+| Linux Bash 覆盖率入口、浏览器 shell 脚本及 kcov fixture | Linux 上运行现有 Bash 行覆盖率和行为检查。 |
 
 `Platform CI` 使用一次路由结果分配五个合同作业。Linux 和 Windows 复用现有覆盖率 workflow 的对应入口。汇总检查始终核对实际结果。被选中作业只有明确成功才可通过。未选作业记录为不适用，缺失、失败、取消、超时及被选作业意外跳过均应报错。iOS unsigned archive、Android 模拟器、全量 Chromium、真机、签名和发布使用各自的证据。
 

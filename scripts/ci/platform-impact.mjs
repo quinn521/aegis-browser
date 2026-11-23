@@ -119,14 +119,36 @@ const iosArchiveInputs = new Set([
 const sharedIosTestInput = 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json';
 const sharedIosProductInput = path => path === 'packages/core/src/tracker/builtin-rules.ts'
   || path.startsWith('apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/');
-const desktopPin = 'apps/browser/CHROMIUM_COMMIT';
-const iosArchiveRuntime = new Set(['scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py']);
+const chromiumVersion = 'apps/browser/CHROMIUM_VERSION';
+const productVersionHeader = 'apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h';
+const desktopPins = new Set(['apps/browser/CHROMIUM_COMMIT', chromiumVersion]);
+const candidateInputs = new Set([
+  '.github/workflows/chromium-candidate.yml',
+  'apps/browser/scripts/ci/candidate.py',
+  'apps/browser/scripts/ci/candidate_test.py',
+]);
+const desktopPatch = path => path.startsWith('apps/browser/patches/');
+const browserShellInput = path => /^apps\/browser\/scripts\/[^/]+\.sh$/u.test(path);
+const iosArchiveRuntime = new Set([
+  'scripts/ci/ios-ci-storage.py',
+  'scripts/release/test_ios_linked_bundle.py',
+  'scripts/release/test_ios_profile_trust.py',
+  'scripts/release/test_development_signing.py',
+  'scripts/release/test_development_key_access.py',
+]);
+const iosReleaseContracts = new Set([
+  'scripts/release/cli.rb',
+  'scripts/release/verify-ios-dsyms.py',
+  'scripts/release/test_verify_ios_dsyms.py',
+  'scripts/release/test_verify_signed_ios.py',
+]);
 const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('.github/workflows/ios-')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
   || path === browserCommonScript
   || iosArchiveInputs.has(path)
+  || iosReleaseContracts.has(path)
   || path === sharedIosTestInput
   || sharedIosProductInput(path)
   || /^scripts\/release\/(?:test_)?ios[-_]/u.test(path)
@@ -135,7 +157,8 @@ const selectsIos = path => path.startsWith('apps/ios/')
   || path === 'Gemfile' || path === 'Gemfile.lock';
 const needsIosCompile = path => sharedIosProductInput(path)
   || iosArchiveRuntime.has(path)
-  || (path.startsWith('apps/ios/') && !path.startsWith('apps/ios/Tests/') && !path.endsWith('.md'))
+  || (path.startsWith('apps/ios/') && !path.startsWith('apps/ios/Tests/')
+    && !path.startsWith('apps/ios/scripts/') && !path.endsWith('.md'))
   || (iosArchiveInputs.has(path) && !path.startsWith('scripts/release/test_'))
   || path === browserCommonScript
   || path === '.github/workflows/ios-release-validation.yml';
@@ -143,8 +166,9 @@ const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || path === 'apps/browser/ci-pins/android.json'
   || path === 'apps/browser/args/aegis-android.gn'
   || path === 'scripts/ci/check-android-platform-inputs.py'
-  || path === 'apps/browser/scripts/ci/candidate.py'
-  || path === 'apps/browser/scripts/ci/candidate_test.py'
+  || candidateInputs.has(path)
+  || path === chromiumVersion
+  || path === productVersionHeader
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('android'))
   || path === browserCommonScript
   || path.startsWith('.github/workflows/android-')
@@ -158,24 +182,29 @@ const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || path === 'scripts/release/verify-aab.py'
   || path === 'scripts/release/VerifiedAabCertificate.java';
 const selectsMacos = path => path.startsWith('.github/workflows/macos-')
-  || path === desktopPin
+  || desktopPins.has(path)
+  || candidateInputs.has(path)
   || path === browserCommonScript
+  || (browserShellInput(path) && !selectsAndroid(path))
   || (path.startsWith('scripts/release/') && path.toLowerCase().includes('macos'));
 const selectsWindows = path => path.endsWith('.ps1')
-  || path === desktopPin
+  || desktopPins.has(path)
+  || candidateInputs.has(path)
   || path.startsWith('apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/')
   || path === 'apps/browser/args/aegis-windows.gn'
   || path.startsWith('apps/browser/overlay/chrome/installer/')
   || /^apps\/browser\/overlay\/chrome\/browser\/ui\/views\/(?:aegis_uninstall_test_main|uninstall_view(?:_unittest)?)\.(?:cc|h)$/u.test(path)
-  || (path.startsWith('apps/browser/patches/') && /(?:^|[-_/])windows(?:[-_.]|$)/u.test(path))
+  || desktopPatch(path)
   || path.startsWith('apps/browser/scripts/windows-')
   || path.startsWith('scripts/ci/platform-tests/windows-')
   || path.startsWith('apps/browser/scripts/ci/windows')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
-const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh' || path.startsWith('scripts/ci/platform-tests/kcov-');
+const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh'
+  || path.startsWith('scripts/ci/platform-tests/kcov-')
+  || browserShellInput(path);
 const selectsShared = path => path.startsWith('packages/core/')
   || path.startsWith('apps/browser/overlay/')
-  || (path.startsWith('apps/browser/patches/') && !path.startsWith('apps/browser/patches-android/'));
+  || desktopPatch(path);
 const classifyPath = path => {
   const selected = blankPlatforms();
   if (selectsIos(path)) selected.ios = true;

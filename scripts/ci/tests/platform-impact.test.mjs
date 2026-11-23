@@ -303,6 +303,14 @@ test('paths select platforms and commit types select stage depth', () => {
     const commonScript = 'apps/browser/scripts/common.sh';
     const iosArchiveTests = ['scripts/release/test_verify_ios_archive.py', 'scripts/release/test_ios_embedded_core.py'];
     const aabCertificate = 'scripts/release/VerifiedAabCertificate.java';
+    const realWindowsPatch = 'apps/browser/patches/0500-align-product-display-name-and-policy-identity.patch';
+    const runScript = 'apps/browser/scripts/run.sh';
+    const runTests = 'apps/browser/scripts/run_test.sh';
+    const trackedInputs = [realWindowsPatch, runScript, runTests,
+      'apps/browser/CHROMIUM_VERSION', 'apps/browser/scripts/ci/candidate.py',
+      'apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h',
+      'apps/ios/scripts/run-simulator-tests.sh', 'scripts/release/cli.rb', 'scripts/release/verify-ios-dsyms.py'];
+    for (const file of trackedInputs) save(file, readFileSync(resolve(file), 'utf8'));
     save('README.md', 'base');
     save('docs/ios-webkit-protection.en.md', 'initial');
     for (const path of [commonScript, ...iosArchiveTests, aabCertificate]) save(path, 'initial');
@@ -331,7 +339,7 @@ test('paths select platforms and commit types select stage depth', () => {
     const iosRoute = {ios: true, android: false, macos: false, windows: false, linux: false, integrate: true, deep: true};
     const androidRoute = {...iosRoute, ios: false, android: true};
     const sharedSetup = pr(() => save(commonScript, 'updated'), 'fix: repair browser setup');
-    assert.deepEqual(route(sharedSetup), {...iosRoute, android: true, macos: true});
+    assert.deepEqual(route(sharedSetup), {...iosRoute, android: true, macos: true, linux: true});
     for (const path of iosArchiveTests) {
       const isWorkflow = path === '.github/workflows/ios-release-validation.yml';
       assert.deepEqual(route(pr(() => save(path, 'updated'), 'test: cover archive input')), {...iosRoute, deep: isWorkflow}, path);
@@ -343,7 +351,7 @@ test('paths select platforms and commit types select stage depth', () => {
       'test_ios_linked_bundle.py', 'test_ios_profile_trust.py', 'verify-ios-archive.py', 'verify-signed-ios.py',
     ]) {
       assert.deepEqual(route(pr(() => save(`scripts/release/${file}`, 'ios'), 'fix: repair archive')),
-        {...iosRoute, deep: !file.startsWith('test_') || file === 'test_ios_linked_bundle.py'}, file);
+        {...iosRoute, deep: true}, file);
     }
     for (const path of [
       'scripts/release/android-delivery.py', 'scripts/release/android_product_delivery.py',
@@ -381,9 +389,14 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.deepEqual(route(sharedTracker), {...iosRoute, macos: true});
     for (const file of [
       'scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py',
+      'scripts/release/test_ios_profile_trust.py', 'scripts/release/test_development_signing.py',
+      'scripts/release/test_development_key_access.py',
       'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/core.js',
     ]) assert.equal(pr(() => save(file, 'updated'), 'chore: change archive consumer').deep, true, file);
-    for (const file of ['scripts/release/ios-action.py', 'scripts/release/test_ios_action.py']) {
+    for (const file of ['scripts/release/ios-action.py', 'scripts/release/test_ios_action.py',
+      'scripts/release/cli.rb', 'scripts/release/verify-ios-dsyms.py',
+      'scripts/release/test_verify_ios_dsyms.py', 'scripts/release/test_verify_signed_ios.py',
+      'apps/ios/scripts/run-simulator-tests.sh']) {
       assert.deepEqual(route(pr(() => save(file, 'updated'), 'fix: repair iOS contract')), {...iosRoute, deep: false});
     }
     for (const file of [
@@ -394,6 +407,20 @@ test('paths select platforms and commit types select stage depth', () => {
       const onlyWindowsInput = pr(() => save(file, 'updated'), 'chore: update Windows input');
       assert.equal(onlyWindowsInput.windows, true, file);
       assert.equal(onlyWindowsInput.integrate, true, file);
+    }
+    const desktopRoute = {...iosRoute, ios: false, windows: true, macos: true};
+    assert.deepEqual(route(pr(() => save(realWindowsPatch, 'updated patch'), 'fix: update desktop patch')), desktopRoute);
+    const desktopVersion = 'apps/browser/CHROMIUM_VERSION';
+    const productVersion = 'apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h';
+    for (const file of [desktopVersion, 'apps/browser/scripts/ci/candidate.py', 'apps/browser/scripts/ci/candidate_test.py']) {
+      assert.deepEqual(route(pr(() => save(file, 'update'), 'fix: update shared candidate input')),
+        {...desktopRoute, android: true}, file);
+    }
+    assert.deepEqual(route(pr(() => save(productVersion, 'updated header'), 'fix: update product version')),
+      {...desktopRoute, android: true, windows: false});
+    for (const file of [runScript, runTests]) {
+      assert.deepEqual(route(pr(() => save(file, '# update'), 'fix: update covered script')),
+        {...iosRoute, ios: false, linux: true, macos: true}, file);
     }
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');
     assert.equal(linux.linux, true); assert.equal(linux.macos, false); assert.equal(linux.deep, true);

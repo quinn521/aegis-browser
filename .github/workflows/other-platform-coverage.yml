@@ -85,6 +85,8 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: 3.11.9
+      - name: Test candidate orchestration on Windows
+        run: python -B apps/browser/scripts/ci/candidate_test.py
       - name: Run WinRM model relay self-test
         shell: bash
         run: |
