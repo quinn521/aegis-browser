@@ -670,42 +670,98 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
     }
 
     func testProtectionIncidentKeepsDetachedProxyDocumentUntilItsTerminalCommit() async throws {
-        let coordinator = AccessHostStoreCoordinator()
-        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        try await assertManagedDocumentRetirement(.protectionIncident)
+    }
+
+    func testInternalNavigationKeepsDetachedProxyDocumentUntilItsTerminalCommit() async throws {
+        try await assertManagedDocumentRetirement(.internalNavigation)
+    }
+
+    private enum ManagedDocumentExit { case protectionIncident, internalNavigation }
+
+    private func assertManagedDocumentRetirement(_ exit: ManagedDocumentExit) async throws {
+        let title = "Managed retirement fixture"
+        let opener = AnsweringOpener(body: "<title>\(title)</title>")
+        let listenerPort: UInt16 = 18_254
+        let listener = try await makeListener(port: listenerPort, tunnels: opener)
+        try await listener.start()
+        defer { try? listener.stop() }
+        let origin = OriginReceipt(port: 18_255)
+        try await origin.start()
+        defer { origin.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: listenerPort))
+        let suite = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil),
+                                     preferences: BrowserPreferences(defaults: defaults))
         browser.hostCoordinator = coordinator
         defer { browser.closeWindow() }
         let tab = try XCTUnwrap(browser.activeTab)
-        let host = try AccessSiteHost("detached.invalid")
-        let url = URL(string: "https://detached.invalid/")!
+        try await tab.prepareContentRulesForTests()
+        let host = try AccessSiteHost("localhost")
+        let url = try XCTUnwrap(URL(string: "http://localhost:\(origin.port)/managed-retirement"))
         let endpoint = AccessManagedProxyEndpoint(identity: "detached-document", generation: 1,
-            loopbackHost: "127.0.0.1", port: 18_256, state: .ready)
-        coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
-        XCTAssertTrue(coordinator.registry.setEndpoint(endpoint, scopeID: tab.browsingScopeID, host: host, isPrivate: false))
-        let store = try XCTUnwrap(coordinator.dataStoreForMainFrame(tab: tab, url: url))
-        tab.rebindWebsiteDataStore(store, host: host.rawValue)
-        var originalInert = false
-        tab.afterCurrentDocumentBecomesInert { originalInert = true }
-        try await waitUntil(seconds: 10, { originalInert }, message: "Initial direct view did not retire")
-
-        let retainedView = tab.webView
-        let window = show(retainedView)
+            loopbackHost: "127.0.0.1", port: listenerPort, state: .ready)
+        let scope = tab.browsingScopeID
+        coordinator.setProxyEnabled(true, host: host, scopeID: scope, isPrivate: false)
+        XCTAssertTrue(coordinator.registry.setEndpoint(endpoint, scopeID: scope, host: host, isPrivate: false))
+        tab.load(url)
+        let window = show(tab.webView)
         defer { window.isHidden = true }
-        XCTAssertNotNil(retainedView.loadHTMLString("<title>Detached proxy fixture</title>", baseURL: nil))
-        try await waitUntil(seconds: 10, { retainedView.title == "Detached proxy fixture" }, message: "Fixture did not commit")
-        let blockedHost = try XCTUnwrap(LocalThreatDatabase.snapshot?.phishing.first)
-        tab.load(try XCTUnwrap(URL(string: "https://\(blockedHost)/")))
-        XCTAssertNotNil(tab.protectionIncident)
-        XCTAssertFalse(tab.isResident)
-        var socketReleased = false
-        coordinator.retireManagedDocuments(identity: endpoint.identity) { socketReleased = true }
-        XCTAssertFalse(socketReleased, "Dropping the tab reference is not a document receipt")
+        try await waitUntil(seconds: 10, {
+            self.attach(tab.webView, to: window)
+            return tab.committedMainFrameURL == url && tab.webView.title == title && !tab.isLoading
+        }, message: "The managed fixture did not commit. Proxy transcript: \(opener.transcript)")
+        let retainedView = tab.webView
+        let store = try XCTUnwrap(coordinator.registry.store(scopeID: scope, host: host, isPrivate: false))
+        guard tab.committedMainFrameURL == url, retainedView.title == title,
+              retainedView.configuration.websiteDataStore === store,
+              opener.transcript.contains("GET /managed-retirement")
+        else { return XCTFail("Retirement requires a committed document on the owned proxy store") }
+        XCTAssertFalse(origin.transcript.contains("/managed-retirement"))
+
+        let blank = try XCTUnwrap(URL(string: "about:blank"))
+        switch exit {
+        case .protectionIncident:
+            let blocked = try XCTUnwrap(URL(string: "http://paypal.login.account.verify.example.invalid/login"))
+            guard BrowserNavigationPolicy.evaluate(blocked).kind == .blocked else {
+                return XCTFail("Synthetic incident URL must be blocked before loading")
+            }
+            tab.load(blocked)
+            XCTAssertEqual(tab.protectionIncident?.url, blocked)
+            XCTAssertFalse(tab.isResident)
+        case .internalNavigation:
+            tab.load(blank)
+            XCTAssertNil(tab.boundHostName)
+            XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore)
+        }
+        // Mirror the listener's production shutdown ordering. Keep the real
+        // loopback socket bound until the registry supplies the document receipt.
+        listener.suspend()
+        var socketStop: Result<Void, Error>?
+        coordinator.retireManagedDocuments(identity: endpoint.identity) {
+            XCTAssertTrue(store.proxyConfigurations.isEmpty)
+            socketStop = Result { try listener.stop() }
+        }
+        XCTAssertNil(socketStop, "Dropping the tab reference is not a document receipt")
+        XCTAssertEqual(listener.boundPort, listenerPort)
         XCTAssertFalse(store.proxyConfigurations.isEmpty)
-        tab.rebindWebsiteDataStore(tab.originalWebsiteDataStore, host: nil)
-        XCTAssertFalse(socketReleased)
+        if exit == .protectionIncident {
+            tab.rebindWebsiteDataStore(tab.originalWebsiteDataStore, host: nil)
+        }
+        XCTAssertNil(socketStop, "Rebinding is not a document receipt")
+        XCTAssertEqual(listener.boundPort, listenerPort)
+        let terminalPolicy = NSSelectorFromString("webView:decidePolicyForNavigationAction:decisionHandler:")
+        XCTAssertTrue(retainedView.navigationDelegate?.responds(to: terminalPolicy) == true,
+                      "WebKit must call the retained view's terminal navigation policy")
         XCTAssertNil(retainedView.loadHTMLString("<title>Cannot replace terminal navigation</title>", baseURL: nil))
-        try await waitUntil(seconds: 10, { socketReleased }, message: "The retained view's terminal commit did not release the socket")
+        try await waitUntil(seconds: 10, { socketStop != nil }, message: "The retained view's terminal commit did not release the socket")
+        try XCTUnwrap(socketStop).get()
+        XCTAssertNil(listener.boundPort)
+        XCTAssertNil(coordinator.registry.store(scopeID: scope, host: host, isPrivate: false))
         XCTAssertTrue(store.proxyConfigurations.isEmpty)
-        XCTAssertEqual(retainedView.url?.absoluteString, "about:blank")
+        XCTAssertEqual(retainedView.url, blank)
     }
 
     func testRetainedClosedPageStopsBeforeHostStoreRetirement() async throws {
@@ -796,18 +852,24 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
             loopbackHost: "127.0.0.1", port: 18_258, state: .ready), scopeID: "ordinary", host: host, isPrivate: false)
         coordinator.setProxyEnabled(true, host: host, scopeID: "ordinary", isPrivate: false)
         let ordinary = try XCTUnwrap(browser.activeTab)
-        ordinary.load(URL(string: "http://localhost:18259/page")!)
+        let url = try XCTUnwrap(URL(string: "http://localhost:18259/page"))
+        ordinary.load(url)
         let window = show(ordinary.webView)
         defer { window.isHidden = true; browser.closeWindow() }
         try await waitUntil(seconds: 15, {
             attach(ordinary.webView, to: window)
-            return ordinary.url?.path == "/page" && !ordinary.isLoading
+            return ordinary.committedMainFrameURL == url && ordinary.webView.title == "Suspension fixture" && !ordinary.isLoading
         }, message: opener.transcript)
+        let retainedView = ordinary.webView
+        let store = try XCTUnwrap(coordinator.registry.store(scopeID: "ordinary", host: host, isPrivate: false))
+        XCTAssertTrue(retainedView.configuration.websiteDataStore === store)
         browser.switchProfile(to: .privateMode)
         let privateTab = try XCTUnwrap(browser.activeTab)
         let suspended = await ordinary.suspendIfSafe()
         XCTAssertTrue(suspended)
         XCTAssertFalse(ordinary.isResident)
+        var suspendedDocumentInert = false
+        ordinary.afterCurrentDocumentBecomesInert { suspendedDocumentInert = true }
         browser.persistSession()
         let snapshot = try XCTUnwrap(windows.snapshot(browser.windowID))
         let requestCount = opener.transcript.components(separatedBy: "GET /page").count
@@ -817,7 +879,16 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertTrue(privateTab.isDisposed)
         XCTAssertFalse(ordinary.isResident)
         coordinator.registry.sweep(now: Date().addingTimeInterval(1801))
-        XCTAssertNil(coordinator.registry.store(scopeID: "ordinary", host: host, isPrivate: false))
+        if !suspendedDocumentInert {
+            XCTAssertTrue(coordinator.registry.store(scopeID: "ordinary", host: host, isPrivate: false) === store)
+            XCTAssertFalse(store.proxyConfigurations.isEmpty)
+        }
+        try await waitUntil(seconds: 10, {
+            coordinator.registry.sweep(now: Date().addingTimeInterval(1801))
+            return suspendedDocumentInert && coordinator.registry.store(scopeID: "ordinary", host: host, isPrivate: false) == nil
+        }, message: "The closed tab's store did not retire after its retained view became inert")
+        XCTAssertEqual(retainedView.url?.absoluteString, "about:blank")
+        XCTAssertTrue(store.proxyConfigurations.isEmpty)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(ordinary.navigationEpoch, closedEpoch)
         XCTAssertEqual(opener.transcript.components(separatedBy: "GET /page").count, requestCount)

@@ -800,6 +800,12 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         probeGenerations.removeValue(forKey: tab.instanceID.uuidString)
     }
 
+    func willRestoreOriginalStore(tab: BrowserTab) {
+        guard let finish = registry.detachTab(tab.instanceID.uuidString, from: tab.websiteDataStore)
+        else { return }
+        tab.afterCurrentDocumentBecomesInert(finish)
+    }
+
     func ordinaryHostStores() -> [WKWebsiteDataStore] {
         registry.ordinaryStores()
     }

@@ -191,6 +191,17 @@ public final class AccessHostDataStoreRegistry {
         if changed { sweep(now: now) }
     }
 
+    /// Transfer a live binding to a document receipt before the tab changes stores.
+    public func detachTab(_ tabID: String, from store: WKWebsiteDataStore) -> (@MainActor () -> Void)? {
+        guard let key = entries.first(where: {
+            $0.value.store === store && $0.value.record.boundTabIDs.contains(tabID)
+        })?.key,
+              let finish = retainRetiringDocument(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
+        else { return nil }
+        entries[key]?.record.boundTabIDs.remove(tabID)
+        return finish
+    }
+
     public func endPrivateSession(scopeID: String, now: Date = Date()) {
         switchGeneration &+= 1
         let keys = entries.keys.filter { $0.isPrivate && $0.scopeID == scopeID }

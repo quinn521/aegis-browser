@@ -102,6 +102,7 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore?
+    func willRestoreOriginalStore(tab: BrowserTab)
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError)
     func pendingRecoveryInvalidated(tab: BrowserTab)
     func tabClosed(_ tab: BrowserTab)
@@ -113,6 +114,7 @@ public extension BrowserHostStoreCoordinating {
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool { false }
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { false }
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool { false }
+    func willRestoreOriginalStore(tab: BrowserTab) {}
 }
 
 public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
@@ -1029,6 +1031,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         guard store !== configuration.websiteDataStore else {
             boundHostName = host
             return
+        }
+        if store === originalWebsiteDataStore, boundHostName != nil {
+            // Internal destinations do not pass through host routing. Transfer
+            // any remaining binding while the tab still owns the old document.
+            hostCoordinator?.willRestoreOriginalStore(tab: self)
         }
         terminateCurrentDocument()
         needsWindowBeforeLoad = true
