@@ -8,6 +8,9 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const archiveScript = 'scripts/ci/run-ios-unsigned-archive.sh';
 const supervisorScript = 'scripts/ci/ios-archive-supervisor.py';
+const proxyUser = 'fixture-proxy-user';
+const proxyToken = 'fixture-proxy-token%21';
+const authenticatedProxy = `http://${proxyUser}:${proxyToken}@proxy.example.invalid:8080`;
 
 function running(pid) {
   try {
@@ -97,13 +100,14 @@ ${verifierScript}
 exit 0
 `, {mode: 0o755});
   writeFileSync(join(bin, 'xcodebuild'), compilerScript, {mode: 0o755});
-  const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+  const env = {PATH: `${bin}:/usr/bin:/bin`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+    GIT_CONFIG_GLOBAL: join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
     RUNNER_TRACKING_ID: 'archive-fixture', ARCHIVE_TEST_PYTHON: python};
   return {source, python, env, wrapper: join(source, archiveScript)};
 }
 
-for (const [signal, exitCode] of [['SIGTERM', 143], ['SIGINT', 130], [null, 65]]) {
-  test(`archive ${signal ?? 'compiler failure'} stops owned descendants before wrapper exit`, async () => {
+for (const [signal, exitCode, proxy] of [['SIGTERM', 143], ['SIGINT', 130], [null, 65], ['SIGTERM', 143, authenticatedProxy]]) {
+  test(`archive ${signal ?? 'compiler failure'} stops owned descendants before wrapper exit${proxy ? ' with a proxy' : ''}`, async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-cancel-|'));
     const {source, python, env, wrapper} = prepareFixture(root);
 
@@ -123,7 +127,7 @@ with open(sys.argv[1], "rb") as log:
     });
     const child = spawn('bash', [wrapper], {
       cwd: source,
-      env: {...env, ARCHIVE_TEST_FAIL: signal ? '0' : '1'},
+      env: {...env, ARCHIVE_TEST_FAIL: signal ? '0' : '1', ...(proxy ? {HTTPS_PROXY: proxy} : {})},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -138,9 +142,10 @@ with open(sys.argv[1], "rb") as log:
     const roles = ['compiler', 'helper', 'grandchild'];
     const ready = () => [loggerReady, ...roles.map(role => join(root, role))].every(path => existsSync(path));
     const marker = 'separate-group grandchild holds compiler output';
+    const visible = proxy ? 'archive diagnostics withheld' : marker;
 
     try {
-      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(marker)), 'process markers and live diagnostic');
+      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(visible)), 'process markers and live diagnostic');
       assert(ready(), diagnostic);
       const [[compilerPid, supervisorPid, group, session], [helperPid, compilerParent, helperGroup, helperSession],
         [grandchildPid, helperParent, grandchildGroup, grandchildSession]] = roles.map(role =>
@@ -152,12 +157,14 @@ with open(sys.argv[1], "rb") as log:
       assert.deepEqual([helperSession, grandchildSession], [session, session]);
 
       if (signal) {
-        assert(stdout.includes(marker), diagnostic);
+        assert(stdout.includes(visible), diagnostic);
         assert.equal(child.kill(signal), true);
       }
       await waitFor(() => nextCheckoutStarted, 'wrapper exit and next-checkout probe');
       assert.equal(child.exitCode, exitCode, diagnostic);
-      assert(readFileSync(log, 'utf8').includes(marker));
+      const retained = readFileSync(log, 'utf8');
+      assert(retained.includes(visible));
+      if (proxy) assert(!retained.includes(marker) && !stdout.includes(marker));
       for (const pid of [compilerPid, helperPid, grandchildPid]) {
         assert.equal(running(pid), false, `archive descendant ${pid} survived wrapper exit`);
       }
@@ -171,6 +178,103 @@ with open(sys.argv[1], "rb") as log:
     }
   });
 }
+
+const proxyCompiler = String.raw`#!/bin/bash
+case "$ARCHIVE_TEST_INPUT" in
+  config|relative-config)
+    if [[ "$ARCHIVE_TEST_INPUT" == relative-config ]]; then cd overrides || exit 68; fi
+    proxy="$(/usr/bin/git config --get-urlmatch http.proxy https://git.example.invalid)" || exit 68
+    ;;
+  malformed)
+    if /usr/bin/git config --get http.proxy; then exit 68; fi
+    proxy="$ARCHIVE_TEST_PROXY"
+    ;;
+  env) proxy="$HTTPS_PROXY" ;;
+  plain) proxy="$https_proxy" ;;
+esac
+test "$proxy" = "$ARCHIVE_TEST_PROXY" || exit 69
+test "$RUNNER_TRACKING_ID" = archive-fixture || exit 70
+printf 'synthetic Git stdout: %s\n' "$proxy"
+printf 'synthetic Git stderr: %s\n' "$proxy" >&2
+printf '%s' 'synthetic partial line' >&2
+exit "$ARCHIVE_TEST_EXIT"
+`;
+
+for (const input of ['env', 'config', 'included-config', 'injected-config', 'relative-config', 'malformed', 'plain']) {
+  test('archive contains proxy diagnostics from ' + input, () => {
+    const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-proxy-'));
+    try {
+      const {env, source, wrapper} = prepareFixture(root, proxyCompiler, `
+if [[ "$1" == */verify-ios-archive.py ]]; then
+  printf 'verifier reached\\n' > "$IOS_CI_ROOT/verified"
+  printf 'synthetic verifier diagnostic: %s\\n' "$ARCHIVE_TEST_PROXY" >&2
+fi
+`);
+      const success = input === 'plain';
+      const proxy = success ? 'http://plain-proxy.example.invalid:8080' : authenticatedProxy;
+      const tracePath = join(root, 'trace.json');
+      env.ARCHIVE_TEST_INPUT = ['included-config', 'injected-config'].includes(input) ? 'config' : input;
+      env.ARCHIVE_TEST_PROXY = proxy;
+      env.ARCHIVE_TEST_EXIT = success ? '0' : '65';
+      env.GIT_TRACE = '1';
+      env.GIT_TRACE2_EVENT = tracePath;
+      if (input === 'env') env.HTTPS_PROXY = proxy;
+      if (input === 'plain') env.https_proxy = proxy;
+      if (input === 'config') writeFileSync(env.GIT_CONFIG_GLOBAL, '[http "https://git.example.invalid"]\nproxy = ' + proxy + '\n');
+      if (input === 'included-config') {
+        writeFileSync(env.GIT_CONFIG_GLOBAL, '[include]\npath = proxy-config\n');
+        writeFileSync(join(root, 'proxy-config'), '[http]\nproxy = ' + proxy + '\n');
+      }
+      if (input === 'relative-config') {
+        env.GIT_CONFIG_GLOBAL = 'relative-config';
+        mkdirSync(join(source, 'overrides'));
+        writeFileSync(join(source, 'overrides', 'relative-config'), '[http]\nproxy = ' + proxy + '\n');
+      }
+      if (input === 'malformed') writeFileSync(env.GIT_CONFIG_GLOBAL, '[malformed ' + proxy + '\n');
+      if (input === 'injected-config') Object.assign(env, {
+        GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.proxy', GIT_CONFIG_VALUE_0: proxy,
+      });
+      const child = spawnSync('bash', [wrapper], {env, encoding: 'utf8', timeout: 20000});
+      assert.ifError(child.error);
+      assert.equal(child.status, success ? 0 : 65);
+      const retained = readFileSync(join(root, 'xcodebuild.log'), 'utf8');
+      const sinks = [['console', child.stdout + child.stderr], ['xcodebuild.log', retained]];
+      const prohibited = [proxy, 'proxy.example.invalid', proxyUser, proxyToken, decodeURIComponent(proxyToken),
+        'synthetic Git stdout', 'synthetic Git stderr', 'synthetic partial line', 'synthetic verifier diagnostic'];
+      const leaks = sinks.filter(([, output]) => prohibited.some(value => output.includes(value)));
+      assert.deepEqual(leaks.map(([name]) => name), [], 'sinks containing raw transport diagnostics');
+      for (const [name, output] of sinks) {
+        assert.equal(output.includes('archive diagnostics withheld'), true, name);
+        assert.equal(output.includes('compiler exited with status ' + (success ? 0 : 65)), true, name);
+      }
+      assert.equal(existsSync(tracePath), false, 'Git must not retain a trace file');
+      assert.equal(existsSync(join(root, 'verified')), success);
+    } finally {
+      rmSync(root, {recursive: true, force: true});
+    }
+  });
+}
+
+test('archive without transport overrides retains compiler output while disabling Git tracing', () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-quiet-git-'));
+  try {
+    const {env, wrapper} = prepareFixture(root, '#!/bin/bash\n/usr/bin/git config --get fixture.diagnostic\n');
+    const tracePath = join(root, 'trace.json');
+    writeFileSync(env.GIT_CONFIG_GLOBAL, '[trace2]\neventTarget = ' + tracePath + '\n[fixture]\ndiagnostic = ordinary compiler output\n');
+    env.GIT_TRACE = '1';
+    env.GIT_CURL_VERBOSE = '1';
+    const child = spawnSync('bash', [wrapper], {env, encoding: 'utf8', timeout: 20000});
+    assert.ifError(child.error);
+    assert.equal(child.status, 0);
+    assert.match(child.stdout, /(?:^|\n)ordinary compiler output\n$/u);
+    assert.doesNotMatch(child.stdout, /trace:/u);
+    assert.equal(child.stderr, '');
+    assert.equal(readFileSync(join(root, 'xcodebuild.log'), 'utf8'), child.stdout);
+    assert.equal(existsSync(tracePath), false, 'Git must not retain a config-specified trace file');
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
 
 test('a stalled Actions console cannot throttle the compiler log or cancellation', async () => {
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-stalled-console-'));

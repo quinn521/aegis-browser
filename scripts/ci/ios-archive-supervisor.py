@@ -5,6 +5,7 @@ import ctypes
 import errno
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -15,6 +16,66 @@ POLL_INTERVAL = 0.05
 READ_SIZE = 64 * 1024
 TERM_GRACE = 0.5
 CENSUS_TIMEOUT = 2
+GIT_CONFIG_TIMEOUT = 2
+TRANSPORT_OVERRIDES = {
+    "GIT_PROXY_COMMAND", "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS",
+    "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
+    "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "NETRC", "TOOLCHAINS",
+}
+
+
+def archive_environment():
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.startswith("GIT_TRACE") and name != "GIT_CURL_VERBOSE"}
+    # Override Trace2 destinations from system/global Git configuration as well.
+    environment.update(GIT_TRACE2="0", GIT_TRACE2_EVENT="0", GIT_TRACE2_PERF="0")
+    return environment
+
+
+def needs_private_diagnostics(environment):
+    if any(name.lower().endswith("_proxy") or name in TRANSPORT_OVERRIDES
+           or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_", "GIT_HTTP_", "GIT_SSL_"))
+           for name in environment):
+        return True
+    # Relative locations can resolve differently inside package checkouts.
+    for name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "HOME", "XDG_CONFIG_HOME"):
+        if environment.get(name) and not os.path.isabs(environment[name]):
+            return True
+    # Xcode selects system Git. If PATH could select a different Git for a
+    # helper, its system config may differ from the one probed here.
+    if shutil.which("git", path=environment.get("PATH", os.defpath)) != "/usr/bin/git":
+        return True
+    try:
+        git = "/usr/bin/git"
+        if sys.platform == "darwin":
+            # /usr/bin/git is an Xcode launcher. Probe the selected system Git
+            # directly so a cold launcher cache cannot delay archive startup.
+            developer = subprocess.check_output(  # nosec B603 - fixed Xcode selection query.
+                ["/usr/bin/xcode-select", "--print-path"], env=environment,
+                stderr=subprocess.DEVNULL, timeout=GIT_CONFIG_TIMEOUT)
+            directory = os.fsdecode(developer.removesuffix(b"\n"))
+            if not os.path.isabs(directory) or "\n" in directory or "\0" in directory:
+                return True
+            git = os.path.join(directory, "usr/bin/git")
+        config = subprocess.run(  # nosec B603 - fixed, offline Git metadata query.
+            [git, "config", "--null", "--name-only", "--list", "--no-includes"],
+            env=environment, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=GIT_CONFIG_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if config.returncode or b"\n" in config.stdout or (config.stdout and not config.stdout.endswith(b"\0")):
+        return True
+    # Includes can become active only in a package checkout. Config key
+    # subsections can themselves contain credentials, so never report the keys.
+    return any(key.startswith((b"http.", b"credential.", b"url.", b"remote.", b"include.", b"includeif."))
+               or key in (b"core.gitproxy", b"core.askpass", b"core.sshcommand", b"init.templatedir")
+               for key in config.stdout.lower().split(b"\0"))
+
+
+def discard_output(_data):
+    # The compiler can relay Git output in arbitrary formats. Keep draining
+    # the stage pipe without sending those bytes to either diagnostics sink.
+    pass
 
 
 def process_states(timeout=CENSUS_TIMEOUT):
@@ -268,7 +329,7 @@ def stream_until_exit(pid, descriptor, output, cancelled):
             queue.close()
 
 
-def run_stage(command, output, cancelled, signal_worker):
+def run_stage(command, environment, output, cancelled, signal_worker):
     # Verify process enumeration is available before starting anything that
     # might leave a helper in a second process group.
     if cancelled():
@@ -283,7 +344,7 @@ def run_stage(command, output, cancelled, signal_worker):
             # Create the session atomically with spawn. The supervisor stays
             # the direct parent and passes the Actions tracking env intact.
             pid = os.posix_spawn(
-                command[0], command, os.environ, setsid=True, setsigmask=(),
+                command[0], command, environment, setsid=True, setsigmask=(),
                 setsigdef=(signal.SIGINT, signal.SIGTERM, signal.SIGPIPE),
                 file_actions=[(os.POSIX_SPAWN_DUP2, writer, fd) for fd in (1, 2)])
         finally:
@@ -319,16 +380,27 @@ def main(log, shell, wrapper, *command):
         return received != 0
 
     signal_worker = worker_signaler()
+    environment = archive_environment()
+    private_diagnostics = needs_private_diagnostics(environment)
     output = ArchiveOutput(log)
     try:
-        code = run_stage(command, output.write, cancelled, signal_worker)
+        if private_diagnostics:
+            output.write(b"unsigned archive diagnostics withheld for proxy or unverified Git transport settings\n")
+        code = run_stage(command, environment, discard_output if private_diagnostics else output.write,
+                         cancelled, signal_worker)
+        if private_diagnostics:
+            status = 128 + received if received else code
+            output.write(f"unsigned archive compiler exited with status {status}\n".encode("ascii"))
     finally:
         output.close()
     if received:
         return 128 + received
     if code or output.failed:
         return code or os.EX_IOERR
-    code = run_stage([shell, wrapper, "--verify-archive"], write_console, cancelled, signal_worker)
+    code = run_stage([shell, wrapper, "--verify-archive"], environment,
+                     discard_output if private_diagnostics else write_console, cancelled, signal_worker)
+    if private_diagnostics and code:
+        report(f"unsigned archive verification exited with status {code}")
     return 128 + received if received else code
 
 

@@ -336,7 +336,13 @@ test('paths select platforms and commit types select stage depth', () => {
     const iosRoute = {ios: true, android: false, macos: false, windows: false, linux: false, integrate: true, deep: true};
     const androidRoute = {...iosRoute, ios: false, android: true};
     const sharedSetup = pr(() => save(commonScript, 'updated'), 'fix: repair browser setup');
-    assert.deepEqual(route(sharedSetup), {...iosRoute, android: true, macos: true});
+    assert.deepEqual(route(sharedSetup), {...androidRoute, macos: true});
+    const sharedSetupWithIos = pr(() => {
+      save(commonScript, 'updated');
+      save('apps/ios/Feature.swift', 'updated');
+      save('unknown.file', 'updated');
+    }, 'fix: repair browser setup and iOS');
+    assert.deepEqual(route(sharedSetupWithIos), {...iosRoute, android: true, macos: true});
     for (const path of iosArchiveTests) {
       assert.deepEqual(route(pr(() => save(path, 'updated'), 'test: cover archive input')), {...iosRoute, deep: false}, path);
     }
@@ -616,7 +622,8 @@ exit "$ARCHIVE_TEST_EXIT"
   chmodSync(join(bin, 'xcodebuild'), 0o755);
   const run = overrides => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {
     cwd: shared, encoding: 'utf8', timeout: 10000, env: {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+      PATH: `${bin}:/usr/bin:/bin`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
       GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
       GIT_OBJECT_DIRECTORY: join(shared, '.git', 'objects'), GIT_INDEX_FILE: join(shared, '.git', 'index'),
       GIT_IMPLICIT_WORK_TREE: '0', GIT_ALTERNATE_OBJECT_DIRECTORIES: shared, GIT_QUARANTINE_PATH: shared,
@@ -701,11 +708,10 @@ exit 65
     writeFileSync(join(bin, name), body); chmodSync(join(bin, name), 0o755);
   }
   try {
-    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_CONFIG_')));
     const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {encoding: 'utf8', env: {
-      ...environment, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
+      PATH: `${bin}:/usr/bin:/bin`, IOS_CI_ROOT: root,
       IOS_CI_SOURCE: source,
-      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
       https_proxy: 'http://127.0.0.1:10', HTTPS_PROXY: 'http://127.0.0.1:10',
       no_proxy: 'localhost', NO_PROXY: 'localhost',
       ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
