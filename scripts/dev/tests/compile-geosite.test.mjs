@@ -138,6 +138,32 @@ test('network URL matching works without URL.parse', () => {
   assert.equal(result.stderr, '');
 });
 
+test('importing the compiler by a positional filesystem path is inert', (t) => {
+  const source = `void import(require('node:url').pathToFileURL(process.argv[1]));`;
+  const moduleSource = `import {pathToFileURL} from 'node:url'; await import(pathToFileURL(process.argv[1]));`;
+  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-import-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const importer = join(dir, 'importer.mjs');
+  writeFileSync(importer, moduleSource.replace('argv[1]', 'argv[2]'));
+  for (const [args, stdout] of [
+    [['-e', source], ''],
+    [['--eval', source], ''],
+    [[`--eval=${source}`], ''],
+    [['--input-type=module', '-e', moduleSource], ''],
+    [['--input-type=module', '--eval', moduleSource], ''],
+    [['-p', source], 'undefined\n'],
+    [['--print', source], 'undefined\n'],
+    [['-pe', source], 'undefined\n'],
+    [[importer], ''],
+  ]) {
+    const result = spawnSync(process.execPath, [...args, cli, '--help'], {encoding: 'utf8'});
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, stdout, args[0]);
+    assert.equal(result.stderr, '');
+  }
+});
+
 test('domain rules cannot cover a nested registry or wildcard tenants', () => {
   const list = psl.replace('tenant.example', 'tenant.example\ntenants.example.org');
   for (const host of ['kawasaki.jp', 'example.org', '*.good.org', 'appliance.home.arpa']) {
@@ -372,7 +398,7 @@ test('authentic standard XTLS DAT reproduces the three certified groups and reje
     const datCopy = join(dir, 'pinned-geosite.dat');
     writeFileSync(datCopy, raw);
     linkSync(datCopy, datAlias);
-    symlinkSync(pslPath, pslAlias);
+    symlinkSync(realpathSync.native(pslPath), pslAlias);
     symlinkSync(output, outputAlias);
     raw[raw.length - 1] ^= 1;
     suffixes[0] ^= 1;
@@ -445,6 +471,68 @@ test('publication protects a pinned pathname after the opened input is replaced'
       assert.equal(readFileSync(input, 'utf8'), 'refreshed input\n');
       assert.equal(readlinkSync(alias), input);
       assert.ok(readdirSync(dir).every((entry) => !entry.startsWith('.geosite-')));
+    }
+  });
+
+test('publication protects DAT and PSL names when a parent symlink is retargeted',
+  {skip: !(xrayInputs && pinnedInputs) && 'set AEGIS_XRAY_GEOSITE_INPUT_DIR and AEGIS_GEOSITE_INPUT_DIR'}, async (t) => {
+    const dat = join(xrayInputs, 'geosite.dat');
+    const psl = join(pinnedInputs, 'effective_tld_names.dat');
+    for (const [kind, pinned] of [['dat', dat], ['psl', psl]]) {
+      for (const alias of ['identical name', 'canonical path', 'hard link']) {
+        await t.test(`${kind}: ${alias}`, (t) => {
+          const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-retarget-test-'));
+          t.after(() => rmSync(dir, {recursive: true, force: true}));
+          const before = join(dir, 'before', 'nested');
+          const after = join(dir, 'after', 'nested');
+          mkdirSync(before, {recursive: true});
+          mkdirSync(after, {recursive: true});
+          const current = join(dir, 'current');
+          const next = join(dir, 'next');
+          symlinkSync(before, current, 'dir');
+          symlinkSync(after, next, 'dir');
+          const name = `${current}/../${kind}`;
+          const original = join(dirname(before), kind);
+          const refreshed = join(dirname(after), kind);
+          copyFileSync(pinned, original);
+          writeFileSync(refreshed, 'refreshed input\n');
+          writeFileSync(join(dir, kind), 'lexical decoy\n');
+          const catalogue = join(dir, 'catalogue.json');
+          if (alias === 'hard link') linkSync(refreshed, catalogue);
+          else writeFileSync(catalogue, 'previous catalogue\n');
+          const previousCatalogue = readFileSync(catalogue);
+          const output = alias === 'identical name' ? name : alias === 'canonical path' ? refreshed : catalogue;
+
+          // Move the parent after opening the input, or after flushing the temporary output.
+          const method = alias === 'identical name' ? 'fstatSync' : 'fsyncSync';
+          const preload = join(dir, 'retarget.cjs');
+          writeFileSync(preload, `
+            const fs = require('node:fs');
+            const {dev, ino} = fs.statSync(${JSON.stringify(original)}, {bigint: true});
+            const method = ${JSON.stringify(method)};
+            const call = fs[method];
+            fs[method] = (...args) => {
+              const result = call(...args);
+              if (method === 'fsyncSync' || (result.dev === dev && result.ino === ino)) {
+                fs.renameSync(${JSON.stringify(next)}, ${JSON.stringify(current)});
+              }
+              return result;
+            };
+            require('node:module').syncBuiltinESMExports();
+          `);
+          const result = spawnSync(process.execPath, ['--require', preload, cli,
+            '--dat', kind === 'dat' ? name : dat, '--psl', kind === 'psl' ? name : psl,
+            '--group', 'DEBIAN', '--output', output], {encoding: 'utf8'});
+          assert.equal(readlinkSync(current), after);
+          assert.equal(result.status, 1, result.stderr);
+          assert.match(result.stderr, /output.*separate/i);
+          assert.deepEqual(readFileSync(original), readFileSync(pinned));
+          assert.equal(readFileSync(refreshed, 'utf8'), 'refreshed input\n');
+          assert.deepEqual(readFileSync(catalogue), previousCatalogue);
+          assert.ok([dir, dirname(after)].every((path) =>
+            readdirSync(path).every((entry) => !entry.startsWith('.geosite-'))));
+        });
+      }
     }
   });
 

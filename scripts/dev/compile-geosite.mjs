@@ -2,7 +2,7 @@
 
 import {createHash, randomUUID} from 'node:crypto';
 import {
-  closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync,
+  closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync, statSync,
   writeFileSync,
 } from 'node:fs';
 import {isIP} from 'node:net';
@@ -333,15 +333,20 @@ function readPinned(path, pin, label) {
   const canonicalPath = realpathSync.native(path);
   const input = readExactFile(canonicalPath, pin.bytes, label);
   if (sha256(input.data) !== pin.sha256) throw new Error(label + ' SHA-256 does not match the pin');
-  return {...input, path: canonicalPath};
+  return {...input, namedPath: path, canonicalPath};
 }
 
-function checkOutput(path, inputs) {
+function checkOutput(path, namedPath, inputs) {
   const destination = lstatSync(path, {bigint: true, throwIfNoEntry: false});
   if (destination && !destination.isFile()) throw new Error('Output destination must be a regular file');
   const canonicalPath = destination ? realpathSync.native(path) : path;
-  if (inputs.some((input) => canonicalPath === input.path ||
-    (destination?.dev === input.info.dev && destination.ino === input.info.ino))) {
+  const sameFile = ({dev, ino}) => destination?.dev === dev && destination.ino === ino;
+  if (inputs.some((input) => {
+    if (namedPath === input.namedPath || canonicalPath === input.canonicalPath || sameFile(input.info)) return true;
+    // A parent symlink can retarget the raw input name after the pinned read.
+    return canonicalPath === realpathSync.native(input.namedPath) ||
+      sameFile(statSync(input.namedPath, {bigint: true}));
+  })) {
     throw new Error('Output must be separate from the pinned input files');
   }
 }
@@ -354,7 +359,7 @@ function writeAtomically(path, data, inputs) {
   // Resolve symlinks before processing any subsequent parent-directory segments.
   const directory = realpathSync.native(dirname(path));
   const destination = join(directory, name);
-  checkOutput(destination, inputs);
+  checkOutput(destination, path, inputs);
   const temporary = join(directory, '.geosite-' + randomUUID() + '.tmp');
   const fd = openSync(temporary, 'wx', 0o644);
   let renamed = false;
@@ -365,7 +370,7 @@ function writeAtomically(path, data, inputs) {
     } finally {
       closeSync(fd);
     }
-    checkOutput(destination, inputs);
+    checkOutput(destination, path, inputs);
     renameSync(temporary, destination);
     renamed = true;
   } finally {
@@ -428,7 +433,9 @@ function main() {
 }
 
 function isMain() {
-  if (!process.argv[1]) return false;
+  if (typeof import.meta.main === 'boolean') return import.meta.main;
+  // Older Node exposes the source for both eval and print modes on process._eval.
+  if (process._eval !== undefined || !process.argv[1]) return false;
   try {
     return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
   } catch {
