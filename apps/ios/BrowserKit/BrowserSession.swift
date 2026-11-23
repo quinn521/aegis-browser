@@ -872,11 +872,13 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Keep the failed route selected while its document is fenced. An
     /// explicit navigation can acquire a replacement on its normal route.
     public func retireFailedProxyDocument(_ acknowledge: @escaping @MainActor () -> Void) {
-        afterCurrentDocumentBecomesInert(acknowledge)
-        guard loadedWebView != nil else { return }
+        loadTask?.cancel()
         invalidateDeferredDocumentLoad()
-        terminateCurrentDocument()
+        isLoading = false
         loadingErrorPresentation = .resource("代理入口还不能使用")
+        let hasDocument = loadedWebView != nil
+        afterCurrentDocumentBecomesInert(acknowledge)
+        if hasDocument { terminateCurrentDocument() }
     }
 
     private func releaseRetiringStoresIfReady() {

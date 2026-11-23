@@ -10,6 +10,52 @@ import XCTest
 /// Failed page reloads through the app HTTP CONNECT listener, not a test-only proxy socket.
 @MainActor
 final class AccessHostRecoveryWebKitTests: XCTestCase {
+    func testListenerRetirementFencesColdLoadBeforeWebViewCreation() async throws {
+        try await assertDeferredLoadRetiredWithoutWebView(warmRules: false)
+    }
+
+    func testListenerRetirementFencesParkedLoadBeforeWebViewCreation() async throws {
+        try await assertDeferredLoadRetiredWithoutWebView(warmRules: true)
+    }
+
+    private func assertDeferredLoadRetiredWithoutWebView(warmRules: Bool) async throws {
+        let coordinator = AccessHostStoreCoordinator(defaultLocationPrivacy: false)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        defer { browser.closeWindow() }
+        browser.hostCoordinator = coordinator
+        let tab = try XCTUnwrap(browser.activeTab)
+        if warmRules { try await tab.prepareContentRulesForTests() }
+        let host = try AccessSiteHost("localhost")
+        arm(tab, host: host, port: 18_253, coordinator: coordinator)
+        let store = try XCTUnwrap(coordinator.registry.storeForTab(tabID: tab.instanceID.uuidString,
+            scopeID: tab.browsingScopeID, isPrivate: false, targetHost: host, boundHost: nil, intent: .on))
+        let url = try XCTUnwrap(URL(string: "http://localhost:1/retired-before-attachment"))
+        tab.load(URLRequest(url: url))
+        XCTAssertTrue(tab.websiteDataStore === store)
+        XCTAssertTrue(tab.isLoading)
+        XCTAssertFalse(tab.isResident)
+        XCTAssertFalse(store.proxyConfigurations.isEmpty)
+
+        var acknowledged = false
+        coordinator.retireManagedDocuments(identity: "window-terminal") {
+            acknowledged = true
+            XCTAssertFalse(tab.isLoading, "Pending navigation must be fenced before acknowledging retirement")
+            XCTAssertNotNil(tab.loadingError)
+            XCTAssertFalse(tab.isResident)
+        }
+        XCTAssertTrue(acknowledged)
+        XCTAssertTrue(store.proxyConfigurations.isEmpty)
+
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        try await tab.prepareContentRulesForTests()
+        await Task.yield()
+        XCTAssertNil(tab.currentNavigationForTests)
+        XCTAssertNil(tab.heldProxyRequestForTests)
+        XCTAssertFalse(tab.isLoading)
+        XCTAssertNil(tab.webView.url)
+    }
+
     func testFirstPublicNavigationUsesTheDefaultProtectedRoute() async throws {
         let opener = AnsweringOpener(finishAfterRecording: true)
         let listener = try await makeListener(port: 18_277, tunnels: opener)

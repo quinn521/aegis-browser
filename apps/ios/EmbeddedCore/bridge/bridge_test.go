@@ -387,3 +387,19 @@ func TestRealityClientFieldAdmissionMatchesPinnedBuilder(t *testing.T) {
 		}
 	}
 }
+
+func TestManualRealityRejectsSpiderWorkControls(t *testing.T) {
+	for _, spider := range []string{
+		"/?p=1000000000", "/?c=1000000000", "/?t=1-1000000000", "/?i=1000000000", "/?r=1000000000",
+		"/?q=ordinary&%63=1", "/?c=&c=1000000000", "/?r", "/?q=%ZZ&c=1000000000",
+	} {
+		if got := ValidateRealityClientFields("chrome", spider); got != "spiderX" {
+			t.Errorf("manual spider %q: got %q, want spiderX", spider, got)
+		}
+	}
+	for _, spider := range []string{"", "/", "/path%20name?color=red&color=blue", "/?q=p%3D1%26c%3D2"} {
+		if got := ValidateRealityClientFields("chrome", spider); got != "" {
+			t.Errorf("manual spider %q: unexpected rejection %q", spider, got)
+		}
+	}
+}

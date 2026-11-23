@@ -235,6 +235,64 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         }
     }
 
+    func testRetiredSecretLimitDisablesSharedCaptureUntilAllOwnersEnd() throws {
+        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
+        let subscription = log.acquireShared(level: .info, secrets: ["subscription.invalid"])
+        defer { log.stop(lease: subscription) }
+        let originalPath = try XCTUnwrap(subscription.path)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: originalPath))
+        defer { try? writer.close() }
+
+        for index in 0..<256 {
+            let page = log.acquireShared(level: .info, secrets: ["retired-\(index).invalid"])
+            XCTAssertEqual(page.path, originalPath)
+            XCTAssertTrue(log.stop(lease: page))
+        }
+        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //retired-0.invalid:443\n".utf8))
+        XCTAssertTrue(log.stop(lease: log.acquireShared(level: .info, secrets: [])))
+        XCTAssertTrue(log.snapshot().contains("accepted [redacted]"))
+        XCTAssertFalse(log.snapshot().contains("retired-0.invalid"))
+        let overflow = log.acquireShared(level: .info, secrets: ["retired-overflow.invalid"])
+        XCTAssertEqual(overflow.path, originalPath)
+        XCTAssertFalse(log.unavailable)
+        XCTAssertTrue(log.stop(lease: overflow))
+        XCTAssertTrue(log.unavailable)
+
+        log.disableAndClear()
+        let blocked = log.acquireShared(level: .info, secrets: [])
+        defer { log.stop(lease: blocked) }
+        XCTAssertNil(blocked.path, "Off/On cannot reenable capture while an old core can still emit")
+        try writer.write(contentsOf: Data("2026/11/11 00:00:00 from local accepted //retired-overflow.invalid:443\n".utf8))
+        XCTAssertTrue(log.stop(lease: blocked))
+        XCTAssertTrue(log.stop(lease: subscription))
+        XCTAssertEqual(log.snapshot(), "")
+
+        let recovered = log.acquireShared(level: .info, secrets: [])
+        defer { log.stop(lease: recovered) }
+        XCTAssertNotEqual(try XCTUnwrap(recovered.path), originalPath)
+        XCTAssertFalse(log.unavailable)
+    }
+
+    func testDelayedRestoreDropsHistoryWhenItsRedactionLimitIsExceeded() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let line = "2026/11/11 00:00:00 [Access] accepted retired-0.invalid:443"
+        let history = directory.appendingPathComponent("history.json")
+        try JSONSerialization.data(withJSONObject: ["version": 1, "lines": [line]]).write(to: history)
+        let storageQueue = DispatchQueue(label: "access.restore.filter.limit.test")
+        storageQueue.suspend()
+        let log = AccessDiagnosticLog(storageDirectory: directory, initialLevel: .info, storageQueue: storageQueue)
+        for index in 0...256 {
+            let page = log.acquireShared(level: .none, secrets: ["retired-\(index).invalid"], disableCaptureWhenQuiet: false)
+            XCTAssertTrue(log.stop(lease: page))
+        }
+        storageQueue.resume()
+        try await log.flush()
+        XCTAssertEqual(log.snapshot(), "")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: history.path))
+    }
+
     func testDisabledSharedCaptureKeepsLiveLeasesWhenLoggingResumes() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -244,6 +302,8 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         let path = try XCTUnwrap(subscription.path)
         let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         defer { try? writer.close() }
+        let retiredBeforeOff = log.acquireShared(level: .info, secrets: ["retired-before-off.invalid"])
+        XCTAssertTrue(log.stop(lease: retiredBeforeOff))
         log.disableAndClear()
         let quietPage = log.acquireShared(level: .none, secrets: ["quiet-secret.example"])
         defer { log.stop(lease: quietPage) }
@@ -263,6 +323,7 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
             "2026/11/11 00:00:00 from local accepted //subscription-secret.example:443\n" +
             "2026/11/11 00:00:00 from local accepted //page-secret.example:443\n" +
             "2026/11/11 00:00:00 from local accepted //quiet-secret.example:443\n" +
+            "2026/11/11 00:00:00 from local accepted //retired-before-off.invalid:443\n" +
             "2026/11/11 00:00:00 from local accepted //resumed.example:443\n").utf8))
         XCTAssertTrue(log.stop(lease: page))
         XCTAssertTrue(log.stop(lease: quietPage))
@@ -276,7 +337,7 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         for snapshot in [log.snapshot(), restored.snapshot()] {
             XCTAssertTrue(snapshot.contains("resumed.example:443"))
             for hidden in ["disabled.example", "delayed-off.example", "subscription-secret.example",
-                           "page-secret.example", "quiet-secret.example"] {
+                           "page-secret.example", "quiet-secret.example", "retired-before-off.invalid"] {
                 XCTAssertFalse(snapshot.contains(hidden))
             }
         }

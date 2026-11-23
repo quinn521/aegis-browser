@@ -15,6 +15,7 @@
 - `AccessInternalOptions` 同时检查包 ID、Access channel、release profile 和显式能力；Firebase 不参与。内部 Alpha 可使用 Release 编译。Beta、Release、unknown、矛盾身份和私密作用域从原生仓储方法拒绝读、写及恢复，隐藏界面不是唯一防线。
 - 新 Options 入口复用 `AccessLocalV2RayConfigLoader.parseShareURI` 和 `AccessRealityVisionParameters`，增加 8192 字节上限、整次单条、查询字段白名单及别名冲突检查。手动入口在保存前验证 REALITY 公钥为解码成 32 字节的无填充 Base64URL，短 ID 为偶数个十六进制字符，保留显式空短 ID。旧文件/订阅解析合同保持原行为。
 - 兼容 3X-UI REALITY 分享中的 `support-x25519mlkem768=true` 能力提示；保留明示的空 `sid` 和 `spx`，按原生 Xray 的 `shortId` / `spiderX` 语义生成配置，不生成不存在的同名 JSON 开关。提示的非肯定值、重复字段、未知字段与多条输入继续拒绝。连接成功不等于已观测具体握手组。
+- 手动 Profile 的 `spx` 接受路径与普通查询参数。预览、保存和恢复均拒绝 Xray 的爬取控制键 `p`、`c`、`t`、`i`、`r`，包括百分号编码的键。
 - `VisionKit.DataScannerViewController` 只识别 QR；点击扫描后才请求相机授权。捕获 payload 与文本进入相同校验。二维码图像不持久化；自动化只使用合成节点。
 - 普通测试节点按渠道保存到独立、本设备、不参与同步且解锁后可读的 Keychain 项。普通偏好和导出没有节点秘密，存储记录有版本及随机 revision；未知或损坏版本拒绝恢复。
 - 本片只有显式测试网页可使用已保存的手动节点，没有主浏览器的自动激活或文件/深链导入通路。受限渠道仓储拒绝与包身份单测不等同于完整的 Beta/Release 包、覆盖安装、直接命令与恢复矩阵验收。旧高级面板的渠道迁移仍属后续 O1。

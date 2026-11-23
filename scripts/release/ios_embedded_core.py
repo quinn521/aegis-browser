@@ -65,6 +65,9 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
     actual = slice_digests(framework)
     if mode == "strict" and any(lock["artifacts"].get(key) != value for key, value in actual.items()):
         raise ValueError("actual EmbeddedCore slices differ from frozen digests")
+    compiled_bridge = directory_digest(products / "work/bridge")
+    if (products / "compiled-bridge.sha256").read_text().strip() != compiled_bridge:
+        raise ValueError("EmbeddedCore bridge copy differs from the gomobile build input")
     effective = {**lock, "artifacts": {**lock["artifacts"], **actual}}
     write_json(products / "embedded-core-lock.json", effective)
     (products / "build-inputs.xcfilelist").write_text(input_list(
@@ -85,7 +88,8 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
         "digestMode": mode,
         "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
         "sourceLockSha256": file_digest(source_lock),
-        "bridgeSha256": directory_digest(root / "apps/ios/EmbeddedCore/bridge"),
+        "bridgeSha256": compiled_bridge,
+        "compiledBridgeSha256": compiled_bridge,
         "effectiveLockSha256": file_digest(products / "embedded-core-lock.json"),
         "frameworkSha256": directory_digest(framework),
         "slices": actual,
@@ -108,9 +112,11 @@ def verify(root, source_lock, products, mode=None):
     file_list = products / "build-inputs.xcfilelist"
     if file_list.read_text() != input_list(root, source_lock, products, products / "AegisEmbeddedCore.xcframework"):
         raise ValueError("Xcode input list points to different build inputs")
+    bridge = directory_digest(root / "apps/ios/EmbeddedCore/bridge")
     expected = {
         "sourceLockSha256": file_digest(source_lock),
-        "bridgeSha256": directory_digest(root / "apps/ios/EmbeddedCore/bridge"),
+        "bridgeSha256": bridge,
+        "compiledBridgeSha256": bridge,
         "effectiveLockSha256": file_digest(products / "embedded-core-lock.json"),
         "frameworkSha256": directory_digest(products / "AegisEmbeddedCore.xcframework"),
         "slices": slice_digests(products / "AegisEmbeddedCore.xcframework"),
@@ -145,9 +151,11 @@ def verify_bundle(bundle, products, derived, platform):
 
 def verify_prepared_source(manifest, root, commit):
     embedded = Path(root) / "apps/ios/EmbeddedCore"
+    bridge = directory_digest(embedded / "bridge")
     if (manifest["sourceCommit"] != commit
             or manifest["sourceLockSha256"] != file_digest(embedded / "embedded-core-lock.json")
-            or manifest["bridgeSha256"] != directory_digest(embedded / "bridge")):
+            or manifest.get("compiledBridgeSha256") != bridge
+            or manifest["bridgeSha256"] != bridge):
         raise ValueError("EmbeddedCore inputs do not match the prepared Alpha source")
 
 

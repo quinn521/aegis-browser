@@ -142,6 +142,72 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         XCTAssertFalse(listener.isAccepting, "A fenced lease must stay fenced after a clock correction")
     }
 
+    func testHTTPLeaseExpiringDuringDialDoesNotAcknowledgeOrForward() async throws {
+        try await assertLeaseExpiringDuringDial(transport: .http)
+    }
+
+    func testSOCKSLeaseExpiringDuringDialDoesNotAcknowledgeOrForward() async throws {
+        try await assertLeaseExpiringDuringDial(transport: .socks5)
+    }
+
+    private func assertLeaseExpiringDuringDial(transport: AccessInboundTransport) async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port)
+        let time = Date()
+        let cutoff = time.addingTimeInterval(60)
+        let clock = Mutex(time)
+        let now: @Sendable () -> Date = { clock.withLock { $0 } }
+        let tunnel = GatedTunnel()
+        let registration = try makeRegistration(transport: transport, port: port.rawValue, expiresAt: cutoff)
+        let http = transport == .http ? try AccessHTTPInboundListener(registration: registration, tunnels: tunnel,
+            maximumConnections: 4, preparedSocket: socket, now: now) : nil
+        let socks = transport == .socks5 ? try AccessSOCKS5InboundListener(registration: registration, tunnels: tunnel,
+            maximumConnections: 4, preparedSocket: socket, now: now) : nil
+        defer { tunnel.release(); try? http?.stop(); try? socks?.stop() }
+        try await http?.start(at: time)
+        try await socks?.start(at: time)
+
+        let client = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        client.start(queue: .global())
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled { client.cancel() }
+        }
+        defer { deadline.cancel(); client.cancel() }
+        var connect: Data
+        if transport == .socks5 {
+            try await Self.send(Data([5, 1, 0]), to: client)
+            let greeting = try await Self.receive(2, from: client)
+            XCTAssertEqual(greeting, Data([5, 0]))
+            connect = Data([5, 1, 0, 1, 192, 0, 2, 1, 1, 187])
+        } else {
+            connect = Data("CONNECT 192.0.2.1:443 HTTP/1.1\r\nHost: 192.0.2.1:443\r\n\r\n".utf8)
+        }
+        connect.append(contentsOf: "buffered-synthetic-data".utf8)
+        try await Self.send(connect, to: client)
+        let dialDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !tunnel.isWaiting, ContinuousClock.now < dialDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        guard tunnel.isWaiting else { return XCTFail("The authorized opener never suspended") }
+        let refused = expectation(description: "peer closed without CONNECT success")
+        client.receive(minimumIncompleteLength: 1, maximumLength: 256) { data, _, complete, error in
+            XCTAssertTrue(data?.isEmpty != false)
+            XCTAssertTrue(complete || error != nil)
+            refused.fulfill()
+        }
+        // Only wall time advances. Querying isAccepting here would fence the
+        // listener independently of the bridge and hide the regression.
+        clock.withLock { $0 = cutoff }
+        tunnel.release()
+        await fulfillment(of: [refused], timeout: 2)
+        let closeDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while tunnel.stream.isOpen, ContinuousClock.now < closeDeadline { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertTrue(tunnel.stream.writtenSnapshot.isEmpty)
+        XCTAssertEqual(http?.establishedConnectCount ?? socks?.establishedConnectCount, 0)
+        XCTAssertTrue((http?.boundSocketForTests ?? socks?.boundSocketForTests) === socket)
+    }
+
     private func assertGreetingRefused(on port: UInt16) async throws {
         let connection = NWConnection(host: "127.0.0.1", port: try XCTUnwrap(NWEndpoint.Port(rawValue: port)), using: .tcp)
         let timedOut = Mutex(false)
@@ -180,15 +246,27 @@ final class AccessSOCKS5InboundTests: XCTestCase {
 
     private final class GatedTunnel: AccessHTTPTunnelOpening, @unchecked Sendable {
         let stream = AccessMemoryRealityStream()
-        let waiter = Mutex<CheckedContinuation<Void, Never>?>(nil)
-        var isWaiting: Bool { waiter.withLock { $0 != nil } }
+        let gate = Mutex((released: false, waiter: Optional<CheckedContinuation<Void, Never>>.none))
+        var isWaiting: Bool { gate.withLock { $0.waiter != nil } }
         func open(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
-            await withCheckedContinuation { continuation in waiter.withLock { $0 = continuation } }
+            await withCheckedContinuation { continuation in
+                let released = gate.withLock { state in
+                    if state.released { return true }
+                    state.waiter = continuation
+                    return false
+                }
+                if released { continuation.resume() }
+            }
             try Task.checkCancellation()
             return stream
         }
         func release() {
-            let pending = waiter.withLock { value in let current = value; value = nil; return current }
+            let pending = gate.withLock { state in
+                state.released = true
+                let pending = state.waiter
+                state.waiter = nil
+                return pending
+            }
             pending?.resume()
         }
     }

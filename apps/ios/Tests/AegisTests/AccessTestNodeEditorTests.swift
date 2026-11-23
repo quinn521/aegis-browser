@@ -296,13 +296,40 @@ final class AccessTestNodeEditorTests: XCTestCase {
                                                                   ranked: true, control: control).isEmpty)
     }
 
+    func testCampaignStopControlRejectsUnreadableOrInvalidContents() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let control = directory.appendingPathComponent("control")
+        let hosts = ["first.invalid"]
+        func pending() throws -> [String] {
+            try AccessDomainCampaignInput.pendingHosts(hosts, limit: 1, reserved: [], ranked: true, control: control)
+        }
+        XCTAssertEqual(try pending(), hosts)
+        try Data("stop\n".utf8).write(to: control)
+        XCTAssertTrue(try pending().isEmpty)
+        for bytes in [Data([0xff]), Data(), Data("unexpected".utf8)] {
+            try bytes.write(to: control)
+            XCTAssertThrowsError(try pending()) { error in
+                XCTAssertEqual((error as? CocoaError)?.code, .fileReadCorruptFile)
+            }
+        }
+        try FileManager.default.removeItem(at: control)
+        try FileManager.default.createDirectory(at: control, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try pending())
+        XCTAssertThrowsError(try AccessDomainCampaignInput.stopRequested(at: control))
+    }
+
     func testCampaignSourceMustMatchThePreparedAppAndEmbeddedCore() throws {
         let source = String(repeating: "a", count: 40)
         let other = String(repeating: "b", count: 40)
-        func manifest(_ revision: String, kind: String = "ios-embedded-core-build") throws -> Data {
-            try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": kind, "sourceCommit": revision])
+        let bridge = String(repeating: "c", count: 64)
+        func manifest(_ revision: String, kind: String = "ios-embedded-core-build", compiled: String? = nil) throws -> Data {
+            var fields: [String: Any] = ["schemaVersion": 1, "kind": kind, "sourceCommit": revision, "bridgeSha256": bridge]
+            fields["compiledBridgeSha256"] = compiled
+            return try JSONSerialization.data(withJSONObject: fields)
         }
-        let core = try manifest(source)
+        let core = try manifest(source, compiled: bridge)
         XCTAssertEqual(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: core), source)
         for request in [nil, "unknown", "abcd", source.uppercased(), other] {
             XCTAssertNil(AccessDomainCampaignInput.sourceSHA(request, prepared: source, tests: source, coreManifest: core))
@@ -312,8 +339,10 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: other, coreManifest: core))
         XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: nil, coreManifest: core))
         XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: nil))
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(other)))
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(source, kind: "other")))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(other, compiled: bridge)))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(source, kind: "other", compiled: bridge)))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(source)))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(source, compiled: String(repeating: "d", count: 64))))
     }
 
     func testMalformedManualRealityInputCannotApplyOverSavedNode() throws {
@@ -330,7 +359,8 @@ final class AccessTestNodeEditorTests: XCTestCase {
             link.replacingOccurrences(of: "#", with: "&fp=unsafe#"),
             link.replacingOccurrences(of: "#", with: "&fp=not-a-native-fingerprint#"),
             link.replacingOccurrences(of: "#", with: "&spx=relative#"),
-            link.replacingOccurrences(of: "#", with: "&spx=%2Fbad%25ZZ#")
+            link.replacingOccurrences(of: "#", with: "&spx=%2Fbad%25ZZ#"),
+            link.replacingOccurrences(of: "#", with: "&spx=%2Fpath%3F%2563%3D1000000000#")
         ] {
             editor.preview(invalid)
             XCTAssertFalse(editor.canApply)
@@ -898,6 +928,9 @@ enum AccessDomainCampaignInput {
               let manifest = (try? JSONSerialization.jsonObject(with: coreManifest)) as? [String: Any],
               manifest["schemaVersion"] as? Int == 1,
               manifest["kind"] as? String == "ios-embedded-core-build",
+              let bridge = manifest["compiledBridgeSha256"] as? String, bridge.utf8.count == 64,
+              bridge.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              manifest["bridgeSha256"] as? String == bridge,
               manifest["sourceCommit"] as? String == requested else { return nil }
         return requested
     }
@@ -915,12 +948,19 @@ enum AccessDomainCampaignInput {
     static func pendingHosts(_ hosts: [String], limit: Int, reserved: Set<String>, ranked: Bool,
                              control: URL) throws -> [String] {
         guard !ranked || reserved.count <= limit else { throw CocoaError(.fileReadCorruptFile) }
-        guard !stopRequested(at: control) else { return [] }
+        guard try !stopRequested(at: control) else { return [] }
         return hosts.prefix(limit).filter { !reserved.contains($0) }
     }
 
-    static func stopRequested(at control: URL) -> Bool {
-        (try? String(contentsOf: control, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "stop"
+    static func stopRequested(at control: URL) throws -> Bool {
+        let bytes: Data
+        do { bytes = try Data(contentsOf: control) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return false }
+        guard let command = String(data: bytes, encoding: .utf8),
+              command.trimmingCharacters(in: .whitespacesAndNewlines) == "stop" else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        return true
     }
 
     struct Checkpoint {
@@ -1052,6 +1092,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
         // Ranked execution always resumes a supplied checkpoint. The legacy
         // unranked entry may still initialize its own file.
+        guard try !AccessDomainCampaignInput.stopRequested(at: control) else { return }
         if checkpoint == nil { try Data().write(to: file, options: .withoutOverwriting) }
         let output = try FileHandle(forUpdating: file)
         defer { try? output.close() }
@@ -1059,7 +1100,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTFail("Dispatch ledger changed before opening the campaign"); return
         }
         try output.seekToEnd()
-        guard !AccessDomainCampaignInput.stopRequested(at: control) else { return }
+        guard try !AccessDomainCampaignInput.stopRequested(at: control) else { return }
         if (try? repository.savedNode(isPrivate: false).parameters()) != parameters {
             _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
@@ -1100,11 +1141,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             monitor.start(queue: DispatchQueue(label: "ios208-campaign-network"))
         }
         defer { monitor.cancel() }
+        guard try !AccessDomainCampaignInput.stopRequested(at: control) else { return }
         try append(["event":"network", "interface":network])
         var preparationFailures = 0
         var consecutiveNetworkFailures = 0
         for host in pending {
-            if AccessDomainCampaignInput.stopRequested(at: control) {
+            if try AccessDomainCampaignInput.stopRequested(at: control) {
                 try append(["event":"checkpoint", "reservedCount":reserved.count])
                 return
             }

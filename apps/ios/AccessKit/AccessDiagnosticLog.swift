@@ -22,6 +22,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         return AccessDiagnosticLog(storageDirectory: directory, initialLevel: selectedLevel())
     }()
     public static let preferenceKey = "access.diagnostics.logLevel"
+    private static let retiredSecretLimit = 256
     private let queue = DispatchQueue(label: "aegis.access.diagnostics")
     private let limit: Int
     private let pollInterval: DispatchTimeInterval
@@ -36,11 +37,14 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     private var failed = false
     private var standaloneSecrets: [String] = []
     private var liveSecrets: [UUID: [String]] = [:]
-    // Xray's asynchronous writers can deliver records after Runtime.Stop returns.
+    // Xray has one process logger. A stopped runtime may still have late
+    // records, including across an Off/On FIFO rotation with a surviving core.
     private var retiredCaptureSecrets: Set<String> = []
+    private var redactionExhausted = false
     private var secrets: [String] = []
     // A pending history read may outlast a core. Its redactors apply only to that read.
     private var historySecrets: Set<String> = []
+    private var discardRestoredHistory = false
     private var reader: DispatchSourceTimer?
     private var readerFD: Int32?
     private var directory: URL?
@@ -91,9 +95,9 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                             switch result {
                             case .success(let restored):
                                 self.secrets = Array(Set(self.secrets).union(self.historySecrets))
-                                let safe = restored.compactMap(self.restoredLine)
+                                let safe = self.discardRestoredHistory ? [] : restored.compactMap(self.restoredLine)
                                 self.rebuildSecretSetLocked()
-                                if safe.count != restored.count { self.storageFailed = true }
+                                if !self.discardRestoredHistory && safe.count != restored.count { self.storageFailed = true }
                                 self.dirty = self.dirty || safe != restored
                                 self.lines = safe + self.lines
                                 self.trimLocked()
@@ -232,18 +236,34 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         } else {
             stopped = true
         }
-        queue.sync {
+        let exhausted = queue.sync {
             let retiring = liveSecrets.removeValue(forKey: lease.id) ?? []
-            if let readerFD {
-                // The FIFO can still receive records from Xray's queue after this
-                // drain. Keep the retiring core's filters until the pipe is gone.
-                retiredCaptureSecrets.formUnion(retiring)
+            if lastOwner {
+                retiredCaptureSecrets.removeAll()
+                redactionExhausted = false
+            } else if !redactionExhausted {
+                let filters = retiredCaptureSecrets.union(retiring)
+                if filters.count <= Self.retiredSecretLimit {
+                    retiredCaptureSecrets = filters
+                } else {
+                    // No filter may be evicted while any sink can ingest a late
+                    // record. Keep draining, with capture off until all owners end.
+                    enabled = false
+                    pending.removeAll()
+                    redactionExhausted = true
+                    retiredCaptureSecrets.removeAll()
+                }
+            }
+            rebuildSecretSetLocked()
+            if let readerFD, enabled {
                 if !drain(fd: readerFD, maximumReads: 64) { discardPrefix = nil }
                 discardingLine = discardingLine || !pending.isEmpty
                 pending.removeAll()
             }
-            if lastOwner && stopped { retiredCaptureSecrets.removeAll() }
-            rebuildSecretSetLocked()
+            return redactionExhausted
+        }
+        if exhausted, let generation = sharedCapture?.generation {
+            AccessGoEmbeddedCore.retireLogCaptureGeneration(generation)
         }
         leaseCaptures.removeValue(forKey: lease.id)
         for id in Array(disabledPipes.keys) where !leaseCaptures.values.contains(id) {
@@ -258,14 +278,16 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         sharedLock.lock()
         defer { sharedLock.unlock() }
         let owner = UUID()
-        queue.sync {
+        let exhausted = queue.sync {
             liveSecrets[owner] = secrets.filter { !$0.isEmpty }
             updateRedactorLocked()
+            return redactionExhausted
         }
         if level == .none {
             if disableCaptureWhenQuiet { disableSharedCaptureLocked() }
             return Lease(id: owner, path: nil, level: .none, generation: nil)
         }
+        if exhausted { return Lease(id: owner, path: nil, level: .none, generation: nil) }
         if let capture = sharedCapture {
             let state = queue.sync { () -> (usable: Bool, failed: Bool) in
                 guard captureID == capture.id else { return (false, false) }
@@ -313,7 +335,15 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     private func updateRedactorLocked() {
         rebuildSecretSetLocked()
-        if !storageReady && storageGeneration == 0 { historySecrets.formUnion(secrets) }
+        if !storageReady, storageGeneration == 0, !discardRestoredHistory {
+            let filters = historySecrets.union(secrets)
+            if filters.count <= Self.retiredSecretLimit {
+                historySecrets = filters
+            } else {
+                discardRestoredHistory = true
+                historySecrets.removeAll()
+            }
+        }
         // History may have finished restoring before this owner registered.
         // Redact it before exposing it through a snapshot or saving it again.
         let safe = lines.compactMap(restoredLine)
@@ -413,7 +443,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     }
 
     public func snapshot() -> String { queue.sync { lines.joined(separator: "\n") } }
-    public var unavailable: Bool { queue.sync { failed } }
+    public var unavailable: Bool { queue.sync { failed || redactionExhausted } }
     public var persistenceUnavailable: Bool { queue.sync { storage == nil || storageFailed } }
     public var isClearingStorage: Bool { queue.sync { clearingStorage } }
 

@@ -50,6 +50,8 @@ command -v go >/dev/null || { echo "go missing" >&2; exit 2; }
 command -v gomobile >/dev/null || { echo "gomobile missing; go install golang.org/x/mobile/cmd/gomobile@latest" >&2; exit 2; }
 
 mkdir -p "$output"
+output="$(cd "$output" && pwd)"
+rm -f "$output/compiled-bridge.sha256"
 WORK="$output/work"
 rm -rf "$WORK"
 mkdir -p "$WORK"
@@ -72,6 +74,10 @@ echo "building AegisEmbeddedCore.xcframework (ios + iossimulator)..."
 # digests under AEGIS_EMBEDDED_CORE_DIGEST_MODE=ci-rebuild when source pins match.
 export GOFLAGS="${GOFLAGS:--trimpath -buildvcs=false}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
+bridge_digest() {
+  python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); from ios_embedded_core import directory_digest; print(directory_digest("."))' "$ROOT/scripts/release"
+}
+BRIDGE_SHA256="$(bridge_digest)"
 gomobile bind \
   -target ios,iossimulator \
   -iosversion 15.0 \
@@ -79,10 +85,15 @@ gomobile bind \
   -ldflags "-buildid=" \
   -o "$WORK/AegisEmbeddedCore.xcframework" \
   .
+if [[ "$(bridge_digest)" != "$BRIDGE_SHA256" ]]; then
+  echo "EmbeddedCore build copy changed during gomobile bind" >&2
+  exit 2
+fi
 
 DEST="$output/AegisEmbeddedCore.xcframework"
 rm -rf "$DEST"
 mv "$WORK/AegisEmbeddedCore.xcframework" "$DEST"
 "$ROOT/scripts/release/record-ios-access-core-digests.sh" --xcframework "$DEST" | tee "$output/slice-digests.txt"
+printf '%s\n' "$BRIDGE_SHA256" > "$output/compiled-bridge.sha256"
 echo "wrote $DEST"
 echo "NOTE: freeze digests into the lock as verified_build before linking the app."

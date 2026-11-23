@@ -42,11 +42,13 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
                 guard mayOpen() else { self.stop(); return }
                 try Task.checkCancellation()
                 let remote = try await self.opener.open(host: host, port: port)
-                guard self.storeRemote(remote) else {
+                guard mayOpen(), self.storeRemote(remote) else {
                     remote.close()
+                    self.stop()
                     return
                 }
-                if let successResponse { try await self.sendClient(successResponse) }
+                if let successResponse { try await self.sendClient(successResponse, maySend: mayOpen) }
+                guard mayOpen() else { self.stop(); return }
                 try Task.checkCancellation()
                 onEstablished?()
                 if !prelude.isEmpty {
@@ -132,9 +134,10 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
         }
     }
 
-    private func sendClient(_ data: Data) async throws {
+    private func sendClient(_ data: Data, maySend: @escaping @Sendable () -> Bool = { true }) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.queue.async {
+                guard maySend() else { continuation.resume(throwing: CancellationError()); return }
                 self.client.send(content: data, completion: .contentProcessed { error in
                     if let error {
                         continuation.resume(throwing: error)

@@ -77,8 +77,21 @@ func ValidateRealityClientFields(fingerprint, spiderX string) string {
 		if !strings.HasPrefix(spiderX, "/") {
 			return "spiderX"
 		}
-		if _, err := url.Parse(spiderX); err != nil {
+		spider, err := url.Parse(spiderX)
+		if err != nil {
 			return "spiderX"
+		}
+		query, err := url.ParseQuery(spider.RawQuery)
+		if err != nil {
+			return "spiderX"
+		}
+		// The pinned REALITY builder turns these keys into spider work:
+		// padding, concurrency, request count, interval and return delay.
+		// The manual profile only admits a path and ordinary query data.
+		for _, key := range []string{"p", "c", "t", "i", "r"} {
+			if query.Has(key) {
+				return "spiderX"
+			}
 		}
 	}
 	return ""

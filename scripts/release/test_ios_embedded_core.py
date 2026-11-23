@@ -2,6 +2,7 @@
 import copy
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -23,10 +24,16 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
                                          "artifacts": {key: "0" * 64 for key in core.SLICE_KEYS.values()}}))
         self.original = self.lock.read_bytes()
         self.products = self.root / "separate-build-output"
+        self.build_bridge = self.products / "work/bridge"
         for name in core.SLICE_KEYS:
             binary = self.products / "AegisEmbeddedCore.xcframework" / name / "AegisEmbeddedCore.framework/AegisEmbeddedCore"
             binary.parent.mkdir(parents=True)
             binary.write_bytes((name + " actual binary bytes").encode())
+        self.copy_build_bridge()
+
+    def copy_build_bridge(self):
+        shutil.copytree(self.lock.parent / "bridge", self.build_bridge, dirs_exist_ok=True)
+        (self.products / "compiled-bridge.sha256").write_text(core.directory_digest(self.build_bridge) + "\n")
 
     def record(self, **kwargs):
         def tool_output(args, **_kwargs):
@@ -70,11 +77,42 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
             core.verify_prepared_source(verified, prepared, "other commit")
         (self.root / "apps/ios/EmbeddedCore/bridge/bridge.go").write_text("package bridge\n// modified input\n")
+        self.copy_build_bridge()
         self.record()
         rebuilt = core.verify(self.root, self.lock, self.products)
         self.assertEqual(rebuilt["sourceCommit"], verified["sourceCommit"])
         with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
             core.verify_prepared_source(rebuilt, prepared, verified["sourceCommit"])
+
+    def test_restoring_checkout_cannot_relabel_different_compiled_bridge(self):
+        prepared = self.root / "prepared"
+        shutil.copytree(self.root / "apps", prepared / "apps")
+        live = self.lock.parent / "bridge/bridge.go"
+        original = live.read_bytes()
+        live.write_bytes(original + b"// different during build\n")
+        self.copy_build_bridge()
+        live.write_bytes(original)
+
+        recorded = self.record()
+        with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
+            core.verify_prepared_source(recorded, prepared, recorded["sourceCommit"])
+        with self.assertRaisesRegex(ValueError, "build inputs differ"):
+            core.verify(self.root, self.lock, self.products)
+        self.assertEqual(recorded["compiledBridgeSha256"], core.directory_digest(self.build_bridge))
+
+    def test_copy_changed_after_bind_or_missing_digest_cannot_be_recorded(self):
+        (self.build_bridge / "bridge.go").write_text("changed after compilation")
+        with self.assertRaisesRegex(ValueError, "differs from the gomobile build input"):
+            self.record()
+        (self.products / "compiled-bridge.sha256").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.record()
+
+    def test_legacy_checkout_only_manifest_cannot_stamp_prepared_source(self):
+        manifest = self.record()
+        manifest.pop("compiledBridgeSha256", None)
+        with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
+            core.verify_prepared_source(manifest, self.root, manifest["sourceCommit"])
 
     def test_each_stale_or_changed_slice_is_rejected_before_linking(self):
         self.record()
