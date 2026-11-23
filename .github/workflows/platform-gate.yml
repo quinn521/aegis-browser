@@ -38,6 +38,7 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           ROUTE_PUSH_BEFORE: ${{ github.event.before }}
+          CI_PLATFORM_OBSERVATION: 'true'
           CI_LIGHTWEIGHT_ADMITTED: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'develop' && vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY != '' && github.repository == vars.AEGIS_SELF_HOSTED_TEST_REPOSITORY && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -87,6 +88,7 @@ jobs:
           node --test apps/browser/scripts/verify-android-agent-target_test.mjs apps/browser/scripts/android-agent-ui_test.mjs
           bash apps/browser/scripts/package-android-guards_test.sh
           bash -n apps/browser/scripts/package-android.sh
+          python3 -B scripts/ci/check-android-platform-inputs.py
           python3 -B apps/browser/scripts/ci/candidate_test.py
           python3 -B scripts/ci/run-android-release-tests.py
 
@@ -110,6 +112,7 @@ jobs:
         run: |
           bundle exec ruby -e 'Dir["fastlane/tests/*_test.rb"].sort.each { |p| require_relative p }'
           python3 -B -m unittest discover -s scripts/release -p 'test_ios*.py'
+          python3 -B -m unittest scripts/release/test_verify_ios_archive.py scripts/release/test_development_signing.py scripts/release/test_development_key_access.py
           node --test apps/ios/Tests/SharedWebExtension/SafariNavigationIdentityTests.mjs
 
   macos:

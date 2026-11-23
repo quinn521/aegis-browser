@@ -116,19 +116,24 @@ const iosArchiveInputs = new Set([
   'scripts/release/verify-ios-archive.py',
   'scripts/release/verify-signed-ios.py',
 ]);
-const sharedIosInputs = path => path === 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json'
-  || path.startsWith('apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/');
+const sharedIosTestInput = 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json';
+const sharedIosProductInput = path => path.startsWith('apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/');
+const desktopPin = 'apps/browser/CHROMIUM_COMMIT';
+const iosArchiveRuntime = new Set(['scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py']);
 const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('.github/workflows/ios-')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
   || path === browserCommonScript
   || iosArchiveInputs.has(path)
-  || sharedIosInputs(path)
+  || path === sharedIosTestInput
+  || sharedIosProductInput(path)
+  || /^scripts\/release\/(?:test_)?ios[-_]/u.test(path)
   || path.startsWith('fastlane/')
   || path.startsWith('.github/actions/ensure-ios-ruby/')
   || path === 'Gemfile' || path === 'Gemfile.lock';
-const needsIosCompile = path => sharedIosInputs(path)
+const needsIosCompile = path => sharedIosProductInput(path)
+  || iosArchiveRuntime.has(path)
   || (path.startsWith('apps/ios/') && !path.startsWith('apps/ios/Tests/') && !path.endsWith('.md'))
   || (iosArchiveInputs.has(path) && !path.startsWith('scripts/release/test_'))
   || path === browserCommonScript
@@ -136,6 +141,9 @@ const needsIosCompile = path => sharedIosInputs(path)
 const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || path === 'apps/browser/ci-pins/android.json'
   || path === 'apps/browser/args/aegis-android.gn'
+  || path === 'scripts/ci/check-android-platform-inputs.py'
+  || path === 'apps/browser/scripts/ci/candidate.py'
+  || path === 'apps/browser/scripts/ci/candidate_test.py'
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('android'))
   || path === browserCommonScript
   || path.startsWith('.github/workflows/android-')
@@ -149,9 +157,12 @@ const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || path === 'scripts/release/verify-aab.py'
   || path === 'scripts/release/VerifiedAabCertificate.java';
 const selectsMacos = path => path.startsWith('.github/workflows/macos-')
+  || path === desktopPin
   || path === browserCommonScript
   || (path.startsWith('scripts/release/') && path.toLowerCase().includes('macos'));
 const selectsWindows = path => path.endsWith('.ps1')
+  || path === desktopPin
+  || path.startsWith('apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/')
   || path === 'apps/browser/args/aegis-windows.gn'
   || path.startsWith('apps/browser/overlay/chrome/installer/')
   || /^apps\/browser\/overlay\/chrome\/browser\/ui\/views\/(?:aegis_uninstall_test_main|uninstall_view(?:_unittest)?)\.(?:cc|h)$/u.test(path)
@@ -220,10 +231,11 @@ else if (selfEdit) {
 } else if (legacyFull) {
   reason = 'full-platform-fallback';
   platforms.ios = true;
-  platforms.android = event === 'push';
+  const observeAll = event === 'push' && process.env.CI_PLATFORM_OBSERVATION === 'true';
+  platforms.android = observeAll;
   platforms.macos = true;
-  platforms.windows = event === 'push';
-  platforms.linux = event === 'push';
+  platforms.windows = observeAll;
+  platforms.linux = observeAll;
 } else if (!explanationOnly) {
   for (const change of changes) {
     if (explanationPaths.has(change.path) && contentEdit(change)) continue;

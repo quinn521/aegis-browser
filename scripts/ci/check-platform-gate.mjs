@@ -14,10 +14,14 @@ export function selectPlatformChecks(plan, tested, rules) {
       [docs, integrate, deep, ...decisions.map(([, selected]) => selected)].some(value => typeof value !== 'boolean')) {
     throw new Error('Platform plan schema or decisions are invalid');
   }
-  if (docs && (integrate || deep || decisions.some(([, selected]) => selected))) {
+  const selected = decisions.filter(([, enabled]) => enabled).map(([name]) => name);
+  if (docs && (integrate || deep || selected.length > 0)) {
     throw new Error('An admitted documentation route cannot require platform jobs');
   }
-  return decisions.filter(([, selected]) => integrate && selected).map(([name]) => name);
+  if (!integrate && (deep || selected.length > 0)) {
+    throw new Error('Platform selection requires the integration stage');
+  }
+  return selected;
 }
 
 export function checkPlatformResults(required, needs) {

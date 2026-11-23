@@ -248,9 +248,9 @@ test('platform routing binds real merge parents and rejects hidden product chang
       const pushed = JSON.parse(push.stdout);
       assert.equal(pushed.ios, true, 'push without a before SHA retains iOS');
       assert.equal(pushed.macos, true, 'push without a before SHA retains macOS');
-      assert.equal(pushed.android, true, 'unknown push must cover Android contracts');
-      assert.equal(pushed.windows, true, 'unknown push must cover Windows contracts');
-      assert.equal(pushed.linux, true, 'unknown push must cover Linux contracts');
+      assert.equal(pushed.android, false, 'ordinary fallback leaves android on its prior route');
+      assert.equal(pushed.windows, false, 'ordinary fallback leaves windows on its prior route');
+      assert.equal(pushed.linux, false, 'ordinary fallback leaves linux on its prior route');
       assert.equal(pushed.docs, false);
       assert.equal(pushed.integrate, true);
       assert.equal(pushed.deep, true);
@@ -343,7 +343,7 @@ test('paths select platforms and commit types select stage depth', () => {
       'test_ios_linked_bundle.py', 'test_ios_profile_trust.py', 'verify-ios-archive.py', 'verify-signed-ios.py',
     ]) {
       assert.deepEqual(route(pr(() => save(`scripts/release/${file}`, 'ios'), 'fix: repair archive')),
-        {...iosRoute, deep: !file.startsWith('test_')}, file);
+        {...iosRoute, deep: !file.startsWith('test_') || file === 'test_ios_linked_bundle.py'}, file);
     }
     for (const path of [
       'scripts/release/android-delivery.py', 'scripts/release/android_product_delivery.py',
@@ -376,7 +376,23 @@ test('paths select platforms and commit types select stage depth', () => {
     const releaseHelper = pr(() => save('fastlane/lib/ios_status.rb', 'changed'), 'docs: tidy iOS release');
     assert.deepEqual(route(releaseHelper), {...iosRoute, deep: false});
     const sharedIos = pr(() => save('packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json', '{}'), 'chore: change shared vectors');
-    assert.deepEqual(route(sharedIos), {...iosRoute, macos: true});
+    assert.deepEqual(route(sharedIos), {...iosRoute, macos: true, deep: false});
+    for (const file of [
+      'scripts/ci/ios-ci-storage.py', 'scripts/release/test_ios_linked_bundle.py',
+      'apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared/core.js',
+    ]) assert.equal(pr(() => save(file, 'updated'), 'chore: change archive consumer').deep, true, file);
+    for (const file of ['scripts/release/ios-action.py', 'scripts/release/test_ios_action.py']) {
+      assert.deepEqual(route(pr(() => save(file, 'updated'), 'fix: repair iOS contract')), {...iosRoute, deep: false});
+    }
+    for (const file of [
+      'apps/browser/overlay/chrome/browser/ui/views/uninstall_view.cc',
+      'apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/chromium.ico',
+      'apps/browser/CHROMIUM_COMMIT',
+    ]) {
+      const onlyWindowsInput = pr(() => save(file, 'updated'), 'chore: update Windows input');
+      assert.equal(onlyWindowsInput.windows, true, file);
+      assert.equal(onlyWindowsInput.integrate, true, file);
+    }
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');
     assert.equal(linux.linux, true); assert.equal(linux.macos, false); assert.equal(linux.deep, true);
     const shared = pr(() => save('packages/core/src/core.ts', 'core'), 'build: refresh core');
@@ -423,7 +439,11 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.equal(docsPlan.ios, false); assert.equal(docsPlan.macos, false);
     const legacy = planFor({GITHUB_EVENT_NAME: 'push', GITHUB_SHA: docsPush, ROUTE_PUSH_BEFORE: '0'.repeat(40)});
     assert.equal(legacy.reason, 'full-platform-fallback');
-    assert.equal(legacy.ios, true); assert.equal(legacy.macos, true); assert.equal(legacy.android, true);
+    assert.equal(legacy.ios, true); assert.equal(legacy.macos, true); assert.equal(legacy.android, false);
+    const observed = planFor({GITHUB_EVENT_NAME: 'push', GITHUB_SHA: docsPush, ROUTE_PUSH_BEFORE: '0'.repeat(40),
+      CI_PLATFORM_OBSERVATION: 'true'});
+    assert.deepEqual(route(observed), {ios: true, android: true, macos: true, windows: true,
+      linux: true, integrate: true, deep: true});
     const dispatch = planFor({GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: docsPush});
     assert.equal(dispatch.ios, true); assert.equal(dispatch.macos, true); assert.equal(dispatch.android, false); assert.equal(dispatch.deep, true);
   } finally { rmSync(root, {recursive: true, force: true}); }

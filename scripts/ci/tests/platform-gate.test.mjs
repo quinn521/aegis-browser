@@ -25,6 +25,9 @@ test('platform gate accepts only decisions from the bound policy and tested sour
   assert.throws(() => selectPlatformChecks({...plan, schemaVersion: 2}, tested, base), /schema/u);
   assert.throws(() => selectPlatformChecks({...plan, windows: 'true'}, tested, base), /decisions/u);
   assert.throws(() => selectPlatformChecks({...plan, docs: true}, tested, base), /documentation/u);
+  assert.throws(() => selectPlatformChecks({...plan, integrate: false}, tested, base), /integration stage/u);
+  assert.throws(() => selectPlatformChecks({...plan, android: false, windows: false, deep: true, integrate: false},
+    tested, base), /integration stage/u);
   const docs = {...plan, docs: true, integrate: false, android: false, windows: false};
   assert.deepEqual(selectPlatformChecks(docs, tested, base), []);
 });
@@ -68,6 +71,10 @@ test('the observational check is separate from quality and always summarizes its
     assert.ok(job.if.includes("'" + name + "'"));
     assert.ok(!('continue-on-error' in job));
   }
+  const android = workflow.jobs.android.steps.find(step => step.name === 'Run Android host, pin and release regressions');
+  assert.match(android.run, /python3 -B scripts\/ci\/check-android-platform-inputs\.py/u);
+  const ios = workflow.jobs.ios.steps.find(step => step.name === 'Run iOS release and WebExtension contracts');
+  assert.match(ios.run, /test_verify_ios_archive\.py.*test_development_signing\.py.*test_development_key_access\.py/u);
   for (const [name, job] of [['linux', workflow.jobs.linux], ['windows', workflow.jobs.windows]]) {
     assert.equal(job.uses, './.github/workflows/other-platform-coverage.yml');
     assert.deepEqual(job.with, {lane: name});

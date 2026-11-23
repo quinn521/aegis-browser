@@ -139,7 +139,7 @@ def verify_tree(src, base, patches):
         return actual
 
 
-def candidate_pin(name, report, browser=BROWSER):
+def read_candidate_pin(name, browser=BROWSER):
     # 不同平台发布补丁号可能不同；可在审核后的候选分支提供独立 pin 与补丁目录。
     override = browser / 'ci-pins' / (name + '.json')
     if override.exists():
@@ -151,6 +151,11 @@ def candidate_pin(name, report, browser=BROWSER):
         pin = {'version': (browser / 'CHROMIUM_VERSION').read_text().strip(),
                'commit': (browser / 'CHROMIUM_COMMIT').read_text().strip()}
         patch_dir = browser / 'patches'
+    return pin, patch_dir
+
+
+def candidate_pin(name, report, browser=BROWSER):
+    pin, patch_dir = read_candidate_pin(name, browser)
     if report.get('errors') or report.get('status') != 'checked':
         raise ValueError('官方核查不完整，禁止解释为无更新')
     official = report['candidates'][PLATFORMS[name][0]]
