@@ -353,6 +353,19 @@ test('paths select platforms and commit types select stage depth', () => {
     ]) {
       assert.deepEqual(route(pr(() => save(path, 'android'), 'fix: repair android release')), androidRoute, path);
     }
+    const releaseContracts = pr(() => {
+      for (const path of [
+        'scripts/release/ios-delivery-plan.py', 'scripts/release/ios_access_test_gate.py',
+        'scripts/release/test_ios_publish.py', 'scripts/release/prepare-ios-package-core.sh',
+        'scripts/release/central_ios_protocol.py', 'scripts/release/test_central_operator.py',
+        'scripts/release/verify-ipa.py', 'scripts/release/product_delivery.py',
+        'scripts/release/test_cloud_signing_poc.py', 'scripts/release/fixtures/safari-icon-xcode.png',
+        'scripts/ci/tests/ios-release.test.mjs',
+      ]) save(path, 'changed');
+    }, 'test(android): cover release helpers');
+    assert.deepEqual(route(releaseContracts), {...iosRoute, deep: false});
+    const defaults = pr(() => save('scripts/ci/fill-platform-route-defaults.mjs', '// edited'), 'ci: update routing defaults');
+    assert.deepEqual(route(defaults), {...iosRoute, android: true, macos: true, windows: true, linux: true});
     const unknownRelease = pr(() => save('scripts/release/prepare-ios-access-core-extra.sh', 'unknown'), 'fix: repair helper');
     assert.deepEqual(route(unknownRelease), {...iosRoute, ios: false, macos: true});
     const mixedRelease = pr(() => {
@@ -364,6 +377,12 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.equal(windows.windows, true); assert.equal(windows.macos, false); assert.equal(windows.deep, true);
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');
     assert.equal(linux.linux, true); assert.equal(linux.macos, false); assert.equal(linux.deep, true);
+    const mixedContracts = pr(() => {
+      save('scripts/ci/tests/shell-coverage.test.mjs', 'linux');
+      save('scripts/release/android-status.py', 'android');
+      save('scripts/ci/platform-tests/windows-acceptance.ps1', 'windows');
+    }, 'test(ios): exercise portable contracts');
+    assert.deepEqual(route(mixedContracts), {...androidRoute, windows: true, linux: true, deep: false});
     const shared = pr(() => save('packages/core/src/core.ts', 'core'), 'build: refresh core');
     assert.equal(shared.macos, true); assert.equal(shared.ios, false); assert.equal(shared.android, false); assert.equal(shared.windows, false);
     git('checkout', '-B', 'topic', before);
@@ -509,12 +528,18 @@ test('quality preflight selects Linux docs and preserves full checks on all othe
   assert.equal(other['runs-on'], 'ubuntu-24.04');
   assert.deepEqual(other.needs, ['impact', 'quality']);
   assert.match(other.if, /needs.quality.result == 'success'/u);
-  assert.match(other.if, /needs.impact.outputs.android == 'true'/u);
-  assert.match(other.if, /needs.impact.outputs.windows == 'true'/u);
+  assert.equal(other['continue-on-error'], true);
   assert.match(other.if, /needs.impact.outputs.integrate == 'true'/u);
-  assert.match(other.steps.find(step => step.name === 'Run Android and Windows contract checks').run, /pnpm run quality:other-platforms/u);
+  for (const platform of ['android', 'windows', 'linux']) {
+    assert.equal(impact.outputs[platform], '${{ steps.impact.outputs.' + platform + ' }}');
+    const guard = `needs.impact.outputs.${platform} == 'true'`;
+    assert.ok(other.if.includes(guard));
+    const suite = other.steps.filter(step => step.run === `corepack pnpm run quality:${platform}`);
+    assert.equal(suite.length, 1, platform);
+    assert.equal(suite[0].if, "${{ !cancelled() && steps.node.outcome == 'success' && " + guard + ' }}');
+  }
+  assert(other.steps.find(step => step.id === 'node')?.uses.startsWith('actions/setup-node@'));
   assert.equal(summary.steps.find(step => step.name === 'Require every mandatory job to succeed').env.REQUIRED_RESULTS, '{"quality":"${{ needs.quality.result }}"}');
-  assert.equal(impact.outputs.android, '${{ steps.impact.outputs.android }}');
   assertTrustedRouteDefaults(impact.steps.find(step => step.id === 'impact').run);
 });
 

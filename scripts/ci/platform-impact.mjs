@@ -59,7 +59,10 @@ const explanationPaths = new Set([
   'docs/plans/macos-access-toolbar-bubble-NOTES.md',
   'docs/plans/macos-access-bubble-session-NOTES.md',
 ]);
-const routerPath = 'scripts/ci/platform-impact.mjs';
+const routeInputs = new Set([
+  'scripts/ci/platform-impact.mjs',
+  'scripts/ci/fill-platform-route-defaults.mjs',
+]);
 const conventionalTypes = new Set(['build', 'chore', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'release', 'revert', 'style', 'test']);
 const isTypeName = value => {
   if (value.length === 0 || value.charCodeAt(0) < 97 || value.charCodeAt(0) > 122) return false;
@@ -91,23 +94,52 @@ const integrateTypes = new Set(['feat', 'fix', 'perf', 'refactor', 'build', 'tes
 const deepTypes = new Set(['feat', 'fix', 'perf', 'refactor', 'build', 'revert']);
 const blankPlatforms = () => ({ios: false, android: false, macos: false, windows: false, linux: false});
 const browserCommonScript = 'apps/browser/scripts/common.sh';
-// Exact release inputs for iOS contracts and the unsigned archive.
-const iosArchiveInputs = new Set([
+// These iOS release inputs have names outside the ios- / ios_ families.
+// Keep ownership explicit so a new, unidentified release tool retains the macOS fallback.
+const iosReleaseInputs = new Set([
+  'scripts/release/artifact-transport.py',
   'scripts/release/build-ios-access-core.sh',
+  'scripts/release/central-ios.py',
+  'scripts/release/central-reservation.rb',
+  'scripts/release/central_ios_protocol.py',
+  'scripts/release/central_operator_authorization.py',
+  'scripts/release/clear-empty-build-upload.rb',
+  'scripts/release/cli.rb',
+  'scripts/release/cloud-archive.py',
+  'scripts/release/cloud-signing-poc.py',
   'scripts/release/development_key_access.py',
   'scripts/release/development_signing.py',
-  'scripts/release/ios_embedded_core.py',
-  'scripts/release/ios_linked_core.py',
+  'scripts/release/fixtures/safari-icon-xcode.png',
+  'scripts/release/hosted-signing.py',
+  'scripts/release/local-ios-signing.py',
   'scripts/release/prepare-ios-access-core.sh',
+  'scripts/release/prepare-ios-package-core.sh',
+  'scripts/release/private-beta-inputs.py',
+  'scripts/release/product_artifacts.py',
+  'scripts/release/product_delivery.py',
   'scripts/release/record-ios-access-core-digests.sh',
   'scripts/release/safari_manifest.py',
+  'scripts/release/test_artifact_transport.py',
+  'scripts/release/test_central_ios.py',
+  'scripts/release/test_central_operator.py',
+  'scripts/release/test_central_retained.py',
+  'scripts/release/test_cloud_archive.py',
+  'scripts/release/test_cloud_signing_poc.py',
   'scripts/release/test_development_key_access.py',
   'scripts/release/test_development_signing.py',
-  'scripts/release/test_ios_embedded_core.py',
-  'scripts/release/test_ios_linked_bundle.py',
-  'scripts/release/test_ios_profile_trust.py',
+  'scripts/release/test_hosted_signing.py',
+  'scripts/release/test_local_ios_signing.py',
+  'scripts/release/test_native_signing_session.py',
+  'scripts/release/test_private_beta_inputs.py',
+  'scripts/release/test_product_artifacts.py',
+  'scripts/release/test_product_delivery.py',
   'scripts/release/test_verify_ios_archive.py',
+  'scripts/release/test_verify_ios_dsyms.py',
+  'scripts/release/test_verify_ipa.py',
+  'scripts/release/test_verify_signed_ios.py',
   'scripts/release/verify-ios-archive.py',
+  'scripts/release/verify-ios-dsyms.py',
+  'scripts/release/verify-ipa.py',
   'scripts/release/verify-signed-ios.py',
 ]);
 const selectsIos = path => path.startsWith('apps/ios/')
@@ -115,7 +147,9 @@ const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
   || path === browserCommonScript
-  || iosArchiveInputs.has(path);
+  || path.startsWith('scripts/ci/tests/ios-')
+  || /^scripts\/release\/(?:test_)?ios[-_]/u.test(path)
+  || iosReleaseInputs.has(path);
 const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('android'))
   || path === browserCommonScript
@@ -136,13 +170,15 @@ const selectsWindows = path => path.endsWith('.ps1')
   || path.startsWith('scripts/ci/platform-tests/windows-')
   || path.startsWith('apps/browser/scripts/ci/windows')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
-const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh' || path.startsWith('scripts/ci/platform-tests/kcov-');
+const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh'
+  || path === 'scripts/ci/tests/shell-coverage.test.mjs'
+  || path.startsWith('scripts/ci/platform-tests/kcov-');
 const selectsShared = path => path.startsWith('packages/core/')
   || path.startsWith('apps/browser/overlay/')
   || (path.startsWith('apps/browser/patches/') && !path.startsWith('apps/browser/patches-android/'));
 const classifyPath = path => {
   const selected = blankPlatforms();
-  if (explanationPaths.has(path) || path === routerPath) return selected;
+  if (explanationPaths.has(path)) return selected;
   if (selectsIos(path)) selected.ios = true;
   if (selectsAndroid(path)) selected.android = true;
   if (selectsMacos(path)) selected.macos = true;
@@ -179,7 +215,7 @@ for (const subject of subjects) {
 if (!legacyFull && changes.length > 0 && subjects.length === 0) nonConventional = true;
 const contentEdit = change => change.status === 'M' && change.beforeMode === '100644' && change.afterMode === '100644';
 const explanationOnly = changes.length > 0 && changes.every(change => explanationPaths.has(change.path) && contentEdit(change));
-const selfEdit = changes.some(change => change.path === routerPath);
+const selfEdit = changes.some(change => routeInputs.has(change.path));
 const unsafe = changes.some(isUnsafe);
 const strict = selfEdit || unsafe || nonConventional;
 const docs = event === 'pull_request' && explanationOnly && !strict && process.env.CI_LIGHTWEIGHT_ADMITTED === 'true';
