@@ -26,7 +26,7 @@ node scripts/dev/compile-geosite.mjs --dat geosite.dat --psl effective_tld_names
 
 可选组为 `DEBIAN`、`DOUBAN`、`MEITUAN`。加 `--verify` 可重建并逐字节核对现有清单。历史 `DEBIAN` 清单使用 V2Fly `20261121064510` 的 `--dlc dlc.dat` 复现。每次必须明确指定一个来源，编译器离线校验原文件与完整 typed 规则的摘要。[固定分类与来源规格](https://github.com/quinn521/aegis-browser/blob/54ce210fdcaf242b2df3bc74a24d77a820075a5c/docs/superpowers/specs/2026-11-21-geosite-updates-design.md#官方来源与首批完整分类)
 
-在 `node --test scripts/dev/tests/compile-geosite.test.mjs` 前设置 `AEGIS_XRAY_GEOSITE_INPUT_DIR`（`geosite.dat`、`beta-groups.json`）和 `AEGIS_GEOSITE_INPUT_DIR`（`dlc.dat`、`effective_tld_names.dat`）可运行真实输入回归。
+在 `node --test scripts/dev/tests/compile-geosite.test.mjs` 前设置 `AEGIS_XRAY_GEOSITE_INPUT_DIR`（`geosite.dat`）和 `AEGIS_GEOSITE_INPUT_DIR`（`dlc.dat`、`effective_tld_names.dat`）可运行真实输入回归。已认证的分类规则和摘要随测试夹具提供。
 
 # macOS Delivery（前期，不公证）
 

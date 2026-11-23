@@ -2,10 +2,11 @@
 
 import {createHash, randomUUID} from 'node:crypto';
 import {
-  closeSync, constants, fstatSync, fsyncSync, openSync, readSync, renameSync, rmSync, statSync, writeFileSync,
+  closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync,
+  writeFileSync,
 } from 'node:fs';
 import {isIP} from 'node:net';
-import {dirname, join, resolve} from 'node:path';
+import {basename, dirname, join} from 'node:path';
 import {domainToASCII, fileURLToPath, URL} from 'node:url';
 import {parseArgs} from 'node:util';
 
@@ -287,8 +288,9 @@ export function compileGroup(buffer, pslText, group, {requireCanonical = false} 
 export function matchesHost(rules, host) {
   if (typeof host !== 'string') return false;
   let hostname = host;
-  if (/^(?:https?|wss?):\/\/[^/?#\\]/i.test(host)) {
-    if (/[\s\p{Cc}\\]/u.test(host)) return false;
+  const authority = /^(?:https?|wss?):\/\/([^/?#]+)/i.exec(host);
+  if (authority) {
+    if (/[\s\p{Cc}\\]/u.test(authority[1])) return false;
     try {
       hostname = new URL(host).hostname;
     } catch {
@@ -328,13 +330,32 @@ function readExactFile(path, size, label) {
 }
 
 function readPinned(path, pin, label) {
-  const input = readExactFile(path, pin.bytes, label);
+  const canonicalPath = realpathSync.native(path);
+  const input = readExactFile(canonicalPath, pin.bytes, label);
   if (sha256(input.data) !== pin.sha256) throw new Error(label + ' SHA-256 does not match the pin');
-  return input;
+  return {...input, path: canonicalPath};
 }
 
-function writeAtomically(path, data) {
-  const temporary = join(dirname(path), '.geosite-' + randomUUID() + '.tmp');
+function checkOutput(path, inputs) {
+  const destination = lstatSync(path, {bigint: true, throwIfNoEntry: false});
+  if (destination && !destination.isFile()) throw new Error('Output destination must be a regular file');
+  const canonicalPath = destination ? realpathSync.native(path) : path;
+  if (inputs.some((input) => canonicalPath === input.path ||
+    (destination?.dev === input.info.dev && destination.ino === input.info.ino))) {
+    throw new Error('Output must be separate from the pinned input files');
+  }
+}
+
+function writeAtomically(path, data, inputs) {
+  const name = basename(path);
+  if (!name || name === '.' || name === '..' || !path.endsWith(name)) {
+    throw new Error('Output must name a regular file');
+  }
+  // Resolve symlinks before processing any subsequent parent-directory segments.
+  const directory = realpathSync.native(dirname(path));
+  const destination = join(directory, name);
+  checkOutput(destination, inputs);
+  const temporary = join(directory, '.geosite-' + randomUUID() + '.tmp');
   const fd = openSync(temporary, 'wx', 0o644);
   let renamed = false;
   try {
@@ -344,7 +365,8 @@ function writeAtomically(path, data) {
     } finally {
       closeSync(fd);
     }
-    renameSync(temporary, path);
+    checkOutput(destination, inputs);
+    renameSync(temporary, destination);
     renamed = true;
   } finally {
     if (!renamed) rmSync(temporary, {force: true});
@@ -401,17 +423,20 @@ function main() {
     const {data} = readExactFile(output, expected.length, 'Catalogue to verify');
     if (!data.equals(expected)) throw new Error('Catalogue does not match the pinned build');
   } else {
-    const destination = statSync(output, {bigint: true, throwIfNoEntry: false});
-    if (destination && [datInput.info, pslInput.info].some(
-      (input) => destination.dev === input.dev && destination.ino === input.ino
-    )) {
-      throw new Error('Output must be separate from the pinned input files');
-    }
-    writeAtomically(output, expected);
+    writeAtomically(output, expected, [datInput, pslInput]);
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   try {
     main();
   } catch (error) {
