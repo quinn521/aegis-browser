@@ -17,7 +17,7 @@
 
 沿用内部 Debug/Alpha 的当前网站工具栏入口与受信页面 `chrome://aegis/access-options`。在“Profile → 本地入站”增加协议和端口偏好；常规、主题、Profile/自动切换、导入导出、日志及账号页面沿用 M5–M10。当前网站面板显示使用该规则的实际 Profile 和运输，Options 同时显示草稿、提交版本和当前发布状态。[既有 WebUI 与渠道设计](macos-access-options-sdd.zh-CN.md) · [三端 Options 合同](app-access-options-sdd.zh-CN.md)
 
-DEV / 内部 Alpha 的“测试节点”支持文本输入和扫描节点二维码。Mac 可选择本机二维码图片，也可主动打开可用相机扫码。Browser 侧检查渠道和目标 Profile，本机解码后只更新发起窗口的草稿，Apply 再按已提交版本准备该测试上游。验收同一合成链接经文本和扫码预览一致、取消选择图片或拒绝相机后可继续输入文本、关闭窗口后迟到结果作废。Beta / Release 直接打开 WebUI、发送导入消息或恢复旧 Profile 均不能激活手动节点。托管账户联调等待服务端同事交付。[测试节点与阶段交接](app-access-options-sdd.zh-CN.md)
+DEV / 内部 Alpha 的“测试节点”支持文本输入和扫描节点二维码。Mac 可选择本机二维码图片，也可主动打开可用相机扫码。Browser 侧检查渠道和目标 Profile，本机解码后只更新发起窗口的草稿。没有待完成的 Apply 时，按受保护站点的规则所引用测试 Profile 的已提交版本准备和登记上游。Apply 将活跃绑定的上游从 A 改为 B 时，Browser 按该 Profile 校验通过的候选版本准备、登记并安装 B 的回环端点，期间保持派发屏障。按下文的发布条件取得精确安装 ACK 后，只有该候选版本已持久提交并在仍匹配的上下文中完成激活，且 `activeRevision` 与本次 `committedRevision` 一致、`dispatchPermitted` 为 true，才解除屏障。验收同一合成链接经文本和扫码预览一致、取消选择图片或拒绝相机后可继续输入文本、关闭窗口后迟到结果作废。Beta / Release 直接打开 WebUI、发送导入消息或恢复旧 Profile 均不能激活手动节点。托管账户联调等待服务端同事交付。[测试节点与阶段交接](app-access-options-sdd.zh-CN.md)
 
 WebUI 消息携带草稿版本和操作 ID，Browser 侧的 Profile 服务逐操作检查 page/read/write/import/activate 权限，并将提交结果写回当前窗口。界面不能直接创建监听或恢复旧 endpoint。受限渠道通过直接 URL、消息或导入调用也必须遵循原生能力门。一个窗口 Apply 后另一个窗口的旧版本提交须显示冲突；重新打开可读取新版本，失败提交不得显示成功。[Profile 服务](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_service.cc) · [版本化存储](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_store.cc) · [已知冲突回执问题 #195](https://github.com/gcsagroup/aegis-browser/issues/195)
 
