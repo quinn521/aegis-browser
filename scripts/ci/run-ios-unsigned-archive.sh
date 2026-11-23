@@ -45,12 +45,13 @@ case "${1:-}" in
     --products "$IOS_CI_ROOT/EmbeddedCore"
   ;;
 --verify-archive)
+  derived="${IOS_CI_SCRATCH:?IOS_CI_SCRATCH is required}/DerivedData"
   python3 "$REPO_ROOT/scripts/release/verify-ios-archive.py" \
     "$IOS_CI_ROOT/Aegis.xcarchive" 1.0.0 1
   python3 -B "$REPO_ROOT/scripts/release/test_ios_linked_bundle.py" \
     "$IOS_CI_ROOT/Aegis.xcarchive/Products/Applications/Aegis.app" \
-    "$IOS_CI_ROOT/EmbeddedCore" "$IOS_CI_SCRATCH/DerivedData" device
-  exec python3 -I -B "$REPO_ROOT/scripts/ci/ios-ci-storage.py" seal --root "$IOS_CI_ROOT"
+    "$IOS_CI_ROOT/EmbeddedCore" "$derived" device --owned-linker-paths
+  exec python3 -I -B "$REPO_ROOT/scripts/ci/ios-ci-storage.py" seal --root "$IOS_CI_ROOT" --derived "$derived"
   ;;
 --compile-archive)
   # SwiftPM's system Git uses the runner's Git and proxy configuration.

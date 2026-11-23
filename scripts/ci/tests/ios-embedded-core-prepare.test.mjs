@@ -16,9 +16,61 @@ const token = 'synthetic-embedded-core-proxy-token';
 const proxy = `http://fixture:${token}@proxy.invalid:8080`;
 const moduleVersion = 'v0.0.0-20261011034528-197770444867';
 const lock = 'apps/ios/EmbeddedCore/embedded-core-lock.json';
+const moduleSum = 'h1:rav73cdd7OQUPgt1aIFbZQTiPNnjfueKXvfOiLCY0Ss=';
 const sourceCommit = 'a'.repeat(40);
 const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
 const goArchive = `go1.27.3.darwin-${arch}.tar.gz`;
+
+const packageFixture = String.raw`
+import os
+from pathlib import Path
+import plistlib
+import shutil
+import sys
+
+mode, *arguments = sys.argv[1:]
+name = "AegisEmbeddedCore"
+if mode == "generate":
+    tmp = Path(os.environ["TMPDIR"]) / "gomobile-work-123"
+    output, = arguments
+    frameworks = []
+    for platform, sdk in (("ios", "iphoneos"), ("iossimulator", "iphonesimulator")):
+        framework = tmp / platform / sdk / (name + ".framework")
+        (framework / "Headers").mkdir(parents=True)
+        (framework / "Modules").mkdir()
+        (framework / "Headers" / (name + ".h")).write_text("fixture header")
+        (framework / "Modules/module.modulemap").write_text("fixture module map")
+        (framework / name).write_text("fixture binary " + sdk + "\n")
+        if platform == "ios" and os.environ["PREP_SCENARIO"] == "redirected-framework":
+            (framework / name).unlink()
+            (framework / name).symlink_to(Path(os.environ["PREP_PACKAGE"]))
+        (framework / "Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleExecutable": name, "CFBundleIdentifier": name, "CFBundlePackageType": "FMWK",
+            "MinimumOSVersion": "100.0", "CFBundleVersion": "0.0.12345",
+            "CFBundleShortVersionString": "0.0.999" if os.environ["PREP_SCENARIO"] == "unexpected-version" else "0.0.12345",
+        }))
+        frameworks.append(str(framework))
+    os.execvp("xcodebuild", ["xcodebuild", "-create-xcframework", "-framework", frameworks[0],
+                          "-framework", frameworks[1], "-framework", frameworks[1], "-output", output])
+else:
+    assert arguments[0] == "-create-xcframework"
+    output = Path(arguments[-1])
+    libraries = []
+    for framework in map(Path, dict.fromkeys(arguments[2:-2:2])):
+        sim = framework.parent.name == "iphonesimulator"
+        identifier = "ios-arm64_x86_64-simulator" if sim else "ios-arm64"
+        shutil.copytree(framework, output / identifier / framework.name)
+        fields = dict(LibraryIdentifier=identifier, LibraryPath=framework.name,
+                      BinaryPath=framework.name + "/" + name,
+                      SupportedPlatform="ios", SupportedArchitectures=["arm64"])
+        if sim:
+            fields.update(SupportedPlatformVariant="simulator", SupportedArchitectures=["arm64", "x86_64"])
+        libraries.append(fields)
+        if not sim and os.environ["PREP_SCENARIO"] == "changed-packaged-slice":
+            (output / identifier / framework.name / name).write_text("not the generated archive")
+    (output / "Info.plist").write_bytes(plistlib.dumps({
+        "AvailableLibraries": libraries[::-1], "CFBundlePackageType": "XFWK", "XCFrameworkFormatVersion": "1.0"}))
+`;
 
 const tools = String.raw`#!/bin/bash
 set -eo pipefail
@@ -65,8 +117,10 @@ case "$tool:$1" in
     [[ "$0" == "$GOROOT/bin/go" && "$GOTOOLCHAIN" == local ]]
     if [[ "$2" == -m ]]; then
       [[ "$3" == -json ]]
-      [[ "$PREP_SCENARIO" == record ]] && fail 47
-      printf '{"Path":"golang.org/x/mobile/cmd/gomobile","Main":{"Path":"golang.org/x/mobile","Version":"%s"}}\n' "$PREP_MODULE_VERSION"
+      [[ "$PREP_SCENARIO" == record && -f "$IOS_CI_ROOT/EmbeddedCore/slice-digests.txt" ]] && fail 47
+      binding="$(basename "$4")"
+      [[ "$PREP_SCENARIO:$binding" == wrong-gobind:gobind ]] && PREP_MODULE_SUM='h1:invalid'
+      printf '{"GoVersion":"go1.27.3","Path":"golang.org/x/mobile/cmd/%s","Main":{"Path":"golang.org/x/mobile","Version":"%s","Sum":"%s"}}\n' "$binding" "$PREP_MODULE_VERSION" "$PREP_MODULE_SUM"
       if [[ "$PREP_SCENARIO" == metadata-gomobile ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     elif [[ "$PREP_SCENARIO" == version-failure ]]; then
       fail 42
@@ -81,25 +135,31 @@ case "$tool:$1" in
     fi
     printf 'version diagnostic %s\n' "$HTTPS_PROXY" >&2
     ;;
+  go:tool)
+    [[ "$2 $3" == 'compile -V=full' ]]
+    printf 'compile version go1.27.3\n'
+    ;;
+  go:env)
+    [[ "$2" == -json ]]
+    printf '{"GOFLAGS":"%s","GOBIN":"","GOPATH":"%s","GOPROXY":"%s","GONOPROXY":"%s"}\n' "$GOFLAGS" "$GOPATH" "$GOPROXY" "$GONOPROXY"
+    ;;
   go:install)
-    [[ "$2" == "golang.org/x/mobile/cmd/gomobile@$PREP_MODULE_VERSION" ]]
+    [[ "$#" == 3 && "$2" == "golang.org/x/mobile/cmd/gomobile@$PREP_MODULE_VERSION"       && "$3" == "golang.org/x/mobile/cmd/gobind@$PREP_MODULE_VERSION" ]]
+    [[ "$GOBIN" == "$IOS_CI_SCRATCH/tmp/"*/tools || -z "$IOS_CI_SCRATCH" ]]
     [[ "$PREP_SCENARIO" == install ]] && fail 43
     diagnostic
-    mkdir "$GOBIN"
     cp "$PREP_TOOLS" "$GOBIN/gomobile"
-    ;;
-  gomobile:init)
-    [[ "$PREP_SCENARIO" == init ]] && fail 44
-    diagnostic
-    if [[ "$PREP_SCENARIO" == cancel ]]; then
-      printf '%s\n' "$$" > "$PREP_READY"
-      exec /bin/sleep 15
-    fi
+    cp "$PREP_TOOLS" "$GOBIN/gobind"
     ;;
   go:mod)
-    [[ "$2" == tidy && "$PWD" == "$IOS_CI_ROOT/EmbeddedCore/work/bridge" ]]
-    diagnostic
-    git fixture-fetch
+    if [[ "$2" == edit ]]; then
+      [[ "$3" == -json ]]
+      printf '{"Module":{"Path":"aegis.browser/ios/embeddedcore"}}\n'
+    else
+      [[ "$2" == tidy && "$PWD" == */aegis-core-*/bridge ]]
+      diagnostic
+      git fixture-fetch
+    fi
     ;;
   git:fixture-fetch)
     if [[ -n "$GIT_TRACE" ]]; then printf '%s\n' "$HTTPS_PROXY" >> "$GIT_TRACE"; fi
@@ -109,15 +169,18 @@ case "$tool:$1" in
   gomobile:bind)
     [[ "$PREP_SCENARIO" == bind ]] && fail 46
     diagnostic
+    if [[ "$PREP_SCENARIO" == cancel ]]; then
+      printf '%s\n' "$$" > "$PREP_READY"
+      exec /bin/sleep 15
+    fi
     if [[ "$PREP_SCENARIO" == changed-bridge ]]; then
       printf '\n// changed during bind\n' >> go.mod
     fi
     while [[ "$1" != -o ]]; do shift; done
-    output="$2"
-    for slice in ios-arm64 ios-arm64-simulator; do
-      mkdir -p "$output/$slice"
-      printf 'fixture binary %s\n' "$slice" > "$output/$slice/AegisEmbeddedCore.a"
-    done
+    python3 "$PREP_PACKAGE" generate "$2"
+    ;;
+  xcodebuild:-create-xcframework)
+    python3 "$PREP_PACKAGE" pack "$@"
     ;;
   git:rev-parse)
     printf '%s\n' "$PREP_SOURCE_COMMIT"
@@ -128,7 +191,11 @@ case "$tool:$1" in
     if [[ "$PREP_SCENARIO" == metadata-xcode ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     ;;
   xcrun:--sdk)
-    printf '27.0\n'
+    if [[ "$3" == "--show-sdk-build-version" ]]; then
+      printf '24A111\n'
+    else
+      printf '27.0\n'
+    fi
     if [[ "$PREP_SCENARIO" == "metadata-$2" ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     ;;
   *) exit 99 ;;
@@ -164,6 +231,7 @@ function fixture(t, scenario) {
     'scripts/release/build-ios-access-core.sh',
     'scripts/release/record-ios-access-core-digests.sh',
     'scripts/release/ios_embedded_core.py',
+    'scripts/release/ios_core_build.py',
   ]) {
     mkdirSync(join(source, file, '..'), {recursive: true});
     copyFileSync(file, join(source, file));
@@ -186,7 +254,14 @@ function fixture(t, scenario) {
   if (scenario === 'bad-size') entry.size += 1;
   const files = scenario === 'missing-release' ? [] : scenario === 'duplicate-release' ? [entry, entry] : [entry];
   writeFileSync(catalog, JSON.stringify([{version: entry.version, files}]));
-  if (scenario === 'installed-gomobile') copyFileSync(toolScript, join(goPath, 'bin/gomobile'));
+  if (scenario === 'installed-gomobile' || scenario === 'wrong-gobind') {
+    for (const name of ['gomobile', 'gobind']) copyFileSync(toolScript, join(goPath, 'bin', name));
+  }
+  const packageScript = join(root, 'package.py');
+  writeFileSync(packageScript, packageFixture);
+  const shared = join(goPath, 'pkg/gomobile');
+  mkdirSync(shared, {recursive: true});
+  writeFileSync(join(shared, 'sentinel'), 'runner-owned gomobile state\n');
   writeFileSync(join(bin, 'python3'), '#!/bin/bash\nexec "$PREP_PYTHON" "$@"\n', {mode: 0o755});
   const options = {cwd: root, encoding: 'utf8', env: {
     PATH: `${bin}:/usr/bin:/bin`, HOME: root, GOPATH: goPath, GOPROXY: 'direct', GONOPROXY: 'example.invalid/*', GOTOOLCHAIN: 'auto',
@@ -194,10 +269,10 @@ function fixture(t, scenario) {
     GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file', GIT_DIR: join(root, 'wrong checkout'), GIT_TRACE: trace,
     IOS_CI_ROOT: job, IOS_CI_SOURCE: source, PREP_SCENARIO: scenario, PREP_PYTHON: python,
     PREP_ARCH: arch, PREP_ARCHIVE: archive, PREP_ARCHIVE_NAME: goArchive, PREP_CATALOG: catalog,
-    PREP_MODULE_VERSION: moduleVersion, PREP_SOURCE_COMMIT: sourceCommit, PREP_TOOLS: toolScript, PREP_PROXY: proxy,
+    PREP_MODULE_VERSION: moduleVersion, PREP_MODULE_SUM: moduleSum, PREP_PACKAGE: packageScript, PREP_SOURCE_COMMIT: sourceCommit, PREP_TOOLS: toolScript, PREP_PROXY: proxy,
     PREP_CALLS: calls, PREP_READY: ready,
   }};
-  return {options, job, products, trace, calls, ready};
+  return {options, job, products, trace, calls, ready, shared};
 }
 
 const bash = ['-e', '-o', 'pipefail', '-c', prepare.run];
@@ -224,11 +299,14 @@ for (const [scenario, phase, status] of [
   ['version-failure', 'go version', 42],
   ['version-mismatch', 'go version', 2],
   ['install', 'go install', 43],
-  ['init', 'gomobile init', 44],
+  ['wrong-gobind', 'go version -m', 1],
   ['tidy', 'git fixture-fetch', 45],
   ['bind', 'gomobile bind', 46],
-  ['changed-bridge', 'gomobile bind', 2],
-  ['record', 'go version -m', 1],
+  ['changed-bridge', 'gomobile bind', 1],
+  ['redirected-framework', 'gomobile bind', 1],
+  ['unexpected-version', 'gomobile bind', 1],
+  ['changed-packaged-slice', 'xcodebuild -create-xcframework', 1],
+  ['record', 'go version -m', 47],
   ['metadata-go', 'go version -m', 1],
   ['metadata-commit', 'git rev-parse', 1],
   ['metadata-xcode', 'xcodebuild -version', 1],
@@ -279,9 +357,10 @@ for (const scenario of ['cold-install', 'installed-gomobile']) {
     const calls = readFileSync(setup.calls, 'utf8');
     assert.match(calls, /catalog\n/u);
     assert.match(calls, /archive\n/u);
-    assert.doesNotMatch(calls, /go env|unexpected tool selection/u);
+    assert.doesNotMatch(calls, /unexpected tool selection/u);
     assert.equal(calls.includes('go install'), scenario === 'cold-install');
-    assert.equal(calls.includes('gomobile init'), scenario === 'cold-install');
+    assert(!calls.includes('gomobile init'));
+    assert.equal(readFileSync(join(setup.shared, 'sentinel'), 'utf8'), 'runner-owned gomobile state\n');
     const manifest = JSON.parse(readFileSync(join(setup.products, 'build-manifest.json'), 'utf8'));
     assert.equal(manifest.sourceCommit, sourceCommit);
     assert.match(manifest.compiledBridgeSha256, /^[a-f0-9]{64}$/u);
@@ -289,6 +368,7 @@ for (const scenario of ['cold-install', 'installed-gomobile']) {
     assert.equal(manifest.compiledBridgeSha256, readFileSync(join(setup.products, 'compiled-bridge.sha256'), 'utf8').trim());
     assert.equal(manifest.digestMode, 'ci-rebuild');
     assert.equal(manifest.gomobileModule, `golang.org/x/mobile@${moduleVersion}`);
+    assert.equal(manifest.gobindModule, manifest.gomobileModule);
     assert.equal(manifest.goVersion, `go version go1.27.3 darwin/${arch}`);
     assert.equal(manifest.xcodeVersion, 'Xcode 27.0\nBuild version 27A266a');
     assert.deepEqual(manifest.sdkVersions, {iphoneos: '27.0', iphonesimulator: '27.0'});
@@ -296,9 +376,9 @@ for (const scenario of ['cold-install', 'installed-gomobile']) {
     assert(archiveSteps.indexOf(prepare) < archiveSteps.indexOf(archive));
     assert.equal(archive.env.IOS_CI_ROOT, prepare.env.IOS_CI_ROOT);
     assert.equal(archive.env.IOS_CI_SOURCE, prepare.env.IOS_CI_SOURCE);
-    for (const slice of ['ios-arm64', 'ios-arm64-simulator']) {
-      const binary = join(setup.products, 'AegisEmbeddedCore.xcframework', slice, 'AegisEmbeddedCore.a');
-      assert.equal(readFileSync(binary, 'utf8'), `fixture binary ${slice}\n`);
+    for (const [slice, sdk] of [['ios-arm64', 'iphoneos'], ['ios-arm64_x86_64-simulator', 'iphonesimulator']]) {
+      const binary = join(setup.products, 'AegisEmbeddedCore.xcframework', slice, 'AegisEmbeddedCore.framework', 'AegisEmbeddedCore');
+      assert.equal(readFileSync(binary, 'utf8'), `fixture binary ${sdk}\n`);
       assert(readFileSync(join(setup.products, 'build-inputs.xcfilelist'), 'utf8').includes(binary + '\n'));
     }
     const effective = JSON.parse(readFileSync(join(setup.products, 'embedded-core-lock.json'), 'utf8'));

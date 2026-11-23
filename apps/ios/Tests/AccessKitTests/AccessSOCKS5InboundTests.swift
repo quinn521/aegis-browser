@@ -150,6 +150,88 @@ final class AccessSOCKS5InboundTests: XCTestCase {
         try await assertLeaseExpiringDuringDial(transport: .socks5)
     }
 
+    func testEstablishedHTTPUploadIsFencedOnWallClockExpiry() async throws {
+        try await assertEstablishedLeaseExpiry(transport: .http, upload: true)
+    }
+
+    func testEstablishedHTTPDownloadIsFencedOnWallClockExpiry() async throws {
+        try await assertEstablishedLeaseExpiry(transport: .http, upload: false)
+    }
+
+    func testEstablishedSOCKSUploadIsFencedOnWallClockExpiry() async throws {
+        try await assertEstablishedLeaseExpiry(transport: .socks5, upload: true)
+    }
+
+    func testEstablishedSOCKSDownloadIsFencedOnWallClockExpiry() async throws {
+        try await assertEstablishedLeaseExpiry(transport: .socks5, upload: false)
+    }
+
+    private func assertEstablishedLeaseExpiry(transport: AccessInboundTransport, upload: Bool) async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port)
+        let time = Date()
+        let cutoff = time.addingTimeInterval(60)
+        let clock = Mutex(time)
+        let now: @Sendable () -> Date = { clock.withLock { $0 } }
+        let tunnel = GatedTunnel()
+        tunnel.release()
+        let registration = try makeRegistration(transport: transport, port: port.rawValue, expiresAt: cutoff)
+        let http = transport == .http ? try AccessHTTPInboundListener(registration: registration, tunnels: tunnel,
+            maximumConnections: 4, preparedSocket: socket, now: now) : nil
+        let socks = transport == .socks5 ? try AccessSOCKS5InboundListener(registration: registration, tunnels: tunnel,
+            maximumConnections: 4, preparedSocket: socket, now: now) : nil
+        defer { try? http?.stop(); try? socks?.stop() }
+        try await http?.start(at: time)
+        try await socks?.start(at: time)
+
+        let client = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        client.start(queue: .global())
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(6))
+            if !Task.isCancelled { client.cancel() }
+        }
+        defer { deadline.cancel(); client.cancel() }
+        let reply: Data
+        if transport == .socks5 {
+            try await Self.send(Data([5, 1, 0]), to: client)
+            let greeting = try await Self.receive(2, from: client)
+            XCTAssertEqual(greeting, Data([5, 0]))
+            try await Self.send(Data([5, 1, 0, 1, 192, 0, 2, 1, 1, 187]), to: client)
+            reply = AccessSOCKS5InboundParser.successReply()
+        } else {
+            try await Self.send(Data("CONNECT 192.0.2.1:443 HTTP/1.1\r\nHost: 192.0.2.1:443\r\n\r\n".utf8), to: client)
+            reply = AccessHTTPConnectParser.successResponse(httpVersion: "HTTP/1.1")
+        }
+        let received = try await Self.receive(reply.count, from: client)
+        XCTAssertEqual(received, reply)
+        let readDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !tunnel.stream.hasPendingReadForTests, ContinuousClock.now < readDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard tunnel.stream.hasPendingReadForTests else { return XCTFail("The established stream never parked its remote read") }
+        XCTAssertEqual(http?.establishedConnectCount ?? socks?.establishedConnectCount, 1)
+        let fenced = expectation(description: "established peer closes without passing expired bytes")
+        client.receive(minimumIncompleteLength: 1, maximumLength: 64) { data, _, complete, error in
+            XCTAssertTrue(data?.isEmpty != false)
+            XCTAssertTrue(complete || error != nil)
+            fenced.fulfill()
+        }
+        // The listener's monotonic timer is still valid; only the next forwarding
+        // attempt can observe the wall-clock expiry.
+        clock.withLock { $0 = cutoff }
+        if upload {
+            try? await Self.send(Data([42]), to: client)
+        } else {
+            tunnel.stream.push(Data([42]))
+        }
+        await fulfillment(of: [fenced], timeout: 2)
+        XCTAssertTrue(tunnel.stream.writtenSnapshot.isEmpty)
+        XCTAssertFalse(tunnel.stream.isOpen)
+        XCTAssertTrue((http?.boundSocketForTests ?? socks?.boundSocketForTests) === socket)
+        XCTAssertEqual(http?.boundPort ?? socks?.boundPort, port.rawValue)
+    }
+
     private func assertLeaseExpiringDuringDial(transport: AccessInboundTransport) async throws {
         let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
         defer { socket.cancel() }

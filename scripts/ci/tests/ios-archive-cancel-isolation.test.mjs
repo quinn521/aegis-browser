@@ -499,6 +499,8 @@ if [[ "$2" == */test_ios_linked_bundle.py ]]; then
   touch "$IOS_CI_ROOT/linked-verified"
 fi
 if [[ "$3" == */ios-ci-storage.py && "$4" == seal ]]; then
+  test "$7" = --derived && test "$8" = "$IOS_CI_SCRATCH/DerivedData" || exit 74
+  test -f "$8/Logs/archive.xcactivitylog" || exit 75
   touch "$IOS_CI_ROOT/sealed"
 fi
 `);

@@ -21,6 +21,8 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         (bridge / "bridge.go").write_text("package bridge\n")
         self.lock = bridge.parent / "embedded-core-lock.json"
         self.toolchain = {"go": "1.27.3", "gomobile": "golang.org/x/mobile@v0.0.0-20261011034528-197770444867"}
+        self.module_sum = "h1:rav73cdd7OQUPgt1aIFbZQTiPNnjfueKXvfOiLCY0Ss="
+        (bridge / "go.sum").write_text(self.toolchain["gomobile"].replace("@", " ") + f" {self.module_sum}\n")
         self.lock.write_text(json.dumps({"status": "verified_build", "xrayCore": {"commit": "a" * 40},
                                          "toolchain": self.toolchain,
                                          "artifacts": {key: "0" * 64 for key in core.SLICE_KEYS.values()}}))
@@ -41,14 +43,15 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         def tool_output(args, **_kwargs):
             if args[:4] == ["go", "version", "-m", "-json"]:
                 path, version = self.toolchain["gomobile"].split("@")
-                return json.dumps({"Path": f"{path}/cmd/gomobile", "Main": {"Path": path, "Version": version}})
+                return json.dumps({"GoVersion": "go1.27.3", "Path": f"{path}/cmd/{Path(args[-1]).name}",
+                                   "Main": {"Path": path, "Version": version, "Sum": self.module_sum}})
             return {
                 "go": f"go version go{self.toolchain['go']} darwin/arm64\n",
                 "git": "a" * 40 + "\n",
                 "xcodebuild": "Xcode 27.0\nBuild version 27A266a\n",
-                "xcrun": "27.0\n",
+                "xcrun": "24A222\n" if args[-1] == "--show-sdk-build-version" else "27.0\n",
             }[args[0]]
-        with patch.object(core.shutil, "which", return_value="/fixture/gomobile"), \
+        with patch.object(core.shutil, "which", side_effect=lambda name: f"/fixture/{name}"), \
                 patch.object(core.subprocess, "check_output", side_effect=tool_output):
             return core.record(self.root, self.lock, self.products, "ci-rebuild", **kwargs)
 
@@ -76,6 +79,19 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "frozen digests"):
             core.record(self.root, self.lock, self.products, "strict")
         self.assertEqual(self.original, self.lock.read_bytes())
+
+    def test_strict_apple_metadata_enforces_the_frozen_xcode_and_any_sdk_pins(self):
+        sdk_versions = {"iphoneos": "27.2", "iphonesimulator": "27.2"}
+        sdk_builds = {"iphoneos": "24B8118", "iphonesimulator": "24B8118"}
+        toolchain = {"xcode": "27B52", "sdkVersions": sdk_versions, "sdkBuildVersions": sdk_builds}
+        metadata = {"xcodeVersion": "Xcode 27.2\nBuild version 27B52",
+                    "sdkVersions": sdk_versions, "sdkBuildVersions": sdk_builds}
+        core.verify_apple_pin(metadata, toolchain)
+        for changed in (dict(metadata, xcodeVersion="Xcode 27.2\nBuild version 27B53"),
+                        dict(metadata, sdkVersions={"iphoneos": "27.3", "iphonesimulator": "27.2"}),
+                        dict(metadata, sdkBuildVersions={"iphoneos": "24B8118", "iphonesimulator": "24B9999"})):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "Apple toolchain"):
+                core.verify_apple_pin(changed, toolchain)
 
     def test_prepared_source_rejects_a_rebuild_from_edited_bridge_at_same_commit(self):
         from shutil import copytree
@@ -156,7 +172,7 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         (resource.parent / "embedded-core-build.json").write_bytes((self.products / "build-manifest.json").read_bytes())
         with patch("ios_linked_core.verify_link", return_value={"coreCarrierSha256": "fixture"}) as linked:
             receipt = core.verify_bundle(app, self.products, self.root / "DerivedData", "simulator")
-        linked.assert_called_once_with(app, self.products, self.root / "DerivedData", "simulator")
+        linked.assert_called_once_with(app, self.products, self.root / "DerivedData", "simulator", owned_linker_paths=False)
         self.assertEqual(receipt["appBinarySha256"], core.file_digest(app / "Aegis"))
 
     def test_internal_archive_upgrades_legacy_cache_and_passes_the_resolved_products_to_xcode(self):

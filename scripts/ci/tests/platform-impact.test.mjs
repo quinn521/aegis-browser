@@ -305,6 +305,7 @@ test('paths select platforms and commit types select stage depth', () => {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Routing Test'); git('config', 'user.email', 'routing@example.invalid');
     const commonScript = 'apps/browser/scripts/common.sh';
     const iosArchiveTests = ['scripts/release/test_verify_ios_archive.py', 'scripts/release/test_ios_embedded_core.py',
+      'scripts/release/test_ios_archive_seal.py',
       'scripts/ci/tests/ios-archive-cancel-isolation.test.mjs', 'scripts/ci/tests/ios-archive-supervisor-fixture.py',
       'scripts/ci/tests/ios-embedded-core-prepare.test.mjs'];
     const iosPrepareWorker = 'scripts/ci/run-ios-embedded-core-prepare.sh';
@@ -357,7 +358,7 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.deepEqual(route(cliTestOnly), {...iosRoute, deep: false});
     for (const file of [
       'build-ios-access-core.sh', 'development_key_access.py', 'development_signing.py',
-      'ios_embedded_core.py', 'ios_linked_core.py', 'prepare-ios-access-core.sh', 'record-ios-access-core-digests.sh',
+      'ios_core_build.py', 'ios_embedded_core.py', 'ios_linked_core.py', 'prepare-ios-access-core.sh', 'record-ios-access-core-digests.sh',
       'safari_manifest.py', 'test_development_key_access.py', 'test_development_signing.py',
       'test_ios_linked_bundle.py', 'test_ios_profile_trust.py', 'verify-ios-archive.py', 'verify-signed-ios.py',
     ]) {

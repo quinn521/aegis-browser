@@ -64,26 +64,53 @@ def tool_field(field, command, pattern, *, cwd=None):
     return value
 
 
-def tool_metadata(root, toolchain):
-    binding = shutil.which("gomobile")
-    if not binding:
-        raise ValueError("gomobile build tool is missing")
-    metadata = json.loads(subprocess.check_output(["go", "version", "-m", "-json", binding]))
+def check_mobile_tool(go, executable, name, toolchain, bridge, *, env=None):
+    metadata = json.loads(subprocess.check_output([go, "version", "-m", "-json", executable], env=env))
     module = metadata["Main"]
     path, version = toolchain["gomobile"].split("@", 1)
-    if (metadata.get("Path") != "golang.org/x/mobile/cmd/gomobile"
-            or module.get("Path") != path or module.get("Version") != version or module.get("Replace") is not None):
-        raise ValueError("actual gomobile module differs from the source pin")
+    sums = [fields[2] for line in (bridge / "go.sum").read_text().splitlines()
+            if len(fields := line.split()) == 3 and fields[:2] == [path, version]]
+    if (path != "golang.org/x/mobile" or metadata.get("Path") != f"{path}/cmd/{name}"
+            or metadata.get("GoVersion") != f"go{toolchain['go']}"
+            or module.get("Path") != path or module.get("Version") != version
+            or module.get("Replace") is not None or sums != [module.get("Sum")]
+            or not re.fullmatch(r"h1:[A-Za-z0-9+/]{43}=", sums[0])):
+        raise ValueError(f"actual {name} toolchain or module differs from the source pin")
+
+
+def apple_metadata():
     version_pattern = r"[0-9]{1,3}(?:\.[0-9]{1,3}){0,2}"
+    return {
+        "xcodeVersion": tool_field("Xcode version", ["xcodebuild", "-version"],
+                                   rf"Xcode {version_pattern}\nBuild version [0-9]{{1,3}}[A-Z][0-9]{{1,6}}[a-z]?"),
+        "sdkVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-version"], version_pattern)
+                        for sdk in ("iphoneos", "iphonesimulator")},
+        "sdkBuildVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-build-version"],
+                                            r"[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?")
+                             for sdk in ("iphoneos", "iphonesimulator")},
+    }
+
+
+def verify_apple_pin(metadata, toolchain):
+    if (metadata.get("xcodeVersion", "").split("\n")[-1] != "Build version " + toolchain["xcode"]
+            or any(key in toolchain and metadata.get(key) != toolchain[key]
+                   for key in ("sdkVersions", "sdkBuildVersions"))):
+        raise ValueError("actual Apple toolchain differs from the source pin")
+
+
+def tool_metadata(root, toolchain, bridge):
+    for name in ("gomobile", "gobind"):
+        executable = shutil.which(name)
+        if not executable:
+            raise ValueError(f"{name} build tool is missing")
+        check_mobile_tool("go", executable, name, toolchain, bridge)
     return {
         "sourceCommit": tool_field("source commit", ["git", "rev-parse", "HEAD"], r"[0-9a-f]{40}", cwd=root),
         "goVersion": tool_field("Go version", ["go", "version"],
                                 rf"go version go{re.escape(toolchain['go'])} darwin/(?:arm64|amd64)"),
-        "xcodeVersion": tool_field("Xcode version", ["xcodebuild", "-version"],
-                                   rf"Xcode {version_pattern}\nBuild version [0-9]{{1,3}}[A-Z][0-9]{{1,6}}[a-z]?"),
         "gomobileModule": toolchain["gomobile"],
-        "sdkVersions": {sdk: tool_field(sdk, ["xcrun", "--sdk", sdk, "--show-sdk-version"], version_pattern)
-                        for sdk in ("iphoneos", "iphonesimulator")},
+        "gobindModule": toolchain["gomobile"],
+        **apple_metadata(),
     }
 
 
@@ -99,7 +126,9 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None):
     compiled_bridge = directory_digest(products / "work/bridge")
     if (products / "compiled-bridge.sha256").read_text().strip() != compiled_bridge:
         raise ValueError("EmbeddedCore bridge copy differs from the gomobile build input")
-    metadata = tool_metadata(root, lock["toolchain"])
+    metadata = tool_metadata(root, lock["toolchain"], products / "work/bridge")
+    if mode == "strict":
+        verify_apple_pin(metadata, lock["toolchain"])
     effective = {**lock, "artifacts": {**lock["artifacts"], **actual}}
     write_json(products / "embedded-core-lock.json", effective)
     (products / "build-inputs.xcfilelist").write_text(input_list(
@@ -142,8 +171,13 @@ def verify(root, source_lock, products, mode=None):
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("actual EmbeddedCore build inputs differ from their manifest")
     source = json.loads(source_lock.read_text())
+    toolchain = source["toolchain"]
+    if any(manifest.get(key) != toolchain["gomobile"] for key in ("gomobileModule", "gobindModule")):
+        raise ValueError("recorded binding tools differ from the source pin")
     if mode == "strict" and any(source["artifacts"].get(k) != v for k, v in expected["slices"].items()):
         raise ValueError("cached slices differ from frozen digests")
+    if mode == "strict":
+        verify_apple_pin(manifest, toolchain)
     effective = json.loads((products / "embedded-core-lock.json").read_text())
     if source.get("status") != "verified_build" or effective != {
         **source, "artifacts": {**source["artifacts"], **expected["slices"]}
@@ -152,7 +186,7 @@ def verify(root, source_lock, products, mode=None):
     return {**manifest, "manifestSha256": file_digest(products / "build-manifest.json")}
 
 
-def verify_bundle(bundle, products, derived, platform):
+def verify_bundle(bundle, products, derived, platform, *, owned_linker_paths=False):
     bundle, products = Path(bundle), Path(products)
     lock = bundle / "Frameworks/AccessKit.framework/embedded-core-lock.json"
     if file_digest(lock) != file_digest(products / "embedded-core-lock.json"):
@@ -161,7 +195,7 @@ def verify_bundle(bundle, products, derived, platform):
     if file_digest(manifest) != file_digest(products / "build-manifest.json"):
         raise ValueError("app bundled a different EmbeddedCore build manifest")
     from ios_linked_core import verify_link
-    return {**verify_link(bundle, products, Path(derived), platform),
+    return {**verify_link(bundle, products, Path(derived), platform, owned_linker_paths=owned_linker_paths),
             "appBinarySha256": file_digest(bundle / "Aegis"), "bundledLockSha256": file_digest(lock),
             "bundledBuildManifestSha256": file_digest(manifest)}
 

@@ -52,11 +52,12 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
                 try Task.checkCancellation()
                 onEstablished?()
                 if !prelude.isEmpty {
+                    guard mayOpen() else { self.stop(); return }
                     try await remote.write(prelude)
                 }
-                async let download: Void = self.pumpRemote(remote)
+                async let download: Void = self.pumpRemote(remote, maySend: mayOpen)
                 do {
-                    try await Self.forwardUpload(receive: self.receiveClient, write: remote.write)
+                    try await Self.forwardUpload(receive: self.receiveClient, write: remote.write, maySend: mayOpen)
                 } catch {
                     // A failed read or write terminates both directions, like EOF.
                 }
@@ -96,10 +97,12 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
     /// Wait for the current write before requesting another client chunk.
     static func forwardUpload(
         receive: () async throws -> (Data?, Bool),
-        write: (Data) async throws -> Void
+        write: (Data) async throws -> Void,
+        maySend: () -> Bool = { true }
     ) async throws {
         while !Task.isCancelled {
             let (data, complete) = try await receive()
+            guard !Task.isCancelled, maySend() else { return }
             if let data, !data.isEmpty {
                 try await write(data)
             }
@@ -119,14 +122,15 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
         }
     }
 
-    private func pumpRemote(_ remote: any AccessRealityPathStream) async {
+    private func pumpRemote(_ remote: any AccessRealityPathStream, maySend: @escaping @Sendable () -> Bool) async {
         while !Task.isCancelled {
             do {
                 guard let chunk = try await remote.read(maxBytes: Self.chunkSize) else {
                     stop()
                     return
                 }
-                try await sendClient(chunk)
+                try Task.checkCancellation()
+                try await sendClient(chunk, maySend: maySend)
             } catch {
                 stop()
                 return
@@ -134,7 +138,7 @@ public final class AccessHTTPTunnelBridge: @unchecked Sendable {
         }
     }
 
-    private func sendClient(_ data: Data, maySend: @escaping @Sendable () -> Bool = { true }) async throws {
+    private func sendClient(_ data: Data, maySend: @escaping @Sendable () -> Bool) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.queue.async {
                 guard maySend() else { continuation.resume(throwing: CancellationError()); return }
@@ -173,6 +177,12 @@ public final class AccessMemoryRealityStream: AccessRealityPathStream, @unchecke
         lock.lock()
         defer { lock.unlock() }
         return !closed
+    }
+
+    var hasPendingReadForTests: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !readers.isEmpty
     }
 
     public func read(maxBytes: Int) async throws -> Data? {

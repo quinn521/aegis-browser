@@ -323,10 +323,18 @@ class JobScratch:
         self.path = Path(tempfile.mkdtemp(prefix=".aegis-ios-scratch-", dir=root.parent))
         self.identity = directory_identity(self.path, private=True)
 
-    def environment(self, environment):
+    def environment(self, environment, *, for_archive=False):
         temporary = self.path / "tmp"
         temporary.mkdir(mode=0o700)
-        return dict(environment, TMPDIR=str(temporary), IOS_CI_SCRATCH=str(self.path))
+        device, inode = self.identity
+        result = dict(environment, TMPDIR=str(temporary), IOS_CI_SCRATCH=str(self.path),
+                      IOS_CI_SCRATCH_ID=f"{device}:{inode}")
+        if for_archive:
+            derived = self.path / "DerivedData"
+            derived.mkdir(mode=0o700)
+            derived_device, derived_inode = directory_identity(derived, private=True)
+            result["IOS_CI_DERIVED_ID"] = f"{derived_device}:{derived_inode}"
+        return result
 
     def clean(self):
         try:
@@ -377,6 +385,10 @@ def archive(log, shell, wrapper, environment, cancelled, signal_worker, cancel_s
         output.close()
     if cancelled() or code or output.failed:
         return code or os.EX_IOERR, False
+    derived = Path(environment["IOS_CI_SCRATCH"]) / "DerivedData"
+    device, inode = directory_identity(derived, private=True)
+    if f"{device}:{inode}" != environment["IOS_CI_DERIVED_ID"]:
+        raise OSError(errno.EPERM, "archive DerivedData identity changed")
     report("unsigned archive verification starting")
     code = run_stage([shell, wrapper, "--verify-archive"], environment, cancelled, signal_worker)
     if code is not None:
@@ -405,7 +417,7 @@ def main(*arguments):
     session_stopped = True
     cancellation_reported = False
     try:
-        environment = scratch.environment(environment)
+        environment = scratch.environment(environment, for_archive=not preparing)
         if preparing:
             code = prepare_embedded_core(*arguments[1:], environment, cancelled, signal_worker)
         else:

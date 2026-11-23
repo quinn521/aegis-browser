@@ -14,13 +14,6 @@ export GOROOT="${IOS_CI_SCRATCH:?IOS_CI_SCRATCH is required}/go"
 export GOTOOLCHAIN=local
 export PATH="$GOROOT/bin:${GOBIN:-${GOPATH:-$HOME/go}/bin}:$PATH"
 
-if ! command -v gomobile >/dev/null 2>&1; then
-  export GOBIN="$IOS_CI_SCRATCH/bin"
-  go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20261011034528-197770444867
-  export PATH="$GOROOT/bin:$GOBIN:$PATH"
-  gomobile init
-fi
-
 # Both the bridge and its receipt must use the job-private checkout.
 AEGIS_EMBEDDED_CORE_DIGEST_MODE=ci-rebuild \
   bash scripts/release/prepare-ios-access-core.sh \
