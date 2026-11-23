@@ -140,6 +140,7 @@
 		5E0260208A956B2D7C036DB8 /* icon-256.png in Resources */ = {isa = PBXBuildFile; fileRef = 79B8057C45E31C106CCBD50F /* icon-256.png */; };
 		5E94F6A20FEE46649FAE643D /* FirebaseInstallationCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A76362E1332AEE6CE280B693 /* FirebaseInstallationCleanup.swift */; };
 		5EE75D92D196BC21A04D1C12 /* AccessGeoSiteAdmission.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04669089BD3A65A732EB0F23 /* AccessGeoSiteAdmission.swift */; };
+		5790653A43C5D48811FFC2D2 /* AccessOverseasCatalogue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8827DE3A86197F24420757F5 /* AccessOverseasCatalogue.swift */; };
 		5F330B083DC9F2371801C627 /* AccessDevAllowBlockSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21DFE3B27F6365B330F0E739 /* AccessDevAllowBlockSectionView.swift */; };
 		5F3417E7B4BCA29FBC13A8EC /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 68E446701B5F847B61CB3995 /* PrivacyInfo.xcprivacy */; };
 		5F49F1C483F473646F56D052 /* ReadingLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9594C0B3C26733D2849ABD0 /* ReadingLibraryView.swift */; };
@@ -572,6 +573,7 @@
 		02D5318F98B98D709C5312B7 /* AccessHostSelectiveProxyCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessHostSelectiveProxyCapabilityTests.swift; sourceTree = "<group>"; };
 		037C51E582A13D84AA1C122E /* AccessHTTPConnectError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessHTTPConnectError.swift; sourceTree = "<group>"; };
 		04669089BD3A65A732EB0F23 /* AccessGeoSiteAdmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteAdmission.swift; sourceTree = "<group>"; };
+		8827DE3A86197F24420757F5 /* AccessOverseasCatalogue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessOverseasCatalogue.swift; sourceTree = "<group>"; };
 		0510756A74BFFCEF7ECFDE21 /* SettingsLayoutUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLayoutUITests.swift; sourceTree = "<group>"; };
 		0566DCB113FA458049F3395C /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		0733E717B779380580E227F2 /* AssistantTaskStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantTaskStoreTests.swift; sourceTree = "<group>"; };
@@ -1372,6 +1374,7 @@
 				12381FD7114703959852EF0B /* AccessEndpoint.swift */,
 				753BFC176DC983DD55DB1017 /* AccessFailClosedProxyEntryPublisher.swift */,
 				04669089BD3A65A732EB0F23 /* AccessGeoSiteAdmission.swift */,
+				8827DE3A86197F24420757F5 /* AccessOverseasCatalogue.swift */,
 				AC02B6D11358636A4317F95E /* AccessGeoSiteCatalogue.swift */,
 				E32CFDCF103DF2CE4B825E4E /* AccessGoEmbeddedCore.swift */,
 				68987EA5CADDABC9488D27A8 /* AccessHostDataStoreRegistry.swift */,
@@ -2438,6 +2441,7 @@
 				B25CEDCB03B98DF07727ED85 /* AccessEndpoint.swift in Sources */,
 				E467E400761B3747835C82CE /* AccessFailClosedProxyEntryPublisher.swift in Sources */,
 				5EE75D92D196BC21A04D1C12 /* AccessGeoSiteAdmission.swift in Sources */,
+				5790653A43C5D48811FFC2D2 /* AccessOverseasCatalogue.swift in Sources */,
 				9B1953760AA59D2808FB9BD1 /* AccessGeoSiteCatalogue.swift in Sources */,
 				8946A639356E25B573D8FE76 /* AccessGoEmbeddedCore.swift in Sources */,
 				5C8B2D0685911D3B6C598530 /* AccessHTTPConnectError.swift in Sources */,

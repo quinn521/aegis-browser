@@ -197,6 +197,146 @@ final class AccessGeoSiteFullFrozenAdmissionTests: XCTestCase {
         XCTAssertEqual(candidate.receipt.database.sha256, AccessGeoSiteCatalogue.bundled.rawSHA256)
         XCTAssertEqual(candidate.receipt.checksum.sha256, "9d153aa5f78ff022a85726e42522ea00776e87b30e4c2519c8e04dbd795893e6")
         XCTAssertEqual(candidate.catalogue.groups, AccessGeoSiteCatalogue.bundled.groups)
+        let combined = try AccessGeoSiteAdmission.admit(metadata: metadata, database: database, checksum: checksum,
+            now: AccessGeoSiteTestVector.now, includeOverseas: true)
+        XCTAssertEqual(combined.catalogue, candidate.catalogue)
+        XCTAssertEqual(combined.categoryCount, candidate.categoryCount)
+        XCTAssertNil(candidate.overseas)
+        let overseas = try XCTUnwrap(combined.overseas)
+        XCTAssertEqual(overseas.counts.source, 4_417)
+        XCTAssertEqual(overseas.counts.admitted, 4_368)
+        XCTAssertEqual(overseas.counts.rejected, 36)
+        XCTAssertEqual(overseas.counts.unsupported, 13)
+        XCTAssertEqual(overseas.counts.exclusions, 32)
+        XCTAssertEqual(overseas.hosts.values.reduce(0) { $0 + $1.count }, 30)
+        XCTAssertEqual(overseas.hosts[.development],
+            ["github.com", "gist.github.com", "raw.githubusercontent.com", "hub.docker.com"])
+    }
+}
+
+final class AccessOverseasAdmissionTests: XCTestCase {
+    private typealias Vector = AccessGeoSiteTestVector
+
+    func testCuratedRulesUseOnlyApprovedHTTPSHostsAndApplyBothExclusionTypes() throws {
+        let positive = Vector.group("GFWLIST-CN", rules: [
+            Vector.rule(2, "google.com"), Vector.rule(2, "fast.com"),
+            Vector.rule(2, "ampproject.org"), Vector.rule(2, "tokenplus.app"),
+            Vector.rule(2, "github.io"), Vector.rule(1, "(.*)blogspot\\.(.*)")
+        ])
+        let exceptions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [
+            Vector.rule(2, "www.ampproject.org"), Vector.rule(0, ".tokenplus.app")
+        ])
+        let topics = Vector.group("GOOGLE-GEMINI", rules: [Vector.rule(3, "gemini.google.com")])
+            + Vector.group("GOOGLE", rules: [Vector.rule(2, "google.com")])
+            + Vector.group("NETFLIX", rules: [Vector.rule(2, "fast.com")])
+        let candidate = try Vector.admit(positive + exceptions + topics, includeOverseas: true)
+        let catalogue = try XCTUnwrap(candidate.overseas)
+
+        func matches(_ url: String, _ scope: AccessOverseasCatalogue.Scope = .all) throws -> Bool {
+            catalogue.matches(try XCTUnwrap(URL(string: url)), scope: scope)
+        }
+        XCTAssertEqual(catalogue.counts.admitted, 4)
+        XCTAssertEqual(catalogue.counts.rejected, 1)
+        XCTAssertEqual(catalogue.counts.unsupported, 1)
+        XCTAssertTrue(try matches("https://fast.com"))
+        XCTAssertFalse(try matches("https://fast.com", .categories([.video])))
+        XCTAssertTrue(try matches("https://gemini.google.com:443/", .categories([.ai])))
+        XCTAssertFalse(try matches("https://gemini.google.com", .categories([.web])))
+        XCTAssertFalse(try matches("https://child.gemini.google.com", .categories([.ai])))
+        XCTAssertFalse(try matches("https://gemini.google.com:8443"))
+        XCTAssertFalse(try matches("http://gemini.google.com"))
+        XCTAssertFalse(try matches("https://user@google.com"))
+        XCTAssertFalse(try matches("https://evilgoogle.com"))
+        XCTAssertTrue(try matches("https://ampproject.org"))
+        XCTAssertFalse(try matches("https://www.ampproject.org"))
+        XCTAssertFalse(try matches("https://abc.tokenplus.app"))
+        XCTAssertFalse(try matches("https://arbitrary.github.io"))
+    }
+
+    func testMissingUnknownExceptionsRejectOverseasAdmission() throws {
+        let positive = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, "google.com")])
+        let invalid = [
+            Data(),
+            Vector.group("GFWLIST-CN-EXCLUDE", rules: [Vector.rule(1, "^google")])
+        ]
+        for negative in invalid {
+            XCTAssertThrowsError(try Vector.admit(positive + negative, includeOverseas: true))
+        }
+        XCTAssertNil(try Vector.admit(positive).overseas)
+    }
+
+    func testPositiveAndExclusionRecordCountBoundaries() throws {
+        let positives = (0..<8_193).map { Vector.rule(3, "positive-\($0).example.com") }
+        let exclusions = (0..<513).map { Vector.rule(2, "exception-\($0).example.com") }
+        func admit(positiveCount: Int, exclusionCount: Int) throws -> AccessOverseasCatalogue {
+            let database = Vector.group("GFWLIST-CN", rules: Array(positives.prefix(positiveCount)))
+                + Vector.group("GFWLIST-CN-EXCLUDE", rules: Array(exclusions.prefix(exclusionCount)))
+            let candidate = try Vector.admit(database, includeOverseas: true)
+            return try XCTUnwrap(candidate.overseas)
+        }
+        let valid = try admit(positiveCount: 8_192, exclusionCount: 512)
+        XCTAssertEqual(valid.counts.admitted, 8_192)
+        XCTAssertEqual(valid.counts.exclusions, 512)
+        XCTAssertThrowsError(try admit(positiveCount: 8_193, exclusionCount: 512))
+        XCTAssertThrowsError(try admit(positiveCount: 8_192, exclusionCount: 513))
+    }
+
+    func testSourceGroupMustHaveCanonicalNameAndKnownGroupSemantics() throws {
+        let positive = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, "google.com")])
+        let exclusions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [])
+        let rule = Vector.rule(3, "gemini.google.com")
+        let wrongName = Vector.group("google-gemini", rules: [rule])
+        let unknownField = Vector.field(1, Vector.field(1, Data("GOOGLE-GEMINI".utf8))
+            + Vector.field(2, rule) + Vector.scalar(3, 1))
+        for topic in [wrongName, unknownField] {
+            XCTAssertThrowsError(try Vector.admit(positive + exclusions + topic, includeOverseas: true))
+        }
+    }
+
+    func testLongUnsupportedPositivePatternHasItsOwnDisposition() throws {
+        let pattern = "^" + String(repeating: "ab", count: 200) + "$"
+        let positive = Vector.group("GFWLIST-CN", rules: [
+            Vector.rule(2, "google.com"), Vector.rule(1, pattern), Vector.rule(2, "github.io")
+        ])
+        let exclusions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [])
+        let catalogue = try XCTUnwrap(Vector.admit(positive + exclusions, includeOverseas: true).overseas)
+        XCTAssertEqual(catalogue.counts.admitted, 1)
+        XCTAssertEqual(catalogue.unusedRules.map(\.value), [pattern, "github.io"])
+        XCTAssertEqual(catalogue.unusedRules.map(\.kind), [.regexp, .domain])
+        XCTAssertEqual(catalogue.unusedRules.map(\.reason), [.unsupportedRegexp, .hostRejected])
+    }
+
+    func testSingleLabelExclusionNarrowsAValidDescendantRule() throws {
+        let positive = Vector.group("GFWLIST-CN", rules: [
+            Vector.rule(2, "pki.goog"), Vector.rule(2, "google.com")
+        ])
+        let exclusions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [Vector.rule(2, "goog")])
+        let catalogue = try XCTUnwrap(Vector.admit(positive + exclusions, includeOverseas: true).overseas)
+        XCTAssertEqual(catalogue.counts.admitted, 2)
+        XCTAssertFalse(catalogue.matches(try XCTUnwrap(URL(string: "https://c.pki.goog")), scope: .all))
+        XCTAssertTrue(catalogue.matches(try XCTUnwrap(URL(string: "https://www.google.com")), scope: .all))
+    }
+
+    func testTopicEvidenceCanAppearAfterPositiveInventoryLimit() throws {
+        let positive = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, "google.com")])
+        let exclusions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [])
+        let records = (0..<8_192).map { Vector.rule(2, "other-\($0).example.com") }
+            + [Vector.rule(3, "www.google.com")]
+        let topic = Vector.group("GOOGLE", rules: records)
+        let catalogue = try XCTUnwrap(Vector.admit(positive + exclusions + topic, includeOverseas: true).overseas)
+        XCTAssertEqual(catalogue.hosts[.web], ["www.google.com"])
+    }
+
+    func testExclusionsRequireCanonicalIDNALabels() throws {
+        let positive = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, "xn--bcher-kva.de")])
+        for (type, host) in [(2, "xn--a.de"), (3, "xn--a.de"), (2, "xn--a.xn--bcher-kva.de"),
+                             (2, "1.xn--mgbh0fb.de"), (3, "1.xn--mgbh0fb.de")] {
+            let malformed = Vector.group("GFWLIST-CN-EXCLUDE", rules: [Vector.rule(type, host)])
+            XCTAssertThrowsError(try Vector.admit(positive + malformed, includeOverseas: true))
+        }
+        let exclusions = Vector.group("GFWLIST-CN-EXCLUDE", rules: [Vector.rule(2, "xn--bcher-kva.de")])
+        let catalogue = try XCTUnwrap(Vector.admit(positive + exclusions, includeOverseas: true).overseas)
+        XCTAssertFalse(catalogue.matches(try XCTUnwrap(URL(string: "https://www.bücher.de/")), scope: .all))
     }
 }
 
@@ -259,9 +399,10 @@ enum AccessGeoSiteTestVector {
     }
 
     static func admit(_ database: Data, newer: Bool = false,
-                      highWater: AccessGeoSiteAdmission.Receipt? = nil) throws -> AccessGeoSiteAdmission.Candidate {
+                      highWater: AccessGeoSiteAdmission.Receipt? = nil,
+                      includeOverseas: Bool = false) throws -> AccessGeoSiteAdmission.Candidate {
         let input = try release(database, newer: newer)
         return try AccessGeoSiteAdmission.admit(metadata: input.metadata, database: database, checksum: input.checksum,
-                                                now: now, highWater: highWater)
+                                                now: now, highWater: highWater, includeOverseas: includeOverseas)
     }
 }
