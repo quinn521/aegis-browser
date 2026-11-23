@@ -559,15 +559,11 @@ async function waitForToolReady(child, ready, diagnostics) {
   assert.fail(`Tool did not signal readiness within its ${startupAllowanceMs} ms startup allowance.\n${diagnostics()}`);
 }
 
-async function waitForCancellation(closed) {
+function waitForCancellation(closed) {
   const timer = new globalThis.AbortController();
-  try {
-    return await Promise.race([closed, delay(cancellationAllowanceMs, undefined, {signal: timer.signal}).then(() => {
-      assert.fail(`Cancellation did not finish within ${cancellationAllowanceMs} ms of the signal`);
-    })]);
-  } finally {
-    timer.abort();
-  }
+  return Promise.race([closed, delay(cancellationAllowanceMs, undefined, {signal: timer.signal}).then(() => {
+    assert.fail(`Cancellation did not finish within ${cancellationAllowanceMs} ms of the signal`);
+  })]).finally(() => timer.abort());
 }
 
 for (const [scenario, signal, status] of [['cancel', 'SIGINT', 130], ['cancel', 'SIGTERM', 143],
