@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync, spawn, spawnSync} from 'node:child_process';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -32,7 +32,7 @@ async function waitFor(predicate, label) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
-const compiler = `#!/bin/bash
+const compiler = String.raw`#!/bin/bash
 exec "$ARCHIVE_TEST_PYTHON" -c '
 import json, os, signal, time
 from pathlib import Path
@@ -40,6 +40,7 @@ from pathlib import Path
 root = Path(os.environ["IOS_CI_ROOT"])
 probe = root / "next-checkout"
 deadline = time.monotonic() + 15
+assert os.environ["RUNNER_TRACKING_ID"] == "archive-fixture"
 
 def mark(role):
     status = [os.getpid(), os.getppid(), os.getpgrp(), os.getsid(0)]
@@ -55,12 +56,11 @@ def watch():
         time.sleep(0.01)
 
 if os.fork() == 0:
-    with open(os.devnull, "r+") as quiet:
-        for descriptor in (0, 1, 2):
-            os.dup2(quiet.fileno(), descriptor)
     if os.fork() == 0:
+        os.setpgid(0, 0)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
+        os.write(2, b"separate-group grandchild holds compiler output\n")
         mark("grandchild")
     else:
         mark("helper")
@@ -85,6 +85,10 @@ for (const [signal, exitCode] of [['SIGTERM', 143], ['SIGINT', 130], [null, 65]]
     const source = join(root, 'Source');
     const python = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
     mkdirSync(bin);
+    for (const path of [archiveScript, 'scripts/ci/ios-archive-supervisor.py', 'apps/browser/scripts/common.sh']) {
+      mkdirSync(join(source, path, '..'), {recursive: true});
+      copyFileSync(path, join(source, path));
+    }
     mkdirSync(join(source, 'apps/ios/Aegis.xcodeproj'), {recursive: true});
     writeFileSync(join(source, 'apps/ios/Aegis.xcodeproj/project.pbxproj'), '// fixture\n');
     writeFileSync(join(bin, 'python3'), `#!/bin/bash
@@ -93,16 +97,29 @@ exit 0
 `, {mode: 0o755});
     writeFileSync(join(bin, 'xcodebuild'), compiler, {mode: 0o755});
 
-    // A sibling job can refer to the exact archive log path in its argv.
-    const otherJob = spawn(python, ['-c', 'import time; time.sleep(20)', join(root, 'xcodebuild.log')], {
+    // A sibling job follows the same log while the compiler is running.
+    const log = join(root, 'xcodebuild.log');
+    const loggerReady = join(root, 'logger-ready');
+    writeFileSync(log, '');
+    const otherJob = spawn(python, ['-c', `
+import os, pathlib, sys, time
+with open(sys.argv[1], "rb") as log:
+    pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))
+    for _ in range(200):
+        log.read()
+        time.sleep(0.1)
+`, log, loggerReady], {
       stdio: 'ignore',
     });
-    const child = spawn('bash', [archiveScript], {
+    const child = spawn('bash', [join(source, archiveScript)], {
+      cwd: source,
       env: {...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
-        ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_FAIL: signal ? '0' : '1'},
-      stdio: ['ignore', 'ignore', 'pipe'],
+        RUNNER_TRACKING_ID: 'archive-fixture', ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_FAIL: signal ? '0' : '1'},
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+    let stdout = '';
     let diagnostic = '';
+    child.stdout.on('data', data => { stdout += data; });
     child.stderr.on('data', data => { diagnostic += data; });
     let nextCheckoutStarted = false;
     child.once('exit', () => {
@@ -110,25 +127,32 @@ exit 0
       nextCheckoutStarted = true;
     });
     const roles = ['compiler', 'helper', 'grandchild'];
+    const ready = () => [loggerReady, ...roles.map(role => join(root, role))].every(path => existsSync(path));
+    const marker = 'separate-group grandchild holds compiler output';
 
     try {
-      await waitFor(() => roles.every(role => existsSync(join(root, role))), 'owned process markers');
-      const [[compilerPid, workerPid, group, session], [helperPid, compilerParent, helperGroup, helperSession],
+      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(marker)), 'process markers and live diagnostic');
+      assert(ready(), diagnostic);
+      const [[compilerPid, supervisorPid, group, session], [helperPid, compilerParent, helperGroup, helperSession],
         [grandchildPid, helperParent, grandchildGroup, grandchildSession]] = roles.map(role =>
         JSON.parse(readFileSync(join(root, role), 'utf8')));
-      assert.equal(group, workerPid, 'the archive shell must lead a private process group');
+      assert.equal(supervisorPid, child.pid, 'the compiler must be the entry supervisor’s direct child');
+      assert.deepEqual([group, session], [compilerPid, compilerPid]);
       assert.deepEqual([compilerParent, helperParent], [compilerPid, helperPid]);
-      assert.deepEqual([helperGroup, grandchildGroup], [group, group]);
+      assert.deepEqual([helperGroup, grandchildGroup], [group, grandchildPid]);
       assert.deepEqual([helperSession, grandchildSession], [session, session]);
-      assert.notEqual(session, group, 'the worker must stay in the Actions session');
 
-      if (signal) assert.equal(child.kill(signal), true);
+      if (signal) {
+        assert(stdout.includes(marker), diagnostic);
+        assert.equal(child.kill(signal), true);
+      }
       await waitFor(() => nextCheckoutStarted, 'wrapper exit and next-checkout probe');
       assert.equal(child.exitCode, exitCode, diagnostic);
-      for (const pid of [workerPid, compilerPid, helperPid, grandchildPid]) {
+      assert(readFileSync(log, 'utf8').includes(marker));
+      for (const pid of [compilerPid, helperPid, grandchildPid]) {
         assert.equal(running(pid), false, `archive descendant ${pid} survived wrapper exit`);
       }
-      assert.equal(process.kill(otherJob.pid, 0), true, 'the unrelated log reader must survive');
+      assert.equal(running(otherJob.pid), true, 'the unrelated log reader must survive');
       assert.equal(existsSync(join(root, 'saw-next-checkout')), false);
     } finally {
       child.removeAllListeners('exit');
@@ -141,7 +165,7 @@ exit 0
 
 test('workflow keeps unsigned archive compilation behind the cancel-safe wrapper', () => {
   const workflow = readFileSync('.github/workflows/ios-release-validation.yml', 'utf8');
-  assert.match(workflow, /exec bash scripts\/ci\/run-ios-unsigned-archive\.sh/u);
+  assert.match(workflow, /exec bash "\$IOS_CI_SOURCE\/scripts\/ci\/run-ios-unsigned-archive\.sh"/u);
   assert.match(workflow, /steps\.storage\.outputs\.source/u);
   assert.doesNotMatch(workflow, /xcodebuild .*\| tee/u);
   const probe = spawnSync('bash', ['-n', archiveScript], {encoding: 'utf8'});

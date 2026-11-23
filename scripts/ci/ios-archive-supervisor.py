@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the unsigned archive worker and its process group owned by the CI step."""
+"""Stream the unsigned compiler log and drain the compiler's private session."""
 
 import errno
 import os
@@ -10,82 +10,196 @@ import sys
 import time
 
 
-def wait_for_worker(pid, cancelled):
-    # Observe exit without reaping. The child's PID reserves the group ID
-    # until the supervisor has finished signalling that group.
-    if hasattr(os, "waitid"):
-        while not cancelled() and os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is None:
-            time.sleep(0.05)
-    else:
-        queue = select.kqueue()
+POLL_INTERVAL = 0.05
+READ_SIZE = 64 * 1024
+
+
+def process_states():
+    rows = subprocess.check_output(  # nosec B603 - fixed ps invocation without command lines.
+        ["/bin/ps", "-ax", "-o", "pid=", "-o", "stat="], text=True, timeout=2)
+    return [(int(pid), state) for pid, state in map(str.split, rows.splitlines())]
+
+
+def in_session(pid, session):
+    try:
+        return os.getsid(pid) == session
+    except ProcessLookupError:
+        return False
+
+
+def session_workers(session):
+    reported = False
+    while True:
         try:
+            # Reparented zombies may be visible until their new parent reaps them.
+            return [pid for pid, state in process_states()
+                    if not state.startswith("Z") and in_session(pid, session)]
+        except (OSError, subprocess.SubprocessError) as error:
+            # Keep the session ID reserved until the process census succeeds.
+            if not reported:
+                print(f"waiting to confirm unsigned archive session stopped: {error}", file=sys.stderr)
+                reported = True
+            time.sleep(POLL_INTERVAL)
+
+
+def signal_workers(workers, session, signum):
+    for pid in workers:
+        # Check membership again at the point of signalling.
+        if in_session(pid, session):
+            try:
+                os.kill(pid, signum)
+            except ProcessLookupError:
+                pass
+
+
+def stop_and_reap(pid):
+    # Leave the compiler unreaped to keep its session ID reserved after exit.
+    signal_workers(session_workers(pid), pid, signal.SIGTERM)
+    deadline = time.monotonic() + 0.5
+    empty = False
+    while True:
+        workers = session_workers(pid)
+        if not workers and empty:
+            return os.waitpid(pid, 0)[1]
+        # Rescan after an empty snapshot in case an exiting worker forked
+        # while ps was collecting the process table.
+        empty = not workers
+        if time.monotonic() >= deadline:
+            signal_workers(workers, pid, signal.SIGKILL)
+        time.sleep(POLL_INTERVAL)
+
+
+def write_all(descriptor, data):
+    pending = memoryview(data)
+    while pending:
+        size = os.write(descriptor, pending)
+        if size == 0:
+            raise OSError(errno.EIO, "empty write")
+        pending = pending[size:]
+
+
+class ArchiveOutput:
+    def __init__(self, path):
+        self.log = None
+        self.diagnostics = True
+        self.failed = False
+        try:
+            self.log = open(path, "wb", buffering=0)
+        except OSError as error:
+            self.log_error(error)
+
+    def log_error(self, error):
+        self.failed = True
+        print(f"failed to retain xcodebuild.log: {error}", file=sys.stderr)
+
+    def write(self, data):
+        if self.diagnostics:
+            try:
+                write_all(sys.stdout.fileno(), data)
+            except OSError as error:
+                self.diagnostics = False
+                self.failed = True
+                print(f"failed to stream xcodebuild diagnostics: {error}", file=sys.stderr)
+        if self.log is not None:
+            try:
+                write_all(self.log.fileno(), data)
+            except OSError as error:
+                self.log_error(error)
+                self.close()
+
+    def close(self):
+        if self.log is not None:
+            try:
+                self.log.close()
+            except OSError as error:
+                self.log_error(error)
+            finally:
+                self.log = None
+
+
+def copy_chunk(descriptor, output):
+    try:
+        data = os.read(descriptor, READ_SIZE)
+    except BlockingIOError:
+        return False
+    if data:
+        output.write(data)
+    return bool(data)
+
+
+def stream_until_exit(pid, descriptor, output, cancelled):
+    # macOS Python 3.9 lacks waitid. Both observers leave the child unreaped.
+    queue = None
+    changes = []
+    ready = [descriptor]
+    try:
+        if not hasattr(os, "waitid"):
+            queue = select.kqueue()
             changes = [select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD,
                                      fflags=select.KQ_NOTE_EXIT)]
-            while not cancelled():
-                events = queue.control(changes, 1, 0.05)
+        while not cancelled():
+            if queue is None:
+                if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None:
+                    return
+            else:
+                try:
+                    events = queue.control(changes, 1, 0)
+                except ProcessLookupError:
+                    return
                 changes = []
                 if events:
                     event = events[0]
                     if event.flags & select.KQ_EV_ERROR and event.data != errno.ESRCH:
                         raise OSError(event.data, os.strerror(event.data))
                     return
-        finally:
+            if select.select(ready, [], [], POLL_INTERVAL)[0] and not copy_chunk(descriptor, output):
+                ready = []
+    finally:
+        if queue is not None:
             queue.close()
 
 
-def group_has_workers(pgid):
-    # A dead orphan may remain as a zombie until its new parent reaps it.
-    # Only the kernel-assigned group and process state are relevant.
-    rows = subprocess.check_output(  # nosec B603 - fixed ps invocation, no shell or user arguments.
-        ["/bin/ps", "-ax", "-o", "pgid=", "-o", "stat="], text=True, timeout=2)
-    group_id = str(pgid)
-    return any(len(row) == 2 and row[0] == group_id and not row[1].startswith("Z")
-               for row in map(str.split, rows.splitlines()))
-
-
-def signal_group(pgid, signum):
+def run_compiler(command, log, cancelled):
+    # Verify process enumeration is available before starting anything that
+    # might leave a helper in a second process group.
+    process_states()
+    if cancelled():
+        return 0
+    output = ArchiveOutput(log)
     try:
-        os.killpg(pgid, signum)
-    except ProcessLookupError:
-        pass
-
-
-def stop_and_reap(pid):
-    try:
-        signal_group(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 0.5
-        while time.monotonic() < deadline and group_has_workers(pid):
-            time.sleep(0.05)
-        # Signal even if the last snapshot was empty: an exiting parent can
-        # fork a helper while ps is walking the process table.
-        signal_group(pid, signal.SIGKILL)
-        while group_has_workers(pid):
-            signal_group(pid, signal.SIGKILL)
-            time.sleep(0.05)
-    except (OSError, subprocess.SubprocessError) as error:
-        # If process listing is unavailable, kill while the group ID is still
-        # reserved and require a kernel confirmation after reaping. A group
-        # that still exists could contain zombies, so a failed probe cannot
-        # establish cleanup. Never signal it again after releasing the PID.
+        reader, writer = os.pipe()
         try:
-            signal_group(pid, signal.SIGKILL)
-        except PermissionError:
-            pass
-        _, status = os.waitpid(pid, 0)
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
             try:
-                os.killpg(pid, 0)
-            except ProcessLookupError:
-                return status
-            except PermissionError:
+                os.set_blocking(reader, False)
+                if cancelled():
+                    return 0
+                # Create the session atomically with spawn. The supervisor
+                # stays the parent and passes the Actions tracking env intact.
+                pid = os.posix_spawn(
+                    command[0], command, os.environ, setsid=True, setsigmask=(),
+                    setsigdef=(signal.SIGINT, signal.SIGTERM, signal.SIGPIPE),
+                    file_actions=[(os.POSIX_SPAWN_DUP2, writer, fd) for fd in (1, 2)])
+            finally:
+                os.close(writer)
+            try:
+                stream_until_exit(pid, reader, output, cancelled)
+            finally:
+                status = stop_and_reap(pid)
+            # Helpers can hold the pipe open after the compiler exits. Drain
+            # buffered diagnostics only after those helpers have stopped.
+            while copy_chunk(reader, output):
                 pass
-            time.sleep(0.05)
-        raise RuntimeError(f"could not confirm unsigned archive process group stopped: {error}") from error
-    return os.waitpid(pid, 0)[1]
+        finally:
+            os.close(reader)
+    finally:
+        output.close()
+    code = os.waitstatus_to_exitcode(status)
+    if code < 0:
+        return 128 - code
+    return code or (os.EX_IOERR if output.failed else 0)
 
 
-def main(command):
+def main(log, shell, wrapper, *command):
     received = 0
 
     def cancel(signum, _frame):
@@ -97,23 +211,16 @@ def main(command):
     signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     if received:
         return 128 + received
-    # Group creation and exec happen in one spawn, with the worker still a
-    # direct child in the Actions session. Cancellation records intent even
-    # during spawn so cleanup always has the resulting PID before it runs.
-    pid = os.posix_spawn(command[0], command, os.environ, setpgroup=0, setsigmask=(),
-                         setsigdef=(signal.SIGINT, signal.SIGTERM, signal.SIGPIPE))
-    try:
-        wait_for_worker(pid, lambda: received)
-    finally:
-        status = stop_and_reap(pid)
+    code = run_compiler(command, log, lambda: received)
     if received:
         return 128 + received
-    code = os.waitstatus_to_exitcode(status)
-    return 128 - code if code < 0 else code
+    if code:
+        return code
+    os.execv(shell, [shell, wrapper, "--verify-archive"])
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main(sys.argv[1:]))
-    except (OSError, RuntimeError) as error:
+        sys.exit(main(*sys.argv[1:]))
+    except (OSError, subprocess.SubprocessError) as error:
         sys.exit(f"unsigned archive supervisor: {error}")

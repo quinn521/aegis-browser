@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync, chmodSync, symlinkSync} from 'node:fs';
+import {copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, rmSync, chmodSync, symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
@@ -515,11 +515,21 @@ test('quality preflight selects Linux docs and preserves full checks on all othe
   assertTrustedRouteDefaults(impact.steps.find(step => step.id === 'impact').run);
 });
 
-const archiveScript = resolve('scripts/ci/run-ios-unsigned-archive.sh');
-const delegateArchiveSupervisor = 'case "$3" in */ios-archive-supervisor.py) exec "$ARCHIVE_TEST_PYTHON" "$@" ;; esac\n';
+const archiveScript = 'scripts/ci/run-ios-unsigned-archive.sh';
+const delegateArchiveSupervisor = `case "$3" in
+  */ios-archive-supervisor.py)
+    if [[ "\${ARCHIVE_TEST_LOG_FAILURE:-}" == write ]]; then ulimit -f 8; fi
+    exec "$ARCHIVE_TEST_PYTHON" "$@"
+    ;;
+esac
+`;
 
 function prepareArchiveFixture(root) {
   const source = join(root, 'Source');
+  for (const path of [archiveScript, 'scripts/ci/ios-archive-supervisor.py', 'apps/browser/scripts/common.sh']) {
+    mkdirSync(join(source, path, '..'), {recursive: true});
+    copyFileSync(path, join(source, path));
+  }
   mkdirSync(join(source, 'apps/ios/Aegis.xcodeproj'), {recursive: true});
   mkdirSync(join(source, 'apps/ios/EmbeddedCore'), {recursive: true});
   writeFileSync(join(source, 'apps/ios/Aegis.xcodeproj/project.pbxproj'), '// fixture\n');
@@ -537,67 +547,78 @@ test('archive compiler diagnostics reach Actions and retain exit status before s
   assert.equal(step.env.IOS_CI_SOURCE, '${{ steps.storage.outputs.source }}');
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'archive-diagnostics-'));
   const bin = join(root, 'bin');
+  const shared = join(root, 'shared checkout');
   const trace = join(root, 'python-calls.txt');
   const launch = join(root, 'compiler-cwd.txt');
   mkdirSync(bin);
+  mkdirSync(join(shared, 'scripts/ci'), {recursive: true});
+  writeFileSync(join(shared, archiveScript), 'exit 99\n');
   const source = prepareArchiveFixture(root);
   const python = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
   writeFileSync(join(bin, 'python3'), `#!/bin/bash
+if [[ "\${GIT_DIR+x}\${GIT_WORK_TREE+x}\${GIT_COMMON_DIR+x}" ]]; then exit 98; fi
 ${delegateArchiveSupervisor}printf '%s\\n' "$*" >> "$ARCHIVE_TEST_TRACE"
 if [[ "$ARCHIVE_TEST_SOURCE_CHANGE" == 1 && "$2" == */ios_embedded_core.py && "$3" == verify ]]; then
   mv -- "$IOS_CI_SOURCE" "$IOS_CI_ROOT/MovedSource"
 fi
 `);
   writeFileSync(join(bin, 'xcodebuild'), `#!/bin/bash
+if [[ "\${GIT_DIR+x}\${GIT_WORK_TREE+x}\${GIT_COMMON_DIR+x}" ]]; then exit 98; fi
 pwd -P > "$ARCHIVE_TEST_LAUNCH"
 printf 'archive-compiler-diagnostic\\n' >&2
+if [[ "$ARCHIVE_TEST_LOG_FAILURE" == write ]]; then printf '%16384s\\n' ''; fi
 exit "$ARCHIVE_TEST_EXIT"
 `);
   chmodSync(join(bin, 'python3'), 0o755);
   chmodSync(join(bin, 'xcodebuild'), 0o755);
+  const run = overrides => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {
+    cwd: shared, encoding: 'utf8', timeout: 10000, env: {
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+      GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
+      ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_LAUNCH: launch,
+      ...overrides,
+    },
+  });
   try {
-    for (const [compilerExit, logFailure] of [[65, null], [0, null], [0, 'open'], [65, 'open'], [0, 'write']]) {
+    writeFileSync(trace, '');
+    const absent = run({IOS_CI_SOURCE: join(root, 'absent')});
+    assert.equal(absent.status, 1, absent.stderr);
+    assert.match(absent.stderr, /cd:.*absent/u);
+    assert.equal(readFileSync(trace, 'utf8'), '');
+    const vanished = run({ARCHIVE_TEST_SOURCE_CHANGE: '1', ARCHIVE_TEST_EXIT: '0'});
+    assert.equal(vanished.status, 1, vanished.stderr);
+    assert.match(vanished.stderr, /cd:.*Source/u);
+    assert.throws(() => readFileSync(launch), {code: 'ENOENT'});
+    assert.doesNotMatch(readFileSync(trace, 'utf8'), /verify-ios-archive\.py|ios-ci-storage\.py seal/u);
+    renameSync(join(root, 'MovedSource'), source);
+
+    const cases = [[65, null], [0, null], [0, 'open'], [65, 'open'], [0, 'write'], [65, 'write']];
+    for (const [compilerExit, logFailure] of cases) {
       const log = join(root, 'xcodebuild.log');
       rmSync(log, {force: true});
+      rmSync(launch, {force: true});
       if (logFailure === 'open') mkdirSync(log);
-      if (logFailure === 'write') {
-        writeFileSync(join(bin, 'tee'), '#!/bin/bash\nprintf "partial log\\n" > "$1"\ncat\nexit 74\n', {mode: 0o755});
-      }
       writeFileSync(trace, '');
-      const result = spawnSync('bash', [archiveScript], {encoding: 'utf8', env: {
-        ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
-        IOS_CI_SOURCE: source, ARCHIVE_TEST_SOURCE_CHANGE: '0', ARCHIVE_TEST_LAUNCH: launch,
-        ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_EXIT: String(compilerExit),
-      }});
-      if (logFailure === 'open' && compilerExit === 0) {
-        assert.ok(result.status > 0, result.stderr);
-      } else {
-        assert.equal(result.status, logFailure === 'write' ? 74 : compilerExit, result.stderr);
-      }
+      const result = run({ARCHIVE_TEST_SOURCE_CHANGE: '0', ARCHIVE_TEST_EXIT: String(compilerExit),
+        ARCHIVE_TEST_LOG_FAILURE: logFailure ?? ''});
+      assert.ifError(result.error);
+      assert.equal(result.status, compilerExit || (logFailure ? 74 : 0), result.stderr);
       assert.equal(readFileSync(launch, 'utf8').trim(), source);
       assert.match(result.stdout + result.stderr, /archive-compiler-diagnostic/u);
       if (logFailure) assert.match(result.stderr, /failed to retain xcodebuild\.log/u);
       if (logFailure === 'open') rmSync(log, {recursive: true});
-      else if (logFailure === 'write') assert.equal(readFileSync(log, 'utf8'), 'partial log\n');
       else {
-        assert.match(readFileSync(log, 'utf8'), /archive-compiler-diagnostic/u);
+        const retained = readFileSync(log, 'utf8');
+        assert.match(retained, /archive-compiler-diagnostic/u);
+        if (logFailure === 'write') assert(retained.length < 16384, 'fixture must hit the file-size limit');
       }
-      const calls = readFileSync(trace, 'utf8');
+      const calls = readFileSync(trace, 'utf8').trim().split('\n');
       const succeeded = compilerExit === 0 && !logFailure;
-      assert.equal(calls.includes('verify-ios-archive.py'), succeeded);
-      assert.equal(calls.includes('ios-ci-storage.py seal'), succeeded);
+      assert(calls[0].startsWith(`-B ${source}/scripts/release/ios_embedded_core.py verify `));
+      assert.equal(calls.some(line => line.startsWith(`${source}/scripts/release/verify-ios-archive.py `)), succeeded);
+      assert.equal(calls.some(line => line.startsWith(`-B ${source}/scripts/release/test_ios_linked_bundle.py `)), succeeded);
+      assert.equal(calls.some(line => line.startsWith(`-I -B ${source}/scripts/ci/ios-ci-storage.py seal `)), succeeded);
     }
-    rmSync(launch);
-    writeFileSync(trace, '');
-    const missing = spawnSync('bash', [archiveScript], {encoding: 'utf8', env: {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
-      ARCHIVE_TEST_SOURCE_CHANGE: '1', ARCHIVE_TEST_LAUNCH: launch, ARCHIVE_TEST_EXIT: '0',
-      ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace,
-    }});
-    assert.equal(missing.status, 1, missing.stderr);
-    assert.match(missing.stderr, /cd:.*Source/u);
-    assert.throws(() => readFileSync(launch), {code: 'ENOENT'});
-    assert.doesNotMatch(readFileSync(trace, 'utf8'), /verify-ios-archive\.py|ios-ci-storage\.py seal/u);
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
@@ -608,7 +629,7 @@ test('archive package resolution inherits the existing GitHub transport policy',
   const root = mkdtempSync(join(realpathSync(tmpdir()), 'archive-git-policy-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
-  prepareArchiveFixture(root);
+  const source = prepareArchiveFixture(root);
   const trace = join(root, 'git-policy.txt');
   const args = join(root, 'xcode-args.txt');
   const config = join(root, 'gitconfig');
@@ -632,9 +653,9 @@ exit 65
   }
   try {
     const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_CONFIG_')));
-    const result = spawnSync('bash', [archiveScript], {encoding: 'utf8', env: {
+    const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {encoding: 'utf8', env: {
       ...environment, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
-      IOS_CI_SOURCE: join(root, 'Source'),
+      IOS_CI_SOURCE: source,
       GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1',
       ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
     }});

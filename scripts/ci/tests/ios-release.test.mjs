@@ -164,23 +164,30 @@ test('archive EmbeddedCore preparation uses the private script, bridge root and 
   const source = join(root, 'Source');
   const bin = join(root, 'bin');
   const receipt = join(root, 'fixture-receipt.txt');
-  const privateHead = 'c'.repeat(40);
   const lock = 'apps/ios/EmbeddedCore/embedded-core-lock.json';
   const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  const heads = new Map();
   try {
-    for (const [checkout, head, marker] of [[shared, 'b'.repeat(40), 'shared'], [source, privateHead, 'private']]) {
+    for (const [checkout, marker] of [[shared, 'shared'], [source, 'private']]) {
+      const git = (...args) => execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.autocrlf=false',
+        '-c', 'user.name=EmbeddedCore Fixture', '-c', 'user.email=embedded-core@example.invalid', ...args], {
+        cwd: checkout, encoding: 'utf8', env: {...gitEnv,
+          GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z'},
+      }).trim();
       mkdirSync(join(checkout, 'scripts/release'), {recursive: true});
       mkdirSync(join(checkout, 'apps/ios/EmbeddedCore/bridge'), {recursive: true});
       writeFileSync(join(checkout, lock), '{}\n');
       writeFileSync(join(checkout, 'apps/ios/EmbeddedCore/bridge/origin'), marker);
-      execFileSync('git', ['init', '--quiet', '--template='], {cwd: checkout, env: gitEnv});
-      writeFileSync(join(checkout, '.git/HEAD'), head + '\n');
       writeFileSync(join(checkout, 'scripts/release/prepare-ios-access-core.sh'), `#!/bin/bash
 set -euo pipefail
 printf '%s\\n' '${marker}' "$(cat apps/ios/EmbeddedCore/bridge/origin)" "$(git rev-parse HEAD)" \
   "$PWD" "$1" "$AEGIS_EMBEDDED_CORE_DIGEST_MODE" > "$EMBEDDED_TEST_RECEIPT"
 mkdir -p "$2/AegisEmbeddedCore.xcframework"
 `);
+      git('init', '--quiet', '--template=');
+      git('add', '--', 'apps', 'scripts');
+      git('commit', '--quiet', '--no-gpg-sign', '-m', `${marker} fixture`);
+      heads.set(marker, git('rev-parse', 'HEAD'));
     }
     mkdirSync(bin);
     writeFileSync(join(bin, 'go'), '#!/bin/bash\n[[ "$*" == version ]] || exit 2\necho "go version go1.27.3 fixture"\n', {mode: 0o755});
@@ -195,7 +202,7 @@ mkdir -p "$2/AegisEmbeddedCore.xcframework"
     const prepared = run(source);
     assert.equal(prepared.status, 0, prepared.stderr);
     assert.deepEqual(readFileSync(receipt, 'utf8').trim().split('\n'),
-      ['private', 'private', privateHead, source, join(source, lock), 'ci-rebuild']);
+      ['private', 'private', heads.get('private'), source, join(source, lock), 'ci-rebuild']);
     rmSync(receipt);
     const missing = run(join(root, 'missing'));
     assert.equal(missing.status, 1, missing.stderr);
