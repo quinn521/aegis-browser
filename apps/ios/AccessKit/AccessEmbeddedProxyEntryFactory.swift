@@ -360,15 +360,12 @@ final class AccessEmbeddedProxyEntrySession {
     }
 
     private static func awaitLoopbackSocket(on port: NWEndpoint.Port) async throws -> NWListener {
-        let nwListener: NWListener
-        do {
-            let parameters = NWParameters.tcp
-            parameters.allowLocalEndpointReuse = false
-            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
-            nwListener = try NWListener(using: parameters, on: port)
-        } catch {
-            throw AccessSiteSessionError.prepareFailed(String(describing: error))
-        }
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = false
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+        // The local endpoint already specifies the port. Passing a fixed
+        // port again to NWListener would try to override the endpoint.
+        let nwListener = try NWListener(using: parameters)
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -394,11 +391,7 @@ final class AccessEmbeddedProxyEntrySession {
                         }
                     case .failed(let error):
                         nwListener.stateUpdateHandler = nil
-                        resume.finish(
-                            throwing: AccessSiteSessionError.prepareFailed(
-                                "port.reserve: \(error)"
-                            )
-                        )
+                        resume.finish(throwing: error)
                         nwListener.cancel()
                     case .cancelled:
                         nwListener.stateUpdateHandler = nil

@@ -167,27 +167,37 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
                     let deadline = ContinuousClock.now.advanced(by: .seconds(3))
                     while true {
                         do { return try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket(on: port) }
-                        catch {
-                            if ContinuousClock.now >= deadline { throw error }
+                        catch NWError.posix(.EADDRINUSE) where ContinuousClock.now < deadline {
                             try await Task.sleep(for: .milliseconds(20))
                         }
                     }
                 })
             let publisher = AccessProxyEntryPublisher(
                 provision: { try await session.provision(generation: $0, deadline: $1) },
-                shutdown: { session.shutdown(identity: $0) }, activate: { session.activate() })
+                shutdown: { session.shutdown(identity: $0) }, activate: { session.activate() },
+                healthCheck: { session.isRuntimeHealthy })
+            defer { publisher.cancel(operationID: operation) }
             let result = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
             XCTAssertEqual(result.endpoint.port, port.rawValue)
             XCTAssertEqual(result.endpoint.generation, 1)
+            XCTAssertTrue(publisher.validateReady(result))
             if let old = bindings.first {
                 XCTAssertFalse(publisher.validateReady(.init(operationID: operation, endpoint: old)))
                 session.shutdown(identity: old.identity)
                 XCTAssertTrue(publisher.validateReady(result))
+                XCTAssertTrue(session.isRuntimeHealthy)
+                XCTAssertTrue(retiring.isEmpty)
+            } else {
+                do {
+                    let duplicate = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket(on: port)
+                    duplicate.cancel()
+                    XCTFail("A fixed-port reservation displaced the live listener")
+                } catch NWError.posix(.EADDRINUSE) {}
+                XCTAssertTrue(session.isRuntimeHealthy)
             }
             bindings.append(result.endpoint)
             configurations.append(try XCTUnwrap(core.configuration))
             publisher.closeCurrentGeneration()
-            publisher.cancel(operationID: operation)
             XCTAssertEqual(retiring, [result.endpoint.identity])
         }
         XCTAssertNotEqual(bindings[0].identity, bindings[1].identity)

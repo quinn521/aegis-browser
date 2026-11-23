@@ -138,13 +138,20 @@ final class AccessGoSchedulingTests: XCTestCase {
 
     func testStopJoinsAStreamCloseAlreadyRemovedFromTheNativeRegistry() async throws {
         let closing = expectation(description: "stream close is in flight outside the native registry")
-        let registryStopped = expectation(description: "native stop returned after draining the registry")
+        let registryStopped = expectation(description: "first native stop drained its registry")
+        let nextRegistryStopped = expectation(description: "second owner stopped its native registry")
         let allowClose = DispatchSemaphore(value: 0)
         let stopped = Mutex(false)
         let native = ControlledAsyncNativeCore(onRead: {}, onClose: {
             closing.fulfill()
             _ = allowClose.wait(timeout: .now() + 5)
-        }, onStop: { registryStopped.fulfill() })
+        }, onStop: { count in
+            switch count {
+            case 1: registryStopped.fulfill()
+            case 2: nextRegistryStopped.fulfill()
+            default: XCTFail("Unexpected native stop \(count)")
+            }
+        })
         let ownership = AccessGoRuntimeOwnership()
         let core = AccessGoEmbeddedCore(native: native, ownership: ownership)
         let next = AccessGoEmbeddedCore(native: native, ownership: ownership)
@@ -170,12 +177,27 @@ final class AccessGoSchedulingTests: XCTestCase {
             XCTFail("A new adapter acquired the runtime before the previous stream drained")
         } catch AccessEmbeddedCoreError.unverifiedAsset {}
         XCTAssertEqual(native.snapshot.starts, 1)
+        XCTAssertEqual(native.snapshot.stops, 1)
         allowClose.signal()
         await fulfillment(of: [completion], timeout: 2)
         await stop.value
+        XCTAssertEqual(native.snapshot.closes[1], 1)
+        XCTAssertEqual(native.snapshot.stops, 1)
         try await next.start(configData: Data("next".utf8))
+        XCTAssertEqual(native.snapshot.starts, 2)
+        await core.stop()
+        XCTAssertEqual(native.snapshot.stops, 1)
         XCTAssertTrue(next.isRunning)
+        let nextStream = try await next.dial(host: "controlled.invalid", port: 443)
+        try await nextStream.write(Data("next".utf8))
+        XCTAssertEqual(native.snapshot.writes, 1)
         await next.stop()
+        await fulfillment(of: [nextRegistryStopped], timeout: 2)
+        await next.stop()
+        XCTAssertEqual(native.snapshot.stops, 2)
+        XCTAssertFalse(nextStream.isOpen)
+        XCTAssertFalse(next.isRunning)
+        XCTAssertFalse(native.isRunning)
     }
 
     func testSharedNativeClaimSurvivesCancelAndConcurrentShutdownUntilDrain() async throws {
@@ -274,10 +296,10 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
     private let state = Mutex(State())
     private let onRead: @Sendable () -> Void
     private let onClose: @Sendable () -> Void
-    private let onStop: @Sendable () -> Void
+    private let onStop: @Sendable (Int) -> Void
     private let beforeStart: @Sendable (Int) async -> Void
     init(onRead: @escaping @Sendable () -> Void, onClose: @escaping @Sendable () -> Void = {},
-         onStop: @escaping @Sendable () -> Void = {},
+         onStop: @escaping @Sendable (Int) -> Void = { _ in },
          beforeStart: @escaping @Sendable (Int) async -> Void = { _ in }) {
         self.onRead = onRead
         self.onClose = onClose
@@ -326,7 +348,11 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
         onClose()
         read?.resume(returning: Data())
     }
-    func stop() async { state.withLock { $0.stops += 1 }; finishAll(); onStop() }
+    func stop() async {
+        let count = state.withLock { $0.stops += 1; return $0.stops }
+        finishAll()
+        onStop(count)
+    }
     func finishAll() {
         let reads = state.withLock {
             $0.running = false
