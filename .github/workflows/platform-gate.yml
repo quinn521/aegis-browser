@@ -56,6 +56,7 @@ jobs:
           git show "$rules:scripts/ci/check-platform-gate.mjs" > "$RUNNER_TEMP/check-platform-gate.mjs"
           GITHUB_OUTPUT= node "$RUNNER_TEMP/platform-impact.mjs" > "$RUNNER_TEMP/platform-plan.json"
           required="$(node "$RUNNER_TEMP/check-platform-gate.mjs" plan "$GITHUB_SHA" "$rules" < "$RUNNER_TEMP/platform-plan.json")"
+          test -n "$required"
           printf 'required=%s\n' "$required" >> "$GITHUB_OUTPUT"
           printf 'rules=%s\n' "$rules" >> "$GITHUB_OUTPUT"
       - name: Upload platform routing evidence

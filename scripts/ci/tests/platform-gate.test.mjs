@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {execFileSync, spawnSync} from 'node:child_process';
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {dirname, join} from 'node:path';
 import {test} from 'node:test';
 import YAML from 'yaml';
 import {checkPlatformResults, selectPlatformChecks} from '../check-platform-gate.mjs';
@@ -74,4 +77,73 @@ test('the observational check is separate from quality and always summarizes its
   assert.deepEqual(report.needs, ['shell-coverage', 'powershell-coverage']);
   assert.match(report.steps[0].run, /test "\$LINUX_RESULT" = success && test "\$WINDOWS_RESULT" = skipped/u);
   assert.match(report.steps[0].run, /test "\$WINDOWS_RESULT" = success && test "\$LINUX_RESULT" = skipped/u);
+});
+
+test('the workflow uses the actual merge parent and fails when the trusted base lacks a gate', () => {
+  const workflow = YAML.parse(readFileSync('.github/workflows/platform-gate.yml', 'utf8'));
+  const command = workflow.jobs.plan.steps.find(step => step.id === 'route').run;
+  const root = mkdtempSync(join(tmpdir(), 'aegis-platform-gate-'));
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args],
+    {cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
+  const save = (name, value) => {
+    const file = join(root, name);
+    mkdirSync(dirname(file), {recursive: true});
+    writeFileSync(file, value);
+  };
+  const run = (env) => {
+    save('.git/platform-job-outputs', '');
+    return spawnSync('bash', ['-e', '-o', 'pipefail', '-c', command], {
+      cwd: root,
+      encoding: 'utf8',
+      env: {
+        ...process.env, GITHUB_EVENT_NAME: 'pull_request', GITHUB_SHA: git('rev-parse', 'HEAD'),
+        RUNNER_TEMP: join(root, '.git'), GITHUB_OUTPUT: join(root, '.git', 'platform-job-outputs'), ...env,
+      },
+    });
+  };
+  try {
+    git('init', '-b', 'main');
+    git('config', 'user.name', 'CI fixture');
+    git('config', 'user.email', 'fixture@example.invalid');
+    save('README.md', 'baseline\n');
+    git('add', 'README.md');
+    git('commit', '-m', 'docs: baseline before platform gate');
+    const oldBase = git('rev-parse', 'HEAD');
+    for (const name of ['scripts/ci/platform-impact.mjs', 'scripts/ci/check-platform-gate.mjs']) {
+      save(name, readFileSync(name, 'utf8'));
+    }
+    git('add', 'scripts');
+    git('commit', '-m', 'ci: register platform CI');
+    const trustedBase = git('rev-parse', 'HEAD');
+    git('checkout', '-b', 'candidate');
+    save('apps/browser/ci-pins/android.json', '{}\n');
+    git('add', 'apps');
+    git('commit', '-m', 'chore: update Android pin');
+    const head = git('rev-parse', 'HEAD');
+    git('checkout', 'main');
+    git('merge', '--no-ff', 'candidate', '-m', 'test: integrate candidate');
+    const tested = git('rev-parse', 'HEAD');
+
+    const event = {PR_HEAD: head, PR_BASE: oldBase, ROUTE_PUSH_BEFORE: '', CI_LIGHTWEIGHT_ADMITTED: 'false'};
+    save('.git/pr-event.json', JSON.stringify({pull_request: {base: {sha: oldBase}, head: {sha: head}}}));
+    save('scripts/ci/platform-impact.mjs', 'throw new Error("candidate router must not run");');
+    const prEnv = {...event, GITHUB_EVENT_PATH: join(root, '.git', 'pr-event.json')};
+    const result = run(prEnv);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(join(root, '.git', 'platform-job-outputs'), 'utf8'),
+      'required=["android"]\nrules=' + trustedBase + '\n');
+    const plan = JSON.parse(readFileSync(join(root, '.git', 'platform-plan.json'), 'utf8'));
+    assert.equal(plan.tested, tested);
+    assert.equal(plan.base, trustedBase);
+    assert.equal(plan.head, head);
+    assert.notEqual(run({...prEnv, PR_HEAD: oldBase}).status, 0);
+
+    git('restore', 'scripts/ci/platform-impact.mjs');
+    git('checkout', '--detach', oldBase);
+    git('merge', '--no-ff', 'candidate', '-m', 'test: bootstrap platform gate');
+    assert.match(run(prEnv).stdout, /trusted base predates platform-gate/u);
+    assert.equal(readFileSync(join(root, '.git', 'platform-job-outputs'), 'utf8'), '');
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
 });

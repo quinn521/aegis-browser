@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import {readFileSync} from 'node:fs';
-import {pathToFileURL} from 'node:url';
 
 const platforms = ['android', 'ios', 'linux', 'macos', 'windows'];
 
@@ -35,7 +34,7 @@ export function checkPlatformResults(required, needs) {
   return {result: 'PASS', required, notApplicable: platforms.filter(name => !required.includes(name))};
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (import.meta.main) {
   const [command, tested, rules] = process.argv.slice(2);
   try {
     if (command === 'plan') {
