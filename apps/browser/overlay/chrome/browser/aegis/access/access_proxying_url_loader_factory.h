@@ -13,6 +13,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "build/build_config.h"
 #include "chrome/browser/aegis/access/access_browser_request_adapter.h"
 #include "components/aegis_access/request_policy_context.h"
 #include "content/public/browser/frame_tree_node_id.h"
@@ -121,6 +122,14 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       int64_t navigation_id,
       network::URLLoaderFactoryBuilder& factory_builder);
 
+#if BUILDFLAG(IS_MAC)
+  // Installs the private terminal for factory setup tests with a fake context.
+  static void BindPrivateFactoryForTesting(
+      Profile* profile,
+      const aegis_access::OwnershipKey& owner,
+      network::URLLoaderFactoryBuilder& factory_builder);
+#endif
+
   // network::mojom::URLLoaderFactory:
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
@@ -202,7 +211,7 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       int net_error);
-  void StartTargetRequest(
+  std::string StartTargetRequest(
       mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
       int32_t request_id,
       uint32_t options,
@@ -211,6 +220,11 @@ class AccessProxyingURLLoaderFactory : public network::mojom::URLLoaderFactory {
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
       const aegis_access::RequestOwnershipRecord& ownership,
       mojo::PendingReceiver<network::mojom::AegisAccessURLLoaderControl> control);
+#if BUILDFLAG(IS_MAC)
+  void OnPreparedListenerAuthFault(
+      const aegis_access::RequestOwnershipRecord& ownership,
+      const std::string& registration_id);
+#endif
   network::mojom::AegisAccessRequestEnvelopePtr BuildEnvelope(
       const aegis_access::RequestOwnershipRecord& ownership,
       const GURL& target, const std::string& method, uint32_t hop);

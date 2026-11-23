@@ -14,6 +14,7 @@ enum AegisAccessMode { kNone, kDirect, kProxy, kReject };
 enum AegisAccessScheme { kHttp, kHttps, kWs, kWss };
 enum AegisAccessPortScope { kAllBrowserPermitted, kExplicitSubset };
 enum AegisAccessProtection { kNone, kTracker, kEasyList, kCname };
+enum AegisAccessProxyTransport { kHttp, kSocks5 };
 
 struct AegisAccessOwner {
   AegisAccessChannel channel;
@@ -52,12 +53,23 @@ struct AegisAccessRule {
   uint64 row_revision;
   uint64 last_operation_sequence;
 };
-struct AegisAccessHttpEndpoint {
+// Private wire version, independent of the formal SDD freeze revision. The
+// absence of this value means legacy authenticated HTTP, never no-auth.
+struct AegisAccessPreparedListenerBinding {
+  uint32 wire_version;
+  string connection_profile_id;
+  uint64 profile_version;
+  uint64 upstream_authorization_generation;
+  uint64 listener_generation;
+};
+struct AegisAccessProxyEndpoint {
   string proxy_group_id;
   string registration_id;
   uint64 selection_generation;
   string numeric_loopback_host;
   uint16 port;
+  AegisAccessProxyTransport transport = kHttp;
+  AegisAccessPreparedListenerBinding? listener_binding;
   // Process-local inbound credentials, never the upstream node credentials.
   // These are not echoed in ACKs, request envelopes, diagnostics or renderer IPC.
   AuthCredentials? credentials;
@@ -75,7 +87,7 @@ struct AegisAccessSnapshot {
   // Selection generation is zero here and is explicit for each endpoint.
   AegisAccessGenerations common_generations;
   array<AegisAccessRule> rules;
-  array<AegisAccessHttpEndpoint> endpoints;
+  array<AegisAccessProxyEndpoint> endpoints;
   array<AegisAccessUnavailableGroup> unavailable_groups;
 };
 struct AegisAccessRequestEnvelope {
@@ -100,6 +112,10 @@ struct AegisAccessRegistrationAck {
   string proxy_group_id;
   string registration_id;
   uint64 selection_generation;
+  AegisAccessProxyTransport transport = kHttp;
+  string numeric_loopback_host;
+  uint16 port;
+  AegisAccessPreparedListenerBinding? listener_binding;
 };
 struct AegisAccessSnapshotAck {
   bool accepted;

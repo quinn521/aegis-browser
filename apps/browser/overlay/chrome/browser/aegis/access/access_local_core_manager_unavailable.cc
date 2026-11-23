@@ -35,6 +35,14 @@ void AccessLocalCoreManager::Stop(base::OnceClosure completion) {
   base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, std::move(completion));
 }
+#if BUILDFLAG(IS_MAC)
+void AccessLocalCoreManager::StopForwarding() {}
+
+void AccessLocalCoreManager::StopConfirmed(base::OnceCallback<void(bool)> completion) {
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(completion), true));
+}
+#endif
 
 void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completion) {
   std::move(completion).Run();

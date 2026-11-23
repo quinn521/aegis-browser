@@ -11,6 +11,7 @@
 #include "base/test/test_future.h"
 #include "chrome/browser/aegis/access/access_private_context_client.h"
 #include "components/aegis_access/access_proxy_route_adapter.h"
+#include "components/aegis_access/access_prepared_listener_test_fixture.h"
 #include "components/aegis_access/access_policy_evaluator.h"
 #include "components/aegis_access/access_route_types.h"
 #include "services/network/public/mojom/aegis_access_route.mojom.h"
@@ -48,7 +49,7 @@ mojom::AegisAccessSnapshotPtr WireSnapshot() {
   rule->row_revision = 1;
   rule->last_operation_sequence = 1;
   s->rules.push_back(std::move(rule));
-  auto endpoint = mojom::AegisAccessHttpEndpoint::New();
+  auto endpoint = mojom::AegisAccessProxyEndpoint::New();
   endpoint->proxy_group_id = "group";
   endpoint->registration_id = "registration";
   endpoint->selection_generation = 1;
@@ -78,7 +79,8 @@ class AckContext final : public TestNetworkContext,
     for (const auto& endpoint : snapshot->endpoints) {
       ack->registrations.push_back(mojom::AegisAccessRegistrationAck::New(
           endpoint->proxy_group_id, endpoint->registration_id,
-          endpoint->selection_generation));
+          endpoint->selection_generation, endpoint->transport,
+              endpoint->numeric_loopback_host, endpoint->port, endpoint->listener_binding.Clone()));
     }
     for (const auto& group : snapshot->unavailable_groups) {
       ack->unavailable_groups.push_back(group.Clone());
@@ -101,6 +103,15 @@ class AckContext final : public TestNetworkContext,
       case 14: ack->unavailable_groups[0]->proxy_group_id = "foreign"; break;
       case 15: ++ack->unavailable_groups[0]->selection_generation; break;
       case 16: ack->unavailable_groups.clear(); break;
+      case 17: ack->registrations[0]->transport = mojom::AegisAccessProxyTransport::kSocks5; break;
+      case 18: ack->registrations[0]->numeric_loopback_host = "::1"; break;
+      case 19: ++ack->registrations[0]->port; break;
+      case 20: ack->registrations[0]->listener_binding.reset(); break;
+      case 21: ++ack->registrations[0]->listener_binding->wire_version; break;
+      case 22: ack->registrations[0]->listener_binding->connection_profile_id = "foreign"; break;
+      case 23: ++ack->registrations[0]->listener_binding->profile_version; break;
+      case 24: ++ack->registrations[0]->listener_binding->upstream_authorization_generation; break;
+      case 25: ++ack->registrations[0]->listener_binding->listener_generation; break;
     }
     if (hold_ack) {
       held_ack = std::move(ack);
@@ -154,6 +165,35 @@ TEST_F(AccessPrivateContextAckTest, EveryAckIdentityFieldMustMatchCompleteCandid
     EXPECT_FALSE(client->is_ready());
     EXPECT_EQ(client->published_sequence(), 0u);
   }
+}
+TEST_F(AccessPrivateContextAckTest, NoAuthAckMustMatchProtocolAddressProfileAndListenerIdentity) {
+  for (int mutation = 17; mutation <= 25; ++mutation) {
+    SCOPED_TRACE(mutation);
+    auto client = Client();
+    context_.mutation = mutation;
+    auto snapshot = Snapshot();
+    snapshot->endpoints[0]->credentials.reset();
+    snapshot->endpoints[0]->listener_binding = mojom::AegisAccessPreparedListenerBinding::New(
+        1, "11111111-2222-4333-8444-555555555555", 9007199254740993ULL, 2, 3);
+    base::test::TestFuture<bool> future;
+    client->PublishSnapshot(std::move(snapshot), future.GetCallback());
+    EXPECT_FALSE(future.Get());
+    EXPECT_FALSE(client->is_ready());
+    EXPECT_EQ(client->published_sequence(), 0u);
+  }
+}
+TEST_F(AccessPrivateContextAckTest, ExactNoAuthAckAcceptsFullNativeIdentityWithoutRounding) {
+  auto client = Client();
+  auto snapshot = Snapshot();
+  snapshot->endpoints[0]->credentials.reset();
+  snapshot->endpoints[0]->transport = mojom::AegisAccessProxyTransport::kSocks5;
+  snapshot->endpoints[0]->listener_binding = mojom::AegisAccessPreparedListenerBinding::New(
+      1, "11111111-2222-4333-8444-555555555555", 9007199254740993ULL, 2, 3);
+  base::test::TestFuture<bool> future;
+  client->PublishSnapshot(std::move(snapshot), future.GetCallback());
+  EXPECT_TRUE(future.Get());
+  EXPECT_TRUE(client->is_ready());
+  EXPECT_EQ(client->published_sequence(), 1u);
 }
 TEST_F(AccessPrivateContextAckTest, LateAckCannotReleaseRestoringBarrier) {
   auto client = Client();
@@ -329,6 +369,9 @@ class AccessPrivateContextClientTest : public testing::Test {
     snapshot->incarnation = incarnation_;
     snapshot->endpoints[0]->port = server_.port();
     snapshot->endpoints[0]->credentials.reset();
+    snapshot->endpoints[0]->listener_binding =
+        mojom::AegisAccessPreparedListenerBinding::New(
+            1, "11111111-2222-4333-8444-555555555555", 1, 1, 1);
     return snapshot;
   }
   base::test::TaskEnvironment environment_{base::test::TaskEnvironment::MainThreadType::IO};
@@ -529,6 +572,7 @@ TEST_F(AccessPrivateContextClientTest, AuthenticatedSnapshotDrivesPreflightAndAc
   require_auth_ = true;
   auto snapshot = Snapshot();
   snapshot->sequence = 2;
+  snapshot->endpoints[0]->listener_binding.reset();
   snapshot->endpoints[0]->credentials = net::AuthCredentials(u"local-user", u"local-secret");
   snapshot->endpoints[0]->registration_id = "authenticated-registration";
   snapshot->endpoints[0]->selection_generation = 2;
@@ -546,6 +590,7 @@ TEST_F(AccessPrivateContextClientTest, WrongLocalCredentialsNeverSendActualReque
   require_auth_ = true;
   auto snapshot = Snapshot();
   snapshot->sequence = 2;
+  snapshot->endpoints[0]->listener_binding.reset();
   snapshot->endpoints[0]->credentials = net::AuthCredentials(u"local-user", u"wrong");
   snapshot->endpoints[0]->registration_id = "wrong-auth-registration";
   snapshot->endpoints[0]->selection_generation = 2;
@@ -632,7 +677,8 @@ TEST_F(AccessPrivateContextClientTest, TypedPolicyPublicationIncludesCompleteRul
       RegisteredProxyTransport::kHttp, "127.0.0.1", server_.port()};
   base::test::TestFuture<bool> published;
   context_client_->PublishPolicy({key_, 2, {rule}}, {2,1,0,1,1}, 2,
-      {{endpoint, std::nullopt}}, published.GetCallback());
+      {{endpoint, std::nullopt, aegis_access::test::SyntheticPreparedListenerBinding()}},
+      published.GetCallback());
   ASSERT_TRUE(published.Get());
   Start();
   client_->RunUntilComplete();
@@ -682,8 +728,10 @@ TEST_F(AccessPrivateContextClientTest, UnavailableProxyFailsWhileNativeAndLaterR
   RegisteredProxyEndpoint endpoint{"replacement", "group", key_, {2,1,2,1,1},
       RegisteredProxyTransport::kHttp, "127.0.0.1", server_.port()};
   base::test::TestFuture<bool> recovered;
+  auto binding = aegis_access::test::SyntheticPreparedListenerBinding();
+  binding.listener_generation = 2;
   context_client_->PublishPolicy({key_, 2, {rule}}, {2,1,0,1,1}, 3,
-      {{endpoint, std::nullopt}}, recovered.GetCallback());
+      {{endpoint, std::nullopt, std::move(binding)}}, recovered.GetCallback());
   ASSERT_TRUE(recovered.Get());
   selection_generation_ = 2;
   registration_id_ = "replacement";

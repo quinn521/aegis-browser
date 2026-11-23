@@ -9,6 +9,7 @@
 #if BUILDFLAG(IS_MAC)
 #include "base/functional/bind.h"
 #include "base/memory/ref_counted_memory.h"
+#include "ui/base/resource/resource_bundle.h"
 // 对应 BUILD.gn 的 is_mac 依赖；GN 的头文件扫描不会求值 BUILDFLAG。
 #include "chrome/browser/aegis/access/access_build_channel.h"  // nogncheck
 #endif
@@ -696,17 +697,20 @@ AegisUI::AegisUI(content::WebUI* web_ui) : content::WebUIController(web_ui) {
   source->SetRequestFilter(
       base::BindRepeating([](const std::string& path) {
         return path == "access-options" || path.starts_with("access-options/") ||
-               path.starts_with("access-options?");
+               path.starts_with("access-options?") ||
+               path.starts_with("access_options.html");
       }),
-      base::BindRepeating([](const std::string&, content::WebUIDataSource::GotDataCallback callback) {
-        if (!aegis::access::CanUseAccessOptionsForCurrentBuild(
+      base::BindRepeating([](const std::string& path,
+                             content::WebUIDataSource::GotDataCallback callback) {
+        if (path != "access-options" ||
+            !aegis::access::CanUseAccessOptionsForCurrentBuild(
                 aegis_access::AccessOptionsOperation::kPage)) {
           std::move(callback).Run(nullptr);
           return;
         }
-        std::move(callback).Run(base::MakeRefCounted<base::RefCountedString>(
-            "<!doctype html><meta charset=utf-8><title>Access Options</title>"
-            "<h1>Access Options</h1>"));
+        std::move(callback).Run(
+            ui::ResourceBundle::GetSharedInstance().LoadDataResourceBytes(
+                IDR_AEGIS_ACCESS_OPTIONS_HTML));
       }));
 #endif
   source->AddString("aiControlConnect", strings.ai_control_connect);

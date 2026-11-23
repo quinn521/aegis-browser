@@ -463,6 +463,9 @@ if (!is_android) {
       "//ui/message_center/public/cpp",
       "//url",
     ]
+    if (is_mac) {
+      deps += [ "//chrome/browser/aegis/access:access_options_service" ]
+    }
   }
 
   source_set("interactive_ui_tests") {

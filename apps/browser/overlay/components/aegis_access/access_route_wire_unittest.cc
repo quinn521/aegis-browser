@@ -1,6 +1,8 @@
 // Copyright 2026 GCSA
 #include "services/network/aegis/access_route_wire.h"
 #include "net/http/http_auth_cache.h"
+#include "net/http/http_auth_controller.h"
+#include "mojo/public/cpp/test_support/test_utils.h"
 #include "services/network/public/mojom/aegis_access_route_types.mojom.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -25,7 +27,7 @@ mojom::AegisAccessSnapshotPtr WireSnapshot() {
   rule->row_revision = 1;
   rule->last_operation_sequence = 1;
   s->rules.push_back(std::move(rule));
-  auto endpoint = mojom::AegisAccessHttpEndpoint::New();
+  auto endpoint = mojom::AegisAccessProxyEndpoint::New();
   endpoint->proxy_group_id = "group";
   endpoint->registration_id = "registration";
   endpoint->selection_generation = 1;
@@ -34,6 +36,109 @@ mojom::AegisAccessSnapshotPtr WireSnapshot() {
   endpoint->credentials = net::AuthCredentials(u"local-user", u"local-secret");
   s->endpoints.push_back(std::move(endpoint));
   return s;
+}
+mojom::AegisAccessSnapshotPtr NoAuthSnapshot(mojom::AegisAccessProxyTransport transport) {
+  auto wire = WireSnapshot();
+  auto& endpoint = *wire->endpoints[0];
+  endpoint.transport = transport;
+  endpoint.credentials.reset();
+  endpoint.listener_binding = mojom::AegisAccessPreparedListenerBinding::New(
+      aegis_access::kAccessNoAuthListenerWireVersion,
+      "11111111-2222-4333-8444-555555555555", 9007199254740993ULL, 3, 4);
+  return wire;
+}
+TEST(AccessRouteWireTest, ExplicitNoAuthHttpAndSocksKeepTheirActualSingleChain) {
+  for (const auto transport : {mojom::AegisAccessProxyTransport::kHttp,
+                               mojom::AegisAccessProxyTransport::kSocks5}) {
+    auto wire = NoAuthSnapshot(transport);
+    auto decoded = DecodeAccessRouteSnapshot(*wire);
+    ASSERT_TRUE(decoded);
+    const auto route = decoded->snapshot.routes.at("group");
+    ASSERT_TRUE(route->proxy_chain().is_single_proxy());
+    EXPECT_EQ(route->proxy_chain().GetProxyServer(0).scheme(),
+              transport == mojom::AegisAccessProxyTransport::kSocks5
+                  ? net::ProxyServer::SCHEME_SOCKS5 : net::ProxyServer::SCHEME_HTTP);
+    EXPECT_EQ(decoded->snapshot.listener_bindings.at("group").profile_version,
+              9007199254740993ULL);
+    const url::SchemeHostPort proxy(GURL("http://127.0.0.1:12345"));
+    EXPECT_FALSE(route->proxy_auth_cache()->Lookup(proxy, net::HttpAuth::AUTH_PROXY,
+        "proxy", net::HttpAuth::AUTH_SCHEME_BASIC, net::NetworkAnonymizationKey()));
+    wire->endpoints[0]->port = 1080;
+    EXPECT_EQ(DecodeAccessRouteSnapshot(*wire).has_value(),
+              transport == mojom::AegisAccessProxyTransport::kHttp);
+  }
+}
+TEST(AccessRouteWireTest, NoAuthNeverAcceptsLegacyMissingVersionCredentialsOrUnknownProtocol) {
+  auto legacy = WireSnapshot();
+  legacy->endpoints[0]->credentials.reset();
+  EXPECT_FALSE(DecodeAccessRouteSnapshot(*legacy));
+  auto wire = NoAuthSnapshot(mojom::AegisAccessProxyTransport::kSocks5);
+  wire->endpoints[0]->listener_binding.reset();
+  EXPECT_FALSE(DecodeAccessRouteSnapshot(*wire));
+  for (const uint32_t version : {0u, 2u}) {
+    wire = NoAuthSnapshot(mojom::AegisAccessProxyTransport::kHttp);
+    wire->endpoints[0]->listener_binding->wire_version = version;
+    EXPECT_FALSE(DecodeAccessRouteSnapshot(*wire));
+  }
+  wire = NoAuthSnapshot(mojom::AegisAccessProxyTransport::kHttp);
+  wire->endpoints[0]->credentials = net::AuthCredentials(u"unexpected", u"credential");
+  EXPECT_FALSE(DecodeAccessRouteSnapshot(*wire));
+  wire = NoAuthSnapshot(mojom::AegisAccessProxyTransport::kHttp);
+  wire->endpoints[0]->transport = static_cast<mojom::AegisAccessProxyTransport>(99);
+  EXPECT_FALSE(DecodeAccessRouteSnapshot(*wire));
+}
+TEST(AccessRouteWireTest, NoAuthIdentityAndExactVersionsSurviveRealMojoSerialization) {
+  auto original = NoAuthSnapshot(mojom::AegisAccessProxyTransport::kSocks5);
+  mojom::AegisAccessSnapshotPtr decoded;
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::AegisAccessSnapshot>(original, decoded));
+  ASSERT_TRUE(decoded);
+  EXPECT_TRUE(decoded->Equals(*original));
+  ASSERT_TRUE(decoded->endpoints[0]->listener_binding);
+  EXPECT_EQ(decoded->endpoints[0]->listener_binding->profile_version, 9007199254740993ULL);
+  EXPECT_EQ(decoded->endpoints[0]->transport, mojom::AegisAccessProxyTransport::kSocks5);
+  EXPECT_TRUE(DecodeAccessRouteSnapshot(*decoded));
+}
+TEST(AccessRouteWireTest, NoAuthCannotOfferAnyProxyAuthenticationScheme) {
+  for (const auto transport : {mojom::AegisAccessProxyTransport::kHttp,
+                               mojom::AegisAccessProxyTransport::kSocks5}) {
+    auto decoded = DecodeAccessRouteSnapshot(*NoAuthSnapshot(transport));
+    ASSERT_TRUE(decoded);
+    const auto route = decoded->snapshot.routes.at("group");
+    EXPECT_FALSE(net::AccessProxyRouteAllowsLegacyAuthentication(*route));
+    auto controller = base::MakeRefCounted<net::HttpAuthController>(
+        net::HttpAuth::AUTH_PROXY, GURL("http://127.0.0.1:12345/"),
+        net::NetworkAnonymizationKey(), route->proxy_auth_cache(), nullptr, nullptr);
+    net::RestrictAccessProxyAuthentication(*route, *controller);
+    for (int value = net::HttpAuth::AUTH_SCHEME_BASIC;
+         value < net::HttpAuth::AUTH_SCHEME_MAX; ++value)
+      EXPECT_TRUE(controller->IsAuthSchemeDisabled(static_cast<net::HttpAuth::Scheme>(value)));
+    EXPECT_FALSE(controller->HaveAuth());
+  }
+}
+TEST(AccessRouteWireTest, LegacyLocalBasicCannotEnableSsoOrAnotherRealm) {
+  auto decoded = DecodeAccessRouteSnapshot(*WireSnapshot());
+  ASSERT_TRUE(decoded);
+  const auto route = decoded->snapshot.routes.at("group");
+  ASSERT_TRUE(net::AccessProxyRouteAllowsLegacyAuthentication(*route));
+  auto controller = base::MakeRefCounted<net::HttpAuthController>(
+      net::HttpAuth::AUTH_PROXY, GURL("http://127.0.0.1:12345/"),
+      net::NetworkAnonymizationKey(), route->proxy_auth_cache(), nullptr, nullptr);
+  net::RestrictAccessProxyAuthentication(*route, *controller);
+  EXPECT_FALSE(controller->IsAuthSchemeDisabled(net::HttpAuth::AUTH_SCHEME_BASIC));
+  EXPECT_TRUE(controller->IsAuthSchemeDisabled(net::HttpAuth::AUTH_SCHEME_NTLM));
+  EXPECT_TRUE(controller->IsAuthSchemeDisabled(net::HttpAuth::AUTH_SCHEME_NEGOTIATE));
+  auto no_auth = DecodeAccessRouteSnapshot(*NoAuthSnapshot(mojom::AegisAccessProxyTransport::kHttp));
+  ASSERT_TRUE(no_auth);
+  const auto other = no_auth->snapshot.routes.at("group");
+  const url::SchemeHostPort proxy(GURL("http://127.0.0.1:12345/"));
+  other->proxy_auth_cache()->Add(proxy, net::HttpAuth::AUTH_PROXY, "unrelated",
+      net::HttpAuth::AUTH_SCHEME_BASIC, net::NetworkAnonymizationKey(),
+      "Basic realm=\"unrelated\"", net::AuthCredentials(u"test-user", u"test-secret"), "/");
+  EXPECT_FALSE(net::AccessProxyRouteAllowsLegacyAuthentication(*other));
+  other->proxy_auth_cache()->Add(proxy, net::HttpAuth::AUTH_PROXY, "proxy",
+      net::HttpAuth::AUTH_SCHEME_BASIC, net::NetworkAnonymizationKey(),
+      "Basic realm=\"proxy\"", net::AuthCredentials(u"test-user", std::u16string()), "/");
+  EXPECT_FALSE(net::AccessProxyRouteAllowsLegacyAuthentication(*other));
 }
 TEST(AccessRouteWireTest, CompleteSnapshotInstallsWithPrivateLocalCredentials) {
   auto decoded = DecodeAccessRouteSnapshot(*WireSnapshot());

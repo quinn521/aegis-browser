@@ -11,11 +11,13 @@
 #include "base/base64.h"
 #include "base/strings/string_util.h"
 #include "base/command_line.h"
+#include "base/containers/span.h"
 #include "base/base_paths.h"
 #include "base/files/file.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
@@ -39,7 +41,9 @@
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_flags.h"
+#include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/base/url_util.h"
 #include "net/log/net_log_source.h"
 #include "net/proxy_resolution/proxy_config_service_fixed.h"
 #include "net/socket/tcp_server_socket.h"
@@ -81,6 +85,33 @@ std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput() {
   return std::nullopt;
 #endif
 }
+#if BUILDFLAG(IS_MAC)
+std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
+    AccessInternalTestCoreBindingMac binding) {
+#if BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
+  if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kActivate) ||
+      AccessBuildIdentityForCurrentBuild().product != aegis_access::AccessProductChannel::kDebug)
+    return std::nullopt;
+  const auto* command = base::CommandLine::ForCurrentProcess();
+  const auto manifest = command->GetSwitchValuePath("aegis-access-dev-core-manifest");
+  const GURL canary(command->GetSwitchValueASCII("aegis-access-dev-canary-base-url"));
+  if (!manifest.IsAbsolute() || manifest.ReferencesParent() || !canary.is_valid() ||
+      !canary.SchemeIs("https") || !canary.has_host() || canary.has_username() ||
+      canary.has_password() || canary.has_ref() || canary.has_query() ||
+      canary.spec().size() > 1900) return std::nullopt;
+  binding.canary_marker = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  std::erase(binding.canary_marker, '-');
+  binding.canary_url = net::AppendQueryParameter(canary, "nonce", binding.canary_marker);
+  AccessLocalCoreInput input;
+  input.source = AccessLocalCoreSource::kInternalTestProfile;
+  input.manifest = manifest;
+  input.internal_test_profile = std::move(binding);
+  return input;
+#else
+  return std::nullopt;
+#endif
+}
+#endif
 namespace {
 
 const base::DictValue* SelectedOutbound(const base::DictValue& node) {
@@ -136,6 +167,21 @@ constexpr auto kCanaryAnnotation = net::DefineNetworkTrafficAnnotation(
         policy_exception_justification: "User-initiated DEV proxy validation."
       })");
 constexpr char kCanary[] = "https://www.gstatic.com/generate_204";
+constexpr auto kInternalCanaryAnnotation = net::DefineNetworkTrafficAnnotation(
+    "aegis_access_internal_node_canary", R"(
+      semantics {
+        sender: "Aegis internal test Profile"
+        description: "Validates the explicitly selected internal node and owned listener using a controlled HTTPS marker."
+        trigger: "User explicitly prepares an internal test Profile."
+        data: "A fresh non-secret diagnostic marker. No browsing URL, cookies or node secrets."
+        destination: OTHER
+        destination_other: "The controlled HTTPS canary configured by the trusted internal test binding."
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Only native DEV/internal Alpha activation can prepare this test binding."
+        policy_exception_justification: "Explicit internal test Profile validation."
+      })");
 std::string Token() { return base::Uuid::GenerateRandomV4().AsLowercaseString(); }
 // Refuse control characters before Xray can print a multiline node field as
 // an independent diagnostic. Bound redaction work even for large configs.
@@ -227,14 +273,24 @@ class AccessLocalCoreManager::ShutdownHandle
 
 class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
  public:
-  Worker(AccessLocalCoreInput input, std::shared_ptr<ShutdownHandle> shutdown)
-      : input_(std::move(input)), shutdown_(std::move(shutdown)) {
+  Worker(AccessLocalCoreInput input, std::shared_ptr<ShutdownHandle> shutdown
+#if BUILDFLAG(IS_MAC)
+      , std::shared_ptr<AccessTestNodeVaultMac::RuntimeLease> reference_lease
+#endif
+      ) : input_(std::move(input)), shutdown_(std::move(shutdown))
+#if BUILDFLAG(IS_MAC)
+      , runtime_reference_lease_(std::move(reference_lease))
+#endif
+      {
     shutdown_->SetWorker(this);
   }
   ~Worker() override {
-    StopChild();
+    const bool retired = StopChild();
+#if BUILDFLAG(IS_MAC)
+    if (!retired) QuarantineInternalCore();
+#endif
     shutdown_->SetWorker(nullptr);
-    shutdown_->CompleteStop();
+    if (retired) shutdown_->CompleteStop();
   }
 
   void Prepare(base::OnceCallback<void(AccessLocalCoreReady)> completion) {
@@ -246,24 +302,67 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       std::move(completion).Run({.error = "Proxy preparation is already running."});
       return;
     }
+    if (retirement_pending_ && !StopChild()) {
+      std::move(completion).Run({.error = "The previous core has not confirmed retirement.",
+                                .retirement_pending = true});
+      return;
+    }
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal() && internal_binding_spent_ && !Running()) {
+      const bool retired = StopChild();
+      std::move(completion).Run({.error = "A new native authorization binding is required.",
+                                .retirement_pending = !retired});
+      return;
+    }
+#endif
     if (Running()) {
       Verify(std::move(completion));
       return;
     }
-    StopChild();
+    if (!StopChild(/*release_reference=*/false)) {
+      std::move(completion).Run({.error = "The previous core has not confirmed retirement.",
+                                .retirement_pending = true});
+      return;
+    }
     completion_ = std::move(completion);
+    if (IsInternal()) {
+#if BUILDFLAG(IS_MAC)
+      internal_binding_spent_ = true;
+#endif
+      started_ = base::TimeTicks::Now();
+      probe_deadline_ = started_ + base::Seconds(25);
+#if BUILDFLAG(IS_MAC)
+      if (!input_.internal_preparation_deadline.is_null())
+        probe_deadline_ = std::min(probe_deadline_, input_.internal_preparation_deadline);
+#endif
+      if (probe_deadline_ <= started_) {
+        Complete(false, "The original preparation deadline has expired.");
+        return;
+      }
+      timeout_.Start(FROM_HERE, probe_deadline_ - started_, base::BindOnce(
+          &Worker::Complete, base::Unretained(this), false,
+          "Proxy connectivity check timed out."));
+    }
     if (!Launch()) {
       Complete(false, "Cannot start the authorized local proxy.");
       return;
     }
-    started_ = base::TimeTicks::Now();
-    timeout_.Start(FROM_HERE, base::Seconds(25), base::BindOnce(
-        &Worker::Complete, base::Unretained(this), false,
-        "Proxy connectivity check timed out."));
+    if (!IsInternal()) {
+      started_ = base::TimeTicks::Now();
+      probe_deadline_ = started_ + base::Seconds(25);
+      timeout_.Start(FROM_HERE, base::Seconds(25), base::BindOnce(
+          &Worker::Complete, base::Unretained(this), false,
+          "Proxy connectivity check timed out."));
+    }
     StartProbe();
   }
 
   void Verify(base::OnceCallback<void(AccessLocalCoreReady)> completion) {
+    if (retirement_pending_) {
+      std::move(completion).Run({.error = "The previous core has not confirmed retirement.",
+                                .retirement_pending = true});
+      return;
+    }
     if (shutdown_->stop_requested()) {
       std::move(completion).Run({.error = "The local proxy is shutting down."});
       return;
@@ -279,6 +378,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       return;
     }
     started_ = base::TimeTicks();  // A recheck never relaunches or retries startup.
+    probe_deadline_ = base::TimeTicks::Now() + base::Seconds(25);
     request_.reset();
     context_.reset();
     authenticated_ = false;  // Each readiness check proves a fresh authenticated connection.
@@ -289,22 +389,79 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   }
 
   void Stop(base::OnceClosure completion) {
-    if (completion_) Complete(false, "Proxy preparation was cancelled.");
-    StopChild();
-    std::move(completion).Run();
+    StopWithResult(base::BindOnce([](std::shared_ptr<ShutdownHandle> shutdown,
+                                     base::OnceClosure done, bool retired) {
+      if (retired) std::move(done).Run();
+      else shutdown->RequestStop(std::move(done));
+    }, shutdown_, std::move(completion)));
+  }
+  void StopWithResult(base::OnceCallback<void(bool)> completion,
+                      bool consumers_revoked = false) {
+    bool retired = StopChild(true, consumers_revoked);
+#if BUILDFLAG(IS_MAC)
+    if (retired && IsInternal() && input_.internal_test_profile) {
+      // This stop proves removal only for this manager's consumers. A fresh
+      // owner cannot certify an earlier owner's abandoned Network binding.
+      retired = ClearInternalQuarantine(*input_.internal_test_profile);
+      retirement_pending_ = !retired;
+    }
+#endif
+    if (completion_) {
+      AccessLocalCoreReady result;
+      result.error = "Proxy preparation was cancelled.";
+      result.retirement_pending = !retired;
+      std::move(completion_).Run(std::move(result));
+    }
+    if (retired && shutdown_->stop_requested()) shutdown_->CompleteStop();
+    std::move(completion).Run(retired);
   }
   void SetStoppedCallback(base::RepeatingCallback<void(std::string)> callback) {
     stopped_callback_ = std::move(callback);
   }
 
  private:
+  bool IsInternal() const {
+#if BUILDFLAG(IS_MAC)
+    return input_.source == AccessLocalCoreSource::kInternalTestProfile;
+#else
+    return false;
+#endif
+  }
   bool Running() {
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal()) return process_.IsValid() && owned_child_ &&
+        AccessOwnedChildStillMatchesMac(*owned_child_);
+#endif
     int code = 0;
     return process_.IsValid() &&
         base::GetTerminationStatus(process_.Handle(), &code) ==
             base::TERMINATION_STATUS_STILL_RUNNING;
   }
   bool Launch() {
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal()) {
+      if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kActivate) ||
+          !input_.internal_test_profile) return false;
+      const auto& binding = *input_.internal_test_profile;
+      if (!binding.canary_url.is_valid() || !binding.canary_url.SchemeIs("https") ||
+          !binding.canary_url.has_host() || binding.canary_url.has_username() ||
+          binding.canary_url.has_password() || binding.canary_url.has_ref() ||
+          binding.canary_url.spec().size() > 2048 || binding.canary_marker.size() < 16 ||
+          binding.canary_marker.size() > 128 ||
+          !std::ranges::all_of(binding.canary_marker, [](unsigned char value) {
+            return base::IsAsciiAlpha(value) || base::IsAsciiDigit(value) || value == '-' || value == '_';
+          })) return false;
+      credentials_.reset();
+      registration_ = Token();
+      if (!ClearInternalQuarantine(binding)) return false;
+      return LaunchAccessInternalTestCoreMac(AccessBuildIdentityForCurrentBuild(),
+          input_.manifest, binding, probe_deadline_, directory_, process_, owned_child_,
+          runtime_reference_lease_, listener_lease_channel_) ==
+              AccessInternalTestCoreLaunchStatusMac::kLaunched;
+    }
+#endif
+    if (input_.source != AccessLocalCoreSource::kDevFiles &&
+        input_.source != AccessLocalCoreSource::kPrivateTestBundle) return false;
     std::string manifest_json;
     std::string node_json;
     if (!base::ReadFileToStringWithMaxSize(input_.manifest, &manifest_json, 65536) ||
@@ -500,10 +657,65 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       Complete(false, "The local proxy exited before becoming ready.");
       return;
     }
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal()) {
+      if (!owned_child_ || base::TimeTicks::Now() >= probe_deadline_) {
+        Complete(false, "Owned listener readiness is unavailable.");
+        return;
+      }
+      if (!listener_proof_) {
+        const auto observed = InspectAccessOwnedListenerMac(*owned_child_);
+        if (observed.status == AccessOwnedListenerStatusMac::kNotListening) {
+          retry_.Start(FROM_HERE, base::Milliseconds(25),
+              base::BindOnce(&Worker::StartProbe, base::Unretained(this)));
+          return;
+        }
+        if (!observed.proof) {
+          Complete(false, "The listener does not match this owned core.");
+          return;
+        }
+        const auto& binding = *input_.internal_test_profile;
+        if ((binding.selected_transport == aegis_access::RegisteredProxyTransport::kSocks5 &&
+             observed.proof->port == 1080) ||
+            (binding.preferences.port_mode == aegis_access::AccessInboundPortMode::kInternalFixed &&
+             observed.proof->port != binding.preferences.requested_port)) {
+          Complete(false, "The owned listener returned a disallowed port.");
+          return;
+        }
+        listener_proof_ = observed.proof;
+        port_ = listener_proof_->port;
+      }
+      if (!held_listener_lease_.is_valid()) {
+        auto lease = ReceiveAccessListenerLeaseMac(listener_lease_channel_.get(),
+                                                  *owned_child_, *listener_proof_);
+        if (lease.status == AccessListenerLeaseStatusMac::kPending) {
+          retry_.Start(FROM_HERE, base::Milliseconds(25),
+              base::BindOnce(&Worker::StartProbe, base::Unretained(this)));
+          return;
+        }
+        if (lease.status != AccessListenerLeaseStatusMac::kReady) {
+          Complete(false, "The core did not provide its owned listener lease.");
+          return;
+        }
+        held_listener_lease_ = std::move(lease.descriptor);
+        listener_lease_channel_.reset();
+      }
+      if (!AccessOwnedListenerStillMatchesMac(*owned_child_, *listener_proof_)) {
+        Complete(false, "The owned listener changed before validation.");
+        return;
+      }
+    }
+#endif
     request_.reset();
     if (!context_) {
       net::ProxyConfig proxy;
-      proxy.proxy_rules().ParseFromString("http://127.0.0.1:" + base::NumberToString(port_));
+      std::string protocol = "http";
+#if BUILDFLAG(IS_MAC)
+      if (IsInternal() && input_.internal_test_profile->selected_transport ==
+                              aegis_access::RegisteredProxyTransport::kSocks5) protocol = "socks5";
+#endif
+      proxy.proxy_rules().ParseFromString(protocol + "://127.0.0.1:" + base::NumberToString(port_));
+      if (IsInternal()) proxy.proxy_rules().bypass_rules.AddRuleFromString("<-loopback>");
       net::URLRequestContextBuilder builder;
       builder.DisableHttpCache();
       builder.set_proxy_config_service(std::make_unique<net::ProxyConfigServiceFixed>(
@@ -511,8 +723,14 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       context_ = builder.Build();
     }
     auth_attempts_ = 0;
-    request_ = context_->CreateRequest(GURL(kCanary), net::DEFAULT_PRIORITY,
-                                       this, kCanaryAnnotation,
+    GURL target(kCanary);
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal()) target = input_.internal_test_profile->canary_url;
+#endif
+    canary_body_.clear();
+    canary_buffer_.reset();
+    request_ = context_->CreateRequest(target, net::DEFAULT_PRIORITY,
+                                       this, IsInternal() ? kInternalCanaryAnnotation : kCanaryAnnotation,
                                        net::handles::kInvalidNetworkHandle);
     request_->SetLoadFlags(net::LOAD_DISABLE_CACHE | net::LOAD_DO_NOT_SAVE_COOKIES);
     request_->set_disallow_credentials();
@@ -521,6 +739,10 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   }
   void OnAuthRequired(net::URLRequest* request,
                       const net::AuthChallengeInfo& challenge) override {
+    if (IsInternal()) {
+      Complete(false, "The internal listener unexpectedly requested authentication.");
+      return;
+    }
     if (!challenge.is_proxy || challenge.challenger.host() != "127.0.0.1" ||
         challenge.challenger.port() != port_ || ++auth_attempts_ > 1) {
       Complete(false, "Local proxy authentication failed.");
@@ -539,6 +761,15 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     Complete(false, "Proxy connectivity certificate verification failed.");
   }
   void OnResponseStarted(net::URLRequest* request, int error) override {
+    if (IsInternal()) {
+      if (error != net::OK || request->GetResponseCode() != 200) {
+        Complete(false, "The internal node could not validate the controlled HTTPS origin.");
+        return;
+      }
+      canary_buffer_ = base::MakeRefCounted<net::IOBufferWithSize>(4096);
+      ReadCanaryBody();
+      return;
+    }
     if (error == net::ERR_PROXY_CONNECTION_FAILED && !started_.is_null() &&
         base::TimeTicks::Now() - started_ < base::Seconds(3) && Running()) {
       retry_.Start(FROM_HERE, base::Milliseconds(100),
@@ -548,33 +779,170 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     Complete(error == net::OK && request->GetResponseCode() == 204 && authenticated_,
               "The authorized proxy could not complete the HTTPS check.");
   }
-  void OnReadCompleted(net::URLRequest*, int) override {}
+  bool AppendCanaryRead(int count) {
+    if (!canary_buffer_) return false;
+    if (count < 0 || count > canary_buffer_->size() ||
+        canary_body_.size() + static_cast<size_t>(count) > 8192) {
+      Complete(false, "The controlled HTTPS marker could not be verified.");
+      return false;
+    }
+    if (count == 0) {
+      bool verified = false;
+#if BUILDFLAG(IS_MAC)
+      verified = IsInternal() && owned_child_ && listener_proof_ &&
+          AccessOwnedListenerStillMatchesMac(*owned_child_, *listener_proof_) &&
+          canary_body_.find(input_.internal_test_profile->canary_marker) != std::string::npos;
+#endif
+      Complete(verified, "The controlled HTTPS marker could not be verified.");
+      return false;
+    }
+    canary_body_.append(base::as_string_view(canary_buffer_->first(static_cast<size_t>(count))));
+    return true;
+  }
+  void ReadCanaryBody() {
+    while (request_ && canary_buffer_) {
+      const int count = request_->Read(canary_buffer_.get(), canary_buffer_->size());
+      if (count == net::ERR_IO_PENDING || !AppendCanaryRead(count)) return;
+    }
+  }
+  void OnReadCompleted(net::URLRequest*, int count) override {
+    if (IsInternal() && AppendCanaryRead(count)) ReadCanaryBody();
+  }
   void Complete(bool ready, std::string error) {
-    ready = ready && Running();
+    ready = ready && !retirement_pending_ && Running();
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal()) ready = ready && owned_child_ && listener_proof_ &&
+        AccessHeldListenerStillMatchesMac(held_listener_lease_.get(), *listener_proof_) &&
+        AccessOwnedListenerStillMatchesMac(*owned_child_, *listener_proof_);
+#endif
     timeout_.Stop();
     retry_.Stop();
     request_.reset();
+    canary_buffer_.reset();
+    canary_body_.clear();
     AccessLocalCoreReady result;
     result.ready = ready;
     if (ready) {
       result.port = port_;
       result.registration_id = registration_;
       result.local_credentials = credentials_;
+      result.transport = aegis_access::RegisteredProxyTransport::kHttp;
+#if BUILDFLAG(IS_MAC)
+      if (IsInternal()) {
+        const auto& binding = *input_.internal_test_profile;
+        result.transport = binding.selected_transport;
+        result.no_local_auth = true;
+        result.profile_id = binding.profile_id;
+        result.profile_version = binding.profile_version;
+        result.authorization_generation = binding.authorization_generation;
+        result.listener_socket_generation = listener_proof_->socket_generation;
+        result.parent_listener_lease_held = true;
+        // Once native callers can publish this Ready result, implicit cleanup
+        // may stop the child but cannot release its address without a fence.
+        network_lease_pending_ = true;
+      }
+#endif
       health_.Start(FROM_HERE, base::Seconds(1), base::BindRepeating(
           &Worker::CheckChild, base::Unretained(this)));
     } else {
       result.error = std::move(error);
-      StopChild();
+      result.retirement_pending = !StopChild();
+      if (result.retirement_pending)
+        result.error = "The previous core has not confirmed retirement.";
     }
     if (completion_) std::move(completion_).Run(std::move(result));
   }
   void CheckChild() {
-    if (Running()) return;
+    bool alive = Running();
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal()) alive = alive && owned_child_ && listener_proof_ &&
+        AccessHeldListenerStillMatchesMac(held_listener_lease_.get(), *listener_proof_) &&
+        AccessOwnedListenerStillMatchesMac(*owned_child_, *listener_proof_);
+#endif
+    if (alive) return;
     const auto registration = registration_;
     StopChild();
     if (stopped_callback_) stopped_callback_.Run(registration);
   }
 #if BUILDFLAG(IS_MAC)
+  using RetirementFunction = AccessOwnedChildRetirementMac (*)(const AccessOwnedChildMac&, uint32_t);
+  static bool RetireInternalProcess(base::Process& process,
+      std::optional<AccessOwnedChildMac>& child, RetirementFunction retire = nullptr) {
+    if (!process.IsValid()) return true;
+    if (!child) child = CaptureAccessOwnedChildMac(process.Pid());
+    bool confirmed = false;
+    if (child) {
+      if (child->pid() != process.Pid()) return false;
+      confirmed = (retire ? retire : &RetireAccessOwnedChildMac)(*child, 2000) ==
+          AccessOwnedChildRetirementMac::kRetired;
+    } else {
+      // An already-exited launch may never have exposed an observable birth.
+      // No signal is allowed when that identity could not be established.
+      confirmed = ReapAccessExitedChildMac(process.Pid());
+    }
+    if (!confirmed) return false;
+    process.Close();
+    child.reset();
+    return true;
+  }
+  struct QuarantinedCore {
+    std::string scope;
+    std::string profile;
+    base::Process process;
+    std::optional<AccessOwnedChildMac> child;
+    base::ScopedTempDir directory;
+    base::ScopedFD held_listener;
+    base::ScopedFD listener_channel;
+    bool network_lease_pending;
+    std::shared_ptr<AccessTestNodeVaultMac::RuntimeLease> reference_lease;
+    std::shared_ptr<ShutdownHandle> shutdown;
+  };
+  static base::Lock& QuarantineLock() {
+    static base::NoDestructor<base::Lock> lock;
+    return *lock;
+  }
+  static std::vector<std::unique_ptr<QuarantinedCore>>& Quarantine() {
+    // Intentionally retained until exact retirement or application exit. The
+    // admitted core also watches its parent; closing a UI/Profile cannot hide
+    // an unconfirmed live child or make this binding available again.
+    static base::NoDestructor<std::vector<std::unique_ptr<QuarantinedCore>>> entries;
+    return *entries;
+  }
+  void QuarantineInternalCore() {
+    CHECK(IsInternal() && input_.internal_test_profile);
+    const auto& binding = *input_.internal_test_profile;
+    auto entry = std::make_unique<QuarantinedCore>(binding.vault_scope_hash,
+        binding.profile_id, std::move(process_), std::move(owned_child_),
+        std::move(directory_), std::move(held_listener_lease_), std::move(listener_lease_channel_),
+        network_lease_pending_, std::move(runtime_reference_lease_), shutdown_);
+    base::AutoLock lock(QuarantineLock());
+    Quarantine().push_back(std::move(entry));
+  }
+  static bool ClearInternalQuarantine(const AccessInternalTestCoreBindingMac& binding) {
+    std::vector<std::shared_ptr<ShutdownHandle>> completed;
+    bool retired = true;
+    {
+      base::AutoLock lock(QuarantineLock());
+      auto& entries = Quarantine();
+      for (auto entry = entries.begin(); entry != entries.end();) {
+        auto& old = **entry;
+        if (old.scope != binding.vault_scope_hash || old.profile != binding.profile_id) {
+          ++entry;
+          continue;
+        }
+        if (!RetireInternalProcess(old.process, old.child) ||
+            (old.directory.IsValid() && !old.directory.Delete()) ||
+            old.network_lease_pending) {
+          retired = false;
+          break;
+        }
+        completed.push_back(old.shutdown);
+        entry = entries.erase(entry);
+      }
+    }
+    for (auto& handle : completed) handle->CompleteStop();
+    return retired;
+  }
   bool WaitForChildExit(base::TimeDelta maximum_wait) {
     auto deadline = maximum_wait.is_max()
         ? base::TimeTicks::Max() : base::TimeTicks::Now() + maximum_wait;
@@ -595,17 +963,26 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     }
   }
 #endif
-  void StopChild() {
+  bool StopChild(bool release_reference = true, bool consumers_revoked = false) {
+    if (IsInternal()) retirement_pending_ = true;
+#if BUILDFLAG(IS_MAC)
+    if (IsInternal() && release_reference) internal_binding_spent_ = true;
+#endif
     health_.Stop();
     timeout_.Stop();
     retry_.Stop();
     request_.reset();
     context_.reset();
+    canary_buffer_.reset();
+    canary_body_.clear();
 #if BUILDFLAG(IS_WIN)
     StopOwnedCore(job_, directory_);
     process_.Close();
 #else
-    if (process_.IsValid()) {
+    if (IsInternal()) {
+      if (!RetireInternalProcess(process_, owned_child_, input_.retire_owned_child_for_testing))
+        return false;
+    } else if (process_.IsValid()) {
       if (Running()) {
         process_.Terminate(0, false);
         if (!WaitForChildExit(base::Seconds(60)) &&
@@ -625,9 +1002,24 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     credentials_.reset();
     authenticated_ = false;
 #if BUILDFLAG(IS_MAC)
-    const bool deleted = directory_.Delete();
-    (void)deleted;
+    if (IsInternal() && network_lease_pending_ && !consumers_revoked) return false;
+    if (consumers_revoked) network_lease_pending_ = false;
+    held_listener_lease_.reset();
+    listener_lease_channel_.reset();
+    owned_child_.reset();
+    listener_proof_.reset();
+    if (IsInternal()) {
+      port_ = 0;
+      registration_.clear();
+      if (directory_.IsValid() && !directory_.Delete()) return false;
+      if (release_reference) runtime_reference_lease_.reset();
+    } else {
+      const bool deleted = directory_.Delete();
+      (void)deleted;
+    }
 #endif
+    retirement_pending_ = false;
+    return true;
   }
 
   AccessLocalCoreInput input_;
@@ -651,13 +1043,26 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   std::string registration_;
   std::optional<net::AuthCredentials> credentials_;
   bool authenticated_ = false;
+  bool retirement_pending_ = false;
   int auth_attempts_ = 0;
   base::TimeTicks started_;
+  base::TimeTicks probe_deadline_;
+#if BUILDFLAG(IS_MAC)
+  std::optional<AccessOwnedChildMac> owned_child_;
+  std::optional<AccessOwnedListenerProofMac> listener_proof_;
+  std::shared_ptr<AccessTestNodeVaultMac::RuntimeLease> runtime_reference_lease_;
+  base::ScopedFD held_listener_lease_;
+  base::ScopedFD listener_lease_channel_;
+  bool network_lease_pending_ = false;
+  bool internal_binding_spent_ = false;
+#endif
   base::OneShotTimer timeout_;
   base::OneShotTimer retry_;
   base::RepeatingTimer health_;
   std::unique_ptr<net::URLRequestContext> context_;
   std::unique_ptr<net::URLRequest> request_;
+  scoped_refptr<net::IOBufferWithSize> canary_buffer_;
+  std::string canary_body_;
   base::OnceCallback<void(AccessLocalCoreReady)> completion_;
   base::RepeatingCallback<void(std::string)> stopped_callback_;
 };
@@ -667,8 +1072,8 @@ void AccessLocalCoreManager::ShutdownHandle::StopOnCoreThread() {
     CompleteStop();
     return;
   }
-  worker_->Stop(base::BindOnce([](std::shared_ptr<ShutdownHandle> handle) {
-    handle->CompleteStop();
+  worker_->StopWithResult(base::BindOnce([](std::shared_ptr<ShutdownHandle> handle, bool retired) {
+    if (retired) handle->CompleteStop();
   }, shared_from_this()));
 }
 
@@ -681,8 +1086,25 @@ AccessLocalCoreManager::AccessLocalCoreManager(AccessLocalCoreInput input) {
   auto& handles = ShutdownHandle::Registry();
   std::erase_if(handles, [](const auto& handle) { return handle.expired(); });
   handles.emplace_back(shutdown_);
+#if BUILDFLAG(IS_MAC)
+  std::shared_ptr<AccessTestNodeVaultMac::RuntimeLease> reference_lease;
+  if (input.source == AccessLocalCoreSource::kInternalTestProfile && input.internal_test_profile &&
+      CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kActivate)) {
+    const auto& binding = *input.internal_test_profile;
+    const std::string expected_channel =
+        AccessBuildIdentityForCurrentBuild().product == aegis_access::AccessProductChannel::kDebug
+            ? "debug" : "alpha";
+    if (binding.channel == expected_channel)
+      reference_lease = AccessTestNodeVaultMac::ReserveRuntimeReference(
+          binding.channel, binding.vault_scope_hash, binding.reference);
+  }
+#endif
   worker_ = base::SequenceBound<Worker>(thread_->task_runner(), std::move(input),
-                                      shutdown_);
+                                      shutdown_
+#if BUILDFLAG(IS_MAC)
+                                      , std::move(reference_lease)
+#endif
+                                      );
 }
 AccessLocalCoreManager::~AccessLocalCoreManager() {
   worker_.Reset();
@@ -707,6 +1129,17 @@ void AccessLocalCoreManager::Stop(base::OnceClosure completion) {
   worker_.AsyncCall(&Worker::Stop).WithArgs(
       base::BindPostTaskToCurrentDefault(std::move(completion)));
 }
+#if BUILDFLAG(IS_MAC)
+void AccessLocalCoreManager::StopForwarding() {
+  worker_.AsyncCall(&Worker::StopWithResult).WithArgs(
+      base::OnceCallback<void(bool)>(base::DoNothing()), false);
+}
+
+void AccessLocalCoreManager::StopConfirmed(base::OnceCallback<void(bool)> completion) {
+  worker_.AsyncCall(&Worker::StopWithResult).WithArgs(
+      base::BindPostTaskToCurrentDefault(std::move(completion)), true);
+}
+#endif
 void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completion) {
   std::vector<std::shared_ptr<ShutdownHandle>> handles;
   for (auto& weak : ShutdownHandle::Registry()) {

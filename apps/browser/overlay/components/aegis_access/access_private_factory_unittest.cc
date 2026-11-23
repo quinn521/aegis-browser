@@ -1,4 +1,5 @@
 // Copyright 2026 GCSA
+#include "components/aegis_access/access_prepared_listener_test_fixture.h"
 #include <atomic>
 #include "base/functional/bind.h"
 #include "base/test/task_environment.h"
@@ -56,7 +57,8 @@ class AccessPrivateFactoryTest : public testing::Test {
         net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_HTTP,
                                                "127.0.0.1", server_.port())));
     ASSERT_TRUE(registry_.Install(1, {{key_, 1, {rule}}, {1, 1, 0, 1, 1},
-                                     {{"group", route}}}));
+                                     {{"group", route}}, {},
+                                     {{"group", aegis_access::test::SyntheticPreparedListenerBinding()}}}));
   }
   void TearDown() override {
     loader_.reset();
@@ -108,7 +110,8 @@ class AccessPrivateFactoryTest : public testing::Test {
         net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_HTTP,
                                                "127.0.0.1", server_.port())));
     ASSERT_TRUE(registry_.Install(2, {{key_, 2, {rule}}, {2, 1, 0, 1, 1},
-                                     {{"group", route}}}));
+                                     {{"group", route}}, {},
+                                     {{"group", aegis_access::test::SyntheticPreparedListenerBinding()}}}));
     policy_generation_ = 2;
   }
   void Start(bool wrong_initiator = false, bool fake_trusted = false,

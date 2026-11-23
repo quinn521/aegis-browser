@@ -18,6 +18,8 @@
 #include "base/functional/callback_forward.h"
 #include "base/supports_user_data.h"
 #include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "components/aegis_access/access_proxy_route_adapter.h"
 #include "components/aegis_access/policy_publication_ack_tracker.h"
 #include "components/aegis_access/access_route_types.h"
@@ -111,11 +113,30 @@ class AccessNetworkContextTransport
   // remain intact; the next full snapshot marks this group unavailable.
   bool ForgetPreparedProxy(const aegis_access::OwnershipKey& owner,
       const std::string& group, const std::string& registration_id);
+  std::optional<aegis_access::RegisteredProxyEndpoint> PreparedProxyForGroup(
+      const aegis_access::OwnershipKey& owner, const std::string& group) const;
+  // Removes the exact no-auth registration and waits for the policy snapshot
+  // without it to be installed in each owning private Context.
+  void RetirePreparedTestListener(
+      const aegis_access::PublishedAccessPolicySnapshot& policy,
+      const aegis_access::GenerationTuple& common,
+      const std::string& group, const std::string& registration_id,
+      base::OnceCallback<void(bool)> completion);
   std::vector<AccessPrivateEndpoint> PrivateEndpoints(
       const aegis_access::OwnershipKey& owner) const;
   bool HasReadyPrivateContext(const aegis_access::OwnershipKey& owner) const;
   bool HasCurrentPrivatePolicy(const aegis_access::OwnershipKey& owner,
       const aegis_access::GenerationTuple& common) const;
+#if BUILDFLAG(IS_MAC)
+  bool HasAcknowledgedTestListener(
+      const aegis_access::OwnershipKey& owner,
+      const aegis_access::GenerationTuple& common, const std::string& group,
+      const std::string& registration_id) const;
+  bool HasAcknowledgedLegacyProxy(
+      const aegis_access::OwnershipKey& owner,
+      const aegis_access::GenerationTuple& common, const std::string& group,
+      const std::string& registration_id) const;
+#endif
   using PrivateContext = std::shared_ptr<AccessPrivateContextClient>;
   void BindPrivateContext(const aegis_access::OwnershipKey& owner,
       network::mojom::NetworkContext* context,
@@ -185,16 +206,31 @@ class AccessNetworkContextTransport
     std::map<std::string, uint64_t> unavailable;
   };
   struct PrivateContextEntry {
+    explicit PrivateContextEntry(PrivateContext client);
+    ~PrivateContextEntry();
+
+    bool InstallExpired(base::TimeTicks now) const {
+      return !install_deadline.is_null() && now >= install_deadline;
+    }
+
     PrivateContext client;
     uint64_t sequence = 0;
     uint64_t applied_revision = 0;
-    bool publishing = false;
+    // Remains set after timeout until Mojo actually settles the install.
+    uint64_t install_attempt = 0;
+    base::TimeTicks install_deadline;
+    base::OneShotTimer install_timer;
   };
   struct PartitionState {
     // A partition that uses trusted per-request routing must never reinstall
     // destination-host-global proxying, including while its Context reconnects.
     bool private_routing = false;
     std::map<std::string, AccessPrivateEndpoint> private_endpoints;
+    struct RetiringListener {
+      std::string registration_id;
+      bool acknowledged = false;
+    };
+    std::map<std::string, RetiringListener> retiring_test_listeners;
     std::map<std::string, uint64_t> private_unavailable_generations;
     std::map<std::string, PrivateContextEntry> private_contexts;
     std::optional<PrivatePublication> private_publication;
@@ -213,6 +249,11 @@ class AccessNetworkContextTransport
   };
 
   AccessNetworkContextTransport();
+
+  void OnTestListenerRetirementPublished(
+      aegis_access::OwnershipKey owner,
+      std::string group, std::string registration_id,
+      base::OnceCallback<void(bool)> completion, bool acknowledged);
 
   void OnNetworkChanged(
       net::NetworkChangeNotifier::ConnectionType type) override;
@@ -248,14 +289,23 @@ class AccessNetworkContextTransport
   void Broadcast(PartitionState& state);
   void PublishPrivateContext(const aegis_access::OwnershipKey& owner,
                              const std::string& incarnation);
+#if BUILDFLAG(IS_MAC)
+  bool HasAcknowledgedPrivateProxy(
+      const aegis_access::OwnershipKey& owner,
+      const aegis_access::GenerationTuple& common, const std::string& group,
+      const std::string& registration_id, bool test_listener) const;
+#endif
+  void OnPrivateContextInstallTimeout(aegis_access::OwnershipKey owner,
+      std::string incarnation, uint64_t attempt);
   void OnPrivateContextPublished(aegis_access::OwnershipKey owner,
-      std::string incarnation, uint64_t revision, bool accepted);
+      std::string incarnation, uint64_t attempt, uint64_t revision, bool accepted);
   void SettlePrivatePublication(PartitionState& state, bool accepted);
   static bool SamePrivatePublication(const PrivatePublication& a,
                                      const PrivatePublication& b);
 
   std::string runtime_profile_token_;
   uint64_t network_epoch_ = 1;
+  uint64_t private_install_attempt_ = 0;
   std::map<std::string, PartitionState> partitions_;
   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};
 };

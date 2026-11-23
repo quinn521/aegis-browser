@@ -1,0 +1,512 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import test from 'node:test';
+import vm from 'node:vm';
+import {fileURLToPath} from 'node:url';
+
+const requireWorkspace = createRequire(new URL('../../../package.json', import.meta.url));
+const {JSDOM} = requireWorkspace('jsdom');
+const ts = requireWorkspace('typescript');
+const resources = fileURLToPath(new URL('../overlay/chrome/browser/resources/aegis/', import.meta.url));
+const page = readFileSync(resources + 'access_options.html', 'utf8');
+const {outputText} = ts.transpileModule(
+    readFileSync(resources + 'access_options.ts', 'utf8'), {
+      compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS},
+    });
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function openOptions(t, capabilities = {enabled: true, private: false}) {
+  const dom = new JSDOM(page, {runScripts: 'outside-only'});
+  t.after(() => dom.window.close());
+  const previews = [];
+  const discards = [];
+  const cancellations = [];
+  const applies = [];
+  const applyQueries = [];
+  const revocations = [];
+  let saved = {state: 'ready', revision: '0'};
+  const {document, Event} = dom.window;
+  const context = dom.getInternalVMContext();
+  context.exports = {};
+  context.chrome = {send: message => cancellations.push(message)};
+  context.require = id => {
+    assert.equal(id, 'chrome://resources/js/cr.js');
+    return {
+      sendWithPromise(message, ...args) {
+        if (message === 'getAccessOptionsCapabilities') {
+          return Promise.resolve(capabilities);
+        }
+        if (message === 'discardAccessTestNodeDraft') {
+          return new Promise((resolve, reject) => discards.push({resolve, reject}));
+        }
+        if (message === 'readAccessOptions') {
+          return Promise.resolve(saved);
+        }
+        if (message === 'applyAccessTestNode') {
+          return new Promise(resolve => applies.push({args, resolve}));
+        }
+        if (message === 'queryAccessTestNodeApply') {
+          return new Promise(resolve => applyQueries.push({args, resolve}));
+        }
+        if (message === 'revokeAccessTestNode') {
+          return new Promise(resolve => revocations.push({args, resolve}));
+        }
+        assert.equal(message, 'previewAccessTestNode');
+        const [source, payload] = args;
+        return new Promise(resolve => previews.push({source, payload, resolve}));
+      },
+    };
+  };
+  vm.runInContext(outputText, context);
+  return {
+    document,
+    Event,
+    form: document.querySelector('form'),
+    fields: document.querySelector('fieldset'),
+    input: document.querySelector('#node-share'),
+    status: document.querySelector('[role=status]'),
+    discard: document.querySelector('#discard-preview'),
+    image: document.querySelector('#node-image'),
+    previewText(value) {
+      this.input.value = value;
+      this.form.dispatchEvent(new Event('submit', {cancelable: true}));
+    },
+    selectImage(file) {
+      Object.defineProperty(this.image, 'files', {configurable: true, value: file ? [file] : []});
+      this.image.dispatchEvent(new Event('change'));
+    },
+    makeImage(bytes) {
+      return new dom.window.File([Uint8Array.from(bytes)], 'image.png', {type: 'image/png'});
+    },
+    previews,
+    discards,
+    cancellations,
+    applies,
+    applyQueries,
+    revocations,
+    setSaved(snapshot) {
+      saved = snapshot;
+    },
+  };
+}
+
+test('connection details associate each value with a named row header', t => {
+  const {document} = openOptions(t);
+  const summary = document.querySelector('table[aria-labelledby="connection-heading"]');
+  assert.ok(summary);
+  assert.deepEqual(Array.from(summary.rows, row => [
+    row.querySelector('th[scope="row"]').textContent,
+    row.querySelector('td').id,
+  ]), [
+    ['Test Profile', 'connection-profile'],
+    ['Protocol', 'connection-protocol'],
+    ['Local address', 'connection-address'],
+    ['Saved revision', 'saved-revision'],
+  ]);
+});
+
+test('manual preview starts disabled and remains disabled for restricted profiles', async t => {
+  for (const identity of [
+    {enabled: false, private: false},
+    {enabled: true, private: true},
+  ]) {
+    const page = openOptions(t, identity);
+    assert.equal(page.fields.disabled, true);
+    await tick();
+    assert.equal(page.fields.disabled, true);
+    assert.match(page.status.textContent, /unavailable/);
+    assert.equal(page.previews.length, 0);
+  }
+});
+
+test('Apply binds the preview to its revision and the selected port before any site activation', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const apply = byId('apply-node');
+  assert.equal(apply.disabled, true);
+  page.previewText('synthetic-test-profile');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  const protocol = byId('inbound-protocol');
+  const portMode = byId('inbound-port-mode');
+  protocol.value = 'socks5';
+  protocol.dispatchEvent(new page.Event('change'));
+  portMode.value = 'fixed';
+  portMode.dispatchEvent(new page.Event('change'));
+  assert.equal(apply.disabled, false);
+  assert.equal(page.applies.length, 0);
+  apply.click();
+  assert.equal(page.applies.length, 1);
+  const [revision, operation, ...preferences] = page.applies[0].args;
+  assert.equal(revision, '0');
+  assert.match(operation, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(preferences, ['socks5', 'fixed', '10806']);
+  page.applies[0].resolve({state: 'prepared', revision: '1', protocol: 'SOCKS5', port: 10806});
+  await tick();
+  assert.equal(byId('connection-state').textContent, 'Listener prepared');
+  assert.equal(byId('connection-address').textContent, '127.0.0.1:10806');
+  assert.equal(byId('saved-revision').textContent, '1');
+  assert.doesNotMatch(page.document.body.textContent, /synthetic-test-profile/);
+  byId('revoke-node').click();
+  assert.deepEqual(page.revocations[0].args, ['1']);
+  page.revocations[0].resolve({state: 'revoked'});
+  await tick();
+  assert.equal(byId('connection-state').textContent, 'No active connection');
+  assert.equal(byId('connection-address').textContent, '—');
+});
+
+test('DEV WebSocket preview displays the fixed transport label and hides input', async t => {
+  const page = openOptions(t, {
+    enabled: true, private: false, testApply: true, testWebSocketTls: true,
+  });
+  await tick();
+  assert.match(page.document.querySelector('#share-hint').textContent, /WebSocket\/TLS/);
+  page.previewText('private-synthetic-share');
+  page.previews[0].resolve({state: 'preview', protocol: 'VLESS · WebSocket · TLS'});
+  await tick();
+  assert.equal(page.document.querySelector('#node-preview-protocol').textContent, 'VLESS · WebSocket · TLS');
+  assert.equal(page.input.value, '');
+  assert.doesNotMatch(page.document.body.textContent, /private-synthetic-share/);
+  assert.equal(page.applies.length, 0);
+});
+
+test('a conflicting draft keeps its preview and compares the newer committed revision before retry', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  page.previewText('synthetic-conflicting-draft');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  byId('apply-node').click();
+  page.applies[0].resolve({state: 'notSaved', revision: '1', reason: 'configuration_revision_conflict'});
+  await tick();
+  assert.equal(byId('apply-node').disabled, true);
+  assert.equal(byId('node-preview').hidden, false);
+  page.setSaved({state: 'ready', revision: '1',
+    testProfile: {protocol: 'http', portMode: 'fixed', requestedPort: 9990}});
+  byId('review-revision').click();
+  await tick();
+  assert.match(page.status.textContent, /HTTP · fixed port 9990/);
+  assert.equal(byId('node-preview').hidden, false);
+  assert.equal(byId('inbound-protocol').value, 'auto');
+  byId('apply-node').click();
+  assert.equal(page.applies[1].args[0], '1');
+  assert.notEqual(page.applies[1].args[1], page.applies[0].args[1]);
+  page.applies[1].resolve({state: 'savedUnavailable', revision: '2', reason: 'Listener unavailable'});
+  await tick();
+  assert.equal(byId('connection-state').textContent, 'No active connection');
+  assert.match(page.status.textContent, /^Saved\. Listener unavailable/);
+});
+
+test('an uncertain Apply queries the same operation without sending a second commit', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  page.previewText('synthetic-unknown-draft');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  byId('apply-node').click();
+  const operation = page.applies[0].args[1];
+  page.applies[0].resolve({state: 'uncertain'});
+  await tick();
+  assert.equal(page.fields.disabled, true);
+  assert.equal(byId('apply-node').disabled, true);
+  byId('check-apply-result').click();
+  assert.equal(page.applies.length, 1);
+  assert.equal(page.applyQueries[0].args[0], operation);
+  page.setSaved({state: 'ready', revision: '1',
+    testProfile: {protocol: 'socks5', portMode: 'random', requestedPort: 0}});
+  page.applyQueries[0].resolve({state: 'saved', revision: '1'});
+  await tick();
+  assert.equal(byId('saved-revision').textContent, '1');
+  assert.equal(byId('node-preview').hidden, true);
+  assert.equal(page.fields.disabled, false);
+});
+
+test('a stale revoke refreshes status and waits for a new explicit action', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  page.setSaved({state: 'ready', revision: '1',
+    testProfile: {protocol: 'socks5', portMode: 'random', requestedPort: 0},
+    connection: {state: 'active', revision: '1', protocol: 'SOCKS5', port: 45122}});
+  await tick();
+  const revoke = page.document.getElementById('revoke-node');
+  revoke.click();
+  assert.deepEqual(page.revocations[0].args, ['1']);
+  page.setSaved({state: 'ready', revision: '2',
+    testProfile: {protocol: 'http', portMode: 'random', requestedPort: 0},
+    connection: {state: 'prepared', revision: '2', protocol: 'HTTP', port: 45123}});
+  page.revocations[0].resolve({state: 'connectionChanged'});
+  await tick();
+  assert.equal(page.revocations.length, 1);
+  assert.equal(page.document.getElementById('connection-address').textContent, '127.0.0.1:45123');
+  assert.match(page.status.textContent, /review its current status/i);
+  revoke.click();
+  assert.deepEqual(page.revocations[1].args, ['2']);
+  page.revocations[1].resolve({state: 'revoked'});
+  await tick();
+});
+
+test('revoke uses the owned revision while publishing or unavailable', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  const snapshot = {state: 'ready', revision: '7',
+    testProfile: {protocol: 'socks5', portMode: 'random', requestedPort: 0}};
+  page.setSaved({...snapshot, connection: {state: 'pending'}});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const revoke = byId('revoke-node');
+  assert.equal(revoke.disabled, true);
+  revoke.click();
+  assert.equal(page.revocations.length, 0);
+
+  for (const [state, label] of [
+    ['publishing', 'Waiting for connection confirmation…'],
+    ['unavailable', 'Connection status unavailable'],
+  ]) {
+    page.setSaved({...snapshot, connection: {state, revision: '7'}});
+    byId('refresh-connection').click();
+    await tick();
+    assert.equal(byId('connection-state').textContent, label);
+    assert.equal(byId('connection-address').textContent, '—');
+    assert.equal(revoke.disabled, false);
+    revoke.click();
+    assert.deepEqual(page.revocations.at(-1).args, ['7']);
+    page.revocations.at(-1).resolve({state: 'revoked'});
+    await tick();
+  }
+  assert.equal(page.revocations.length, 2);
+});
+
+test('late replies after discard stay in their originating page and cannot restore a preview', async t => {
+  const first = openOptions(t);
+  const second = openOptions(t);
+  await tick();
+  assert.equal(first.fields.disabled, false);
+  first.previewText('synthetic-first-input');
+  second.previewText('synthetic-second-input');
+  assert.equal(first.input.value, '');
+  assert.equal(second.input.value, '');
+  assert.deepEqual(first.previews.map(p => p.payload), ['synthetic-first-input']);
+  assert.deepEqual(second.previews.map(p => p.payload), ['synthetic-second-input']);
+  first.discard.click();
+  assert.equal(first.status.textContent, 'Discarding preview…');
+  first.discards[0].resolve({state: 'canceled'});
+  first.previews[0].resolve({state: 'preview', protocol: 'late-first'});
+  second.previews[0].resolve({state: 'preview', protocol: 'VLESS · TCP · REALITY · Vision'});
+  await tick();
+  assert.equal(first.status.textContent, 'Preview discarded.');
+  assert.equal(second.status.textContent, 'Preview ready · not applied.');
+  assert.equal(second.document.querySelector('#node-preview').hidden, false);
+  assert.equal(second.cancellations.length, 1);
+  assert.deepEqual(first.cancellations, ['cancelAccessTestNodePreview',
+    'cancelAccessTestNodePreview']);
+});
+
+test('the image picker forwards only selected bytes and ignores a stale decode', {timeout: 1500}, async t => {
+  const page = openOptions(t);
+  await tick();
+  page.selectImage(null);
+  await tick();
+  assert.equal(page.previews.length, 0);
+  page.selectImage(page.makeImage([0, 1, 250]));
+  while (page.previews.length === 0) {
+    await tick();
+  }
+  assert.equal(page.previews[0].source, 'image');
+  assert.equal(page.previews[0].payload, 'AAH6');
+
+  page.previewText('synthetic-replacement');
+  page.previews[1].resolve({state: 'invalidShare'});
+  page.previews[0].resolve({state: 'preview', protocol: 'late-image'});
+  await tick();
+  assert.equal(page.status.textContent, 'Enter one complete 3X-UI node link.');
+});
+
+test('listener preferences are a draft; 1080 is rejected and discard clears the draft', async t => {
+  const page = openOptions(t);
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const mode = byId('inbound-port-mode');
+  const port = byId('inbound-port');
+  mode.value = 'fixed';
+  mode.dispatchEvent(new page.Event('change'));
+  assert.equal(byId('fixed-port-field').hidden, false);
+  assert.equal(byId('port-error').hidden, true);
+  port.value = '1080';
+  port.dispatchEvent(new page.Event('input'));
+  assert.equal(port.getAttribute('aria-invalid'), 'true');
+  assert.equal(byId('port-error').hidden, false);
+  assert.equal(byId('apply-node').disabled, true);
+  port.value = '10806';
+  port.dispatchEvent(new page.Event('input'));
+  assert.equal(byId('port-error').hidden, true);
+  assert.equal(byId('apply-node').disabled, true);
+  assert.equal(page.previews.length, 0);
+  page.discard.click();
+  assert.equal(mode.value, 'random');
+  assert.equal(byId('fixed-port-field').hidden, true);
+  assert.equal(byId('draft-state').textContent, 'No changes saved');
+  assert.equal(page.document.activeElement, page.input);
+  page.discards[0].resolve({state: 'canceled'});
+  await tick();
+  assert.equal(page.status.textContent, 'Preview discarded.');
+});
+
+test('pasted input is masked, cleared on preview, and cannot enable Apply', async t => {
+  const page = openOptions(t);
+  await tick();
+  assert.equal(page.input.type, 'password');
+  page.previewText('synthetic-single-node');
+  assert.equal(page.input.value, '');
+  assert.equal(page.previews[0].payload, 'synthetic-single-node');
+  page.previews[0].resolve({state:'preview',protocol:'VLESS · TCP · REALITY · Vision'});
+  await tick();
+  assert.equal(page.document.querySelector('#node-preview').hidden, false);
+  assert.equal(page.document.querySelector('#apply-node').disabled, true);
+  assert.match(page.document.querySelector('.connection-state').textContent, /unavailable/);
+  assert.doesNotMatch(page.document.body.textContent, /synthetic-single-node/);
+  page.discard.click();
+  assert.equal(page.document.querySelector('#node-preview').hidden, true);
+  page.discards[0].resolve({state: 'canceled'});
+  await tick();
+});
+
+test('fixed HTTP ports use the complete decimal range without enabling Apply', async t => {
+  const page = openOptions(t);
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const protocol = byId('inbound-protocol');
+  const mode = byId('inbound-port-mode');
+  const port = byId('inbound-port');
+  protocol.value = 'http';
+  protocol.dispatchEvent(new page.Event('change'));
+  mode.value = 'fixed';
+  mode.dispatchEvent(new page.Event('change'));
+  assert.equal(mode.selectedOptions[0].textContent, 'Fixed port (internal)');
+  for (const value of ['1', '80', '1080', '8080', '10806', '65535', '00001']) {
+    port.value = value;
+    port.dispatchEvent(new page.Event('input'));
+    assert.equal(byId('port-error').hidden, true, value);
+    assert.equal(port.hasAttribute('aria-invalid'), false, value);
+  }
+  for (const value of ['', '0', '65536', '1e3', '1.0', '-1', ' 80', '80 ', '+80', '000080', '٨٠']) {
+    port.value = value;
+    port.dispatchEvent(new page.Event('input'));
+    assert.equal(byId('port-error').hidden, false, value);
+    assert.equal(port.getAttribute('aria-invalid'), 'true', value);
+  }
+  assert.match(byId('port-error').textContent, /1 to 65535/);
+  assert.equal(byId('apply-node').disabled, true);
+  assert.equal(page.previews.length, 0);
+});
+
+test('switching from HTTP does not admit its fixed port for Auto or SOCKS5', async t => {
+  const page = openOptions(t);
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const protocol = byId('inbound-protocol');
+  const mode = byId('inbound-port-mode');
+  const port = byId('inbound-port');
+  protocol.value = 'http';
+  mode.value = 'fixed';
+  port.value = '1080';
+  port.dispatchEvent(new page.Event('input'));
+  assert.equal(byId('port-error').hidden, true);
+  for (const value of ['socks5', 'auto']) {
+    protocol.value = value;
+    protocol.dispatchEvent(new page.Event('change'));
+    assert.equal(port.value, '1080');
+    assert.equal(byId('port-error').hidden, false);
+    assert.match(mode.selectedOptions[0].textContent, /10806/);
+  }
+  port.value = '10806';
+  port.dispatchEvent(new page.Event('input'));
+  assert.equal(byId('port-error').hidden, true);
+  protocol.value = 'http';
+  protocol.dispatchEvent(new page.Event('change'));
+  page.discard.click();
+  page.discards[0].resolve({state: 'canceled'});
+  await tick();
+  assert.equal(protocol.value, 'auto');
+  assert.match(mode.querySelector('option[value=fixed]').textContent, /10806/);
+  assert.match(byId('port-hint').textContent, /SOCKS5/);
+  assert.equal(byId('port-error').hidden, true);
+});
+
+test('discard reports secure storage failures and permits a successful retry', async t => {
+  const page = openOptions(t);
+  await tick();
+  page.previewText('synthetic-single-node');
+  page.previews[0].resolve({state: 'preview', protocol: 'VLESS'});
+  await tick();
+  page.discard.click();
+  assert.equal(page.discard.disabled, true);
+  page.discards[0].resolve({state: 'secureStorageUnavailable'});
+  await tick();
+  assert.equal(page.status.dataset.error, 'true');
+  assert.match(page.status.textContent, /Secure storage is unavailable/);
+  assert.equal(page.discard.disabled, false);
+  assert.equal(page.document.querySelector('#node-preview').hidden, true);
+  page.discard.click();
+  page.discards[1].resolve({state: 'canceled'});
+  await tick();
+  assert.equal(page.status.textContent, 'Preview discarded.');
+  assert.equal(page.status.dataset.error, 'false');
+  assert.equal(page.discard.disabled, true);
+});
+
+test('a late discard cannot replace a newer draft or a closed page status', async t => {
+  const page = openOptions(t);
+  await tick();
+  page.previewText('synthetic-first');
+  page.discard.click();
+  page.previewText('synthetic-second');
+  page.previews[1].resolve({state: 'preview', protocol: 'VLESS'});
+  await tick();
+  page.discards[0].resolve({state: 'canceled'});
+  page.previews[0].resolve({state: 'invalidShare'});
+  await tick();
+  assert.equal(page.status.textContent, 'Preview ready · not applied.');
+  assert.equal(page.document.querySelector('#node-preview').hidden, false);
+  page.discard.click();
+  page.document.defaultView.dispatchEvent(new page.Event('pagehide'));
+  page.discards[1].reject(new Error('synthetic transport failure'));
+  await tick();
+  assert.equal(page.status.textContent, 'Discarding preview…');
+  assert.equal(page.document.querySelector('#node-preview').hidden, true);
+});
+
+test('an invalid reply allows correction and pagehide invalidates pending work', async t => {
+  const page = openOptions(t);
+  await tick();
+  page.previewText('invalid');
+  page.previews[0].resolve({state:'invalidShare'});
+  await tick();
+  assert.equal(page.status.dataset.error, 'true');
+  page.previewText('correction');
+  page.document.defaultView.dispatchEvent(new page.Event('pagehide'));
+  page.previews[1].resolve({state:'preview',protocol:'VLESS'});
+  await tick();
+  assert.equal(page.document.querySelector('#node-preview').hidden, true);
+  assert.ok(page.cancellations.length >= 3);
+});
+
+test('Return in the port field preserves the validated node preview', async t => {
+  const page = openOptions(t);
+  await tick();
+  page.previewText('synthetic-single-node');
+  page.previews[0].resolve({state:'preview',protocol:'VLESS · TCP · REALITY · Vision'});
+  await tick();
+  const port = page.document.getElementById('inbound-port');
+  port.focus();
+  const event = new page.document.defaultView.KeyboardEvent('keydown', {
+    key:'Enter', bubbles:true, cancelable:true,
+  });
+  port.dispatchEvent(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(page.previews.length, 1);
+  assert.equal(page.document.querySelector('#node-preview').hidden, false);
+  assert.equal(page.input.value, '');
+  assert.equal(page.status.textContent, 'Preview ready · not applied.');
+});

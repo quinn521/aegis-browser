@@ -48,7 +48,7 @@ mojom::AegisAccessSnapshotPtr WireSnapshot() {
   rule->row_revision = 1;
   rule->last_operation_sequence = 1;
   s->rules.push_back(std::move(rule));
-  auto endpoint = mojom::AegisAccessHttpEndpoint::New();
+  auto endpoint = mojom::AegisAccessProxyEndpoint::New();
   endpoint->proxy_group_id = "group";
   endpoint->registration_id = "registration";
   endpoint->selection_generation = 1;
@@ -231,6 +231,9 @@ class AccessNetworkContextIPCTest : public testing::Test {
     snapshot->incarnation = incarnation_;
     snapshot->endpoints[0]->port = server_.port();
     snapshot->endpoints[0]->credentials.reset();
+    snapshot->endpoints[0]->listener_binding =
+        mojom::AegisAccessPreparedListenerBinding::New(
+            1, "11111111-2222-4333-8444-555555555555", 1, 1, 1);
     return snapshot;
   }
   base::test::TaskEnvironment environment_{base::test::TaskEnvironment::MainThreadType::IO};
@@ -432,6 +435,7 @@ TEST_F(AccessNetworkContextIPCTest, AuthenticatedSnapshotDrivesPreflightAndActua
   require_auth_ = true;
   auto snapshot = Snapshot();
   snapshot->sequence = 2;
+  snapshot->endpoints[0]->listener_binding.reset();
   snapshot->endpoints[0]->credentials = net::AuthCredentials(u"local-user", u"local-secret");
   snapshot->endpoints[0]->registration_id = "authenticated-registration";
   snapshot->endpoints[0]->selection_generation = 2;
@@ -449,6 +453,7 @@ TEST_F(AccessNetworkContextIPCTest, WrongLocalCredentialsNeverSendActualRequest)
   require_auth_ = true;
   auto snapshot = Snapshot();
   snapshot->sequence = 2;
+  snapshot->endpoints[0]->listener_binding.reset();
   snapshot->endpoints[0]->credentials = net::AuthCredentials(u"local-user", u"wrong");
   snapshot->endpoints[0]->registration_id = "wrong-auth-registration";
   snapshot->endpoints[0]->selection_generation = 2;
@@ -475,6 +480,11 @@ TEST_F(AccessNetworkContextIPCTest, AckBindsCompleteInstalledIdentityWithoutSecr
   EXPECT_EQ(last_ack_->registrations[0]->proxy_group_id, "group");
   EXPECT_EQ(last_ack_->registrations[0]->registration_id, "registration");
   EXPECT_EQ(last_ack_->registrations[0]->selection_generation, 1u);
+  const auto& registration = *last_ack_->registrations[0];
+  EXPECT_EQ(registration.transport, mojom::AegisAccessProxyTransport::kHttp);
+  EXPECT_EQ(registration.numeric_loopback_host, "127.0.0.1");
+  EXPECT_EQ(registration.port, server_.port());
+  EXPECT_EQ(registration.listener_binding, Snapshot()->endpoints[0]->listener_binding);
   auto old = Snapshot();
   EXPECT_FALSE(Install(*old));
   EXPECT_FALSE(last_ack_->accepted);

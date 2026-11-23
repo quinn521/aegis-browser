@@ -1,6 +1,10 @@
 // Copyright 2026 GCSA
 #include "services/network/aegis/access_route_registry.h"
+#include "components/aegis_access/access_prepared_listener_test_fixture.h"
 #include "net/base/net_errors.h"
+#include "base/test/bind.h"
+#include "base/test/task_environment.h"
+#include "base/task/sequenced_task_runner.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace network {
@@ -27,7 +31,9 @@ AccessPolicyRule Rule(std::string site, std::string group) {
 }
 AccessRouteRegistry::Snapshot Snapshot() {
   return {{Owner(), 7, {Rule("https://a.test", "x"), Rule("https://b.test", "y")}},
-          Common(), {{"x", Route("x", 8)}, {"y", Route("y", 11)}}};
+          Common(), {{"x", Route("x", 8)}, {"y", Route("y", 11)}}, {},
+          {{"x", aegis_access::test::SyntheticPreparedListenerBinding()},
+           {"y", aegis_access::test::SyntheticPreparedListenerBinding()}}};
 }
 AccessRouteRegistry::Expectation Expected(std::string group = "x",
                                         uint64_t selection = 8) {
@@ -37,10 +43,151 @@ AccessRouteRegistry::Expectation Expected(std::string group = "x",
 }
 GURL Target() { return GURL("https://cdn.test/resource"); }
 
+TEST(AccessNetworkRouteRegistryTest, ListenerFaultBlocksNewSendAndCancelsOnlyItsObservedRegistration) {
+  base::test::TaskEnvironment environment;
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  const auto snapshot = Snapshot();
+  ASSERT_TRUE(registry.Install(1, snapshot));
+  int canceled_x = 0, canceled_y = 0;
+  auto x = registry.ObserveRegistrationRevocation(snapshot.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++canceled_x; }));
+  auto y = registry.ObserveRegistrationRevocation(snapshot.routes.at("y")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++canceled_y; }));
+  ASSERT_TRUE(x);
+  ASSERT_TRUE(y);
+  ASSERT_TRUE(registry.InvalidateRegisteredListener(snapshot.routes.at("x")->isolation_key()));
+  EXPECT_EQ(registry.Resolve(Metadata(), Target(), Expected()).net_error, net::ERR_PROXY_CONNECTION_FAILED);
+  EXPECT_EQ(registry.Resolve(Metadata("https://b.test"), Target(), Expected("y", 11)).net_error, net::OK);
+  EXPECT_EQ(canceled_x, 0);
+  environment.RunUntilIdle();
+  EXPECT_EQ(canceled_x, 1);
+  EXPECT_EQ(canceled_y, 0);
+  EXPECT_FALSE(registry.Install(2, snapshot));
+}
+TEST(AccessNetworkRouteRegistryTest, ForeignOrUnobservedFaultCannotRevokeInstalledListener) {
+  base::test::TaskEnvironment environment;
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  const auto snapshot = Snapshot();
+  ASSERT_TRUE(registry.Install(1, snapshot));
+  auto key = snapshot.routes.at("x")->isolation_key();
+  EXPECT_FALSE(registry.InvalidateRegisteredListener(key));
+  int canceled = 0;
+  auto subscription = registry.ObserveRegistrationRevocation(key,
+      base::BindLambdaForTesting([&] { ++canceled; }));
+  ASSERT_TRUE(subscription);
+  for (const auto field : {&net::AccessRouteIsolationKey::profile,
+                          &net::AccessRouteIsolationKey::partition,
+                          &net::AccessRouteIsolationKey::registration,
+                          &net::AccessRouteIsolationKey::incarnation}) {
+    auto foreign = key;
+    foreign.*field = "foreign";
+    EXPECT_FALSE(registry.InvalidateRegisteredListener(foreign));
+    EXPECT_FALSE(registry.ObserveRegistrationRevocation(foreign, base::BindLambdaForTesting([] {})));
+  }
+  auto stale = key;
+  ++stale.selection_generation;
+  EXPECT_FALSE(registry.InvalidateRegisteredListener(stale));
+  subscription.reset();
+  EXPECT_FALSE(registry.InvalidateRegisteredListener(key));
+  environment.RunUntilIdle();
+  EXPECT_EQ(canceled, 0);
+  EXPECT_EQ(registry.Resolve(Metadata(), Target(), Expected()).net_error, net::OK);
+}
+TEST(AccessNetworkRouteRegistryTest, RemovedInstanceCancellationPrecedesQueuedFenceAndPreservesReplacement) {
+  base::test::TaskEnvironment environment;
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  auto first = Snapshot();
+  ASSERT_TRUE(registry.Install(1, first));
+  std::vector<int> order;
+  int canceled_y = 0, canceled_new = 0;
+  auto x = registry.ObserveRegistrationRevocation(first.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { order.push_back(1); }));
+  auto y = registry.ObserveRegistrationRevocation(first.routes.at("y")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++canceled_y; }));
+  auto next = Snapshot();
+  auto key = next.routes.at("x")->isolation_key();
+  key.registration = "new-registration-x";
+  ++key.selection_generation;
+  next.routes.at("x") = net::AccessProxyRoute::Create(key, first.routes.at("x")->proxy_chain());
+  ++next.listener_bindings.at("x").listener_generation;
+  ASSERT_TRUE(registry.Install(2, next));
+  auto fresh = registry.ObserveRegistrationRevocation(key,
+      base::BindLambdaForTesting([&] { ++canceled_new; }));
+  ASSERT_TRUE(fresh);
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE,
+      base::BindLambdaForTesting([&] { order.push_back(2); }));
+  EXPECT_TRUE(order.empty());
+  environment.RunUntilIdle();
+  EXPECT_EQ(order, (std::vector<int>{1, 2}));
+  EXPECT_EQ(canceled_y, 0);
+  EXPECT_EQ(canceled_new, 0);
+}
+TEST(AccessNetworkRouteRegistryTest, FaultIncludesEarlierPolicyOfSameListenerAndPreservesOtherGroup) {
+  base::test::TaskEnvironment environment;
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  const auto first = Snapshot();
+  ASSERT_TRUE(registry.Install(1, first));
+  int old_x = 0, new_x = 0, y = 0;
+  auto old = registry.ObserveRegistrationRevocation(first.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++old_x; }));
+  auto other = registry.ObserveRegistrationRevocation(first.routes.at("y")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++y; }));
+  auto next = Snapshot();
+  ++next.policy.policy_generation;
+  ++next.common_generations.policy_generation;
+  for (auto& entry : next.routes) {
+    auto key = entry.second->isolation_key();
+    ++key.policy_generation;
+    entry.second = net::AccessProxyRoute::Create(key, entry.second->proxy_chain());
+  }
+  ASSERT_TRUE(registry.Install(2, next));
+  auto fresh = registry.ObserveRegistrationRevocation(next.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++new_x; }));
+  environment.RunUntilIdle();
+  EXPECT_EQ(old_x + new_x + y, 0);
+  ASSERT_TRUE(registry.InvalidateRegisteredListener(first.routes.at("x")->isolation_key()));
+  environment.RunUntilIdle();
+  EXPECT_EQ(old_x, 1);
+  EXPECT_EQ(new_x, 1);
+  EXPECT_EQ(y, 0);
+}
+TEST(AccessNetworkRouteRegistryTest, RestoreCancelsOldSubscriptionsWithoutCancelingFreshSameKey) {
+  base::test::TaskEnvironment environment;
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  const auto snapshot = Snapshot();
+  ASSERT_TRUE(registry.Install(1, snapshot));
+  const auto epoch = registry.restoration_epoch();
+  int old = 0, fresh = 0;
+  auto earlier = registry.ObserveRegistrationRevocation(snapshot.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++old; }));
+  registry.EnterRestoring();
+  EXPECT_GT(registry.restoration_epoch(), epoch);
+  ASSERT_TRUE(registry.Install(2, snapshot));
+  auto current = registry.ObserveRegistrationRevocation(snapshot.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++fresh; }));
+  environment.RunUntilIdle();
+  EXPECT_EQ(old, 1);
+  EXPECT_EQ(fresh, 0);
+}
+TEST(AccessNetworkRouteRegistryTest, ClosedSubscriptionCannotReceiveAlreadyQueuedRevocation) {
+  base::test::TaskEnvironment environment;
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  const auto snapshot = Snapshot();
+  ASSERT_TRUE(registry.Install(1, snapshot));
+  int canceled = 0;
+  auto current = registry.ObserveRegistrationRevocation(snapshot.routes.at("x")->isolation_key(),
+      base::BindLambdaForTesting([&] { ++canceled; }));
+  ASSERT_TRUE(registry.InvalidateRegisteredListener(snapshot.routes.at("x")->isolation_key()));
+  current.reset();
+  environment.RunUntilIdle();
+  EXPECT_EQ(canceled, 0);
+}
+
 TEST(AccessNetworkRouteRegistryTest, UnavailableProxyGroupDoesNotBlockUnmatchedNativeTraffic) {
   AccessRouteRegistry registry(Owner(), "incarnation");
   auto snapshot = Snapshot();
   snapshot.routes.erase("x");
+  snapshot.listener_bindings.erase("x");
   snapshot.unavailable_groups.emplace("x", 8);
   ASSERT_TRUE(registry.Install(1, std::move(snapshot)));
   EXPECT_EQ(registry.Resolve(Metadata(), Target(), Expected()).net_error,
@@ -57,6 +204,7 @@ TEST(AccessNetworkRouteRegistryTest, UnavailableGroupPreservesSelectionAndRegist
   ASSERT_TRUE(registry.Install(1, Snapshot()));
   auto unavailable = Snapshot();
   unavailable.routes.erase("x");
+  unavailable.listener_bindings.erase("x");
   unavailable.unavailable_groups.emplace("x", 8);
   ASSERT_TRUE(registry.Install(2, unavailable));
   registry.EnterRestoring();
@@ -80,6 +228,7 @@ TEST(AccessNetworkRouteRegistryTest, ExplicitUnavailableGroupAllowsUnselectedSta
   AccessRouteRegistry registry(Owner(), "incarnation");
   auto startup = Snapshot();
   startup.routes.erase("x");
+  startup.listener_bindings.erase("x");
   startup.unavailable_groups.emplace("x", 0);
   ASSERT_TRUE(registry.Install(1, startup));
   EXPECT_EQ(registry.Resolve(Metadata(), Target(), Expected()).net_error,
@@ -213,6 +362,84 @@ TEST(AccessNetworkRouteRegistryTest, RegistrationCannotChangeEndpoint) {
       net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_HTTP,
                                              "127.0.0.1", 23456)));
   EXPECT_FALSE(registry.Install(2, std::move(replacement)));
+}
+TEST(AccessNetworkRouteRegistryTest, NoAuthRouteRequiresExplicitCompleteListenerBinding) {
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  auto missing = Snapshot();
+  missing.listener_bindings.erase("x");
+  EXPECT_FALSE(registry.Install(1, std::move(missing)));
+  for (const auto field : {&AccessPreparedListenerBinding::profile_version,
+                          &AccessPreparedListenerBinding::upstream_authorization_generation,
+                          &AccessPreparedListenerBinding::listener_generation}) {
+    auto invalid = Snapshot();
+    invalid.listener_bindings.at("x").*field = 0;
+    EXPECT_FALSE(registry.Install(1, std::move(invalid)));
+  }
+  for (const uint32_t version : {0u, 2u}) {
+    auto invalid = Snapshot();
+    invalid.listener_bindings.at("x").wire_version = version;
+    EXPECT_FALSE(registry.Install(1, std::move(invalid)));
+  }
+  ASSERT_TRUE(registry.Install(1, Snapshot()));
+  EXPECT_EQ(registry.Resolve(Metadata(), Target(), Expected()).net_error, net::OK);
+}
+TEST(AccessNetworkRouteRegistryTest, ProfileAuthorizationAndListenerCannotMutateUnderRegistration) {
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  ASSERT_TRUE(registry.Install(1, Snapshot()));
+  for (const auto field : {&AccessPreparedListenerBinding::profile_version,
+                          &AccessPreparedListenerBinding::upstream_authorization_generation,
+                          &AccessPreparedListenerBinding::listener_generation}) {
+    auto changed = Snapshot();
+    ++(changed.listener_bindings.at("x").*field);
+    EXPECT_FALSE(registry.Install(2, std::move(changed)));
+  }
+  auto changed = Snapshot();
+  changed.listener_bindings.at("x").connection_profile_id =
+      "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  EXPECT_FALSE(registry.Install(2, std::move(changed)));
+  registry.EnterRestoring();
+  changed = Snapshot();
+  ++changed.listener_bindings.at("x").listener_generation;
+  EXPECT_FALSE(registry.Install(2, std::move(changed)));
+}
+TEST(AccessNetworkRouteRegistryTest, SocksUsesSingleChainAndCannotReplaceProtocolUnderRegistration) {
+  auto socks = Snapshot();
+  const auto key = socks.routes.at("x")->isolation_key();
+  socks.routes.at("x") = net::AccessProxyRoute::Create(key, net::ProxyChain(
+      net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_SOCKS5,
+                                             "127.0.0.1", 12345)));
+  ASSERT_TRUE(socks.routes.at("x"));
+  AccessRouteRegistry fresh(Owner(), "incarnation");
+  ASSERT_TRUE(fresh.Install(1, socks));
+  const auto resolved = fresh.Resolve(Metadata(), Target(), Expected());
+  ASSERT_TRUE(resolved.route);
+  EXPECT_TRUE(resolved.route->proxy_chain().is_single_proxy());
+  EXPECT_EQ(resolved.route->proxy_chain().GetProxyServer(0).scheme(),
+            net::ProxyServer::SCHEME_SOCKS5);
+  AccessRouteRegistry existing(Owner(), "incarnation");
+  ASSERT_TRUE(existing.Install(1, Snapshot()));
+  EXPECT_FALSE(existing.Install(2, std::move(socks)));
+}
+TEST(AccessNetworkRouteRegistryTest, SameAddressWithNewInstanceRequiresNewRegistrationAndPoolIdentity) {
+  AccessRouteRegistry registry(Owner(), "incarnation");
+  ASSERT_TRUE(registry.Install(1, Snapshot()));
+  const auto old = registry.Resolve(Metadata(), Target(), Expected()).route;
+  ASSERT_TRUE(old);
+  auto replacement = Snapshot();
+  auto key = replacement.routes.at("x")->isolation_key();
+  key.registration = "new-listener-registration";
+  ++key.selection_generation;
+  replacement.routes.at("x") = net::AccessProxyRoute::Create(key, old->proxy_chain());
+  ++replacement.listener_bindings.at("x").listener_generation;
+  ASSERT_TRUE(registry.Install(2, std::move(replacement)));
+  EXPECT_NE(registry.Resolve(Metadata(), Target(), Expected()).net_error, net::OK);
+  auto expected = Expected("x", 9);
+  expected.registration_id = key.registration;
+  const auto current = registry.Resolve(Metadata(), Target(), expected).route;
+  ASSERT_TRUE(current);
+  EXPECT_EQ(current->proxy_chain(), old->proxy_chain());
+  EXPECT_NE(current->isolation_key(), old->isolation_key());
+  EXPECT_NE(current->proxy_auth_cache(), old->proxy_auth_cache());
 }
 }  // namespace
 }  // namespace network

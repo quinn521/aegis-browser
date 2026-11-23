@@ -12,6 +12,7 @@
 #include "components/aegis_access/access_route_types.h"
 #include "components/aegis_access/access_policy_evaluator.h"
 #include "components/aegis_access/access_proxy_route_adapter.h"
+#include "components/aegis_access/access_prepared_listener.h"
 #include "net/base/auth.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -21,6 +22,7 @@ namespace aegis::access {
 struct AccessPrivateEndpoint {
   aegis_access::RegisteredProxyEndpoint registration;
   std::optional<net::AuthCredentials> local_credentials;
+  std::optional<aegis_access::AccessPreparedListenerBinding> listener_binding;
 };
 
 // Browser-owned capability for the exact terminal NetworkContext. The raw
@@ -62,6 +64,7 @@ class AccessPrivateContextClient {
   network::mojom::AegisAccessOwnerPtr owner_;
   std::string incarnation_;
   mojo::Remote<network::mojom::AegisAccessContext> context_;
+  base::OnceClosure reject_initialize_;
   bool connected_ = false;
   bool ready_ = false;
   bool publication_pending_ = false;

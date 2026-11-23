@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Access Options</title>
+  <link rel="stylesheet" href="access_options.css">
+  <script type="module" src="access_options.js"></script>
+</head>
+<body>
+  <header class="page-header">
+    <a class="back" href="chrome://settings/aegis" aria-label="Back to Aegis settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg>
+    </a>
+    <h1>Access Options</h1>
+    <span class="channel">DEV / Internal Alpha</span>
+  </header>
+  <main>
+    <div class="intro">
+      <h2>Your test connection</h2>
+      <p>Import a single node into this window’s draft. Review it before applying changes.</p>
+    </div>
+    <div class="workspace">
+      <form id="test-node-form" autocomplete="off">
+        <fieldset id="test-node-fields" disabled>
+          <legend>Test Profile</legend>
+          <div class="profile-row">
+            <div><strong>Current browser Profile</strong><p class="hint">Manual test node · ordinary window</p></div>
+            <span class="scope">Local draft</span>
+          </div>
+          <section class="form-section" aria-labelledby="node-heading">
+            <h3 id="node-heading">Import node</h3>
+            <label id="share-label" for="node-share">3X-UI share link</label>
+            <input id="node-share" type="password" maxlength="4096"
+                   spellcheck="false" autocapitalize="off" autocomplete="off"
+                   placeholder="Click here and press ⌘V"
+                   aria-describedby="share-hint node-status">
+            <p id="share-hint" class="hint">One VLESS / TCP / REALITY / Vision node. The link stays hidden.</p>
+            <div class="input-actions">
+              <button type="submit" id="preview-link">Preview node</button>
+              <label class="file-action" for="node-image">Choose QR image
+                <input id="node-image" type="file" accept="image/*">
+              </label>
+              <button type="button" disabled title="Camera input is not available in this build">Use camera</button>
+            </div>
+            <div id="node-status" class="message" role="status" aria-live="polite"></div>
+            <div id="node-preview" class="node-preview" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+              <div><strong>Test node</strong><p id="node-preview-protocol"></p>
+                <p class="hint">Validated for preview. No connection started.</p></div>
+            </div>
+          </section>
+          <section class="form-section inbound" aria-labelledby="inbound-heading">
+            <h3 id="inbound-heading">Local listener preference</h3>
+            <p class="hint">These are draft preferences. The current connection is shown separately.</p>
+            <div class="field-grid">
+              <div>
+                <label for="inbound-protocol">Protocol</label>
+                <select id="inbound-protocol">
+                  <option value="auto">Automatic · prefer SOCKS5</option>
+                  <option value="socks5">SOCKS5</option>
+                  <option value="http">HTTP</option>
+                </select>
+              </div>
+              <div>
+                <label for="inbound-port-mode">Port</label>
+                <select id="inbound-port-mode">
+                  <option value="random">System allocated</option>
+                  <option value="fixed">Fixed · 10806 (internal)</option>
+                </select>
+              </div>
+            </div>
+            <div id="fixed-port-field" hidden>
+              <label for="inbound-port">Internal port</label>
+              <input id="inbound-port" inputmode="numeric" value="10806" maxlength="5"
+                     aria-describedby="port-hint port-error">
+              <p id="port-hint" class="hint">Fixed Auto and SOCKS5 listeners use 10806.</p>
+              <p id="port-error" class="error" role="alert" hidden>Use 10806, or choose a system-allocated port.</p>
+            </div>
+            <p class="hint local-note">Loopback only · no local username or password.<br>Upstream authentication remains separate.</p>
+          </section>
+        </fieldset>
+        <footer class="apply-bar">
+          <div><strong id="draft-state">No changes saved</strong>
+            <p id="apply-availability" class="hint">Preview a node to apply your draft.</p>
+            <button type="button" id="review-revision" hidden>Review saved settings</button>
+            <button type="button" id="check-apply-result" hidden>Check Apply result</button></div>
+          <div class="apply-actions">
+            <button type="button" id="discard-preview" disabled>Discard</button>
+            <button type="button" id="apply-node" class="primary" disabled
+                    aria-describedby="apply-availability">Apply changes</button>
+          </div>
+        </footer>
+      </form>
+      <aside class="connection" aria-labelledby="connection-heading">
+        <h3 id="connection-heading">Current connection</h3>
+        <p class="connection-state" id="connection-state" role="status">Connection status unavailable</p>
+        <p class="hint" id="connection-hint">Connection details appear after a listener is prepared.</p>
+        <table aria-labelledby="connection-heading">
+          <tbody>
+            <tr><th scope="row">Test Profile</th><td id="connection-profile">—</td></tr>
+            <tr><th scope="row">Protocol</th><td id="connection-protocol">—</td></tr>
+            <tr><th scope="row">Local address</th><td id="connection-address">—</td></tr>
+            <tr><th scope="row">Saved revision</th><td id="saved-revision">Not loaded</td></tr>
+          </tbody>
+        </table>
+        <div class="connection-actions">
+          <button type="button" id="refresh-connection" disabled>Refresh status</button>
+          <button type="button" id="revoke-node" disabled>Revoke connection</button>
+        </div>
+        <p class="protection-note">Pages that require protection stay blocked when their connection is unavailable.</p>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>

@@ -2,7 +2,12 @@
 
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
 
+#include <utility>
+#include <vector>
+
+#include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "build/build_config.h"
 #include "chrome/browser/aegis/access/access_private_context_client.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
@@ -14,6 +19,22 @@
 #include "services/network/test/test_network_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "base/functional/bind.h"
+#include "chrome/browser/aegis/access/access_build_channel.h"
+#include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
+#include "chrome/browser/aegis/access/access_service_coordinator.h"
+#include "chrome/browser/net/profile_network_context_service.h"
+#include "chrome/browser/net/profile_network_context_service_factory.h"
+#include "components/prefs/pref_service.h"
+#include "components/proxy_config/proxy_config_dictionary.h"
+#include "components/proxy_config/proxy_config_pref_names.h"
+#include "mojo/public/cpp/bindings/receiver.h"
+#include "mojo/public/cpp/system/message_pipe.h"
+#include "services/network/public/cpp/originating_process_id.h"
+#include "services/network/public/cpp/url_loader_factory_builder.h"
+#endif
+
 namespace aegis::access {
 namespace {
 
@@ -24,6 +45,13 @@ class HeldPrivateContext final : public network::TestNetworkContext,
       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
       BindAegisAccessContextCallback callback) override {
     receivers.Add(this, std::move(receiver));
+#if BUILDFLAG(IS_MAC)
+    if (hold_bind) {
+      CHECK(!bind_reply);
+      bind_reply = std::move(callback);
+      return;
+    }
+#endif
     std::move(callback).Run(incarnation);
   }
   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr value,
@@ -44,7 +72,8 @@ class HeldPrivateContext final : public network::TestNetworkContext,
       ack->registrations.push_back(
           network::mojom::AegisAccessRegistrationAck::New(
               endpoint->proxy_group_id, endpoint->registration_id,
-              endpoint->selection_generation));
+              endpoint->selection_generation, endpoint->transport,
+              endpoint->numeric_loopback_host, endpoint->port, endpoint->listener_binding.Clone()));
     }
     for (const auto& unavailable : snapshot->unavailable_groups)
       ack->unavailable_groups.push_back(unavailable.Clone());
@@ -55,13 +84,40 @@ class HeldPrivateContext final : public network::TestNetworkContext,
     std::move(callback).Run(true);
   }
   void CreateFactory(
-      mojo::PendingReceiver<network::mojom::AegisAccessURLLoaderFactory>,
+      mojo::PendingReceiver<network::mojom::AegisAccessURLLoaderFactory> receiver,
       network::mojom::URLLoaderFactoryParamsPtr,
       network::mojom::AegisAccessFactoryBindingPtr,
       CreateFactoryCallback callback) override {
+#if BUILDFLAG(IS_MAC)
+    factory_receivers.push_back(std::move(receiver));
+    if (hold_factory) {
+      CHECK(!factory_reply);
+      factory_reply = std::move(callback);
+      return;
+    }
+#endif
     std::move(callback).Run(true);
   }
 
+#if BUILDFLAG(IS_MAC)
+  mojo::PendingRemote<network::mojom::NetworkContext> BindNetworkContext() {
+    return network_receiver.BindNewPipeAndPassRemote();
+  }
+  void CreateURLLoaderFactory(
+      mojo::PendingReceiver<network::mojom::URLLoaderFactory>,
+      network::mojom::URLLoaderFactoryParamsPtr) override {
+    ++legacy_factory_count;
+  }
+
+  bool hold_bind = false;
+  bool hold_factory = false;
+  BindAegisAccessContextCallback bind_reply;
+  CreateFactoryCallback factory_reply;
+  std::vector<mojo::PendingReceiver<network::mojom::AegisAccessURLLoaderFactory>>
+      factory_receivers;
+  size_t legacy_factory_count = 0;
+  mojo::Receiver<network::mojom::NetworkContext> network_receiver{this};
+#endif
   std::string incarnation = "actual-context";
   size_t install_count = 0;
   network::mojom::AegisAccessSnapshotPtr snapshot;
@@ -71,13 +127,23 @@ class HeldPrivateContext final : public network::TestNetworkContext,
 
 class AccessPrivatePublicationTest : public testing::Test {
  protected:
+  using TimeSource = base::test::TaskEnvironment::TimeSource;
+  explicit AccessPrivatePublicationTest(TimeSource time_source = TimeSource::SYSTEM_TIME)
+      : environment_(time_source) {}
+
   void SetUp() override {
     profile_ = TestingProfile::Builder().Build();
+    ASSERT_NO_FATAL_FAILURE(ConfigureTransport(aegis_access::ChannelNamespace::kDev));
+  }
+  void ConfigureTransport(aegis_access::ChannelNamespace channel) {
     network::mojom::NetworkContextParams params;
     ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(
         profile_.get(), {}, &params));
     transport_ = AccessNetworkContextTransport::Get(profile_.get());
-    owner_ = *transport_->OwnerForPartition(aegis_access::ChannelNamespace::kDev, {});
+    ASSERT_TRUE(transport_);
+    const auto owner = transport_->OwnerForPartition(channel, {});
+    ASSERT_TRUE(owner);
+    owner_ = *owner;
   }
   AccessNetworkContextTransport::PrivateContext Bind(HeldPrivateContext& context) {
     base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
@@ -288,6 +354,217 @@ TEST_F(AccessPrivatePublicationTest, SupersededAckCannotReleaseNewCandidate) {
   context.Acknowledge();
   EXPECT_TRUE(current.Get());
 }
+
+#if BUILDFLAG(IS_MAC)
+class AccessPrivatePublicationDeadlineTest : public AccessPrivatePublicationTest {
+ protected:
+  AccessPrivatePublicationDeadlineTest() : AccessPrivatePublicationTest(TimeSource::MOCK_TIME) {}
+};
+
+TEST_F(AccessPrivatePublicationDeadlineTest, ExpiredAckOfUnchangedPolicyRequiresFreshSequence) {
+  HeldPrivateContext context;
+  ASSERT_TRUE(Bind(context));
+  base::test::TestFuture<bool> first, later;
+  transport_->PublishPrivatePolicy(Policy(), Common(), first.GetCallback());
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context.reply);
+  environment_.FastForwardBy(base::Seconds(30));
+  ASSERT_TRUE(first.IsReady());
+  EXPECT_FALSE(first.Get());
+
+  transport_->PublishPrivatePolicy(Policy(), Common(), later.GetCallback());
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(later.IsReady());
+  EXPECT_FALSE(later.Get());
+  EXPECT_EQ(context.install_count, 1u);
+  EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
+
+  context.Acknowledge();
+  environment_.RunUntilIdle();
+  EXPECT_EQ(context.install_count, 2u);
+  ASSERT_TRUE(context.reply);
+  EXPECT_EQ(context.snapshot->sequence, 2u);
+  EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
+  context.Acknowledge();
+  environment_.RunUntilIdle();
+  EXPECT_TRUE(transport_->HasCurrentPrivatePolicy(owner_, Common()));
+}
+
+TEST_F(AccessPrivatePublicationDeadlineTest, BindReplyAtDeadlineBeforeTimerIsRejected) {
+  HeldPrivateContext context;
+  context.hold_bind = true;
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &context, bound.GetCallback());
+  ASSERT_TRUE(context.bind_reply);
+  environment_.AdvanceClock(base::Seconds(30));
+  ASSERT_FALSE(bound.IsReady());
+  std::move(context.bind_reply).Run(context.incarnation);
+  ASSERT_TRUE(bound.IsReady());
+  EXPECT_FALSE(bound.Get());
+  environment_.RunUntilIdle();
+  EXPECT_TRUE(context.receivers.empty());
+}
+
+class AccessPrivateFactoryDeadlineTest : public AccessPrivatePublicationDeadlineTest {
+ protected:
+  void SetUp() override {
+    // The private terminal captures the base proxy configuration generation.
+    profile_ = TestingProfile::Builder()
+        .AddTestingFactory(ProfileNetworkContextServiceFactory::GetInstance(),
+            base::BindRepeating([](content::BrowserContext* context)
+                -> std::unique_ptr<KeyedService> {
+              return std::make_unique<ProfileNetworkContextService>(
+                  Profile::FromBrowserContext(context));
+            }))
+        .Build();
+    ASSERT_TRUE(ProfileNetworkContextServiceFactory::GetForContext(profile_.get()));
+    profile_->GetPrefs()->SetDict(proxy_config::prefs::kProxy,
+                                  ProxyConfigDictionary::CreateDirect());
+    environment_.RunUntilIdle();
+    ASSERT_NO_FATAL_FAILURE(ConfigureTransport(AccessChannelForCurrentBuild()));
+    auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile_.get());
+    ASSERT_TRUE(coordinator);
+    base::test::TestFuture<bool> restored;
+    coordinator->InitializeForProfile(owner_, restored.GetCallback());
+    environment_.RunUntilIdle();
+    ASSERT_TRUE(restored.IsReady());
+    ASSERT_TRUE(restored.Get());
+    network_.Bind(context_.BindNetworkContext());
+  }
+
+  void TearDown() override {
+    // Release Browser factories and clients while the fake context is alive.
+    transport_ = nullptr;
+    profile_.reset();
+    AccessPrivatePublicationDeadlineTest::TearDown();
+  }
+
+  mojo::Remote<network::mojom::URLLoaderFactory> StartBrowserFactory() {
+    network::URLLoaderFactoryBuilder builder;
+    AccessProxyingURLLoaderFactory::BindPrivateFactoryForTesting(
+        profile_.get(), owner_, builder);
+    EXPECT_TRUE(builder.RequiresFreshFactory());
+    auto params = network::mojom::URLLoaderFactoryParams::New();
+    params->process_id = network::OriginatingProcessId::browser();
+    return mojo::Remote<network::mojom::URLLoaderFactory>(
+        std::move(builder).Finish<mojo::PendingRemote<network::mojom::URLLoaderFactory>>(
+            network_.get(), std::move(params)));
+  }
+
+  HeldPrivateContext context_;
+  mojo::Remote<network::mojom::NetworkContext> network_;
+};
+
+TEST_F(AccessPrivateFactoryDeadlineTest, HeldBindClosesFactoryWithoutRetiringStalledContext) {
+  auto installing = StartBrowserFactory();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context_.reply);
+  ASSERT_EQ(context_.receivers.size(), 1u);
+  ASSERT_TRUE(installing.is_connected());
+
+  context_.hold_bind = true;
+  auto waiting = StartBrowserFactory();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context_.bind_reply);
+  ASSERT_EQ(context_.receivers.size(), 2u);
+  ASSERT_EQ(context_.install_count, 1u);
+  EXPECT_TRUE(waiting.is_connected());
+  environment_.FastForwardBy(base::Seconds(29));
+  EXPECT_TRUE(waiting.is_connected());
+  environment_.FastForwardBy(base::Seconds(1));
+  EXPECT_FALSE(waiting.is_connected());
+  EXPECT_FALSE(installing.is_connected());
+  EXPECT_TRUE(network_.is_connected());
+  EXPECT_EQ(context_.receivers.size(), 1u);
+  EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
+
+  std::move(context_.bind_reply).Run(context_.incarnation);
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(waiting.is_connected());
+  EXPECT_EQ(context_.install_count, 1u);
+  EXPECT_TRUE(context_.factory_receivers.empty());
+  EXPECT_EQ(context_.legacy_factory_count, 0u);
+
+  context_.Acknowledge();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context_.reply);
+  ASSERT_EQ(context_.install_count, 2u);
+  EXPECT_EQ(context_.snapshot->incarnation, context_.incarnation);
+  EXPECT_EQ(context_.snapshot->sequence, 2u);
+  EXPECT_TRUE(context_.factory_receivers.empty());
+  context_.Acknowledge();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(transport_->HasReadyPrivateContext(owner_));
+  context_.hold_bind = false;
+  auto rebound = StartBrowserFactory();
+  environment_.RunUntilIdle();
+  EXPECT_TRUE(rebound.is_connected());
+  ASSERT_EQ(context_.factory_receivers.size(), 1u);
+  EXPECT_EQ(context_.receivers.size(), 1u);
+  EXPECT_EQ(context_.install_count, 2u);
+  EXPECT_EQ(context_.legacy_factory_count, 0u);
+
+  auto target_pipe = context_.factory_receivers.front().PassPipe();
+  ASSERT_TRUE(target_pipe.is_valid());
+  EXPECT_FALSE(target_pipe->QuerySignalsState().peer_closed());
+  rebound.reset();
+  environment_.RunUntilIdle();
+  EXPECT_TRUE(target_pipe->QuerySignalsState().peer_closed());
+  EXPECT_TRUE(transport_->HasReadyPrivateContext(owner_));
+}
+
+TEST_F(AccessPrivateFactoryDeadlineTest, PrivatePipeClosureBeforeBindReplyClosesFactory) {
+  context_.hold_bind = true;
+  base::test::TestFuture<void> disconnected;
+  auto waiting = StartBrowserFactory();
+  waiting.set_disconnect_handler(disconnected.GetCallback());
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context_.bind_reply);
+  ASSERT_TRUE(waiting.is_connected());
+
+  context_.receivers.Clear();
+  environment_.RunUntilIdle();
+  EXPECT_TRUE(disconnected.IsReady());
+  EXPECT_FALSE(waiting.is_connected());
+  EXPECT_TRUE(network_.is_connected());
+  std::move(context_.bind_reply).Run(context_.incarnation);
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(waiting.is_connected());
+  EXPECT_EQ(context_.install_count, 0u);
+  EXPECT_TRUE(context_.factory_receivers.empty());
+  EXPECT_EQ(context_.legacy_factory_count, 0u);
+}
+
+TEST_F(AccessPrivateFactoryDeadlineTest, HeldCreateClosesFactoryAndFencesLateSuccess) {
+  context_.hold_factory = true;
+  auto waiting = StartBrowserFactory();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context_.reply);
+  context_.Acknowledge();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(context_.factory_reply);
+  ASSERT_EQ(context_.factory_receivers.size(), 1u);
+  ASSERT_TRUE(waiting.is_connected());
+  auto target_pipe = context_.factory_receivers.front().PassPipe();
+  ASSERT_TRUE(target_pipe.is_valid());
+  EXPECT_FALSE(target_pipe->QuerySignalsState().peer_closed());
+
+  environment_.FastForwardBy(base::Seconds(29));
+  EXPECT_TRUE(waiting.is_connected());
+  environment_.FastForwardBy(base::Seconds(1));
+  EXPECT_FALSE(waiting.is_connected());
+  EXPECT_TRUE(transport_->HasReadyPrivateContext(owner_));
+  EXPECT_TRUE(target_pipe->QuerySignalsState().peer_closed());
+  std::move(context_.factory_reply).Run(true);
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(waiting.is_connected());
+  EXPECT_TRUE(target_pipe->QuerySignalsState().peer_closed());
+  EXPECT_TRUE(network_.is_connected());
+  EXPECT_EQ(context_.receivers.size(), 1u);
+  EXPECT_TRUE(transport_->HasReadyPrivateContext(owner_));
+  EXPECT_EQ(context_.legacy_factory_count, 0u);
+}
+#endif
 
 TEST_F(AccessPrivatePublicationTest, LostContextRequiresFullNewIncarnationAck) {
   HeldPrivateContext old;

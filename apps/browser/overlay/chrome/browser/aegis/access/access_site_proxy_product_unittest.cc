@@ -8,11 +8,13 @@
 #include "chrome/browser/aegis/access/access_navigation_retry_tab_helper.h"
 #include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
 
+#include <algorithm>
 #include <string_view>
 
 #include "base/command_line.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/pending_task.h"
 #include "base/task/current_thread.h"
 #include "base/task/task_observer.h"
@@ -44,6 +46,18 @@
 #include "services/network/test/test_network_context.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#if BUILDFLAG(IS_MAC)
+#include <map>
+
+#include "base/auto_reset.h"
+#include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/test/simple_test_tick_clock.h"
+#include "base/test/task_environment.h"
+#include "base/uuid.h"
+#include "chrome/browser/aegis/access/access_options_service.h"
+#include "components/aegis_access/access_test_node_test_fixture.h"
+#endif
 
 namespace aegis::access {
 class AccessSiteProxyProductTestPeer {
@@ -59,6 +73,56 @@ class AccessSiteProxyProductTestPeer {
   static bool IsPreparing(AccessSiteProxyBubbleController* bubble) {
     return bubble->publication_in_flight_;
   }
+#if BUILDFLAG(IS_MAC)
+  static void PublishFakeLegacyRoute(
+      AccessSiteProxyBubbleController* bubble, const AccessSiteHost& host,
+      const OwnershipKey& owner, const std::string& registration,
+      base::OnceCallback<void(AccessMutationTransactionResult)> completion,
+      base::OnceClosure before_verification = {}) {
+    const AccessLocalCoreReady ready{
+        .ready = true,
+        .port = 23457,
+        .registration_id = registration,
+        .local_credentials = net::AuthCredentials(u"test-user", u"test-password"),
+    };
+    ASSERT_TRUE(bubble->RegisterPreparedCore(owner, ready));
+    bubble->BeginEnablePublication(
+        host, {owner, AccessSiteProxyBubbleController::LocalProxyGroup(owner)},
+        base::BindOnce(
+            [](base::WeakPtr<AccessSiteProxyBubbleController> bubble,
+               AccessSiteHost host, AccessLocalCoreReady ready,
+               base::OnceClosure before_verification,
+               base::OnceCallback<void(AccessMutationTransactionResult)> done,
+               AccessMutationTransactionResult result) {
+              if (result.status == AccessMutationTransactionStatus::kCommitted) {
+                bubble->AdoptWebsiteIntent(host, true);
+                // Supply the probe result after the real mutation and Mojo ACK.
+                bubble->verifying_host_ = host;
+                const auto attempt = ++bubble->committed_verification_attempt_;
+                if (before_verification) std::move(before_verification).Run();
+                bubble->OnCommittedCoreVerified(host, attempt, std::move(ready));
+              } else {
+                bubble->OnPublicationComplete(host, true, result);
+              }
+              std::move(done).Run(result);
+            }, bubble->weak_factory_.GetWeakPtr(), host, ready,
+            std::move(before_verification), std::move(completion)));
+  }
+
+  static base::OneShotTimer& SavedTestProfilePublicationTimer(
+      AccessSiteProxyBubbleController* bubble) {
+    return bubble->saved_test_profile_publication_timer_;
+  }
+  static void NotifyTestProfileCoreStopped(AccessOptionsService* options,
+                                           const std::string& registration) {
+    options->OnTestProfileCoreStopped(registration);
+  }
+  static auto OverrideSavedTestProfilePublicationClock(
+      AccessSiteProxyBubbleController* bubble, const base::TickClock* clock) {
+    return base::AutoReset<raw_ptr<const base::TickClock>>(
+        &bubble->saved_test_profile_publication_clock_, clock);
+  }
+#endif
   static void StopCore(AccessSiteProxyBubbleController* bubble,
                        base::OnceClosure completion) {
     bubble->local_core_->Stop(std::move(completion));
@@ -81,34 +145,49 @@ class AccessNetworkContextTransportTestPeer {
   static void AdvanceNetwork(AccessNetworkContextTransport* transport) {
     transport->OnNetworkChanged(net::NetworkChangeNotifier::CONNECTION_WIFI);
   }
+#if BUILDFLAG(IS_MAC)
+  static void ExpireInstall(AccessNetworkContextTransport* transport,
+      const OwnershipKey& owner, const std::string& incarnation) {
+    auto& entry = transport->partitions_.at(owner.storage_partition_token)
+                      .private_contexts.at(incarnation);
+    entry.install_deadline = base::TimeTicks::Now();
+    entry.install_timer.FireNow();
+  }
+#endif
 };
 namespace {
 
-// Cancel after the real transport has queued its ready callback, immediately
-// before it is delivered. The Mojo disconnect notification cannot run between
-// closing the caller and resuming that callback on this sequence.
-class CancelAtQueuedPolicyCompletion final : public base::TaskObserver {
+// Act on either side of the task delivering the real transport's callback.
+class RunAtQueuedPolicyCompletion final : public base::TaskObserver {
  public:
-  explicit CancelAtQueuedPolicyCompletion(base::OnceClosure cancel)
-      : cancel_(std::move(cancel)) {
+  enum class Phase { kBefore, kAfter };
+
+  explicit RunAtQueuedPolicyCompletion(base::OnceClosure action,
+                                       Phase phase = Phase::kBefore)
+      : action_(std::move(action)), phase_(phase) {
     base::CurrentThread::Get()->AddTaskObserver(this);
   }
-  ~CancelAtQueuedPolicyCompletion() override {
+  ~RunAtQueuedPolicyCompletion() override {
     base::CurrentThread::Get()->RemoveTaskObserver(this);
   }
   void WillProcessTask(const base::PendingTask& task, bool) override {
-    if (cancel_ && std::string_view(task.posted_from.function_name()).find(
-                       "SettlePrivatePublication") != std::string_view::npos) {
-      cancelled_ = true;
-      std::move(cancel_).Run();
-    }
+    if (phase_ == Phase::kBefore) MaybeRun(task);
   }
-  void DidProcessTask(const base::PendingTask&) override {}
-  bool cancelled() const { return cancelled_; }
+  void DidProcessTask(const base::PendingTask& task) override {
+    if (phase_ == Phase::kAfter) MaybeRun(task);
+  }
+  bool ran() const { return !action_; }
 
  private:
-  base::OnceClosure cancel_;
-  bool cancelled_ = false;
+  void MaybeRun(const base::PendingTask& task) {
+    if (action_ && std::string_view(task.posted_from.function_name()).find(
+                       "SettlePrivatePublication") != std::string_view::npos) {
+      std::move(action_).Run();
+    }
+  }
+
+  base::OnceClosure action_;
+  const Phase phase_;
 };
 
 // Act after the enable transaction's UI task commits ON and starts its
@@ -290,8 +369,7 @@ struct HeldRedirectBrowserRequest {
   std::unique_ptr<AccessProxyingURLLoaderFactory> wrapper;
 };
 
-// Real Mojo ACK with an explicit hold at the product PREPARED boundary. The
-// core is not mocked: these tests require the authorized local DEV inputs.
+// Real Mojo ACK with an explicit hold at the product publication boundary.
 class ProductAckContext final : public network::TestNetworkContext,
                                 public network::mojom::AegisAccessContext {
  public:
@@ -313,11 +391,17 @@ class ProductAckContext final : public network::TestNetworkContext,
       ack->registrations.push_back(
           network::mojom::AegisAccessRegistrationAck::New(
               endpoint->proxy_group_id, endpoint->registration_id,
-              endpoint->selection_generation));
+              endpoint->selection_generation, endpoint->transport,
+              endpoint->numeric_loopback_host, endpoint->port, endpoint->listener_binding.Clone()));
     for (const auto& group : snapshot->unavailable_groups)
       ack->unavailable_groups.push_back(group.Clone());
-    if (hold_next) {
+    if (hold_next ||
+        (!hold_next_registration.empty() &&
+         std::ranges::any_of(ack->registrations, [&](const auto& entry) {
+           return entry->registration_id == hold_next_registration;
+         }))) {
       hold_next = false;
+      hold_next_registration.clear();
       held_ack_ = std::move(ack);
       held_reply_ = std::move(callback);
     } else {
@@ -325,6 +409,15 @@ class ProductAckContext final : public network::TestNetworkContext,
     }
   }
   bool has_reply() const { return !!held_reply_; }
+  const network::mojom::AegisAccessSnapshotAck& held_ack() const {
+    return *held_ack_;
+  }
+  bool HoldsRegistration(std::string_view registration_id) const {
+    return held_ack_ &&
+           std::ranges::any_of(held_ack_->registrations, [&](const auto& entry) {
+             return entry->registration_id == registration_id;
+           });
+  }
   void Reply(bool accepted) {
     CHECK(held_reply_);
     held_ack_->accepted = accepted;
@@ -342,6 +435,7 @@ class ProductAckContext final : public network::TestNetworkContext,
     std::move(callback).Run(true);
   }
   bool hold_next = false;
+  std::string hold_next_registration;
   std::string incarnation = "product-test-context";
   void Disconnect() { receivers_.Clear(); }
 
@@ -362,6 +456,10 @@ class AccessSiteProxyProductTest : public testing::Test {
     }
 #endif
     ASSERT_TRUE(directory_.CreateUniqueTempDir());
+    ASSERT_NO_FATAL_FAILURE(OpenProfile());
+  }
+
+  void OpenProfile() {
     profile_ = TestingProfile::Builder()
         .SetPath(directory_.GetPath())
         .AddTestingFactory(ProfileNetworkContextServiceFactory::GetInstance(),
@@ -381,20 +479,30 @@ class AccessSiteProxyProductTest : public testing::Test {
     ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(
         profile_.get(), {}, &params));
     transport_ = AccessNetworkContextTransport::Get(profile_.get());
-    owner_ = *transport_->OwnerForPartition(AccessChannelForCurrentBuild(), {});
+    ASSERT_TRUE(transport_);
+    const auto owner =
+        transport_->OwnerForPartition(AccessChannelForCurrentBuild(), {});
+    ASSERT_TRUE(owner);
+    owner_ = *owner;
     coordinator_ = AccessServiceCoordinator::GetOrCreate(profile_.get());
+    ASSERT_TRUE(coordinator_);
     base::test::TestFuture<bool> restored;
     coordinator_->InitializeForProfile(owner_, restored.GetCallback());
+    ASSERT_TRUE(restored.Wait()) << "Profile store initialization did not complete";
     ASSERT_TRUE(restored.Get());
     base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
     transport_->BindPrivateContext(owner_, &context_, bound.GetCallback());
+    ASSERT_TRUE(bound.Wait()) << "Private NetworkContext bind did not complete";
     ASSERT_TRUE(bound.Get());
     auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+    ASSERT_TRUE(runtime);
     const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
     ASSERT_TRUE(common);
+    const auto* policy = runtime->GetPublishedPolicySnapshot(owner_);
+    ASSERT_TRUE(policy);
     base::test::TestFuture<bool> published;
-    transport_->PublishPrivatePolicy(*runtime->GetPublishedPolicySnapshot(owner_),
-                                    *common, published.GetCallback());
+    transport_->PublishPrivatePolicy(*policy, *common, published.GetCallback());
+    ASSERT_TRUE(published.Wait()) << "Initial private policy ACK did not arrive";
     ASSERT_TRUE(published.Get());
     bubble_ = AccessSiteProxyBubbleController::GetOrCreate(profile_.get());
     ASSERT_TRUE(bubble_);
@@ -424,6 +532,1187 @@ class AccessSiteProxyProductTest : public testing::Test {
   raw_ptr<AccessSiteProxyBubbleController> bubble_ = nullptr;
   OwnershipKey owner_;
 };
+
+#if BUILDFLAG(IS_MAC)
+namespace {
+class SavedProfileTestVault final : public AccessTestNodeVaultMac::Backend {
+ public:
+  using Rows = std::map<std::pair<std::string, std::string>, std::string>;
+  explicit SavedProfileTestVault(std::shared_ptr<Rows> rows)
+      : rows_(std::move(rows)) {}
+
+  AccessTestNodeVaultStatus Add(std::string_view service, std::string_view account,
+                               std::string_view secret) override {
+    return rows_->emplace(Key(service, account), secret).second
+        ? AccessTestNodeVaultStatus::kOk : AccessTestNodeVaultStatus::kUnavailable;
+  }
+  std::optional<std::string> Read(std::string_view service,
+                                  std::string_view account) override {
+    const auto found = rows_->find(Key(service, account));
+    return found == rows_->end() ? std::nullopt : std::make_optional(found->second);
+  }
+  AccessTestNodeVaultStatus Delete(std::string_view service,
+                                   std::string_view account) override {
+    rows_->erase(Key(service, account));
+    return AccessTestNodeVaultStatus::kOk;
+  }
+  std::optional<std::vector<std::string>> ListAccounts(
+      std::string_view service) override {
+    std::vector<std::string> accounts;
+    for (const auto& [key, secret] : *rows_) {
+      if (key.first == service) accounts.push_back(key.second);
+    }
+    return accounts;
+  }
+
+ private:
+  static std::pair<std::string, std::string> Key(
+      std::string_view service, std::string_view account) {
+    return {std::string(service), std::string(account)};
+  }
+  std::shared_ptr<Rows> rows_;
+};
+}  // namespace
+
+constexpr char kUnconfirmedTestProfileSwitchPolicy[] =
+    "The browser could not confirm the network policy for the test Profile "
+    "switch.";
+
+class AccessSavedTestProfileProductTest : public AccessSiteProxyProductTest {
+ protected:
+  void SetUp() override {
+    if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kActivate)) {
+      GTEST_SKIP() << "Requires an admitted internal build.";
+    }
+    ASSERT_TRUE(directory_.CreateUniqueTempDir());
+    ASSERT_NO_FATAL_FAILURE(OpenProfile());
+    auto* options = InstallOptions();
+    ASSERT_TRUE(options);
+    const auto editor = options->BeginTestNodeEditor();
+    ASSERT_TRUE(editor);
+    base::test::TestFuture<TestNodePreviewResult> preview;
+    options->PreviewTestNodeText(*editor, aegis_access::test::kSyntheticTestNodeShare,
+                                 preview.GetCallback());
+    ASSERT_TRUE(preview.Wait()) << "Test node preview did not complete";
+    ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
+    aegis_access::AccessInboundPreferences inbound;
+    inbound.protocol = aegis_access::AccessInboundProtocolPreference::kSocks5;
+    base::test::TestFuture<AccessTestProfileSaveResult> saved;
+    options->SaveTestNodeProfile(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+                                 "Synthetic", inbound, saved.GetCallback());
+    ASSERT_TRUE(saved.Wait()) << "Test Profile save did not complete";
+    ASSERT_EQ(saved.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
+    ASSERT_TRUE(saved.Get().snapshot && saved.Get().snapshot->test_profile);
+    options_before_ = *saved.Get().snapshot;
+    options->EndTestNodeEditor(*editor);
+
+    const auto& saved_profile = *options_before_.test_profile;
+    group_ = "internal-test-profile:" + saved_profile.configuration.id + ":" +
+             base::NumberToString(saved_profile.version);
+    ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+    ASSERT_NO_FATAL_FAILURE(PublishInitialTestProfile(options));
+    previous_registration_ = options->test_profile_runtime().registration_id;
+    const auto committed =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    ASSERT_TRUE(committed.value && committed.value->site_groups.size() == 1u);
+
+    base::test::TestFuture<bool> revoked;
+    ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+                                                         revoked.GetCallback()));
+    ASSERT_TRUE(revoked.Wait()) << SavedProfileState(options);
+    ASSERT_TRUE(revoked.Get()) << SavedProfileState(options);
+
+    bubble_ = nullptr;
+    transport_ = nullptr;
+    coordinator_ = nullptr;
+    profile_.reset();
+    environment_.RunUntilIdle();
+    ASSERT_NO_FATAL_FAILURE(OpenProfile());
+    options = InstallOptions();
+    ASSERT_TRUE(options);
+    bubble_->EnsureProfileRestored(owner_);
+    const auto restored =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    // The reopened store rebinds durable policy rows to the new runtime owner.
+    ASSERT_TRUE(owner_ != committed.value->owner);
+    ASSERT_TRUE(restored.value && restored.value->owner == owner_);
+    ASSERT_EQ(restored.value->policy_generation, committed.value->policy_generation);
+    ASSERT_EQ(restored.value->site_groups.size(), 1u);
+    const auto& site = restored.value->site_groups.front();
+    ASSERT_EQ(site.group.revision, committed.value->site_groups.front().group.revision);
+    ASSERT_FALSE(site.members.empty());
+    for (const auto& rule : site.members) {
+      ASSERT_EQ(rule.policy.mode, AccessMode::kProxy);
+      ASSERT_TRUE(rule.policy.proxy_group_id == group_);
+    }
+    ASSERT_EQ(Snapshot().intent, AccessSiteIntent::kAllow)
+        << SavedProfileState(options);
+    ASSERT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable)
+        << SavedProfileState(options);
+    ASSERT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+    ASSERT_TRUE(options->CanRestoreSavedTestNodeProfile()) << SavedProfileState(options);
+  }
+
+  AccessOptionsService* InstallOptions() {
+    // Only the native core preparation is synthetic. The service first reads
+    // from the persisted store and resolves the reference through the Vault.
+    return AccessOptionsService::InstallForTesting(
+        profile_.get(), std::make_unique<SavedProfileTestVault>(vault_rows_),
+        base::BindRepeating([](const AccessInternalTestCoreBindingMac& binding) {
+          return AccessLocalCoreReady{
+              .ready = true,
+              .port = 23456,
+              .registration_id = base::Uuid::GenerateRandomV4().AsLowercaseString(),
+              .transport = binding.selected_transport,
+              .no_local_auth = true,
+              .profile_id = binding.profile_id,
+              .profile_version = binding.profile_version,
+              .authorization_generation = binding.authorization_generation,
+              .listener_socket_generation = binding.authorization_generation,
+              .parent_listener_lease_held = true,
+          };
+        }));
+  }
+
+  void PrepareExplicitly(AccessOptionsService* options) {
+    base::test::TestFuture<AccessLocalCoreReady> prepared;
+    options->PrepareTestNodeProfile(options_before_.revision, prepared.GetCallback());
+    ASSERT_TRUE(prepared.Wait()) << SavedProfileState(options);
+    ASSERT_TRUE(prepared.Get().ready) << SavedProfileState(options);
+  }
+
+  void PublishInitialTestProfile(AccessOptionsService* options) {
+    context_.hold_next = true;
+    ASSERT_TRUE(bubble_->RequestTestProfileForSite({"news.example"}))
+        << SavedProfileState(options);
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return context_.has_reply() ||
+             !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+    })) << "Waiting for manual publication ACK. " << SavedProfileState(options);
+    ASSERT_NO_FATAL_FAILURE(AssertHeldTestProfileAck(options));
+
+    context_.Reply(true);
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+    })) << "Waiting for manual publication to settle after ACK. "
+        << SavedProfileState(options);
+    ASSERT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady)
+        << SavedProfileState(options);
+    ASSERT_EQ(Snapshot().intent, AccessSiteIntent::kAllow) << SavedProfileState(options);
+    const auto active = options->test_profile_runtime();
+    ASSERT_TRUE(active.ready) << SavedProfileState(options);
+    ASSERT_TRUE(HasAcknowledgedListener(active)) << SavedProfileState(options);
+  }
+
+  void WaitForRestoreAck(base::test::TestFuture<bool>& completion) {
+    auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return context_.has_reply() || completion.IsReady();
+    })) << "Waiting for saved Profile publication ACK. " << SavedProfileState(options);
+    ASSERT_NO_FATAL_FAILURE(AssertHeldTestProfileAck(options));
+    ASSERT_FALSE(completion.IsReady()) << SavedProfileState(options);
+  }
+
+  void AssertHeldTestProfileAck(AccessOptionsService* options,
+                               const char* host = "news.example") {
+    const auto runtime = options->test_profile_runtime();
+    ASSERT_TRUE(context_.HoldsRegistration(runtime.registration_id))
+        << SavedProfileState(options);
+    ASSERT_EQ(Snapshot(host).connection, AccessSiteConnectionState::kConnecting)
+        << SavedProfileState(options);
+    ASSERT_EQ(options->test_profile_runtime_state(),
+              AccessTestProfileRuntimeState::kPublishing)
+        << SavedProfileState(options);
+    ASSERT_FALSE(runtime.ready) << SavedProfileState(options);
+    ASSERT_FALSE(HasAcknowledgedListener(runtime)) << SavedProfileState(options);
+  }
+
+  bool HasAcknowledgedListener(const AccessLocalCoreReady& runtime) {
+    const auto* published = AccessPublishedRequestRuntime::Get(profile_.get());
+    const auto common = published
+        ? published->CaptureCommonGenerationTupleOnUiThread(owner_)
+        : std::nullopt;
+    return common && transport_->HasAcknowledgedTestListener(
+                         owner_, *common, group_, runtime.registration_id);
+  }
+
+  std::string SavedProfileState(AccessOptionsService* options) {
+    const auto snapshot = Snapshot();
+    const auto runtime = options->test_profile_runtime();
+    return (testing::Message()
+            << "site=" << AccessSiteConnectionStateToString(snapshot.connection)
+            << " intent=" << static_cast<int>(snapshot.intent)
+            << " runtime_state="
+            << static_cast<int>(options->test_profile_runtime_state())
+            << " runtime_ready=" << runtime.ready
+            << " ack_held=" << context_.has_reply()
+            << " registration_in_held_ack="
+            << context_.HoldsRegistration(runtime.registration_id)
+            << " listener_acknowledged=" << HasAcknowledgedListener(runtime)
+            << " can_dispatch=" << coordinator_->CanDispatch(owner_))
+        .GetString();
+  }
+
+  void ExpectBlockedWithoutRestoring() {
+    base::test::TestFuture<bool> blocked;
+    bubble_->EnsureLocalCoreForRequest(owner_, group_, blocked.GetCallback());
+    ASSERT_TRUE(blocked.Wait())
+        << SavedProfileState(AccessOptionsService::GetOrCreate(profile_.get()));
+    EXPECT_FALSE(blocked.Get());
+    EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+    EXPECT_EQ(Snapshot().intent, AccessSiteIntent::kAllow);
+    EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+  }
+
+  void HoldRevokedLegacyRollback(const AccessSiteHost& host,
+                                 const std::string& registration) {
+    auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+    ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+    context_.hold_next = true;
+    ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+    ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+    ASSERT_NO_FATAL_FAILURE(AssertHeldTestProfileAck(options, host.value.c_str()));
+    ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
+        options_before_.revision, base::DoNothing()));
+
+    // Retirement can publish before rollback. Hold the install that restores
+    // this legacy registration specifically.
+    context_.hold_next_registration = registration;
+    context_.Reply(true);
+    ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+    ASSERT_TRUE(context_.HoldsRegistration(registration));
+    ASSERT_TRUE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+  }
+
+  void PublishLegacyRoute(const AccessSiteHost& host,
+                          const std::string& registration,
+                          base::OnceClosure before_verification = {}) {
+    base::test::TestFuture<AccessMutationTransactionResult> published;
+    ASSERT_NO_FATAL_FAILURE(AccessSiteProxyProductTestPeer::PublishFakeLegacyRoute(
+        bubble_, host, owner_, registration, published.GetCallback(),
+        std::move(before_verification)));
+    ASSERT_TRUE(published.Wait());
+    ASSERT_EQ(published.Get().status, AccessMutationTransactionStatus::kCommitted);
+    ASSERT_EQ(Snapshot(host.value.c_str()).connection,
+              AccessSiteConnectionState::kReady);
+  }
+
+  enum class SwitchFailure {
+    kRejectedAck,
+    kRejectedAckWithLateRollback,
+    kCandidateStopped,
+    kCommitFailed,
+  };
+
+  void ExpectFailedTestProfileSwitchAfterLegacyRollback(SwitchFailure failure) {
+    const AccessSiteHost host{"legacy-example.com"};
+    const std::string registration = "legacy-local-registration";
+    const auto legacy_group =
+        AccessSiteProxyBubbleController::LocalProxyGroup(owner_);
+    ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(host, registration));
+    const auto before =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    ASSERT_TRUE(before.value);
+
+    auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+    ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+    context_.hold_next = true;
+    ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+    ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+    ASSERT_NO_FATAL_FAILURE(
+        AssertHeldTestProfileAck(options, host.value.c_str()));
+    const auto candidate_registration =
+        options->test_profile_runtime().registration_id;
+    const bool fail_commit = failure == SwitchFailure::kCommitFailed;
+    const char* expected_failure = kUnconfirmedTestProfileSwitchPolicy;
+    if (fail_commit) {
+      AccessServiceCoordinatorTestPeer::SetFailure(
+          coordinator_,
+          AccessRuleStore::FailurePointForTesting::kCommitAfterFirstMemberInsert);
+      expected_failure = "The test Profile switch could not be saved.";
+    }
+    context_.hold_next_registration = registration;
+    context_.Reply(/*accepted=*/fail_commit);
+    ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+    ASSERT_TRUE(context_.HoldsRegistration(registration));
+
+    const auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+    const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+    ASSERT_TRUE(common);
+    ASSERT_GT(common->policy_generation, before.value->policy_generation);
+    ASSERT_EQ(context_.held_ack().common_generations->policy_generation,
+              common->policy_generation);
+    const auto legacy_acknowledged = [&] {
+      return transport_->HasAcknowledgedLegacyProxy(owner_, *common,
+                                                    legacy_group, registration);
+    };
+    EXPECT_FALSE(legacy_acknowledged());
+    if (failure == SwitchFailure::kCandidateStopped) {
+      ASSERT_FALSE(context_.HoldsRegistration(candidate_registration));
+      ASSERT_EQ(options->test_profile_runtime_state(),
+                AccessTestProfileRuntimeState::kPublishing);
+      AccessSiteProxyProductTestPeer::NotifyTestProfileCoreStopped(
+          options, candidate_registration);
+      ASSERT_EQ(options->test_profile_runtime_state(),
+                AccessTestProfileRuntimeState::kRevoking);
+      EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+      // A UI Revoke can join the retirement the core stop already started.
+      ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
+          options_before_.revision, base::DoNothing()));
+      EXPECT_TRUE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+    }
+    if (failure == SwitchFailure::kRejectedAckWithLateRollback) {
+      const auto expired_sequence = context_.held_ack().sequence;
+      AccessNetworkContextTransportTestPeer::ExpireInstall(
+          transport_, owner_, context_.incarnation);
+      ASSERT_TRUE(base::test::RunUntil([&] {
+        return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+      }));
+      EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+                AccessSiteConnectionState::kUnavailable);
+
+      context_.hold_next_registration = registration;
+      context_.Reply(true);
+      ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+      ASSERT_TRUE(context_.HoldsRegistration(registration));
+      EXPECT_GT(context_.held_ack().sequence, expired_sequence);
+      EXPECT_EQ(context_.held_ack().common_generations->policy_generation,
+                common->policy_generation);
+      EXPECT_FALSE(legacy_acknowledged());
+      EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+                AccessSiteConnectionState::kUnavailable);
+    }
+
+    context_.Reply(true);
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_) &&
+             legacy_acknowledged();
+    }));
+    if (fail_commit) {
+      AccessServiceCoordinatorTestPeer::SetFailure(
+          coordinator_, AccessRuleStore::FailurePointForTesting::kNone);
+    }
+    const auto after =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    EXPECT_EQ(after.value, before.value);
+    const auto snapshot = Snapshot(host.value.c_str());
+    EXPECT_EQ(snapshot.intent, AccessSiteIntent::kAllow);
+    EXPECT_EQ(snapshot.connection, AccessSiteConnectionState::kReady);
+    EXPECT_EQ(snapshot.failure_reason, expected_failure);
+
+    AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+    EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+              AccessSiteConnectionState::kUnavailable);
+  }
+
+  void ExpectFaultSurvivesLegacyRollback(bool wait,
+                                         bool expire_rollback,
+                                         bool fault_before_switch = false) {
+    const AccessSiteHost host{"legacy-example.com"};
+    const std::string registration = "legacy-local-registration";
+    const auto legacy_group =
+        AccessSiteProxyBubbleController::LocalProxyGroup(owner_);
+    ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(host, registration));
+    const auto before =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    ASSERT_TRUE(before.value);
+
+    const auto expected_state = wait ? AccessSiteConnectionState::kConnecting
+                                     : AccessSiteConnectionState::kUnavailable;
+    const auto expected_reason = AccessSiteProxySessionErrorReadableMessage(
+        AccessSiteProxySessionError::kRuntimeFault,
+        wait ? "waiting for node recovery" : "node or runtime unavailable");
+    const auto expect_fault = [&] {
+      const auto snapshot = Snapshot(host.value.c_str());
+      EXPECT_EQ(snapshot.intent, AccessSiteIntent::kAllow);
+      EXPECT_EQ(snapshot.connection, expected_state);
+      EXPECT_EQ(snapshot.failure_reason, expected_reason);
+    };
+    if (fault_before_switch) {
+      ASSERT_TRUE(bubble_->NotifyHostProxyRuntimeFault(host, wait));
+      expect_fault();
+    }
+
+    ASSERT_NO_FATAL_FAILURE(HoldRevokedLegacyRollback(host, registration));
+    auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+    const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+    ASSERT_TRUE(common);
+    ASSERT_GT(common->policy_generation, before.value->policy_generation);
+    ASSERT_EQ(context_.held_ack().common_generations->policy_generation,
+              common->policy_generation);
+
+    if (!fault_before_switch) {
+      ASSERT_TRUE(bubble_->NotifyHostProxyRuntimeFault(host, wait));
+      expect_fault();
+    }
+    EXPECT_FALSE(bubble_->RequestHostProxySession(host, false));
+    if (!fault_before_switch) expect_fault();
+
+    if (expire_rollback) {
+      const auto expired_sequence = context_.held_ack().sequence;
+      AccessNetworkContextTransportTestPeer::ExpireInstall(
+          transport_, owner_, context_.incarnation);
+      ASSERT_TRUE(base::test::RunUntil([&] {
+        return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+      }));
+      ASSERT_TRUE(coordinator_->CanDispatch(owner_));
+      expect_fault();
+
+      context_.hold_next_registration = registration;
+      context_.Reply(true);
+      ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+      ASSERT_TRUE(context_.HoldsRegistration(registration));
+      EXPECT_GT(context_.held_ack().sequence, expired_sequence);
+      EXPECT_EQ(context_.held_ack().common_generations->policy_generation,
+                common->policy_generation);
+      EXPECT_FALSE(transport_->HasAcknowledgedLegacyProxy(
+          owner_, *common, legacy_group, registration));
+      expect_fault();
+    }
+
+    context_.Reply(true);
+    ASSERT_TRUE(base::test::RunUntil([&] {
+      return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_) &&
+             transport_->HasAcknowledgedLegacyProxy(
+                 owner_, *common, legacy_group, registration);
+    }));
+    expect_fault();
+    EXPECT_TRUE(coordinator_->CanDispatch(owner_));
+    EXPECT_EQ(Snapshot("www.legacy-example.com").failure_reason, expected_reason);
+    const auto after =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    EXPECT_EQ(after.value, before.value);
+    const auto original = AccessRuleStore::AdaptMatcherSnapshot(*before.value);
+    ASSERT_TRUE(original.value);
+    const auto* published = runtime->GetPublishedPolicySnapshot(owner_);
+    ASSERT_TRUE(published);
+    EXPECT_EQ(published->rules, original.value->rules);
+    EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+    EXPECT_EQ(Snapshot().intent, AccessSiteIntent::kAllow);
+    EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+  }
+
+  // Keep SQLite and Mojo startup on the real clock.
+  base::test::ScopedRunLoopTimeout saved_profile_timeout_{FROM_HERE,
+                                                        base::Seconds(15)};
+  std::shared_ptr<SavedProfileTestVault::Rows> vault_rows_ =
+      std::make_shared<SavedProfileTestVault::Rows>();
+  AccessOptionsSnapshot options_before_;
+  std::string group_;
+  std::string previous_registration_;
+};
+
+TEST_F(AccessSavedTestProfileProductTest, PersistedBindingWaitsForExactAckAfterRestart) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  const auto before = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(before.value);
+  base::test::TestFuture<bool> wrong_group;
+  bubble_->EnsureLocalCoreForRequest(owner_,
+      "internal-test-profile:550e8400-e29b-41d4-a716-446655440000:1",
+      wrong_group.GetCallback());
+  ASSERT_TRUE(wrong_group.Wait()) << SavedProfileState(options);
+  EXPECT_FALSE(wrong_group.Get());
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+
+  context_.hold_next = true;
+  base::test::TestFuture<bool> first, second;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, first.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(first));
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, second.GetCallback());
+  EXPECT_FALSE(first.IsReady());
+  EXPECT_FALSE(second.IsReady());
+  EXPECT_FALSE(options->test_profile_runtime().ready);
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kConnecting);
+  const auto endpoint = transport_->PreparedProxyForGroup(owner_, group_);
+  ASSERT_TRUE(endpoint);
+  EXPECT_NE(endpoint->registration_id, previous_registration_);
+  EXPECT_EQ(endpoint->transport, aegis_access::RegisteredProxyTransport::kSocks5);
+
+  context_.Reply(true);
+  ASSERT_TRUE(first.Wait()) << SavedProfileState(options);
+  ASSERT_TRUE(second.Wait()) << SavedProfileState(options);
+  EXPECT_TRUE(first.Get());
+  EXPECT_TRUE(second.Get());
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady)
+      << SavedProfileState(options);
+  const auto after = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(after.value);
+  EXPECT_EQ(after.value->policy_generation, before.value->policy_generation);
+  EXPECT_EQ(after.value->site_groups, before.value->site_groups);
+  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> stored;
+  options->Read(stored.GetCallback());
+  ASSERT_TRUE(stored.Wait()) << "Saved test Profile read did not complete";
+  ASSERT_TRUE(stored.Get().value);
+  EXPECT_EQ(stored.Get().value->revision, options_before_.revision);
+  EXPECT_EQ(stored.Get().value->test_profile, options_before_.test_profile);
+
+  base::test::TestFuture<bool> revoked;
+  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+                                                       revoked.GetCallback()));
+  ASSERT_TRUE(revoked.Wait()) << SavedProfileState(options);
+  ASSERT_TRUE(revoked.Get());
+  ExpectBlockedWithoutRestoring();
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+}
+
+TEST_F(AccessSavedTestProfileProductTest, RejectedAckKeepsSavedProxyUnavailable) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  context_.hold_next = true;
+  base::test::TestFuture<bool> result;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, result.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(result));
+  context_.Reply(false);
+  ASSERT_TRUE(result.Wait()) << SavedProfileState(options);
+  EXPECT_FALSE(result.Get());
+  environment_.RunUntilIdle();
+  ExpectBlockedWithoutRestoring();
+}
+
+TEST_F(AccessSavedTestProfileProductTest, MissingVaultBindingKeepsSavedProxyUnavailable) {
+  vault_rows_->clear();
+  ExpectBlockedWithoutRestoring();
+  EXPECT_EQ(AccessOptionsService::GetOrCreate(profile_.get())->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kIdle);
+  ExpectBlockedWithoutRestoring();
+}
+
+TEST_F(AccessSavedTestProfileProductTest, ChangedNetworkTupleFencesHeldAck) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  context_.hold_next = true;
+  base::test::TestFuture<bool> first, changed;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, first.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(first));
+  AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, changed.GetCallback());
+  ASSERT_TRUE(changed.IsReady());
+  EXPECT_FALSE(changed.Get());
+  EXPECT_FALSE(first.IsReady());
+
+  context_.Reply(true);
+  ASSERT_TRUE(first.Wait()) << SavedProfileState(options);
+  EXPECT_FALSE(first.Get());
+  environment_.RunUntilIdle();
+  ExpectBlockedWithoutRestoring();
+}
+
+TEST_F(AccessSavedTestProfileProductTest, MissingAckFailsColdRestoreAndLaterRequests) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  context_.hold_next = true;
+  base::test::TestFuture<bool> result;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, result.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(result));
+
+  AccessNetworkContextTransportTestPeer::ExpireInstall(
+      transport_, owner_, context_.incarnation);
+  ASSERT_TRUE(result.Wait()) << SavedProfileState(options);
+  EXPECT_FALSE(result.Get());
+  ExpectBlockedWithoutRestoring();
+
+  const auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+  const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+  ASSERT_TRUE(common);
+  const auto* policy = runtime->GetPublishedPolicySnapshot(owner_);
+  ASSERT_TRUE(policy);
+  base::test::TestFuture<bool> later;
+  transport_->PublishPrivatePolicy(*policy, *common, later.GetCallback());
+  ASSERT_TRUE(later.Wait());
+  EXPECT_FALSE(later.Get());
+
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &context_, bound.GetCallback());
+  ASSERT_TRUE(bound.Wait());
+  ASSERT_TRUE(bound.Get());
+  // The metadata-free fake has no live frame and only tests publication failure.
+  HeldBrowserRequest request(profile_.get(),
+                             content::FrameTreeNodeId::FromUnsafeValue(1),
+                             owner_, bound.Take());
+  request.StartPost();
+  ASSERT_TRUE(base::test::RunUntil([&] { return request.client.has_received_completion(); }));
+  EXPECT_EQ(request.client.completion_status().error_code, net::ERR_NETWORK_CHANGED);
+  EXPECT_EQ(request.target.starts, 0);
+
+  EXPECT_TRUE(context_.has_reply());
+  EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kUncertain);
+  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
+}
+
+TEST_F(AccessSavedTestProfileProductTest, MissingAckTimesOutAndLateAckCannotDispatch) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  context_.hold_next = true;
+  base::test::TestFuture<bool> result;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, result.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(result));
+
+  auto& timer =
+      AccessSiteProxyProductTestPeer::SavedTestProfilePublicationTimer(bubble_);
+  ASSERT_TRUE(timer.IsRunning()) << SavedProfileState(options);
+  timer.FireNow();
+  ASSERT_TRUE(result.IsReady()) << SavedProfileState(options);
+  EXPECT_FALSE(result.Get());
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kRevoking);
+  AccessNetworkContextTransportTestPeer::ExpireInstall(
+      transport_, owner_, context_.incarnation);
+  environment_.RunUntilIdle();
+  ASSERT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kUncertain);
+  ASSERT_TRUE(context_.has_reply());
+  const auto expired_sequence = context_.held_ack().sequence;
+
+  context_.hold_next = true;
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  EXPECT_GT(context_.held_ack().sequence, expired_sequence);
+  EXPECT_TRUE(context_.held_ack().registrations.empty());
+  ASSERT_EQ(context_.held_ack().unavailable_groups.size(), 1u);
+  EXPECT_EQ(context_.held_ack().unavailable_groups.front()->proxy_group_id, group_);
+  EXPECT_NE(context_.held_ack().unavailable_groups.front()->selection_generation, 0u);
+  EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
+  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
+  base::test::TestFuture<AccessLocalCoreReady> blocked_preparation;
+  options->PrepareTestNodeProfile(options_before_.revision,
+                                  blocked_preparation.GetCallback());
+  EXPECT_FALSE(blocked_preparation.Get().ready);
+
+  base::test::TestFuture<bool> revoked;
+  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+                                                       revoked.GetCallback()));
+  EXPECT_FALSE(revoked.IsReady());
+  context_.Reply(true);
+  ASSERT_TRUE(revoked.Wait());
+  EXPECT_TRUE(revoked.Get());
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+  ExpectBlockedWithoutRestoring();
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+}
+
+TEST_F(AccessSavedTestProfileProductTest, AckAfterDeadlineBeforeColdTimerCannotActivate) {
+  base::SimpleTestTickClock publication_clock;
+  publication_clock.SetNowTicks(base::TimeTicks::Now());
+  auto clock_override = AccessSiteProxyProductTestPeer::OverrideSavedTestProfilePublicationClock(
+      bubble_, &publication_clock);
+  context_.hold_next = true;
+  base::test::TestFuture<bool> result;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, result.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(result));
+  publication_clock.Advance(base::Seconds(30));
+  ASSERT_TRUE(AccessSiteProxyProductTestPeer::SavedTestProfilePublicationTimer(bubble_)
+                  .IsRunning());
+  context_.Reply(true);
+  ASSERT_TRUE(result.Wait());
+  EXPECT_FALSE(result.Get());
+  EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+  ExpectBlockedWithoutRestoring();
+}
+
+TEST_F(AccessSavedTestProfileProductTest, NetworkChangeHidesActiveListenerButKeepsRevocation) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Wait());
+  ASSERT_TRUE(restored.Get());
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+
+  AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
+  EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+  EXPECT_TRUE(options->CanRevokeTestNodeProfileAtRevision(options_before_.revision));
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+}
+
+TEST_F(AccessSavedTestProfileProductTest, RevokingHeldExplicitPublicationSettlesOriginalSite) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+  context_.hold_next = true;
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite({"other.example"}));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kPublishing);
+  ASSERT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kConnecting);
+  base::test::TestFuture<bool> revoked;
+  EXPECT_FALSE(options->CanRevokeTestNodeProfileAtRevision(options_before_.revision + 1));
+  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+                                                       revoked.GetCallback()));
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kOff);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kIdle);
+  EXPECT_TRUE(Snapshot("other.example").failure_reason.empty());
+  EXPECT_EQ(Snapshot().intent, AccessSiteIntent::kAllow);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RejectedTestProfileSwitchReportsFailureAfterLegacyRollback) {
+  ExpectFailedTestProfileSwitchAfterLegacyRollback(SwitchFailure::kRejectedAck);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RejectedTestProfileSwitchReportsFailureAfterLateLegacyAck) {
+  ExpectFailedTestProfileSwitchAfterLegacyRollback(
+      SwitchFailure::kRejectedAckWithLateRollback);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       CandidateStopDuringRejectedSwitchRollbackStillReportsFailure) {
+  // The held rollback can acknowledge the legacy route as-is once the
+  // candidate stops because no other website uses the test Profile.
+  ASSERT_TRUE(bubble_->RequestHostProxySession({"news.example"}, false));
+  ASSERT_NO_FATAL_FAILURE(WaitFor(AccessSiteConnectionState::kIdle));
+  ASSERT_EQ(Snapshot().intent, AccessSiteIntent::kOff);
+  ExpectFailedTestProfileSwitchAfterLegacyRollback(
+      SwitchFailure::kCandidateStopped);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       AcknowledgedTestProfileSwitchReportsDurableSaveFailure) {
+  ExpectFailedTestProfileSwitchAfterLegacyRollback(SwitchFailure::kCommitFailed);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       StalePositiveSwitchAckReportsUnconfirmedPolicy) {
+  const AccessSiteHost host{"other.example"};
+  const auto before =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(before.value);
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+  context_.hold_next = true;
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_NO_FATAL_FAILURE(AssertHeldTestProfileAck(options, host.value.c_str()));
+  const auto candidate = options->test_profile_runtime();
+
+  RunAtQueuedPolicyCompletion advance_epoch(base::BindLambdaForTesting([&] {
+    EXPECT_TRUE(HasAcknowledgedListener(candidate));
+    AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+  }));
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  ASSERT_TRUE(advance_epoch.ran());
+  const auto after =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  EXPECT_EQ(after.value, before.value);
+  const auto snapshot = Snapshot(host.value.c_str());
+  EXPECT_EQ(snapshot.intent, AccessSiteIntent::kOff);
+  EXPECT_EQ(snapshot.connection, AccessSiteConnectionState::kUnavailable);
+  EXPECT_EQ(snapshot.failure_reason, kUnconfirmedTestProfileSwitchPolicy);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       CandidateStopAfterPositiveSwitchAckStillReportsSaved) {
+  const AccessSiteHost host{"legacy-example.com"};
+  ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(host, "legacy-local-registration"));
+  const auto before =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(before.value);
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+  context_.hold_next = true;
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_NO_FATAL_FAILURE(AssertHeldTestProfileAck(options, host.value.c_str()));
+  const auto candidate = options->test_profile_runtime();
+  const auto generation =
+      context_.held_ack().common_generations->policy_generation;
+  ASSERT_GT(generation, before.value->policy_generation);
+
+  {
+    // Deliver the positive ACK on UI while the real SQLite commit is queued.
+    base::test::TaskEnvironment::ParallelExecutionFence hold_commit;
+    base::RunLoop ack_consumed;
+    RunAtQueuedPolicyCompletion after_ack(
+        ack_consumed.QuitClosure(), RunAtQueuedPolicyCompletion::Phase::kAfter);
+    context_.Reply(true);
+    ack_consumed.Run();
+    ASSERT_TRUE(after_ack.ran());
+    ASSERT_TRUE(HasAcknowledgedListener(candidate));
+    ASSERT_TRUE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+    ASSERT_EQ(options->test_profile_runtime_state(),
+              AccessTestProfileRuntimeState::kPublishing);
+    const auto still_committed =
+        coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+    ASSERT_EQ(still_committed.value, before.value);
+
+    AccessSiteProxyProductTestPeer::NotifyTestProfileCoreStopped(
+        options, candidate.registration_id);
+    EXPECT_EQ(options->test_profile_runtime_state(),
+              AccessTestProfileRuntimeState::kRevoking);
+    EXPECT_FALSE(HasAcknowledgedListener(candidate));
+  }
+
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_) &&
+           options->test_profile_runtime_state() ==
+               AccessTestProfileRuntimeState::kIdle;
+  }));
+  const auto after =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(after.value);
+  EXPECT_EQ(after.value->policy_generation, generation);
+  const auto saved =
+      std::ranges::find_if(after.value->site_groups, [&](const auto& row) {
+        return row.group.website_context && row.group.canonical_host == host.value;
+      });
+  ASSERT_NE(saved, after.value->site_groups.end());
+  ASSERT_FALSE(saved->members.empty());
+  for (const auto& member : saved->members) {
+    EXPECT_EQ(member.policy.mode, AccessMode::kProxy);
+    EXPECT_EQ(member.policy.proxy_group_id, group_);
+  }
+  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+  EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+  const auto snapshot = Snapshot(host.value.c_str());
+  EXPECT_EQ(snapshot.intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(snapshot.connection, AccessSiteConnectionState::kUnavailable);
+  EXPECT_EQ(snapshot.failure_reason,
+            "The test Profile switch was saved. Its original connection "
+            "could not be confirmed.");
+
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite({"other.example"}));
+  ASSERT_NO_FATAL_FAILURE(
+      WaitFor(AccessSiteConnectionState::kReady, "other.example"));
+  const auto successor = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(successor);
+  EXPECT_NE(successor->registration_id, candidate.registration_id);
+  EXPECT_FALSE(HasAcknowledgedListener(candidate));
+  const auto with_successor = Snapshot(host.value.c_str());
+  EXPECT_EQ(with_successor.connection, AccessSiteConnectionState::kReady);
+  EXPECT_EQ(with_successor.failure_reason, snapshot.failure_reason);
+}
+
+TEST_F(AccessSavedTestProfileProductTest, RevokingPendingSwitchRestoresAcknowledgedLegacyRoute) {
+  const AccessSiteHost host{"other.example"};
+  const std::string registration = "legacy-local-registration";
+  base::test::TestFuture<AccessMutationTransactionResult> initial_legacy;
+  ASSERT_NO_FATAL_FAILURE(AccessSiteProxyProductTestPeer::PublishFakeLegacyRoute(
+      bubble_, host, owner_, registration, initial_legacy.GetCallback()));
+  ASSERT_TRUE(initial_legacy.Wait());
+  ASSERT_EQ(initial_legacy.Get().status, AccessMutationTransactionStatus::kCommitted);
+  ASSERT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
+  const auto before = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(before.value);
+
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+  context_.hold_next = true;
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kConnecting);
+  ASSERT_TRUE(context_.HoldsRegistration(options->test_profile_runtime().registration_id));
+  base::test::TestFuture<bool> revoked;
+  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+                                                       revoked.GetCallback()));
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  ASSERT_TRUE(revoked.Wait());
+  EXPECT_TRUE(revoked.Get());
+
+  const auto after = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(after.value);
+  EXPECT_EQ(after.value->site_groups, before.value->site_groups);
+  EXPECT_EQ(after.value->policy_generation, before.value->policy_generation);
+  const auto common = AccessPublishedRequestRuntime::Get(profile_.get())
+                          ->CaptureCommonGenerationTupleOnUiThread(owner_);
+  ASSERT_TRUE(common);
+  EXPECT_GT(common->policy_generation, after.value->policy_generation);
+  EXPECT_TRUE(transport_->HasAcknowledgedLegacyProxy(
+      owner_, *common, AccessSiteProxyBubbleController::LocalProxyGroup(owner_), registration));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
+  EXPECT_TRUE(Snapshot("other.example").failure_reason.empty());
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+
+  AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+  const auto new_common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+  ASSERT_TRUE(new_common);
+  ASSERT_GT(new_common->network_epoch, common->network_epoch);
+  const auto* policy = runtime->GetPublishedPolicySnapshot(owner_);
+  ASSERT_TRUE(policy);
+  const auto legacy_group = AccessSiteProxyBubbleController::LocalProxyGroup(owner_);
+  context_.hold_next = true;
+  base::test::TestFuture<bool> published;
+  transport_->PublishPrivatePolicy(*policy, *new_common, published.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  EXPECT_FALSE(context_.HoldsRegistration(registration));
+  EXPECT_TRUE(std::ranges::any_of(
+      context_.held_ack().unavailable_groups,
+      [&](const auto& entry) { return entry->proxy_group_id == legacy_group; }));
+  context_.Reply(true);
+  ASSERT_TRUE(published.Wait());
+  ASSERT_TRUE(published.Get());
+  ASSERT_TRUE(transport_->HasCurrentPrivatePolicy(owner_, *new_common));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kUnavailable);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RevokingPendingSwitchWaitsForFreshLegacyAckAfterRollbackTimeout) {
+  const AccessSiteHost host{"other.example"};
+  const std::string registration = "legacy-local-registration";
+  const auto legacy_group = AccessSiteProxyBubbleController::LocalProxyGroup(owner_);
+  base::test::TestFuture<AccessMutationTransactionResult> initial_legacy;
+  ASSERT_NO_FATAL_FAILURE(AccessSiteProxyProductTestPeer::PublishFakeLegacyRoute(
+      bubble_, host, owner_, registration, initial_legacy.GetCallback()));
+  ASSERT_TRUE(initial_legacy.Wait());
+  ASSERT_EQ(initial_legacy.Get().status, AccessMutationTransactionStatus::kCommitted);
+  ASSERT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
+  const auto before = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(before.value);
+
+  ASSERT_NO_FATAL_FAILURE(HoldRevokedLegacyRollback(host, registration));
+  const auto expired_sequence = context_.held_ack().sequence;
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+  const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+  ASSERT_TRUE(common);
+  ASSERT_GT(common->policy_generation, before.value->policy_generation);
+  ASSERT_EQ(context_.held_ack().common_generations->policy_generation,
+            common->policy_generation);
+  AccessNetworkContextTransportTestPeer::ExpireInstall(
+      transport_, owner_, context_.incarnation);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  ASSERT_TRUE(coordinator_->CanDispatch(owner_));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kUnavailable);
+
+  context_.hold_next_registration = registration;
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_TRUE(context_.HoldsRegistration(registration));
+  EXPECT_GT(context_.held_ack().sequence, expired_sequence);
+  EXPECT_EQ(context_.held_ack().common_generations->policy_generation,
+            common->policy_generation);
+  EXPECT_FALSE(transport_->HasAcknowledgedLegacyProxy(
+      owner_, *common, legacy_group, registration));
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kUnavailable);
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return transport_->HasAcknowledgedLegacyProxy(
+        owner_, *common, legacy_group, registration);
+  }));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
+  EXPECT_TRUE(Snapshot("other.example").failure_reason.empty());
+
+  // Hold a different site's DIRECT candidate after the legacy ACK is current.
+  // Reject that candidate so both sites must still have their original rules.
+  const AccessSiteHost unrelated{"unrelated.example"};
+  context_.hold_next_registration = registration;
+  base::test::TestFuture<void> unrelated_off;
+  ASSERT_TRUE(bubble_->RequestHostProxySession(unrelated, false,
+                                              unrelated_off.GetCallback()));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_TRUE(context_.HoldsRegistration(registration));
+  ASSERT_TRUE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+  ASSERT_FALSE(coordinator_->CanDispatch(owner_));
+  const auto pending = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+  ASSERT_TRUE(pending);
+  ASSERT_GT(pending->policy_generation, common->policy_generation);
+  ASSERT_EQ(context_.held_ack().common_generations->policy_generation,
+            pending->policy_generation);
+  const auto* candidate = runtime->GetPublishedPolicySnapshot(owner_);
+  ASSERT_TRUE(candidate);
+  ASSERT_TRUE(std::ranges::any_of(candidate->rules, [&](const auto& rule) {
+    return rule.destination_host == unrelated.value &&
+           rule.mode == AccessMode::kDirect;
+  }));
+
+  base::test::TestFuture<void> rejected_off;
+  EXPECT_FALSE(bubble_->RequestHostProxySession(host, false,
+                                              rejected_off.GetCallback()));
+  EXPECT_EQ(Snapshot("other.example").failure_reason,
+            AccessSiteProxySessionErrorReadableMessage(
+                AccessSiteProxySessionError::kBusy));
+  context_.Reply(false);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    const auto current = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_) && current &&
+           current->policy_generation > pending->policy_generation &&
+           transport_->HasAcknowledgedLegacyProxy(
+               owner_, *current, legacy_group, registration);
+  }));
+  EXPECT_FALSE(rejected_off.IsReady());
+  EXPECT_FALSE(unrelated_off.IsReady());
+  EXPECT_EQ(Snapshot("unrelated.example").intent, AccessSiteIntent::kOff);
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
+  EXPECT_TRUE(Snapshot("other.example").failure_reason.empty());
+  const auto after = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  EXPECT_EQ(after.value, before.value);
+  const auto original = AccessRuleStore::AdaptMatcherSnapshot(*before.value);
+  ASSERT_TRUE(original.value);
+  const auto* published = runtime->GetPublishedPolicySnapshot(owner_);
+  ASSERT_TRUE(published);
+  EXPECT_EQ(published->rules, original.value->rules);
+
+  ASSERT_TRUE(bubble_->NotifyHostProxyRuntimeFault(host, false));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kUnavailable);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RevokingPendingSwitchPreservesConnectingFaultWithRollbackAck) {
+  ExpectFaultSurvivesLegacyRollback(/*wait=*/true, /*expire_rollback=*/false);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RevokingPendingSwitchPreservesUnavailableFaultAfterLateRollbackAck) {
+  ExpectFaultSurvivesLegacyRollback(/*wait=*/false, /*expire_rollback=*/true);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RevokingPendingSwitchPreservesLegacyFaultFromBeforeAdmission) {
+  ExpectFaultSurvivesLegacyRollback(/*wait=*/false, /*expire_rollback=*/false,
+                                   /*fault_before_switch=*/true);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       SwitchRejectedBeforePublicationPreservesOriginalLegacyFault) {
+  const AccessSiteHost host{"legacy-example.com"};
+  ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(host, "legacy-local-registration"));
+  ASSERT_TRUE(bubble_->NotifyHostProxyRuntimeFault(host, /*wait=*/true));
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+
+  // Invalidate the current policy ACK before the restore callback can publish.
+  AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+  ASSERT_FALSE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+  EXPECT_EQ(options->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kPrepared);
+  const auto after = Snapshot(host.value.c_str());
+  EXPECT_EQ(after.intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(after.connection, AccessSiteConnectionState::kConnecting);
+  EXPECT_EQ(after.failure_reason, AccessSiteProxySessionErrorReadableMessage(
+                                     AccessSiteProxySessionError::kRuntimeFault,
+                                     "waiting for node recovery"));
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       SwitchRejectedBeforePublicationReportsFailureAfterLegacyAck) {
+  const AccessSiteHost host{"legacy-example.com"};
+  const std::string registration = "legacy-local-registration";
+  ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(host, registration));
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+
+  context_.Disconnect();
+  environment_.RunUntilIdle();
+  ProductAckContext replacement;
+  replacement.incarnation = "replacement-context";
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
+  ASSERT_TRUE(bound.Get());
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+  const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+  const auto* policy = runtime->GetPublishedPolicySnapshot(owner_);
+  ASSERT_TRUE(common && policy);
+  replacement.hold_next_registration = registration;
+  base::test::TestFuture<bool> ack;
+  transport_->PublishPrivatePolicy(*policy, *common, ack.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil([&] { return replacement.has_reply(); }));
+  ASSERT_TRUE(replacement.HoldsRegistration(registration));
+
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite(host));
+  ASSERT_FALSE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+  EXPECT_EQ(options->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kPrepared);
+  EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+            AccessSiteConnectionState::kUnavailable);
+  replacement.Reply(true);
+  ASSERT_TRUE(ack.Get());
+  const auto snapshot = Snapshot(host.value.c_str());
+  EXPECT_EQ(snapshot.intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(snapshot.connection, AccessSiteConnectionState::kReady);
+  EXPECT_EQ(snapshot.failure_reason,
+            "The test Profile switch failed because the website policy could "
+            "not be confirmed.");
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       StoppedLegacySiteRecoversAfterVerifiedReplacementForAnotherSite) {
+  const AccessSiteHost host{"legacy-example.com"};
+  const std::string registration = "legacy-local-registration";
+  const std::string replacement = "replacement-legacy-registration";
+  const auto group = AccessSiteProxyBubbleController::LocalProxyGroup(owner_);
+  ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(host, registration));
+  ASSERT_NO_FATAL_FAILURE(HoldRevokedLegacyRollback(host, registration));
+
+  AccessSiteProxyProductTestPeer::LoseRuntime(bubble_, registration);
+  context_.Reply(true);
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_.get());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_) &&
+           coordinator_->CanDispatch(owner_) && common &&
+           transport_->HasCurrentPrivatePolicy(owner_, *common);
+  }));
+  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group));
+  ASSERT_EQ(Snapshot(host.value.c_str()).intent, AccessSiteIntent::kAllow);
+  ASSERT_EQ(Snapshot(host.value.c_str()).connection,
+            AccessSiteConnectionState::kUnavailable);
+
+  const AccessSiteHost other{"other.example"};
+  context_.hold_next_registration = replacement;
+  base::test::TestFuture<AccessMutationTransactionResult> published;
+  ASSERT_NO_FATAL_FAILURE(AccessSiteProxyProductTestPeer::PublishFakeLegacyRoute(
+      bubble_, other, owner_, replacement, published.GetCallback()));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_TRUE(context_.HoldsRegistration(replacement));
+  EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+            AccessSiteConnectionState::kUnavailable);
+  context_.Reply(true);
+  ASSERT_TRUE(published.Wait());
+  ASSERT_EQ(published.Get().status, AccessMutationTransactionStatus::kCommitted);
+  ASSERT_EQ(Snapshot(other.value.c_str()).connection,
+            AccessSiteConnectionState::kReady);
+  const auto common = runtime->CaptureCommonGenerationTupleOnUiThread(owner_);
+  ASSERT_TRUE(common);
+  ASSERT_TRUE(transport_->HasAcknowledgedLegacyProxy(owner_, *common, group,
+                                                     replacement));
+  EXPECT_EQ(Snapshot(host.value.c_str()).intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+            AccessSiteConnectionState::kReady);
+  EXPECT_TRUE(Snapshot(host.value.c_str()).failure_reason.empty());
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       BusyRejectionShowsNoticeAfterCommittedCoreVerificationClearsFault) {
+  const AccessSiteHost host{"legacy-example.com"};
+  const std::string registration = "legacy-local-registration";
+  ASSERT_NO_FATAL_FAILURE(PublishLegacyRoute(
+      host, registration, base::BindLambdaForTesting([&] {
+        ASSERT_TRUE(bubble_->NotifyHostProxyRuntimeFault(host, /*wait=*/false));
+        EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+                  AccessSiteConnectionState::kUnavailable);
+      })));
+  ASSERT_TRUE(Snapshot(host.value.c_str()).failure_reason.empty());
+
+  context_.hold_next_registration = registration;
+  ASSERT_TRUE(bubble_->RequestHostProxySession({"other.example"}, false));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  ASSERT_TRUE(context_.HoldsRegistration(registration));
+  EXPECT_FALSE(bubble_->RequestHostProxySession(host, false));
+  EXPECT_EQ(Snapshot(host.value.c_str()).failure_reason,
+            AccessSiteProxySessionErrorReadableMessage(
+                AccessSiteProxySessionError::kBusy));
+  context_.Reply(true);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  EXPECT_EQ(Snapshot(host.value.c_str()).intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot(host.value.c_str()).connection,
+            AccessSiteConnectionState::kReady);
+  EXPECT_TRUE(Snapshot(host.value.c_str()).failure_reason.empty());
+}
+#endif
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 TEST_F(AccessSiteProxyProductTest, DualSelectionReleasesPaidOnlyAfterCommittedLocalOff) {
@@ -1244,11 +2533,11 @@ TEST_F(AccessRetryNavigationProductTest,
   ASSERT_TRUE(request->client.has_received_redirect());
   ASSERT_TRUE(request->target.initial);
   ASSERT_FALSE(request->target.initial->registration_id.empty());
-  CancelAtQueuedPolicyCompletion cancel(base::BindOnce(
+  RunAtQueuedPolicyCompletion cancel(base::BindOnce(
       [](HeldRedirectBrowserRequest* request) { request->loader.reset(); },
       base::Unretained(request.get())));
   request->loader->FollowRedirect({}, std::nullopt);
-  ASSERT_TRUE(base::test::RunUntil([&] { return cancel.cancelled(); }));
+  ASSERT_TRUE(base::test::RunUntil([&] { return cancel.ran(); }));
   task_environment()->RunUntilIdle();
   EXPECT_FALSE(request->target.followed);
   EXPECT_EQ(request->target.public_follows, 0);
@@ -1260,11 +2549,11 @@ TEST_F(AccessRetryNavigationProductTest,
   ASSERT_TRUE(request->client.has_received_redirect());
   ASSERT_TRUE(request->target.initial);
   ASSERT_FALSE(request->target.initial->registration_id.empty());
-  CancelAtQueuedPolicyCompletion cancel(base::BindOnce(
+  RunAtQueuedPolicyCompletion cancel(base::BindOnce(
       [](HeldRedirectBrowserRequest* request) { request->client.Unbind(); },
       base::Unretained(request.get())));
   request->loader->FollowRedirect({}, std::nullopt);
-  ASSERT_TRUE(base::test::RunUntil([&] { return cancel.cancelled(); }));
+  ASSERT_TRUE(base::test::RunUntil([&] { return cancel.ran(); }));
   task_environment()->RunUntilIdle();
   EXPECT_FALSE(request->target.followed);
   EXPECT_EQ(request->target.public_follows, 0);

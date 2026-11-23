@@ -26,6 +26,9 @@
 #include "ui/views/controls/button/checkbox.h"
 #include "url/origin.h"
 #include "chrome/browser/browser_process.h"
+#if BUILDFLAG(IS_MAC)
+#include "chrome/browser/aegis/access/access_build_channel.h"  // nogncheck
+#endif
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 #include "chrome/browser/aegis/access/access_account_refresh.h"
 #include "chrome/browser/aegis/access/access_navigation_retry_tab_helper.h"
@@ -381,6 +384,33 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
         ui::PAGE_TRANSITION_LINK, false), {});
     if (GetWidget()) GetWidget()->Close();
   }
+#if BUILDFLAG(IS_MAC)
+  void OpenAccessOptions() {
+    if (!Valid() || !browser_->GetProfile()->IsRegularProfile() ||
+        !aegis::access::CanUseAccessOptionsForCurrentBuild(
+            aegis_access::AccessOptionsOperation::kPage)) {
+      return;
+    }
+    source_->OpenURL(
+        content::OpenURLParams(GURL("chrome://aegis/access-options"),
+                               content::Referrer(),
+                               WindowOpenDisposition::kNewForegroundTab,
+                               ui::PAGE_TRANSITION_LINK, false),
+        {});
+    if (GetWidget()) {
+      GetWidget()->Close();
+    }
+  }
+  void UsePreparedTestProfile() {
+    if (!Valid()) return;
+    auto* controller = AccessBubble();
+    if (!controller) return;
+    const auto snap = controller->SnapshotForCommittedUrl(address_);
+    if (snap.has_trusted_site && snap.toggle_enabled)
+      controller->RequestTestProfileForSite(snap.host);
+    RefreshSoon();
+  }
+#endif
   void OpenReading() {
     if (!Valid()) return;
     content::OpenURLParams params(GURL("chrome://aegis/markdown.html#tab=" + tab_),
@@ -734,6 +764,15 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
   void AppendSiteProxySection(views::View* parent) {
     AddLabel(parent, Copy(u"本站代理", u"Site proxy", u"本站代理"),
              views::style::CONTEXT_DIALOG_TITLE);
+#if BUILDFLAG(IS_MAC)
+    if (browser_->GetProfile()->IsRegularProfile() &&
+        aegis::access::CanUseAccessOptionsForCurrentBuild(
+            aegis_access::AccessOptionsOperation::kPage)) {
+      Button(parent, Copy(u"Access 选项", u"Access Options", u"Access 選項"),
+             base::BindRepeating(&AegisPageBubble::OpenAccessOptions,
+                                 base::Unretained(this)));
+    }
+#endif
     auto* controller = AccessBubble();
     if (!controller) {
       AddLabel(parent, Copy(u"当前用户资料不可用",
@@ -747,6 +786,14 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
       AddLabel(parent, ConnectionStatusCopy(snap.connection_status));
       return;
     }
+#if BUILDFLAG(IS_MAC)
+    if (controller->HasPreparedTestNode() && snap.toggle_enabled) {
+      Button(parent, Copy(u"用测试配置保护本站", u"Protect site with Test Profile",
+                          u"用測試設定保護本站"),
+             base::BindRepeating(&AegisPageBubble::UsePreparedTestProfile,
+                                 base::Unretained(this)));
+    }
+#endif
     bool toggle_on = snap.toggle_on;
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
     auto* profile = browser_->GetProfile();
