@@ -5,6 +5,7 @@ import {
   chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync,
   realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
+import Module from 'node:module';
 import {tmpdir} from 'node:os';
 import {basename, delimiter, dirname, join} from 'node:path';
 import test from 'node:test';
@@ -180,6 +181,11 @@ test('preloading the CLI runs the entry once and leaves syntax checks, eval and 
   assert.equal(direct.status, 0, direct.stderr);
   assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
   assert.equal(direct.stderr, '');
+  const canceledCheck = run('--import', cli, '--check', '--no-check', cli, '--help');
+  assert.ifError(canceledCheck.error);
+  assert.equal(canceledCheck.status, 0, canceledCheck.stderr);
+  assert.equal(canceledCheck.stdout, direct.stdout);
+  assert.equal(canceledCheck.stderr, '');
   const cliUrl = new URL('../compile-geosite.mjs', import.meta.url);
   for (const preload of [cli, cliUrl.href + '?preload', cliUrl.href + '#preload', cliUrl.href + '?']) {
     const result = run('--import', preload, cli, '--help');
@@ -259,6 +265,7 @@ test('URL-entry mode dispatches a preloaded compiler exactly once',
       [['--entry-url', '--preserve-symlinks', '--preserve-symlinks-main'], url + '#', url + '#', ''],
       [['--entry-url', '--preserve-symlinks', '--no-preserve-symlinks-main'], url + '?', url + '?', ''],
       [['--entry-url'], cli + '#variant', url + '#variant', ''],
+      [['--entry-url'], cli + '#section/..', url + '#section/..', ''],
       [['--entry-url'], url, url + '?library', ''],
       [['--no-entry-url'], cli, url, '--entry-url'],
     ]) {
@@ -269,6 +276,70 @@ test('URL-entry mode dispatches a preloaded compiler exactly once',
       assert.equal(result.stderr, '');
     }
   });
+
+test('loader rewrites dispatch the resolved CLI once', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-loader-test-'));
+  t.after(() => rmSync(dir, {recursive: true, force: true}));
+  const url = pathToFileURL(cli).href;
+  const asynchronous = join(dir, 'async-loader.mjs');
+  const synchronous = join(dir, 'sync-loader.mjs');
+  const unrelated = join(dir, 'unrelated.mjs');
+  writeFileSync(unrelated, `
+    export {compileGroup, matchesHost} from ${JSON.stringify(url)};
+    console.log('unrelated entry');
+  `);
+  const rewrite = `
+    const compiler = ${JSON.stringify(url)};
+    function rewrite(result, context) {
+      if (context.parentURL !== undefined || result.url !== compiler) return result;
+      return {...result, url: process.env.AEGIS_GEOSITE_TEST_ENTRY || compiler + '?instrumented'};
+    }
+  `;
+  writeFileSync(asynchronous, rewrite + `
+    export async function resolve(specifier, context, nextResolve) {
+      return rewrite(await nextResolve(specifier, context), context);
+    }
+  `);
+  writeFileSync(synchronous, rewrite + `
+    import {registerHooks} from 'node:module';
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        return rewrite(nextResolve(specifier, context), context);
+      },
+    });
+  `);
+  const run = (flags, overrides) => spawnSync(process.execPath, [...flags, cli, '--help'], {
+    encoding: 'utf8', env: {...process.env, NODE_NO_WARNINGS: '1', ...overrides},
+  });
+  const direct = run([]);
+  assert.equal(direct.status, 0, direct.stderr);
+  assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
+  for (const flags of [
+    ['--experimental-loader', asynchronous],
+    ['--experimental-loader', asynchronous, '--import', cli],
+  ]) {
+    const result = run(flags);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, direct.stdout, JSON.stringify(flags));
+  }
+  if (typeof Module.registerHooks !== 'function') return;
+  for (const preloads of [
+    ['--import', cli],
+    ['--import', url + '?instrumented', '--import', cli],
+  ]) {
+    const result = run([...preloads, '--import', synchronous]);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, direct.stdout, JSON.stringify(preloads));
+  }
+  const redirected = run(['--import', cli, '--import', synchronous], {
+    AEGIS_GEOSITE_TEST_ENTRY: pathToFileURL(unrelated).href,
+  });
+  assert.ifError(redirected.error);
+  assert.equal(redirected.status, 0, redirected.stderr);
+  assert.equal(redirected.stdout, 'unrelated entry\n');
+});
 
 test('domain rules cannot cover a nested registry or wildcard tenants', () => {
   const list = psl.replace('tenant.example', 'tenant.example\ntenants.example.org');
@@ -913,6 +984,22 @@ test('a Node config file can select a preloaded URL entry for verification',
       verifyMissing([help.stdout.includes(defaultFlag) ? defaultFlag : configFlag]);
       if (major >= 26 && configFlag !== '--config-file') verifyMissing([configFlag]);
     }
+  });
+
+test('direct verification runs before preload shutdown handlers',
+  {skip: !pinnedInputs && 'requires pinned inputs'}, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-shutdown-test-'));
+    t.after(() => rmSync(dir, {recursive: true, force: true}));
+    const preload = join(dir, 'shutdown.mjs');
+    writeFileSync(preload, "process.once('beforeExit', () => process.exit());\n");
+    const output = join(dir, 'missing-catalogue.json');
+    const args = ['--import', preload, cli, '--dlc', join(pinnedInputs, 'dlc.dat'),
+      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN',
+      '--output', output, '--verify'];
+    const result = spawnSync(process.execPath, args, {encoding: 'utf8'});
+    assert.ifError(result.error);
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /ENOENT.*missing-catalogue\.json/);
   });
 
 test('new publication requires a volume that respects ownership',

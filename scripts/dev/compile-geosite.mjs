@@ -2,13 +2,14 @@
 
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {channel} from 'node:diagnostics_channel';
 import {
   closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdtempSync, openSync, readSync, realpathSync,
   rmSync, rmdirSync, statSync, writeFileSync,
 } from 'node:fs';
 import Module from 'node:module';
 import {isIP} from 'node:net';
-import {basename, dirname, isAbsolute, join, sep} from 'node:path';
+import {basename, dirname, join, sep} from 'node:path';
 import {domainToASCII, fileURLToPath, pathToFileURL, URL} from 'node:url';
 import {parseArgs} from 'node:util';
 
@@ -520,58 +521,58 @@ function main() {
   }
 }
 
-function readNodeOption(name) {
-  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
-  const enabled = '--' + name;
-  const disabled = '--no-' + name;
-  const option = [...environment.map((flag) => flag.replaceAll('"', '')), ...process.execArgv]
-    .map((flag) => flag.split('=', 1)[0].replaceAll('_', '-'))
-    .findLast((flag) => flag === enabled || flag === disabled);
-  return option === undefined ? undefined : option === enabled;
-}
-
-function urlEntryReference(argument) {
-  return new URL(argument, pathToFileURL(process.cwd() + sep));
-}
-
-function legacyEntryMatches(argument) {
+function fileSource(reference) {
   try {
-    const reference = (readNodeOption('entry-url') ?? !isAbsolute(argument))
-      ? urlEntryReference(argument) : pathToFileURL(argument);
-    const preserveMain = readNodeOption('preserve-symlinks-main') ??
-      process.env.NODE_PRESERVE_SYMLINKS_MAIN === '1';
-    if (preserveMain) return reference.href === import.meta.url;
-    const entry = Module._findPath(fileURLToPath(reference), null, true);
-    if (!entry) return false;
-    const url = pathToFileURL(entry);
-    url.search = reference.search;
-    url.hash = reference.hash;
-    return url.href === import.meta.url;
-  } catch {
-    return false;
-  }
-}
-
-function entrySource(reference) {
-  try {
-    return realpathSync.native(fileURLToPath(reference()));
+    const path = realpathSync.native(fileURLToPath(reference()));
+    return statSync(path).isFile() ? path : undefined;
   } catch {
     return undefined;
   }
 }
 
-function couldBeEntry(argument) {
-  const moduleSource = entrySource(() => import.meta.url);
-  if (!moduleSource) return false;
-  // Node can interpret an argument as a path or a URL. Require an unambiguous file.
-  const candidates = new Set([
-    entrySource(() => pathToFileURL(argument)),
-    entrySource(() => urlEntryReference(argument)),
-  ].filter(Boolean));
-  return candidates.size === 1 && candidates.has(moduleSource);
+function urlReference(argument) {
+  return new URL(argument, pathToFileURL(process.cwd() + sep));
 }
 
-function runCLI() {
+function argumentSources(argument) {
+  const sources = new Set([fileSource(() => pathToFileURL(argument))]);
+  if (process.allowedNodeEnvironmentFlags.has('--entry-url')) {
+    sources.add(fileSource(() => urlReference(argument)));
+  }
+  sources.delete(undefined);
+  return sources;
+}
+
+function nonEntryMode() {
+  const flags = process.execArgv.map((arg) => arg.split('=', 1)[0].replaceAll('_', '-'));
+  if (flags.some((arg) => ['--eval', '-e', '--print', '-p', '-pe', '-ep'].includes(arg))) return true;
+  const check = flags.findLast((arg) => ['--check', '-c', '--no-check'].includes(arg));
+  return check === '--check' || check === '-c';
+}
+
+function explicitlyPreloaded(source) {
+  const environment = (process.env.NODE_OPTIONS ?? '').match(/(?:[^\s"]+|"[^"]*")+/gu) ?? [];
+  const args = [...environment.map((value) => value.replaceAll('"', '')), ...process.execArgv];
+  for (let index = 0; index < args.length; index++) {
+    const option = args[index];
+    const flag = option.split('=', 1)[0];
+    if (!['--import', '--require', '-r'].includes(flag)) continue;
+    const reference = option.includes('=') ? option.slice(flag.length + 1) : args[++index];
+    if (reference && (fileSource(() => urlReference(reference)) === source ||
+        fileSource(() => pathToFileURL(reference)) === source)) return true;
+  }
+  return false;
+}
+
+// The loader reports the selected module namespace. A default token identifies
+// this instance without resolving its URL again or being copied by export *.
+const cliModule = Symbol('GeoSite compiler module');
+export default cliModule;
+
+function runCLIOnce() {
+  const invoked = Symbol.for('aegis.geosite.cli.invoked');
+  if (process[invoked]) return;
+  process[invoked] = true;
   try {
     main();
   } catch (error) {
@@ -580,45 +581,34 @@ function runCLI() {
   }
 }
 
+function observeEntry() {
+  const completion = channel('tracing:module.import:asyncEnd');
+  const onImportEnd = ({parentURL, result}) => {
+    if (parentURL !== undefined) return;
+    completion.unsubscribe(onImportEnd);
+    if (result?.default === cliModule) runCLIOnce();
+  };
+  completion.subscribe(onImportEnd);
+}
+
 function dispatchCLI() {
   if (import.meta.main === true) {
-    runCLI();
+    runCLIOnce();
     return;
   }
   const argument = process.argv[1];
-  // Syntax checks, eval, and print can also have the CLI path in argv[1].
-  const nonEntryMode = /^(?:--(?:check|eval|print)|-[cep]|-pe)(?:=|$)/;
-  if (!argument || argument === '-' || process.execArgv.some((arg) => nonEntryMode.test(arg))) return;
+  if (!argument || argument === '-' || nonEntryMode()) return;
+  const source = fileSource(() => import.meta.url);
+  const candidates = argumentSources(argument);
+  if (!candidates.has(source)) return;
 
-  if (typeof Module.registerHooks !== 'function') {
-    if (legacyEntryMatches(argument)) runCLI();
-    return;
+  // Modern Node identifies direct entry modules itself. Node 22.15–22.17
+  // can also trace an explicitly preloaded entry, but lacks the main marker.
+  if (import.meta.main === false || (typeof Module.registerHooks === 'function' && explicitlyPreloaded(source))) {
+    observeEntry();
+  } else if (candidates.size === 1) {
+    runCLIOnce();
   }
-  if (!couldBeEntry(argument)) return;
-
-  // A preloaded module is evaluated once. Observe Node's actual root resolution
-  // to distinguish the CLI entry from a distinct URL of the same source.
-  const hook = Module.registerHooks({
-    resolve(specifier, context, nextResolve) {
-      if (context.parentURL !== undefined) return nextResolve(specifier, context);
-      try {
-        const resolution = nextResolve(specifier, context);
-        if (resolution.url === import.meta.url) runCLI();
-        return resolution;
-      } finally {
-        hook.deregister();
-        process.removeListener('beforeExit', finishLegacyEntry);
-      }
-    },
-  });
-
-  function finishLegacyEntry() {
-    hook.deregister();
-    runCLI();
-  }
-  // Node 22.15–22.17 have hooks but no public main marker. A direct entry has
-  // already been resolved when this file evaluates, so it has no later root hook.
-  if (import.meta.main === undefined) process.once('beforeExit', finishLegacyEntry);
 }
 
 dispatchCLI();
