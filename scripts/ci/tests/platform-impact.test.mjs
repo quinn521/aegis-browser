@@ -305,7 +305,9 @@ test('paths select platforms and commit types select stage depth', () => {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Routing Test'); git('config', 'user.email', 'routing@example.invalid');
     const commonScript = 'apps/browser/scripts/common.sh';
     const iosArchiveTests = ['scripts/release/test_verify_ios_archive.py', 'scripts/release/test_ios_embedded_core.py',
-      'scripts/ci/tests/ios-archive-cancel-isolation.test.mjs', 'scripts/ci/tests/ios-archive-supervisor-fixture.py'];
+      'scripts/ci/tests/ios-archive-cancel-isolation.test.mjs', 'scripts/ci/tests/ios-archive-supervisor-fixture.py',
+      'scripts/ci/tests/ios-embedded-core-prepare.test.mjs'];
+    const iosPrepareWorker = 'scripts/ci/run-ios-embedded-core-prepare.sh';
     const iosCliTest = 'fastlane/tests/cli_test.rb';
     const aabCertificate = 'scripts/release/VerifiedAabCertificate.java';
     save('README.md', 'base');
@@ -340,11 +342,12 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.deepEqual(route(sharedSetup), {...androidRoute, macos: true});
     const sharedSetupWithIos = pr(() => {
       save(commonScript, 'updated');
-      save('scripts/ci/ios-archive-supervisor.py', 'updated');
+      save(iosPrepareWorker, 'updated');
       save('unknown.file', 'updated');
     }, 'fix: repair browser setup and iOS');
     assert.deepEqual(route(sharedSetupWithIos), {...iosRoute, android: true, macos: true});
-    for (const path of ['scripts/ci/ios-archive-supervisor.py', 'scripts/ci/run-ios-unsigned-archive.sh']) {
+    for (const path of ['scripts/ci/ios-archive-supervisor.py', 'scripts/ci/run-ios-unsigned-archive.sh',
+      iosPrepareWorker, '.github/workflows/ios-release-validation.yml']) {
       assert.deepEqual(route(pr(() => save(path, 'updated'), 'fix: protect archive logs')), iosRoute, path);
     }
     for (const path of iosArchiveTests) {

@@ -296,7 +296,7 @@ def run_stage(command, environment, cancelled, signal_worker):
     return code
 
 
-def main(log, shell, wrapper, *command):
+def main(*arguments):
     received = 0
 
     def cancel(signum, _frame):
@@ -312,6 +312,19 @@ def main(log, shell, wrapper, *command):
 
     signal_worker = worker_signaler()
     environment = archive_environment()
+    if arguments[0] == "--prepare-embedded-core":
+        _, shell, worker = arguments
+        report("EmbeddedCore preparation starting (tool diagnostics withheld)")
+        code = run_stage([shell, worker], environment, cancelled, signal_worker)
+        if code is not None:
+            report(f"EmbeddedCore preparation exited with status {code}")
+        if received:
+            status = 128 + received
+            report(f"EmbeddedCore preparation cancelled with status {status}")
+            return status
+        return code
+
+    log, shell, wrapper, *command = arguments
     output = ArchiveOutput(log)
     try:
         output.notice("unsigned archive diagnostics withheld because transport settings can change during archive")
