@@ -1,0 +1,767 @@
+From eedeef9871e0f887860949f9cdac92c14a69c686 Mon Sep 17 00:00:00 2001
+From: Aegis Development <development@example.invalid>
+Date: Mon, 23 Nov 2026 17:56:38 +0800
+Subject: [PATCH] feat(android): open internal Access Options from a trusted
+ tab
+
+---
+ chrome/android/BUILD.gn                       |   1 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ chrome/android/java/res/values/ids.xml        |   1 +
+ .../chrome/browser/ChromeTabbedActivity.java  |   5 +
+ .../settings/AegisAccessOptionsBridge.java    |  85 +++++++
+ .../browser/settings/AegisSettings.java       |  40 +++-
+ .../TabbedAppMenuPropertiesDelegate.java      |  19 ++
+ chrome/browser/android/BUILD.gn               |  30 +++
+ .../android/aegis_access_options_bridge.cc    | 218 ++++++++++++++++++
+ .../android/aegis_access_options_identity.h   |  50 ++++
+ .../aegis_access_options_identity_unittest.cc |  53 +++++
+ .../strings/android_chrome_strings.grd        |   9 +
+ 12 files changed, 510 insertions(+), 2 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsBridge.java
+ create mode 100644 chrome/browser/android/aegis_access_options_bridge.cc
+ create mode 100644 chrome/browser/android/aegis_access_options_identity.h
+ create mode 100644 chrome/browser/android/aegis_access_options_identity_unittest.cc
+
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index ad19373cdb9d4b47522a10e6b39bbacf32b02c9b..3c530863482bbde8bf3247146846630b6300b699 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -2914,6 +2914,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/safe_browsing/SafeBrowsingSettingsNavigation.java",
+       "java/src/org/chromium/chrome/browser/safe_browsing/SafeBrowsingSuspiciousSiteDialogBridge.java",
+       "java/src/org/chromium/chrome/browser/segmentation_platform/ContextualPageActionController.java",
++      "java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsBridge.java",
+       "java/src/org/chromium/chrome/browser/sharing/sms_fetcher/SmsFetcherMessageHandler.java",
+       "java/src/org/chromium/chrome/browser/signin/SigninBridge.java",
+       "java/src/org/chromium/chrome/browser/site_settings/ChromeSiteSettingsDelegate.java",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index b416d70493f41b491c6e8869ec94ae59b5574263..b7b744d62ba3451f77e02149447047b7d3be341e 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -1086,6 +1086,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/services/gcm/GCMBackgroundServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/services/gcm/GCMNativeBackgroundTask.java",
+   "java/src/org/chromium/chrome/browser/services/gcm/GcmUma.java",
++  "java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsBridge.java",
+   "java/src/org/chromium/chrome/browser/settings/AegisSettings.java",
+   "java/src/org/chromium/chrome/browser/settings/DetailedPaneSearchController.java",
+   "java/src/org/chromium/chrome/browser/settings/FragmentDependencyProvider.java",
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+index c1db52b24f4ed268c25853c782f69cb2170bd71a..4d27e915fc31d8dbb7095424de4f10d071cef504 100644
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -312,6 +312,7 @@ found in the LICENSE file.
+     <item type="id" name="tab_groups_header_menu_id" />
+     <item type="id" name="tab_groups_parent_menu_id" />
+     <item type="id" name="toggle_bookmarks_bar_menu_id" />
++    <item type="id" name="aegis_access_options_menu_id" />
+     <item type="id" name="aegis_agent_menu_id" />
+     <item type="id" name="aegis_capture_page_menu_id" />
+     <item type="id" name="aegis_recognize_image_context_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 94d12ae5b34b2d446dc371da3c6adfdcf5ccebdd..0e54e83fd54978cbf1607c67741672f7c128c2fe 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -258,6 +258,7 @@ import org.chromium.chrome.browser.safety_hub.SafetyHubMagicStackBuilder;
+ import org.chromium.chrome.browser.search_engines.SearchEngineChoiceNotification;
+ import org.chromium.chrome.browser.searchwidget.SearchActivityClientImpl;
+ import org.chromium.chrome.browser.selection.ChromeSelectionDropdownMenuDelegate;
++import org.chromium.chrome.browser.settings.AegisAccessOptionsBridge;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
+ import org.chromium.chrome.browser.share.ShareDelegate;
+@@ -4559,6 +4560,10 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 }
+             }
+             return true;
++        } else if (id == R.id.aegis_access_options_menu_id) {
++            if (fromMenu && currentTab != null) {
++                AegisAccessOptionsBridge.openFromBrowserMenu(this, currentTab.getWebContents());
++            }
+         } else if (id == R.id.aegis_agent_menu_id) {
+             showAegisAgentComposer();
+             RecordUserAction.record("MobileMenuAegisAgent");
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsBridge.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6a483c30cd7c3138abbb15a39e64385e7835b7c
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsBridge.java
+@@ -0,0 +1,85 @@
++// Copyright 2026 GCSA
++
++package org.chromium.chrome.browser.settings;
++
++import android.app.Activity;
++import android.content.Intent;
++import android.os.Bundle;
++
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.IntentUtils;
++import org.chromium.base.library_loader.LibraryLoader;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.content_public.browser.WebContents;
++
++/** Native authorization for the browser menu's internal Access Options screen. */
++@NullMarked
++public final class AegisAccessOptionsBridge {
++    private static final String LAUNCH_TICKET = "aegis_access_options_launch_ticket";
++
++    private AegisAccessOptionsBridge() {}
++
++    public static boolean canOffer(@Nullable WebContents contents) {
++        return contents != null
++                && LibraryLoader.getInstance().isInitialized()
++                && AegisAccessOptionsBridgeJni.get().canOffer(contents);
++    }
++
++    public static void openFromBrowserMenu(Activity activity, @Nullable WebContents contents) {
++        if (contents == null || !LibraryLoader.getInstance().isInitialized()) return;
++        String ticket = AegisAccessOptionsBridgeJni.get().prepareLaunch(contents);
++        if (ticket.isEmpty()) return;
++        Bundle args = new Bundle();
++        args.putString(LAUNCH_TICKET, ticket);
++        Intent intent =
++                SettingsIntentUtil.createIntent(
++                        activity,
++                        AegisSettings.class.getName(),
++                        args,
++                        /* addToBackStack= */ false,
++                        /* tag= */ null,
++                        /* useSettingsInTab= */ false);
++        IntentUtils.safeStartActivity(activity, intent);
++    }
++
++    static String claim(
++            @Nullable Bundle args, Profile profile, AegisSettings receiver) {
++        if (args == null) return "";
++        String ticket = args.getString(LAUNCH_TICKET, "");
++        if (ticket.isEmpty()) return "";
++        return AegisAccessOptionsBridgeJni.get().claimLaunch(ticket, profile, receiver);
++    }
++
++    static boolean canRead(String editor, Profile profile, AegisSettings receiver) {
++        return AegisAccessOptionsBridgeJni.get().canRead(editor, profile, receiver);
++    }
++
++    static void close(String editor, AegisSettings receiver) {
++        AegisAccessOptionsBridgeJni.get().close(editor, receiver);
++    }
++
++    @NativeMethods
++    interface Natives {
++        boolean canOffer(@JniType("content::WebContents*") WebContents contents);
++
++        @JniType("std::string")
++        String prepareLaunch(@JniType("content::WebContents*") WebContents contents);
++
++        @JniType("std::string")
++        String claimLaunch(
++                @JniType("std::string") String ticket,
++                @JniType("Profile*") Profile profile,
++                AegisSettings receiver);
++
++        boolean canRead(
++                @JniType("std::string") String editor,
++                @JniType("Profile*") Profile profile,
++                AegisSettings receiver);
++
++        void close(@JniType("std::string") String editor, AegisSettings receiver);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisSettings.java
+index e0c1f282fd5d0bf608950efc1614b8db8b3bb549..1d123954860a47aa07cabeb9a86a28f3bbfae46c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisSettings.java
+@@ -9,6 +9,7 @@ import android.view.LayoutInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.TextView;
+ 
+ import androidx.fragment.app.Fragment;
+ 
+@@ -18,6 +19,7 @@ import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+ import org.chromium.base.version_info.VersionInfo;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.content.WebContentsFactory;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.components.browser_ui.settings.SettingsFragment;
+@@ -49,6 +51,8 @@ public final class AegisSettings extends Fragment
+     private @Nullable WebContents mWebContents;
+     private @Nullable WebContentsObserver mObserver;
+     private @Nullable ThinWebView mThinWebView;
++    private String mAccessEditor = "";
++    private @Nullable TextView mAccessStatus;
+ 
+     @Override
+     public void setProfile(Profile profile) {
+@@ -64,9 +68,21 @@ public final class AegisSettings extends Fragment
+     public View onCreateView(
+             LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle state) {
+         SettingsActivity activity = (SettingsActivity) requireActivity();
++        Profile profile = assumeNonNull(mProfile);
++        if (state == null) {
++            mAccessEditor = AegisAccessOptionsBridge.claim(getArguments(), profile, this);
++        }
++        if (!mAccessEditor.isEmpty()) {
++            TextView status = new TextView(activity);
++            int padding = Math.round(24 * getResources().getDisplayMetrics().density);
++            status.setPadding(padding, padding, padding, padding);
++            mAccessStatus = status;
++            updateAccessStatus();
++            return status;
++        }
+         WebContents contents =
+                 WebContentsFactory.createWebContents(
+-                        assumeNonNull(mProfile), /* initiallyHidden= */ false, false);
++                        profile, /* initiallyHidden= */ false, false);
+         mWebContents = contents;
+         ContentView contentView = ContentView.createContentView(activity, contents);
+         contents.setDelegates(
+@@ -114,6 +130,16 @@ public final class AegisSettings extends Fragment
+         return mThinWebView.getView();
+     }
+ 
++    private void updateAccessStatus() {
++        TextView status = mAccessStatus;
++        Profile profile = mProfile;
++        if (status == null || profile == null) return;
++        status.setText(
++                AegisAccessOptionsBridge.canRead(mAccessEditor, profile, this)
++                        ? R.string.aegis_access_options_read_only
++                        : R.string.aegis_access_options_unavailable);
++    }
++
+     private void updateBackState() {
+         if (mWebContents == null) return;
+         GURL url = mWebContents.getLastCommittedUrl();
+@@ -152,7 +178,12 @@ public final class AegisSettings extends Fragment
+     @Override
+     public void onResume() {
+         super.onResume();
+-        requireActivity().setTitle("GCSA Aegis");
++        if (mAccessStatus != null) {
++            requireActivity().setTitle(R.string.aegis_access_options_title);
++            updateAccessStatus();
++        } else {
++            requireActivity().setTitle("GCSA Aegis");
++        }
+         if (mWebContents != null) mWebContents.updateWebContentsVisibility(Visibility.VISIBLE);
+     }
+ 
+@@ -172,6 +203,11 @@ public final class AegisSettings extends Fragment
+ 
+     @Override
+     public void onDestroyView() {
++        if (!mAccessEditor.isEmpty()) {
++            AegisAccessOptionsBridge.close(mAccessEditor, this);
++        }
++        mAccessEditor = "";
++        mAccessStatus = null;
+         if (mObserver != null) mObserver.observe(null);
+         mObserver = null;
+         if (mThinWebView != null) mThinWebView.destroy();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+index ed807975d1ca1764d76bec166eaa7a0013be1f6e..dea676c7feead0baa9e57bce954ea6ead453d150 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -63,6 +63,7 @@ import org.chromium.chrome.browser.recent_tabs.ForeignSessionHelper;
+ import org.chromium.chrome.browser.recent_tabs.RecentlyClosedEntriesManager;
+ import org.chromium.chrome.browser.share.ShareUtils;
+ import org.chromium.chrome.browser.supervised_user.AndroidParentalControlsBridge;
++import org.chromium.chrome.browser.settings.AegisAccessOptionsBridge;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tab_group_sync.TabGroupSyncServiceFactory;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+@@ -557,6 +558,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                             isMenuIconAtStart())));
+         }
+         modelList.add(buildAegisAgentItem());
++        if (currentTab != null && AegisAccessOptionsBridge.canOffer(currentTab.getWebContents())) {
++            modelList.add(buildAegisAccessOptionsItem());
++        }
+ 
+         // Settings
+         modelList.add(buildSettingsItem());
+@@ -755,6 +759,9 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         AppMenuItemUtils.maybeAddDividerLine(modelList, R.id.divider_line_id);
+ 
+         modelList.add(buildAegisAgentItem());
++        if (currentTab != null && AegisAccessOptionsBridge.canOffer(currentTab.getWebContents())) {
++            modelList.add(buildAegisAccessOptionsItem());
++        }
+ 
+         // Settings
+         modelList.add(buildSettingsItem());
+@@ -1389,6 +1396,18 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         isMenuIconAtStart()));
+     }
+ 
++    private ListItem buildAegisAccessOptionsItem() {
++        return new ListItem(
++                AppMenuHandler.AppMenuItemType.STANDARD,
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.aegis_access_options_menu_id,
++                        R.string.aegis_access_options_title,
++                        Resources.ID_NULL,
++                        isMenuIconAtStart()));
++    }
++
+     private ListItem buildAegisAgentItem() {
+         return new ListItem(
+                 AppMenuHandler.AppMenuItemType.STANDARD,
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index f6469ff50925052355ae8098d15151ccf6da9f48..04b9c7f6ba94372e29fed95b04871219155f600f 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -2,6 +2,8 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
++import("//build/buildflag_header.gni")
++import("//build/config/android/channel.gni")
+ import("//build/config/buildflags_paint_preview.gni")
+ import("//chrome/android/features/dev_ui/dev_ui_module.gni")
+ import("//chrome/common/features.gni")
+@@ -382,8 +384,30 @@ if (is_android) {
+     ]
+   }
+ 
++  declare_args() {
++    aegis_android_access_product_channel = "unknown"
++    aegis_android_internal_access_options = false
++  }
++
++  assert(!aegis_android_internal_access_options ||
++             (aegis_android_access_product_channel == "debug" &&
++                  android_channel == "dev") ||
++             (aegis_android_access_product_channel == "alpha" &&
++                  android_channel == "canary"),
++         "Android internal Access Options requires an explicit internal build.")
++
++  buildflag_header("aegis_access_options_buildflags") {
++    header = "aegis_access_options_buildflags.h"
++    flags = [
++      "AEGIS_ANDROID_ACCESS_PRODUCT_CHANNEL=\"$aegis_android_access_product_channel\"",
++      "AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS=$aegis_android_internal_access_options",
++    ]
++  }
++
+   source_set("android") {
+     sources = [
++      "aegis_access_options_bridge.cc",
++      "aegis_access_options_identity.h",
+       "background_sync_launcher_android.cc",
+       "background_sync_launcher_android.h",
+       "background_tab_manager.cc",
+@@ -682,6 +706,7 @@ if (is_android) {
+     ]
+ 
+     deps = [
++      ":aegis_access_options_buildflags",
+     "//chrome/browser/aegis",
+       ":delta_file_proto",
+       ":language_data_proto",
+@@ -697,6 +722,7 @@ if (is_android) {
+       ":usage_stats_proto",
+       ":web_contents_theme_client",
+       "//cc/slim",
++      "//chrome/android:chrome_jni_headers",
+       "//chrome/android:jni_headers",
+       "//chrome/app:command_ids",
+       "//chrome/browser:global_features",
+@@ -842,8 +868,10 @@ if (is_android) {
+       "//chrome/browser/webapps/installable:impl",
+       "//chrome/browser/webauthn:webauthn_request_delegate_android",
+       "//chrome/browser/webauthn:webauthn_request_delegate_android_impl",
++      "//chrome/common:channel_info",
+       "//chrome/common:non_code_constants",
+       "//chrome/common/aegis",
++      "//components/aegis_access:access_options_capability",
+       "//components/android_autofill/browser:android",
+       "//components/android_autofill/browser:features",
+       "//components/application_locale_storage",
+@@ -1230,6 +1258,7 @@ source_set("profile_key_startup_accessor") {
+ source_set("unit_tests") {
+   testonly = true
+   sources = [
++    "aegis_access_options_identity_unittest.cc",
+     "backup/dict_pref_backup_serializer_unittest.cc",
+     "compositor/compositor_view_unittest.cc",
+     "compositor/retry_strategy_unittest.cc",
+@@ -1297,6 +1326,7 @@ source_set("unit_tests") {
+     "//chrome/test/base:chrome_render_view_host_test_harness",
+     "//chrome/test/base:testing_browser_process",
+     "//components/actor/core",
++    "//components/aegis_access:access_options_capability",
+     "//components/autofill/content/browser",
+     "//components/autofill/content/browser:test_support",
+     "//components/autofill/core/browser:test_support",
+diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..4e51258f4cf3c4881814ba445054e7e70a252b5e
+--- /dev/null
++++ b/chrome/browser/android/aegis_access_options_bridge.cc
+@@ -0,0 +1,218 @@
++// Copyright 2026 GCSA
++
++#include <cstddef>
++#include <map>
++#include <memory>
++#include <string>
++
++#include "base/android/apk_info.h"
++#include "base/android/jni_string.h"
++#include "base/android/jni_weak_ref.h"
++#include "base/callback_list.h"
++#include "base/check.h"
++#include "base/functional/bind.h"
++#include "base/memory/no_destructor.h"
++#include "base/memory/weak_ptr.h"
++#include "base/time/time.h"
++#include "base/unguessable_token.h"
++#include "chrome/browser/android/aegis_access_options_buildflags.h"
++#include "chrome/browser/android/aegis_access_options_identity.h"
++#include "chrome/browser/android/tab_android.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/common/channel_info.h"
++#include "content/public/browser/browser_thread.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/browser/web_contents_observer.h"
++
++// Must follow the FromJniType and ToJniType specializations.
++#include "chrome/android/chrome_jni_headers/AegisAccessOptionsBridge_jni.h"
++
++namespace {
++
++using aegis_access::AccessOptionsOperation;
++
++constexpr size_t kMaxSessions = 64;
++constexpr auto kLaunchLifetime = base::Seconds(30);
++
++bool CanUseAndroidOptions(AccessOptionsOperation operation) {
++  return aegis::access::CanUseAndroidAccessOptions(
++      base::android::apk_info::package_name(),
++      base::android::apk_info::host_package_name(),
++      BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS),
++      BUILDFLAG(AEGIS_ANDROID_ACCESS_PRODUCT_CHANNEL), chrome::GetChannel(),
++      operation);
++}
++
++TabAndroid* GetEligibleTab(content::WebContents* contents) {
++  if (!contents || contents->IsBeingDestroyed()) {
++    return nullptr;
++  }
++  auto* frame = contents->GetPrimaryMainFrame();
++  if (!frame || !frame->IsRenderFrameLive()) {
++    return nullptr;
++  }
++  auto* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  TabAndroid* tab = TabAndroid::FromWebContents(contents);
++  if (!tab || tab->GetContents() != contents || tab->IsCustomTab() ||
++      tab->IsClosing() || !tab->IsActivated() || !profile->IsRegularProfile() ||
++      profile->IsOffTheRecord()) {
++    return nullptr;
++  }
++  return tab;
++}
++
++// Browser-owned state. The intent contains only a one-use ticket, never the
++// editor credential. No Profile or window identity is taken from the intent.
++class EditorOrigin final : public content::WebContentsObserver {
++ public:
++  EditorOrigin(content::WebContents* contents,
++               TabAndroid& tab,
++               BrowserWindowInterface& window)
++      : content::WebContentsObserver(contents),
++        window_(window.GetWeakPtr()),
++        launch_deadline_(base::TimeTicks::Now() + kLaunchLifetime),
++        will_detach_(tab.RegisterWillDetach(
++            base::BindRepeating(&EditorOrigin::OnTabDetached,
++                                base::Unretained(this)))),
++        will_deactivate_(tab.RegisterWillDeactivate(
++            base::BindRepeating(&EditorOrigin::OnTabDeactivated,
++                                base::Unretained(this)))) {}
++
++  bool IsEditor() const { return launch_deadline_.is_null(); }
++
++  void MarkClaimed(JNIEnv* env, const jni_zero::JavaRef<jobject>& receiver) {
++    receiver_ = JavaObjectWeakGlobalRef(env, receiver);
++    launch_deadline_ = base::TimeTicks();
++  }
++
++  bool IsOwnedBy(JNIEnv* env, const jni_zero::JavaRef<jobject>& receiver) const {
++    auto owner = receiver_.get(env);
++    return owner && receiver && env->IsSameObject(owner.obj(), receiver.obj());
++  }
++
++  Profile* GetProfile() const {
++    if (revoked_ || !window_ ||
++        (!IsEditor() && base::TimeTicks::Now() >= launch_deadline_)) {
++      return nullptr;
++    }
++    auto* tab = GetEligibleTab(web_contents());
++    if (!tab || tab->GetBrowserWindowInterface() != window_.get()) {
++      return nullptr;
++    }
++    auto* profile =
++        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
++    return profile == window_->GetProfile() ? profile : nullptr;
++  }
++
++ private:
++  void PrimaryPageChanged(content::Page&) override { revoked_ = true; }
++  void PrimaryMainFrameRenderProcessGone(base::TerminationStatus) override {
++    revoked_ = true;
++  }
++  void WebContentsDestroyed() override { revoked_ = true; }
++  void OnTabDetached(tabs::TabInterface*, tabs::TabInterface::DetachReason) {
++    revoked_ = true;
++  }
++  void OnTabDeactivated(tabs::TabInterface*) { revoked_ = true; }
++
++  const base::WeakPtr<BrowserWindowInterface> window_;
++  base::TimeTicks launch_deadline_;
++  JavaObjectWeakGlobalRef receiver_;
++  base::CallbackListSubscription will_detach_;
++  base::CallbackListSubscription will_deactivate_;
++  bool revoked_ = false;
++};
++
++using Sessions = std::map<std::string, std::unique_ptr<EditorOrigin>>;
++
++Sessions& GetSessions() {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  static base::NoDestructor<Sessions> sessions;
++  return *sessions;
++}
++
++std::string AddSession(std::unique_ptr<EditorOrigin> origin) {
++  auto key = base::UnguessableToken::Create().ToString();
++  CHECK(GetSessions().try_emplace(key, std::move(origin)).second);
++  return key;
++}
++
++}  // namespace
++
++static bool JNI_AegisAccessOptionsBridge_CanOffer(content::WebContents* contents) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!CanUseAndroidOptions(AccessOptionsOperation::kPage)) {
++    return false;
++  }
++  auto* tab = GetEligibleTab(contents);
++  auto* window = tab ? tab->GetBrowserWindowInterface() : nullptr;
++  return window &&
++         window->GetProfile() ==
++             Profile::FromBrowserContext(contents->GetBrowserContext());
++}
++
++static std::string JNI_AegisAccessOptionsBridge_PrepareLaunch(
++    content::WebContents* contents) {
++  if (!JNI_AegisAccessOptionsBridge_CanOffer(contents)) {
++    return {};
++  }
++  auto& sessions = GetSessions();
++  std::erase_if(sessions, [](const auto& entry) {
++    return !entry.second->GetProfile();
++  });
++  if (sessions.size() >= kMaxSessions) {
++    return {};
++  }
++  auto& tab = *TabAndroid::FromWebContents(contents);
++  return AddSession(std::make_unique<EditorOrigin>(
++      contents, tab, *tab.GetBrowserWindowInterface()));
++}
++
++static std::string JNI_AegisAccessOptionsBridge_ClaimLaunch(
++    JNIEnv* env,
++    const std::string& ticket,
++    Profile* profile,
++    const jni_zero::JavaRef<jobject>& receiver) {
++  auto& sessions = GetSessions();
++  auto it = sessions.find(ticket);
++  if (it == sessions.end() || it->second->IsEditor()) {
++    return {};
++  }
++  auto origin = std::move(it->second);
++  sessions.erase(it);
++  if (!profile || !receiver || origin->GetProfile() != profile ||
++      !CanUseAndroidOptions(AccessOptionsOperation::kPage)) {
++    return {};
++  }
++  origin->MarkClaimed(env, receiver);
++  return AddSession(std::move(origin));
++}
++
++static bool JNI_AegisAccessOptionsBridge_CanRead(
++    JNIEnv* env,
++    const std::string& editor,
++    Profile* profile,
++    const jni_zero::JavaRef<jobject>& receiver) {
++  const auto& sessions = GetSessions();
++  auto it = sessions.find(editor);
++  return it != sessions.end() && it->second->IsEditor() && profile &&
++         it->second->IsOwnedBy(env, receiver) &&
++         it->second->GetProfile() == profile &&
++         CanUseAndroidOptions(AccessOptionsOperation::kRead);
++}
++
++static void JNI_AegisAccessOptionsBridge_Close(
++    JNIEnv* env,
++    const std::string& editor,
++    const jni_zero::JavaRef<jobject>& receiver) {
++  auto& sessions = GetSessions();
++  auto it = sessions.find(editor);
++  if (it != sessions.end() && it->second->IsEditor() &&
++      it->second->IsOwnedBy(env, receiver)) {
++    sessions.erase(it);
++  }
++}
++
++DEFINE_JNI(AegisAccessOptionsBridge)
+diff --git a/chrome/browser/android/aegis_access_options_identity.h b/chrome/browser/android/aegis_access_options_identity.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc7f01fa2e35157e4398dd754522fc0bd7597e5a
+--- /dev/null
++++ b/chrome/browser/android/aegis_access_options_identity.h
+@@ -0,0 +1,50 @@
++// Copyright 2026 GCSA
++
++#ifndef CHROME_BROWSER_ANDROID_AEGIS_ACCESS_OPTIONS_IDENTITY_H_
++#define CHROME_BROWSER_ANDROID_AEGIS_ACCESS_OPTIONS_IDENTITY_H_
++
++#include <string_view>
++
++#include "base/version_info/channel.h"
++#include "components/aegis_access/access_options_capability.h"
++
++namespace aegis::access {
++
++inline bool CanUseAndroidAccessOptions(
++    std::string_view package,
++    std::string_view host_package,
++    bool internal_options,
++    std::string_view product_channel,
++    version_info::Channel channel,
++    aegis_access::AccessOptionsOperation operation) {
++  constexpr std::string_view kAegisPackage = "com.gcsa.aegis";
++  if (!internal_options || package != kAegisPackage ||
++      host_package != kAegisPackage) {
++    return false;
++  }
++
++  using aegis_access::AccessProductChannel;
++  using aegis_access::BrowserReleaseChannel;
++  const auto product =
++      aegis_access::ParseAccessProductChannel(product_channel);
++  BrowserReleaseChannel browser;
++  if (product == AccessProductChannel::kDebug &&
++      channel == version_info::Channel::DEV) {
++    browser = BrowserReleaseChannel::kDev;
++  } else if (product == AccessProductChannel::kAlpha &&
++             channel == version_info::Channel::CANARY) {
++    browser = BrowserReleaseChannel::kCanary;
++  } else {
++    return false;
++  }
++
++  return aegis_access::CanUseAccessOptions(
++      aegis_access::ResolveAccessBuildIdentity(
++          product, browser, aegis_access::ChannelNamespace::kInvalid,
++          internal_options),
++      operation);
++}
++
++}  // namespace aegis::access
++
++#endif  // CHROME_BROWSER_ANDROID_AEGIS_ACCESS_OPTIONS_IDENTITY_H_
+diff --git a/chrome/browser/android/aegis_access_options_identity_unittest.cc b/chrome/browser/android/aegis_access_options_identity_unittest.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d30e3af35d803256410487ce40c1a62e8b32bd7
+--- /dev/null
++++ b/chrome/browser/android/aegis_access_options_identity_unittest.cc
+@@ -0,0 +1,53 @@
++// Copyright 2026 GCSA
++
++#include "chrome/browser/android/aegis_access_options_identity.h"
++
++#include <initializer_list>
++
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace aegis::access {
++namespace {
++
++using aegis_access::AccessOptionsOperation;
++using version_info::Channel;
++
++constexpr char kAegisPackage[] = "com.gcsa.aegis";
++
++TEST(AegisAccessOptionsIdentityTest, RequiresCongruentNativeChannelAndOptIn) {
++  for (auto product : {"debug", "alpha", "beta", "stable", "unknown", "dev"}) {
++    for (auto channel : {Channel::UNKNOWN, Channel::DEV, Channel::CANARY,
++                         Channel::BETA, Channel::STABLE}) {
++      for (bool enabled : {false, true}) {
++        const auto product_name = std::string_view(product);
++        const bool expected =
++            enabled && ((product_name == "debug" && channel == Channel::DEV) ||
++                        (product_name == "alpha" && channel == Channel::CANARY));
++        for (auto operation :
++             {AccessOptionsOperation::kPage, AccessOptionsOperation::kRead,
++              AccessOptionsOperation::kWrite, AccessOptionsOperation::kImport,
++              AccessOptionsOperation::kActivate}) {
++          EXPECT_EQ(CanUseAndroidAccessOptions(kAegisPackage, kAegisPackage,
++                                               enabled, product, channel,
++                                               operation),
++                    expected);
++        }
++      }
++    }
++  }
++}
++
++TEST(AegisAccessOptionsIdentityTest, RequiresBothNativePackageIdentities) {
++  constexpr auto operation = AccessOptionsOperation::kPage;
++  EXPECT_TRUE(CanUseAndroidAccessOptions(kAegisPackage, kAegisPackage, true,
++                                         "debug", Channel::DEV, operation));
++  EXPECT_FALSE(CanUseAndroidAccessOptions("org.chromium.chrome", kAegisPackage,
++                                          true, "debug", Channel::DEV,
++                                          operation));
++  EXPECT_FALSE(CanUseAndroidAccessOptions(kAegisPackage, "org.chromium.chrome",
++                                          true, "debug", Channel::DEV,
++                                          operation));
++}
++
++}  // namespace
++}  // namespace aegis::access
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+index 7a603f53cd724c8d076a994860851b11e9d7c18d..986bee9c5d0b1a35739a21d54be4fa589778bf94 100644
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -4566,6 +4566,15 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+       <message name="IDS_AEGIS_AGENT_START_TASK" desc="Button that starts planning an Aegis Browser Agent task.">
+         Let Aegis make a plan
+       </message>
++      <message name="IDS_AEGIS_ACCESS_OPTIONS_TITLE" desc="Menu and screen title for Aegis Access Options.">
++        Access Options
++      </message>
++      <message name="IDS_AEGIS_ACCESS_OPTIONS_READ_ONLY" desc="Status in the internal Aegis Access Options settings when editing is unavailable.">
++        Internal test. Read-only access.
++      </message>
++      <message name="IDS_AEGIS_ACCESS_OPTIONS_UNAVAILABLE" desc="Status when the originating browser tab can no longer authorize this settings screen.">
++        Access Options is unavailable. Reopen it from the browser menu.
++      </message>
+       <message name="IDS_AEGIS_AGENT_OPEN_CENTER" desc="Button that opens the full Aegis Browser Agent workspace.">
+         Open Agent workspace and automations
+       </message>
