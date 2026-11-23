@@ -853,21 +853,50 @@ test('publication requires readable, nonmutating macOS ACLs',
 
 test('a Node config file can select a preloaded URL entry for verification',
   {skip: !pinnedInputs || !process.allowedNodeEnvironmentFlags.has('--entry-url')}, (t) => {
+    const help = spawnSync(process.execPath, ['--help'], {encoding: 'utf8'});
+    assert.ifError(help.error);
+    assert.equal(help.status, 0, help.stderr);
+    const configFlag = ['--experimental-config-file', '--config-file']
+      .find((flag) => help.stdout.includes(flag));
+    if (!configFlag) {
+      t.skip('requires Node startup configuration');
+      return;
+    }
     const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-node-config-test-'));
     t.after(() => rmSync(dir, {recursive: true, force: true}));
-    const config = join(dir, 'node.config.json');
-    writeFileSync(config, JSON.stringify({nodeOptions: {'entry-url': true}}));
+    const config = join(dir, 'entry-options.json');
+    const options = {nodeOptions: {'entry-url': true}};
+    writeFileSync(config, JSON.stringify(options));
     const preload = pathToFileURL(cli).href + '?variant';
     const output = join(dir, 'missing-catalogue.json');
     const args = ['--import', preload, cli + '?variant', '--dlc', join(pinnedInputs, 'dlc.dat'),
       '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output', output, '--verify'];
     const env = {...process.env, NODE_OPTIONS: '', NODE_NO_WARNINGS: '1'};
-    for (const flag of ['--experimental-config-file=' + config, '--experimental-default-config-file']) {
-      const result = spawnSync(process.execPath, [flag, ...args], {cwd: dir, encoding: 'utf8', env});
+    const verifyMissing = (...flags) => {
+      const result = spawnSync(process.execPath, [...flags, ...args], {cwd: dir, encoding: 'utf8', env});
       assert.ifError(result.error);
       assert.equal(result.status, 1, result.stderr);
       assert.match(result.stderr, /ENOENT.*missing-catalogue\.json/);
       assert.equal(existsSync(output), false);
+    };
+    verifyMissing(configFlag + '=' + config);
+    const major = Number(process.versions.node.split('.')[0]);
+    if (major < 26) {
+      // Older runtimes consume a following config filename.
+      verifyMissing(configFlag, config);
+    } else {
+      const versioned = join(dir, 'versioned-options.json');
+      writeFileSync(versioned, JSON.stringify({configs: [
+        {nodeVersion: major + 1, config: {nodeOptions: {'entry-url': false}}},
+        {nodeVersion: major, config: options},
+      ]}));
+      verifyMissing(configFlag + '=' + versioned);
+    }
+    const defaultFlag = '--experimental-default-config-file';
+    if (help.stdout.includes(defaultFlag) || configFlag === '--config-file') {
+      writeFileSync(join(dir, 'node.config.json'), JSON.stringify(options));
+      verifyMissing(help.stdout.includes(defaultFlag) ? defaultFlag : configFlag);
+      if (major >= 26 && configFlag !== '--config-file') verifyMissing(configFlag);
     }
   });
 

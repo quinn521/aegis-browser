@@ -522,10 +522,18 @@ function main() {
 
 function readNodeConfig() {
   // Read only a configuration file explicitly enabled in the Node command line.
-  const flag = process.execArgv.findLast((arg) => /^--(?:experimental[-_])?config[-_]file(?:=|$)/u.test(arg));
+  const index = process.execArgv.findLastIndex((arg) => /^--(?:experimental[-_])?config[-_]file(?:=|$)/u.test(arg));
+  const flag = process.execArgv[index];
   if (!flag && !readNodeOption('experimental-default-config-file')) return {};
-  const path = flag?.includes('=') ? flag.slice(flag.indexOf('=') + 1) : 'node.config.json';
-  return JSON.parse(readFileSync(path, 'utf8')).nodeOptions ?? {};
+  const major = Number(process.versions.node.split('.')[0]);
+  const inlinePath = flag?.includes('=') ? flag.slice(flag.indexOf('=') + 1) : undefined;
+  // Older Node accepts a separate filename. In default-file mode the next token is another flag.
+  const next = process.execArgv[index + 1];
+  const separatePath = flag && next && !next.startsWith('-') ? next : undefined;
+  const path = inlinePath ?? separatePath ?? 'node.config.json';
+  const settings = JSON.parse(readFileSync(path, 'utf8'));
+  const selected = settings.configs?.find((item) => item.nodeVersion === major)?.config ?? settings;
+  return selected.nodeOptions ?? {};
 }
 
 function readNodeOption(name, config = {}) {
