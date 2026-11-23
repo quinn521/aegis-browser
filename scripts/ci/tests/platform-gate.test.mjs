@@ -73,10 +73,13 @@ test('the observational check is separate from quality and always summarizes its
   }
   const android = workflow.jobs.android.steps.find(step => step.name === 'Run Android host, pin and release regressions');
   assert.match(android.run, /python3 -B scripts\/ci\/check-android-platform-inputs\.py/u);
+  assert.match(android.run, /node --test scripts\/ci\/tests\/android-\*\.test\.mjs/u);
+  assert.ok(workflow.jobs.android.steps.some(step => step.run === 'pnpm install --frozen-lockfile --ignore-scripts'));
   const ios = workflow.jobs.ios.steps.find(step => step.name === 'Run iOS release and WebExtension contracts');
   for (const fixture of [
     'test_verify_ios_archive.py', 'test_verify_signed_ios.py', 'test_verify_ios_dsyms.py',
     'test_development_signing.py', 'test_development_key_access.py',
+    'test_verify_ipa.py', 'test_hosted_signing.py',
   ]) assert.ok(ios.run.includes('scripts/release/' + fixture), fixture);
   assert.match(ios.run, /generate-tracker-rules\.mjs --check/u);
   assert.ok(workflow.jobs.ios.steps.some(step => step.run === 'pnpm install --frozen-lockfile --ignore-scripts'));
@@ -86,7 +89,7 @@ test('the observational check is separate from quality and always summarizes its
   }
   const nativeCoverage = YAML.parse(readFileSync('.github/workflows/other-platform-coverage.yml', 'utf8'));
   assert.ok(nativeCoverage.jobs['powershell-coverage'].steps.some(step =>
-    step.run === 'python -B apps/browser/scripts/ci/candidate_test.py'));
+    step.run === "python -B -m unittest discover -s apps/browser/scripts/ci -p '*_test.py'"));
   const report = nativeCoverage.jobs['lane-result'];
   assert.deepEqual(report.needs, ['shell-coverage', 'powershell-coverage']);
   assert.match(report.steps[0].run, /test "\$LINUX_RESULT" = success && test "\$WINDOWS_RESULT" = skipped/u);

@@ -126,6 +126,7 @@ const candidateInputs = new Set([
   '.github/workflows/chromium-candidate.yml',
   'apps/browser/scripts/ci/candidate.py',
   'apps/browser/scripts/ci/candidate_test.py',
+  'apps/browser/scripts/release-contract.py',
 ]);
 const desktopPatch = path => path.startsWith('apps/browser/patches/');
 const browserShellInput = path => /^apps\/browser\/scripts\/[^/]+\.sh$/u.test(path);
@@ -138,6 +139,10 @@ const iosArchiveRuntime = new Set([
 ]);
 const iosReleaseContracts = new Set([
   'scripts/release/cli.rb',
+  'scripts/release/hosted-signing.py',
+  'scripts/release/test_hosted_signing.py',
+  'scripts/release/verify-ipa.py',
+  'scripts/release/test_verify_ipa.py',
   'scripts/release/verify-ios-dsyms.py',
   'scripts/release/test_verify_ios_dsyms.py',
   'scripts/release/test_verify_signed_ios.py',

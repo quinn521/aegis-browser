@@ -15,6 +15,7 @@ def main():
     if not re.fullmatch(r"[0-9a-f]{40}", pin["commit"]):
         raise ValueError("Invalid Android Chromium commit")
     patch_names = candidate["series"](patches)
+    v8_patch_names = candidate["series"](patches / "v8")
 
     gn = Path("apps/browser/args/aegis-android.gn").read_text(encoding="utf-8")
     for name, expected in (
@@ -27,7 +28,8 @@ def main():
             raise ValueError(f"Invalid Android GN value for {name}")
 
     print(json.dumps(
-        {"androidPin": pin, "patches": len(patch_names), "source": delivery["source_identity"]()},
+        {"androidPin": pin, "patches": len(patch_names), "v8Patches": len(v8_patch_names),
+         "source": delivery["source_identity"]()},
         ensure_ascii=False,
     ))
 

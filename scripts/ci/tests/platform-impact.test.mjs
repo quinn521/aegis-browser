@@ -395,6 +395,8 @@ test('paths select platforms and commit types select stage depth', () => {
     ]) assert.equal(pr(() => save(file, 'updated'), 'chore: change archive consumer').deep, true, file);
     for (const file of ['scripts/release/ios-action.py', 'scripts/release/test_ios_action.py',
       'scripts/release/cli.rb', 'scripts/release/verify-ios-dsyms.py',
+      'scripts/release/hosted-signing.py', 'scripts/release/test_hosted_signing.py',
+      'scripts/release/verify-ipa.py', 'scripts/release/test_verify_ipa.py',
       'scripts/release/test_verify_ios_dsyms.py', 'scripts/release/test_verify_signed_ios.py',
       'apps/ios/scripts/run-simulator-tests.sh']) {
       assert.deepEqual(route(pr(() => save(file, 'updated'), 'fix: repair iOS contract')), {...iosRoute, deep: false});
@@ -412,7 +414,8 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.deepEqual(route(pr(() => save(realWindowsPatch, 'updated patch'), 'fix: update desktop patch')), desktopRoute);
     const desktopVersion = 'apps/browser/CHROMIUM_VERSION';
     const productVersion = 'apps/browser/overlay/chrome/browser/ui/webui/help/aegis_github_update.h';
-    for (const file of [desktopVersion, 'apps/browser/scripts/ci/candidate.py', 'apps/browser/scripts/ci/candidate_test.py']) {
+    for (const file of [desktopVersion, 'apps/browser/scripts/ci/candidate.py',
+      'apps/browser/scripts/ci/candidate_test.py', 'apps/browser/scripts/release-contract.py']) {
       assert.deepEqual(route(pr(() => save(file, 'update'), 'fix: update shared candidate input')),
         {...desktopRoute, android: true}, file);
     }

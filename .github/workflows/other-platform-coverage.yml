@@ -86,7 +86,7 @@ jobs:
         with:
           python-version: 3.11.9
       - name: Test candidate orchestration on Windows
-        run: python -B apps/browser/scripts/ci/candidate_test.py
+        run: python -B -m unittest discover -s apps/browser/scripts/ci -p '*_test.py'
       - name: Run WinRM model relay self-test
         shell: bash
         run: |
