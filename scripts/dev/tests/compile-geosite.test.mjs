@@ -8,7 +8,7 @@ import {
 import {tmpdir} from 'node:os';
 import {basename, delimiter, dirname, join} from 'node:path';
 import test from 'node:test';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {compileGroup, matchesHost} from '../compile-geosite.mjs';
 
 const cli = fileURLToPath(new URL('../compile-geosite.mjs', import.meta.url));
@@ -241,6 +241,31 @@ test('preloaded aliases do not dispatch a different CLI entry', (t) => {
     assert.equal(result.stderr, '');
   }
 });
+
+test('URL-entry mode dispatches a preloaded compiler exactly once',
+  {skip: !process.allowedNodeEnvironmentFlags.has('--entry-url')}, () => {
+    const url = pathToFileURL(cli).href;
+    const run = (args, nodeOptions = '') => spawnSync(process.execPath, args, {
+      encoding: 'utf8', env: {...process.env, NODE_OPTIONS: nodeOptions, NODE_NO_WARNINGS: '1'},
+    });
+    const direct = run([cli, '--help']);
+    assert.equal(direct.status, 0, direct.stderr);
+    assert.match(direct.stdout, /^Usage: node scripts\/dev\/compile-geosite\.mjs/);
+    for (const [flags, entry, preload, nodeOptions] of [
+      [['--entry-url'], url, url, ''],
+      [[], url, url, '--entry-url'],
+      [['--entry-url'], url + '?variant', url + '?variant', ''],
+      [['--entry-url'], cli + '#variant', url + '#variant', ''],
+      [['--entry-url'], url, url + '?library', ''],
+      [['--no-entry-url'], cli, url, '--entry-url'],
+    ]) {
+      const result = run([...flags, '--import', preload, entry, '--help'], nodeOptions);
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, direct.stdout, JSON.stringify({flags, entry, preload, nodeOptions}));
+      assert.equal(result.stderr, '');
+    }
+  });
 
 test('domain rules cannot cover a nested registry or wildcard tenants', () => {
   const list = psl.replace('tenant.example', 'tenant.example\ntenants.example.org');
@@ -767,6 +792,39 @@ test('publication requires a protected output directory chain',
 
     chmodSync(shared, 0o1777);
     const output = join(nested, 'catalogue.json');
+    const result = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(readFileSync(output, 'utf8')).group, 'DEBIAN');
+    assert.deepEqual(readdirSync(nested), ['catalogue.json']);
+  });
+
+test('publication rejects mutating macOS ACLs and accepts read-only ACLs',
+  {skip: process.platform !== 'darwin' || !pinnedInputs}, (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'aegis-geosite-acl-test-'));
+    t.after(() => rmSync(dir, {recursive: true, force: true}));
+    const shared = join(dir, 'shared');
+    const nested = join(shared, 'nested');
+    mkdirSync(nested, {recursive: true});
+    chmodSync(shared, 0o755);
+    const setACL = (...args) => {
+      const result = spawnSync('/bin/chmod', args, {encoding: 'utf8'});
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+    };
+    setACL('+a', 'group:everyone allow add_subdirectory,delete_child', shared);
+    assert.equal(lstatSync(shared).mode & 0o777, 0o755);
+    const args = [cli, '--dlc', join(pinnedInputs, 'dlc.dat'),
+      '--psl', join(pinnedInputs, 'effective_tld_names.dat'), '--group', 'DEBIAN', '--output'];
+    const output = join(nested, 'catalogue.json');
+    const refused = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
+    assert.ifError(refused.error);
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /trusted output directory.*ACL/i);
+    assert.deepEqual(readdirSync(nested), []);
+
+    setACL('-N', shared);
+    setACL('+a', 'group:everyone allow list,search,readattr,readextattr,readsecurity', shared);
     const result = spawnSync(process.execPath, [...args, output], {encoding: 'utf8'});
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
