@@ -77,9 +77,9 @@ import os
 from pathlib import Path
 import sys
 operation, argument = sys.argv[1:]
-sums = {tuple(path.read_text().split()[index:index + 2]): path.read_text().split()[index + 2]
-        for path in [Path(os.environ["IOS_CI_SOURCE"]) / "apps/ios/EmbeddedCore/bridge/go.sum"]
-        for index in range(0, len(path.read_text().split()), 3)}
+checksum_file = Path(os.environ["IOS_CI_SOURCE"]) / "apps/ios/EmbeddedCore/bridge/go.sum"
+sums = {(path, revision): checksum
+        for path, revision, checksum in map(str.split, checksum_file.read_text().splitlines())}
 modules = {"golang.org/x/mobile": os.environ["PREP_MODULE_VERSION"], "golang.org/x/mod": "v0.42.0",
            "golang.org/x/sync": "v0.24.0", "golang.org/x/tools": "v0.52.0"}
 def metadata(path, version):
@@ -124,6 +124,11 @@ fail() {
   diagnostic
   exit "$1"
 }
+hold_for_cancellation() {
+  printf '%s\n' "$$" > "$PREP_READY.tmp"
+  mv "$PREP_READY.tmp" "$PREP_READY"
+  exec /bin/sleep 15
+}
 case "$tool:$1" in
   curl:--disable)
     [[ "$2 $3 $4 $5 $6" == '--proto =https --fail --silent --show-error' ]]
@@ -139,8 +144,7 @@ case "$tool:$1" in
       "https://dl.google.com/go/$PREP_ARCHIVE_NAME")
         printf 'archive\n' >> "$PREP_CALLS"
         if [[ "$PREP_SCENARIO" == download-cancel ]]; then
-          printf '%s\n' "$$" > "$PREP_READY"
-          exec /bin/sleep 15
+          hold_for_cancellation
         fi
         [[ "$PREP_SCENARIO" == archive-error ]] && fail 28
         cp "$PREP_ARCHIVE" "$2"
@@ -184,6 +188,7 @@ case "$tool:$1" in
     cmp "$IOS_CI_SOURCE/apps/ios/EmbeddedCore/bridge/go.sum" go.sum
     printf '%s\n' 'synthetic compiler intermediate' > "$GOTMPDIR/install-work"
     [[ "$PREP_SCENARIO" == install || "$PREP_SCENARIO" == stale-install ]] && fail 43
+    if [[ "$PREP_SCENARIO" == slow-start-cancel ]]; then /bin/sleep 7; fi
     diagnostic
     cp "$PREP_TOOLS" "$GOBIN/gomobile"
     cp "$PREP_TOOLS" "$GOBIN/gobind"
@@ -216,9 +221,8 @@ case "$tool:$1" in
     printf '%s\n' 'synthetic binding intermediate' > "$GOTMPDIR/bind-work"
     [[ "$PREP_SCENARIO" == bind ]] && fail 46
     diagnostic
-    if [[ "$PREP_SCENARIO" == cancel ]]; then
-      printf '%s\n' "$$" > "$PREP_READY"
-      exec /bin/sleep 15
+    if [[ "$PREP_SCENARIO" == cancel || "$PREP_SCENARIO" == slow-start-cancel ]]; then
+      hold_for_cancellation
     fi
     if [[ "$PREP_SCENARIO" == changed-bridge ]]; then
       printf '\n// changed during bind\n' >> go.mod
@@ -536,9 +540,40 @@ raise SystemExit(status)
   }
 });
 
-for (const [scenario, signal, status] of [['cancel', 'SIGINT', 130], ['cancel', 'SIGTERM', 143], ['download-cancel', 'SIGTERM', 143]]) {
+// Locked Go setup, private tool installation and binding must signal readiness
+// before the separate cancellation/cleanup deadline starts.
+const startupAllowanceMs = 30_000;
+const cancellationAllowanceMs = 8_000;
+
+async function waitForToolReady(child, ready, diagnostics) {
+  const deadline = performance.now() + startupAllowanceMs;
+  while (child.exitCode === null && child.signalCode === null && performance.now() < deadline) {
+    if (existsSync(ready)) {
+      const pid = Number(readFileSync(ready, 'utf8').trim());
+      assert(Number.isSafeInteger(pid) && pid > 1, 'ready marker must identify the active tool');
+      return pid;
+    }
+    await delay(50);
+  }
+  assert.fail(`Tool did not signal readiness within its ${startupAllowanceMs} ms startup allowance.\n${diagnostics()}`);
+}
+
+async function waitForCancellation(closed) {
+  const timer = new AbortController();
+  try {
+    return await Promise.race([closed, delay(cancellationAllowanceMs, undefined, {signal: timer.signal}).then(() => {
+      assert.fail(`Cancellation did not finish within ${cancellationAllowanceMs} ms of the signal`);
+    })]);
+  } finally {
+    timer.abort();
+  }
+}
+
+for (const [scenario, signal, status] of [['cancel', 'SIGINT', 130], ['cancel', 'SIGTERM', 143],
+  ['download-cancel', 'SIGTERM', 143], ['slow-start-cancel', 'SIGTERM', 143]]) {
   test(`EmbeddedCore ${scenario} handles ${signal} and stops the active tool`, async t => {
     const setup = fixture(t, scenario);
+    const started = performance.now();
     const child = spawn('bash', bash, {...setup.options, stdio: ['ignore', 'pipe', 'pipe']});
     const closed = once(child, 'close');
     t.after(() => child.kill('SIGTERM'));
@@ -546,14 +581,17 @@ for (const [scenario, signal, status] of [['cancel', 'SIGINT', 130], ['cancel', 
     let stderr = '';
     child.stdout.on('data', data => { stdout += data; });
     child.stderr.on('data', data => { stderr += data; });
-    for (let attempt = 0; attempt < 120 && !existsSync(setup.ready) && child.exitCode === null; attempt += 1) {
-      await delay(50);
+    const pid = await Promise.race([waitForToolReady(child, setup.ready, () => stderr), closed.then(([code, reason]) => {
+      assert.fail(`Fixture exited before tool readiness (${code ?? reason}).\n${stderr}`);
+    })]);
+    if (scenario === 'slow-start-cancel') {
+      assert(performance.now() - started > 6_000, 'fixture must outlast the former readiness deadline');
+      assert.match(readFileSync(setup.calls, 'utf8'), /go install -mod=readonly[\s\S]+gomobile bind/u);
     }
-    assert(existsSync(setup.ready), stderr);
-    const pid = Number(readFileSync(setup.ready, 'utf8'));
     assert(child.kill(signal));
-    assert.deepEqual(await closed, [status, null]);
+    assert.deepEqual(await waitForCancellation(closed), [status, null]);
     assertPrivate(setup, stdout, stderr);
+    assert(!existsSync(join(setup.products, 'build-manifest.json')), 'cancelled preparation published a receipt');
     assert.match(stderr, /EmbeddedCore preparation exited with status 143/u);
     assert(stderr.includes(setupExited(scenario === 'download-cancel' ? 143 : 0)));
     assert(stderr.endsWith(`EmbeddedCore preparation cancelled with status ${status}\n`));

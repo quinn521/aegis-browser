@@ -15,7 +15,7 @@ import tempfile
 
 sys.dont_write_bytecode = True
 from ios_embedded_core import (apple_build_environment, apple_metadata, check_mobile_tool, directory_digest,
-                               go_version, mobile_modules, record, verify_apple_pin)
+                               go_version, mobile_modules, normalized_xcframework_info, record, verify_apple_pin)
 
 NAME = "AegisEmbeddedCore"
 FRAMEWORK = NAME + ".framework"
@@ -239,16 +239,12 @@ def package_wrapper(root, args):
 
 def normalize_xcframework(path):
     plain_tree(path)
-    libraries = {
-        "ios-arm64": {"SupportedArchitectures": ["arm64"]},
-        "ios-arm64_x86_64-simulator": {"SupportedArchitectures": ["arm64", "x86_64"],
-                                      "SupportedPlatformVariant": "simulator"},
-    }
+    canonical = normalized_xcframework_info()
+    expected = canonical["AvailableLibraries"]
+    libraries = [item["LibraryIdentifier"] for item in expected]
     require({item.name for item in path.iterdir()} == {"Info.plist", *libraries}, "unexpected XCFramework layout")
     plist = plain(path / "Info.plist")
     fields = read_plist(plist.read_bytes())
-    expected = [{"LibraryIdentifier": name, "LibraryPath": FRAMEWORK, "BinaryPath": f"{FRAMEWORK}/{NAME}",
-                 "SupportedPlatform": "ios", **attrs} for name, attrs in sorted(libraries.items())]
     found = fields.get("AvailableLibraries")
     require(isinstance(found, list) and len(found) == len(expected) and all(isinstance(entry, dict) for entry in found),
             "unexpected XCFramework library list")
@@ -264,7 +260,7 @@ def normalize_xcframework(path):
         framework_plist(slice_path / FRAMEWORK)
         binary_digests[name] = directory_digest(slice_path / FRAMEWORK)
     require(input_digests == binary_digests, "packaged slice differs from the generated framework")
-    plist.write_bytes(plistlib.dumps({**fields, "AvailableLibraries": expected}, sort_keys=True))
+    plist.write_bytes(plistlib.dumps(canonical, sort_keys=True))
 
 
 def mobile_tools(go, toolchain, root, env, bridge):

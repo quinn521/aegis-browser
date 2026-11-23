@@ -3,9 +3,9 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import plistlib
 import re
 import subprocess
-import shutil
 
 
 SLICE_KEYS = {"ios-arm64": "iosArm64Sha256", "ios-arm64-simulator": "iosArm64SimulatorSha256"}
@@ -14,6 +14,8 @@ IOS_SDKS = ("iphoneos", "iphonesimulator")
 MOBILE_DEPENDENCIES = {"golang.org/x/mod": "v0.42.0", "golang.org/x/sync": "v0.24.0",
                        "golang.org/x/tools": "v0.52.0"}
 BINDING_TOOL_POLICY = "private-pinned-graph-v1"
+CORE_NAME = "AegisEmbeddedCore"
+FRAMEWORK_NAME = CORE_NAME + ".framework"
 
 
 def file_digest(path):
@@ -46,6 +48,36 @@ def slice_digests(framework):
         raise ValueError("expected one arm64 simulator slice")
     return {"iosArm64Sha256": directory_digest(framework / "ios-arm64"),
             "iosArm64SimulatorSha256": directory_digest(simulator[0])}
+
+
+def normalized_xcframework_info():
+    libraries = []
+    for identifier, architectures, variant in (("ios-arm64", ["arm64"], {}),
+            ("ios-arm64_x86_64-simulator", ["arm64", "x86_64"], {"SupportedPlatformVariant": "simulator"})):
+        libraries.append({"LibraryIdentifier": identifier, "LibraryPath": FRAMEWORK_NAME,
+                          "BinaryPath": f"{FRAMEWORK_NAME}/{CORE_NAME}", "SupportedPlatform": "ios",
+                          "SupportedArchitectures": architectures, **variant})
+    return {"AvailableLibraries": libraries, "CFBundlePackageType": "XFWK", "XCFrameworkFormatVersion": "1.0"}
+
+
+def verify_frozen_xcframework_layout(framework):
+    # The slice hashes cover the binary, headers and modules. Independently
+    # lock the routing plist and exact paths so Xcode cannot choose another slice.
+    layout = normalized_xcframework_info()
+    directories = set()
+    files = {Path("Info.plist")}
+    for library in layout["AvailableLibraries"]:
+        leaf = Path(library["LibraryIdentifier"]) / FRAMEWORK_NAME
+        directories.update((leaf.parent, leaf, leaf / "Headers", leaf / "Modules"))
+        files.update(leaf / name for name in (CORE_NAME, "Info.plist", "Modules/module.modulemap",
+                     "Headers/AegisEmbeddedCore.h", "Headers/Embeddedcore.objc.h",
+                     "Headers/Universe.objc.h", "Headers/ref.h"))
+    if (framework.is_symlink()
+            or {path.relative_to(framework) for path in framework.rglob("*")} != directories | files
+            or any((framework / path).is_symlink() or not (framework / path).is_dir() for path in directories)
+            or any((framework / path).is_symlink() or not (framework / path).is_file() for path in files)
+            or (framework / "Info.plist").read_bytes() != plistlib.dumps(layout, sort_keys=True)):
+        raise ValueError("EmbeddedCore XCFramework does not match the frozen Alpha layout")
 
 
 def write_json(path, value):
@@ -210,25 +242,28 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None, 
 
 def verify(root, source_lock, products, mode=None):
     root, source_lock, products = Path(root).resolve(), Path(source_lock).resolve(), Path(products).resolve()
-    manifest = json.loads((products / "build-manifest.json").read_text())
+    manifest_bytes = (products / "build-manifest.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
     if manifest.get("schemaVersion") != 1 or manifest.get("kind") != "ios-embedded-core-build":
         raise ValueError("unsupported EmbeddedCore build manifest")
     file_list = products / "build-inputs.xcfilelist"
     if file_list.read_text() != input_list(root, source_lock, products, products / "AegisEmbeddedCore.xcframework"):
         raise ValueError("Xcode input list points to different build inputs")
     bridge = directory_digest(root / "apps/ios/EmbeddedCore/bridge")
+    source_bytes = source_lock.read_bytes()
+    effective_bytes = (products / "embedded-core-lock.json").read_bytes()
     expected = {
-        "sourceLockSha256": file_digest(source_lock),
+        "sourceLockSha256": hashlib.sha256(source_bytes).hexdigest(),
         "bridgeSha256": bridge,
         "compiledBridgeSha256": bridge,
-        "effectiveLockSha256": file_digest(products / "embedded-core-lock.json"),
+        "effectiveLockSha256": hashlib.sha256(effective_bytes).hexdigest(),
         "frameworkSha256": directory_digest(products / "AegisEmbeddedCore.xcframework"),
         "slices": slice_digests(products / "AegisEmbeddedCore.xcframework"),
         "inputFileListSha256": file_digest(products / "build-inputs.xcfilelist"),
     }
     if any(manifest.get(key) != value for key, value in expected.items()):
         raise ValueError("actual EmbeddedCore build inputs differ from their manifest")
-    source = json.loads(source_lock.read_text())
+    source = json.loads(source_bytes)
     toolchain = source["toolchain"]
     if any(manifest.get(key) != toolchain["gomobile"] for key in ("gomobileModule", "gobindModule")):
         raise ValueError("recorded binding tools differ from the source pin")
@@ -243,12 +278,12 @@ def verify(root, source_lock, products, mode=None):
         raise ValueError("cached slices differ from frozen digests")
     if mode == "strict":
         verify_apple_pin(manifest, toolchain)
-    effective = json.loads((products / "embedded-core-lock.json").read_text())
+    effective = json.loads(effective_bytes)
     if source.get("status") != "verified_build" or effective != {
         **source, "artifacts": {**source["artifacts"], **expected["slices"]}
     }:
         raise ValueError("bundled lock differs from the source pins or actual slices")
-    return {**manifest, "manifestSha256": file_digest(products / "build-manifest.json")}
+    return {**manifest, "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest()}
 
 
 def verify_bundle(bundle, products, derived, platform, *, owned_linker_paths=False):
@@ -265,14 +300,32 @@ def verify_bundle(bundle, products, derived, platform, *, owned_linker_paths=Fal
             "bundledBuildManifestSha256": file_digest(manifest)}
 
 
-def verify_prepared_source(manifest, root, commit):
+def verify_prepared_source(manifest, root, commit, framework):
     embedded = Path(root) / "apps/ios/EmbeddedCore"
     bridge = directory_digest(embedded / "bridge")
+    lock_bytes = (embedded / "embedded-core-lock.json").read_bytes()
     if (manifest["sourceCommit"] != commit
-            or manifest["sourceLockSha256"] != file_digest(embedded / "embedded-core-lock.json")
+            or manifest["sourceLockSha256"] != hashlib.sha256(lock_bytes).hexdigest()
             or manifest.get("compiledBridgeSha256") != bridge
             or manifest["bridgeSha256"] != bridge):
         raise ValueError("EmbeddedCore inputs do not match the prepared Alpha source")
+    if manifest.get("digestMode") != "strict":
+        raise ValueError("Commit-stamped Alpha requires a strict EmbeddedCore build; ci-rebuild cannot certify it")
+    lock = json.loads(lock_bytes)
+    if manifest.get("slices") != {key: lock["artifacts"][key] for key in SLICE_KEYS.values()}:
+        raise ValueError("EmbeddedCore slices differ from the prepared Alpha source's frozen digests")
+    verify_apple_pin(manifest, lock["toolchain"])
+    verify_frozen_xcframework_layout(framework)
+
+
+def install_verified_receipts(products, bundle, manifest):
+    lock = (products / "embedded-core-lock.json").read_bytes()
+    receipt = (products / "build-manifest.json").read_bytes()
+    if (hashlib.sha256(lock).hexdigest() != manifest["effectiveLockSha256"]
+            or hashlib.sha256(receipt).hexdigest() != manifest["manifestSha256"]):
+        raise ValueError("EmbeddedCore lock or manifest changed during installation")
+    (bundle / "embedded-core-lock.json").write_bytes(lock)
+    (bundle / "embedded-core-build.json").write_bytes(receipt)
 
 
 def main():
@@ -295,9 +348,8 @@ def main():
         if not args.bundle:
             parser.error("install requires --bundle")
         if args.prepared_source:
-            verify_prepared_source(result, *args.prepared_source)
-        shutil.copyfile(args.products / "embedded-core-lock.json", args.bundle / "embedded-core-lock.json")
-        shutil.copyfile(args.products / "build-manifest.json", args.bundle / "embedded-core-build.json")
+            verify_prepared_source(result, *args.prepared_source, args.products / "AegisEmbeddedCore.xcframework")
+        install_verified_receipts(args.products, args.bundle, result)
     elif args.bundle:
         if not args.derived or not args.platform:
             parser.error("bundle verification requires --derived and --platform")
