@@ -8,11 +8,13 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         let id: UUID
         let path: String
         let level: AccessLogLevel
+        let generation: Int64?
     }
     struct Lease: Sendable {
         let id: UUID
         let path: String?
         let level: AccessLogLevel
+        let generation: Int64?
     }
     public static let shared: AccessDiagnosticLog = {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -144,7 +146,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         return try openCapture(level: level)
     }
 
-    private func openCapture(level: AccessLogLevel) throws -> Capture {
+    private func openCapture(level: AccessLogLevel, shared: Bool = false) throws -> Capture {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("aegis-access-log-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false,
@@ -168,7 +170,8 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             try? FileManager.default.removeItem(at: dir)
             throw failure
         }
-        let capture = Capture(id: UUID(), path: fifo.path, level: level)
+        let capture = Capture(id: UUID(), path: fifo.path, level: level,
+                              generation: shared ? AccessGoEmbeddedCore.newLogCaptureGeneration() : nil)
         queue.sync {
             enabled = true
             failed = false
@@ -223,6 +226,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         }) else { return true }
         let stopped: Bool
         if lastOwner, let capture = sharedCapture {
+            if let generation = capture.generation { AccessGoEmbeddedCore.retireLogCaptureGeneration(generation) }
             stopped = stop(ifID: capture.id)
             if stopped { sharedCapture = nil }
         } else {
@@ -259,8 +263,8 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             updateRedactorLocked()
         }
         if level == .none {
-            if disableCaptureWhenQuiet { queue.sync { clearLocked(disable: true, completion: nil) } }
-            return Lease(id: owner, path: nil, level: .none)
+            if disableCaptureWhenQuiet { disableSharedCaptureLocked() }
+            return Lease(id: owner, path: nil, level: .none, generation: nil)
         }
         if let capture = sharedCapture {
             let state = queue.sync { () -> (usable: Bool, failed: Bool) in
@@ -280,20 +284,20 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             }
             if state.usable {
                 leaseCaptures[owner] = capture.id
-                return Lease(id: owner, path: capture.path, level: level)
+                return Lease(id: owner, path: capture.path, level: level, generation: capture.generation)
             }
-            if state.failed { return Lease(id: owner, path: nil, level: .none) }
+            if state.failed { return Lease(id: owner, path: nil, level: .none, generation: nil) }
             sharedCapture = nil
             if !leaseCaptures.values.contains(capture.id) { retireDisabledPipe(capture.id) }
         }
         do {
-            let capture = try openCapture(level: level)
+            let capture = try openCapture(level: level, shared: true)
             sharedCapture = capture
             leaseCaptures[owner] = capture.id
-            return Lease(id: owner, path: capture.path, level: level)
+            return Lease(id: owner, path: capture.path, level: level, generation: capture.generation)
         } catch {
             markUnavailable()
-            return Lease(id: owner, path: nil, level: .none)
+            return Lease(id: owner, path: nil, level: .none, generation: nil)
         }
     }
 
@@ -379,6 +383,11 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
     public func disableAndClear() {
         sharedLock.lock()
         defer { sharedLock.unlock() }
+        disableSharedCaptureLocked()
+    }
+
+    private func disableSharedCaptureLocked() {
+        if let generation = sharedCapture?.generation { AccessGoEmbeddedCore.retireLogCaptureGeneration(generation) }
         queue.sync { clearLocked(disable: true, completion: nil) }
     }
 

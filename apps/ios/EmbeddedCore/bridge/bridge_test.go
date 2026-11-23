@@ -11,6 +11,7 @@ import (
 	"time"
 
 	clog "github.com/xtls/xray-core/common/log"
+	"github.com/xtls/xray-core/infra/conf"
 )
 
 const freedomConfig = `{
@@ -240,13 +241,16 @@ func TestConcurrentRuntimeInitialization(t *testing.T) {
 	stopped.Wait()
 }
 
-func diagnosticConfig(t *testing.T, path, mask string) string {
+func diagnosticConfig(t *testing.T, path, mask string, generation int64) string {
 	t.Helper()
 	var value map[string]any
 	if err := json.Unmarshal([]byte(freedomConfig), &value); err != nil {
 		t.Fatal(err)
 	}
 	value["log"] = map[string]any{"loglevel": "info", "access": "none", "error": path, "maskAddress": mask}
+	if generation != 0 {
+		value["aegisLogCaptureGeneration"] = generation
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
@@ -272,12 +276,12 @@ func TestRotatedCaptureOutlivesRuntimeThatOpenedIt(t *testing.T) {
 	directory := t.TempDir()
 	oldPath, resumedPath := filepath.Join(directory, "old.log"), filepath.Join(directory, "resumed.log")
 	first, second := NewRuntime(), NewRuntime()
-	if err := first.Start(diagnosticConfig(t, oldPath, "")); err != nil {
+	if err := first.Start(diagnosticConfig(t, oldPath, "", 0)); err != nil {
 		t.Fatal(err)
 	}
 	defer first.Stop()
 	requireNativeLog(t, oldPath, "old-capture-only")
-	if err := second.Start(diagnosticConfig(t, resumedPath, "")); err != nil {
+	if err := second.Start(diagnosticConfig(t, resumedPath, "", 0)); err != nil {
 		t.Fatal(err)
 	}
 	defer second.Stop()
@@ -296,11 +300,11 @@ func TestRotatedCaptureOutlivesRuntimeThatOpenedIt(t *testing.T) {
 func TestQuietStartAndLoggerFailureKeepTheActiveNativeSink(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "active.log")
 	first, quiet := NewRuntime(), NewRuntime()
-	if err := first.Start(diagnosticConfig(t, path, "")); err != nil {
+	if err := first.Start(diagnosticConfig(t, path, "", 0)); err != nil {
 		t.Fatal(err)
 	}
 	defer first.Stop()
-	if err := quiet.Start(diagnosticConfig(t, path, "invalid-mask")); err == nil {
+	if err := quiet.Start(diagnosticConfig(t, path, "invalid-mask", 0)); err == nil {
 		t.Fatal("expected a failed logging startup")
 	}
 	requireNativeLog(t, path, "after-failed-logging-start")
@@ -313,4 +317,73 @@ func TestQuietStartAndLoggerFailureKeepTheActiveNativeSink(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireNativeLog(t, path, "after-quiet-runtime-stop")
+}
+
+func TestLateStartCannotRestoreRetiredCapture(t *testing.T) {
+	directory := t.TempDir()
+	oldPath := filepath.Join(directory, "retired.log")
+	newPath := filepath.Join(directory, "resumed.log")
+	oldGeneration := NewLogCaptureGeneration()
+	oldConfig := diagnosticConfig(t, oldPath, "", oldGeneration)
+	RetireLogCaptureGeneration(oldGeneration)
+	late, resumed := NewRuntime(), NewRuntime()
+	defer late.Stop()
+	defer resumed.Stop()
+	if err := late.Start(oldConfig); err != nil || !late.IsRunning() {
+		t.Fatalf("retired capture prevented runtime startup: %v", err)
+	}
+	if severity := clog.GetSeverity(); severity != clog.Severity_Unknown {
+		t.Fatalf("retired capture installed a logger while off: %v", severity)
+	}
+	if err := late.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	newGeneration := NewLogCaptureGeneration()
+	RetireLogCaptureGeneration(oldGeneration) // old owner must not retire the new capture
+	if err := resumed.Start(diagnosticConfig(t, newPath, "", newGeneration)); err != nil {
+		t.Fatal(err)
+	}
+	if err := late.Start(oldConfig); err != nil || !late.IsRunning() {
+		t.Fatalf("late runtime did not start: %v", err)
+	}
+	requireNativeLog(t, newPath, "after-late-start")
+	if err := resumed.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	requireNativeLog(t, newPath, "after-new-runtime-stop")
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("retired capture reopened: %v", err)
+	}
+}
+
+func TestQuietRuntimeAdvertisesDisabledSeverity(t *testing.T) {
+	runtime := NewRuntime()
+	if err := runtime.Start(freedomConfig); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	if severity := clog.GetSeverity(); severity != clog.Severity_Unknown {
+		t.Fatalf("quiet runtime advertises %v instead of disabled", severity)
+	}
+}
+
+func TestRealityClientFieldAdmissionMatchesPinnedBuilder(t *testing.T) {
+	for _, test := range []struct{ fingerprint, spider, invalidField string }{
+		{"Chrome", "", ""}, {"random", "/", ""}, {"helloios_14", "/path%20name?q=1", ""},
+		{"unsafe", "", "fingerprint"}, {"HelloGolang", "", "fingerprint"}, {"unknown-hello", "", "fingerprint"},
+		{"chrome", "relative", "spiderX"}, {"chrome", "/bad%ZZ", "spiderX"}, {"chrome", "/bad\x00", "spiderX"},
+	} {
+		if field := ValidateRealityClientFields(test.fingerprint, test.spider); field != test.invalidField {
+			t.Errorf("fingerprint %q, spider %q: got %q, want %q", test.fingerprint, test.spider, field, test.invalidField)
+		}
+		// The pinned builder dereferences a nil URL for these malformed paths.
+		if test.spider == "/bad%ZZ" || test.spider == "/bad\x00" {
+			continue
+		}
+		config := conf.REALITYConfig{Fingerprint: test.fingerprint, SpiderX: test.spider,
+			PublicKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", ServerName: "example.invalid"}
+		if _, err := config.Build(); (err != nil) != (test.invalidField != "") {
+			t.Errorf("pinned builder diverged for %q, %q: %v", test.fingerprint, test.spider, err)
+		}
+	}
 }

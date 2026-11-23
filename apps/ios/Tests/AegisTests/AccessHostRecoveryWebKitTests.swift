@@ -669,6 +669,45 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertFalse(origin.transcript.contains("/resurrect"))
     }
 
+    func testProtectionIncidentKeepsDetachedProxyDocumentUntilItsTerminalCommit() async throws {
+        let coordinator = AccessHostStoreCoordinator()
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
+        browser.hostCoordinator = coordinator
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let host = try AccessSiteHost("detached.invalid")
+        let url = URL(string: "https://detached.invalid/")!
+        let endpoint = AccessManagedProxyEndpoint(identity: "detached-document", generation: 1,
+            loopbackHost: "127.0.0.1", port: 18_256, state: .ready)
+        coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
+        XCTAssertTrue(coordinator.registry.setEndpoint(endpoint, scopeID: tab.browsingScopeID, host: host, isPrivate: false))
+        let store = try XCTUnwrap(coordinator.dataStoreForMainFrame(tab: tab, url: url))
+        tab.rebindWebsiteDataStore(store, host: host.rawValue)
+        var originalInert = false
+        tab.afterCurrentDocumentBecomesInert { originalInert = true }
+        try await waitUntil(seconds: 10, { originalInert }, message: "Initial direct view did not retire")
+
+        let retainedView = tab.webView
+        let window = show(retainedView)
+        defer { window.isHidden = true }
+        XCTAssertNotNil(retainedView.loadHTMLString("<title>Detached proxy fixture</title>", baseURL: nil))
+        try await waitUntil(seconds: 10, { retainedView.title == "Detached proxy fixture" }, message: "Fixture did not commit")
+        let blockedHost = try XCTUnwrap(LocalThreatDatabase.snapshot?.phishing.first)
+        tab.load(try XCTUnwrap(URL(string: "https://\(blockedHost)/")))
+        XCTAssertNotNil(tab.protectionIncident)
+        XCTAssertFalse(tab.isResident)
+        var socketReleased = false
+        coordinator.retireManagedDocuments(identity: endpoint.identity) { socketReleased = true }
+        XCTAssertFalse(socketReleased, "Dropping the tab reference is not a document receipt")
+        XCTAssertFalse(store.proxyConfigurations.isEmpty)
+        tab.rebindWebsiteDataStore(tab.originalWebsiteDataStore, host: nil)
+        XCTAssertFalse(socketReleased)
+        XCTAssertNil(retainedView.loadHTMLString("<title>Cannot replace terminal navigation</title>", baseURL: nil))
+        try await waitUntil(seconds: 10, { socketReleased }, message: "The retained view's terminal commit did not release the socket")
+        XCTAssertTrue(store.proxyConfigurations.isEmpty)
+        XCTAssertEqual(retainedView.url?.absoluteString, "about:blank")
+    }
+
     func testRetainedClosedPageStopsBeforeHostStoreRetirement() async throws {
         let html = """
         <title>Terminal window fixture</title><script>

@@ -278,6 +278,24 @@ final class AccessTestNodeEditorTests: XCTestCase {
         }
     }
 
+    func testRankedResumeDoesNotDispatchAnExhaustedOrStoppedCheckpoint() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let control = directory.appendingPathComponent("control")
+        let hosts = ["first.invalid", "second.invalid", "third.invalid"]
+        let reserved: Set<String> = [hosts[0]]
+        XCTAssertEqual(try AccessDomainCampaignInput.pendingHosts(hosts, limit: 2, reserved: reserved,
+                                                                  ranked: true, control: control), [hosts[1]])
+        XCTAssertTrue(try AccessDomainCampaignInput.pendingHosts(hosts, limit: 1, reserved: reserved,
+                                                                  ranked: true, control: control).isEmpty)
+        XCTAssertThrowsError(try AccessDomainCampaignInput.pendingHosts(hosts, limit: 1, reserved: Set(hosts.prefix(2)),
+                                                                        ranked: true, control: control))
+        try Data(" stop\n".utf8).write(to: control)
+        XCTAssertTrue(try AccessDomainCampaignInput.pendingHosts(hosts, limit: 2, reserved: reserved,
+                                                                  ranked: true, control: control).isEmpty)
+    }
+
     func testCampaignSourceMustMatchThePreparedAppAndEmbeddedCore() throws {
         let source = String(repeating: "a", count: 40)
         let other = String(repeating: "b", count: 40)
@@ -285,15 +303,17 @@ final class AccessTestNodeEditorTests: XCTestCase {
             try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": kind, "sourceCommit": revision])
         }
         let core = try manifest(source)
-        XCTAssertEqual(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: core), source)
+        XCTAssertEqual(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: core), source)
         for request in [nil, "unknown", "abcd", source.uppercased(), other] {
-            XCTAssertNil(AccessDomainCampaignInput.sourceSHA(request, prepared: source, coreManifest: core))
+            XCTAssertNil(AccessDomainCampaignInput.sourceSHA(request, prepared: source, tests: source, coreManifest: core))
         }
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: nil, coreManifest: core))
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: other, coreManifest: core))
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: nil))
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: try manifest(other)))
-        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: try manifest(source, kind: "other")))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: nil, tests: source, coreManifest: core))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: other, tests: source, coreManifest: core))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: other, coreManifest: core))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: nil, coreManifest: core))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: nil))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(other)))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, tests: source, coreManifest: try manifest(source, kind: "other")))
     }
 
     func testMalformedManualRealityInputCannotApplyOverSavedNode() throws {
@@ -306,7 +326,11 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let saved = try repository.savedNode(isPrivate: false)
         for invalid in [
             link.replacingOccurrences(of: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", with: "invalid"),
-            link.replacingOccurrences(of: "sid=abcd1234", with: "sid=abc")
+            link.replacingOccurrences(of: "sid=abcd1234", with: "sid=abc"),
+            link.replacingOccurrences(of: "#", with: "&fp=unsafe#"),
+            link.replacingOccurrences(of: "#", with: "&fp=not-a-native-fingerprint#"),
+            link.replacingOccurrences(of: "#", with: "&spx=relative#"),
+            link.replacingOccurrences(of: "#", with: "&spx=%2Fbad%25ZZ#")
         ] {
             editor.preview(invalid)
             XCTAssertFalse(editor.canApply)
@@ -314,6 +338,31 @@ final class AccessTestNodeEditorTests: XCTestCase {
             XCTAssertEqual(try repository.savedNode(isPrivate: false).revision, saved.revision)
             XCTAssertEqual(storage.writes, 1)
         }
+    }
+
+    func testPreviouslySavedMalformedRealityPathCannotActivateAndCanBeReplaced() throws {
+        let storage = Storage()
+        let malformed = link.replacingOccurrences(of: "#", with: "&spx=%2Fbad%25ZZ#")
+        let parameters = try AccessLocalV2RayConfigLoader.parseShareURI(malformed)
+        let saved = AccessTestNodeRecord(parameters)
+        storage.value = saved
+        let repository = AccessTestNodeRepository(channel: .alpha, storage: storage)
+        var revocations = 0
+        _ = repository.observeRevocation { revocations += 1 }
+        XCTAssertThrowsError(try repository.savedNode(isPrivate: false).parameters())
+        XCTAssertThrowsError(try repository.apply(parameters, expectedRevision: saved.revision, isPrivate: false))
+        XCTAssertEqual(try repository.revision(isPrivate: false), saved.revision)
+        XCTAssertEqual(storage.writes, 0)
+        XCTAssertEqual(revocations, 0)
+
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        editor.openProfile()
+        XCTAssertTrue(editor.hasSavedNode)
+        editor.preview(link)
+        editor.apply()
+        XCTAssertEqual(try repository.savedNode(isPrivate: false).parameters().spiderX, "")
+        XCTAssertEqual(storage.writes, 1)
+        XCTAssertEqual(revocations, 1)
     }
 
     func testTwoWindowsCompareSavedRevisionAndFailedStoragePreservesDraft() {
@@ -842,15 +891,36 @@ enum AccessDomainCampaignInput {
         return count
     }
 
-    static func sourceSHA(_ requested: String?, prepared: String?, coreManifest: Data?) -> String? {
+    static func sourceSHA(_ requested: String?, prepared: String?, tests: String?, coreManifest: Data?) -> String? {
         guard let requested, requested.utf8.count == 40,
               requested.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
-              requested == prepared, let coreManifest,
+              requested == prepared, requested == tests, let coreManifest,
               let manifest = (try? JSONSerialization.jsonObject(with: coreManifest)) as? [String: Any],
               manifest["schemaVersion"] as? Int == 1,
               manifest["kind"] as? String == "ios-embedded-core-build",
               manifest["sourceCommit"] as? String == requested else { return nil }
         return requested
+    }
+
+    static func installedSourceSHA(_ requested: String?) -> String? {
+        let coreManifest = Bundle(for: AccessEmbeddedCoreAdapter.self)
+            .url(forResource: "embedded-core-build", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) }
+        let key = "AegisPreparedSourceCommit"
+        return sourceSHA(requested, prepared: Bundle.main.object(forInfoDictionaryKey: key) as? String,
+                         tests: Bundle(for: AccessTestNodeEditorTests.self).object(forInfoDictionaryKey: key) as? String,
+                         coreManifest: coreManifest)
+    }
+
+    static func pendingHosts(_ hosts: [String], limit: Int, reserved: Set<String>, ranked: Bool,
+                             control: URL) throws -> [String] {
+        guard !ranked || reserved.count <= limit else { throw CocoaError(.fileReadCorruptFile) }
+        guard !stopRequested(at: control) else { return [] }
+        return hosts.prefix(limit).filter { !reserved.contains($0) }
+    }
+
+    static func stopRequested(at control: URL) -> Bool {
+        (try? String(contentsOf: control, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "stop"
     }
 
     struct Checkpoint {
@@ -932,7 +1002,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let device = "ios-device-2d62695fc7"
         guard env["AEGIS_TEST_CAMPAIGN_DEVICE"] == device,
-              let node = env["AEGIS_TEST_AUTHORIZED_NODE"],
+              env.keys.contains("AEGIS_TEST_AUTHORIZED_NODE"),
               let input = Bundle.main.url(forResource: "domains", withExtension: "txt") else {
             throw XCTSkip("Explicit physical campaign inputs are required")
         }
@@ -942,14 +1012,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
         }
         guard model == "iPhone14,3" else { XCTFail("Wrong physical device model"); return }
-        let coreManifest = Bundle(for: AccessEmbeddedCoreAdapter.self)
-            .url(forResource: "embedded-core-build", withExtension: "json")
-            .flatMap { try? Data(contentsOf: $0) }
         guard let bundleID = Bundle.main.bundleIdentifier,
-              let sourceSHA = AccessDomainCampaignInput.sourceSHA(env["AEGIS_TEST_SOURCE_SHA"],
-                prepared: Bundle.main.object(forInfoDictionaryKey: "AegisPreparedSourceCommit") as? String,
-                coreManifest: coreManifest) else {
-            XCTFail("Campaign source identity does not match the prepared app and embedded core"); return
+              let sourceSHA = AccessDomainCampaignInput.installedSourceSHA(env["AEGIS_TEST_SOURCE_SHA"]) else {
+            XCTFail("Campaign source identity does not match the installed app, tests and embedded core"); return
         }
         let data = try Data(contentsOf: input)
         let digest = AccessDomainCampaignInput.sha256(data)
@@ -977,9 +1042,11 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             expectedSHA: env["AEGIS_TEST_CAMPAIGN_LEDGER_SHA256"], dataset: digest, device: device,
             bundle: bundleID, runID: runID, orderSHA: orderDigest, hosts: hosts)
         var reserved = checkpoint?.reserved ?? []
-        guard runID == nil || reserved.count <= limit else {
-            XCTFail("Campaign phase limit precedes the supplied checkpoint"); return
-        }
+        let control = file.deletingLastPathComponent().appendingPathComponent("ios208-campaign-control")
+        let pending = try AccessDomainCampaignInput.pendingHosts(hosts, limit: limit, reserved: reserved,
+                                                                ranked: runID != nil, control: control)
+        guard !pending.isEmpty else { return }
+        let node = try XCTUnwrap(env["AEGIS_TEST_AUTHORIZED_NODE"])
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else { XCTFail("Native admission denied"); return }
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
@@ -992,6 +1059,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTFail("Dispatch ledger changed before opening the campaign"); return
         }
         try output.seekToEnd()
+        guard !AccessDomainCampaignInput.stopRequested(at: control) else { return }
         if (try? repository.savedNode(isPrivate: false).parameters()) != parameters {
             _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
@@ -1035,9 +1103,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         try append(["event":"network", "interface":network])
         var preparationFailures = 0
         var consecutiveNetworkFailures = 0
-        let control = file.deletingLastPathComponent().appendingPathComponent("ios208-campaign-control")
-        for host in hosts.prefix(limit) where !reserved.contains(host) {
-            if (try? String(contentsOf: control, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) == "stop" {
+        for host in pending {
+            if AccessDomainCampaignInput.stopRequested(at: control) {
                 try append(["event":"checkpoint", "reservedCount":reserved.count])
                 return
             }
@@ -1171,18 +1238,24 @@ final class AccessTestNodeDeviceTests: XCTestCase {
     /// Explicit operator-supplied inputs only. Never uses any member of the domain campaign as a probe.
     func testAuthorizedAppPath() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let share = environment["AEGIS_TEST_AUTHORIZED_NODE"],
+        guard environment.keys.contains("AEGIS_TEST_AUTHORIZED_NODE"),
               let rawURL = environment["AEGIS_TEST_CONTROLLED_URL"], let url = URL(string: rawURL) else {
             throw XCTSkip("Explicit authorized node and independent controlled URL are required")
         }
         let attempt = UUID()
         var receipt: [String: Any] = [
-            "attempt": attempt.uuidString, "sourceSHA": environment["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
+            "attempt": attempt.uuidString,
             "destination": Self.controlledPathDestination(),
             "nonce": URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "nonce" })?.value ?? "",
             "state": "probe-incomplete"
         ]
         defer { AccessProbeReceiptKind.controlledPath.writeAndAttach(receipt, attempt: attempt, to: self) }
+        guard let sourceSHA = AccessDomainCampaignInput.installedSourceSHA(environment["AEGIS_TEST_SOURCE_SHA"]) else {
+            receipt["state"] = "invalid-source-identity"
+            XCTFail("Controlled path requires matching installed app, test and embedded core source identity")
+            return
+        }
+        receipt["sourceSHA"] = sourceSHA
         guard let destination = Self.controlledDestination(url) else {
             receipt["state"] = "invalid-controlled-destination"
             XCTFail("An HTTPS controlled URL with a valid port is required")
@@ -1204,7 +1277,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         }
         let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
         editor.openProfile()
-        editor.preview(share)
+        editor.preview(try XCTUnwrap(environment["AEGIS_TEST_AUTHORIZED_NODE"]))
         guard editor.canApply else { XCTFail("Authorized node did not produce a valid native draft"); return }
         editor.apply()
         guard editor.error == nil, editor.hasSavedNode else { XCTFail("Native Apply did not save the authorized node"); return }
@@ -1311,7 +1384,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             await core.stop()
             receipt["coreStopped"] = !core.isRunning
             let observation = await Self.observeRevokedFetch(
-                until: ContinuousClock.now.advanced(by: .seconds(3))
+                until: ContinuousClock.now.advanced(by: .seconds(3)),
+                retirementCommittedAt: { page.retirementCommittedAt }
             ) { finish in
                 webView.callAsyncJavaScript(
                     "return await fetch(target, {cache: 'no-store'}).then(() => 'received').catch(() => 'blocked');",
@@ -1324,13 +1398,13 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             }
             receipt["revokedFetch"] = observation.rawValue
             switch observation {
-            case .documentRetired:
-                XCTAssertEqual(page.status, "连接暂不可用", "A script failure counts only after protection retired the document")
-            case .timedOut:
+            case .documentRetired, .blocked:
+                break
+            case .timedOut, .evaluationFailed, .unknown:
                 callbackInconclusive = true
-                XCTFail("Revoked fetch is inconclusive because WebContent timed out")
-            default:
-                XCTAssertEqual(observation, .blocked, "Stopped protection must not fall back to direct networking")
+                XCTFail("Revoked fetch is inconclusive: \(observation.rawValue)")
+            case .received:
+                XCTFail("Stopped protection must not fall back to direct networking")
             }
         }
         if callbackInconclusive { receipt["state"] = "probe-inconclusive" }
@@ -1427,15 +1501,24 @@ final class AccessTestNodeDeviceTests: XCTestCase {
     fileprivate enum RevokedFetchObservation: String {
         case blocked, received, unknown
         case documentRetired = "document-retired"
+        case evaluationFailed = "evaluation-failed"
         case timedOut = "timed-out"
     }
 
     fileprivate static func observeRevokedFetch(
-        until deadline: ContinuousClock.Instant, evaluate: (@escaping @MainActor (String?) -> Void) -> Void
+        until deadline: ContinuousClock.Instant,
+        retirementCommittedAt: @escaping @MainActor () -> ContinuousClock.Instant?,
+        evaluate: (@escaping @MainActor (String?) -> Void) -> Void
     ) async -> RevokedFetchObservation {
         await AccessPhysicalSOCKSAdmissionTests.observeWebContent(until: deadline, timeout: .timedOut) { finish in
             evaluate { value in
-                finish(value.map { RevokedFetchObservation(rawValue: $0) ?? .unknown } ?? .documentRetired)
+                switch value {
+                case "blocked": finish(.blocked)
+                case "received": finish(.received)
+                case nil:
+                    finish(retirementCommittedAt() == nil ? .evaluationFailed : .documentRetired)
+                default: finish(.unknown)
+                }
             }
         }
     }
@@ -1696,10 +1779,15 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         var result: [String: Any] = ["attempt": attempt.uuidString, "device": "ios-device-2d62695fc7",
             "model": model, "destination": AccessTestNodeDeviceTests.controlledPathDestination(),
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
-            "sourceSHA": env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
             "bundle": Bundle.main.bundleIdentifier ?? "unknown", "nonce": nonce, "status": "probe-incomplete",
             "requestedUpstreamPort": destination.port]
         defer { AccessProbeReceiptKind.socksAdmission.writeAndAttach(result, attempt: attempt, to: self) }
+        guard let sourceSHA = AccessDomainCampaignInput.installedSourceSHA(env["AEGIS_TEST_SOURCE_SHA"]) else {
+            result["status"] = "invalid-source-identity"
+            XCTFail("SOCKS admission requires matching installed app, test and embedded core source identity")
+            return
+        }
+        result["sourceSHA"] = sourceSHA
 
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else { XCTFail("Internal admission required"); return }
@@ -1974,16 +2062,23 @@ final class AccessTestNodeEvidenceTests: XCTestCase {
 
     func testControlledRevokedFetchTreatsASilentOrLateReplyAsInconclusive() async {
         var late: (@MainActor (String?) -> Void)?
-        let timedOut = await Probe.observeRevokedFetch(until: ContinuousClock.now.advanced(by: .milliseconds(100))) {
+        let timedOut = await Probe.observeRevokedFetch(until: ContinuousClock.now.advanced(by: .milliseconds(100)),
+                                                       retirementCommittedAt: { nil }) {
             late = $0
         }
         XCTAssertEqual(timedOut, .timedOut)
         XCTAssertNotNil(late)
         late?("blocked")
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))
-        let blocked = await Probe.observeRevokedFetch(until: deadline) { $0("blocked"); $0("received") }
+        let blocked = await Probe.observeRevokedFetch(until: deadline, retirementCommittedAt: { nil }) { $0("blocked"); $0("received") }
         XCTAssertEqual(blocked, .blocked)
-        let retired = await Probe.observeRevokedFetch(until: deadline) { $0(nil) }
+        var committedAt: ContinuousClock.Instant?
+        let failedBeforeCommit = await Probe.observeRevokedFetch(until: deadline, retirementCommittedAt: { committedAt }) {
+            $0(nil)
+            committedAt = .now
+        }
+        XCTAssertEqual(failedBeforeCommit, .evaluationFailed)
+        let retired = await Probe.observeRevokedFetch(until: deadline, retirementCommittedAt: { committedAt }) { $0(nil) }
         XCTAssertEqual(retired, .documentRetired)
     }
 

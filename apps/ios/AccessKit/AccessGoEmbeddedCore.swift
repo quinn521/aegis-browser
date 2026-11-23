@@ -34,6 +34,29 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
 
     public var isRunning: Bool { native.isRunning }
 
+    static func validateRealityClientFields(fingerprint: String, spiderX: String) throws {
+        #if canImport(AegisEmbeddedCore)
+        let field = EmbeddedcoreValidateRealityClientFields(fingerprint, spiderX)
+        guard field.isEmpty else { throw AccessRealityVisionOutboundConfigError.fieldNotCanonical(field) }
+        #else
+        throw LinkError.frameworkNotLinked
+        #endif
+    }
+
+    static func newLogCaptureGeneration() -> Int64 {
+        #if canImport(AegisEmbeddedCore)
+        EmbeddedcoreNewLogCaptureGeneration()
+        #else
+        0
+        #endif
+    }
+
+    static func retireLogCaptureGeneration(_ generation: Int64) {
+        #if canImport(AegisEmbeddedCore)
+        EmbeddedcoreRetireLogCaptureGeneration(generation)
+        #endif
+    }
+
     public func start(configData: Data) async throws {
         guard let json = String(data: configData, encoding: .utf8) else {
             throw AccessEmbeddedCoreError.unverifiedAsset

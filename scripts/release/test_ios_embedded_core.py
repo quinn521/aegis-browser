@@ -60,6 +60,22 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
             core.record(self.root, self.lock, self.products, "strict")
         self.assertEqual(self.original, self.lock.read_bytes())
 
+    def test_prepared_source_rejects_a_rebuild_from_edited_bridge_at_same_commit(self):
+        from shutil import copytree
+        prepared = self.root / "prepared"
+        copytree(self.root / "apps", prepared / "apps")
+        self.record()
+        verified = core.verify(self.root, self.lock, self.products)
+        core.verify_prepared_source(verified, prepared, verified["sourceCommit"])
+        with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
+            core.verify_prepared_source(verified, prepared, "other commit")
+        (self.root / "apps/ios/EmbeddedCore/bridge/bridge.go").write_text("package bridge\n// modified input\n")
+        self.record()
+        rebuilt = core.verify(self.root, self.lock, self.products)
+        self.assertEqual(rebuilt["sourceCommit"], verified["sourceCommit"])
+        with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
+            core.verify_prepared_source(rebuilt, prepared, verified["sourceCommit"])
+
     def test_each_stale_or_changed_slice_is_rejected_before_linking(self):
         self.record()
         for name in core.SLICE_KEYS:

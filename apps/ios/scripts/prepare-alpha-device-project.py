@@ -7,15 +7,19 @@ Uses installed PyYAML, or system Ruby safe_load. Output project.yml is JSON
 import argparse
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
+import shutil
 import stat
 # Local tooling uses argument arrays with the shell disabled.
 import subprocess  # nosec B404
 import sys
+import tarfile
+from tempfile import TemporaryDirectory
 
 APP = "com.gcsa.aegis.alpha.internal"
 OLD_GROUP = "group.com.gcsa.aegis.ios.share-inbox"
@@ -31,6 +35,9 @@ REPLACEMENTS = {
 IDS = {"Aegis": "", "SafariWebExtension": ".safari", "ShareExtension": ".share",
        "BrowserKit": ".browserkit", "AegisPolicyKit": ".policykit", "AccessKit": ".accesskit",
        "AgentKit": ".agentkit", "AegisTests": ".tests", "AegisUITests": ".uitests"}
+SNAPSHOT_PATHS = ("apps/ios", "apps/browser/overlay/chrome/browser/resources/aegis/enhancements_shared",
+                  "packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json",
+                  "scripts/release/ios_embedded_core.py")
 
 
 def digest(data):
@@ -76,6 +83,34 @@ def prepared_source_commit(root):
     return lines[1] if status.returncode == 0 and not status.stdout else None
 
 
+def snapshot_source(root, commit, destination):
+    # Use Git objects so ignored files and changes racing with preparation
+    # cannot enter a source-attributed project.
+    data = subprocess.check_output(["git", "-C", str(root), "archive", commit, "--", *SNAPSHOT_PATHS])  # nosec B603 B607
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+        for member in archive:
+            relative = Path(member.name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("unsafe snapshot path")
+            path = destination / relative
+            if member.isdir():
+                path.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with archive.extractfile(member) as source, path.open("xb") as output:
+                    shutil.copyfileobj(source, output)
+            else:
+                raise ValueError("non-regular snapshot input")
+    return digest(data)
+
+
+def make_read_only(directory):
+    for root, _, files in os.walk(directory, topdown=False):
+        for name in files:
+            (Path(root) / name).chmod(0o444)
+        Path(root).chmod(0o555)
+
+
 def prepare(source_root, output_dir, products, team_id, node_file=None):
     root = Path(source_root).resolve(strict=True)
     ios = root / "apps/ios"
@@ -91,10 +126,19 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
         raise ValueError("existing EmbeddedCore products required; run verify separately")
     node = private_path(node_file) if node_file else "/dev/null"
     # Paths are inserted inside quoted shell build scripts; reject shell syntax.
-    if any(c in str(ios) for c in ('"', '$', '`', '\n', '\r')):
+    if any(c in str(ios) + str(out) for c in ('"', '$', '`', '\\', '\n', '\r')):
         raise ValueError("source path cannot be represented safely in build scripts")
-    original = (ios / "project.yml").read_bytes()
     source_commit = prepared_source_commit(root)
+    with TemporaryDirectory(prefix="alpha-source-", dir=out.parent) as staging:
+        snapshot = Path(staging) / "source"
+        archive_digest = snapshot_source(root, source_commit, snapshot) if source_commit else None
+        return prepare_variant(root, out, products, team_id, node, source_commit, snapshot, archive_digest)
+
+
+def prepare_variant(root, out, products, team_id, node, source_commit, snapshot, archive_digest):
+    ios = (snapshot if source_commit else root) / "apps/ios"
+    build_ios = (out / "source" if source_commit else root) / "apps/ios"
+    original = (ios / "project.yml").read_bytes()
     spec = copy.deepcopy(load_spec(ios / "project.yml"))
     if set(spec["targets"]) != set(IDS):
         raise ValueError("unexpected target topology; update isolation contract")
@@ -163,17 +207,21 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
                 schemes[0]["CFBundleURLName"] = APP + ".open"
                 data["CFBundleDisplayName"] = "Aegis Alpha"
                 changes.update(externalScheme=1, urlName=1, displayName=1)
-                if source_commit:
-                    data["AegisPreparedSourceCommit"] = source_commit
-                    changes["preparedSourceCommit"] = 1
             elif name in ("ShareExtension", "SafariWebExtension") and key == "INFOPLIST_FILE":
                 data["CFBundleDisplayName"] += " Alpha"
                 changes["displayName"] = 1
+            if key == "INFOPLIST_FILE" and name in ("Aegis", "AegisTests", "AegisUITests"):
+                data.pop("AegisPreparedSourceCommit", None)
+                if source_commit:
+                    data["AegisPreparedSourceCommit"] = source_commit
+                    changes["preparedSourceCommit"] = 1
             settings[key] = overlay(rel, plistlib.dumps(data, sort_keys=False), changes)
         extra = []
         for source in target["sources"]:
             rel = source["path"]
-            source["path"] = mapping.get(rel, str((ios / rel).resolve()))
+            if source_commit and not (ios / rel).resolve().exists():
+                raise ValueError("Xcode source is missing from the committed snapshot")
+            source["path"] = mapping.get(rel, str((build_ios / rel).resolve()))
             if rel == "SharedWebExtension":
                 source.setdefault("excludes", []).append("background.js")
                 extra.append({"path": mapping["SharedWebExtension/background.js"], "buildPhase": "resources"})
@@ -184,10 +232,24 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
                                "Install verified EmbeddedCore manifest"}
             if script.get("name") not in allowed_scripts:
                 raise ValueError("unrecognized build script; review source-root conversion")
-            script["script"] = script["script"].replace('${SRCROOT}/../..', str(root)).replace('${SRCROOT}', str(ios))
+            # Core verification uses the independently recorded absolute
+            # xcfilelist. Only the source compiler and app scripts use the snapshot.
+            script_ios = root / "apps/ios" if script["name"] == "Install verified EmbeddedCore manifest" else build_ios
+            script["script"] = script["script"].replace('${SRCROOT}/../..', str(root)).replace('${SRCROOT}', str(script_ios))
             for key in ("inputFiles", "inputFileLists"):
                 if key in script:
-                    script[key] = [p.replace('$(SRCROOT)/../..', str(root)).replace('$(SRCROOT)', str(ios)) for p in script[key]]
+                    script[key] = [p.replace('$(SRCROOT)/../..', str(root)).replace('$(SRCROOT)', str(script_ios)) for p in script[key]]
+            if source_commit and script["name"] == "Install verified EmbeddedCore manifest":
+                rel = "scripts/release/ios_embedded_core.py"
+                build_snapshot = out / "source"
+                frozen_verifier = str(build_snapshot / rel)
+                script["script"] = script["script"].replace(str(root / rel), frozen_verifier).rstrip()
+                script["script"] += f' --prepared-source "{build_snapshot}" {source_commit}\n'
+                embedded = snapshot / "apps/ios/EmbeddedCore"
+                bridge = embedded / "bridge"
+                core_source_inputs = [embedded / "embedded-core-lock.json", bridge, *sorted(bridge.rglob("*"))]
+                script["inputFiles"].extend([frozen_verifier, *(str(build_snapshot / p.relative_to(snapshot))
+                                                               for p in core_source_inputs)])
         if name == "Aegis":
             settings["AEGIS_PRIVATE_TEST_NODE_FILE"] = node
             settings["AEGIS_FIREBASE_CHANNEL"] = "disabled"
@@ -205,10 +267,15 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
                    coreVerification="NOT_RUN", build="NOT_RUN", device="NOT_RUN", overlays=overlays)
     if source_commit:
         receipt["sourceCommit"] = source_commit
+        receipt["sourceArchiveSha256"] = archive_digest
     out.mkdir(mode=0o700)
     for path, data in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+    if source_commit:
+        snapshot.rename(out / "source")
+        make_read_only(out / "source")
+        make_read_only(out / "overlay")
     (out / "project.yml").write_bytes(generated)
     (out / "preparation-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt

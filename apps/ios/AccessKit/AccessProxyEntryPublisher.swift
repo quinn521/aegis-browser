@@ -166,11 +166,13 @@ public final class AccessProxyEntryPublisher: AccessProxyEntryPublishing {
         return true
     }
 
-    public func retain(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey) -> Bool {
+    public func retain(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey,
+                       admitting: () -> Bool) -> Bool {
         guard let instance, !instance.generation.isClosed, isHealthy(instance.provision),
               healthCheck?() ?? true else { return false }
         guard endpoint == instance.provision.endpoint,
-              endpoint.generation == instance.generation.number
+              endpoint.generation == instance.generation.number,
+              admitting()
         else { return false }
         consumers[key] = instance
         return true

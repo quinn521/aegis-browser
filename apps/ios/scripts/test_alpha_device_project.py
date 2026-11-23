@@ -104,15 +104,53 @@ class AlphaDeviceProjectTest(unittest.TestCase):
             return subprocess.check_output(["git", "-C", str(self.root), *arguments], text=True).strip()
 
         self.assertIsNone(module.prepared_source_commit(self.root))
+        # Keep a minimal but complete synthetic source tree for all XcodeGen
+        # source entries, including those outside apps/ios.
+        files_to_mutate = [self.ios / "AegisApp/Frozen.swift", self.ios / "Tests/AegisTests/Frozen.swift"]
+        for target in self.spec["targets"].values():
+            for row in target["sources"]:
+                rel = Path(row["path"])
+                path = (self.ios / rel).resolve()
+                if not rel.suffix:
+                    path = path / "fixture.swift"
+                if not path.exists():
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("// committed placeholder\n")
+        for path in [*files_to_mutate, self.root / module.SNAPSHOT_PATHS[-1]]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// committed inputs\n")
+        (self.root / ".gitignore").write_text("Ignored.swift\n")
         git("init", "-q")
-        git("add", "apps/ios")
+        git("add", ".")
         git("-c", "user.name=Synthetic Fixture", "-c", "user.email=fixture@example.invalid",
             "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
         commit = git("rev-parse", "HEAD")
+        (self.ios / "AegisApp/Ignored.swift").write_text("// ignored input must never compile\n")
         receipt = self.prepare()
+        variant = module.load_spec(self.out / "project.yml")
         app_info = self.out / "overlay/AegisApp/Info.plist"
         self.assertEqual(receipt["sourceCommit"], commit)
+        self.assertEqual(len(receipt["sourceArchiveSha256"]), 64)
         self.assertEqual(plistlib.loads(app_info.read_bytes())["AegisPreparedSourceCommit"], commit)
+        for target in ("AegisTests", "AegisUITests"):
+            info = Path(variant["targets"][target]["settings"]["base"]["INFOPLIST_FILE"])
+            self.assertEqual(plistlib.loads(info.read_bytes())["AegisPreparedSourceCommit"], commit)
+        verifier = variant["targets"]["AccessKit"]["postBuildScripts"][0]
+        self.assertIn(f'--prepared-source "{self.out / "source"}" {commit}', verifier["script"])
+        self.assertIn(str(self.out / "source" / module.SNAPSHOT_PATHS[-1]), verifier["inputFiles"])
+        for target in variant["targets"].values():
+            for row in target["sources"]:
+                self.assertTrue(Path(row["path"]).is_relative_to(self.out))
+        for name, path in zip(("Aegis", "AegisTests"), files_to_mutate):
+            compiled = next(Path(row["path"]) for row in variant["targets"][name]["sources"]
+                            if Path(row["path"]).name == path.parent.name) / path.name
+            path.write_text("// changed after XcodeGen preparation\n")
+            self.assertEqual(compiled.read_text(), "// committed inputs\n")
+            self.assertEqual(compiled.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(compiled.parent.stat().st_mode & 0o777, 0o555)
+        self.assertFalse((self.out / "source/apps/ios/AegisApp/Ignored.swift").exists())
+        for path in files_to_mutate:
+            git("restore", str(path))
         extra = self.ios / "untracked.swift"
         extra.write_text("// synthetic untracked input\n")
         self.assertIsNone(module.prepared_source_commit(self.root))

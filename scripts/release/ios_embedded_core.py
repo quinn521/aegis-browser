@@ -143,6 +143,14 @@ def verify_bundle(bundle, products, derived, platform):
             "bundledBuildManifestSha256": file_digest(manifest)}
 
 
+def verify_prepared_source(manifest, root, commit):
+    embedded = Path(root) / "apps/ios/EmbeddedCore"
+    if (manifest["sourceCommit"] != commit
+            or manifest["sourceLockSha256"] != file_digest(embedded / "embedded-core-lock.json")
+            or manifest["bridgeSha256"] != directory_digest(embedded / "bridge")):
+        raise ValueError("EmbeddedCore inputs do not match the prepared Alpha source")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", choices=("record", "verify", "install"))
@@ -156,13 +164,18 @@ def main():
     parser.add_argument("--platform", choices=("device", "simulator"))
     parser.add_argument("--xcode-root", type=Path)
     parser.add_argument("--xcode-lock", type=Path)
+    parser.add_argument("--prepared-source", nargs=2, metavar=("ROOT", "COMMIT"))
     args = parser.parse_args()
+    if args.prepared_source and args.operation != "install":
+        parser.error("--prepared-source requires install")
     result = (record(args.root, args.source_lock, args.products, args.mode or "strict",
                      args.xcode_root, args.xcode_lock) if args.operation == "record"
               else verify(args.root, args.source_lock, args.products, args.mode))
     if args.operation == "install":
         if not args.bundle:
             parser.error("install requires --bundle")
+        if args.prepared_source:
+            verify_prepared_source(result, *args.prepared_source)
         shutil.copyfile(args.products / "embedded-core-lock.json", args.bundle / "embedded-core-lock.json")
         shutil.copyfile(args.products / "build-manifest.json", args.bundle / "embedded-core-build.json")
     elif args.bundle:

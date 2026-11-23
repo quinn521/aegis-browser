@@ -255,7 +255,8 @@ final class AccessEmbeddedProxyEntrySession {
         defer { if !started { diagnostics.stop(lease: lease) } }
         do {
             let config = try outbound.embeddedInstanceJSONData(
-                logLevel: lease.level, errorLogPath: lease.path, includeAccessLog: true
+                logLevel: lease.level, errorLogPath: lease.path, includeAccessLog: true,
+                logCaptureGeneration: lease.generation
             )
             try await core.start(configData: config)
         } catch {

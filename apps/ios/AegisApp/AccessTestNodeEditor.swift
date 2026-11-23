@@ -105,9 +105,11 @@ struct AccessTestNodeRecord: Codable {
     }
 
     func parameters() throws -> AccessRealityVisionParameters {
-        try AccessRealityVisionParameters(address: address, port: port, userID: userID,
+        let parameters = try AccessRealityVisionParameters(address: address, port: port, userID: userID,
             serverName: serverName, publicKey: publicKey, shortID: shortID,
             fingerprint: fingerprint, spiderX: spiderX)
+        try AccessLocalV2RayConfigLoader.validateManualParameters(parameters)
+        return parameters
     }
 
     init(from decoder: any Decoder) throws {
@@ -243,6 +245,7 @@ final class AccessTestNodeRepository {
     func apply(_ draft: AccessRealityVisionParameters, expectedRevision: UUID?, isPrivate: Bool) throws -> UUID {
         guard let channel, !isPrivate else { throw AccessTestNodeError.unavailable }
         guard try revision(isPrivate: isPrivate) == expectedRevision else { throw AccessTestNodeError.conflict }
+        try AccessLocalV2RayConfigLoader.validateManualParameters(draft)
         let record = AccessTestNodeRecord(draft)
         try storage.write(record, channel: channel)
         revokeOpenPages()

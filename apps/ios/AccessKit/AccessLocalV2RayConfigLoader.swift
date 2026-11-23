@@ -138,6 +138,12 @@ public enum AccessLocalV2RayConfigLoader {
         components.fragment = nil
         guard let uri = components.string else { throw AccessLocalV2RayConfigError.invalidJSON }
         let parameters = try parseShareURI(uri)
+        try validateManualParameters(parameters)
+        return parameters
+    }
+
+    /// Manual imports and restored manual revisions share native admission.
+    public static func validateManualParameters(_ parameters: AccessRealityVisionParameters) throws {
         // Match the pinned REALITY builder's RawURLEncoding and hex decoding.
         let publicKey = parameters.publicKey
         let base64url = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
@@ -150,7 +156,7 @@ public enum AccessLocalV2RayConfigLoader {
         guard parameters.shortID.utf8.count.isMultiple(of: 2) else {
             throw AccessRealityVisionOutboundConfigError.fieldNotCanonical("shortID")
         }
-        return parameters
+        try AccessGoEmbeddedCore.validateRealityClientFields(fingerprint: parameters.fingerprint, spiderX: parameters.spiderX)
     }
 
     // MARK: - vless:// share URI

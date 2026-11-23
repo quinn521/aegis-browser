@@ -63,6 +63,27 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         XCTAssertEqual(try AccessLocalV2RayConfigLoader.parse(text: sampleShareURI + "\n" + sampleShareURI), expected)
     }
 
+    func testManualRealityFieldsFollowPinnedFingerprintAndSpiderPathRules() throws {
+        func link(fp: String, encodedSpider: String) -> String {
+            sampleShareURI.replacingOccurrences(of: "fp=chrome", with: "fp=\(fp)&spx=\(encodedSpider)")
+        }
+        for (fp, spider, field) in [("unsafe", "", "fingerprint"), ("HelloGolang", "", "fingerprint"),
+                                    ("unknown-hello", "", "fingerprint"), ("chrome", "relative", "spiderX"),
+                                    ("chrome", "%2Fbad%25ZZ", "spiderX"), ("chrome", "%2Fbad%00", "spiderX")] {
+            let input = link(fp: fp, encodedSpider: spider)
+            XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(input)) {
+                XCTAssertEqual($0 as? AccessRealityVisionOutboundConfigError, .fieldNotCanonical(field))
+            }
+            XCTAssertNoThrow(try AccessLocalV2RayConfigLoader.parseShareURI(input))
+        }
+        for (fp, encoded, decoded) in [("Chrome", "", ""), ("random", "%2F", "/"),
+                                       ("helloios_14", "%2Fmanual%2520path%3Fq%3D1", "/manual%20path?q=1")] {
+            let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(link(fp: fp, encodedSpider: encoded))
+            XCTAssertEqual(parameters.fingerprint, fp)
+            XCTAssertEqual(parameters.spiderX, decoded)
+        }
+    }
+
     func testProductPathInEachAppChannelWithAStaleResource() throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)

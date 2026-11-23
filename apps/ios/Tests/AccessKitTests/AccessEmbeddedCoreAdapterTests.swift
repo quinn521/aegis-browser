@@ -223,13 +223,19 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         let firstCapture = diagnostics.acquireShared(level: .info, secrets: [])
         addTeardownBlock { await first.stop(); diagnostics.stop(lease: firstCapture) }
         let path = try XCTUnwrap(firstCapture.path)
-        func config(path: String) throws -> Data {
+        func config(path: String, capture: AccessDiagnosticLog.Lease) throws -> Data {
             try JSONSerialization.data(withJSONObject: [
                 "log": ["loglevel": "info", "access": path, "error": path],
+                "aegisLogCaptureGeneration": try XCTUnwrap(capture.generation),
                 "inbounds": [], "outbounds": [["protocol": "freedom"]]
             ])
         }
-        try await first.start(configData: config(path: path))
+        let oldConfig = try config(path: path, capture: firstCapture)
+        try await first.start(configData: oldConfig)
+        let lateCapture = diagnostics.acquireShared(level: .info, secrets: [])
+        XCTAssertEqual(lateCapture.generation, firstCapture.generation)
+        let late = try AccessGoEmbeddedCore(isolated: true)
+        addTeardownBlock { await late.stop(); diagnostics.stop(lease: lateCapture) }
         diagnostics.disableAndClear()
         let oldWriter = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         defer { try? oldWriter.close() }
@@ -238,7 +244,9 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         addTeardownBlock { await second.stop(); diagnostics.stop(lease: secondCapture) }
         let resumedPath = try XCTUnwrap(secondCapture.path)
         XCTAssertNotEqual(path, resumedPath)
-        try await second.start(configData: config(path: resumedPath))
+        try await second.start(configData: config(path: resumedPath, capture: secondCapture))
+        try await late.start(configData: oldConfig)
+        XCTAssertTrue(late.isRunning)
         await second.stop()
         XCTAssertTrue(diagnostics.stop(lease: secondCapture))
         XCTAssertTrue(first.isRunning)
@@ -264,6 +272,8 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         XCTAssertFalse(captured.contains("off-period.invalid"))
         await quiet.stop()
         XCTAssertTrue(diagnostics.stop(lease: quietLease))
+        await late.stop()
+        XCTAssertTrue(diagnostics.stop(lease: lateCapture))
         await first.stop()
         XCTAssertTrue(diagnostics.stop(lease: firstCapture))
     }

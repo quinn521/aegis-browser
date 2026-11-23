@@ -357,8 +357,9 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         guard endpoint.state == .ready, endpoint.hasAdmittedBinding else { return false }
         if let current = registry.endpoint(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate),
            current.generation > endpoint.generation { return false }
-        guard publisher.retain(endpoint, for: key) else { return false }
-        return registry.setEndpoint(endpoint, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
+        return publisher.retain(endpoint, for: key) {
+            registry.setEndpoint(endpoint, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
+        }
     }
 
     @discardableResult

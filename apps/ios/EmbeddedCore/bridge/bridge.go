@@ -8,8 +8,10 @@ package embeddedcore
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +21,9 @@ import (
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
+	xrayjson "github.com/xtls/xray-core/infra/conf/json"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	"github.com/xtls/xray-core/transport/internet/tls"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -45,11 +49,40 @@ var lifecycleMu sync.Mutex
 var liveInstances int
 var activeLogger *xraylog.Instance
 var activeLogConfig *xraylog.Config
+var activeLogGeneration int64
+var logCaptureGeneration atomic.Int64
 var xrayLogType = serial.GetMessageType(&xraylog.Config{})
 
 type discardedLog struct{}
 
-func (discardedLog) Handle(clog.Message) {}
+func (discardedLog) Handle(clog.Message)     {}
+func (discardedLog) Severity() clog.Severity { return clog.Severity_Unknown }
+
+// Capture order is assigned when Swift opens a FIFO, before scheduling Start.
+func NewLogCaptureGeneration() int64 { return logCaptureGeneration.Add(1) }
+
+func RetireLogCaptureGeneration(generation int64) {
+	logCaptureGeneration.CompareAndSwap(generation, generation+1)
+}
+
+// ValidateRealityClientFields mirrors the pinned builder's client admission.
+// Check url.Parse explicitly because the builder dereferences its result.
+// Only a field name crosses the bridge on failure.
+func ValidateRealityClientFields(fingerprint, spiderX string) string {
+	fingerprint = strings.ToLower(fingerprint)
+	if fingerprint == "unsafe" || fingerprint == "hellogolang" || tls.GetFingerprint(fingerprint) == nil {
+		return "fingerprint"
+	}
+	if spiderX != "" {
+		if !strings.HasPrefix(spiderX, "/") {
+			return "spiderX"
+		}
+		if _, err := url.Parse(spiderX); err != nil {
+			return "spiderX"
+		}
+	}
+	return ""
+}
 
 func selectLiveLogger() {
 	if activeLogger != nil {
@@ -102,6 +135,19 @@ func (r *Runtime) Start(configJSON string) error {
 	}
 	lifecycleMu.Lock()
 	defer lifecycleMu.Unlock()
+	var metadata struct {
+		LogCaptureGeneration int64 `json:"aegisLogCaptureGeneration"`
+	}
+	if err := json.NewDecoder(&xrayjson.Reader{Reader: strings.NewReader(configJSON)}).Decode(&metadata); err != nil {
+		return err
+	}
+	generation := metadata.LogCaptureGeneration
+	canSelectLog := func() bool {
+		if generation == 0 {
+			return activeLogGeneration == 0
+		}
+		return generation == logCaptureGeneration.Load()
+	}
 	config, err := core.LoadConfig("json", bytes.NewBufferString(configJSON))
 	if err != nil {
 		return err
@@ -114,7 +160,8 @@ func (r *Runtime) Start(configJSON string) error {
 		selectLiveLogger()
 	}
 	var candidateLogger *xraylog.Instance
-	if logConfig != nil && !proto.Equal(logConfig, activeLogConfig) {
+	if logConfig != nil && canSelectLog() &&
+		(generation != activeLogGeneration || !proto.Equal(logConfig, activeLogConfig)) {
 		candidateLogger, err = xraylog.New(context.Background(), logConfig)
 		if err != nil {
 			selectLiveLogger()
@@ -138,10 +185,14 @@ func (r *Runtime) Start(configJSON string) error {
 		return err
 	}
 	if candidateLogger != nil {
-		if activeLogger != nil {
-			_ = activeLogger.Close()
+		if canSelectLog() {
+			if activeLogger != nil {
+				_ = activeLogger.Close()
+			}
+			activeLogger, activeLogConfig, activeLogGeneration = candidateLogger, logConfig, generation
+		} else {
+			rollbackLogger()
 		}
-		activeLogger, activeLogConfig = candidateLogger, logConfig
 	}
 	r.instance = inst
 	liveInstances++
@@ -170,7 +221,7 @@ func (r *Runtime) Stop() error {
 		liveInstances--
 		if liveInstances == 0 && activeLogger != nil {
 			_ = activeLogger.Close()
-			activeLogger, activeLogConfig = nil, nil
+			activeLogger, activeLogConfig, activeLogGeneration = nil, nil, 0
 			selectLiveLogger()
 		}
 		return err
