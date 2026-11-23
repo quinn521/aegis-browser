@@ -97,10 +97,6 @@ const browserCommonScript = 'apps/browser/scripts/common.sh';
 const iosReleaseInputs = new Set([
   'scripts/release/artifact-transport.py',
   'scripts/release/build-ios-access-core.sh',
-  'scripts/release/central-ios.py',
-  'scripts/release/central-reservation.rb',
-  'scripts/release/central_ios_protocol.py',
-  'scripts/release/central_operator_authorization.py',
   'scripts/release/clear-empty-build-upload.rb',
   'scripts/release/cli.rb',
   'scripts/release/cloud-archive.py',
@@ -118,9 +114,6 @@ const iosReleaseInputs = new Set([
   'scripts/release/record-ios-access-core-digests.sh',
   'scripts/release/safari_manifest.py',
   'scripts/release/test_artifact_transport.py',
-  'scripts/release/test_central_ios.py',
-  'scripts/release/test_central_operator.py',
-  'scripts/release/test_central_retained.py',
   'scripts/release/test_cloud_archive.py',
   'scripts/release/test_cloud_signing_poc.py',
   'scripts/release/test_development_key_access.py',
@@ -140,12 +133,15 @@ const iosReleaseInputs = new Set([
   'scripts/release/verify-ipa.py',
   'scripts/release/verify-signed-ios.py',
 ]);
+// Match the top-level Ruby tests discovered by ios-release-validation.yml.
+const iosFastlaneTest = /^fastlane\/tests\/(?!\.)[^/]*_test\.rb$/u;
 const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('.github/workflows/ios-')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
   || path === browserCommonScript
   || path.startsWith('scripts/ci/tests/ios-')
+  || iosFastlaneTest.test(path)
   || /^scripts\/release\/(?:test_)?ios[-_]/u.test(path)
   || iosReleaseInputs.has(path);
 const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')

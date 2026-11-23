@@ -305,11 +305,12 @@ test('paths select platforms and commit types select stage depth', () => {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Routing Test'); git('config', 'user.email', 'routing@example.invalid');
     const commonScript = 'apps/browser/scripts/common.sh';
     const iosArchiveTests = ['scripts/release/test_verify_ios_archive.py', 'scripts/release/test_ios_embedded_core.py'];
+    const iosCliTest = 'fastlane/tests/cli_test.rb';
     const aabCertificate = 'scripts/release/VerifiedAabCertificate.java';
     save('README.md', 'base');
     save('docs/ios-webkit-protection.en.md', 'initial');
     const defaultsPath = 'scripts/ci/fill-platform-route-defaults.mjs';
-    for (const path of [commonScript, ...iosArchiveTests, aabCertificate, defaultsPath]) save(path, 'initial');
+    for (const path of [commonScript, ...iosArchiveTests, iosCliTest, aabCertificate, defaultsPath]) save(path, 'initial');
     git('add', '.'); git('commit', '-m', 'base');
     const before = git('rev-parse', 'HEAD');
     const pr = (mutate, message) => {
@@ -339,6 +340,8 @@ test('paths select platforms and commit types select stage depth', () => {
     for (const path of iosArchiveTests) {
       assert.deepEqual(route(pr(() => save(path, 'updated'), 'test: cover archive input')), {...iosRoute, deep: false}, path);
     }
+    const cliTestOnly = pr(() => save(iosCliTest, 'updated'), 'test: cover iOS release CLI');
+    assert.deepEqual(route(cliTestOnly), {...iosRoute, deep: false});
     for (const file of [
       'build-ios-access-core.sh', 'development_key_access.py', 'development_signing.py',
       'ios_embedded_core.py', 'ios_linked_core.py', 'prepare-ios-access-core.sh', 'record-ios-access-core-digests.sh',
@@ -358,7 +361,7 @@ test('paths select platforms and commit types select stage depth', () => {
       for (const path of [
         'scripts/release/ios-delivery-plan.py', 'scripts/release/ios_access_test_gate.py',
         'scripts/release/test_ios_publish.py', 'scripts/release/prepare-ios-package-core.sh',
-        'scripts/release/central_ios_protocol.py', 'scripts/release/test_central_operator.py',
+        'scripts/release/cli.rb', 'scripts/release/test_product_delivery.py',
         'scripts/release/verify-ipa.py', 'scripts/release/product_delivery.py',
         'scripts/release/test_cloud_signing_poc.py', 'scripts/release/fixtures/safari-icon-xcode.png',
         'scripts/ci/tests/ios-release.test.mjs',
@@ -373,6 +376,8 @@ test('paths select platforms and commit types select stage depth', () => {
     }
     const unknownRelease = pr(() => save('scripts/release/prepare-ios-access-core-extra.sh', 'unknown'), 'fix: repair helper');
     assert.deepEqual(route(unknownRelease), {...iosRoute, ios: false, macos: true});
+    const unknownFastlane = pr(() => save('fastlane/tests/support/helper_test.rb', 'unknown'), 'test: cover helper');
+    assert.deepEqual(route(unknownFastlane), {...iosRoute, ios: false, macos: true, deep: false});
     const mixedRelease = pr(() => {
       save('scripts/release/verify-ios-archive.py', 'ios');
       save('scripts/release/android-delivery.py', 'android');
