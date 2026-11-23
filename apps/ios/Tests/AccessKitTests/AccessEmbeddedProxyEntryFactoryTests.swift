@@ -106,78 +106,114 @@ private final class RecordingEmbeddedCoreForFactory: AccessEmbeddedCoreControlli
 @MainActor
 final class AccessEmbeddedTeardownTests: XCTestCase {
     func testThirdPrepareKeepsSharedListenerWhenCancelledWaiterResumesFirst() async throws {
-        try await assertThirdPrepareKeepsSharedListener(cancelledPriority: .high, survivorPriority: .background)
+        try await assertThirdPrepareKeepsSharedListener(cancelledPriority: .high, survivorPriority: .medium)
     }
 
     func testThirdPrepareKeepsSharedListenerWhenSurvivorResumesFirst() async throws {
-        try await assertThirdPrepareKeepsSharedListener(cancelledPriority: .background, survivorPriority: .high)
+        try await assertThirdPrepareKeepsSharedListener(cancelledPriority: .medium, survivorPriority: .high)
     }
 
     private func assertThirdPrepareKeepsSharedListener(cancelledPriority: TaskPriority, survivorPriority: TaskPriority) async throws {
         let core = DelayedStopCore()
-        let coreStopped = expectation(description: "shared core stopped after last owner")
+        let coreStopped = XCTestExpectation(description: "shared core stopped after last owner")
         core.onStop = { [weak core] _ in core?.finishStop(); coreStopped.fulfill() }
-        defer { core.finishStop() }
-        let firstGate = AccessProvisionTestGate(entered: expectation(description: "shared listener provisioned"))
+        let parameters = try AccessRealityVisionParameters(address: "node.invalid", port: 443,
+            userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
+        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters })
+        let deadline: Duration = .seconds(5)
+        // Stage the live listener before introducing unequal waiter priorities.
+        // Only the handoff of this provision is gated by the two waiters.
+        let initial: AccessProxyEntryPublisher.Provision
+        do {
+            initial = try await session.provision(generation: 1, deadline: deadline)
+        } catch {
+            await session.stopUnpublished()
+            throw error
+        }
+        defer { session.shutdown(identity: initial.endpoint.identity) }
+
+        let firstGate = AccessProvisionTestGate(entered: XCTestExpectation(description: "shared provision held before publication"))
         let thirdGate = AccessProvisionTestGate(entered: XCTestExpectation(description: "unexpected second flight"))
         defer { firstGate.finish(); thirdGate.finish() }
-        let thirdBoundary = expectation(description: "third caller joined or started provision")
+        let thirdBoundary = XCTestExpectation(description: "third caller finished or second provision reached its gate")
         var signalledThird = false
         @MainActor func signalThird() {
             guard !signalledThird else { return }
             signalledThird = true
             thirdBoundary.fulfill()
         }
-        let parameters = try AccessRealityVisionParameters(address: "node.invalid", port: 443,
-            userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
-        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters })
         var stopped: [String] = []
         let publisher = AccessProxyEntryPublisher(provision: { generation, deadline in
+            if generation == 1 {
+                await firstGate.wait()
+                return initial
+            }
             let ready = try await session.provision(generation: generation, deadline: deadline)
-            if generation == 1 { await firstGate.wait() }
-            else { signalThird(); await thirdGate.wait() }
+            signalThird()
+            await thirdGate.wait()
             return ready
         }, shutdown: { stopped.append($0); session.shutdown(identity: $0) })
         let cancelledID = UUID(), survivorID = UUID(), thirdID = UUID()
+        let host = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("winner.invalid"), isPrivate: false)
         let survivor = Task(priority: survivorPriority) {
-            try await publisher.prepare(.init(operationID: survivorID, deadline: .seconds(5)))
+            try Task.checkCancellation()
+            return try await publisher.prepare(.init(operationID: survivorID, deadline: deadline))
         }
-        await fulfillment(of: [firstGate.entered], timeout: 2)
-        let cancelledEntered = expectation(description: "cancelled caller joined shared flight")
-        // The third caller enters directly from the cancelled caller's completion,
-        // without another task hop that would first let the survivor publish.
+        defer {
+            survivor.cancel()
+            publisher.cancel(operationID: survivorID)
+            publisher.release(for: host)
+        }
+        guard await XCTWaiter.fulfillment(of: [firstGate.entered], timeout: 2) == .completed else {
+            return XCTFail("Survivor did not start the shared flight")
+        }
+        let cancelledEntered = XCTestExpectation(description: "cancelled caller joined shared flight")
+        // Enter the third prepare in the same actor turn as the cancelled callback.
         let third = Task(priority: cancelledPriority) { @MainActor () throws -> AccessProxyEntryPrepareResult in
+            defer { signalThird() }
+            try Task.checkCancellation()
+            // prepare registers on MainActor before suspending on the flight.
             cancelledEntered.fulfill()
             do {
-                _ = try await publisher.prepare(.init(operationID: cancelledID, deadline: .seconds(5)))
+                _ = try await publisher.prepare(.init(operationID: cancelledID, deadline: deadline))
                 XCTFail("Cancelled caller claimed the provision")
             } catch is CancellationError {
-                defer { signalThird() }
-                return try await publisher.prepare(.init(operationID: thirdID, deadline: .seconds(5)))
+                try Task.checkCancellation()
+                return try await publisher.prepare(.init(operationID: thirdID, deadline: deadline))
             }
             throw AccessSiteSessionError.prepareFailed("Cancelled caller did not enter third preparation")
         }
-        await fulfillment(of: [cancelledEntered], timeout: 2)
+        defer {
+            third.cancel()
+            publisher.cancel(operationID: cancelledID)
+            publisher.cancel(operationID: thirdID)
+        }
+        guard await XCTWaiter.fulfillment(of: [cancelledEntered], timeout: 2) == .completed else {
+            return XCTFail("Second waiter did not enter the shared flight")
+        }
         publisher.cancel(operationID: cancelledID)
         firstGate.finish()
-        // Either the third caller already got the shared result, or a faulty
-        // split flight reached its real session provision and is held above.
-        await fulfillment(of: [thirdBoundary], timeout: 2)
+        // Hold any split flight after it provisions so cancellation exercises disposal.
+        guard await XCTWaiter.fulfillment(of: [thirdBoundary], timeout: 2) == .completed else {
+            return XCTFail("Third prepare did not settle or reach the split-flight gate")
+        }
         let winner = try await survivor.value
-        let host = AccessHostStoreKey(scopeID: "ordinary", host: try AccessSiteHost("winner.invalid"), isPrivate: false)
         XCTAssertTrue(publisher.retain(winner.endpoint, for: host))
         publisher.cancel(operationID: survivorID)
         publisher.cancel(operationID: thirdID)
         thirdGate.finish()
         do {
             let shared = try await third.value
-            XCTAssertEqual(shared.endpoint.generation, winner.endpoint.generation)
-        } catch is CancellationError { }
+            XCTAssertEqual(shared.endpoint, winner.endpoint)
+        } catch is CancellationError {
+            XCTAssertGreaterThan(publisher.provisionCount, 1, "The shared third prepare must return before cleanup")
+        }
         XCTAssertEqual(publisher.provisionCount, 1, "One returned provision must remain shared until publication")
         XCTAssertTrue(session.isRuntimeHealthy, "Cancelling a third caller must not stop the retained winner's listener")
         XCTAssertTrue(stopped.isEmpty)
         publisher.release(for: host)
-        await fulfillment(of: [coreStopped], timeout: 2)
+        let stopResult = await XCTWaiter.fulfillment(of: [coreStopped], timeout: 2)
+        XCTAssertEqual(stopResult, .completed)
         XCTAssertEqual(stopped, [winner.endpoint.identity])
     }
 
