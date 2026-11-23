@@ -136,6 +136,30 @@ final class AccessHTTPInboundListenerTests: XCTestCase {
         XCTAssertFalse(listener.isAccepting, "The fenced lease must remain closed after a clock correction")
     }
 
+    func testLeaseExpiringAfterSocketReadinessReturnsHTTPError() async throws {
+        let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        defer { socket.cancel() }
+        let port = try XCTUnwrap(socket.port?.rawValue)
+        let registration = try makeRegistration(port: port)
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        let initialTime = registration.leaseExpiry.addingTimeInterval(-30)
+        let listener = try AccessHTTPInboundListener(registration: registration, tunnels: HoldingTunnel(),
+            maximumConnections: 4, preparedSocket: socket, now: {
+                reads.withLock { count in
+                    count += 1
+                    return count == 1 ? initialTime : registration.leaseExpiry
+                }
+            })
+        do {
+            try await listener.start(at: initialTime)
+            XCTFail("HTTP startup must fail when the lease reaches its cutoff")
+        } catch {
+            XCTAssertEqual(error as? AccessHTTPInboundError, .leaseInactive)
+        }
+        XCTAssertGreaterThanOrEqual(reads.withLock { $0 }, 2)
+        XCTAssertFalse(listener.isListening)
+    }
+
     func testHTTPConnectAdmittedBeforeExpiryCannotOpenUpstreamAfterExpiry() async throws {
         let socket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
         defer { socket.cancel() }

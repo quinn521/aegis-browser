@@ -104,7 +104,7 @@ final class SettingsLayoutUITests: XCTestCase {
         field.tap()
         let syntheticLink = "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
             + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
-            + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=&spx=%2Fsynthetic"
+            + "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=&spx=%2Fsynthetic"
             + "&support-x25519mlkem768=true#synthetic-node"
         field.typeText(syntheticLink)
         let preview = app.buttons["access-test-node-preview"]

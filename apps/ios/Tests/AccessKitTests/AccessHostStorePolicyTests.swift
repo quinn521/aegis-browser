@@ -77,6 +77,57 @@ final class AccessHostStorePolicyTests: XCTestCase {
         XCTAssertEqual(decision, .keepBoundHostStore)
     }
 
+    @MainActor
+    func testListenerRetirementWaitsForAllBoundAndAlreadyDetachedDocuments() throws {
+        let registry = AccessHostDataStoreRegistry()
+        let ordinary = AccessHostStoreKey(scopeID: "ordinary", host: try host("one.invalid"), isPrivate: false)
+        let privateKey = AccessHostStoreKey(scopeID: "private-scope", host: try host("two.invalid"), isPrivate: true)
+        let unrelated = AccessHostStoreKey(scopeID: "ordinary", host: try host("three.invalid"), isPrivate: false)
+        let old = AccessManagedProxyEndpoint(identity: "expired", generation: 1, loopbackHost: "127.0.0.1",
+                                             port: 18080, state: .ready)
+        var replacement = old
+        replacement.identity = "replacement"
+        replacement.generation = 2
+        replacement.port = 18081
+        func install(_ endpoint: AccessManagedProxyEndpoint, for key: AccessHostStoreKey) -> Bool {
+            registry.setEndpoint(endpoint, scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate)
+        }
+        func bind(_ tab: String, to key: AccessHostStoreKey, bound: Bool = false) -> WKWebsiteDataStore? {
+            registry.storeForTab(tabID: tab, scopeID: key.scopeID, isPrivate: key.isPrivate,
+                targetHost: key.host, boundHost: bound ? key.host : nil, intent: .on)
+        }
+        XCTAssertTrue(install(old, for: ordinary))
+        XCTAssertTrue(install(old, for: privateKey))
+        XCTAssertTrue(install(replacement, for: unrelated))
+        let ordinaryStore = try XCTUnwrap(bind("open-tab", to: ordinary))
+        let privateStore = try XCTUnwrap(bind("closing-window", to: privateKey))
+        let otherStore = try XCTUnwrap(bind("other-tab", to: unrelated))
+        let acknowledgeDetached = try XCTUnwrap(registry.retainRetiringDocument(
+            scopeID: ordinary.scopeID, host: ordinary.host, isPrivate: ordinary.isPrivate))
+        var releases = 0
+        let bound = registry.retireListener(identity: old.identity) { releases += 1 }
+        XCTAssertEqual(bound[ordinary], ["open-tab"])
+        XCTAssertEqual(bound[privateKey], ["closing-window"])
+        XCTAssertNil(bind("new-tab", to: ordinary, bound: true))
+        XCTAssertFalse(install(replacement, for: privateKey))
+        XCTAssertEqual(ordinaryStore.proxyConfigurations.count, 1)
+        XCTAssertEqual(privateStore.proxyConfigurations.count, 1)
+        XCTAssertEqual(releases, 0)
+        // A removed tab's close path acknowledges via the normal unbind callback.
+        registry.unbind("closing-window")
+        XCTAssertEqual(releases, 0)
+        acknowledgeDetached()
+        registry.acknowledgeRetiredTab("open-tab", key: ordinary, identity: replacement.identity)
+        XCTAssertEqual(releases, 0)
+        registry.acknowledgeRetiredTab("open-tab", key: ordinary, identity: old.identity)
+        XCTAssertEqual(releases, 1)
+        XCTAssertTrue(ordinaryStore.proxyConfigurations.isEmpty)
+        XCTAssertTrue(privateStore.proxyConfigurations.isEmpty)
+        XCTAssertEqual(otherStore.proxyConfigurations.count, 1)
+        XCTAssertTrue(install(replacement, for: ordinary))
+        XCTAssertNotNil(bind("new-generation", to: ordinary))
+    }
+
     func testNavigationToAnotherHostDoesNotCarryThePreviousStore() throws {
         let decision = AccessHostRoutingPolicy.decide(AccessHostRoutingRequest(
             intent: .on,

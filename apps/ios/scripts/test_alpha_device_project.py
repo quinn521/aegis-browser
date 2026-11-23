@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import plistlib
 import shutil
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -97,6 +98,28 @@ class AlphaDeviceProjectTest(unittest.TestCase):
             self.assertEqual(text.count(new), count)
         local = self.out / "overlay/Shared/AppLocalization.swift"
         self.assertIn(module.GROUP, local.read_text())
+
+    def test_only_clean_git_inputs_stamp_the_prepared_app(self):
+        def git(*arguments):
+            return subprocess.check_output(["git", "-C", str(self.root), *arguments], text=True).strip()
+
+        self.assertIsNone(module.prepared_source_commit(self.root))
+        git("init", "-q")
+        git("add", "apps/ios")
+        git("-c", "user.name=Synthetic Fixture", "-c", "user.email=fixture@example.invalid",
+            "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
+        commit = git("rev-parse", "HEAD")
+        receipt = self.prepare()
+        app_info = self.out / "overlay/AegisApp/Info.plist"
+        self.assertEqual(receipt["sourceCommit"], commit)
+        self.assertEqual(plistlib.loads(app_info.read_bytes())["AegisPreparedSourceCommit"], commit)
+        extra = self.ios / "untracked.swift"
+        extra.write_text("// synthetic untracked input\n")
+        self.assertIsNone(module.prepared_source_commit(self.root))
+        extra.unlink()
+        with (self.ios / "AegisApp/Info.plist").open("ab") as stream:
+            stream.write(b"\n")
+        self.assertIsNone(module.prepared_source_commit(self.root))
 
     def test_unknown_group_reference_blocks_generation(self):
         extra = self.ios / "AegisApp/Unexpected.swift"

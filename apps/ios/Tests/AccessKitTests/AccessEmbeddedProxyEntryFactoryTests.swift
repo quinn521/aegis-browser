@@ -335,10 +335,16 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
         var authorized = true
         var reads = 0
+        var retiringIdentity: String?
+        var releasePort: (@MainActor () -> Void)?
+        defer { releasePort?() }
         let session = AccessEmbeddedProxyEntrySession(core: core, parameters: {
             reads += 1
             guard authorized else { throw URLError(.userAuthenticationRequired) }
             return parameters
+        }, retireDocuments: { identity, finish in
+            retiringIdentity = identity
+            releasePort = finish
         })
         let publisher = AccessProxyEntryPublisher(provision: { try await session.provision(generation: $0, deadline: $1) },
             shutdown: { session.shutdown(identity: $0) }, activate: { session.activate() }, healthCheck: { session.isRuntimeHealthy && authorized })
@@ -351,8 +357,25 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         // Exercise the actual health watcher rather than manually marking metadata failed.
         for _ in 0..<150 where core.stopCount == 0 { try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertEqual(core.stopCount, 1)
-        XCTAssertFalse(session.isRuntimeHealthy, "Retained listener must be closed on revocation")
+        XCTAssertFalse(session.isRuntimeHealthy, "Retained listener must be fenced on revocation")
         XCTAssertNil(publisher.currentEndpoint)
+        XCTAssertEqual(retiringIdentity, first.endpoint.identity)
+        XCTAssertNotNil(releasePort)
+        let fenced = expectation(description: "The old socket stays bound and closes new proxy traffic")
+        let peer = NWConnection(host: "127.0.0.1",
+            port: try XCTUnwrap(NWEndpoint.Port(rawValue: first.endpoint.port)), using: .tcp)
+        defer { peer.cancel() }
+        peer.stateUpdateHandler = { [weak peer] state in
+            guard case .ready = state, let peer else { return }
+            peer.receive(minimumIncompleteLength: 1, maximumLength: 256) { data, _, complete, error in
+                XCTAssertTrue(data?.isEmpty != false)
+                XCTAssertTrue(complete || error != nil)
+                fenced.fulfill()
+            }
+        }
+        peer.start(queue: .global())
+        await fulfillment(of: [fenced], timeout: 2)
+        XCTAssertEqual(core.dialCount, 0)
         let nextID = UUID()
         let next = Task { try await publisher.prepare(.init(operationID: nextID, deadline: .seconds(5))) }
         for _ in 0..<20 { await Task.yield() }
@@ -362,6 +385,8 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         XCTAssertEqual(reads, 2)
         XCTAssertEqual(core.startCount, 1)
         XCTAssertFalse(core.isRunning)
+        releasePort?()
+        releasePort = nil
         publisher.release(for: key)
         publisher.cancel(operationID: nextID)
     }

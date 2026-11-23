@@ -62,6 +62,20 @@ def private_path(path):
     return str(path)
 
 
+def prepared_source_commit(root):
+    result = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel", "HEAD"],  # nosec B603 B607
+                            capture_output=True, text=True, check=False)
+    if result.returncode:
+        return None
+    lines = result.stdout.splitlines()
+    if len(lines) != 2 or Path(lines[0]).resolve() != root or not re.fullmatch(r"[0-9a-f]{40}", lines[1]):
+        return None
+    status = subprocess.run(["git", "--no-optional-locks", "-C", str(root), "status", "--porcelain",  # nosec B603 B607
+                             "--untracked-files=normal", "--", "apps/ios"],
+                            capture_output=True, text=True, check=False)
+    return lines[1] if status.returncode == 0 and not status.stdout else None
+
+
 def prepare(source_root, output_dir, products, team_id, node_file=None):
     root = Path(source_root).resolve(strict=True)
     ios = root / "apps/ios"
@@ -80,6 +94,7 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
     if any(c in str(ios) for c in ('"', '$', '`', '\n', '\r')):
         raise ValueError("source path cannot be represented safely in build scripts")
     original = (ios / "project.yml").read_bytes()
+    source_commit = prepared_source_commit(root)
     spec = copy.deepcopy(load_spec(ios / "project.yml"))
     if set(spec["targets"]) != set(IDS):
         raise ValueError("unexpected target topology; update isolation contract")
@@ -148,6 +163,9 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
                 schemes[0]["CFBundleURLName"] = APP + ".open"
                 data["CFBundleDisplayName"] = "Aegis Alpha"
                 changes.update(externalScheme=1, urlName=1, displayName=1)
+                if source_commit:
+                    data["AegisPreparedSourceCommit"] = source_commit
+                    changes["preparedSourceCommit"] = 1
             elif name in ("ShareExtension", "SafariWebExtension") and key == "INFOPLIST_FILE":
                 data["CFBundleDisplayName"] += " Alpha"
                 changes["displayName"] = 1
@@ -185,6 +203,8 @@ def prepare(source_root, output_dir, products, team_id, node_file=None):
                    generatedSpecSha256=digest(generated), appId=APP, appGroup=GROUP,
                    externalScheme=SCHEME, teamId=team_id, firebase="disabled",
                    coreVerification="NOT_RUN", build="NOT_RUN", device="NOT_RUN", overlays=overlays)
+    if source_commit:
+        receipt["sourceCommit"] = source_commit
     out.mkdir(mode=0o700)
     for path, data in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)

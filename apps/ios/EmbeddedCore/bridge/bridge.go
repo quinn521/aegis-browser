@@ -6,6 +6,7 @@
 package embeddedcore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -16,8 +17,10 @@ import (
 	xraylog "github.com/xtls/xray-core/app/log"
 	clog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	"google.golang.org/protobuf/proto"
 )
 
 // Runtime owns an isolated Xray instance and its streams.
@@ -35,23 +38,46 @@ func NewRuntime() *Runtime { return &Runtime{streams: map[int64]*streamHandle{}}
 
 var legacy = NewRuntime()
 
-// Xray initialization and the selected logger are process-wide even though
-// instance routing and stream tables are independent.
+// Xray initialization and diagnostics are process-wide even though routing
+// and streams belong to individual runtimes. A rotated log sink outlives the
+// runtime that opened it while any runtime is still alive.
 var lifecycleMu sync.Mutex
-var liveInstances []*core.Instance
+var liveInstances int
+var activeLogger *xraylog.Instance
+var activeLogConfig *xraylog.Config
+var xrayLogType = serial.GetMessageType(&xraylog.Config{})
 
 type discardedLog struct{}
 
 func (discardedLog) Handle(clog.Message) {}
 
 func selectLiveLogger() {
-	for i := len(liveInstances) - 1; i >= 0; i-- {
-		if handler, ok := liveInstances[i].GetFeature((*xraylog.Instance)(nil).Type()).(clog.Handler); ok {
-			clog.RegisterHandler(handler)
-			return
-		}
+	if activeLogger != nil {
+		clog.RegisterHandler(activeLogger)
+	} else {
+		clog.RegisterHandler(discardedLog{})
 	}
-	clog.RegisterHandler(discardedLog{})
+}
+
+// Omit the instance logger feature. Even a quiet Xray log feature registers a
+// global handler during construction and would displace the live capture.
+func detachLogConfig(config *core.Config) (*xraylog.Config, error) {
+	for index, app := range config.App {
+		if app.Type != xrayLogType {
+			continue
+		}
+		value, err := app.GetInstance()
+		if err != nil {
+			return nil, err
+		}
+		config.App = append(config.App[:index], config.App[index+1:]...)
+		logConfig := value.(*xraylog.Config)
+		if logConfig.AccessLogType != xraylog.LogType_None || logConfig.ErrorLogType != xraylog.LogType_None {
+			return logConfig, nil
+		}
+		break
+	}
+	return nil, nil
 }
 
 var (
@@ -76,13 +102,49 @@ func (r *Runtime) Start(configJSON string) error {
 	}
 	lifecycleMu.Lock()
 	defer lifecycleMu.Unlock()
-	inst, err := core.StartInstance("json", []byte(configJSON))
+	config, err := core.LoadConfig("json", bytes.NewBufferString(configJSON))
 	if err != nil {
-		selectLiveLogger()
 		return err
 	}
+	logConfig, err := detachLogConfig(config)
+	if err != nil {
+		return err
+	}
+	if liveInstances == 0 {
+		selectLiveLogger()
+	}
+	var candidateLogger *xraylog.Instance
+	if logConfig != nil && !proto.Equal(logConfig, activeLogConfig) {
+		candidateLogger, err = xraylog.New(context.Background(), logConfig)
+		if err != nil {
+			selectLiveLogger()
+			return err
+		}
+	}
+	rollbackLogger := func() {
+		if candidateLogger != nil {
+			selectLiveLogger()
+			_ = candidateLogger.Close()
+		}
+	}
+	inst, err := core.New(config)
+	if err != nil {
+		rollbackLogger()
+		return err
+	}
+	if err := inst.Start(); err != nil {
+		_ = inst.Close()
+		rollbackLogger()
+		return err
+	}
+	if candidateLogger != nil {
+		if activeLogger != nil {
+			_ = activeLogger.Close()
+		}
+		activeLogger, activeLogConfig = candidateLogger, logConfig
+	}
 	r.instance = inst
-	liveInstances = append(liveInstances, inst)
+	liveInstances++
 	r.instanceContext, r.instanceCancel = context.WithCancel(context.Background())
 	return nil
 }
@@ -104,19 +166,11 @@ func (r *Runtime) Stop() error {
 	if inst != nil {
 		lifecycleMu.Lock()
 		defer lifecycleMu.Unlock()
-		for i, live := range liveInstances {
-			if live == inst {
-				copy(liveInstances[i:], liveInstances[i+1:])
-				liveInstances[len(liveInstances)-1] = nil
-				liveInstances = liveInstances[:len(liveInstances)-1]
-				break
-			}
-		}
-		if len(liveInstances) > 0 {
-			selectLiveLogger()
-		}
 		err := inst.Close()
-		if len(liveInstances) == 0 {
+		liveInstances--
+		if liveInstances == 0 && activeLogger != nil {
+			_ = activeLogger.Close()
+			activeLogger, activeLogConfig = nil, nil
 			selectLiveLogger()
 		}
 		return err

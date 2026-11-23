@@ -7,7 +7,7 @@ import WebKit
 /// A private scope id is the browser's current private session.
 @MainActor
 final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordinating {
-    let registry = AccessHostDataStoreRegistry()
+    let registry: AccessHostDataStoreRegistry
     let publisher: any AccessProxyEntryPublishing
     let clock: any AccessPreparationClock
     let releaseChannel: AccessReleaseChannel
@@ -51,8 +51,10 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         channel: AccessReleaseChannel = .release,
         probeRunner: AccessSiteProbeRunner = AccessSiteProbeRunner(),
         defaultLocationPrivacy: Bool = false,
-        locationPreferences: UserDefaults? = nil
+        locationPreferences: UserDefaults? = nil,
+        registry: AccessHostDataStoreRegistry = AccessHostDataStoreRegistry()
     ) {
+        self.registry = registry
         self.publisher = publisher ?? AccessFailClosedProxyEntryPublisher()
         self.clock = clock ?? AccessContinuousPreparationClock()
         self.releaseChannel = channel == .unknown ? .release : channel
@@ -1059,6 +1061,24 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
             lastRecoveryFailure = AccessAutoRecoveryCopy.unavailable
         }
         revision &+= 1
+    }
+
+    func retireManagedDocuments(identity: String, finish: @escaping @MainActor () -> Void) {
+        if var endpoint = registry.endpointSnapshot.values.first(where: { $0.identity == identity && $0.state == .ready }) {
+            endpoint.state = .failed
+            applySharedState(endpoint)
+        }
+        let bound = registry.retireListener(identity: identity, finish: finish)
+        let tabs = BrowserSession.openTabs()
+        for (key, tabIDs) in bound {
+            guard let store = registry.store(scopeID: key.scopeID, host: key.host, isPrivate: key.isPrivate) else { continue }
+            for tab in tabs where tab.websiteDataStore === store && tabIDs.contains(tab.instanceID.uuidString) {
+                let tabID = tab.instanceID.uuidString
+                tab.retireFailedProxyDocument { [registry] in
+                    registry.acknowledgeRetiredTab(tabID, key: key, identity: identity)
+                }
+            }
+        }
     }
 
     private func publishGroup(

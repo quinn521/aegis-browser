@@ -40,6 +40,7 @@ public final class AccessHostDataStoreRegistry {
     public private(set) var switchGeneration: UInt64 = 0
     private var entries: [AccessHostStoreKey: Entry] = [:]
     private var endpoints: [AccessHostStoreKey: AccessManagedProxyEndpoint] = [:]
+    private var listenerRetirements: [String: @MainActor () -> Void] = [:]
     public var onRetire: ((AccessHostStoreKey) -> Void)?
 
     private struct Entry {
@@ -76,6 +77,7 @@ public final class AccessHostDataStoreRegistry {
             return false
         }
         if endpoint.state == .ready {
+            if let identity = endpoints[storeKey]?.identity, listenerRetirements[identity] != nil { return false }
             guard let configuration = configuration(for: endpoint) else {
                 var rejected = endpoint
                 rejected.state = .failed
@@ -156,8 +158,8 @@ public final class AccessHostDataStoreRegistry {
         }
     }
 
-    /// Disables the host and drops its store. Returns tab ids that were bound so
-    /// the caller can send each one back to its original store first.
+    /// Disables new attachments. The caller detaches the returned tabs and
+    /// acknowledges their documents before the store can be dropped.
     public func revoke(
         scopeID: String,
         host: AccessSiteHost,
@@ -169,7 +171,6 @@ public final class AccessHostDataStoreRegistry {
         let tabs = entries[storeKey]?.record.boundTabIDs ?? []
         if var entry = entries[storeKey] {
             entry.record.proxyEnabled = false
-            entry.record.boundTabIDs = []
             entries[storeKey] = entry
         }
         endpoints[storeKey]?.state = .unavailable
@@ -212,6 +213,38 @@ public final class AccessHostDataStoreRegistry {
         )
         for eviction in evictions {
             retire(eviction.key)
+        }
+        finishListenerRetirements()
+    }
+
+    /// Fences one listener's stores immediately. Bound tabs (including those
+    /// closing a window) and previously detached documents both owe a receipt.
+    public func retireListener(identity: String, finish: @escaping @MainActor () -> Void) -> [AccessHostStoreKey: Set<String>] {
+        var bound: [AccessHostStoreKey: Set<String>] = [:]
+        for (key, endpoint) in endpoints where endpoint.identity == identity {
+            if endpoint.state == .ready { endpoints[key]?.state = .failed }
+            if let entry = entries[key] { bound[key] = entry.record.boundTabIDs }
+        }
+        listenerRetirements[identity] = finish
+        finishListenerRetirements()
+        return bound
+    }
+
+    public func acknowledgeRetiredTab(_ tabID: String, key: AccessHostStoreKey, identity: String) {
+        guard endpoints[key]?.identity == identity, listenerRetirements[identity] != nil else { return }
+        entries[key]?.record.boundTabIDs.remove(tabID)
+        finishListenerRetirements()
+    }
+
+    private func finishListenerRetirements() {
+        for (identity, finish) in listenerRetirements {
+            let keys = endpoints.keys.filter { endpoints[$0]?.identity == identity && entries[$0] != nil }
+            guard keys.allSatisfy({ key in
+                entries[key]?.record.boundTabIDs.isEmpty == true && entries[key]?.retiringDocuments.isEmpty == true
+            }) else { continue }
+            listenerRetirements.removeValue(forKey: identity)
+            for key in keys { retire(key) }
+            finish()
         }
     }
 
@@ -264,6 +297,7 @@ public final class AccessHostDataStoreRegistry {
         let storeKey = key(scopeID, host, isPrivate)
         let endpoint = endpoints[storeKey]
         if let endpoint, !endpoint.hasAdmittedBinding { return nil }
+        if let endpoint, listenerRetirements[endpoint.identity] != nil { return nil }
         if entries[storeKey] == nil {
             guard let endpoint, let configuration = configuration(for: endpoint) else { return nil }
             let store = WKWebsiteDataStore.nonPersistent()
@@ -319,6 +353,7 @@ public final class AccessHostDataStoreRegistry {
 
     private func retire(_ key: AccessHostStoreKey) {
         guard entries[key]?.retiringDocuments.isEmpty == true,
+              entries[key]?.record.boundTabIDs.isEmpty == true,
               let entry = entries.removeValue(forKey: key) else { return }
         entry.store.proxyConfigurations = []
         endpoints[key] = nil

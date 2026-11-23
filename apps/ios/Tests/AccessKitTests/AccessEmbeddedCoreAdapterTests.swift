@@ -231,6 +231,9 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         }
         try await first.start(configData: config(path: path))
         diagnostics.disableAndClear()
+        let oldWriter = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        defer { try? oldWriter.close() }
+        try oldWriter.write(contentsOf: Data("2026/11/20 00:00:00 from local accepted //off-period.invalid:443\n".utf8))
         let secondCapture = diagnostics.acquireShared(level: .info, secrets: [])
         addTeardownBlock { await second.stop(); diagnostics.stop(lease: secondCapture) }
         let resumedPath = try XCTUnwrap(secondCapture.path)
@@ -239,22 +242,28 @@ final class AccessGoNativeCallbackIntegrationTests: XCTestCase {
         await second.stop()
         XCTAssertTrue(diagnostics.stop(lease: secondCapture))
         XCTAssertTrue(first.isRunning)
+        let quiet = try AccessGoEmbeddedCore(isolated: true)
+        let quietLease = diagnostics.acquireShared(level: .none, secrets: [], disableCaptureWhenQuiet: false)
+        addTeardownBlock { await quiet.stop(); diagnostics.stop(lease: quietLease) }
+        try await quiet.start(configData: Data(#"{"log":{"loglevel":"none"},"inbounds":[],"outbounds":[{"protocol":"freedom"}]}"#.utf8))
+        let previousInfoCount = diagnostics.snapshot().components(separatedBy: "[Info] details withheld").count
         let stream = try await first.dial(host: "127.0.0.1", port: port)
         defer { stream.close() }
         try await stream.write(Data("surviving-core".utf8))
         let echoed = try await stream.read(maxBytes: 1024)
         XCTAssertEqual(echoed, Data("surviving-core".utf8))
-        // Core.Dial's local freedom fixture has no inbound access message.
-        // The Go regression verifies native logger selection; this controlled
-        // record verifies the new Swift reader without inventing one.
-        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: resumedPath))
-        try writer.write(contentsOf: Data("2026/11/20 00:00:00 from local accepted //surviving-native.example:443\n".utf8))
-        try writer.close()
+        // The pinned freedom outbound logs its local connection through Xray.
+        // The production redactor retains its severity and withholds details.
         let deadline = Date().addingTimeInterval(3)
-        while !diagnostics.snapshot().contains("surviving-native.example:443"), Date() < deadline {
+        while diagnostics.snapshot().components(separatedBy: "[Info] details withheld").count == previousInfoCount,
+              Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        XCTAssertTrue(diagnostics.snapshot().contains("surviving-native.example:443"))
+        let captured = diagnostics.snapshot()
+        XCTAssertGreaterThan(captured.components(separatedBy: "[Info] details withheld").count, previousInfoCount)
+        XCTAssertFalse(captured.contains("off-period.invalid"))
+        await quiet.stop()
+        XCTAssertTrue(diagnostics.stop(lease: quietLease))
         await first.stop()
         XCTAssertTrue(diagnostics.stop(lease: firstCapture))
     }

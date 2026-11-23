@@ -492,7 +492,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                     return (try? repository.revision(isPrivate: self.isPrivate)) == revision
                         && !self.closed && !self.preparationDeadlineElapsed
                 },
-                retireDocuments: { [weak self] finish in
+                retireDocuments: { [weak self] _, finish in
                     guard let self else { finish(); return }
                     self.retire(finish)
                 }, transport: transport)

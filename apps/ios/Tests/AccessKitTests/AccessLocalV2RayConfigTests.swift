@@ -7,7 +7,7 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
         + "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
         + "&sni=www.example.com&fp=chrome"
-        + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234"
+        + "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
         + "&headerType=none#demo-reality-vision"
 
     func testManualShareRequiresExplicitVisionFlowWhileLegacyReadersKeepTheirDefault() throws {
@@ -20,6 +20,23 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         }
         XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(
             sampleShareURI.replacingOccurrences(of: "xtls-rprx-vision", with: "xtls-rprx-origin")))
+    }
+
+    func testManualShareRejectsUnusableRealityKeyAndShortIDWithLegacyCompatibility() throws {
+        let key = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        for invalid in ["short", String(repeating: "A", count: 42), key + "%3D",
+                        "+" + key.dropFirst()] {
+            let link = sampleShareURI.replacingOccurrences(of: key, with: invalid)
+            XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(link))
+            XCTAssertNoThrow(try AccessLocalV2RayConfigLoader.parseShareURI(link))
+        }
+        let odd = sampleShareURI.replacingOccurrences(of: "abcd1234", with: "abc")
+        XCTAssertThrowsError(try AccessLocalV2RayConfigLoader.parseSingleShareURI(odd))
+        XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseShareURI(odd).shortID, "abc")
+        let empty = sampleShareURI.replacingOccurrences(of: "abcd1234", with: "")
+        XCTAssertEqual(try AccessLocalV2RayConfigLoader.parseSingleShareURI(empty).shortID, "")
+        let urlSafe = sampleShareURI.replacingOccurrences(of: key, with: "-_" + key.dropFirst(2))
+        XCTAssertNoThrow(try AccessLocalV2RayConfigLoader.parseSingleShareURI(urlSafe))
     }
 
     func testOptionsParserRequiresTheEntireInputToBeOneShareLink() throws {
@@ -84,7 +101,7 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
         XCTAssertEqual(parameters.port, 443)
         XCTAssertEqual(parameters.userID, "550e8400-e29b-41d4-a716-446655440000")
         XCTAssertEqual(parameters.serverName, "www.example.com")
-        XCTAssertEqual(parameters.publicKey, "abcdefghijklmnopqrstuvwxyzABCDEFG")
+        XCTAssertEqual(parameters.publicKey, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
         XCTAssertEqual(parameters.shortID, "abcd1234")
         XCTAssertEqual(parameters.fingerprint, "chrome")
     }
@@ -125,7 +142,7 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
             "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
             + "?flow=xtls-rprx-vision&security=reality&encryption=&type=tcp"
             + "&sni=www.example.com&fp=chrome"
-            + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234"
+            + "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
         let parameters = try AccessLocalV2RayConfigLoader.parseShareURI(uri)
         XCTAssertEqual(parameters.address, "198.51.100.10")
         XCTAssertEqual(parameters.shortID, "abcd1234")
@@ -144,7 +161,7 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
             "port": "8443",
             "id": "550e8400-e29b-41d4-a716-446655440000",
             "sni": "cdn.example.net",
-            "pbk": "abcdefghijklmnopqrstuvwxyzABCDEFG",
+            "pbk": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
             "sid": "deadbeef",
             "fp": "chrome",
             "flow": "xtls-rprx-vision",
@@ -179,7 +196,7 @@ final class AccessLocalV2RayConfigTests: XCTestCase {
             "port": 443,
             "id": "550e8400-e29b-41d4-a716-446655440000",
             "serverName": "www.example.com",
-            "publicKey": "abcdefghijklmnopqrstuvwxyzABCDEFG",
+            "publicKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
             "shortId": "abcd1234",
             "allowInsecure": true,
         ]

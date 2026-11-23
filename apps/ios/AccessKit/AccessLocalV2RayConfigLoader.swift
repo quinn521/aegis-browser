@@ -137,7 +137,20 @@ public enum AccessLocalV2RayConfigLoader {
         // The fragment is untrusted and can itself contain credentials.
         components.fragment = nil
         guard let uri = components.string else { throw AccessLocalV2RayConfigError.invalidJSON }
-        return try parseShareURI(uri)
+        let parameters = try parseShareURI(uri)
+        // Match the pinned REALITY builder's RawURLEncoding and hex decoding.
+        let publicKey = parameters.publicKey
+        let base64url = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+        let base64 = publicKey.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        guard publicKey.utf8.count == 43,
+              publicKey.unicodeScalars.allSatisfy({ base64url.contains($0) }),
+              Data(base64Encoded: base64 + "=")?.count == 32 else {
+            throw AccessRealityVisionOutboundConfigError.fieldNotCanonical("publicKey")
+        }
+        guard parameters.shortID.utf8.count.isMultiple(of: 2) else {
+            throw AccessRealityVisionOutboundConfigError.fieldNotCanonical("shortID")
+        }
+        return parameters
     }
 
     // MARK: - vless:// share URI

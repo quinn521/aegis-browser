@@ -8,7 +8,8 @@ enum AccessThreeXUIWebEntry {
     static func makePublisher(
         for usage: AccessSubscriptionUsageSession,
         lockData: Data? = nil,
-        verifiedCore: (any AccessEmbeddedCoreControlling)? = nil
+        verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
+        retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil
     ) -> any AccessProxyEntryPublishing {
         guard usage.isSelected, usage.managesConnections else { return AccessFailClosedProxyEntryPublisher() }
         return AccessEmbeddedProxyEntryFactory.makeProductPublisher(
@@ -16,7 +17,8 @@ enum AccessThreeXUIWebEntry {
             configPath: nil,
             verifiedCore: verifiedCore,
             parameters: { try await usage.connectionParameters() },
-            connectionAllowed: { usage.permitsExistingConnection }
+            connectionAllowed: { usage.permitsExistingConnection },
+            retireDocuments: retireDocuments
         )
     }
 }

@@ -19,7 +19,7 @@ public enum AccessEmbeddedProxyEntryFactory {
         verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
         parameters: (@MainActor () async throws -> AccessRealityVisionParameters)? = nil,
         connectionAllowed: (@MainActor () -> Bool)? = nil,
-        retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil,
+        retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil,
         transport: AccessInboundTransport = .http
     ) -> any AccessProxyEntryPublishing {
         do {
@@ -96,11 +96,11 @@ final class AccessEmbeddedProxyEntrySession {
     private var startedCore = false
     private var pendingStop: Task<Void, Never>?
     private var logLease: AccessDiagnosticLog.Lease?
-    private var retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)?
+    private let retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)?
 
     init(core: any AccessEmbeddedCoreControlling, outbound: AccessRealityVisionOutboundConfig,
          transport: AccessInboundTransport = .http,
-         retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil) {
+         retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil) {
         self.core = core
         self.transport = transport
         self.retireDocuments = retireDocuments
@@ -109,7 +109,7 @@ final class AccessEmbeddedProxyEntrySession {
 
     init(core: any AccessEmbeddedCoreControlling,
          parameters: @escaping @MainActor () async throws -> AccessRealityVisionParameters,
-         retireDocuments: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil,
+         retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil,
          transport: AccessInboundTransport = .http) {
         self.core = core
         self.transport = transport
@@ -294,7 +294,7 @@ final class AccessEmbeddedProxyEntrySession {
         if let listener {
             if published, let retireDocuments {
                 listener.suspend()
-                retireDocuments { try? listener.stop() }
+                retireDocuments(identity) { try? listener.stop() }
             } else {
                 try? listener.stop()
             }

@@ -231,7 +231,7 @@ public final class AccessHTTPInboundListener: @unchecked Sendable {
         }
         guard scheduled else {
             try? stop()
-            throw AccessSOCKS5InboundError.leaseInactive
+            throw AccessHTTPInboundError.leaseInactive
         }
     }
 

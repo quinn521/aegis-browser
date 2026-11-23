@@ -18,7 +18,7 @@ import XCTest
 final class AccessTestNodeEditorTests: XCTestCase {
     private let link = "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
         + "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.example.com"
-        + "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic-node"
+        + "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234#synthetic-node"
 
     func testTransportAdmissionAndBindingTimeSelection() throws {
         XCTAssertEqual(try AccessTestNodeTransport.automatic.select(socksAdmitted: true), .socks5)
@@ -236,6 +236,83 @@ final class AccessTestNodeEditorTests: XCTestCase {
         XCTAssertEqual(AccessDomainCampaignInput.dispatchLimit("2", hostCount: count, ranked: true), 2)
         for value in ["", "0", "-1", "6", "all"] {
             XCTAssertNil(AccessDomainCampaignInput.dispatchLimit(value, hostCount: count, ranked: true))
+        }
+    }
+
+    func testRankedResumeRequiresTheExactNonemptyCheckpointAndOrderedReservations() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("checkpoint.jsonl")
+        let hosts = ["first.invalid", "second.invalid", "third.invalid"]
+        func read(_ sha: String?, order: String = "synthetic-order") throws -> AccessDomainCampaignInput.Checkpoint? {
+            try AccessDomainCampaignInput.checkpoint(at: file, expectedSHA: sha, dataset: "synthetic-dataset",
+                device: "synthetic-device", bundle: "example.invalid.test", runID: "synthetic-run",
+                orderSHA: order, hosts: hosts)
+        }
+        func row(_ host: String) throws -> Data {
+            var row = try JSONSerialization.data(withJSONObject: [
+                "event": "reserved", "host": host, "dataset": "synthetic-dataset", "device": "synthetic-device",
+                "bundle": "example.invalid.test", "campaignID": "synthetic-run", "orderSHA256": "synthetic-order"
+            ], options: .sortedKeys)
+            row.append(10)
+            return row
+        }
+        let first = try row(hosts[0])
+        let second = try row(hosts[1])
+        let bytes = first + second
+        let sha = AccessDomainCampaignInput.sha256(bytes)
+        XCTAssertThrowsError(try read(sha))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        try Data().write(to: file)
+        XCTAssertThrowsError(try read(AccessDomainCampaignInput.sha256(Data())))
+        try bytes.write(to: file)
+        XCTAssertThrowsError(try read(nil))
+        XCTAssertThrowsError(try read(AccessDomainCampaignInput.sha256(first)))
+        XCTAssertThrowsError(try read(sha, order: "other-order"))
+        XCTAssertEqual(try read(sha)?.reserved, Set(hosts.prefix(2)))
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        for invalid in [second, first + first, Data(bytes.dropLast())] {
+            try invalid.write(to: file)
+            XCTAssertThrowsError(try read(AccessDomainCampaignInput.sha256(invalid)))
+        }
+    }
+
+    func testCampaignSourceMustMatchThePreparedAppAndEmbeddedCore() throws {
+        let source = String(repeating: "a", count: 40)
+        let other = String(repeating: "b", count: 40)
+        func manifest(_ revision: String, kind: String = "ios-embedded-core-build") throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": kind, "sourceCommit": revision])
+        }
+        let core = try manifest(source)
+        XCTAssertEqual(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: core), source)
+        for request in [nil, "unknown", "abcd", source.uppercased(), other] {
+            XCTAssertNil(AccessDomainCampaignInput.sourceSHA(request, prepared: source, coreManifest: core))
+        }
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: nil, coreManifest: core))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: other, coreManifest: core))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: nil))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: try manifest(other)))
+        XCTAssertNil(AccessDomainCampaignInput.sourceSHA(source, prepared: source, coreManifest: try manifest(source, kind: "other")))
+    }
+
+    func testMalformedManualRealityInputCannotApplyOverSavedNode() throws {
+        let storage = Storage()
+        let repository = AccessTestNodeRepository(channel: .alpha, storage: storage)
+        let editor = AccessTestNodeEditor(isPrivate: false, repository: repository)
+        editor.openProfile()
+        editor.preview(link)
+        editor.apply()
+        let saved = try repository.savedNode(isPrivate: false)
+        for invalid in [
+            link.replacingOccurrences(of: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", with: "invalid"),
+            link.replacingOccurrences(of: "sid=abcd1234", with: "sid=abc")
+        ] {
+            editor.preview(invalid)
+            XCTAssertFalse(editor.canApply)
+            editor.apply()
+            XCTAssertEqual(try repository.savedNode(isPrivate: false).revision, saved.revision)
+            XCTAssertEqual(storage.writes, 1)
         }
     }
 
@@ -738,6 +815,10 @@ final class AccessTestNodeEditorTests: XCTestCase {
 }
 
 enum AccessDomainCampaignInput {
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     static func validID(_ value: String) -> Bool {
         !value.isEmpty && value.utf8.count <= 64 && value.utf8.allSatisfy {
             (97...122).contains($0) || (48...57).contains($0) || $0 == 45
@@ -745,8 +826,7 @@ enum AccessDomainCampaignInput {
     }
 
     static func order(_ data: Data, canonical: [String], digest: String) throws -> [String] {
-        let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        guard actual == digest, let text = String(data: data, encoding: .utf8) else {
+        guard sha256(data) == digest, let text = String(data: data, encoding: .utf8) else {
             throw CocoaError(.fileReadCorruptFile)
         }
         let hosts = text.split(separator: "\n").map(String.init)
@@ -760,6 +840,54 @@ enum AccessDomainCampaignInput {
         guard let value else { return ranked ? nil : hostCount }
         guard let count = Int(value), (1...hostCount).contains(count) else { return nil }
         return count
+    }
+
+    static func sourceSHA(_ requested: String?, prepared: String?, coreManifest: Data?) -> String? {
+        guard let requested, requested.utf8.count == 40,
+              requested.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              requested == prepared, let coreManifest,
+              let manifest = (try? JSONSerialization.jsonObject(with: coreManifest)) as? [String: Any],
+              manifest["schemaVersion"] as? Int == 1,
+              manifest["kind"] as? String == "ios-embedded-core-build",
+              manifest["sourceCommit"] as? String == requested else { return nil }
+        return requested
+    }
+
+    struct Checkpoint {
+        let bytes: Data
+        let reserved: Set<String>
+    }
+
+    static func checkpoint(at file: URL, expectedSHA: String?, dataset: String, device: String, bundle: String,
+                           runID: String?, orderSHA: String?, hosts: [String]) throws -> Checkpoint? {
+        let bytes: Data
+        do { bytes = try Data(contentsOf: file) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile && runID == nil && expectedSHA == nil {
+            return nil
+        }
+        if runID != nil || expectedSHA != nil {
+            guard !bytes.isEmpty, sha256(bytes) == expectedSHA else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+        }
+        guard let text = String(data: bytes, encoding: .utf8), bytes.isEmpty || bytes.last == 10 else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let validHosts = Set(hosts)
+        var reserved = Set<String>()
+        for line in text.split(separator: "\n") {
+            guard let record = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  record["dataset"] as? String == dataset, record["device"] as? String == device,
+                  record["bundle"] as? String == bundle, record["campaignID"] as? String == runID,
+                  record["orderSHA256"] as? String == orderSHA else { throw CocoaError(.fileReadCorruptFile) }
+            if record["event"] as? String == "reserved" {
+                guard let host = record["host"] as? String, validHosts.contains(host),
+                      runID == nil || (reserved.count < hosts.count && host == hosts[reserved.count]),
+                      reserved.insert(host).inserted else { throw CocoaError(.fileReadCorruptFile) }
+            }
+        }
+        if runID != nil && reserved.isEmpty { throw CocoaError(.fileReadCorruptFile) }
+        return Checkpoint(bytes: bytes, reserved: reserved)
     }
 }
 
@@ -802,7 +930,8 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         throw XCTSkip("This campaign requires its designated physical device")
 #else
         let env = ProcessInfo.processInfo.environment
-        guard env["AEGIS_TEST_CAMPAIGN_DEVICE"] == "ios-device-2d62695fc7",
+        let device = "ios-device-2d62695fc7"
+        guard env["AEGIS_TEST_CAMPAIGN_DEVICE"] == device,
               let node = env["AEGIS_TEST_AUTHORIZED_NODE"],
               let input = Bundle.main.url(forResource: "domains", withExtension: "txt") else {
             throw XCTSkip("Explicit physical campaign inputs are required")
@@ -813,8 +942,17 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             $0.withMemoryRebound(to: CChar.self, capacity: 256) { String(cString: $0) }
         }
         guard model == "iPhone14,3" else { XCTFail("Wrong physical device model"); return }
+        let coreManifest = Bundle(for: AccessEmbeddedCoreAdapter.self)
+            .url(forResource: "embedded-core-build", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) }
+        guard let bundleID = Bundle.main.bundleIdentifier,
+              let sourceSHA = AccessDomainCampaignInput.sourceSHA(env["AEGIS_TEST_SOURCE_SHA"],
+                prepared: Bundle.main.object(forInfoDictionaryKey: "AegisPreparedSourceCommit") as? String,
+                coreManifest: coreManifest) else {
+            XCTFail("Campaign source identity does not match the prepared app and embedded core"); return
+        }
         let data = try Data(contentsOf: input)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let digest = AccessDomainCampaignInput.sha256(data)
         guard digest == "84a004adf2537fde3befb724fe77512cf3a4acb1df8ec350cd898a6cf8428374" else {
             XCTFail("Campaign input digest differs"); return
         }
@@ -833,41 +971,36 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         guard let limit = AccessDomainCampaignInput.dispatchLimit(
             env["AEGIS_TEST_CAMPAIGN_LIMIT"], hostCount: hosts.count, ranked: runID != nil
         ) else { XCTFail("Invalid or missing campaign phase limit"); return }
-        let validHosts = Set(hosts)
+        let file = documents.appendingPathComponent(runID.map { "ios208-" + $0 + "-dispatch.jsonl" }
+            ?? "ios208-domain-dispatch.jsonl")
+        let checkpoint = try AccessDomainCampaignInput.checkpoint(at: file,
+            expectedSHA: env["AEGIS_TEST_CAMPAIGN_LEDGER_SHA256"], dataset: digest, device: device,
+            bundle: bundleID, runID: runID, orderSHA: orderDigest, hosts: hosts)
+        var reserved = checkpoint?.reserved ?? []
+        guard runID == nil || reserved.count <= limit else {
+            XCTFail("Campaign phase limit precedes the supplied checkpoint"); return
+        }
         let repository = AccessTestNodeRepository.shared
         guard repository.allowsEditing(isPrivate: false) else { XCTFail("Native admission denied"); return }
         let parameters = try AccessLocalV2RayConfigLoader.parseSingleShareURI(node)
+        // Ranked execution always resumes a supplied checkpoint. The legacy
+        // unranked entry may still initialize its own file.
+        if checkpoint == nil { try Data().write(to: file, options: .withoutOverwriting) }
+        let output = try FileHandle(forUpdating: file)
+        defer { try? output.close() }
+        guard try (output.readToEnd() ?? Data()) == (checkpoint?.bytes ?? Data()) else {
+            XCTFail("Dispatch ledger changed before opening the campaign"); return
+        }
+        try output.seekToEnd()
         if (try? repository.savedNode(isPrivate: false).parameters()) != parameters {
             _ = try repository.apply(parameters, expectedRevision: repository.revision(isPrivate: false), isPrivate: false)
         }
-        let file = documents.appendingPathComponent(runID.map { "ios208-" + $0 + "-dispatch.jsonl" }
-            ?? "ios208-domain-dispatch.jsonl")
-        if !FileManager.default.fileExists(atPath: file.path) {
-            try Data().write(to: file, options: .atomic)
-        }
-        let prior = try Data(contentsOf: file)
-        var reserved = Set<String>()
-        for line in String(decoding: prior, as: UTF8.self).split(separator: "\n") {
-            guard let json = line.data(using: .utf8), let record = try JSONSerialization.jsonObject(with: json) as? [String: Any],
-                  record["dataset"] as? String == digest,
-                  record["device"] as? String == "ios-device-2d62695fc7",
-                  record["bundle"] as? String == Bundle.main.bundleIdentifier,
-                  record["campaignID"] as? String == runID,
-                  record["orderSHA256"] as? String == orderDigest else { XCTFail("Dispatch ledger is damaged"); return }
-            if record["event"] as? String == "reserved" {
-                guard let host = record["host"] as? String, validHosts.contains(host),
-                      reserved.insert(host).inserted else { XCTFail("Duplicate or foreign dispatch key"); return }
-            }
-        }
-        let output = try FileHandle(forWritingTo: file)
-        defer { try? output.close() }
-        try output.seekToEnd()
         func append(_ item: [String: Any]) throws {
             var record = item
             record["dataset"] = digest
-            record["device"] = "ios-device-2d62695fc7"
-            record["bundle"] = Bundle.main.bundleIdentifier
-            record["sourceSHA"] = env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown"
+            record["device"] = device
+            record["bundle"] = bundleID
+            record["sourceSHA"] = sourceSHA
             record["campaignID"] = runID
             record["orderSHA256"] = orderDigest
             record["nodeInputSHA256"] = SHA256.hash(data: Data(node.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -1050,6 +1183,12 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             "state": "probe-incomplete"
         ]
         defer { AccessProbeReceiptKind.controlledPath.writeAndAttach(receipt, attempt: attempt, to: self) }
+        guard let destination = Self.controlledDestination(url) else {
+            receipt["state"] = "invalid-controlled-destination"
+            XCTFail("An HTTPS controlled URL with a valid port is required")
+            return
+        }
+        receipt["requestedUpstreamPort"] = destination.port
         guard let preference = Self.requestedTransport(environment["AEGIS_TEST_LOCAL_TRANSPORT"]) else {
             receipt["state"] = "invalid-requested-transport"
             XCTFail("Invalid explicit controlled-probe transport")
@@ -1069,7 +1208,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         guard editor.canApply else { XCTFail("Authorized node did not produce a valid native draft"); return }
         editor.apply()
         guard editor.error == nil, editor.hasSavedNode else { XCTFail("Native Apply did not save the authorized node"); return }
-        let core = try ObservedCore(mainHost: url.host ?? "")
+        let core = try ObservedCore(mainHost: destination.host)
         let singleNavigation = environment["AEGIS_TEST_SINGLE_NAVIGATION"] == "1"
         let expectPolicyBlock = environment["AEGIS_TEST_EXPECT_POLICY_BLOCK"] == "1"
         let page = AccessTestNodePage(isPrivate: false, repository: repository, testingCore: core,
@@ -1094,9 +1233,9 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         webView.frame = window.bounds
         window.makeKeyAndVisible()
         defer { page.close(); window.isHidden = true }
-        let deadline = Date().addingTimeInterval(30)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         let expectedPath = environment["AEGIS_TEST_EXPECT_FINAL_PATH"]
-        while (page.status == "正在加载" || expectedPath.map { webView.url?.path != $0 } == true), Date() < deadline {
+        while (page.status == "正在加载" || expectedPath.map { webView.url?.path != $0 } == true), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
         if singleNavigation { try await Task.sleep(for: .seconds(1)) }
@@ -1109,6 +1248,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         receipt["initialHTTPStatus"] = page.initialHTTPStatus ?? 0
         receipt["initialResponseObserved"] = page.initialHTTPStatus != nil
         receipt["serverRedirectCount"] = page.serverRedirectCount
+        var callbackInconclusive = false
         if expectPolicyBlock {
             let expectedPolicy = environment["AEGIS_TEST_EXPECT_POLICY_REASON"] ?? "additional-top-level-navigation"
             XCTAssertEqual(page.localPolicyRejection, expectedPolicy)
@@ -1125,18 +1265,25 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             if let expectedPath { XCTAssertEqual(webView.url?.path, expectedPath) }
             let nonce = try XCTUnwrap(receipt["nonce"] as? String)
             XCTAssertFalse(nonce.isEmpty)
-            let containsNonce = try await webView.callAsyncJavaScript(
-                "return document.documentElement.textContent.includes(nonce);",
-                arguments: ["nonce": nonce], in: nil, contentWorld: .page) as? Bool
-            receipt["documentContainsNonce"] = containsNonce == true
-            XCTAssertEqual(containsNonce, true)
+            let observation = await AccessPhysicalSOCKSAdmissionTests.observeNonce(
+                until: min(deadline, ContinuousClock.now.advanced(by: .seconds(2)))
+            ) { finish in
+                webView.callAsyncJavaScript("return document.documentElement.textContent.includes(nonce);",
+                    arguments: ["nonce": nonce], in: nil, in: .page, completionHandler: { result in
+                    finish((try? result.get()) as? Bool)
+                })
+            }
+            receipt["nonceObservation"] = observation.rawValue
+            receipt["documentContainsNonce"] = observation == .matched
+            callbackInconclusive = observation == .timedOut
+            XCTAssertEqual(observation, .matched)
         }
         receipt["httpStatus"] = page.httpStatus
         XCTAssertNotEqual(binding.port, 0)
         if binding.transport == .socks5 { XCTAssertNotEqual(binding.port, 1080) }
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.count, 1)
         XCTAssertEqual(webView.configuration.websiteDataStore.proxyConfigurations.first?.allowFailover, false)
-        let normalCloseProbe = environment["AEGIS_TEST_NORMAL_CLOSE_PROBE"] == "1"
+        let normalCloseProbe = environment["AEGIS_TEST_NORMAL_CLOSE_PROBE"] == "1" && !callbackInconclusive
         var closeSession: URLSession?
         var oldFlow: LocalProxyPeer?
         defer { closeSession?.invalidateAndCancel(); oldFlow?.cancel() }
@@ -1155,28 +1302,41 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(receipt["nonce"] as? String ?? "missing"))
             let peer = LocalProxyPeer(port: try XCTUnwrap(page.initialBinding?.port))
             oldFlow = peer
-            let outcome = await peer.connect(host: try XCTUnwrap(url.host), transport: binding.transport)
+            let outcome = await peer.connect(host: destination.host, upstreamPort: destination.port, transport: binding.transport)
             receipt["oldProxyCONNECTOutcome"] = outcome.rawValue
             guard outcome == .admitted else { XCTFail("Old probe did not establish CONNECT: \(outcome.rawValue)"); return }
             receipt["normalCloseProbe"] = true
         }
-        if let target = environment["AEGIS_TEST_REVOKED_URL"], !normalCloseProbe {
+        if let target = environment["AEGIS_TEST_REVOKED_URL"], !normalCloseProbe, !callbackInconclusive {
             await core.stop()
             receipt["coreStopped"] = !core.isRunning
-            do {
-                let result = try await webView.callAsyncJavaScript(
-                    "return await Promise.race([fetch(target, {cache: 'no-store'}).then(() => 'received').catch(() => 'blocked'), new Promise(resolve => setTimeout(() => resolve('timeout'), 3000))]);",
-                    arguments: ["target": target], in: nil, contentWorld: .page)
-                receipt["revokedFetch"] = result as? String ?? "unknown"
-                XCTAssertEqual(result as? String, "blocked", "Stopped protection must not fall back to direct networking")
-            } catch {
-                receipt["revokedFetch"] = "document-retired"
+            let observation = await Self.observeRevokedFetch(
+                until: ContinuousClock.now.advanced(by: .seconds(3))
+            ) { finish in
+                webView.callAsyncJavaScript(
+                    "return await fetch(target, {cache: 'no-store'}).then(() => 'received').catch(() => 'blocked');",
+                    arguments: ["target": target], in: nil, in: .page, completionHandler: { result in
+                    switch result {
+                    case .success(let value): finish(value as? String ?? "unknown")
+                    case .failure: finish(nil)
+                    }
+                })
+            }
+            receipt["revokedFetch"] = observation.rawValue
+            switch observation {
+            case .documentRetired:
                 XCTAssertEqual(page.status, "连接暂不可用", "A script failure counts only after protection retired the document")
+            case .timedOut:
+                callbackInconclusive = true
+                XCTFail("Revoked fetch is inconclusive because WebContent timed out")
+            default:
+                XCTAssertEqual(observation, .blocked, "Stopped protection must not fall back to direct networking")
             }
         }
+        if callbackInconclusive { receipt["state"] = "probe-inconclusive" }
         let busyStarted = XCTestExpectation(description: "controlled WebContent busy loop started")
         let busy = RetirementSignal { busyStarted.fulfill() }
-        let probeBusyContent = environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"] == "1"
+        let probeBusyContent = environment["AEGIS_TEST_BUSY_CONTENT_BEFORE_CLOSE"] == "1" && !callbackInconclusive
         if probeBusyContent {
             webView.configuration.userContentController.add(busy, name: "aegisRetirementSignal")
             let pendingNavigation = environment["AEGIS_TEST_RETIREMENT_RACE"] == "1"
@@ -1203,7 +1363,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 XCTAssertTrue(oldClosed)
                 let newcomer = LocalProxyPeer(port: port)
                 defer { newcomer.cancel() }
-                let outcome = await newcomer.connect(host: try XCTUnwrap(url.host), transport: binding.transport)
+                let outcome = await newcomer.connect(host: destination.host, upstreamPort: destination.port, transport: binding.transport)
                 receipt["newProxyCONNECTOutcome"] = outcome.rawValue
                 switch outcome {
                 case .refused, .peerClosed:
@@ -1222,7 +1382,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 } else { XCTFail("Normal-close probe requires its independent negative marker") }
                 receipt["coreRunningDuringCloseFence"] = core.isRunning
             }
-            if environment["AEGIS_TEST_RETIREMENT_INTERFERENCE"] == "1" {
+            if environment["AEGIS_TEST_RETIREMENT_INTERFERENCE"] == "1", !callbackInconclusive {
                 XCTAssertTrue(normalCloseProbe)
                 receipt["retirementInterferenceProbe"] = true
                 _ = webView.load(URLRequest(url: URL(string: "about:blank")!))
@@ -1244,7 +1404,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         receipt["retirementWithinFirst5Seconds"] = observations.first?["confirmed"]
         receipt["retirementObservationSeconds"] = observations.last?["observationSeconds"]
         receipt["retirementEvents"] = page.retirementEvents
-        if environment["AEGIS_TEST_RETIREMENT_INTERFERENCE"] == "1" {
+        if environment["AEGIS_TEST_RETIREMENT_INTERFERENCE"] == "1", !callbackInconclusive {
             XCTAssertTrue(page.retirementEvents.contains("denied-about-main"))
             XCTAssertEqual(page.retirementEvents.filter { $0 == "replacement-retry-scheduled" }.count, 1)
         }
@@ -1256,6 +1416,28 @@ final class AccessTestNodeDeviceTests: XCTestCase {
         XCTAssertTrue(retired, "The real proxy-bound document must commit its inert replacement")
         receipt["retired"] = retired
         XCTAssertNotNil(page.initialBinding)
+    }
+
+    fileprivate static func controlledDestination(_ url: URL) -> (host: String, port: UInt16)? {
+        guard url.scheme?.lowercased() == "https", let host = url.host, !host.isEmpty,
+              let port = UInt16(exactly: url.port ?? 443), port != 0 else { return nil }
+        return (host, port)
+    }
+
+    fileprivate enum RevokedFetchObservation: String {
+        case blocked, received, unknown
+        case documentRetired = "document-retired"
+        case timedOut = "timed-out"
+    }
+
+    fileprivate static func observeRevokedFetch(
+        until deadline: ContinuousClock.Instant, evaluate: (@escaping @MainActor (String?) -> Void) -> Void
+    ) async -> RevokedFetchObservation {
+        await AccessPhysicalSOCKSAdmissionTests.observeWebContent(until: deadline, timeout: .timedOut) { finish in
+            evaluate { value in
+                finish(value.map { RevokedFetchObservation(rawValue: $0) ?? .unknown } ?? .documentRetired)
+            }
+        }
     }
 
     fileprivate static func controlledPathDestination() -> [String: String] {
@@ -1350,7 +1532,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 }
             }
         }
-        func connect(host: String, transport: AccessInboundTransport) async -> ConnectOutcome {
+        func connect(host: String, upstreamPort: UInt16, transport: AccessInboundTransport) async -> ConnectOutcome {
             if locallyCancelled.withLock({ $0 }) || Task.isCancelled { return .cancelled }
             let deadline = ContinuousClock.now.advanced(by: .seconds(2))
             let timeout = Task {
@@ -1359,7 +1541,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             }
             defer { timeout.cancel() }
             let outcome: ConnectOutcome = await withTaskCancellationHandler {
-                do { return try await handshake(host: host, transport: transport) }
+                do { return try await handshake(host: host, upstreamPort: upstreamPort, transport: transport) }
                 catch PeerError.closed { return .peerClosed }
                 catch let error as NWError {
                     switch error {
@@ -1376,14 +1558,27 @@ final class AccessTestNodeDeviceTests: XCTestCase {
             return outcome
         }
 
-        private func handshake(host: String, transport: AccessInboundTransport) async throws -> ConnectOutcome {
+        static func socksRequest(host: String, upstreamPort: UInt16) -> Data? {
+            guard !host.isEmpty, host.utf8.count < 256 else { return nil }
+            var request = Data([5, 1, 0, 3, UInt8(host.utf8.count)])
+            request.append(contentsOf: host.utf8)
+            request.append(contentsOf: [UInt8(upstreamPort >> 8), UInt8(upstreamPort & 255)])
+            return request
+        }
+
+        static func httpRequest(host: String, upstreamPort: UInt16) -> Data {
+            let address = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+            let authority = "\(address):\(upstreamPort)"
+            return Data("CONNECT \(authority) HTTP/1.1\r\nHost: \(authority)\r\n\r\n".utf8)
+        }
+
+        private func handshake(host: String, upstreamPort: UInt16, transport: AccessInboundTransport) async throws -> ConnectOutcome {
             if transport == .socks5 {
                 try await send(Data([5, 1, 0]))
                 let method = try await receive(2)
                 if method == Data([5, 255]) { return .refused }
-                guard method == Data([5, 0]), host.utf8.count < 256 else { return .inconclusive }
-                var request = Data([5, 1, 0, 3, UInt8(host.utf8.count)])
-                request.append(contentsOf: host.utf8); request.append(contentsOf: [1, 187])
+                guard method == Data([5, 0]), let request = Self.socksRequest(host: host, upstreamPort: upstreamPort)
+                else { return .inconclusive }
                 try await send(request)
                 let prefix = try await receive(4)
                 guard prefix[0] == 5, prefix[2] == 0 else { return .inconclusive }
@@ -1399,7 +1594,7 @@ final class AccessTestNodeDeviceTests: XCTestCase {
                 if prefix[1] == 0 { return .admitted }
                 return (1...8).contains(prefix[1]) ? .refused : .inconclusive
             } else {
-                try await send(Data("CONNECT \(host):443 HTTP/1.1\r\nHost: \(host):443\r\n\r\n".utf8))
+                try await send(Self.httpRequest(host: host, upstreamPort: upstreamPort))
                 var header = Data()
                 let end = [UInt8(13), 10, 13, 10]
                 while header.count < 4096, !header.suffix(4).elementsEqual(end) {
@@ -1486,7 +1681,7 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         guard env["AEGIS_TEST_SOCKS_PROBE"] == "1",
               env["AEGIS_TEST_CAMPAIGN_DEVICE"] == "ios-device-2d62695fc7",
               let raw = env["AEGIS_TEST_CONTROLLED_URL"], let url = URL(string: raw),
-              let host = url.host,
+              let destination = AccessTestNodeDeviceTests.controlledDestination(url),
               let nonce = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
                 .first(where: { $0.name == "nonce" })?.value, !nonce.isEmpty else {
             throw XCTSkip("Explicit physical SOCKS admission inputs required")
@@ -1502,7 +1697,8 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             "model": model, "destination": AccessTestNodeDeviceTests.controlledPathDestination(),
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
             "sourceSHA": env["AEGIS_TEST_SOURCE_SHA"] ?? "unknown",
-            "bundle": Bundle.main.bundleIdentifier ?? "unknown", "nonce": nonce, "status": "probe-incomplete"]
+            "bundle": Bundle.main.bundleIdentifier ?? "unknown", "nonce": nonce, "status": "probe-incomplete",
+            "requestedUpstreamPort": destination.port]
         defer { AccessProbeReceiptKind.socksAdmission.writeAndAttach(result, attempt: attempt, to: self) }
 
         let repository = AccessTestNodeRepository.shared
@@ -1538,7 +1734,7 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         result["protocol"] = "socks5"
         result["port"] = listener.boundPort
         do {
-            try await Self.nativeSOCKSConnect(host: host, port: 443)
+            try await Self.nativeSOCKSConnect(host: destination.host, port: destination.port)
             result["nativeConnect"] = true
         } catch {
             result["nativeConnect"] = false
@@ -1606,7 +1802,7 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         observer.retirement = view.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\">",
                                                   baseURL: URL(string: "https://aegis.invalid/socks-retired"))
         let newcomer = AccessTestNodeDeviceTests.LocalProxyPeer(port: registration.endpoint.port)
-        let outcome = await newcomer.connect(host: host, transport: .socks5)
+        let outcome = await newcomer.connect(host: destination.host, upstreamPort: destination.port, transport: .socks5)
         newcomer.cancel()
         result["newProxyCONNECTOutcome"] = outcome.rawValue
         XCTAssertTrue(outcome == .refused || outcome == .peerClosed, "The fenced fixture must refuse a new CONNECT")
@@ -1642,29 +1838,39 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
         until deadline: ContinuousClock.Instant,
         evaluate: (@escaping @MainActor (Bool?) -> Void) -> Void
     ) async -> NonceObservation {
-        guard ContinuousClock.now < deadline, !Task.isCancelled else { return .timedOut }
+        await observeWebContent(until: deadline, timeout: .timedOut) { finish in
+            evaluate { matched in
+                finish(matched.map { $0 ? .matched : .missing } ?? .unavailable)
+            }
+        }
+    }
+
+    fileprivate static func observeWebContent<Value: Sendable>(
+        until deadline: ContinuousClock.Instant, timeout: Value,
+        evaluate: (@escaping @MainActor (Value) -> Void) -> Void
+    ) async -> Value {
+        guard ContinuousClock.now < deadline, !Task.isCancelled else { return timeout }
         return await withCheckedContinuation { continuation in
-            let result = NonceResult(continuation)
+            let result = WebContentResult(continuation)
             result.timeout = Task {
                 try? await ContinuousClock().sleep(until: deadline)
                 guard !Task.isCancelled else { return }
-                result.finish(.timedOut)
+                result.finish(timeout)
             }
-            evaluate { matched in
-                let outcome = matched.map { $0 ? NonceObservation.matched : .missing } ?? .unavailable
-                result.finish(ContinuousClock.now < deadline ? outcome : .timedOut)
+            evaluate { value in
+                result.finish(ContinuousClock.now < deadline ? value : timeout)
             }
         }
     }
 
     @MainActor
-    private final class NonceResult {
+    private final class WebContentResult<Value: Sendable> {
         var timeout: Task<Void, Never>?
-        private var continuation: CheckedContinuation<NonceObservation, Never>?
+        private var continuation: CheckedContinuation<Value, Never>?
 
-        init(_ continuation: CheckedContinuation<NonceObservation, Never>) { self.continuation = continuation }
+        init(_ continuation: CheckedContinuation<Value, Never>) { self.continuation = continuation }
 
-        func finish(_ outcome: NonceObservation) {
+        func finish(_ outcome: Value) {
             guard let continuation else { return }
             self.continuation = nil
             timeout?.cancel()
@@ -1713,10 +1919,9 @@ final class AccessPhysicalSOCKSAdmissionTests: XCTestCase {
             }
         }
         try await send(Data([5, 1, 0]))
-        guard try await receive(2) == Data([5, 0]), host.utf8.count < 256 else { throw URLError(.badServerResponse) }
-        var request = Data([5, 1, 0, 3, UInt8(host.utf8.count)])
-        request.append(contentsOf: host.utf8)
-        request.append(contentsOf: [UInt8(port >> 8), UInt8(port & 255)])
+        guard try await receive(2) == Data([5, 0]),
+              let request = AccessTestNodeDeviceTests.LocalProxyPeer.socksRequest(host: host, upstreamPort: port)
+        else { throw URLError(.badServerResponse) }
         try await send(request)
         let reply = try await receive(10)
         guard reply[0] == 5, reply[1] == 0 else { throw URLError(.cannotConnectToHost) }
@@ -1765,6 +1970,36 @@ final class AccessTestNodeEvidenceTests: XCTestCase {
             XCTFail("An expired observation must never evaluate WebContent")
         }
         XCTAssertEqual(expired, .timedOut)
+    }
+
+    func testControlledRevokedFetchTreatsASilentOrLateReplyAsInconclusive() async {
+        var late: (@MainActor (String?) -> Void)?
+        let timedOut = await Probe.observeRevokedFetch(until: ContinuousClock.now.advanced(by: .milliseconds(100))) {
+            late = $0
+        }
+        XCTAssertEqual(timedOut, .timedOut)
+        XCTAssertNotNil(late)
+        late?("blocked")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        let blocked = await Probe.observeRevokedFetch(until: deadline) { $0("blocked"); $0("received") }
+        XCTAssertEqual(blocked, .blocked)
+        let retired = await Probe.observeRevokedFetch(until: deadline) { $0(nil) }
+        XCTAssertEqual(retired, .documentRetired)
+    }
+
+    func testControlledHTTPSPortIsEncodedInBothLocalProxyRequests() throws {
+        let url = try XCTUnwrap(URL(string: "https://origin.invalid:8443/probe"))
+        let destination = try XCTUnwrap(Probe.controlledDestination(url))
+        XCTAssertEqual(destination.port, 8443)
+        XCTAssertEqual(Probe.controlledDestination(try XCTUnwrap(URL(string: "https://origin.invalid")))?.port, 443)
+        for invalid in ["https://origin.invalid:0", "https://origin.invalid:65536", "http://origin.invalid:8443"] {
+            XCTAssertNil(Probe.controlledDestination(try XCTUnwrap(URL(string: invalid))))
+        }
+        let socks = try XCTUnwrap(Probe.LocalProxyPeer.socksRequest(host: destination.host, upstreamPort: destination.port))
+        XCTAssertEqual(socks, Data([5, 1, 0, 3, 14] + Array("origin.invalid".utf8) + [0x20, 0xfb]))
+        let http = Probe.LocalProxyPeer.httpRequest(host: destination.host, upstreamPort: destination.port)
+        XCTAssertEqual(String(decoding: http, as: UTF8.self),
+            "CONNECT origin.invalid:8443 HTTP/1.1\r\nHost: origin.invalid:8443\r\n\r\n")
     }
 
     func testPhysicalRetirementDistinguishesLateCommitFromUnconfirmedAndOnTime() {
@@ -1895,12 +2130,12 @@ final class AccessTestNodeEvidenceTests: XCTestCase {
             let port = try XCTUnwrap(listener.port?.rawValue)
             let probe = Probe.LocalProxyPeer(port: port)
             defer { probe.cancel() }
-            let outcome = await probe.connect(host: "fixture.invalid", transport: .http)
+            let outcome = await probe.connect(host: "fixture.invalid", upstreamPort: 8443, transport: .http)
             await fulfillment(of: [requested], timeout: 2)
             XCTAssertEqual(outcome, expected)
             if expected == .timedOut {
                 probe.cancel()
-                let local = await probe.connect(host: "fixture.invalid", transport: .http)
+                let local = await probe.connect(host: "fixture.invalid", upstreamPort: 8443, transport: .http)
                 XCTAssertEqual(local, .cancelled)
             }
         }
