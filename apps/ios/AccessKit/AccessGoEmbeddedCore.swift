@@ -15,7 +15,9 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
         case frameworkNotLinked
     }
 
+    private static let legacyOwnership = AccessGoRuntimeOwnership()
     private let native: any AccessGoNativeCore
+    private let ownership: AccessGoRuntimeOwnership
     private let operations = AccessGoOperationLifetime()
 
     public init(isolated: Bool = false) throws {
@@ -23,8 +25,10 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
         if isolated {
             guard let runtime = EmbeddedcoreNewRuntime() else { throw LinkError.frameworkNotLinked }
             native = AccessGomobileCore(runtime: runtime)
+            ownership = AccessGoRuntimeOwnership()
         } else {
             native = AccessGomobileCore(runtime: nil)
+            ownership = Self.legacyOwnership
         }
         #else
         throw LinkError.frameworkNotLinked
@@ -32,9 +36,12 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
     }
 
     /// Uses the same asynchronous contract for gomobile and controlled tests.
-    init(native: any AccessGoNativeCore) { self.native = native }
+    init(native: any AccessGoNativeCore, ownership: AccessGoRuntimeOwnership = AccessGoRuntimeOwnership()) {
+        self.native = native
+        self.ownership = ownership
+    }
 
-    public var isRunning: Bool { native.isRunning }
+    public var isRunning: Bool { operations.ownsRuntime && native.isRunning }
 
     static func validateRealityClientFields(fingerprint: String, spiderX: String) throws {
         #if canImport(AegisEmbeddedCore)
@@ -63,7 +70,7 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
         guard let json = String(data: configData, encoding: .utf8) else {
             throw AccessEmbeddedCoreError.unverifiedAsset
         }
-        try await operations.start(native, config: json)
+        try await operations.start(native, config: json, ownership: ownership)
     }
 
     public func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
@@ -78,7 +85,7 @@ public final class AccessGoEmbeddedCore: AccessEmbeddedCoreControlling, @uncheck
     }
 
     public func stop() async {
-        await operations.stop(native)
+        await operations.stop(native, ownership: ownership)
     }
 }
 
@@ -94,9 +101,26 @@ protocol AccessGoNativeCore: Sendable {
     func stop() async
 }
 
+/// The legacy native runtime is shared across adapters. Keep its claim through
+/// the callback drain, even after native IsRunning first turns false.
+final class AccessGoRuntimeOwnership: Sendable {
+    private let claimed = Mutex(false)
+
+    func claim() -> Bool {
+        claimed.withLock {
+            guard !$0 else { return false }
+            $0 = true
+            return true
+        }
+    }
+
+    func release() { claimed.withLock { $0 = false } }
+}
+
 private final class AccessGoOperationLifetime: Sendable {
     private struct State {
         var generation: UInt64 = 0
+        var ownsRuntime = false
         var startup: Task<Void, Error>?
         var stop: Task<Void, Never>?
     }
@@ -105,9 +129,11 @@ private final class AccessGoOperationLifetime: Sendable {
     private let active = DispatchGroup()
     private let closes = DispatchQueue(label: "aegis.access.native-close", qos: .utility)
 
+    var ownsRuntime: Bool { state.withLock { $0.ownsRuntime } }
+
     func begin(generation: UInt64? = nil) -> UInt64? {
         state.withLock {
-            guard $0.startup == nil, $0.stop == nil, generation == nil || generation == $0.generation else { return nil }
+            guard $0.ownsRuntime, generation == nil || generation == $0.generation else { return nil }
             active.enter()
             return $0.generation
         }
@@ -116,7 +142,7 @@ private final class AccessGoOperationLifetime: Sendable {
     func end() { active.leave() }
 
     func isCurrent(_ generation: UInt64) -> Bool {
-        state.withLock { $0.startup == nil && $0.stop == nil && $0.generation == generation }
+        state.withLock { $0.ownsRuntime && $0.generation == generation }
     }
 
     func close(_ id: Int64, generation: UInt64, native: any AccessGoNativeCore) {
@@ -127,41 +153,60 @@ private final class AccessGoOperationLifetime: Sendable {
         }
     }
 
-    func start(_ native: any AccessGoNativeCore, config: String) async throws {
+    func start(_ native: any AccessGoNativeCore, config: String, ownership: AccessGoRuntimeOwnership) async throws {
         try Task.checkCancellation()
         let startup = try state.withLock { state -> Task<Void, Error> in
-            guard state.startup == nil else { throw AccessEmbeddedCoreError.unverifiedAsset }
+            guard state.startup == nil, !state.ownsRuntime else { throw AccessEmbeddedCoreError.unverifiedAsset }
             let priorStop = state.stop
             if priorStop != nil { state.generation &+= 1 }
             let task = Task {
                 await priorStop?.value
-                try await native.start(config)
+                guard ownership.claim() else { throw AccessEmbeddedCoreError.unverifiedAsset }
+                do { try await native.start(config) }
+                catch {
+                    ownership.release()
+                    throw error
+                }
             }
             state.startup = task
             state.stop = nil
             return task
         }
-        defer { state.withLock { $0.startup = nil } }
-        try await startup.value
+        // A successful native start is always accounted for, even if the
+        // caller was cancelled while waiting for its non-cancellable callback.
+        let result = await startup.result
+        let stoppedDuringStart = state.withLock {
+            $0.startup = nil
+            if case .success = result, $0.stop == nil { $0.ownsRuntime = true }
+            return $0.stop != nil
+        }
+        try result.get()
+        if stoppedDuringStart { throw CancellationError() }
     }
 
-    func stop(_ native: any AccessGoNativeCore) async {
-        let stop = state.withLock { state -> Task<Void, Never> in
+    func stop(_ native: any AccessGoNativeCore, ownership: AccessGoRuntimeOwnership) async {
+        let stop = state.withLock { state -> Task<Void, Never>? in
             if let existing = state.stop { return existing }
             let startup = state.startup
+            let wasOwner = state.ownsRuntime
+            guard wasOwner || startup != nil else { return nil }
+            state.ownsRuntime = false
             let task = Task { [active] in
-                _ = await startup?.result
+                if !wasOwner {
+                    guard case .success? = await startup?.result else { return }
+                }
                 // Stop drains the native registry. A close which already
                 // removed its handle from that registry can still be running.
                 await native.stop()
                 await withCheckedContinuation { continuation in
                     active.notify(queue: .global()) { continuation.resume() }
                 }
+                ownership.release()
             }
             state.stop = task
             return task
         }
-        await stop.value
+        await stop?.value
     }
 }
 

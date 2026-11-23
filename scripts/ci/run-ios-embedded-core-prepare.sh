@@ -12,7 +12,7 @@ unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_IMPLICIT_WORK_TREE GIT_INDEX_FILE
 lock="$PWD/apps/ios/EmbeddedCore/embedded-core-lock.json"
 export GOROOT="${IOS_CI_SCRATCH:?IOS_CI_SCRATCH is required}/go"
 export GOTOOLCHAIN=local
-export PATH="$GOROOT/bin:${GOBIN:-${GOPATH:-$HOME/go}/bin}:$PATH"
+export PATH="$GOROOT/bin:$PATH"
 
 # Both the bridge and its receipt must use the job-private checkout.
 AEGIS_EMBEDDED_CORE_DIGEST_MODE=ci-rebuild \

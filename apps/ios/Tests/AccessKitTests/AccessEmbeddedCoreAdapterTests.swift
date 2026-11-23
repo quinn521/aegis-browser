@@ -145,7 +145,9 @@ final class AccessGoSchedulingTests: XCTestCase {
             closing.fulfill()
             _ = allowClose.wait(timeout: .now() + 5)
         }, onStop: { registryStopped.fulfill() })
-        let core = AccessGoEmbeddedCore(native: native)
+        let ownership = AccessGoRuntimeOwnership()
+        let core = AccessGoEmbeddedCore(native: native, ownership: ownership)
+        let next = AccessGoEmbeddedCore(native: native, ownership: ownership)
         defer { allowClose.signal() }
         try await core.start(configData: Data("{}".utf8))
         let stream = try await core.dial(host: "controlled.invalid", port: 443)
@@ -162,9 +164,96 @@ final class AccessGoSchedulingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(40))
         XCTAssertFalse(stopped.withLock { $0 })
         XCTAssertFalse(stream.isOpen)
+        XCTAssertFalse(native.isRunning)
+        do {
+            try await next.start(configData: Data("next".utf8))
+            XCTFail("A new adapter acquired the runtime before the previous stream drained")
+        } catch AccessEmbeddedCoreError.unverifiedAsset {}
+        XCTAssertEqual(native.snapshot.starts, 1)
         allowClose.signal()
         await fulfillment(of: [completion], timeout: 2)
         await stop.value
+        try await next.start(configData: Data("next".utf8))
+        XCTAssertTrue(next.isRunning)
+        await next.stop()
+    }
+
+    func testSharedNativeClaimSurvivesCancelAndConcurrentShutdownUntilDrain() async throws {
+        let startup = AccessProvisionTestGate(entered: expectation(description: "native start entered"))
+        let gate = AccessGoRuntimeOwnership()
+        let native = ControlledAsyncNativeCore(onRead: {}, beforeStart: { if $0 == 1 { await startup.wait() } })
+        let owner = AccessGoEmbeddedCore(native: native, ownership: gate)
+        let other = AccessGoEmbeddedCore(native: native, ownership: gate)
+        let start = Task { try await owner.start(configData: Data("owner".utf8)) }
+        defer { startup.finish() }
+        await fulfillment(of: [startup.entered], timeout: 2)
+        do {
+            try await other.start(configData: Data("foreign".utf8))
+            XCTFail("A second adapter acquired the runtime")
+        } catch AccessEmbeddedCoreError.unverifiedAsset {}
+        await other.stop()
+        XCTAssertEqual(native.snapshot.stops, 0)
+        XCTAssertFalse(other.isRunning)
+        start.cancel()
+        let stopped = expectation(description: "both shutdown callers received the drain")
+        let stop = Task {
+            async let a: Void = owner.stop()
+            async let b: Void = owner.stop()
+            _ = await (a, b)
+            stopped.fulfill()
+        }
+        await Task.yield()
+        startup.finish()
+        // The start either reports ownership or observes shutdown's fence.
+        // Both outcomes still owe a stop for the successful native start.
+        do { try await start.value } catch is CancellationError {}
+        await fulfillment(of: [stopped], timeout: 2)
+        await stop.value
+        XCTAssertEqual(native.snapshot.starts, 1)
+        XCTAssertEqual(native.snapshot.stops, 1)
+        XCTAssertFalse(native.isRunning)
+        try await other.start(configData: Data("foreign-after-drain".utf8))
+        XCTAssertTrue(other.isRunning)
+        await owner.stop()
+        XCTAssertTrue(other.isRunning)
+        XCTAssertEqual(native.snapshot.stops, 1)
+        await other.stop()
+    }
+
+    func testRedundantStartCannotFenceCloseForAnActiveParkedStream() async throws {
+        let (retry, gate) = AsyncStream<Void>.makeStream()
+        let reading = expectation(description: "an owned native stream parked in read")
+        let closed = expectation(description: "native close completed")
+        let native = ControlledAsyncNativeCore(onRead: { reading.fulfill() }, onClose: { closed.fulfill() },
+            beforeStart: { attempt in if attempt > 1 { for await _ in retry { break } } })
+        let core = AccessGoEmbeddedCore(native: native)
+        defer { gate.finish(); native.finishAll() }
+        try await core.start(configData: Data("configured".utf8))
+        let stream = try await core.dial(host: "controlled.invalid", port: 443)
+        let reader = Task { try await stream.read(maxBytes: 128) }
+        await fulfillment(of: [reading], timeout: 2)
+        let returned = Mutex(false)
+        let duplicate = Task {
+            defer { returned.withLock { $0 = true } }
+            try await core.start(configData: Data("redundant".utf8))
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while native.snapshot.starts == 1, !returned.withLock({ $0 }), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        duplicate.cancel()
+        reader.cancel()
+        stream.close()
+        await fulfillment(of: [closed], timeout: 2)
+        gate.finish()
+        do { try await duplicate.value; XCTFail("Redundant native start succeeded") }
+        catch AccessEmbeddedCoreError.unverifiedAsset {}
+        let value = try await reader.value
+        XCTAssertNil(value)
+        XCTAssertEqual(native.snapshot.starts, 1)
+        XCTAssertEqual(native.snapshot.closes[1], 1)
+        XCTAssertTrue(core.isRunning)
+        await core.stop()
     }
 }
 
@@ -174,6 +263,8 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
     struct State {
         var running = false
         var nextID: Int64 = 0
+        var starts = 0
+        var stops = 0
         var finished = 0
         var writes = 0
         var closes: [Int64: Int] = [:]
@@ -184,15 +275,25 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
     private let onRead: @Sendable () -> Void
     private let onClose: @Sendable () -> Void
     private let onStop: @Sendable () -> Void
+    private let beforeStart: @Sendable (Int) async -> Void
     init(onRead: @escaping @Sendable () -> Void, onClose: @escaping @Sendable () -> Void = {},
-         onStop: @escaping @Sendable () -> Void = {}) {
+         onStop: @escaping @Sendable () -> Void = {},
+         beforeStart: @escaping @Sendable (Int) async -> Void = { _ in }) {
         self.onRead = onRead
         self.onClose = onClose
         self.onStop = onStop
+        self.beforeStart = beforeStart
     }
     var snapshot: State { state.withLock { $0 } }
     var isRunning: Bool { snapshot.running }
-    func start(_ json: String) async { state.withLock { $0.running = true } }
+    func start(_ json: String) async throws {
+        let attempt = state.withLock { $0.starts += 1; return $0.starts }
+        await beforeStart(attempt)
+        try state.withLock {
+            guard !$0.running else { throw AccessEmbeddedCoreError.unverifiedAsset }
+            $0.running = true
+        }
+    }
     func dial(host: String, port: UInt16) async throws -> Int64 {
         try state.withLock {
             guard $0.running else { throw AccessEmbeddedCoreError.unverifiedAsset }
@@ -225,7 +326,7 @@ private final class ControlledAsyncNativeCore: AccessGoNativeCore, Sendable {
         onClose()
         read?.resume(returning: Data())
     }
-    func stop() async { finishAll(); onStop() }
+    func stop() async { state.withLock { $0.stops += 1 }; finishAll(); onStop() }
     func finishAll() {
         let reads = state.withLock {
             $0.running = false

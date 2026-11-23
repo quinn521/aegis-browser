@@ -10,10 +10,9 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import plistlib
 import re
-import shutil
 import stat
 # Local tooling uses argument arrays with the shell disabled.
 import subprocess  # nosec B404
@@ -84,32 +83,73 @@ def prepared_source_commit(root):
     return lines[1] if status.returncode == 0 and not status.stdout else None
 
 
+def snapshot_path(name):
+    path = PurePosixPath(name)
+    if (path.is_absolute() or ".." in path.parts or not path.parts or path.as_posix() != name
+            or "\\" in name or any(ord(char) < 32 for char in name)):
+        raise ValueError("unsafe snapshot path")
+    return path
+
+
 def snapshot_source(root, commit, destination):
-    # Use Git objects so ignored files and changes racing with preparation
-    # cannot enter a source-attributed project.
-    data = subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), "archive",  # nosec B603 B607
-                                    commit, "--", *SNAPSHOT_PATHS])
+    git = ["git", "--no-replace-objects", "-C", str(root)]
+    listing = subprocess.check_output([*git, "ls-tree", "-r", "-z", "--full-tree", commit, "--", *SNAPSHOT_PATHS])  # nosec B603 B607
+    expected = {}
+    directories = set()
+    for entry in listing.split(b"\0")[:-1]:
+        header, name = entry.split(b"\t", 1)
+        mode, kind, blob = header.split()
+        if kind != b"blob" or mode not in (b"100644", b"100755") or not re.fullmatch(rb"[0-9a-f]{40}", blob):
+            raise ValueError("unsupported Git tree entry in Alpha source")
+        relative = snapshot_path(os.fsdecode(name))
+        if relative in expected:
+            raise ValueError("duplicate Git tree entry in Alpha source")
+        expected[relative] = (mode == b"100755", blob.decode("ascii"))
+        directories.update(parent for parent in relative.parents if parent.parts)
+
+    # The tar digest alone cannot detect local export attributes that omit or
+    # substitute files. Verify every member against the unreplaced Git tree.
+    data = subprocess.check_output([*git, "archive", commit, "--", *SNAPSHOT_PATHS])  # nosec B603 B607
+    seen_files, seen_dirs = set(), set()
+    destination.mkdir()
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
         for member in archive:
-            relative = Path(member.name)
-            if relative.is_absolute() or ".." in relative.parts:
-                raise ValueError("unsafe snapshot path")
+            relative = snapshot_path(member.name)
             path = destination / relative
             if member.isdir():
-                path.mkdir(parents=True, exist_ok=True)
+                if relative not in directories or relative in seen_dirs:
+                    raise ValueError("unexpected directory in Alpha source archive")
+                path.mkdir()
+                seen_dirs.add(relative)
             elif member.isfile():
-                path.parent.mkdir(parents=True, exist_ok=True)
+                if relative not in expected or relative in seen_files:
+                    raise ValueError("unexpected file in Alpha source archive")
+                executable, blob = expected[relative]
+                if bool(member.mode & 0o100) != executable:
+                    raise ValueError("Alpha source archive changed a Git executable mode")
+                actual = hashlib.sha1(f"blob {member.size}\0".encode("ascii"), usedforsecurity=False)
                 with archive.extractfile(member) as source, path.open("xb") as output:
-                    shutil.copyfileobj(source, output)
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        actual.update(chunk)
+                        output.write(chunk)
+                if actual.hexdigest() != blob:
+                    raise ValueError("Alpha source archive changed Git blob contents")
+                path.chmod(0o755 if executable else 0o644)
+                seen_files.add(relative)
             else:
                 raise ValueError("non-regular snapshot input")
+    if seen_files != set(expected) or seen_dirs != directories:
+        raise ValueError("Alpha source archive omitted Git tree entries")
+    if {PurePosixPath(path.relative_to(destination).as_posix()) for path in destination.rglob("*")} != set(expected) | directories:
+        raise ValueError("Alpha source tree paths alias on the staging filesystem")
     return digest(data)
 
 
 def make_read_only(directory):
     for root, _, files in os.walk(directory, topdown=False):
         for name in files:
-            (Path(root) / name).chmod(0o444)
+            path = Path(root) / name
+            path.chmod(0o555 if path.stat().st_mode & stat.S_IXUSR else 0o444)
         Path(root).chmod(0o555)
 
 

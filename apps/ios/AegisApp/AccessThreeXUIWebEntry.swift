@@ -9,7 +9,7 @@ enum AccessThreeXUIWebEntry {
         for usage: AccessSubscriptionUsageSession,
         lockData: Data? = nil,
         verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
-        retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil
+        retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void
     ) -> any AccessProxyEntryPublishing {
         guard usage.isSelected, usage.managesConnections else { return AccessFailClosedProxyEntryPublisher() }
         return AccessEmbeddedProxyEntryFactory.makeProductPublisher(

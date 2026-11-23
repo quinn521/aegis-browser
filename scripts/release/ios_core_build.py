@@ -14,7 +14,8 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-from ios_embedded_core import apple_build_environment, apple_metadata, check_mobile_tool, directory_digest, record, verify_apple_pin
+from ios_embedded_core import (apple_build_environment, apple_metadata, check_mobile_tool, directory_digest,
+                               go_version, mobile_modules, record, verify_apple_pin)
 
 NAME = "AegisEmbeddedCore"
 FRAMEWORK = NAME + ".framework"
@@ -133,9 +134,6 @@ def binding_environment(go, environment):
                        SOURCE_DATE_EPOCH="0")
     for key in COMPILE_OVERRIDES:
         environment.pop(key, None)
-    local_bin = effective["GOBIN"] or str(Path(effective["GOPATH"].split(os.pathsep)[0]) / "bin")
-    require(Path(local_bin).is_absolute(), "Go tool directory must be absolute")
-    environment["PATH"] += os.pathsep + local_bin
     return environment
 
 
@@ -271,29 +269,32 @@ def normalize_xcframework(path):
 
 def mobile_tools(go, toolchain, root, env, bridge):
     names = ("gomobile", "gobind")
-    selected = [shutil.which(name, path=env["PATH"]) for name in names]
-
-    def validate_pair(paths):
-        resolved = [Path(path).resolve(strict=True) for path in paths]
-        for name, executable in zip(names, resolved):
-            require(executable.is_file() and os.access(executable, os.X_OK), f"{name} is not executable")
-            check_mobile_tool(go, executable, name, toolchain, bridge, env=env)
-        return resolved
-
-    if all(selected):
-        try:
-            return validate_pair(selected)
-        except (OSError, KeyError, TypeError, ValueError, subprocess.CalledProcessError):
-            print("Installed binding tools failed provenance; installing the locked pair in private scratch.", flush=True)
-
     private_bin = root / "tools"
     private_bin.mkdir(mode=0o700)
-    module, version = toolchain["gomobile"].split("@", 1)
-    require(module == "golang.org/x/mobile" and re.fullmatch(r"v0\.0\.0-[0-9]{14}-[0-9a-f]{12}", version),
-            "invalid pinned mobile module")
-    run([go, "install", *(f"{module}/cmd/{name}@{version}" for name in names)],
-        cwd=root, env=dict(env, GOBIN=str(private_bin)))
-    return validate_pair([plain(private_bin / name) for name in names])
+    module_root = root / "tool-module"
+    module_root.mkdir(mode=0o700)
+    modules = mobile_modules(toolchain, bridge)
+    required = "\n".join(f"  {module} {info['Version']}" for module, info in modules.items())
+    (module_root / "go.mod").write_text(f"module aegis.browser/ios/embeddedcore-tools\n\ngo {toolchain['go']}\n\n"
+                                      f"require (\n{required}\n)\n")
+    shutil.copyfile(bridge / "go.sum", module_root / "go.sum")
+    host_arch = go_version(go, toolchain, env=env).rsplit("/", 1)[1]
+    tools_env = dict(env, GOBIN=str(private_bin), GOOS="darwin", GOARCH=host_arch)
+    # Download exact modules against the reviewed checksums, then verify the
+    # shared cache's extracted source before compiling in the private module.
+    for info in modules.values():
+        actual = json.loads(capture([go, "mod", "download", "-json", f"{info['Path']}@{info['Version']}"],
+                                    cwd=module_root, env=tools_env, timeout=90))
+        require(all(actual.get(key) == value for key, value in info.items()),
+                "binding tool source differs from the approved module checksums")
+    run([go, "mod", "verify"], cwd=module_root, env=tools_env, timeout=90)
+    run([go, "install", "-mod=readonly", *(f"golang.org/x/mobile/cmd/{name}" for name in names)],
+        cwd=module_root, env=tools_env, timeout=180)
+    binaries = [plain(private_bin / name) for name in names]
+    for name, path in zip(names, binaries):
+        require(os.access(path, os.X_OK), f"{name} is not executable")
+        check_mobile_tool(go, path, name, toolchain, modules, host_arch, env=tools_env)
+    return binaries
 
 
 def publish(root, output, digest):
@@ -390,10 +391,7 @@ def build(repo, lock, output, record_for):
         (output / "slice-digests.txt").write_text(result)
         print(result, end="")
         if record_for:
-            # Validate and record against the same native Go and binding tools.
-            os.environ.clear()
-            os.environ.update(env, PATH=f"{go.parent}:{tool_aliases}:{env['PATH']}")
-            manifest = record(repo, lock, output, mode, *record_for, apple=apple)
+            manifest = record(repo, lock, output, mode, *record_for, apple=apple, go=go, tools=(gomobile, gobind), env=env)
             print(json.dumps(manifest, sort_keys=True))
 
 
@@ -423,5 +421,7 @@ if __name__ == "__main__":
         main()
     except subprocess.CalledProcessError as error:
         sys.exit(error.returncode if error.returncode >= 0 else 128 - error.returncode)
+    except subprocess.TimeoutExpired:
+        sys.exit("EmbeddedCore private binding tool operation timed out")
     except (KeyError, OSError, TypeError, ValueError) as error:
         sys.exit(str(error))

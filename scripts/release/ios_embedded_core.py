@@ -11,6 +11,9 @@ import shutil
 SLICE_KEYS = {"ios-arm64": "iosArm64Sha256", "ios-arm64-simulator": "iosArm64SimulatorSha256"}
 APPLE_TOOLCHAIN = "com.apple.dt.toolchain.XcodeDefault"
 IOS_SDKS = ("iphoneos", "iphonesimulator")
+MOBILE_DEPENDENCIES = {"golang.org/x/mod": "v0.42.0", "golang.org/x/sync": "v0.24.0",
+                       "golang.org/x/tools": "v0.52.0"}
+BINDING_TOOL_POLICY = "private-pinned-graph-v1"
 
 
 def file_digest(path):
@@ -66,18 +69,42 @@ def tool_field(field, command, pattern, *, cwd=None, env=None):
     return value
 
 
-def check_mobile_tool(go, executable, name, toolchain, bridge, *, env=None):
-    metadata = json.loads(subprocess.check_output([go, "version", "-m", "-json", executable], env=env))
-    module = metadata["Main"]
+def mobile_modules(toolchain, bridge):
     path, version = toolchain["gomobile"].split("@", 1)
-    sums = [fields[2] for line in (bridge / "go.sum").read_text().splitlines()
-            if len(fields := line.split()) == 3 and fields[:2] == [path, version]]
-    if (path != "golang.org/x/mobile" or metadata.get("Path") != f"{path}/cmd/{name}"
-            or metadata.get("GoVersion") != f"go{toolchain['go']}"
-            or module.get("Path") != path or module.get("Version") != version
-            or module.get("Replace") is not None or sums != [module.get("Sum")]
-            or not re.fullmatch(r"h1:[A-Za-z0-9+/]{43}=", sums[0])):
-        raise ValueError(f"actual {name} toolchain or module differs from the source pin")
+    if path != "golang.org/x/mobile" or not re.fullmatch(r"v0\.0\.0-[0-9]{14}-[0-9a-f]{12}", version):
+        raise ValueError("invalid pinned mobile module")
+    rows = [line.split() for line in (bridge / "go.sum").read_text().splitlines()]
+    modules = {}
+    for module, revision in {path: version, **MOBILE_DEPENDENCIES}.items():
+        sums = {}
+        for suffix, key in (("", "Sum"), ("/go.mod", "GoModSum")):
+            matches = [row[2] for row in rows if len(row) == 3 and row[:2] == [module, revision + suffix]]
+            if len(matches) != 1 or not re.fullmatch(r"h1:[A-Za-z0-9+/]{43}=", matches[0]):
+                raise ValueError("binding tool module is missing its approved checksums")
+            sums[key] = matches[0]
+        modules[module] = {"Path": module, "Version": revision, **sums}
+    return modules
+
+
+def go_version(go, toolchain, *, env=None):
+    return tool_field("Go version", [go, "version"],
+                      rf"go version go{re.escape(toolchain['go'])} darwin/(?:arm64|amd64)", env=env)
+
+
+def check_mobile_tool(go, executable, name, toolchain, modules, host_arch, *, env=None):
+    metadata = json.loads(subprocess.check_output([go, "version", "-m", "-json", executable], env=env))
+    path = "golang.org/x/mobile"
+    expected = {module: {key: value for key, value in info.items() if key != "GoModSum"}
+                for module, info in modules.items()}
+    dependencies = metadata.get("Deps", [])
+    target = [(setting["Key"], setting["Value"]) for setting in metadata.get("Settings", [])
+              if setting["Key"] in {"GOOS", "GOARCH"}]
+    if (metadata.get("Path") != f"{path}/cmd/{name}" or metadata.get("GoVersion") != f"go{toolchain['go']}"
+            or metadata.get("Main") != expected.pop(path)
+            or len(dependencies) != len(expected)
+            or {dep["Path"]: dep for dep in dependencies} != expected
+            or sorted(target) != [("GOARCH", host_arch), ("GOOS", "darwin")]):
+        raise ValueError(f"actual {name} host or module graph differs from the source pins")
 
 
 def apple_build_environment(environment):
@@ -128,23 +155,24 @@ def verify_apple_pin(metadata, toolchain):
         raise ValueError("actual Apple toolchain differs from the source pin")
 
 
-def tool_metadata(root, toolchain, bridge, apple):
-    for name in ("gomobile", "gobind"):
-        executable = shutil.which(name)
-        if not executable:
-            raise ValueError(f"{name} build tool is missing")
-        check_mobile_tool("go", executable, name, toolchain, bridge)
+def tool_metadata(root, toolchain, bridge, apple, go, tools, env):
+    version = go_version(go, toolchain, env=env)
+    modules = mobile_modules(toolchain, bridge)
+    gomobile, gobind = tools
+    for name, executable in (("gomobile", gomobile), ("gobind", gobind)):
+        check_mobile_tool(go, executable, name, toolchain, modules, version.rsplit("/", 1)[1], env=env)
     return {
-        "sourceCommit": tool_field("source commit", ["git", "--no-replace-objects", "rev-parse", "HEAD"], r"[0-9a-f]{40}", cwd=root),
-        "goVersion": tool_field("Go version", ["go", "version"],
-                                rf"go version go{re.escape(toolchain['go'])} darwin/(?:arm64|amd64)"),
+        "sourceCommit": tool_field("source commit", ["git", "--no-replace-objects", "rev-parse", "HEAD"],
+                                   r"[0-9a-f]{40}", cwd=root, env=env),
+        "goVersion": version,
+        "bindingToolPolicy": BINDING_TOOL_POLICY,
         "gomobileModule": toolchain["gomobile"],
         "gobindModule": toolchain["gomobile"],
         **apple,
     }
 
 
-def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None, *, apple):
+def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None, *, apple, go, tools, env=None):
     root, source_lock, products = Path(root).resolve(), Path(source_lock).resolve(), Path(products).resolve()
     lock = json.loads(source_lock.read_text())
     if lock.get("status") != "verified_build":
@@ -156,7 +184,7 @@ def record(root, source_lock, products, mode, xcode_root=None, xcode_lock=None, 
     compiled_bridge = directory_digest(products / "work/bridge")
     if (products / "compiled-bridge.sha256").read_text().strip() != compiled_bridge:
         raise ValueError("EmbeddedCore bridge copy differs from the gomobile build input")
-    metadata = tool_metadata(root, lock["toolchain"], products / "work/bridge", apple)
+    metadata = tool_metadata(root, lock["toolchain"], products / "work/bridge", apple, go, tools, env)
     if mode == "strict":
         verify_apple_pin(metadata, lock["toolchain"])
     effective = {**lock, "artifacts": {**lock["artifacts"], **actual}}
@@ -204,6 +232,8 @@ def verify(root, source_lock, products, mode=None):
     toolchain = source["toolchain"]
     if any(manifest.get(key) != toolchain["gomobile"] for key in ("gomobileModule", "gobindModule")):
         raise ValueError("recorded binding tools differ from the source pin")
+    if manifest.get("bindingToolPolicy") != BINDING_TOOL_POLICY:
+        raise ValueError("missing private binding tool provenance")
     clang = manifest.get("clangSha256")
     if (manifest.get("appleToolchain") != APPLE_TOOLCHAIN or not isinstance(clang, dict)
             or set(clang) != set(IOS_SDKS)

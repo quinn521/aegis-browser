@@ -16,7 +16,6 @@ const token = 'synthetic-embedded-core-proxy-token';
 const proxy = `http://fixture:${token}@proxy.invalid:8080`;
 const moduleVersion = 'v0.0.0-20261011034528-197770444867';
 const lock = 'apps/ios/EmbeddedCore/embedded-core-lock.json';
-const moduleSum = 'h1:rav73cdd7OQUPgt1aIFbZQTiPNnjfueKXvfOiLCY0Ss=';
 const sourceCommit = 'a'.repeat(40);
 const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
 const goArchive = `go1.27.3.darwin-${arch}.tar.gz`;
@@ -72,6 +71,42 @@ else:
         "AvailableLibraries": libraries[::-1], "CFBundlePackageType": "XFWK", "XCFrameworkFormatVersion": "1.0"}))
 `;
 
+const goMetadata = String.raw`
+import json
+import os
+from pathlib import Path
+import sys
+operation, argument = sys.argv[1:]
+sums = {tuple(path.read_text().split()[index:index + 2]): path.read_text().split()[index + 2]
+        for path in [Path(os.environ["IOS_CI_SOURCE"]) / "apps/ios/EmbeddedCore/bridge/go.sum"]
+        for index in range(0, len(path.read_text().split()), 3)}
+modules = {"golang.org/x/mobile": os.environ["PREP_MODULE_VERSION"], "golang.org/x/mod": "v0.42.0",
+           "golang.org/x/sync": "v0.24.0", "golang.org/x/tools": "v0.52.0"}
+def metadata(path, version):
+    return {"Path": path, "Version": version, "Sum": sums[path, version]}
+if operation == "download":
+    path, revision = argument.split("@")
+    assert modules[path] == revision
+    print(json.dumps({**metadata(path, revision), "GoModSum": sums[path, revision + "/go.mod"]}))
+    sys.exit()
+name = Path(argument).name
+scenario = os.environ["PREP_SCENARIO"]
+main = metadata("golang.org/x/mobile", modules.pop("golang.org/x/mobile"))
+deps = [metadata(path, revision) for path, revision in modules.items()]
+goos = "darwin"
+warm = "go path" in argument
+if name == "gobind":
+    if scenario == "wrong-private-gobind" or (warm and scenario in {"wrong-gobind", "stale-install"}):
+        main["Sum"] = "h1:invalid"
+    if scenario == "wrong-private-platform" or (warm and scenario == "foreign-platform"):
+        goos = "linux"
+    if scenario == "wrong-private-dependency" or (warm and scenario == "replaced-dependency"):
+        deps[-1]["Replace"] = {"Path": "fixture.invalid/replacement"}
+print(json.dumps({"GoVersion": "go1.27.3", "Path": "golang.org/x/mobile/cmd/" + name, "Main": main,
+                  "Deps": deps, "Settings": [{"Key": "GOOS", "Value": goos},
+                                             {"Key": "GOARCH", "Value": os.environ["PREP_ARCH"]}]}))
+`;
+
 const tools = String.raw`#!/bin/bash
 set -eo pipefail
 tool="$(basename "$0")"
@@ -118,15 +153,7 @@ case "$tool:$1" in
     if [[ "$2" == -m ]]; then
       [[ "$3" == -json ]]
       [[ "$PREP_SCENARIO" == record && -f "$IOS_CI_ROOT/EmbeddedCore/slice-digests.txt" ]] && fail 47
-      binding="$(basename "$4")"
-      if [[ "$binding" == gobind ]]; then
-        case "$PREP_SCENARIO:$4" in
-          wrong-gobind:*"/go path/"*|stale-install:*"/go path/"*|wrong-private-gobind:*"/go path/"*)
-            PREP_MODULE_SUM='h1:invalid' ;;
-          wrong-private-gobind:*/tools/gobind) PREP_MODULE_SUM='h1:invalid' ;;
-        esac
-      fi
-      printf '{"GoVersion":"go1.27.3","Path":"golang.org/x/mobile/cmd/%s","Main":{"Path":"golang.org/x/mobile","Version":"%s","Sum":"%s"}}\n' "$binding" "$PREP_MODULE_VERSION" "$PREP_MODULE_SUM"
+      python3 "$PREP_GO_METADATA" binary "$4"
       if [[ "$PREP_SCENARIO" == metadata-gomobile ]]; then printf '%s\n' "$HTTPS_PROXY"; fi
     elif [[ "$PREP_SCENARIO" == version-failure ]]; then
       fail 42
@@ -150,9 +177,11 @@ case "$tool:$1" in
     printf '{"GOFLAGS":"%s","GOBIN":"%s","GOPATH":"%s","GOPROXY":"%s","GONOPROXY":"%s"}\n' "$GOFLAGS" "$GOBIN" "$GOPATH" "$GOPROXY" "$GONOPROXY"
     ;;
   go:install)
-    [[ "$#" == 3 && "$2" == "golang.org/x/mobile/cmd/gomobile@$PREP_MODULE_VERSION"       && "$3" == "golang.org/x/mobile/cmd/gobind@$PREP_MODULE_VERSION" ]]
-    [[ "$GOBIN" == "$IOS_CI_SCRATCH/tmp/"*/tools || -z "$IOS_CI_SCRATCH" ]]
-    [[ "$GOTMPDIR" == "$PWD/go-tmp" && -d "$GOTMPDIR" && "$GOTMPDIR" != "$PREP_FOREIGN_TMP" ]]
+    [[ "$#" == 4 && "$2" == -mod=readonly && "$3" == golang.org/x/mobile/cmd/gomobile && "$4" == golang.org/x/mobile/cmd/gobind ]]
+    [[ "$GOBIN" == "$(dirname "$PWD")/tools" && "$PWD" == */tool-module ]]
+    [[ "$GOTMPDIR" == "$(dirname "$PWD")/go-tmp" && -d "$GOTMPDIR" && "$GOTMPDIR" != "$PREP_FOREIGN_TMP" ]]
+    [[ "$GOOS" == darwin && "$GOARCH" == "$PREP_ARCH" ]]
+    cmp "$IOS_CI_SOURCE/apps/ios/EmbeddedCore/bridge/go.sum" go.sum
     printf '%s\n' 'synthetic compiler intermediate' > "$GOTMPDIR/install-work"
     [[ "$PREP_SCENARIO" == install || "$PREP_SCENARIO" == stale-install ]] && fail 43
     diagnostic
@@ -160,7 +189,14 @@ case "$tool:$1" in
     cp "$PREP_TOOLS" "$GOBIN/gobind"
     ;;
   go:mod)
-    if [[ "$2" == edit ]]; then
+    if [[ "$2" == download ]]; then
+      [[ "$PWD" == */tool-module && "$3" == -json ]]
+      python3 "$PREP_GO_METADATA" download "$4"
+    elif [[ "$2" == verify ]]; then
+      [[ "$PWD" == */tool-module ]]
+      [[ "$PREP_SCENARIO" == tampered-cache ]] && fail 48
+      printf 'all modules verified\n'
+    elif [[ "$2" == edit ]]; then
       [[ "$3" == -json ]]
       printf '{"Module":{"Path":"aegis.browser/ios/embeddedcore"}}\n'
     else
@@ -278,11 +314,13 @@ function fixture(t, scenario) {
   if (scenario === 'bad-size') entry.size += 1;
   const files = scenario === 'missing-release' ? [] : scenario === 'duplicate-release' ? [entry, entry] : [entry];
   writeFileSync(catalog, JSON.stringify([{version: entry.version, files}]));
-  const warm = ['installed-gomobile', 'wrong-gobind', 'wrong-private-gobind', 'stale-install'].includes(scenario);
+  const warm = ['installed-gomobile', 'wrong-gobind', 'wrong-private-gobind', 'stale-install', 'foreign-platform', 'replaced-dependency'].includes(scenario);
   const globalPair = warm ? ['gomobile', 'gobind'].map(name => join(goPath, 'bin', name)) : [];
   for (const path of globalPair) copyFileSync(toolScript, path);
   const packageScript = join(root, 'package.py');
   writeFileSync(packageScript, packageFixture);
+  const metadataScript = join(root, 'go-metadata.py');
+  writeFileSync(metadataScript, goMetadata);
   const shared = join(goPath, 'pkg/gomobile');
   mkdirSync(shared, {recursive: true});
   writeFileSync(join(shared, 'sentinel'), 'runner-owned gomobile state\n');
@@ -296,7 +334,7 @@ function fixture(t, scenario) {
     GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file', GIT_DIR: join(root, 'wrong checkout'), GIT_TRACE: trace,
     IOS_CI_ROOT: job, IOS_CI_SOURCE: source, PREP_SCENARIO: scenario, PREP_PYTHON: python,
     PREP_ARCH: arch, PREP_ARCHIVE: archive, PREP_ARCHIVE_NAME: goArchive, PREP_CATALOG: catalog,
-    PREP_MODULE_VERSION: moduleVersion, PREP_MODULE_SUM: moduleSum, PREP_PACKAGE: packageScript, PREP_SOURCE_COMMIT: sourceCommit, PREP_TOOLS: toolScript, PREP_PROXY: proxy,
+    PREP_MODULE_VERSION: moduleVersion, PREP_GO_METADATA: metadataScript, PREP_PACKAGE: packageScript, PREP_SOURCE_COMMIT: sourceCommit, PREP_TOOLS: toolScript, PREP_PROXY: proxy,
     PREP_CALLS: calls, PREP_READY: ready, PREP_CLANG: clang, PREP_DEVELOPER: bin, PREP_FOREIGN_TMP: foreignTemp,
   }};
   return {options, job, products, trace, calls, ready, shared, clang, foreignTemp, globalPair,
@@ -331,6 +369,9 @@ for (const [scenario, phase, status] of [
   ['version-mismatch', 'go version', 2],
   ['install', 'go install', 43],
   ['wrong-private-gobind', 'go install', 1],
+  ['wrong-private-platform', 'go install', 1],
+  ['wrong-private-dependency', 'go install', 1],
+  ['tampered-cache', 'go mod verify', 48],
   ['stale-install', 'go install', 43],
   ['tidy', 'git fixture-fetch', 45],
   ['bind', 'gomobile bind', 46],
@@ -391,7 +432,7 @@ for (const scenario of ['cold-install', 'installed-gomobile', 'wrong-gobind']) {
     assert.match(calls, /catalog\n/u);
     assert.match(calls, /archive\n/u);
     assert.doesNotMatch(calls, /unexpected tool selection/u);
-    assert.equal(calls.includes('go install'), scenario !== 'installed-gomobile');
+    assert.match(calls, /go mod verify[\s\S]+go install -mod=readonly/u);
     assert(!calls.includes('gomobile init'));
     assert.equal(readFileSync(join(setup.shared, 'sentinel'), 'utf8'), 'runner-owned gomobile state\n');
     const manifest = JSON.parse(readFileSync(join(setup.products, 'build-manifest.json'), 'utf8'));
@@ -445,7 +486,7 @@ test('local EmbeddedCore preparation records the toolchain selected by the build
   assert.match(calls, /go mod tidy[\s\S]+gomobile bind[\s\S]+go version -m/u);
 });
 
-test('offline preparation worker replaces a stale pair once and fails closed on bad private tools or compiler drift', async t => {
+test('offline preparation worker isolates tools from hostile warm binaries and rejects bad private outputs', async t => {
   const worker = String.raw`
 import os
 from pathlib import Path
@@ -466,8 +507,9 @@ finally:
     assert scratch.clean()
 raise SystemExit(status)
 `;
-  for (const [scenario, expected] of [['wrong-gobind', 0], ['stale-install', 43],
-    ['wrong-private-gobind', 1], ['changed-clang', 1]]) {
+  for (const [scenario, expected] of [['wrong-gobind', 0], ['stale-install', 43], ['foreign-platform', 0], ['replaced-dependency', 0],
+    ['tampered-cache', 48], ['wrong-private-gobind', 1], ['wrong-private-platform', 1],
+    ['wrong-private-dependency', 1], ['changed-clang', 1]]) {
     await t.test(scenario, subtest => {
       const setup = fixture(subtest, scenario);
       const {cwd, env} = setup.options;
@@ -479,16 +521,17 @@ raise SystemExit(status)
       assert.equal(result.status, expected, result.stderr);
       assertPrivate(setup, result.stdout, result.stderr);
       const calls = readFileSync(setup.calls, 'utf8');
-      assert.equal(calls.split('\n').filter(line => line.startsWith('go install ')).length, 1);
+      assert.equal(calls.split('\n').filter(line => line.startsWith('go install ')).length, scenario === 'tampered-cache' ? 0 : 1);
       const manifest = join(setup.products, 'build-manifest.json');
       if (expected === 0) {
         const receipt = JSON.parse(readFileSync(manifest, 'utf8'));
         assert.equal(receipt.gobindModule, `golang.org/x/mobile@${moduleVersion}`);
         assert.equal(receipt.appleToolchain, 'com.apple.dt.toolchain.XcodeDefault');
+        assert.equal(receipt.bindingToolPolicy, 'private-pinned-graph-v1');
       } else {
         assert(!existsSync(manifest));
       }
-      if (scenario === 'wrong-private-gobind' || scenario === 'stale-install') assert(!calls.includes('gomobile bind'));
+      if (scenario.startsWith('wrong-private') || scenario === 'stale-install' || scenario === 'tampered-cache') assert(!calls.includes('gomobile bind'));
     });
   }
 });

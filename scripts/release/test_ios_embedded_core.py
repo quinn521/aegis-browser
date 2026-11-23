@@ -22,8 +22,8 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         (bridge / "bridge.go").write_text("package bridge\n")
         self.lock = bridge.parent / "embedded-core-lock.json"
         self.toolchain = {"go": "1.27.3", "gomobile": "golang.org/x/mobile@v0.0.0-20261011034528-197770444867"}
-        self.module_sum = "h1:rav73cdd7OQUPgt1aIFbZQTiPNnjfueKXvfOiLCY0Ss="
-        (bridge / "go.sum").write_text(self.toolchain["gomobile"].replace("@", " ") + f" {self.module_sum}\n")
+        sum_source = Path(__file__).resolve().parents[2] / "apps/ios/EmbeddedCore/bridge/go.sum"
+        shutil.copyfile(sum_source, bridge / "go.sum")
         self.lock.write_text(json.dumps({"status": "verified_build", "xrayCore": {"commit": "a" * 40},
                                          "toolchain": self.toolchain,
                                          "artifacts": {key: "0" * 64 for key in core.SLICE_KEYS.values()}}))
@@ -46,9 +46,7 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
     def record(self, **kwargs):
         def tool_output(args, **_kwargs):
             if args[:4] == ["go", "version", "-m", "-json"]:
-                path, version = self.toolchain["gomobile"].split("@")
-                return json.dumps({"GoVersion": "go1.27.3", "Path": f"{path}/cmd/{Path(args[-1]).name}",
-                                   "Main": {"Path": path, "Version": version, "Sum": self.module_sum}})
+                return json.dumps(self.binding_metadata(Path(args[-1]).name))
             return {
                 "go": f"go version go{self.toolchain['go']} darwin/arm64\n",
                 "git": "a" * 40 + "\n",
@@ -57,10 +55,43 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
                     "24A222\n" if args[-1] == "--show-sdk-build-version" else "27.0\n",
             }[args[0]]
         with patch.dict(os.environ, {"DEVELOPER_DIR": str(self.root), "TOOLCHAINS": "org.fixture.alternative"}), \
-                patch.object(core.shutil, "which", side_effect=lambda name: f"/fixture/{name}"), \
                 patch.object(core.subprocess, "check_output", side_effect=tool_output):
             apple = core.apple_metadata(core.apple_build_environment(os.environ))
-            return core.record(self.root, self.lock, self.products, "ci-rebuild", apple=apple, **kwargs)
+            return core.record(self.root, self.lock, self.products, "ci-rebuild", apple=apple, go="go",
+                               tools=("/fixture/gomobile", "/fixture/gobind"), **kwargs)
+
+    def binding_metadata(self, name):
+        path = "golang.org/x/mobile"
+        graph = {module: {key: value for key, value in info.items() if key != "GoModSum"}
+                 for module, info in core.mobile_modules(self.toolchain, self.lock.parent / "bridge").items()}
+        return {"GoVersion": "go1.27.3", "Path": f"{path}/cmd/{name}", "Main": graph.pop(path),
+                "Deps": list(graph.values()),
+                "Settings": [{"Key": "GOOS", "Value": "darwin"}, {"Key": "GOARCH", "Value": "arm64"}]}
+
+    def test_binding_metadata_rejects_wrong_platform_or_injected_dependency(self):
+        graph = core.mobile_modules(self.toolchain, self.build_bridge)
+        for fault in ("foreign OS", "foreign arch", "local replacement", "wrong checksum", "missing dependency"):
+            metadata = self.binding_metadata("gobind")
+            if fault == "foreign OS":
+                metadata["Settings"][0]["Value"] = "linux"
+            if fault == "foreign arch":
+                metadata["Settings"][1]["Value"] = "amd64"
+            if fault == "local replacement":
+                metadata["Deps"][-1]["Replace"] = {"Path": "../fixture"}
+            if fault == "wrong checksum":
+                metadata["Deps"][-1]["Sum"] = "h1:" + "a" * 43 + "="
+            if fault == "missing dependency":
+                metadata["Deps"].pop()
+            with self.subTest(fault=fault), patch.object(core.subprocess, "check_output", return_value=json.dumps(metadata)):
+                with self.assertRaisesRegex(ValueError, "host or module graph"):
+                    core.check_mobile_tool("go", "/fixture/gobind", "gobind", self.toolchain, graph, "arm64")
+
+    def test_old_binding_receipt_needs_regeneration(self):
+        receipt = self.record()
+        del receipt["bindingToolPolicy"]
+        core.write_json(self.products / "build-manifest.json", receipt)
+        with self.assertRaisesRegex(ValueError, "private binding tool provenance"):
+            core.verify(self.root, self.lock, self.products)
 
     def test_hosted_rebuild_keeps_source_lock_and_binds_the_actual_slices(self):
         self.record()
@@ -101,7 +132,7 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
 
     def test_strict_build_does_not_accept_a_new_binary_digest(self):
         with self.assertRaisesRegex(ValueError, "frozen digests"):
-            core.record(self.root, self.lock, self.products, "strict", apple={})
+            core.record(self.root, self.lock, self.products, "strict", apple={}, go="go", tools=())
         self.assertEqual(self.original, self.lock.read_bytes())
 
     def test_strict_apple_metadata_enforces_the_frozen_xcode_and_any_sdk_pins(self):

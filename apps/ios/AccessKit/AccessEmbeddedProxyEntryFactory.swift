@@ -23,7 +23,9 @@ public enum AccessEmbeddedProxyEntryFactory {
         transport: AccessInboundTransport = .http
     ) -> any AccessProxyEntryPublishing {
         do {
-            guard transport == .http || transport == .socks5 else { return AccessFailClosedProxyEntryPublisher() }
+            guard let retireDocuments, transport == .http || transport == .socks5 else {
+                return AccessFailClosedProxyEntryPublisher()
+            }
             let data = try lockData ?? loadBundledLockData()
             let manifest = try AccessEmbeddedCoreManifest.load(from: data)
             guard manifest.mayLink else {
@@ -50,11 +52,7 @@ public enum AccessEmbeddedProxyEntryFactory {
             }
             return AccessProxyEntryPublisher(
                 provision: { generation, deadline in
-                    do { return try await session.provision(generation: generation, deadline: deadline) }
-                    catch {
-                        await session.stopUnpublished()
-                        throw error
-                    }
+                    try await session.provision(generation: generation, deadline: deadline)
                 },
                 shutdown: { identity in
                     session.shutdown(identity: identity)
@@ -94,31 +92,50 @@ final class AccessEmbeddedProxyEntrySession {
     private var identity: String?
     private var published = false
     private var startedCore = false
+    private var provisioning = false
     private var pendingStop: Task<Void, Never>?
     private var logLease: AccessDiagnosticLog.Lease?
-    private let retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)?
+    private let retireDocuments: @MainActor (String, @escaping @MainActor () -> Void) -> Void
+    private let reserveSocket: @MainActor () async throws -> NWListener
 
     init(core: any AccessEmbeddedCoreControlling, outbound: AccessRealityVisionOutboundConfig,
          transport: AccessInboundTransport = .http,
-         retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil) {
+         retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void) {
         self.core = core
         self.transport = transport
         self.retireDocuments = retireDocuments
         self.loadOutbound = { outbound }
+        self.reserveSocket = { try await Self.reserveLoopbackSocket() }
     }
 
     init(core: any AccessEmbeddedCoreControlling,
          parameters: @escaping @MainActor () async throws -> AccessRealityVisionParameters,
-         retireDocuments: (@MainActor (String, @escaping @MainActor () -> Void) -> Void)? = nil,
-         transport: AccessInboundTransport = .http) {
+         retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void,
+         transport: AccessInboundTransport = .http,
+         reserveSocket: @escaping @MainActor () async throws -> NWListener = {
+             try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+         }) {
         self.core = core
         self.transport = transport
         self.loadOutbound = { try AccessRealityVisionOutboundConfigBuilder.build(parameters: await parameters()) }
         self.retireDocuments = retireDocuments
+        self.reserveSocket = reserveSocket
     }
 
     func provision(generation: UInt64, deadline: Duration) async throws -> AccessProxyEntryPublisher.Provision {
         _ = deadline
+        guard !provisioning else { throw AccessSiteSessionError.runtimeNotReady }
+        provisioning = true
+        defer { provisioning = false }
+        do {
+            return try await provisionOwned(generation: generation)
+        } catch {
+            await stopUnpublished()
+            throw error
+        }
+    }
+
+    private func provisionOwned(generation: UInt64) async throws -> AccessProxyEntryPublisher.Provision {
         // Synchronous publisher shutdown retains its teardown barrier. A new
         // generation must not observe the old core as running and reuse it.
         if let pendingStop {
@@ -128,7 +145,7 @@ final class AccessEmbeddedProxyEntrySession {
         if let listener, let identity {
             // Preserve an unhealthy listener's ownership until the publisher
             // fences it and hands it to the document retirement path.
-            guard listener.isAccepting, let actualPort = listener.boundPort,
+            guard startedCore, listener.isAccepting, let actualPort = listener.boundPort,
                   actualPort != 0, core.isRunning else {
                 throw AccessSiteSessionError.runtimeNotReady
             }
@@ -148,8 +165,8 @@ final class AccessEmbeddedProxyEntrySession {
         }
 
         // A session must own the core it will drain before releasing its port.
-        guard startedCore || !core.isRunning else { throw AccessSiteSessionError.runtimeNotReady }
-        if !core.isRunning {
+        if !startedCore {
+            guard !core.isRunning else { throw AccessSiteSessionError.runtimeNotReady }
             // Fetch account-selected credentials only when a new core generation is needed.
             // Failure propagates; never reuse a bundled static node in this path.
             let outbound = try await loadOutbound()
@@ -164,13 +181,14 @@ final class AccessEmbeddedProxyEntrySession {
             }
             startedCore = true
         }
+        try Task.checkCancellation()
         guard core.isRunning else {
             throw AccessSiteSessionError.runtimeNotReady
         }
 
         let boundSocket: NWListener
         do {
-            boundSocket = try await Self.reserveLoopbackSocket()
+            boundSocket = try await reserveSocket()
         } catch let error as AccessSiteSessionError {
             throw error
         } catch {
@@ -187,7 +205,7 @@ final class AccessEmbeddedProxyEntrySession {
         let registration: AccessRegistration
         do {
             registration = try AccessRegistration(
-                id: try AccessRegistrationID("embedded-entry-\(generation)-\(port)"),
+                id: try AccessRegistrationID("embedded-entry-\(UUID().uuidString)"),
                 owner: try AccessOwner(channel: 1, profile: "ordinary", partition: "default"),
                 transport: transport,
                 endpoint: try AccessEndpoint(host: AccessEndpoint.loopbackHost, port: port),
@@ -272,7 +290,7 @@ final class AccessEmbeddedProxyEntrySession {
         return lease
     }
 
-    func stopUnpublished() async {
+    private func stopUnpublished() async {
         guard identity == nil, startedCore else { return }
         startedCore = false
         await core.stop()
@@ -281,12 +299,12 @@ final class AccessEmbeddedProxyEntrySession {
     }
 
     var isRuntimeHealthy: Bool {
-        guard let listener, identity != nil else { return false }
+        guard startedCore, let listener, identity != nil else { return false }
         return listener.isAccepting && core.isRunning
     }
 
     func activate() -> Bool {
-        guard let listener, core.isRunning, listener.activate() else { return false }
+        guard startedCore, let listener, core.isRunning, listener.activate() else { return false }
         published = true
         return true
     }
@@ -295,7 +313,7 @@ final class AccessEmbeddedProxyEntrySession {
         guard self.identity == identity else { return }
         let listener = self.listener
         listener?.suspend()
-        let retire = published ? retireDocuments : nil
+        let needsDocumentReceipt = published
         self.listener = nil
         self.identity = nil
         published = false
@@ -305,7 +323,7 @@ final class AccessEmbeddedProxyEntrySession {
         logLease = nil
 
         let retirement = listener.map { AccessEmbeddedListenerRetirement(listener: $0) }
-        if retire == nil { retirement?.received(.documents) }
+        if !needsDocumentReceipt { retirement?.received(.documents) }
         if !ownsCore {
             retirement?.received(.native)
         }
@@ -317,17 +335,17 @@ final class AccessEmbeddedProxyEntrySession {
                 retirement?.received(.native)
             }
         }
-        retire?(identity) {
-            retirement?.received(.documents)
+        if needsDocumentReceipt {
+            retireDocuments(identity) { retirement?.received(.documents) }
         }
     }
 
     /// The ready socket is transferred intact to the selected protocol listener.
     /// A port number obtained from a cancelled reservation is never published.
-    static func reserveLoopbackSocket() async throws -> NWListener {
+    static func reserveLoopbackSocket(on port: NWEndpoint.Port = .any) async throws -> NWListener {
         try await withThrowingTaskGroup(of: NWListener.self) { group in
             group.addTask {
-                try await Self.awaitEphemeralLoopbackSocket()
+                try await Self.awaitLoopbackSocket(on: port)
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(2))
@@ -341,13 +359,13 @@ final class AccessEmbeddedProxyEntrySession {
         }
     }
 
-    private static func awaitEphemeralLoopbackSocket() async throws -> NWListener {
+    private static func awaitLoopbackSocket(on port: NWEndpoint.Port) async throws -> NWListener {
         let nwListener: NWListener
         do {
             let parameters = NWParameters.tcp
             parameters.allowLocalEndpointReuse = false
-            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
-            nwListener = try NWListener(using: parameters, on: .any)
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: port)
+            nwListener = try NWListener(using: parameters, on: port)
         } catch {
             throw AccessSiteSessionError.prepareFailed(String(describing: error))
         }

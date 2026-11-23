@@ -1,9 +1,27 @@
 import Network
+import Synchronization
 import XCTest
 @testable import AccessKit
 
 @MainActor
 final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
+    func testValidProductConfigurationWithoutRetirementProviderStaysClosed() async {
+        let lock = Data(#"{"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}"#.utf8)
+        let core = RecordingEmbeddedCoreForFactory()
+        let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(lockData: lock, configPath: nil,
+            verifiedCore: core, parameters: {
+                XCTFail("Document retirement must be required before authorization")
+                throw URLError(.userAuthenticationRequired)
+            })
+        XCTAssertTrue(publisher is AccessFailClosedProxyEntryPublisher)
+        do {
+            _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(1)))
+            XCTFail("Published with no document retirement provider")
+        } catch {}
+        XCTAssertFalse(core.isRunning)
+        XCTAssertNil(publisher.currentEndpoint)
+    }
+
     func testMissingConfigStaysFailClosedEvenWithVerifiedLock() async {
         let json = """
         {"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}
@@ -11,7 +29,7 @@ final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
         let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(
             lockData: Data(json.utf8),
             configPath: nil,
-            verifiedCore: RecordingEmbeddedCoreForFactory()
+            verifiedCore: RecordingEmbeddedCoreForFactory(), retireDocuments: { _, finish in finish() }
         )
         do {
             _ = try await publisher.prepare(
@@ -37,7 +55,7 @@ final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
                 return try AccessRealityVisionParameters(address: "node.invalid", port: 443,
                     userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com",
                     publicKey: "fixture-key", shortID: "")
-            })
+            }, retireDocuments: { _, finish in finish() })
         XCTAssertEqual(reads, 0, "Do not fetch credentials during app initialization")
         let id = UUID()
         let result = try await publisher.prepare(.init(operationID: id, deadline: .seconds(5)))
@@ -52,7 +70,8 @@ final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
         """
         let core = RecordingEmbeddedCoreForFactory()
         let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(lockData: Data(json.utf8),
-            configPath: "/unused/static/node", verifiedCore: core, parameters: { throw URLError(.cannotConnectToHost) })
+            configPath: "/unused/static/node", verifiedCore: core, parameters: { throw URLError(.cannotConnectToHost) },
+            retireDocuments: { _, finish in finish() })
         do {
             _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5)))
             XCTFail("Account failure must not reuse a static node")
@@ -68,7 +87,7 @@ final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
         let publisher = AccessEmbeddedProxyEntryFactory.makeProductPublisher(
             lockData: Data(json.utf8),
             configPath: "/tmp/does-not-matter",
-            verifiedCore: RecordingEmbeddedCoreForFactory()
+            verifiedCore: RecordingEmbeddedCoreForFactory(), retireDocuments: { _, finish in finish() }
         )
         do {
             _ = try await publisher.prepare(
@@ -83,29 +102,98 @@ final class AccessEmbeddedProxyEntryFactoryTests: XCTestCase {
     }
 }
 
-private final class RecordingEmbeddedCoreForFactory: AccessEmbeddedCoreControlling, @unchecked Sendable {
-    nonisolated(unsafe) private var running = false
-    var isRunning: Bool { running }
+private final class RecordingEmbeddedCoreForFactory: AccessEmbeddedCoreControlling, Sendable {
+    private struct State {
+        var running = false
+        var configuration: Data?
+    }
+    private let state = Mutex(State())
+    var configuration: Data? { state.withLock { $0.configuration } }
+    var isRunning: Bool { state.withLock { $0.running } }
 
     func start(configData: Data) async throws {
-        _ = configData
-        running = true
+        try state.withLock {
+            guard !$0.running else { throw AccessEmbeddedCoreError.unverifiedAsset }
+            $0.configuration = configData
+            $0.running = true
+        }
     }
 
     func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
         _ = host
         _ = port
-        guard running else { throw AccessEmbeddedCoreError.unverifiedAsset }
+        guard isRunning else { throw AccessEmbeddedCoreError.unverifiedAsset }
         return AccessMemoryRealityStream()
     }
 
     func stop() async {
-        running = false
+        state.withLock { $0.running = false }
     }
 }
 
 @MainActor
 final class AccessEmbeddedTeardownTests: XCTestCase {
+    func testForeignStartAfterInitialHealthReadCannotReachSocketOrOwnTeardown() async throws {
+        let core = ForeignStartDuringHealthRead()
+        let parameters = try AccessRealityVisionParameters(address: "owned.invalid", port: 443,
+            userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "owned.invalid", publicKey: "fixture-key", shortID: "")
+        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters },
+            retireDocuments: { _, _ in XCTFail("A failed provision cannot owe a document") },
+            reserveSocket: { XCTFail("A foreign core reached listener reservation"); throw CancellationError() })
+        do {
+            _ = try await session.provision(generation: 1, deadline: .seconds(1))
+            XCTFail("A foreign core published")
+        } catch {}
+        XCTAssertEqual(core.starts.withLock { $0 }, 1)
+        XCTAssertEqual(core.stops.withLock { $0 }, 0)
+        XCTAssertTrue(core.isRunning)
+    }
+
+    func testFreshPublishersWithRevisedOutboundOnSamePortHaveDistinctReceipts() async throws {
+        let firstSocket = try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket()
+        let port = try XCTUnwrap(firstSocket.port)
+        let operation = UUID()
+        var bindings: [AccessManagedProxyEndpoint] = []
+        var configurations: [Data] = []
+        for (index, host) in ["first.invalid", "revised.invalid"].enumerated() {
+            let core = RecordingEmbeddedCoreForFactory()
+            var retiring: [String] = []
+            let parameters = try AccessRealityVisionParameters(address: host, port: 443,
+                userID: "550e8400-e29b-41d4-a716-446655440000", serverName: host, publicKey: "fixture-key", shortID: "")
+            let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters },
+                retireDocuments: { identity, finish in retiring.append(identity); finish() },
+                reserveSocket: {
+                    if index == 0 { return firstSocket }
+                    let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+                    while true {
+                        do { return try await AccessEmbeddedProxyEntrySession.reserveLoopbackSocket(on: port) }
+                        catch {
+                            if ContinuousClock.now >= deadline { throw error }
+                            try await Task.sleep(for: .milliseconds(20))
+                        }
+                    }
+                })
+            let publisher = AccessProxyEntryPublisher(
+                provision: { try await session.provision(generation: $0, deadline: $1) },
+                shutdown: { session.shutdown(identity: $0) }, activate: { session.activate() })
+            let result = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
+            XCTAssertEqual(result.endpoint.port, port.rawValue)
+            XCTAssertEqual(result.endpoint.generation, 1)
+            if let old = bindings.first {
+                XCTAssertFalse(publisher.validateReady(.init(operationID: operation, endpoint: old)))
+                session.shutdown(identity: old.identity)
+                XCTAssertTrue(publisher.validateReady(result))
+            }
+            bindings.append(result.endpoint)
+            configurations.append(try XCTUnwrap(core.configuration))
+            publisher.closeCurrentGeneration()
+            publisher.cancel(operationID: operation)
+            XCTAssertEqual(retiring, [result.endpoint.identity])
+        }
+        XCTAssertNotEqual(bindings[0].identity, bindings[1].identity)
+        XCTAssertNotEqual(configurations[0], configurations[1])
+    }
+
     func testThirdPrepareKeepsSharedListenerWhenCancelledWaiterResumesFirst() async throws {
         try await assertThirdPrepareKeepsSharedListener(cancelledFirst: true)
     }
@@ -120,16 +208,10 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         core.onStop = { [weak core] _ in core?.finishStop(); coreStopped.fulfill() }
         let parameters = try AccessRealityVisionParameters(address: "node.invalid", port: 443,
             userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
-        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters })
+        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { parameters }, retireDocuments: { _, finish in finish() })
         let deadline: Duration = .seconds(5)
         // Stage the real listener before controlling the two waiters' handoff.
-        let initial: AccessProxyEntryPublisher.Provision
-        do {
-            initial = try await session.provision(generation: 1, deadline: deadline)
-        } catch {
-            await session.stopUnpublished()
-            throw error
-        }
+        let initial = try await session.provision(generation: 1, deadline: deadline)
         defer { session.shutdown(identity: initial.endpoint.identity) }
 
         let firstGate = AccessProvisionTestGate(entered: XCTestExpectation(description: "shared provision held before publication"))
@@ -262,7 +344,8 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         let parameters = try AccessRealityVisionParameters(address: "node.invalid", port: 443,
             userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "www.example.com", publicKey: "fixture-key", shortID: "")
         var reads = 0
-        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { reads += 1; return parameters })
+        let session = AccessEmbeddedProxyEntrySession(core: core, parameters: { reads += 1; return parameters },
+            retireDocuments: { _, finish in finish() })
         var replacement: AccessProxyEntryPublisher.Provision?
         var stopped: [String] = []
         let publisher = AccessProxyEntryPublisher(provision: { generation, deadline in
@@ -399,7 +482,7 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             publicKey: "abcdefghijklmnopqrstuvwxyzABCDEFG", shortID: "abcd1234"
         )
         let outbound = try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters)
-        let session = AccessEmbeddedProxyEntrySession(core: core, outbound: outbound)
+        let session = AccessEmbeddedProxyEntrySession(core: core, outbound: outbound, retireDocuments: { _, finish in finish() })
         let publisher = AccessProxyEntryPublisher(
             provision: { try await session.provision(generation: $0, deadline: $1) },
             shutdown: { session.shutdown(identity: $0) },
@@ -473,12 +556,11 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
         let session = AccessEmbeddedProxyEntrySession(core: core, parameters: {
             XCTFail("A foreign core must fail before authorization")
             throw URLError(.userAuthenticationRequired)
-        })
+        }, retireDocuments: { _, finish in finish() })
         do {
             _ = try await session.provision(generation: 1, deadline: .seconds(2))
             XCTFail("A foreign core cannot be published under this session")
         } catch AccessSiteSessionError.runtimeNotReady {}
-        await session.stopUnpublished()
         XCTAssertTrue(core.isRunning)
         XCTAssertEqual(core.stopCount, 0)
     }
@@ -533,6 +615,27 @@ final class AccessEmbeddedTeardownTests: XCTestCase {
             return false
         }
     }
+}
+
+private final class ForeignStartDuringHealthRead: AccessEmbeddedCoreControlling, Sendable {
+    private let foreignRunning = Mutex(false)
+    let starts = Mutex(0)
+    let stops = Mutex(0)
+    var isRunning: Bool {
+        foreignRunning.withLock {
+            let previous = $0
+            $0 = true
+            return previous
+        }
+    }
+    func start(configData: Data) async throws {
+        starts.withLock { $0 += 1 }
+        throw AccessEmbeddedCoreError.unverifiedAsset
+    }
+    func dial(host: String, port: UInt16) async throws -> any AccessRealityPathStream {
+        throw AccessEmbeddedCoreError.unverifiedAsset
+    }
+    func stop() async { stops.withLock { $0 += 1 } }
 }
 
 private final class DelayedStopCore: AccessEmbeddedCoreControlling, @unchecked Sendable {

@@ -496,8 +496,7 @@ final class AccessTestNodePage: NSObject, WKNavigationDelegate {
                         && !self.closed && !self.preparationDeadlineElapsed
                 },
                 retireDocuments: { [weak self] _, finish in
-                    guard let self else { finish(); return }
-                    self.retire(finish)
+                    self?.retire(finish)
                 }, transport: transport)
             let remaining = ContinuousClock.now.duration(to: deadline)
             guard !closed, remaining > .zero else { throw AccessTestNodeError.unavailable }
