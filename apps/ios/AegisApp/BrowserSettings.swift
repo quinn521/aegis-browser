@@ -78,6 +78,7 @@ struct BrowserSettingsView: View {
                         AccessUsagePage(isPrivate: browser.profile.isPrivate)
                     } label: { Label("隐藏地理位置服务", systemImage: "location.slash") }
                         .accessibilityIdentifier("access-usage-link")
+                    AccessTestNodeOptionsLink(isPrivate: browser.profile.isPrivate)
                     NavigationLink("网站设置与权限") { WebsiteSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("website-settings")
                     NavigationLink("网站数据管理") { WebsiteDataSettingsView() }
@@ -173,6 +174,10 @@ private struct DomesticAccelerationSettingsView: View {
                                 Text("未选择加速分类。")
                             } else {
                                 Text("按所选分类加速网站。")
+                            }
+                            if hostStores.smartModeReplacesDefaultLocationPrivacy {
+                                Text("选择智能后，其他网站首次打开时不再默认隐藏位置。")
+                                    .accessibilityIdentifier("website-acceleration-smart-location-privacy")
                             }
                         }
                         if !hostStores.offersLocationService {

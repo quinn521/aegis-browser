@@ -108,7 +108,15 @@ struct AegisApp: App {
         let registry = AccessSiteProxyStoreRegistry()
         let subscription = AccessSubscriptionUsageSession.product()
         _subscriptionUsage = StateObject(wrappedValue: subscription)
-        let publisher = AccessThreeXUIWebEntry.makePublisher(for: subscription)
+        let hostRegistry = AccessHostDataStoreRegistry()
+        weak var retirementOwner: AccessHostStoreCoordinator?
+        let publisher = AccessThreeXUIWebEntry.makePublisher(for: subscription) { identity, finish in
+            if let retirementOwner {
+                retirementOwner.retireManagedDocuments(identity: identity, finish: finish)
+            } else {
+                _ = hostRegistry.retireListener(identity: identity, finish: finish)
+            }
+        }
         let channel = AccessProductChannel.resolve()
         let geoSiteCache = Self.makeGeoSiteCache(channel: channel, isUITest: isTest)
 #if DEBUG && targetEnvironment(simulator)
@@ -123,8 +131,10 @@ struct AegisApp: App {
             defaultLocationPrivacy: !(publisher is AccessFailClosedProxyEntryPublisher),
             locationPreferences: defaults,
             geoSiteCache: geoSiteCache,
-            geoSiteTransport: refreshGeoSite ? AccessGeoSiteUpdateTransport() : nil
+            geoSiteTransport: refreshGeoSite ? AccessGeoSiteUpdateTransport() : nil,
+            registry: hostRegistry
         )
+        retirementOwner = hostStores
         registry.hostRouting = hostStores
         hostStores.startForegroundSweep()
         _accessSiteProxyRegistry = StateObject(wrappedValue: registry)

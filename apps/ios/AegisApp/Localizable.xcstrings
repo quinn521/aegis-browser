@@ -109994,6 +109994,95 @@
           }
         }
       }
+    },
+    "选择智能后，其他网站首次打开时不再默认隐藏位置。": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mit „Intelligent“ wird der IP-Standort auf anderen Websites beim ersten Öffnen nicht mehr standardmäßig verborgen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With Smart selected, other websites no longer hide your IP location by default on first visit."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Con Inteligente, los demás sitios web ya no ocultan tu ubicación IP de forma predeterminada al abrirlos por primera vez."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avec Intelligent, les autres sites web ne masquent plus votre localisation IP par défaut lors de la première ouverture."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dengan Cerdas, situs web lain tidak lagi menyembunyikan lokasi IP secara default saat pertama kali dibuka."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Con Intelligente, gli altri siti web non nascondono più la posizione IP per impostazione predefinita alla prima apertura."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スマートを選ぶと、ほかのウェブサイトを初めて開くときに IP 位置情報が既定で隠されなくなります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "스마트를 선택하면 다른 웹사이트를 처음 열 때 기본적으로 IP 위치를 숨기지 않습니다."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dengan Pintar, laman web lain tidak lagi menyembunyikan lokasi IP secara lalai semasa dibuka kali pertama."
+          }
+        },
+        "pt": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Com Inteligente, os outros sites deixam de ocultar a localização IP por padrão na primeira abertura."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เมื่อเลือกอัจฉริยะ เว็บไซต์อื่นจะไม่ซ่อนตำแหน่ง IP โดยค่าเริ่มต้นเมื่อเปิดครั้งแรกอีกต่อไป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Khi chọn Thông minh, các trang web khác sẽ không còn mặc định ẩn vị trí IP khi mở lần đầu."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择智能后，其他网站首次打开时不再默认隐藏位置。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "選擇智慧後，其他網站首次開啟時不再預設隱藏位置。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

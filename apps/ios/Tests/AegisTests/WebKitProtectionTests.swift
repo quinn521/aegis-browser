@@ -1,6 +1,5 @@
 import AegisPolicyKit
 import CryptoKit
-import UIKit
 import WebKit
 import XCTest
 @testable import BrowserKit
@@ -10,14 +9,13 @@ final class WebKitProtectionTests: XCTestCase {
     private var suite: String!
     private var defaults: UserDefaults!
     private var tabs: [BrowserTab] = []
-    private var observationWindow: UIWindow?
+    private let windows = WebKitTestWindows()
     override func setUp() async throws {
         suite = "webkit-protection-\(UUID().uuidString)"; defaults = UserDefaults(suiteName: suite)!
     }
     override func tearDown() async throws {
         tabs.forEach { $0.stop() }; tabs = []
-        observationWindow?.isHidden = true
-        observationWindow = nil
+        windows.close()
         defaults.removePersistentDomain(forName: suite)
     }
     private func tab(strict: Bool = false, hardened: Bool = false, isPrivate: Bool = false) throws -> BrowserTab {
@@ -31,31 +29,15 @@ final class WebKitProtectionTests: XCTestCase {
     }
     private func wait(_ condition: () -> Bool, seconds: Double = 20) async throws {
         let deadline = Date().addingTimeInterval(seconds)
-        while !condition(), Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        repeat {
+            for tab in tabs where !tab.isDisposed && tab.protectionIncident == nil { windows.attach(tab.webView) }
+            if condition() { break }
+            try await Task.sleep(for: .milliseconds(50))
+        } while Date() < deadline
         XCTAssertTrue(condition(), "未等到预期的真实 WebKit 状态")
     }
-    private func observe(_ tab: BrowserTab) {
-        // Loopback loads wait for the real WebKit view to enter a window.
-        let window: UIWindow
-        if let observationWindow {
-            window = observationWindow
-        } else {
-            window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 480))
-            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            window.windowScene = scenes.first { $0.activationState != .unattached } ?? scenes.first
-            observationWindow = window
-            window.makeKeyAndVisible()
-        }
-        let view = tab.webView
-        if view.superview === window {
-            window.bringSubviewToFront(view)
-        } else {
-            view.frame = window.bounds
-            window.addSubview(view)
-        }
-    }
     private func load(_ tab: BrowserTab, _ path: String) async throws {
-        observe(tab)
+        if !tabs.contains(where: { $0 === tab }) { tabs.append(tab) }
         tab.load(URL(string: "http://127.0.0.1:8768" + path)!)
         try await wait { !tab.isLoading && (tab.url?.path == path.components(separatedBy: "?")[0] || tab.protectionIncident != nil) }
         XCTAssertNil(tab.loadingError)
@@ -163,7 +145,6 @@ final class WebKitProtectionTests: XCTestCase {
         try await load(tab, "/security/dynamic")
         try await wait { tab.protectionIncident?.fromPage == true }
         XCTAssertFalse(tab.isResident); XCTAssertFalse(tab.webView.configuration.websiteDataStore.isPersistent)
-        observe(tab)
         tab.continueProtectedPageOnce()
         try await wait { !tab.isLoading && tab.url?.path == "/security/dynamic" }
         try await Task.sleep(for: .seconds(3))
@@ -219,7 +200,6 @@ final class WebKitProtectionTests: XCTestCase {
 
     func testRedirectGetsNavigationProtection() async throws {
         let tab = try tab()
-        observe(tab)
         tab.load(URL(string:"http://127.0.0.1:8768/security/redirect")!)
         try await wait { tab.protectionIncident != nil }
         XCTAssertEqual(tab.protectionIncident?.url.host, "paypal.example.top")
@@ -294,8 +274,8 @@ final class WebKitProtectionTests: XCTestCase {
         _ = try await js(parent, "window.open('/security/safe','_blank'); return true;")
         try await wait { browser.standardTabs.count == 2 }
         let child = try XCTUnwrap(browser.activeTab)
+        tabs.append(child)
         XCTAssertNotEqual(parent.id, child.id); XCTAssertTrue(child.inheritedHardenedSecurity)
-        observe(child)
         try await wait { !child.isLoading }
         XCTAssertEqual(child.url?.path, "/security/safe")
         parent.stop(); child.stop()

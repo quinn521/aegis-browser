@@ -104,6 +104,7 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore?
+    func willRestoreOriginalStore(tab: BrowserTab)
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError)
     func pendingRecoveryInvalidated(tab: BrowserTab)
     func tabClosed(_ tab: BrowserTab)
@@ -119,6 +120,7 @@ public extension BrowserHostStoreCoordinating {
     func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool { false }
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool { true }
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool { false }
+    func willRestoreOriginalStore(tab: BrowserTab) {}
 }
 
 public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
@@ -191,6 +193,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     @Published public private(set) var lastMainFrameFailure: BrowserMainFrameFailure?
     @Published public private(set) var loadingErrorAllowsProxyRetry = false
     @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
+    /// App-issued document loads already handed to WebKit, newest last.
+    private var deliveredDocumentLoads: [(navigationID: String, url: URL)] = []
     /// The address the user is navigating or recovering, even when WebKit still
     /// displays an older document or its internal HTTPS warning page.
     public var addressBarURL: URL? {
@@ -299,6 +303,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     var currentAttemptIDForTests: String { attempt.navigationID }
     var currentNavigationForTests: WKNavigation? { pendingNavigation }
     var heldProxyRequestForTests: URLRequest? { pendingProxyRequest }
+    var pendingAttachedLoadForTests: URLRequest? { pendingAttachedLoad }
 
     /// Records the pending main-frame URL as committed. Unit tests have no WebKit commit callback.
     public func commitPendingMainFrameForTests() {
@@ -702,6 +707,34 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         return ["127.0.0.1", "localhost", "[::1]", "::1"].contains(url?.host ?? "")
     }
 
+    /// WebKit can still ask about an app load that a newer app load replaced.
+    /// Only that exact earlier URL qualifies, and only before the newer load's
+    /// own first policy acknowledgment. That acknowledgment clears the pending
+    /// flag, and a server redirect of the newer load can only arrive after it,
+    /// so links, scripts and redirects are unaffected.
+    private func isSupersededAppLoad(_ action: WKNavigationAction, url: URL) -> Bool {
+        Self.isSupersededAppLoad(
+            navigationType: action.navigationType,
+            awaitingOwnPolicy: navigationState.programmaticPolicyNavigationID == attempt.navigationID,
+            currentNavigationID: attempt.navigationID,
+            currentURL: attempt.url,
+            url: url,
+            delivered: deliveredDocumentLoads
+        )
+    }
+
+    static func isSupersededAppLoad(
+        navigationType: WKNavigationType,
+        awaitingOwnPolicy: Bool,
+        currentNavigationID: String,
+        currentURL: URL,
+        url: URL,
+        delivered: [(navigationID: String, url: URL)]
+    ) -> Bool {
+        guard navigationType == .other, awaitingOwnPolicy, url != currentURL else { return false }
+        return delivered.contains { $0.navigationID != currentNavigationID && $0.url == url }
+    }
+
     private func performLoad(_ request: URLRequest) {
         guard !isDisposed else { return }
         if attempt.recoveryOperationID != nil, request.url?.scheme?.lowercased() == "http" {
@@ -808,6 +841,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         let recorded = attempt
         deferredDocumentNavigationID = nil
+        if let url = request.url {
+            deliveredDocumentLoads.removeAll { $0.navigationID == recorded.navigationID }
+            deliveredDocumentLoads.append((recorded.navigationID, url))
+            if deliveredDocumentLoads.count > 4 { deliveredDocumentLoads.removeFirst() }
+        }
         navigationState.programmaticPolicyNavigationID = recorded.navigationID
         let navigation = webView.load(request)
         pendingNavigation = navigation
@@ -997,6 +1035,18 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         else { retiringStoreReleases.append(release) }
     }
 
+    /// Keep the failed route selected while its document is fenced. An
+    /// explicit navigation can acquire a replacement on its normal route.
+    public func retireFailedProxyDocument(_ acknowledge: @escaping @MainActor () -> Void) {
+        // Stop also cancels navigation waiting behind an older document's
+        // terminal receipt and invalidates any in-flight proxy recovery.
+        stop()
+        loadingErrorPresentation = .resource("代理入口还不能使用")
+        let hasDocument = loadedWebView != nil
+        afterCurrentDocumentBecomesInert(acknowledge)
+        if hasDocument { terminateCurrentDocument() }
+    }
+
     private func releaseRetiringStoresIfReady() {
         guard terminatingProxyDocuments == 0 else { return }
         let releases = retiringStoreReleases
@@ -1006,14 +1056,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func terminateDocumentForProxyHold() {
         guard let view = loadedWebView as? BrowserContentWebView else {
-            releaseWebView()
+            detachWebView()
             releaseRetiringStoresIfReady()
             return
         }
         terminatingProxyDocuments += 1
         contentHooksNeedReinstall = true
-        view.terminateDocument { [weak self] in
-            guard let self else { return }
+        // The detached view may outlive the tab's session membership. Keep
+        // the retirement callbacks alive until this view supplies its receipt.
+        view.terminateDocument { [self] in
             self.terminatingProxyDocuments -= 1
             guard self.terminatingProxyDocuments == 0 else { return }
             self.releaseRetiringStoresIfReady()
@@ -1027,7 +1078,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             self.afterProxyDocumentStops = nil
             action?()
         }
-        releaseWebView(keepTerminalDelegate: true)
+        detachWebView(keepTerminalDelegate: true)
     }
 
     private func finishDocumentDisposalIfReady() {
@@ -1149,6 +1200,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             boundHostName = host
             return
         }
+        if store === originalWebsiteDataStore, boundHostName != nil {
+            // Internal destinations do not pass through host routing. Transfer
+            // any remaining binding while the tab still owns the old document.
+            hostCoordinator?.willRestoreOriginalStore(tab: self)
+        }
         terminateCurrentDocument()
         needsWindowBeforeLoad = true
         if let configurationFactory {
@@ -1251,7 +1307,20 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         onNavigation = nil
     }
 
-    private func releaseWebView(keepTerminalDelegate: Bool = false) {
+    private var hasProxyBoundWebView: Bool {
+        guard let view = loadedWebView else { return false }
+        return view.configuration.websiteDataStore !== originalWebsiteDataStore
+    }
+
+    private func releaseWebView() {
+        if hasProxyBoundWebView {
+            terminateCurrentDocument()
+        } else {
+            detachWebView()
+        }
+    }
+
+    private func detachWebView(keepTerminalDelegate: Bool = false) {
         cancelJavaScriptDialog()
         provisionalDeadline?.cancel()
         userScripts?.navigated()
@@ -1533,6 +1602,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             finish(decision.kind == .blocked ? .cancel : .allow)
             return
         }
+        if isSupersededAppLoad(navigationAction, url: requestURL) {
+            // A newer app load already owns this tab. Re-issuing the stale
+            // request would replace it and drop its pending address choice.
+            finish(.cancel)
+            return
+        }
         if temporaryPermission?.url != requestURL { temporaryPermission = nil }
         let site = preferences.site(for: requestURL)
         activeHardenedSecurity = inheritedHardenedSecurity || (site.hardenedSecurity ?? preferences.values.hardenedSecurity ?? false)
@@ -1782,6 +1857,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard webView === loadedWebView, isCurrent(navigation) else { return }
+        deliveredDocumentLoads.removeAll()
         clearPendingAddressNavigation()
         historyNavigation = nil
         provisionalNavigation = nil
@@ -2138,7 +2214,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func showProtectionIncident(_ incident: PageProtectionIncident) {
         // SwiftUI 可能暂时持有旧视图；先替换其文档，再解除浏览器持有，避免只盖住仍在运行的页面。
-        loadedWebView?.loadHTMLString("", baseURL: nil)
+        if !hasProxyBoundWebView { loadedWebView?.loadHTMLString("", baseURL: nil) }
         releaseWebView()
         requestedURL = incident.url; url = incident.url
         protectionIncident = incident
