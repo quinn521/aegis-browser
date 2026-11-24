@@ -133,6 +133,13 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
   void PrepareLocalCore(const AccessSiteHost& host);
   void RestoreSavedIntents(OwnershipKey owner, bool restored);
   void AdoptWebsiteIntent(const AccessSiteHost& host, bool enabled);
+#if BUILDFLAG(IS_MAC)
+  // Original-tab retry admission for a manual Test Profile binding that does
+  // not depend on the legacy DEV node file. Route checks stay at preparation.
+  bool HasManualTestProfileRetryBinding() const;
+  // |host| null: any committed site rule selects a Test Profile group.
+  bool HasCommittedTestProfileSite(const AccessSiteHost* host) const;
+#endif
   void OnProfileRestoredForCore(AccessSiteHost host, OwnershipKey owner,
                                bool restored);
   void OnLocalCorePrepared(AccessSiteHost host, OwnershipKey owner,

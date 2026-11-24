@@ -86,19 +86,29 @@ std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput() {
 #endif
 }
 #if BUILDFLAG(IS_MAC)
-std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
-    AccessInternalTestCoreBindingMac binding) {
+bool CanResolveAccessInternalTestCoreInput() {
 #if BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kActivate) ||
       AccessBuildIdentityForCurrentBuild().product != aegis_access::AccessProductChannel::kDebug)
-    return std::nullopt;
+    return false;
   const auto* command = base::CommandLine::ForCurrentProcess();
   const auto manifest = command->GetSwitchValuePath("aegis-access-dev-core-manifest");
   const GURL canary(command->GetSwitchValueASCII("aegis-access-dev-canary-base-url"));
-  if (!manifest.IsAbsolute() || manifest.ReferencesParent() || !canary.is_valid() ||
-      !canary.SchemeIs("https") || !canary.has_host() || canary.has_username() ||
-      canary.has_password() || canary.has_ref() || canary.has_query() ||
-      canary.spec().size() > 1900) return std::nullopt;
+  return manifest.IsAbsolute() && !manifest.ReferencesParent() && canary.is_valid() &&
+         canary.SchemeIs("https") && canary.has_host() && !canary.has_username() &&
+         !canary.has_password() && !canary.has_ref() && !canary.has_query() &&
+         canary.spec().size() <= 1900;
+#else
+  return false;
+#endif
+}
+std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
+    AccessInternalTestCoreBindingMac binding) {
+#if BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
+  if (!CanResolveAccessInternalTestCoreInput()) return std::nullopt;
+  const auto* command = base::CommandLine::ForCurrentProcess();
+  const auto manifest = command->GetSwitchValuePath("aegis-access-dev-core-manifest");
+  const GURL canary(command->GetSwitchValueASCII("aegis-access-dev-canary-base-url"));
   binding.canary_marker = base::Uuid::GenerateRandomV4().AsLowercaseString();
   std::erase(binding.canary_marker, '-');
   binding.canary_url = net::AppendQueryParameter(canary, "nonce", binding.canary_marker);

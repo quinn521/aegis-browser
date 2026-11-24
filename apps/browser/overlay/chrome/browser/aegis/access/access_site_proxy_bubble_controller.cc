@@ -468,6 +468,18 @@ void AccessSiteProxyBubbleController::RequestFailedNavigationProxy(
     std::move(completion).Run(false);
     return;
   }
+#if BUILDFLAG(IS_MAC)
+  if (!ResolveAccessLocalCoreInput()) {
+    // Without the legacy node input, only a site already bound to a manual
+    // Test Profile may retry. Its exact route is checked after restoration.
+    const auto website = CanonicalWebsiteHost(*host.host);
+    if (!website.host || (!test_profile_sites_.contains(*website.host) &&
+                          !HasCommittedTestProfileSite(&*website.host))) {
+      std::move(completion).Run(false);
+      return;
+    }
+  }
+#endif
   retry_url_ = original_url;
   retry_completion_ = std::move(completion);
   if (!RequestHostProxySession(*host.host, true) && retry_completion_) {
@@ -477,7 +489,11 @@ void AccessSiteProxyBubbleController::RequestFailedNavigationProxy(
 }
 base::RepeatingCallback<void(const GURL&, base::OnceCallback<void(bool)>)>
 AccessSiteProxyBubbleController::GetFailedNavigationRetryHandler() {
-  if (!ResolveAccessLocalCoreInput()) return {};
+  bool admitted = ResolveAccessLocalCoreInput().has_value();
+#if BUILDFLAG(IS_MAC)
+  admitted = admitted || HasManualTestProfileRetryBinding();
+#endif
+  if (!admitted) return {};
   return base::BindRepeating(
       &AccessSiteProxyBubbleController::RequestFailedNavigationProxy,
       weak_factory_.GetWeakPtr());
@@ -638,6 +654,39 @@ bool AccessSiteProxyBubbleController::HasPreparedTestNode() const {
     return false;
   auto* options = AccessOptionsService::GetOrCreate(profile_);
   return options && options->PreparedTestNode().has_value();
+}
+
+bool AccessSiteProxyBubbleController::HasManualTestProfileRetryBinding() const {
+  // The handler also suppresses Chromium auto-reload, so admit it only when a
+  // manual binding actually exists, never for every DEV error page.
+  if (profile_->IsOffTheRecord() || !CanResolveAccessInternalTestCoreInput())
+    return false;
+  if (!test_profile_sites_.empty()) return true;
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (options && options->test_profile_runtime().ready) return true;
+  return HasCommittedTestProfileSite(nullptr);
+}
+
+bool AccessSiteProxyBubbleController::HasCommittedTestProfileSite(
+    const AccessSiteHost* host) const {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  const auto owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  auto* coordinator = owner ? AccessServiceCoordinator::Get(profile_) : nullptr;
+  if (!coordinator) return false;
+  const auto snapshot = coordinator->ReadCommittedSnapshot(owner->storage_partition_token);
+  if (!snapshot.value || snapshot.value->owner != *owner) return false;
+  const auto selects_test_profile = [](const StoredSiteGroup& site) {
+    return !site.members.empty() &&
+           site.members.front().policy.mode == AccessMode::kProxy &&
+           IsTestProfileProxyGroup(site.members.front().policy.proxy_group_id);
+  };
+  if (host) {
+    const auto* site = FindCommittedBubbleSite(*snapshot.value, *host);
+    return site && selects_test_profile(*site);
+  }
+  return std::ranges::any_of(snapshot.value->site_groups, selects_test_profile);
 }
 
 std::optional<AccessLocalCoreReady>

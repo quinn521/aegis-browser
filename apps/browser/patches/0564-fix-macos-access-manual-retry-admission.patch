@@ -1,0 +1,241 @@
+From bb26ee6121b21c7e4281190ad6866198773b7577 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 04:32:10 +0800
+Subject: [PATCH] fix(access): admit original-tab retry for a manual Test
+ Profile binding
+
+Offer the failed-navigation retry handler without the legacy DEV node file when the build admits internal Test Profile activation and a manual binding exists. Only sites bound to a Test Profile may retry; the exact acknowledged route check at preparation is unchanged.
+---
+ .../aegis/access/access_local_core_manager.cc | 24 +++++---
+ .../aegis/access/access_local_core_manager.h  |  3 +
+ .../access_site_proxy_bubble_controller.cc    | 51 ++++++++++++++++-
+ .../access_site_proxy_bubble_controller.h     |  7 +++
+ .../access_site_proxy_product_unittest.cc     | 56 +++++++++++++++++++
+ 5 files changed, 133 insertions(+), 8 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_local_core_manager.cc b/chrome/browser/aegis/access/access_local_core_manager.cc
+index 466a97961fbe3edca490a79efa3f97127b5dbdd3..3318967ec6862d603a1eaa0dad2f67feaf7721fa 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager.cc
++++ b/chrome/browser/aegis/access/access_local_core_manager.cc
+@@ -86,19 +86,29 @@ std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput() {
+ #endif
+ }
+ #if BUILDFLAG(IS_MAC)
+-std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
+-    AccessInternalTestCoreBindingMac binding) {
++bool CanResolveAccessInternalTestCoreInput() {
+ #if BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
+   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kActivate) ||
+       AccessBuildIdentityForCurrentBuild().product != aegis_access::AccessProductChannel::kDebug)
+-    return std::nullopt;
++    return false;
++  const auto* command = base::CommandLine::ForCurrentProcess();
++  const auto manifest = command->GetSwitchValuePath("aegis-access-dev-core-manifest");
++  const GURL canary(command->GetSwitchValueASCII("aegis-access-dev-canary-base-url"));
++  return manifest.IsAbsolute() && !manifest.ReferencesParent() && canary.is_valid() &&
++         canary.SchemeIs("https") && canary.has_host() && !canary.has_username() &&
++         !canary.has_password() && !canary.has_ref() && !canary.has_query() &&
++         canary.spec().size() <= 1900;
++#else
++  return false;
++#endif
++}
++std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
++    AccessInternalTestCoreBindingMac binding) {
++#if BUILDFLAG(AEGIS_DEV_LOCAL_NODE_ALLOWED)
++  if (!CanResolveAccessInternalTestCoreInput()) return std::nullopt;
+   const auto* command = base::CommandLine::ForCurrentProcess();
+   const auto manifest = command->GetSwitchValuePath("aegis-access-dev-core-manifest");
+   const GURL canary(command->GetSwitchValueASCII("aegis-access-dev-canary-base-url"));
+-  if (!manifest.IsAbsolute() || manifest.ReferencesParent() || !canary.is_valid() ||
+-      !canary.SchemeIs("https") || !canary.has_host() || canary.has_username() ||
+-      canary.has_password() || canary.has_ref() || canary.has_query() ||
+-      canary.spec().size() > 1900) return std::nullopt;
+   binding.canary_marker = base::Uuid::GenerateRandomV4().AsLowercaseString();
+   std::erase(binding.canary_marker, '-');
+   binding.canary_url = net::AppendQueryParameter(canary, "nonce", binding.canary_marker);
+diff --git a/chrome/browser/aegis/access/access_local_core_manager.h b/chrome/browser/aegis/access/access_local_core_manager.h
+index 3006dc8aceb8be4dbc7c3b63b80ce8cd6fa32bc1..2ea3d504e01f8f9179e1664a0b404e8df2169811 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager.h
++++ b/chrome/browser/aegis/access/access_local_core_manager.h
+@@ -51,6 +51,9 @@ std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput();
+ // Auto/default admission and an Alpha packaged-core contract remain separate.
+ std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
+     AccessInternalTestCoreBindingMac binding);
++// Same build and launch-option admission as ResolveAccessInternalTestCoreInput,
++// without generating a canary marker or reading any file.
++bool CanResolveAccessInternalTestCoreInput();
+ #endif
+ #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+ // Display-only anonymous label. Call on a blocking sequence.
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+index a67a14e72fee8f47d0c883369da5bbb261e0d449..faf5a98d8589cb02bfc2940510232760b1da8cb2 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+@@ -468,6 +468,18 @@ void AccessSiteProxyBubbleController::RequestFailedNavigationProxy(
+     std::move(completion).Run(false);
+     return;
+   }
++#if BUILDFLAG(IS_MAC)
++  if (!ResolveAccessLocalCoreInput()) {
++    // Without the legacy node input, only a site already bound to a manual
++    // Test Profile may retry. Its exact route is checked after restoration.
++    const auto website = CanonicalWebsiteHost(*host.host);
++    if (!website.host || (!test_profile_sites_.contains(*website.host) &&
++                          !HasCommittedTestProfileSite(&*website.host))) {
++      std::move(completion).Run(false);
++      return;
++    }
++  }
++#endif
+   retry_url_ = original_url;
+   retry_completion_ = std::move(completion);
+   if (!RequestHostProxySession(*host.host, true) && retry_completion_) {
+@@ -477,7 +489,11 @@ void AccessSiteProxyBubbleController::RequestFailedNavigationProxy(
+ }
+ base::RepeatingCallback<void(const GURL&, base::OnceCallback<void(bool)>)>
+ AccessSiteProxyBubbleController::GetFailedNavigationRetryHandler() {
+-  if (!ResolveAccessLocalCoreInput()) return {};
++  bool admitted = ResolveAccessLocalCoreInput().has_value();
++#if BUILDFLAG(IS_MAC)
++  admitted = admitted || HasManualTestProfileRetryBinding();
++#endif
++  if (!admitted) return {};
+   return base::BindRepeating(
+       &AccessSiteProxyBubbleController::RequestFailedNavigationProxy,
+       weak_factory_.GetWeakPtr());
+@@ -640,6 +656,39 @@ bool AccessSiteProxyBubbleController::HasPreparedTestNode() const {
+   return options && options->PreparedTestNode().has_value();
+ }
+ 
++bool AccessSiteProxyBubbleController::HasManualTestProfileRetryBinding() const {
++  // The handler also suppresses Chromium auto-reload, so admit it only when a
++  // manual binding actually exists, never for every DEV error page.
++  if (profile_->IsOffTheRecord() || !CanResolveAccessInternalTestCoreInput())
++    return false;
++  if (!test_profile_sites_.empty()) return true;
++  auto* options = AccessOptionsService::GetOrCreate(profile_);
++  if (options && options->test_profile_runtime().ready) return true;
++  return HasCommittedTestProfileSite(nullptr);
++}
++
++bool AccessSiteProxyBubbleController::HasCommittedTestProfileSite(
++    const AccessSiteHost* host) const {
++  auto* transport = AccessNetworkContextTransport::Get(profile_);
++  const auto owner = transport
++      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
++      : std::nullopt;
++  auto* coordinator = owner ? AccessServiceCoordinator::Get(profile_) : nullptr;
++  if (!coordinator) return false;
++  const auto snapshot = coordinator->ReadCommittedSnapshot(owner->storage_partition_token);
++  if (!snapshot.value || snapshot.value->owner != *owner) return false;
++  const auto selects_test_profile = [](const StoredSiteGroup& site) {
++    return !site.members.empty() &&
++           site.members.front().policy.mode == AccessMode::kProxy &&
++           IsTestProfileProxyGroup(site.members.front().policy.proxy_group_id);
++  };
++  if (host) {
++    const auto* site = FindCommittedBubbleSite(*snapshot.value, *host);
++    return site && selects_test_profile(*site);
++  }
++  return std::ranges::any_of(snapshot.value->site_groups, selects_test_profile);
++}
++
+ std::optional<AccessLocalCoreReady>
+ AccessSiteProxyBubbleController::AcknowledgedTestProfileListener() const {
+   auto* options = AccessOptionsService::GetOrCreate(profile_);
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+index d9320f980f52c9391ef6d5ac34ab4821ecd42b0c..11b8283a1c4045fc6eca97ea908698c40e215202 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+@@ -133,6 +133,13 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
+   void PrepareLocalCore(const AccessSiteHost& host);
+   void RestoreSavedIntents(OwnershipKey owner, bool restored);
+   void AdoptWebsiteIntent(const AccessSiteHost& host, bool enabled);
++#if BUILDFLAG(IS_MAC)
++  // Original-tab retry admission for a manual Test Profile binding that does
++  // not depend on the legacy DEV node file. Route checks stay at preparation.
++  bool HasManualTestProfileRetryBinding() const;
++  // |host| null: any committed site rule selects a Test Profile group.
++  bool HasCommittedTestProfileSite(const AccessSiteHost* host) const;
++#endif
+   void OnProfileRestoredForCore(AccessSiteHost host, OwnershipKey owner,
+                                bool restored);
+   void OnLocalCorePrepared(AccessSiteHost host, OwnershipKey owner,
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 5e4cca9c07e698cdb92e9e5de71a7194cf1f0222..8d74313cffe400222cdb98d0419c5ef25c21e4c3 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -20,6 +20,7 @@
+ #include "base/task/task_observer.h"
+ #include "base/test/bind.h"
+ #include "base/test/run_until.h"
++#include "base/test/scoped_command_line.h"
+ #include "base/test/scoped_run_loop_timeout.h"
+ #include "base/test/test_future.h"
+ #include "chrome/browser/aegis/access/access_network_context_transport.h"
+@@ -1055,6 +1056,61 @@ TEST_F(AccessSavedTestProfileProductTest, PersistedBindingWaitsForExactAckAfterR
+   ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       ManualBindingOffersOriginalTabRetryWithoutLegacyInput) {
++  base::test::ScopedCommandLine command;
++  auto* line = command.GetProcessCommandLine();
++  line->RemoveSwitch("aegis-access-dev-node-config");
++  line->RemoveSwitch("aegis-access-dev-core-manifest");
++  line->RemoveSwitch("aegis-access-dev-canary-base-url");
++  ASSERT_FALSE(ResolveAccessLocalCoreInput());
++  // No manual launch options: the legacy-only behavior is unchanged.
++  EXPECT_TRUE(bubble_->GetFailedNavigationRetryHandler().is_null());
++
++  line->AppendSwitchPath("aegis-access-dev-core-manifest",
++                         directory_.GetPath().AppendASCII("core-manifest.json"));
++  line->AppendSwitchASCII("aegis-access-dev-canary-base-url",
++                          "https://canary.example/probe");
++  if (!CanResolveAccessInternalTestCoreInput()) {
++    GTEST_SKIP() << "Requires an admitted internal DEV build.";
++  }
++  ASSERT_FALSE(ResolveAccessLocalCoreInput());
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  const auto handler = bubble_->GetFailedNavigationRetryHandler();
++  ASSERT_FALSE(handler.is_null()) << SavedProfileState(options);
++
++  // A site without a manual binding is refused without touching its state.
++  base::test::TestFuture<bool> unrelated;
++  handler.Run(GURL("https://other.example/path"), unrelated.GetCallback());
++  ASSERT_TRUE(unrelated.Wait());
++  EXPECT_FALSE(unrelated.Get());
++  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kIdle);
++  EXPECT_FALSE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
++
++  // The bound site still needs its exact acknowledged route.
++  base::test::TestFuture<bool> before_ack;
++  handler.Run(GURL("https://news.example/story"), before_ack.GetCallback());
++  ASSERT_TRUE(before_ack.Wait()) << SavedProfileState(options);
++  EXPECT_FALSE(before_ack.Get());
++  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
++  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
++
++  context_.hold_next = true;
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(restored));
++  context_.Reply(true);
++  ASSERT_TRUE(restored.Wait()) << SavedProfileState(options);
++  ASSERT_TRUE(restored.Get()) << SavedProfileState(options);
++
++  base::test::TestFuture<bool> after_ack;
++  handler.Run(GURL("https://news.example/story"), after_ack.GetCallback());
++  ASSERT_TRUE(after_ack.Wait()) << SavedProfileState(options);
++  EXPECT_TRUE(after_ack.Get()) << SavedProfileState(options);
++  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
++  EXPECT_TRUE(HasAcknowledgedListener(options->test_profile_runtime()));
++}
++
+ TEST_F(AccessSavedTestProfileProductTest, RejectedAckKeepsSavedProxyUnavailable) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+   context_.hold_next = true;
+-- 
+2.54.0 (Apple Git-157)
+

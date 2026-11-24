@@ -51,6 +51,9 @@ std::optional<AccessLocalCoreInput> ResolveAccessLocalCoreInput();
 // Auto/default admission and an Alpha packaged-core contract remain separate.
 std::optional<AccessLocalCoreInput> ResolveAccessInternalTestCoreInput(
     AccessInternalTestCoreBindingMac binding);
+// Same build and launch-option admission as ResolveAccessInternalTestCoreInput,
+// without generating a canary marker or reading any file.
+bool CanResolveAccessInternalTestCoreInput();
 #endif
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 // Display-only anonymous label. Call on a blocking sequence.

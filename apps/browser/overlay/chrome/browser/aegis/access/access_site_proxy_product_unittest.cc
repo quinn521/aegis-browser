@@ -20,6 +20,7 @@
 #include "base/task/task_observer.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/test_future.h"
 #include "chrome/browser/aegis/access/access_network_context_transport.h"
@@ -1053,6 +1054,61 @@ TEST_F(AccessSavedTestProfileProductTest, PersistedBindingWaitsForExactAckAfterR
   ASSERT_TRUE(revoked.Get());
   ExpectBlockedWithoutRestoring();
   ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       ManualBindingOffersOriginalTabRetryWithoutLegacyInput) {
+  base::test::ScopedCommandLine command;
+  auto* line = command.GetProcessCommandLine();
+  line->RemoveSwitch("aegis-access-dev-node-config");
+  line->RemoveSwitch("aegis-access-dev-core-manifest");
+  line->RemoveSwitch("aegis-access-dev-canary-base-url");
+  ASSERT_FALSE(ResolveAccessLocalCoreInput());
+  // No manual launch options: the legacy-only behavior is unchanged.
+  EXPECT_TRUE(bubble_->GetFailedNavigationRetryHandler().is_null());
+
+  line->AppendSwitchPath("aegis-access-dev-core-manifest",
+                         directory_.GetPath().AppendASCII("core-manifest.json"));
+  line->AppendSwitchASCII("aegis-access-dev-canary-base-url",
+                          "https://canary.example/probe");
+  if (!CanResolveAccessInternalTestCoreInput()) {
+    GTEST_SKIP() << "Requires an admitted internal DEV build.";
+  }
+  ASSERT_FALSE(ResolveAccessLocalCoreInput());
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  const auto handler = bubble_->GetFailedNavigationRetryHandler();
+  ASSERT_FALSE(handler.is_null()) << SavedProfileState(options);
+
+  // A site without a manual binding is refused without touching its state.
+  base::test::TestFuture<bool> unrelated;
+  handler.Run(GURL("https://other.example/path"), unrelated.GetCallback());
+  ASSERT_TRUE(unrelated.Wait());
+  EXPECT_FALSE(unrelated.Get());
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kIdle);
+  EXPECT_FALSE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+
+  // The bound site still needs its exact acknowledged route.
+  base::test::TestFuture<bool> before_ack;
+  handler.Run(GURL("https://news.example/story"), before_ack.GetCallback());
+  ASSERT_TRUE(before_ack.Wait()) << SavedProfileState(options);
+  EXPECT_FALSE(before_ack.Get());
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+
+  context_.hold_next = true;
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_NO_FATAL_FAILURE(WaitForRestoreAck(restored));
+  context_.Reply(true);
+  ASSERT_TRUE(restored.Wait()) << SavedProfileState(options);
+  ASSERT_TRUE(restored.Get()) << SavedProfileState(options);
+
+  base::test::TestFuture<bool> after_ack;
+  handler.Run(GURL("https://news.example/story"), after_ack.GetCallback());
+  ASSERT_TRUE(after_ack.Wait()) << SavedProfileState(options);
+  EXPECT_TRUE(after_ack.Get()) << SavedProfileState(options);
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
+  EXPECT_TRUE(HasAcknowledgedListener(options->test_profile_runtime()));
 }
 
 TEST_F(AccessSavedTestProfileProductTest, RejectedAckKeepsSavedProxyUnavailable) {
