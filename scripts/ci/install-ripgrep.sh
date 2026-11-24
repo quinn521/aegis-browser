@@ -42,8 +42,10 @@ main() {
   name="ripgrep-${version}-${target}"
   archive="${RUNNER_TEMP}/${name}.tar.gz"
   url="https://github.com/BurntSushi/ripgrep/releases/download/${version}/${name}.tar.gz"
+  # Honor HTTP(S)_PROXY when set. Forcing --noproxy for github.com breaks
+  # self-hosted runners that only resolve/reach GitHub through a local proxy.
   curl --fail --location --proto '=https' --tlsv1.2 --retry 3 \
-    --noproxy "${no_proxy:-},${NO_PROXY:-},github.com,.github.com,githubusercontent.com,.githubusercontent.com" \
+    --connect-timeout 20 --max-time 120 \
     --output "$archive" "$url"
   printf '%s  %s\n' "$expected" "$archive" | shasum -a 256 --check --status
   tar -xzf "$archive" -C "$RUNNER_TEMP"

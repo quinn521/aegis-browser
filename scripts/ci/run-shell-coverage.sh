@@ -90,8 +90,10 @@ for command_name in curl sha256sum tar cmake; do
   }
 done
 source_archive="$work_dir/kcov-$KCOV_COMMIT.tar.gz"
+# Honor HTTP(S)_PROXY when set. Forcing --noproxy for github.com breaks
+# self-hosted runners that only resolve/reach GitHub through a local proxy.
 curl --fail --location --silent --show-error --retry 3 \
-  --noproxy "${no_proxy:-},${NO_PROXY:-},github.com,.github.com,githubusercontent.com,.githubusercontent.com" \
+  --connect-timeout 20 --max-time 120 \
   --output "$source_archive" "$KCOV_SOURCE_URL"
 actual_source_sha="$(sha256sum "$source_archive" | awk '{print $1}')"
 [[ "$actual_source_sha" == "$KCOV_SOURCE_SHA256" ]] || {

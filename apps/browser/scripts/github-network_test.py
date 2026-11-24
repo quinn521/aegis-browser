@@ -270,7 +270,7 @@ class GitHubNetworkTests(unittest.TestCase):
         self.assertEqual(value['rows'][2]['no_proxy'], 'existing-lower.invalid')
         self.assertEqual(value['rows'][2]['NO_PROXY'], 'existing-upper.invalid')
 
-    def test_ci_github_download_commands_preserve_proxy_for_other_hosts(self):
+    def test_ci_github_download_commands_honor_configured_proxy(self):
         for relative in ('scripts/ci/install-ripgrep.sh', 'scripts/ci/run-shell-coverage.sh'):
             with self.subTest(script=relative):
                 lines = (ROOT / relative).read_text().splitlines()
@@ -296,9 +296,11 @@ class GitHubNetworkTests(unittest.TestCase):
                                         capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 value = json.loads(result.stdout)
-                self.assertIn('--noproxy', value['args'])
-                exclusions = value['args'][value['args'].index('--noproxy') + 1]
-                self.assert_github_bypass({'no_proxy': exclusions, 'NO_PROXY': exclusions})
+                # Restricted self-hosted runners resolve GitHub only via the
+                # configured proxy; downloads must not force a github bypass.
+                if '--noproxy' in value['args']:
+                    exclusions = value['args'][value['args'].index('--noproxy') + 1]
+                    self.assertFalse(DOMAINS & set(exclusions.split(',')))
                 self.assertEqual(value['https_proxy'], PROXY)
 
 
