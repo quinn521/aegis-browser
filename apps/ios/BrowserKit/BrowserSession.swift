@@ -686,12 +686,30 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     /// WebKit can still ask about an app load that a newer app load replaced.
     /// Only that exact earlier URL qualifies, and only before the newer load's
-    /// own policy acknowledgment; links, scripts and redirects are unaffected.
+    /// own first policy acknowledgment. That acknowledgment clears the pending
+    /// flag, and a server redirect of the newer load can only arrive after it,
+    /// so links, scripts and redirects are unaffected.
     private func isSupersededAppLoad(_ action: WKNavigationAction, url: URL) -> Bool {
-        guard action.navigationType == .other,
-              navigationState.programmaticPolicyNavigationID == attempt.navigationID,
-              url != attempt.url else { return false }
-        return deliveredDocumentLoads.contains { $0.navigationID != attempt.navigationID && $0.url == url }
+        Self.isSupersededAppLoad(
+            navigationType: action.navigationType,
+            awaitingOwnPolicy: navigationState.programmaticPolicyNavigationID == attempt.navigationID,
+            currentNavigationID: attempt.navigationID,
+            currentURL: attempt.url,
+            url: url,
+            delivered: deliveredDocumentLoads
+        )
+    }
+
+    static func isSupersededAppLoad(
+        navigationType: WKNavigationType,
+        awaitingOwnPolicy: Bool,
+        currentNavigationID: String,
+        currentURL: URL,
+        url: URL,
+        delivered: [(navigationID: String, url: URL)]
+    ) -> Bool {
+        guard navigationType == .other, awaitingOwnPolicy, url != currentURL else { return false }
+        return delivered.contains { $0.navigationID != currentNavigationID && $0.url == url }
     }
 
     private func performLoad(_ request: URLRequest) {

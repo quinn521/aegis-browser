@@ -2757,4 +2757,33 @@ extension AccessHostRecoveryWebKitTests {
         store.proxyConfigurations = [observer]
         return { store.proxyConfigurations = saved }
     }
+
+    func testSupersededAppLoadCancelsOnlyTheReplacedURLBeforeOwnPolicy() throws {
+        let first = try XCTUnwrap(URL(string: "https://first.example.invalid/"))
+        let second = try XCTUnwrap(URL(string: "https://second.example.invalid/"))
+        let unrelated = try XCTUnwrap(URL(string: "https://unrelated.example.invalid/"))
+        let delivered: [(navigationID: String, url: URL)] = [("first", first), ("second", second)]
+        func decide(_ type: WKNavigationType = .other, awaiting: Bool = true, url: URL) -> Bool {
+            BrowserTab.isSupersededAppLoad(navigationType: type, awaitingOwnPolicy: awaiting,
+                                           currentNavigationID: "second", currentURL: second,
+                                           url: url, delivered: delivered)
+        }
+        XCTAssertTrue(decide(url: first), "A late callback for the replaced load must be dropped")
+        XCTAssertFalse(decide(awaiting: false, url: first),
+                       "After the newer load's own policy, a redirect to the older URL is legitimate")
+        XCTAssertFalse(decide(.linkActivated, url: first), "Links are never stale app loads")
+        XCTAssertFalse(decide(.reload, url: first), "Reloads are never stale app loads")
+        XCTAssertFalse(decide(url: second), "The current target is never stale")
+        XCTAssertFalse(decide(url: unrelated), "A URL the app never issued is never stale")
+    }
+
+    func testSupersededAppLoadIgnoresTheCurrentLoadsOwnRecord() throws {
+        let target = try XCTUnwrap(URL(string: "https://only.example.invalid/"))
+        let other = try XCTUnwrap(URL(string: "https://other.example.invalid/"))
+        let delivered: [(navigationID: String, url: URL)] = [("only", target)]
+        XCTAssertFalse(BrowserTab.isSupersededAppLoad(
+            navigationType: .other, awaitingOwnPolicy: true, currentNavigationID: "only",
+            currentURL: other, url: target, delivered: delivered),
+            "The record of the current load itself must not make it stale")
+    }
 }
