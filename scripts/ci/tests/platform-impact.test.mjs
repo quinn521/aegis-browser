@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, chmodSync, symlinkSync} from 'node:fs';
+import {copyFileSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, rmSync, chmodSync, symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
@@ -38,6 +38,8 @@ test('Android coverage uses the complete tested diff and the actual PR parents',
     git('init', '-b', 'develop');
     git('config', 'user.name', 'Coverage Test');
     git('config', 'user.email', 'coverage@example.invalid');
+    const fdReader = 'apps/browser/scripts/android-ui-driver/assets/read-profile-fds.sh';
+    save(fdReader, readFileSync(fdReader, 'utf8'));
     save('apps/ios/Feature.swift', 'old');
     const eventBase = commit('initial');
     save('apps/ios/Feature.swift', 'new');
@@ -81,6 +83,7 @@ test('Android coverage uses the complete tested diff and the actual PR parents',
     };
     exerciseSingleInput('apps/ios/Later.swift', false);
     exerciseSingleInput('apps/browser/CHROMIUM_VERSION', true);
+    exerciseSingleInput(fdReader, true);
     const {changedHead, changedTested} = exerciseSingleInput(
       'apps/browser/scripts/android-ui-driver/Driver.java', true);
     const manual = route({GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: changedTested});
@@ -301,7 +304,12 @@ test('paths select platforms and commit types select stage depth', () => {
   try {
     git('init', '-b', 'develop'); git('config', 'user.name', 'Routing Test'); git('config', 'user.email', 'routing@example.invalid');
     const commonScript = 'apps/browser/scripts/common.sh';
-    const iosArchiveTests = ['scripts/release/test_verify_ios_archive.py', 'scripts/release/test_ios_embedded_core.py'];
+    const iosArchiveTests = ['scripts/release/test_verify_ios_archive.py', 'scripts/release/test_ios_embedded_core.py',
+      'scripts/release/test_ios_archive_seal.py',
+      'scripts/ci/tests/ios-archive-cancel-isolation.test.mjs', 'scripts/ci/tests/ios-archive-supervisor-fixture.py',
+      'scripts/ci/tests/ios-embedded-core-prepare.test.mjs'];
+    const iosPrepareWorker = 'scripts/ci/run-ios-embedded-core-prepare.sh';
+    const iosCliTest = 'fastlane/tests/cli_test.rb';
     const aabCertificate = 'scripts/release/VerifiedAabCertificate.java';
     const realWindowsPatch = 'apps/browser/patches/0500-align-product-display-name-and-policy-identity.patch';
     const runScript = 'apps/browser/scripts/run.sh';
@@ -313,7 +321,8 @@ test('paths select platforms and commit types select stage depth', () => {
     for (const file of trackedInputs) save(file, readFileSync(resolve(file), 'utf8'));
     save('README.md', 'base');
     save('docs/ios-webkit-protection.en.md', 'initial');
-    for (const path of [commonScript, ...iosArchiveTests, aabCertificate]) save(path, 'initial');
+    const defaultsPath = 'scripts/ci/fill-platform-route-defaults.mjs';
+    for (const path of [commonScript, ...iosArchiveTests, iosCliTest, aabCertificate, defaultsPath]) save(path, 'initial');
     git('add', '.'); git('commit', '-m', 'base');
     const before = git('rev-parse', 'HEAD');
     const pr = (mutate, message) => {
@@ -339,14 +348,26 @@ test('paths select platforms and commit types select stage depth', () => {
     const iosRoute = {ios: true, android: false, macos: false, windows: false, linux: false, integrate: true, deep: true};
     const androidRoute = {...iosRoute, ios: false, android: true};
     const sharedSetup = pr(() => save(commonScript, 'updated'), 'fix: repair browser setup');
-    assert.deepEqual(route(sharedSetup), {...iosRoute, android: true, macos: true, linux: true});
+    assert.deepEqual(route(sharedSetup), {...androidRoute, macos: true, linux: true});
+    const sharedSetupWithIos = pr(() => {
+      save(commonScript, 'updated');
+      save(iosPrepareWorker, 'updated');
+      save('unknown.file', 'updated');
+    }, 'fix: repair browser setup and iOS');
+    assert.deepEqual(route(sharedSetupWithIos), {...iosRoute, android: true, macos: true, linux: true});
+    for (const path of ['scripts/ci/ios-archive-go.py', 'scripts/ci/ios-archive-supervisor.py', 'scripts/ci/run-ios-unsigned-archive.sh',
+      iosPrepareWorker, '.github/workflows/ios-release-validation.yml']) {
+      assert.deepEqual(route(pr(() => save(path, 'updated'), 'fix: protect archive logs')), iosRoute, path);
+    }
     for (const path of iosArchiveTests) {
       const isWorkflow = path === '.github/workflows/ios-release-validation.yml';
       assert.deepEqual(route(pr(() => save(path, 'updated'), 'test: cover archive input')), {...iosRoute, deep: isWorkflow}, path);
     }
+    const cliTestOnly = pr(() => save(iosCliTest, 'updated'), 'test: cover iOS release CLI');
+    assert.deepEqual(route(cliTestOnly), {...iosRoute, deep: false});
     for (const file of [
       'build-ios-access-core.sh', 'development_key_access.py', 'development_signing.py',
-      'ios_embedded_core.py', 'ios_linked_core.py', 'prepare-ios-access-core.sh', 'record-ios-access-core-digests.sh',
+      'ios_core_build.py', 'ios_embedded_core.py', 'ios_linked_core.py', 'prepare-ios-access-core.sh', 'record-ios-access-core-digests.sh',
       'safari_manifest.py', 'test_development_key_access.py', 'test_development_signing.py',
       'test_ios_linked_bundle.py', 'test_ios_profile_trust.py', 'verify-ios-archive.py', 'verify-signed-ios.py',
     ]) {
@@ -361,8 +382,27 @@ test('paths select platforms and commit types select stage depth', () => {
     ]) {
       assert.deepEqual(route(pr(() => save(path, 'android'), 'fix: repair android release')), androidRoute, path);
     }
+    const releaseContracts = pr(() => {
+      for (const path of [
+        'scripts/release/ios-delivery-plan.py', 'scripts/release/ios_access_test_gate.py',
+        'scripts/release/test_ios_publish.py', 'scripts/release/prepare-ios-package-core.sh',
+        'scripts/release/cli.rb', 'scripts/release/test_product_delivery.py',
+        'scripts/release/verify-ipa.py', 'scripts/release/product_delivery.py',
+        'scripts/release/test_cloud_signing_poc.py', 'scripts/release/fixtures/safari-icon-xcode.png',
+        'scripts/ci/tests/ios-release.test.mjs',
+      ]) save(path, 'changed');
+    }, 'test(android): cover release helpers');
+    assert.deepEqual(route(releaseContracts), {...iosRoute, deep: false});
+    const allPlatforms = {...iosRoute, android: true, windows: true, linux: true, macos: true};
+    for (const [type, integrate, deep] of [['ci', false, false], ['test', true, false], ['fix', true, true]]) {
+      const defaults = pr(() => save(defaultsPath, '// edit'), `${type}: update routing defaults`);
+      assert.deepEqual(route(defaults), {...allPlatforms, integrate, deep});
+      assert.equal(defaults.strict, false);
+    }
     const unknownRelease = pr(() => save('scripts/release/prepare-ios-access-core-extra.sh', 'unknown'), 'fix: repair helper');
     assert.deepEqual(route(unknownRelease), {...iosRoute, ios: false, macos: true});
+    const unknownFastlane = pr(() => save('fastlane/tests/support/helper_test.rb', 'unknown'), 'test: cover helper');
+    assert.deepEqual(route(unknownFastlane), {...iosRoute, ios: false, macos: true, deep: false});
     const mixedRelease = pr(() => {
       save('scripts/release/verify-ios-archive.py', 'ios');
       save('scripts/release/android-delivery.py', 'android');
@@ -443,6 +483,12 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.equal(ripgrep.linux, true);
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');
     assert.equal(linux.linux, true); assert.equal(linux.macos, false); assert.equal(linux.deep, true);
+    const mixedContracts = pr(() => {
+      save('scripts/ci/tests/shell-coverage.test.mjs', 'linux');
+      save('scripts/release/android-status.py', 'android');
+      save('scripts/ci/platform-tests/windows-acceptance.ps1', 'windows');
+    }, 'test(ios): exercise portable contracts');
+    assert.deepEqual(route(mixedContracts), {...androidRoute, windows: true, linux: true, deep: false});
     const shared = pr(() => save('packages/core/src/core.ts', 'core'), 'build: refresh core');
     assert.equal(shared.macos, true); assert.equal(shared.ios, false); assert.equal(shared.android, false); assert.equal(shared.windows, false);
     git('checkout', '-B', 'topic', before);
@@ -592,62 +638,170 @@ test('quality preflight selects Linux docs and preserves full checks on all othe
   assert.equal(other['runs-on'], 'ubuntu-24.04');
   assert.deepEqual(other.needs, ['impact', 'quality']);
   assert.match(other.if, /needs.quality.result == 'success'/u);
-  assert.match(other.if, /needs.impact.outputs.android == 'true'/u);
-  assert.match(other.if, /needs.impact.outputs.windows == 'true'/u);
+  assert.equal(other['continue-on-error'], true);
   assert.match(other.if, /needs.impact.outputs.integrate == 'true'/u);
-  assert.match(other.steps.find(step => step.name === 'Run Android and Windows contract checks').run, /pnpm run quality:other-platforms/u);
+  for (const platform of ['android', 'windows', 'linux']) {
+    assert.equal(impact.outputs[platform], '${{ steps.impact.outputs.' + platform + ' }}');
+    const guard = `needs.impact.outputs.${platform} == 'true'`;
+    assert.ok(other.if.includes(guard));
+    const suite = other.steps.filter(step => step.run === `corepack pnpm run quality:${platform}`);
+    assert.equal(suite.length, 1, platform);
+    assert.equal(suite[0].if, "${{ !cancelled() && steps.node.outcome == 'success' && " + guard + ' }}');
+  }
+  assert(other.steps.find(step => step.id === 'node')?.uses.startsWith('actions/setup-node@'));
   assert.equal(summary.steps.find(step => step.name === 'Require every mandatory job to succeed').env.REQUIRED_RESULTS, '{"quality":"${{ needs.quality.result }}"}');
-  assert.equal(impact.outputs.android, '${{ steps.impact.outputs.android }}');
   assertTrustedRouteDefaults(impact.steps.find(step => step.id === 'impact').run);
 });
 
-test('archive compiler diagnostics reach Actions and retain exit status before sealing', () => {
+const archiveScript = 'scripts/ci/run-ios-unsigned-archive.sh';
+const delegateArchiveSupervisor = `case "$3" in
+  */ios-archive-supervisor.py)
+    shift 2
+    exec "$ARCHIVE_TEST_PYTHON" -I -B "$ARCHIVE_TEST_SUPERVISOR" "$@"
+    ;;
+esac
+`;
+
+function prepareArchiveFixture(root) {
+  const source = join(root, 'Source');
+  for (const path of [archiveScript, 'scripts/ci/ios-archive-supervisor.py']) {
+    mkdirSync(join(source, path, '..'), {recursive: true});
+    copyFileSync(path, join(source, path));
+  }
+  mkdirSync(join(source, 'apps/ios/Aegis.xcodeproj'), {recursive: true});
+  mkdirSync(join(source, 'apps/ios/EmbeddedCore'), {recursive: true});
+  writeFileSync(join(source, 'apps/ios/Aegis.xcodeproj/project.pbxproj'), '// fixture\n');
+  writeFileSync(join(source, 'apps/ios/EmbeddedCore/embedded-core-lock.json'), '{}\n');
+  for (const name of ['tmp', 'DerivedData', 'SourcePackages', 'PackageCache', 'ModuleCache']) {
+    mkdirSync(join(root, name), {recursive: true});
+  }
+  return source;
+}
+
+test('archive keeps only trusted compiler status in Actions and the uploaded log before sealing', () => {
   const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
   const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
-  const root = mkdtempSync(join(tmpdir(), 'archive-diagnostics-'));
+  assert.match(step.run, /run-ios-unsigned-archive\.sh/u);
+  assert.equal(step.env.IOS_CI_SOURCE, '${{ steps.storage.outputs.source }}');
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'archive-diagnostics-'));
   const bin = join(root, 'bin');
+  const shared = join(root, 'shared checkout');
   const trace = join(root, 'python-calls.txt');
+  const launch = join(root, 'compiler-cwd.txt');
   mkdirSync(bin);
-  writeFileSync(join(bin, 'python3'), '#!/bin/bash\nprintf "%s\\n" "$*" >> "$ARCHIVE_TEST_TRACE"\n');
-  writeFileSync(join(bin, 'xcodebuild'), '#!/bin/bash\nprintf "archive-compiler-diagnostic\\n" >&2\nexit "$ARCHIVE_TEST_EXIT"\n');
+  mkdirSync(join(shared, 'scripts/ci'), {recursive: true});
+  writeFileSync(join(shared, archiveScript), 'exit 99\n');
+  const source = prepareArchiveFixture(root);
+  const python = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
+  const rejectGitSelectors = `for name in GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_IMPLICIT_WORK_TREE GIT_INDEX_FILE \\
+  GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_QUARANTINE_PATH \\
+  GIT_GRAFT_FILE GIT_REPLACE_REF_BASE GIT_NO_REPLACE_OBJECTS GIT_SHALLOW_FILE \\
+  GIT_NAMESPACE GIT_ATTR_SOURCE; do
+  if [[ "\${!name+x}" ]]; then exit 98; fi
+done
+`;
+  writeFileSync(join(bin, 'python3'), `#!/bin/bash
+${rejectGitSelectors}${delegateArchiveSupervisor}printf '%s\\n' "$*" >> "$ARCHIVE_TEST_TRACE"
+if [[ "$ARCHIVE_TEST_SOURCE_CHANGE" == 1 && "$2" == */ios_embedded_core.py && "$3" == verify ]]; then
+  mv -- "$IOS_CI_SOURCE" "$IOS_CI_ROOT/MovedSource"
+fi
+`);
+  writeFileSync(join(bin, 'xcodebuild'), `#!/bin/bash
+${rejectGitSelectors}pwd -P > "$ARCHIVE_TEST_LAUNCH"
+printf 'archive-compiler-diagnostic\\n' >&2
+exit "$ARCHIVE_TEST_EXIT"
+`);
   chmodSync(join(bin, 'python3'), 0o755);
   chmodSync(join(bin, 'xcodebuild'), 0o755);
+  const run = overrides => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {
+    cwd: shared, encoding: 'utf8', timeout: 10000, env: {
+      PATH: `${bin}:/usr/bin:/bin`, HOME: root, IOS_CI_ROOT: root, IOS_CI_SOURCE: source,
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
+      GIT_DIR: join(shared, '.git'), GIT_WORK_TREE: shared, GIT_COMMON_DIR: join(shared, '.git'),
+      GIT_OBJECT_DIRECTORY: join(shared, '.git', 'objects'), GIT_INDEX_FILE: join(shared, '.git', 'index'),
+      GIT_IMPLICIT_WORK_TREE: '0', GIT_ALTERNATE_OBJECT_DIRECTORIES: shared, GIT_QUARANTINE_PATH: shared,
+      GIT_GRAFT_FILE: join(shared, 'grafts'), GIT_REPLACE_REF_BASE: 'refs/fixture/', GIT_NO_REPLACE_OBJECTS: '1',
+      GIT_SHALLOW_FILE: join(shared, 'shallow'), GIT_NAMESPACE: 'fixture', GIT_ATTR_SOURCE: 'wrong-tree',
+      ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_LAUNCH: launch,
+      ARCHIVE_TEST_SUPERVISOR: resolve('scripts/ci/tests/ios-archive-supervisor-fixture.py'), ARCHIVE_TEST_LEAF_COMPILER: '1',
+      ...overrides,
+    },
+  });
   try {
-    for (const exitCode of [65, 0]) {
+    writeFileSync(trace, '');
+    const absent = run({IOS_CI_SOURCE: join(root, 'absent')});
+    assert.equal(absent.status, 1, absent.stderr);
+    assert.match(absent.stderr, /cd:.*absent/u);
+    assert.equal(readFileSync(trace, 'utf8'), '');
+    const vanished = run({ARCHIVE_TEST_SOURCE_CHANGE: '1', ARCHIVE_TEST_EXIT: '0'});
+    assert.equal(vanished.status, 1, vanished.stderr);
+    assert.match(vanished.stdout, /pre-compile EmbeddedCore verification exited with status 0/u);
+    assert.match(vanished.stdout, /source became unavailable before compilation/u);
+    assert.throws(() => readFileSync(launch), {code: 'ENOENT'});
+    assert.doesNotMatch(readFileSync(trace, 'utf8'), /verify-ios-archive\.py|ios-ci-storage\.py seal/u);
+    renameSync(join(root, 'MovedSource'), source);
+
+    const cases = [[65, null], [0, null], [0, 'open'], [65, 'open'], [0, 'write'], [65, 'write']];
+    for (const [compilerExit, logFailure] of cases) {
+      const log = join(root, 'xcodebuild.log');
+      rmSync(log, {force: true});
+      rmSync(launch, {force: true});
+      if (logFailure === 'open') mkdirSync(log);
       writeFileSync(trace, '');
-      const result = spawnSync('bash', ['-e', '-c', step.run], {encoding: 'utf8', env: {
-        ...process.env, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
-        ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_EXIT: String(exitCode),
-      }});
-      assert.equal(result.status, exitCode, result.stderr);
-      assert.match(result.stdout + result.stderr, /archive-compiler-diagnostic/u);
-      assert.match(readFileSync(join(root, 'xcodebuild.log'), 'utf8'), /archive-compiler-diagnostic/u);
-      const calls = readFileSync(trace, 'utf8');
-      assert.equal(calls.includes('verify-ios-archive.py'), exitCode === 0);
-      assert.equal(calls.includes('ios-ci-storage.py seal'), exitCode === 0);
+      const result = run({ARCHIVE_TEST_SOURCE_CHANGE: '0', ARCHIVE_TEST_EXIT: String(compilerExit),
+        ARCHIVE_TEST_LOG_FAILURE: logFailure ?? ''});
+      assert.ifError(result.error);
+      assert.equal(result.status, compilerExit || (logFailure ? 74 : 0), result.stderr);
+      assert.equal(readFileSync(launch, 'utf8').trim(), source);
+      const console = result.stdout + result.stderr;
+      assert.match(console, /archive diagnostics withheld/u);
+      assert(console.includes('compiler exited with status ' + compilerExit));
+      assert.doesNotMatch(console, /archive-compiler-diagnostic|synthetic-log-error-value/u);
+      if (logFailure) assert.match(result.stderr, /failed to retain xcodebuild\.log/u);
+      if (logFailure === 'open') rmSync(log, {recursive: true});
+      else {
+        const retained = readFileSync(log, 'utf8');
+        if (logFailure === 'write') assert.equal(retained, '');
+        else {
+          assert(retained.includes('compiler exited with status ' + compilerExit));
+          assert.doesNotMatch(retained, /archive-compiler-diagnostic/u);
+        }
+      }
+      const calls = readFileSync(trace, 'utf8').trim().split('\n');
+      const succeeded = compilerExit === 0 && !logFailure;
+      assert.equal(console.includes('unsigned archive verification exited with status 0'), succeeded);
+      assert(calls[0].startsWith(`-B ${source}/scripts/release/ios_embedded_core.py verify `));
+      assert.equal(calls.some(line => line.startsWith(`${source}/scripts/release/verify-ios-archive.py `)), succeeded);
+      assert.equal(calls.some(line => line.startsWith(`-B ${source}/scripts/release/test_ios_linked_bundle.py `)), succeeded);
+      assert.equal(calls.some(line => line.startsWith(`-I -B ${source}/scripts/ci/ios-ci-storage.py seal `)), succeeded);
     }
   } finally { rmSync(root, {recursive: true, force: true}); }
 });
 
-test('archive package resolution inherits the existing GitHub transport policy', () => {
+test('archive package resolution preserves runner proxy and Git configuration', () => {
   const workflow = YAML.parse(readFileSync('.github/workflows/ios-release-validation.yml', 'utf8'));
   const step = workflow.jobs['ios-archive'].steps.find(item => item.name === 'Compile uncredentialed native archive');
-  const root = mkdtempSync(join(tmpdir(), 'archive-git-policy-'));
+  assert.match(step.run, /run-ios-unsigned-archive\.sh/u);
+  const root = mkdtempSync(join(realpathSync(tmpdir()), 'archive-git-policy-'));
   const bin = join(root, 'bin');
   mkdirSync(bin);
+  const source = prepareArchiveFixture(root);
   const trace = join(root, 'git-policy.txt');
   const args = join(root, 'xcode-args.txt');
   const config = join(root, 'gitconfig');
-  writeFileSync(config, '[http]\n proxy = http://127.0.0.1:9\n[credential]\n helper = retained-fixture-helper\n');
+  const python = execFileSync('python3', ['-c', 'import sys; print(sys.executable)'], {encoding: 'utf8'}).trim();
+  const gitConfig = '[http]\n proxy = http://127.0.0.1:9\n version = HTTP/2\n[credential]\n helper = retained-fixture-helper\n';
+  writeFileSync(config, gitConfig);
   const executables = {
-    python3: '#!/bin/bash\nexit 0\n',
-    scutil: '#!/bin/bash\nexit 0\n',
+    python3: `#!/bin/bash\n${delegateArchiveSupervisor}exit 0\n`,
     xcodebuild: `#!/bin/bash
 printf 'proxy=%s\\n' "$(git config --get-urlmatch http.proxy https://github.com/firebase/firebase-ios-sdk.git)" > "$ARCHIVE_TEST_TRACE"
 printf 'http=%s\\n' "$(git config --get http.version)" >> "$ARCHIVE_TEST_TRACE"
 printf 'credential=%s\\n' "$(git config --get credential.helper)" >> "$ARCHIVE_TEST_TRACE"
 printf 'prompt=%s\\n' "\${GIT_TERMINAL_PROMPT-}" >> "$ARCHIVE_TEST_TRACE"
-printf 'bypass=%s\\n' "\${NO_PROXY-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'https_proxy=%s\\n' "\${https_proxy-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'no_proxy=%s\\n' "\${no_proxy-}" >> "$ARCHIVE_TEST_TRACE"
+printf 'NO_PROXY=%s\\n' "\${NO_PROXY-}" >> "$ARCHIVE_TEST_TRACE"
 printf '%s\\n' "$*" > "$ARCHIVE_TEST_ARGS"
 exit 65
 `,
@@ -656,20 +810,25 @@ exit 65
     writeFileSync(join(bin, name), body); chmodSync(join(bin, name), 0o755);
   }
   try {
-    const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_CONFIG_')));
-    const result = spawnSync('bash', ['-e', '-c', step.run], {encoding: 'utf8', env: {
-      ...environment, PATH: `${bin}:${process.env.PATH}`, IOS_CI_ROOT: root,
-      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1',
-      ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
+    const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {encoding: 'utf8', env: {
+      PATH: `${bin}:/usr/bin:/bin`, HOME: root, IOS_CI_ROOT: root,
+      IOS_CI_SOURCE: source,
+      GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1', GIT_ALLOW_PROTOCOL: 'file',
+      https_proxy: 'http://127.0.0.1:10', HTTPS_PROXY: 'http://127.0.0.1:10',
+      no_proxy: 'localhost', NO_PROXY: 'localhost',
+      ARCHIVE_TEST_PYTHON: python, ARCHIVE_TEST_TRACE: trace, ARCHIVE_TEST_ARGS: args,
+      ARCHIVE_TEST_SUPERVISOR: resolve('scripts/ci/tests/ios-archive-supervisor-fixture.py'), ARCHIVE_TEST_LEAF_COMPILER: '1',
     }});
     assert.equal(result.status, 65, result.stderr);
     const policy = readFileSync(trace, 'utf8');
-    assert.match(policy, /^proxy=$/mu);
-    assert.match(policy, /^http=HTTP\/1\.1$/mu);
+    assert.match(policy, /^proxy=http:\/\/127\.0\.0\.1:9$/mu);
+    assert.match(policy, /^http=HTTP\/2$/mu);
     assert.match(policy, /^credential=retained-fixture-helper$/mu);
     assert.match(policy, /^prompt=0$/mu);
-    assert.match(policy, /bypass=.*github\.com/u);
+    assert.match(policy, /^https_proxy=http:\/\/127\.0\.0\.1:10$/mu);
+    assert.match(policy, /^no_proxy=localhost$/mu);
+    assert.match(policy, /^NO_PROXY=localhost$/mu);
     assert.match(readFileSync(args, 'utf8'), /-scmProvider system/u);
-    assert.equal(readFileSync(config, 'utf8'), '[http]\n proxy = http://127.0.0.1:9\n[credential]\n helper = retained-fixture-helper\n');
+    assert.equal(readFileSync(config, 'utf8'), gitConfig);
   } finally { rmSync(root, {recursive: true, force: true}); }
 });

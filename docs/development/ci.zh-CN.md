@@ -106,7 +106,7 @@ DEV 阶段另提供 `mise exec -- pnpm run quality:static` 作为本地只读静
 
 HTML、CSS、JSON/data 与 GN/GNI 按静态/数据输入单列，不伪造行覆盖率。native 分类仍可对未知产品路径给出 `REVIEW_REQUIRED`；本质量工作不会把它改成 `NOT_APPLICABLE`。
 
-`quality:fast` 执行 core、Mac 脚本、Agent UI、本地模型验证和共享合同。Android 工具和打包 fixture 随 Android 覆盖率运行，WinRM 自测随 Windows 覆盖率运行。本地可用 `pnpm run quality:other-platforms` 执行这些 fixture。JavaScript c8 `--all` 保留完整生产脚本清单，未执行的平台脚本也计入分母。
+`quality:fast` 执行 core、Mac 脚本、Agent UI、本地模型验证和共享合同。本地用 `pnpm run quality:android` 执行 Android 目标、UI 和打包守卫合同，用 `pnpm run quality:windows` 执行 WinRM 回环自测。`pnpm run quality:other-platforms` 依次运行这两组。`pnpm run quality:linux` 校验 Bash 父子进程 fixture 和覆盖率报告转换。JavaScript c8 `--all` 保留完整生产脚本清单，未执行的平台脚本也计入分母。
 
 ## Codacy Production 准备状态
 
@@ -122,7 +122,7 @@ Codacy 正式分析范围为上游 `gcsagroup/aegis-browser` 的 main 及以 mai
 
 ## PR、develop/main 与证据身份
 
-开发 Fork 的 `develop` 与上游 `main` 共用 Draft/Ready 规则：`.github/workflows/quality.yml`、`cpp-unit-tests.yml` 和 `ios-release-validation.yml` 的自动 PR 测试 job 只在 `github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false'` 时运行。PR 必须显式带有布尔值 `draft: false`；Draft 或缺失该元数据时跳过测试，不分配测试 runner。三个 workflow 都监听 `opened`、`reopened`、`synchronize`、`ready_for_review`、`converted_to_draft`；转为 Ready 会触发测试，转回 Draft 则通过现有 PR concurrency 取消同一 PR 的旧运行。各 workflow 原有分支、路径过滤、push 和手动入口保持不变：quality 覆盖 develop/main，C++ 保留路径过滤，iOS release validation 的 PR 仍只面向 main。PR Title Policy 元数据处理和 Codacy 策略独立，分支保护与 required checks 不因 Draft 暂缓而放宽。
+开发 Fork 的 `develop` 与上游 `main` 共用 Draft/Ready 规则：`.github/workflows/quality.yml`、`cpp-unit-tests.yml` 和 `ios-release-validation.yml` 的自动 PR 测试 job 只在 `github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false'` 时运行。PR 必须显式带有布尔值 `draft: false`；Draft 或缺失该元数据时跳过测试，不分配测试 runner。三个 workflow 都监听 `opened`、`reopened`、`synchronize`、`ready_for_review`、`converted_to_draft`；转为 Ready 会触发测试，转回 Draft 则通过现有 PR concurrency 取消同一 PR 的旧运行。各 workflow 原有分支、路径过滤、push 和手动入口保持不变：quality 覆盖 develop/main，C++ 保留路径过滤，iOS release validation 接受指向 main 或 develop 的 Ready PR。PR Title Policy 元数据处理和 Codacy 策略独立，分支保护与 required checks 不因 Draft 暂缓而放宽。
 
 quality 汇总 job 使用中性 ID `quality-summary`，条件为 `always() && (上述就绪条件)`，因此 Ready PR、push 和手动运行仍会在依赖失败时执行汇总。仅非 PR 或显式 Ready PR 使用 required check 显示名 `quality-gate`；Draft 或元数据缺失时配置备用名 `quality-deferred-draft-or-missing-metadata`。GitHub 可能直接显示跳过 job 的名称表达式；无论如何，跳过记录的检查名都不能等于 `quality-gate`，避免被计作必需检查通过。实际运行的 `quality-gate` 仅在唯一必需执行 job `quality` 明确为 `success` 时成功，结果映射必须恰好包含 `quality`；failure、cancelled、skipped、timeout 或缺失均不得放行。普通开发分支不重复执行 push 全量门。
 
@@ -242,9 +242,25 @@ Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS
 
 ## 分阶段平台路由与观察门
 
+`quality.yml`、`ios-release-validation.yml` 和 `macos-delivery.yml` 在各自的 impact job 中生成计划，同一 workflow 的后续作业读取该计划的平台和阶段。PR 从实际合并候选的第一父提交读取 `scripts/ci/platform-impact.mjs` 和 `scripts/ci/fill-platform-route-defaults.mjs`，并验证两个父提交的身份。push 从被测提交读取规则，用 `github.event.before` 与被测提交比较。如果前者缺失、全零、与被测提交相同或不在其祖先链上，沿用 iOS 和 macOS 的完整路径。手动 dispatch 沿用已有入口。
+
 `quality-gate` 继续按既有规则要求 `quality` 通过。独立的 `Platform CI` 在 Ready PR 及 `develop`、`main` push 运行，以 `platform-gate` 报告受影响平台的合同测试。观察期保留原覆盖率和发布入口，平台合同的失败结论独立显示。GitHub required checks 在实际 CI 验收后单独调整。
 
+旧目标分支缺少补全脚本时，workflow 使用内嵌的兼容版本。只有缺失的字段才补全，显式输出的 `false` 会保留。缺失的 `integrate` 和 `deep` 跟随旧版的 `ios` 或 `macos` 结果。Android、Windows、Linux 的缺省值均为 `false`。
+
 ### 平台与验证深度
+
+平台取所有改动路径的并集。Conventional Commit 类型决定阶段，scope 不参与。非 Conventional 或空主题、删除、重命名、模式变化和符号链接都会提高阶段。分类器自身变更时，五个平台都进入深度阶段。缺省补全脚本也影响五个平台，其普通内容修改按提交类型选择阶段。文档轻量路由仅适用于已准入 PR 中的白名单普通内容修改。
+
+| 平台 | 选中路径 |
+| --- | --- |
+| iOS | `apps/ios/**`、`ios-*` workflow、`scripts/ci/{ios-,run-ios-,tests/ios-}*`，以及 `scripts/release/` 中以 `ios-`、`ios_`、`test_ios_` 命名的入口和已登记的 iOS 专用输入，例如 `verify-ipa.py` 和 `product_delivery.py` |
+| Android | `apps/browser/patches-android/**`、`apps/browser/scripts/**` 内含 android 的路径、`android-*` workflow、`scripts/ci/{android-,run-android-,tests/android-}*`、Android 发布脚本及回归测试 |
+| macOS | `macos-*` workflow、`scripts/release/**` 内含 macos 的路径，以及共享产品和未知路径 |
+| Windows | `**/*.ps1`、`apps/browser/scripts/**` 内含 winrm 的路径、`scripts/ci/platform-tests/windows-*`、`apps/browser/scripts/ci/windows*` |
+| Linux | `scripts/ci/run-shell-coverage.sh`、`scripts/ci/platform-tests/kcov-*`、`scripts/ci/tests/shell-coverage.test.mjs` |
+
+共享产品包括 `packages/core/**`、`apps/browser/overlay/**` 和 `apps/browser/patches/**`。单独变更 `apps/browser/scripts/common.sh` 会选中 Android 和 macOS。iOS unsigned archive 使用独立的归档入口和 Xcode 构建阶段；混合变更按各改动路径取平台并集。
 
 PR 从被测合并提交的第一父提交读取规则和汇总程序，并校验第二父提交等于事件 head。push 从被测提交读取规则，以 `before` 到实际落地提交计算完整差异。观察工作流在 push 起点缺失、为零或不可达时执行全部平台合同。其他调用方保留原有回退。PR 的可信 base 若尚未提供当前规则，观察门明确报告迁移待合入。路由产物保留 tested SHA、规则 SHA 和实际变更。
 
@@ -259,6 +275,10 @@ PR 从被测合并提交的第一父提交读取规则和汇总程序，并校�
 | 共享 Chromium 版本、补丁与候选编排 | 选择读取这些输入的 Android、macOS 或 Windows 合同。桌面补丁序列由 macOS 和 Windows 共同消费。 |
 | macOS 交付输入或未识别路径 | 完整基础质量门及适用的 macOS standalone 与 DMG 合同。 |
 | Linux Bash 覆盖率入口、浏览器 shell 脚本及 kcov fixture | Linux 上运行现有 Bash 行覆盖率和行为检查。 |
+
+iOS 合同在自己的 impact 成功且 `ios && integrate` 时启动，unsigned archive 再等待合同成功且 `deep`。macOS 自动合同等待自己的 impact 成功且 `macos && integrate`。两者可与基础 quality 并行。手动验证和交付沿用各自的入口及准入条件。
+
+基础 quality 成功且 `integrate` 为真时，Android、Windows、Linux 任一被选中就分配一个 Ubuntu runner。这个 runner 只执行选中的合同，每个平台单独显示一个步骤。多平台改动共用一次 checkout 和 Node 安装。一个合同失败后，其余已选合同继续运行。取消或环境准备失败时停止。步骤保留各自的失败状态，作业级 `continue-on-error` 让该作业提供诊断。Linux 合同执行真实 Bash 父子 fixture，并用样例验证报告过滤、零命中和缺项拒绝。kcov、Pester、Android instrumentation 和 iOS Simulator 的覆盖率报告及触发条件见本指南的「PR、develop/main 与证据身份」。
 
 `Platform CI` 使用一次路由结果分配五个合同作业。Linux 和 Windows 复用现有覆盖率 workflow 的对应入口。汇总检查始终核对实际结果。被选中作业只有明确成功才可通过。未选作业记录为不适用，缺失、失败、取消、超时及被选作业意外跳过均应报错。iOS unsigned archive、Android 模拟器、全量 Chromium、真机、签名和发布使用各自的证据。
 

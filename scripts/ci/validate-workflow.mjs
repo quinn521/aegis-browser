@@ -88,7 +88,7 @@ try {
         : iosImpact ? '${{ inputs.exercise != \'cloud-poc\' && (' + ready + ') }}'
           : iosContracts ? '${{ inputs.exercise != \'cloud-poc\' && (' + ready + ') && needs.impact.result == \'success\' && (github.event_name == \'workflow_dispatch\' || (needs.impact.outputs.ios == \'true\' && needs.impact.outputs.integrate == \'true\')) }}'
             : iosArchive ? '${{ inputs.exercise != \'cloud-poc\' && (' + ready + ') && needs.impact.result == \'success\' && needs.contracts.result == \'success\' && (github.event_name == \'workflow_dispatch\' || needs.impact.outputs.deep == \'true\') }}'
-              : otherPlatforms ? '${{ (' + ready + ') && needs.quality.result == \'success\' && needs.impact.result == \'success\' && (needs.impact.outputs.android == \'true\' || needs.impact.outputs.windows == \'true\') && needs.impact.outputs.integrate == \'true\' }}'
+              : otherPlatforms ? '${{ (' + ready + ') && needs.quality.result == \'success\' && needs.impact.result == \'success\' && (needs.impact.outputs.android == \'true\' || needs.impact.outputs.windows == \'true\' || needs.impact.outputs.linux == \'true\') && needs.impact.outputs.integrate == \'true\' }}'
                 : automatic === workflow && id === 'quality-summary' ? summaryCondition
                   : androidCoverage ? androidCoverageCondition
                     : otherCoverage ? id === 'lane-result' ? "${{ always() && inputs.lane != '' }}" : coverageCallCondition
@@ -375,14 +375,17 @@ try {
   ) {
     fail('Quality PR base must resolve from the merge commit first parent, not a possibly stale pull_request.base.sha');
   }
-  const iosArchiveGo = array(iosValidationWorkflow.jobs?.['ios-archive']?.steps).find((step) =>
-    String(step.uses ?? '').startsWith('actions/setup-go@'));
+  const archiveSteps = array(iosValidationWorkflow.jobs?.['ios-archive']?.steps);
+  const archiveStorage = archiveSteps.findIndex(step => step.id === 'storage');
+  const archivePrepare = archiveSteps.findIndex(step =>
+    String(step.run ?? '').includes('--prepare-embedded-core')
+    && String(step.run ?? '').includes('ios-archive-supervisor.py'));
+  const archiveCompile = archiveSteps.findIndex(step => String(step.run ?? '').includes('run-ios-unsigned-archive.sh'));
   if (
-    !expectedActions.has(iosArchiveGo?.uses) ||
-    String(iosArchiveGo?.with?.['go-version']) !== '1.27.3' ||
-    iosArchiveGo?.with?.cache !== false
+    archiveStorage < 0 || archivePrepare <= archiveStorage || archiveCompile <= archivePrepare ||
+    archiveSteps.some(step => String(step.uses ?? '').startsWith('actions/setup-go@'))
   ) {
-    fail('ios-archive must install approved pinned Go 1.27.3 before EmbeddedCore prepare');
+    fail('ios-archive must install locked Go inside supervised EmbeddedCore preparation after storage and before compilation');
   }
   const ripgrepInstall = array(quality.steps).find((step) => String(step.run ?? '') === 'bash scripts/ci/install-ripgrep.sh');
   if (!ripgrepInstall || ripgrepInstall['timeout-minutes'] !== 5) {

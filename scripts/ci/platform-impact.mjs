@@ -59,9 +59,10 @@ const explanationPaths = new Set([
   'docs/plans/macos-access-toolbar-bubble-NOTES.md',
   'docs/plans/macos-access-bubble-session-NOTES.md',
 ]);
+const routerPath = 'scripts/ci/platform-impact.mjs';
+const defaultsPath = 'scripts/ci/fill-platform-route-defaults.mjs';
 const routeInputs = new Set([
-  'scripts/ci/platform-impact.mjs',
-  'scripts/ci/fill-platform-route-defaults.mjs',
+  routerPath,
   'scripts/ci/check-platform-gate.mjs',
   '.github/workflows/platform-gate.yml',
   '.github/workflows/other-platform-coverage.yml',
@@ -97,23 +98,45 @@ const integrateTypes = new Set(['feat', 'fix', 'perf', 'refactor', 'build', 'tes
 const deepTypes = new Set(['feat', 'fix', 'perf', 'refactor', 'build', 'revert']);
 const blankPlatforms = () => ({ios: false, android: false, macos: false, windows: false, linux: false});
 const browserCommonScript = 'apps/browser/scripts/common.sh';
-// Exact release inputs for iOS contracts and the unsigned archive.
-const iosArchiveInputs = new Set([
+// These iOS release inputs have names outside the ios- / ios_ families.
+// Keep ownership explicit so a new, unidentified release tool retains the macOS fallback.
+const iosReleaseInputs = new Set([
+  'scripts/release/artifact-transport.py',
   'scripts/release/build-ios-access-core.sh',
+  'scripts/release/clear-empty-build-upload.rb',
+  'scripts/release/cli.rb',
+  'scripts/release/cloud-archive.py',
+  'scripts/release/cloud-signing-poc.py',
   'scripts/release/development_key_access.py',
   'scripts/release/development_signing.py',
-  'scripts/release/ios_embedded_core.py',
-  'scripts/release/ios_linked_core.py',
+  'scripts/release/fixtures/safari-icon-xcode.png',
+  'scripts/release/hosted-signing.py',
+  'scripts/release/local-ios-signing.py',
   'scripts/release/prepare-ios-access-core.sh',
+  'scripts/release/prepare-ios-package-core.sh',
+  'scripts/release/private-beta-inputs.py',
+  'scripts/release/product_artifacts.py',
+  'scripts/release/product_delivery.py',
   'scripts/release/record-ios-access-core-digests.sh',
   'scripts/release/safari_manifest.py',
+  'scripts/release/test_artifact_transport.py',
+  'scripts/release/test_cloud_archive.py',
+  'scripts/release/test_cloud_signing_poc.py',
   'scripts/release/test_development_key_access.py',
   'scripts/release/test_development_signing.py',
-  'scripts/release/test_ios_embedded_core.py',
-  'scripts/release/test_ios_linked_bundle.py',
-  'scripts/release/test_ios_profile_trust.py',
+  'scripts/release/test_hosted_signing.py',
+  'scripts/release/test_local_ios_signing.py',
+  'scripts/release/test_native_signing_session.py',
+  'scripts/release/test_private_beta_inputs.py',
+  'scripts/release/test_product_artifacts.py',
+  'scripts/release/test_product_delivery.py',
   'scripts/release/test_verify_ios_archive.py',
+  'scripts/release/test_verify_ios_dsyms.py',
+  'scripts/release/test_verify_ipa.py',
+  'scripts/release/test_verify_signed_ios.py',
   'scripts/release/verify-ios-archive.py',
+  'scripts/release/verify-ios-dsyms.py',
+  'scripts/release/verify-ipa.py',
   'scripts/release/verify-signed-ios.py',
 ]);
 const sharedIosTestInput = 'packages/core/src/agent/contracts/v1/agent-contract-v1.vectors.json';
@@ -142,11 +165,34 @@ const iosSimulatorTools = new Set([
 const desktopPatch = path => path.startsWith('apps/browser/patches/');
 const browserShellInput = path => /^apps\/browser\/scripts\/[^/]+\.sh$/u.test(path);
 const iosArchiveRuntime = new Set([
+  'scripts/ci/ios-archive-go.py',
+  'scripts/ci/ios-archive-supervisor.py',
+  'scripts/ci/run-ios-unsigned-archive.sh',
+  'scripts/ci/run-ios-embedded-core-prepare.sh',
   'scripts/ci/ios-ci-storage.py',
   'scripts/release/test_ios_linked_bundle.py',
   'scripts/release/test_ios_profile_trust.py',
   'scripts/release/test_development_signing.py',
   'scripts/release/test_development_key_access.py',
+]);
+const iosArchiveInputs = new Set([
+  'scripts/release/build-ios-access-core.sh',
+  'scripts/release/development_key_access.py',
+  'scripts/release/development_signing.py',
+  'scripts/release/ios_core_build.py',
+  'scripts/release/ios_embedded_core.py',
+  'scripts/release/ios_linked_core.py',
+  'scripts/release/prepare-ios-access-core.sh',
+  'scripts/release/record-ios-access-core-digests.sh',
+  'scripts/release/safari_manifest.py',
+  'scripts/release/test_development_key_access.py',
+  'scripts/release/test_development_signing.py',
+  'scripts/release/test_ios_embedded_core.py',
+  'scripts/release/test_ios_linked_bundle.py',
+  'scripts/release/test_ios_profile_trust.py',
+  'scripts/release/test_verify_ios_archive.py',
+  'scripts/release/verify-ios-archive.py',
+  'scripts/release/verify-signed-ios.py',
 ]);
 const iosReleaseContracts = new Set([
   '.github/ios-public-release-tag-ruleset.json',
@@ -167,27 +213,29 @@ const iosReleaseContracts = new Set([
   'scripts/release/test_verify_ios_dsyms.py',
   'scripts/release/test_verify_signed_ios.py',
 ]);
+// Match the top-level Ruby tests discovered by ios-release-validation.yml.
+const iosFastlaneTest = /^fastlane\/tests\/(?!\.)[^/]*_test\.rb$/u;
 const selectsIos = path => path.startsWith('apps/ios/')
   || path.startsWith('.github/workflows/ios-')
   || path.startsWith('scripts/ci/ios-')
   || path.startsWith('scripts/ci/run-ios-')
   || path.startsWith('scripts/ci/tests/ios-')
   || nodeWorkspaceInputs.has(path)
-  || path === browserCommonScript
   || iosArchiveInputs.has(path)
   || iosReleaseContracts.has(path)
   || path === sharedIosTestInput
   || sharedIosProductInput(path)
   || /^scripts\/release\/(?:test_)?ios[-_]/u.test(path)
-  || path.startsWith('fastlane/')
+  || (path.startsWith('fastlane/') && !path.startsWith('fastlane/tests/'))
   || path.startsWith('.github/actions/ensure-ios-ruby/')
-  || path === 'Gemfile' || path === 'Gemfile.lock';
+  || path === 'Gemfile' || path === 'Gemfile.lock'
+  || iosFastlaneTest.test(path)
+  || iosReleaseInputs.has(path);
 const needsIosCompile = path => sharedIosProductInput(path)
   || iosArchiveRuntime.has(path)
   || (path.startsWith('apps/ios/') && !path.startsWith('apps/ios/Tests/')
     && !iosSimulatorTools.has(path) && !path.endsWith('.md'))
   || (iosArchiveInputs.has(path) && !path.startsWith('scripts/release/test_'))
-  || path === browserCommonScript
   || path === '.github/workflows/ios-release-validation.yml';
 const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
   || path === 'apps/browser/ci-pins/android.json'
@@ -235,6 +283,7 @@ const selectsWindows = path => path.endsWith('.ps1')
   || path.startsWith('apps/browser/scripts/ci/windows')
   || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
 const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh'
+  || path === 'scripts/ci/tests/shell-coverage.test.mjs'
   || path === 'scripts/ci/install-ripgrep.sh'
   || nodeWorkspaceInputs.has(path)
   || path.startsWith('scripts/ci/platform-tests/kcov-')
@@ -281,6 +330,7 @@ if (!legacyFull && changes.length > 0 && subjects.length === 0) nonConventional 
 const contentEdit = change => change.status === 'M' && change.beforeMode === '100644' && change.afterMode === '100644';
 const explanationOnly = changes.length > 0 && changes.every(change => explanationPaths.has(change.path) && contentEdit(change));
 const selfEdit = changes.some(change => routeInputs.has(change.path));
+const defaultsEdit = changes.some(change => change.path === defaultsPath);
 const unsafe = changes.some(isUnsafe);
 const strict = selfEdit || unsafe || nonConventional;
 const docs = event === 'pull_request' && explanationOnly && !strict && process.env.CI_LIGHTWEIGHT_ADMITTED === 'true';
@@ -288,8 +338,8 @@ const platforms = blankPlatforms();
 let reason = 'path-and-type';
 if (docs) reason = 'verified-document-content';
 else if (event === 'pull_request' && explanationOnly && !strict) reason = 'document-content-unadmitted';
-else if (selfEdit) {
-  reason = 'router-self-edit';
+else if (selfEdit || defaultsEdit) {
+  reason = selfEdit ? 'router-self-edit' : 'route-defaults-edit';
   platforms.ios = true;
   platforms.android = true;
   platforms.macos = true;
@@ -320,9 +370,11 @@ const actualInputs = changes.filter(change => !explanationPaths.has(change.path)
 const pathRequiresContracts = actualInputs.length > 0;
 const pathRequiresArchive = actualInputs.some(({path}) => needsIosCompile(path));
 const deepByType = typeList.some(type => deepTypes.has(type));
-const deep = !docs && (legacyFull || selfEdit || pathRequiresArchive || strict
-  || (!platforms.ios && (event === 'push' || deepByType)));
-const integrate = deep || (!docs && (pathRequiresContracts || event === 'push' || typeList.some(type => integrateTypes.has(type))));
+const defaultsOnlyEdit = defaultsEdit && !selfEdit;
+const deep = !docs && (legacyFull || selfEdit || strict
+  || (defaultsOnlyEdit ? (event === 'push' || deepByType) : (pathRequiresArchive
+    || (!platforms.ios && (event === 'push' || deepByType)))));
+const integrate = deep || (!docs && ((defaultsOnlyEdit ? false : pathRequiresContracts) || event === 'push' || typeList.some(type => integrateTypes.has(type))));
 const plan = {
   schemaVersion: 3, event, base, head, tested, rulesSha: event === 'pull_request' ? base : tested, changes,
   types: [...types].sort(), strict, docs, ...platforms, gate: true, integrate, deep, reason,
