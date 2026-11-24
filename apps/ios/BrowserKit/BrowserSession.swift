@@ -185,6 +185,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     @Published public private(set) var lastMainFrameFailure: BrowserMainFrameFailure?
     @Published public private(set) var loadingErrorAllowsProxyRetry = false
     @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
+    /// App-issued document loads already handed to WebKit, newest last.
+    private var deliveredDocumentLoads: [(navigationID: String, url: URL)] = []
     /// The address the user is navigating or recovering, even when WebKit still
     /// displays an older document or its internal HTTPS warning page.
     public var addressBarURL: URL? {
@@ -682,6 +684,16 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         return ["127.0.0.1", "localhost", "[::1]", "::1"].contains(url?.host ?? "")
     }
 
+    /// WebKit can still ask about an app load that a newer app load replaced.
+    /// Only that exact earlier URL qualifies, and only before the newer load's
+    /// own policy acknowledgment; links, scripts and redirects are unaffected.
+    private func isSupersededAppLoad(_ action: WKNavigationAction, url: URL) -> Bool {
+        guard action.navigationType == .other,
+              navigationState.programmaticPolicyNavigationID == attempt.navigationID,
+              url != attempt.url else { return false }
+        return deliveredDocumentLoads.contains { $0.navigationID != attempt.navigationID && $0.url == url }
+    }
+
     private func performLoad(_ request: URLRequest) {
         guard !isDisposed else { return }
         if attempt.recoveryOperationID != nil, request.url?.scheme?.lowercased() == "http" {
@@ -783,6 +795,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         let recorded = attempt
         deferredDocumentNavigationID = nil
+        if let url = request.url {
+            deliveredDocumentLoads.removeAll { $0.navigationID == recorded.navigationID }
+            deliveredDocumentLoads.append((recorded.navigationID, url))
+            if deliveredDocumentLoads.count > 4 { deliveredDocumentLoads.removeFirst() }
+        }
         navigationState.programmaticPolicyNavigationID = recorded.navigationID
         let navigation = webView.load(request)
         pendingNavigation = navigation
@@ -1526,6 +1543,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             finish(decision.kind == .blocked ? .cancel : .allow)
             return
         }
+        if isSupersededAppLoad(navigationAction, url: requestURL) {
+            // A newer app load already owns this tab. Re-issuing the stale
+            // request would replace it and drop its pending address choice.
+            finish(.cancel)
+            return
+        }
         if temporaryPermission?.url != requestURL { temporaryPermission = nil }
         let site = preferences.site(for: requestURL)
         activeHardenedSecurity = inheritedHardenedSecurity || (site.hardenedSecurity ?? preferences.values.hardenedSecurity ?? false)
@@ -1765,6 +1788,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard webView === loadedWebView, isCurrent(navigation) else { return }
+        deliveredDocumentLoads.removeAll()
         clearPendingAddressNavigation()
         historyNavigation = nil
         provisionalNavigation = nil
