@@ -40,6 +40,9 @@ struct AccessLocalCoreInput {
   base::TimeTicks internal_preparation_deadline;
   AccessOwnedChildRetirementMac (*retire_owned_child_for_testing)(
       const AccessOwnedChildMac&, uint32_t) = nullptr;
+  // Tests only: after the owned listener and its parent-held lease are
+  // verified, accept readiness without the controlled HTTPS canary.
+  bool skip_internal_canary_for_testing = false;
 #endif
 };
 // Resolves paths only. File parsing, pins, process launch and readiness remain
@@ -104,7 +107,9 @@ class AccessLocalCoreManager {
   // Called on the owning Browser sequence before the session-ending rundown
   // wait. Completion runs after child cleanup on core threads, without needing
   // the blocked Browser sequence to pump replies. Pending worker destruction
-  // remains covered after its owning service has gone away.
+  // remains covered after its owning service has gone away. A published
+  // internal listener counts as cleaned up once forwarding stops and its child
+  // is reaped; its address stays held until the Network fence or process exit.
   static void StopAllForSessionEnding(base::OnceClosure completion);
   // Reports an unexpected exit of this manager's prepared child. The private
   // registration ID lets the Browser ignore a late notification after rebind.

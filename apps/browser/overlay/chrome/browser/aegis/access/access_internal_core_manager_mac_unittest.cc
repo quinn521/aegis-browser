@@ -1,15 +1,24 @@
 // Copyright 2026 GCSA
 #include "chrome/browser/aegis/access/access_local_core_manager.h"
 
+#include <netinet/in.h>
+#include <signal.h>
+#include <sys/socket.h>
+
 #include <atomic>
+#include <cerrno>
 
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/files/scoped_file.h"
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
+#include "base/threading/thread_restrictions.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/uuid.h"
 #include "chrome/browser/aegis/access/access_build_channel.h"
 #include "components/aegis_access/access_test_node_test_fixture.h"
@@ -29,6 +38,20 @@ AccessOwnedChildRetirementMac RetirementFault(const AccessOwnedChildMac& child, 
                                 : RetireAccessOwnedChildMac(child, wait);
 }
 std::string Id() { return base::Uuid::GenerateRandomV4().AsLowercaseString(); }
+// True while some socket still listens on 127.0.0.1:port. SO_REUSEADDR keeps
+// a released address in TIME_WAIT from reading as held.
+bool LoopbackPortHeld(uint16_t port) {
+  base::ScopedFD probe(socket(AF_INET, SOCK_STREAM, 0));
+  if (!probe.is_valid()) return true;
+  const int enable = 1;
+  setsockopt(probe.get(), SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+  sockaddr_in address = {};
+  address.sin_len = sizeof(address);
+  address.sin_family = AF_INET;
+  address.sin_port = htons(port);
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  return bind(probe.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0;
+}
 
 class AccessInternalCoreManagerMacTest : public testing::Test {
  protected:
@@ -195,6 +218,46 @@ TEST_F(AccessInternalCoreManagerMacTest, ExpiredOriginalDeadlineCannotLaunchOrRe
   EXPECT_FALSE(prepared.Get().retirement_pending);
   EXPECT_EQ(prepared.Get().error, "The original preparation deadline has expired.");
   EXPECT_EQ(retirement_pid.load(), 0);
+  EXPECT_FALSE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
+}
+TEST_F(AccessInternalCoreManagerMacTest, SessionEndingCompletesAfterReapWhilePublishedListenerStaysHeld) {
+  block_retirement.store(false);
+  input_.skip_internal_canary_for_testing = true;
+  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
+  base::test::TestFuture<AccessLocalCoreReady> prepared;
+  manager_->Prepare(prepared.GetCallback());
+  ASSERT_TRUE(prepared.Get().ready) << prepared.Get().error;
+  ASSERT_TRUE(prepared.Get().parent_listener_lease_held);
+  const uint16_t port = prepared.Get().port;
+  ASSERT_GT(port, 0);
+  ASSERT_TRUE(LoopbackPortHeld(port));
+  ASSERT_EQ(retirement_pid.load(), 0);
+  {
+    // Without the fix the barrier never runs and EndSession waits its full 10 s.
+    base::ElapsedTimer elapsed;
+    auto stopped = std::make_shared<base::WaitableEvent>();
+    AccessLocalCoreManager::StopAllForSessionEnding(base::BindOnce(
+        [](std::shared_ptr<base::WaitableEvent> event) { event->Signal(); }, stopped));
+    base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+    ASSERT_TRUE(stopped->TimedWait(base::Seconds(5)));
+    EXPECT_LT(elapsed.Elapsed(), base::Seconds(5));
+  }
+  // Session ending retired and reaped the exact owned child.
+  const pid_t pid = retirement_pid.load();
+  ASSERT_GT(pid, 0);
+  errno = 0;
+  EXPECT_EQ(kill(pid, 0), -1);
+  EXPECT_EQ(errno, ESRCH);
+  // The published address stays reserved until the Network fence confirms.
+  EXPECT_TRUE(LoopbackPortHeld(port));
+  EXPECT_TRUE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
+  base::test::TestFuture<AccessLocalCoreReady> reprepared;
+  manager_->Prepare(reprepared.GetCallback());
+  EXPECT_FALSE(reprepared.Get().ready);
+  base::test::TestFuture<bool> retired;
+  manager_->StopConfirmed(retired.GetCallback());
+  EXPECT_TRUE(retired.Get());
+  EXPECT_FALSE(LoopbackPortHeld(port));
   EXPECT_FALSE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
 }
 }  // namespace

@@ -9,6 +9,7 @@
 
 #include "base/barrier_closure.h"
 #include "base/base64.h"
+#include "base/check_is_test.h"
 #include "base/strings/string_util.h"
 #include "base/command_line.h"
 #include "base/containers/span.h"
@@ -240,9 +241,13 @@ class AccessLocalCoreManager::ShutdownHandle
     return *handles;
   }
   bool stop_requested() const { return stop_requested_.load(); }
+  bool session_ending() const { return session_ending_.load(); }
   void SetWorker(Worker* worker) { worker_ = worker; }  // Core thread only.
 
-  void RequestStop(base::OnceClosure completion) {
+  // A session-ending stop completes once forwarding has stopped and the child
+  // is reaped, even while a published Ready address must stay held.
+  void RequestStop(base::OnceClosure completion, bool session_ending = false) {
+    if (session_ending) session_ending_.store(true);
     stop_requested_.store(true);
     bool stopped;
     {
@@ -276,6 +281,7 @@ class AccessLocalCoreManager::ShutdownHandle
   scoped_refptr<base::SequencedTaskRunner> runner_;
   raw_ptr<Worker> worker_ = nullptr;  // Accessed only on the core thread.
   std::atomic_bool stop_requested_{false};
+  std::atomic_bool session_ending_{false};
   base::Lock lock_;
   bool stopped_ GUARDED_BY(lock_) = false;
   std::vector<base::OnceClosure> completions_ GUARDED_BY(lock_);
@@ -300,7 +306,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     if (!retired) QuarantineInternalCore();
 #endif
     shutdown_->SetWorker(nullptr);
-    if (retired) shutdown_->CompleteStop();
+    if (retired || (reaped_with_listener_held_ && shutdown_->session_ending()))
+      shutdown_->CompleteStop();
   }
 
   void Prepare(base::OnceCallback<void(AccessLocalCoreReady)> completion) {
@@ -424,6 +431,17 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     }
     if (retired && shutdown_->stop_requested()) shutdown_->CompleteStop();
     std::move(completion).Run(retired);
+  }
+  // EndSession waits only until forwarding stops and the child is reaped. The
+  // held listener and network_lease_pending_ stay in place, so the address is
+  // released only by the Network fence or by process exit.
+  void StopForSessionEnding() {
+    StopWithResult(base::BindOnce(
+        [](Worker* worker, bool retired) {
+          if (retired || worker->reaped_with_listener_held_)
+            worker->shutdown_->CompleteStop();
+        },
+        base::Unretained(this)));
   }
   void SetStoppedCallback(base::RepeatingCallback<void(std::string)> callback) {
     stopped_callback_ = std::move(callback);
@@ -714,6 +732,11 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
         Complete(false, "The owned listener changed before validation.");
         return;
       }
+      if (input_.skip_internal_canary_for_testing) {
+        CHECK_IS_TEST();
+        Complete(true, std::string());
+        return;
+      }
     }
 #endif
     request_.reset();
@@ -974,6 +997,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   }
 #endif
   bool StopChild(bool release_reference = true, bool consumers_revoked = false) {
+    reaped_with_listener_held_ = false;
     if (IsInternal()) retirement_pending_ = true;
 #if BUILDFLAG(IS_MAC)
     if (IsInternal() && release_reference) internal_binding_spent_ = true;
@@ -1012,7 +1036,11 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     credentials_.reset();
     authenticated_ = false;
 #if BUILDFLAG(IS_MAC)
-    if (IsInternal() && network_lease_pending_ && !consumers_revoked) return false;
+    if (IsInternal() && network_lease_pending_ && !consumers_revoked) {
+      // The child is reaped; only the published address remains held.
+      reaped_with_listener_held_ = true;
+      return false;
+    }
     if (consumers_revoked) network_lease_pending_ = false;
     held_listener_lease_.reset();
     listener_lease_channel_.reset();
@@ -1054,6 +1082,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   std::optional<net::AuthCredentials> credentials_;
   bool authenticated_ = false;
   bool retirement_pending_ = false;
+  bool reaped_with_listener_held_ = false;
   int auth_attempts_ = 0;
   base::TimeTicks started_;
   base::TimeTicks probe_deadline_;
@@ -1080,6 +1109,10 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
 void AccessLocalCoreManager::ShutdownHandle::StopOnCoreThread() {
   if (!worker_) {
     CompleteStop();
+    return;
+  }
+  if (session_ending_.load()) {
+    worker_->StopForSessionEnding();
     return;
   }
   worker_->StopWithResult(base::BindOnce([](std::shared_ptr<ShutdownHandle> handle, bool retired) {
@@ -1160,7 +1193,8 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
       base::BindOnce(&AccessCoreLogStore::FlushAllForSessionEnding,
                      std::move(completion)));
   CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
-  for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
+  for (auto& handle : handles)
+    handle->RequestStop(base::OnceClosure(stopped), /*session_ending=*/true);
 }
 void AccessLocalCoreManager::SetStoppedCallback(
     base::RepeatingCallback<void(std::string)> callback) {

@@ -562,3 +562,4 @@
 0562-test-macos-access-options-browser-fixtures.patch
 0563-fix-macos-access-options-review-drafts.patch
 0564-fix-macos-access-manual-retry-admission.patch
+0565-fix-macos-access-session-ending-reap.patch
