@@ -179,6 +179,10 @@ public final class AccessHostDataStoreRegistry {
         return tabs
     }
 
+    public func isBound(_ tabID: String, to key: AccessHostStoreKey) -> Bool {
+        entries[key]?.record.boundTabIDs.contains(tabID) == true
+    }
+
     public func unbind(_ tabID: String, now: Date = Date()) {
         var changed = false
         for key in entries.keys {
@@ -287,6 +291,11 @@ public final class AccessHostDataStoreRegistry {
     public func removeUnstoredEndpoint(for key: AccessHostStoreKey) {
         guard entries[key] == nil else { return }
         endpoints[key] = nil
+    }
+
+    public func releaseIdleStore(for key: AccessHostStoreKey) {
+        guard entries[key]?.record.isInUse == false else { return }
+        retire(key)
     }
 
     public func releaseIdleStores() {
