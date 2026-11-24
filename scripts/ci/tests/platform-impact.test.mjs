@@ -405,6 +405,7 @@ test('paths select platforms and commit types select stage depth', () => {
     }
     for (const path of [
       'apps/browser/overlay/chrome/browser/ui/views/uninstall_view.cc',
+      'apps/browser/overlay/chrome/browser/ui/views/uninstall_view.h',
       'apps/browser/overlay/chrome/browser/ui/views/uninstall_view_unittest.cc',
       'apps/browser/overlay/chrome/browser/ui/views/aegis_uninstall_test_main.cc',
       'apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/chromium.ico',

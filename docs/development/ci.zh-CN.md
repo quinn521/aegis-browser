@@ -267,7 +267,7 @@ Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS
 
 iOS 合同在自己的 impact 成功且 `ios && integrate` 时启动，unsigned archive 再等待合同成功且 `deep`。macOS 自动合同等待自己的 impact 成功且 `macos && integrate`。两者可与基础 quality 并行。手动验证和交付沿用各自的入口及准入条件。
 
-平台合同是诊断结果，不是合并门禁。上游 `main` 与开发 Fork `develop` 的规则集只要求 `quality-gate`、`Codacy Static Code Analysis` 和 `gitleaks`；`quality-gate` 只汇总 `quality`。iOS 合同、unsigned archive、macOS 合同和 `other-platforms` 失败不会阻止合并，审查者需要单独查看这些结果。
+平台合同是诊断结果，不是合并门禁。上游 `main` 的规则集要求 `quality-gate`、`Codacy Static Code Analysis` 和 `gitleaks`；开发 Fork `develop` 只要求 `quality-gate` 和 `gitleaks`。`quality-gate` 只汇总 `quality`。iOS 合同、unsigned archive、macOS 合同和 `other-platforms` 失败不会阻止合并，审查者需要单独查看这些结果。
 
 自动平台合同只在各 workflow 已声明的触发分支运行。`develop` push 运行 quality 和其中的 Android、Windows、Linux 合同，不运行 iOS 或 macOS 合同；iOS 维护线（如 `releases/ios/1.0`）的 push 只运行 quality，iOS 合同和归档通过手动 dispatch 验证。
 
