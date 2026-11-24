@@ -354,7 +354,8 @@ test('runner can run iPhone only with another phone type when the runtime has no
   const lines = readText(path.join(result.report, 'run-metadata.txt')).split('\n');
   assert.ok(lines.includes('iphone=Aegis CI com.gcsa.aegis iPhone Duo|' + createdUdid));
   assert.ok(lines.includes('ipad=<skipped>'));
-  assert.ok(lines.includes('ipad_exit=0'));
+  assert.ok(lines.includes('ipad_exit=skipped'));
+  assert.ok(!lines.includes('ipad_exit=0'));
   assert.ok(exists(path.join(result.report, 'iPhone.xcresult')));
   assert.ok(!exists(path.join(result.report, 'iPad.xcresult')));
 });

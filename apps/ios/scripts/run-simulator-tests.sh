@@ -618,6 +618,9 @@ run_test "iPhone" "${OUTPUT_DIR}/iPhone.xcresult" "${OUTPUT_DIR}/iPhone-xcodebui
 if [[ "$TABLET_ENABLED" == "yes" ]]; then
   run_test "iPad" "${OUTPUT_DIR}/iPad.xcresult" "${OUTPUT_DIR}/iPad-xcodebuild.log" \
     "${TABLET_COMMAND[@]}" || tablet_status=$?
+  tablet_exit_record="${tablet_status}"
+else
+  tablet_exit_record="skipped"
 fi
 
 write_input_manifest "${OUTPUT_DIR}/ios-input-sha256-after.txt" "$DERIVED_DATA/EmbeddedCore"
@@ -629,7 +632,7 @@ if ! cmp -s \
 fi
 
 printf 'iphone_exit=%s\nipad_exit=%s\ninput_stability_exit=%s\nfinished_at_utc=%s\n' \
-  "$phone_status" "$tablet_status" "$input_status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  "$phone_status" "$tablet_exit_record" "$input_status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   >> "${OUTPUT_DIR}/run-metadata.txt"
 
 printf '\n测试产物：%s\n' "$OUTPUT_DIR"
