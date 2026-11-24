@@ -103,6 +103,7 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
     func dataStoreForMainFrame(tab: BrowserTab, url: URL) -> WKWebsiteDataStore?
+    func willRestoreOriginalStore(tab: BrowserTab)
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError)
     func pendingRecoveryInvalidated(tab: BrowserTab)
     func tabClosed(_ tab: BrowserTab)
@@ -115,6 +116,7 @@ public extension BrowserHostStoreCoordinating {
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { false }
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool { true }
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool { false }
+    func willRestoreOriginalStore(tab: BrowserTab) {}
 }
 
 public enum BrowserProfile: String, CaseIterable, Identifiable, Sendable {
@@ -291,6 +293,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     var currentAttemptIDForTests: String { attempt.navigationID }
     var currentNavigationForTests: WKNavigation? { pendingNavigation }
     var heldProxyRequestForTests: URLRequest? { pendingProxyRequest }
+    var pendingAttachedLoadForTests: URLRequest? { pendingAttachedLoad }
 
     /// Records the pending main-frame URL as committed. Unit tests have no WebKit commit callback.
     public func commitPendingMainFrameForTests() {
@@ -967,6 +970,18 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         else { retiringStoreReleases.append(release) }
     }
 
+    /// Keep the failed route selected while its document is fenced. An
+    /// explicit navigation can acquire a replacement on its normal route.
+    public func retireFailedProxyDocument(_ acknowledge: @escaping @MainActor () -> Void) {
+        // Stop also cancels navigation waiting behind an older document's
+        // terminal receipt and invalidates any in-flight proxy recovery.
+        stop()
+        loadingErrorPresentation = .resource("代理入口还不能使用")
+        let hasDocument = loadedWebView != nil
+        afterCurrentDocumentBecomesInert(acknowledge)
+        if hasDocument { terminateCurrentDocument() }
+    }
+
     private func releaseRetiringStoresIfReady() {
         guard terminatingProxyDocuments == 0 else { return }
         let releases = retiringStoreReleases
@@ -976,14 +991,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func terminateDocumentForProxyHold() {
         guard let view = loadedWebView as? BrowserContentWebView else {
-            releaseWebView()
+            detachWebView()
             releaseRetiringStoresIfReady()
             return
         }
         terminatingProxyDocuments += 1
         contentHooksNeedReinstall = true
-        view.terminateDocument { [weak self] in
-            guard let self else { return }
+        // The detached view may outlive the tab's session membership. Keep
+        // the retirement callbacks alive until this view supplies its receipt.
+        view.terminateDocument { [self] in
             self.terminatingProxyDocuments -= 1
             guard self.terminatingProxyDocuments == 0 else { return }
             self.releaseRetiringStoresIfReady()
@@ -997,7 +1013,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             self.afterProxyDocumentStops = nil
             action?()
         }
-        releaseWebView(keepTerminalDelegate: true)
+        detachWebView(keepTerminalDelegate: true)
     }
 
     private func finishDocumentDisposalIfReady() {
@@ -1119,6 +1135,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             boundHostName = host
             return
         }
+        if store === originalWebsiteDataStore, boundHostName != nil {
+            // Internal destinations do not pass through host routing. Transfer
+            // any remaining binding while the tab still owns the old document.
+            hostCoordinator?.willRestoreOriginalStore(tab: self)
+        }
         terminateCurrentDocument()
         needsWindowBeforeLoad = true
         if let configurationFactory {
@@ -1210,7 +1231,20 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         onNavigation = nil
     }
 
-    private func releaseWebView(keepTerminalDelegate: Bool = false) {
+    private var hasProxyBoundWebView: Bool {
+        guard let view = loadedWebView else { return false }
+        return view.configuration.websiteDataStore !== originalWebsiteDataStore
+    }
+
+    private func releaseWebView() {
+        if hasProxyBoundWebView {
+            terminateCurrentDocument()
+        } else {
+            detachWebView()
+        }
+    }
+
+    private func detachWebView(keepTerminalDelegate: Bool = false) {
         cancelJavaScriptDialog()
         provisionalDeadline?.cancel()
         userScripts?.navigated()
@@ -2086,7 +2120,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func showProtectionIncident(_ incident: PageProtectionIncident) {
         // SwiftUI 可能暂时持有旧视图；先替换其文档，再解除浏览器持有，避免只盖住仍在运行的页面。
-        loadedWebView?.loadHTMLString("", baseURL: nil)
+        if !hasProxyBoundWebView { loadedWebView?.loadHTMLString("", baseURL: nil) }
         releaseWebView()
         requestedURL = incident.url; url = incident.url
         protectionIncident = incident
