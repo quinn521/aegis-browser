@@ -168,6 +168,10 @@ private struct DomesticAccelerationSettingsView: View {
                             Text("自行选择要加速的网站。")
                         case .smart:
                             Text("当前仅自动加速 Debian 相关网站。")
+                            if hostStores.smartModeReplacesDefaultLocationPrivacy {
+                                Text("选择智能后，其他网站首次打开时不再默认隐藏位置。")
+                                    .accessibilityIdentifier("website-acceleration-smart-location-privacy")
+                            }
                         }
                         if !hostStores.offersLocationService {
                             Text("加速服务未配置。")

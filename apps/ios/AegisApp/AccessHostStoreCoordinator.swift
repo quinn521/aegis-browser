@@ -19,6 +19,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     private let ruleGroups = AccessSiteRuleGroupRegistry()
     private var intents: [AccessHostStoreKey: AccessProxyIntentState] = [:]
     var offersLocationService: Bool { !(publisher is AccessFailClosedProxyEntryPublisher) }
+    /// Smart mode replaces the default location-privacy first attempt for sites outside its rules.
+    var smartModeReplacesDefaultLocationPrivacy: Bool { defaultLocationPrivacy }
     private let defaultLocationPrivacy: Bool
     private let locationPreferences: UserDefaults?
     private static let directSitesKey = "browser.locationPrivacy.directSites"

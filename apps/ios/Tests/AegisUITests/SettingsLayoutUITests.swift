@@ -279,6 +279,7 @@ final class SettingsLayoutUITests: XCTestCase {
         let manualHint = app.staticTexts.matching(NSPredicate(format: "label == %@", "自行选择要加速的网站。"))
         let smartHint = app.staticTexts.matching(NSPredicate(format: "label == %@", "当前仅自动加速 Debian 相关网站。"))
         let serviceNotice = app.staticTexts.matching(NSPredicate(format: "label == %@", "加速服务未配置。"))
+        let smartPrivacyNotice = app.descendants(matching: .any)["website-acceleration-smart-location-privacy"]
         let engineeringDetails = app.staticTexts.matching(NSPredicate(
             format: "label CONTAINS[c] %@ OR label CONTAINS %@ OR label CONTAINS %@",
             "debian.org", "系统代理", "原有的选路规则"
@@ -303,6 +304,8 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertEqual(smartHint.count, 1)
         XCTAssertFalse(manualHint.firstMatch.exists)
         XCTAssertFalse(engineeringDetails.firstMatch.exists)
+        // Without a configured service there is no default location-privacy attempt to replace.
+        XCTAssertFalse(smartPrivacyNotice.exists)
         XCTAssertEqual(serviceNotice.count, 1)
         XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
         capture("国内加速-网站加速-智能", app)
