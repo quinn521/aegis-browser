@@ -74,10 +74,12 @@ const devTextMessages: Record<string, string> = {
 let generation = 0;
 let reader: FileReader|null = null;
 let canApply = false;
+let canActivate = false;
 let canImportWebSocket = false;
 let working = false;
 let previewReady = false;
 let hasDraft = false;
+let nodeDraft = false;
 let revision: string|undefined;
 let saved: InboundPreferences|undefined;
 let uncertainOperation: string|undefined;
@@ -86,8 +88,21 @@ let pendingApplyRecovery = false;
 let applying = false;
 let lastConnection: Connection = {state: 'unavailable'};
 
+function selectedPreferences(): InboundPreferences {
+  return {protocol: protocol.value, portMode: portMode.value,
+          requestedPort: portMode.value === 'fixed' ? Number(port.value) : 0};
+}
+
+function preferencesOnlyDraft() {
+  if (!saved || previewReady || nodeDraft || !hasDraft) return false;
+  const selected = selectedPreferences();
+  return selected.protocol !== saved.protocol || selected.portMode !== saved.portMode ||
+      (selected.portMode === 'fixed' && selected.requestedPort !== saved.requestedPort);
+}
+
 function syncActions() {
-  apply.disabled = !canApply || !previewReady || !revision || working ||
+  const preferencesOnly = preferencesOnlyDraft();
+  apply.disabled = !canApply || !(previewReady || preferencesOnly) || !revision || working ||
       requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden;
   discard.disabled = !hasDraft || working || !!uncertainOperation;
   revoke.disabled = !canApply || working || !lastConnection.revision ||
@@ -99,7 +114,10 @@ function syncActions() {
   refresh.disabled = !canApply || working;
   if (canApply) {
     availability.textContent = previewReady ?
-        'Apply saves this draft and prepares the listener.' :
+        (canActivate ? 'Apply saves this draft and prepares the listener.' :
+                       'Apply saves this draft. Connections are not available in this build.') :
+        preferencesOnly ?
+        'Apply saves these listener preferences for the saved test node.' :
         'Preview a node to apply your draft.';
   }
 }
@@ -204,10 +222,19 @@ form.addEventListener('submit', event => {
   const input = link.value;
   link.value = '';
   hasDraft = true;
+  nodeDraft = true;
   discard.disabled = false;
   draftState.textContent = 'Unsaved draft';
   status.textContent = 'Checking node link…';
   void preview('text', input, generation);
+});
+
+link.addEventListener('input', () => {
+  if (!previewReady) return;
+  cancel();
+  status.dataset['error'] = 'false';
+  status.textContent = 'Preview the edited link before applying.';
+  syncActions();
 });
 
 image.addEventListener('change', () => {
@@ -218,6 +245,7 @@ image.addEventListener('change', () => {
   }
   cancel();
   hasDraft = true;
+  nodeDraft = true;
   discard.disabled = false;
   draftState.textContent = 'Unsaved draft';
   if (selected.size === 0 || selected.size > maxImageBytes) {
@@ -246,6 +274,7 @@ image.addEventListener('change', () => {
 discard.addEventListener('click', async () => {
   cancel();
   hasDraft = false;
+  nodeDraft = false;
   const request = generation;
   link.value = '';
   restorePreferences();
@@ -261,10 +290,12 @@ discard.addEventListener('click', async () => {
       return;
     }
     const cleared = result.state === 'canceled';
+    const edited = hasDraft;
     status.textContent = messages[result.state] ?? 'Discard unavailable.';
     status.dataset['error'] = String(!cleared);
-    discard.disabled = cleared;
-    hasDraft = !cleared;
+    discard.disabled = cleared && !edited;
+    hasDraft = edited || !cleared;
+    if (cleared && canApply && !edited) await reloadCommitted(request);
   } catch {
     if (request === generation) {
       status.textContent = messages['secureStorageUnavailable']!;
@@ -274,6 +305,26 @@ discard.addEventListener('click', async () => {
     }
   }
 });
+
+async function reloadCommitted(request: number) {
+  try {
+    const latest = await sendWithPromise<OptionsState>('readAccessOptions');
+    if (request !== generation || hasDraft) return;
+    if (latest.state !== 'ready' || !latest.revision) throw new Error('Options unavailable');
+    pendingApplyRecovery = latest.pendingApplyRecovery === true;
+    revision = latest.revision;
+    saved = latest.testProfile;
+    showSavedRevision();
+    restorePreferences();
+    draftState.textContent = saved ? 'Saved preferences' : 'No changes saved';
+    showConnection(latest.connection ?? {state: 'inactive'});
+  } catch {
+    if (request === generation) {
+      status.textContent = 'Saved settings are unavailable. Try again.';
+      status.dataset['error'] = 'true';
+    }
+  }
+}
 
 function refreshListenerFields() {
   const http = protocol.value === 'http';
@@ -325,12 +376,12 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
   if (['saved', 'prepared', 'savedUnavailable'].includes(result.state)) {
     revision = result.revision ?? revision;
     if (applying) {
-      saved = {protocol: protocol.value, portMode: portMode.value,
-               requestedPort: portMode.value === 'fixed' ? Number(port.value) : 0};
+      saved = selectedPreferences();
     }
     showSavedRevision();
     previewReady = false;
     hasDraft = false;
+    nodeDraft = false;
     nodePreview.hidden = true;
     draftState.textContent = 'Saved preferences';
     if (result.state === 'prepared') {
@@ -358,13 +409,14 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
 
 apply.addEventListener('click', async () => {
   if (apply.disabled || !revision) return;
+  const message = previewReady ? 'applyAccessTestNode' : 'applyAccessTestNodePreferences';
   const operation = crypto.randomUUID();
   working = applying = true;
   fields.disabled = true;
   status.textContent = 'Applying draft…';
   syncActions();
   try {
-    const result = await sendWithPromise<ApplyResult>('applyAccessTestNode',
+    const result = await sendWithPromise<ApplyResult>(message,
         revision, operation, protocol.value, portMode.value,
         portMode.value === 'fixed' ? port.value : '');
     await handleApplyResult(result, operation);
@@ -446,6 +498,7 @@ void sendWithPromise<{
   enabled: boolean,
   private: boolean,
   testApply?: boolean,
+  testActivate?: boolean,
   testWebSocketTls?: boolean,
 }>(
     'getAccessOptionsCapabilities').then(async result => {
@@ -454,6 +507,7 @@ void sendWithPromise<{
     return;
   }
   canApply = result.testApply === true;
+  canActivate = canApply && result.testActivate === true;
   canImportWebSocket = result.testWebSocketTls === true;
   if (canImportWebSocket) {
     document.querySelector('#share-label')!.textContent = 'Node share link';

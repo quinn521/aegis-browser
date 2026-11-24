@@ -415,6 +415,9 @@ void AegisUIHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback("applyAccessTestNode",
       base::BindRepeating(&AegisUIHandler::HandleApplyAccessTestNode,
                           base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("applyAccessTestNodePreferences",
+      base::BindRepeating(&AegisUIHandler::HandleApplyAccessTestNodePreferences,
+                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback("queryAccessTestNodeApply",
       base::BindRepeating(&AegisUIHandler::HandleQueryAccessTestNodeApply,
                           base::Unretained(this)));
@@ -657,6 +660,15 @@ void AegisUIHandler::HandleGetStatus(const base::ListValue& args) {
 }
 
 #if BUILDFLAG(IS_MAC)
+namespace {
+// Activation launches the DEV-only internal core; saving is a separate grant.
+bool CanActivateAccessTestNode() {
+  const auto identity = aegis::access::AccessBuildIdentityForCurrentBuild();
+  return identity.product == aegis_access::AccessProductChannel::kDebug &&
+      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kActivate);
+}
+}  // namespace
+
 void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& args) {
   if (args.size() != 1 || !args[0].is_string()) return;
   AllowJavascript();
@@ -672,8 +684,9 @@ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& a
           identity, aegis_access::AccessOptionsOperation::kImport));
   result.Set("testApply", IsAccessOptionsDocument() &&
       !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
-      identity.product == aegis_access::AccessProductChannel::kDebug &&
-      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kActivate));
+      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kWrite));
+  result.Set("testActivate", IsAccessOptionsDocument() &&
+      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode());
   ResolveJavascriptCallback(args[0], result);
 }
 
@@ -932,6 +945,25 @@ void AegisUIHandler::OnAccessTestNodeDiscarded(std::string callback_id,
                           {status});
 }
 
+namespace {
+std::optional<aegis_access::AccessInboundPreferences> ParseAccessTestNodeInbound(
+    const base::ListValue& args) {
+  using Mode = aegis_access::AccessInboundPortMode;
+  const auto protocol = aegis_access::ParseAccessInboundProtocolPreference(args[3].GetString());
+  const auto mode = aegis_access::ParseAccessInboundPortMode(args[4].GetString());
+  const auto port = mode == Mode::kSystemAllocated && args[5].GetString().empty()
+      ? std::optional<uint16_t>(0)
+      : aegis_access::ParseAccessInboundFixedPort(args[5].GetString());
+  if (!port) return std::nullopt;
+  const aegis_access::AccessInboundPreferences inbound{protocol, mode, *port};
+  if (aegis_access::ValidateAccessInboundPreferences(inbound) !=
+      aegis_access::AccessInboundPreferenceError::kNone) {
+    return std::nullopt;
+  }
+  return inbound;
+}
+}  // namespace
+
 void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
   if (args.size() != 6 ||
       !std::ranges::all_of(args, [](const auto& value) { return value.is_string(); })) {
@@ -943,9 +975,7 @@ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
   };
   auto* service = access_test_node_service_.get();
   if (!IsAccessOptionsDocument() || !service ||
-      aegis::access::AccessBuildIdentityForCurrentBuild().product !=
-          aegis_access::AccessProductChannel::kDebug ||
-      !service->Admitted(aegis_access::AccessOptionsOperation::kActivate)) {
+      !service->Admitted(aegis_access::AccessOptionsOperation::kWrite)) {
     reject("notAdmitted");
     return;
   }
@@ -954,24 +984,44 @@ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
     return;
   }
   const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
-  using Mode = aegis_access::AccessInboundPortMode;
-  const auto protocol = aegis_access::ParseAccessInboundProtocolPreference(args[3].GetString());
-  const auto mode = aegis_access::ParseAccessInboundPortMode(args[4].GetString());
-  const auto port = mode == Mode::kSystemAllocated && args[5].GetString().empty()
-      ? std::optional<uint16_t>(0)
-      : aegis_access::ParseAccessInboundFixedPort(args[5].GetString());
-  if (!revision || !port) {
-    reject("invalidPreferences");
-    return;
-  }
-  const aegis_access::AccessInboundPreferences inbound{protocol, mode, *port};
-  if (aegis_access::ValidateAccessInboundPreferences(inbound) !=
-      aegis_access::AccessInboundPreferenceError::kNone) {
+  const auto inbound = ParseAccessTestNodeInbound(args);
+  if (!revision || !inbound) {
     reject("invalidPreferences");
     return;
   }
   service->SaveTestNodeProfile(access_test_node_editor_, *revision, args[2].GetString(),
-      "Test node", inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+      "Test node", *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+          account_weak_factory_.GetWeakPtr(), access_options_document_,
+          args[0].GetString(), access_test_node_editor_,
+          access_test_node_preview_generation_));
+}
+
+void AegisUIHandler::HandleApplyAccessTestNodePreferences(const base::ListValue& args) {
+  if (args.size() != 6 ||
+      !std::ranges::all_of(args, [](const auto& value) { return value.is_string(); })) {
+    return;
+  }
+  AllowJavascript();
+  auto reject = [&](std::string_view state) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", state));
+  };
+  auto* service = EnsureAccessTestNodeEditor();
+  if (!service || !service->Admitted(aegis_access::AccessOptionsOperation::kWrite)) {
+    reject("notAdmitted");
+    return;
+  }
+  if (access_test_node_draft_) {
+    reject("previewPending");
+    return;
+  }
+  const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
+  const auto inbound = ParseAccessTestNodeInbound(args);
+  if (!revision || !inbound) {
+    reject("invalidPreferences");
+    return;
+  }
+  service->SaveTestNodePreferences(access_test_node_editor_, *revision, args[2].GetString(),
+      *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
           account_weak_factory_.GetWeakPtr(), access_options_document_,
           args[0].GetString(), access_test_node_editor_,
           access_test_node_preview_generation_));
@@ -1009,6 +1059,11 @@ void AegisUIHandler::OnAccessTestNodeSaved(
   if (!committed) {
     response.Set("state", result.outcome == Outcome::kUnknown ? "uncertain" : "notSaved");
     response.Set("reason", result.detail);
+  } else if (same_draft && access_test_node_service_ && !CanActivateAccessTestNode()) {
+    // Saving is admitted separately from launching a core in this build.
+    access_test_node_draft_.reset();
+    response.Set("state", "savedUnavailable");
+    response.Set("reason", "Connections are not available in this build.");
   } else if (same_draft && access_test_node_service_) {
     access_test_node_draft_.reset();
     access_test_node_service_->PrepareTestNodeProfile(result.snapshot->revision,

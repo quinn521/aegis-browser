@@ -103,6 +103,11 @@ class AccessOptionsService : public base::SupportsUserData::Data {
       std::string operation_id, std::string name,
       aegis_access::AccessInboundPreferences inbound,
       base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
+  // Saves listener preferences for the committed Profile. The native owner
+  // reuses the durable Keychain reference; no new import is staged.
+  void SaveTestNodePreferences(const std::string& editor, uint64_t expected_revision,
+      std::string operation_id, aegis_access::AccessInboundPreferences inbound,
+      base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
   void QueryTestNodeProfileOperation(std::string operation_id,
       base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
   bool HasUncertainTestNodeApply() const;
@@ -154,6 +159,11 @@ class AccessOptionsService : public base::SupportsUserData::Data {
   void OnTestProfileSaveComplete(std::string editor, std::string operation_id,
       base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
       AccessTestProfileSaveResult result);
+  void OnTestProfilePreferencesRead(std::string editor, uint64_t generation,
+      uint64_t expected_revision, std::string operation_id,
+      aegis_access::AccessInboundPreferences inbound,
+      base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+      StoreResult<AccessOptionsSnapshot> snapshot);
   void OnTestProfileQueryRead(std::string operation_id,
       base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
       StoreResult<AccessOptionsSnapshot> snapshot);

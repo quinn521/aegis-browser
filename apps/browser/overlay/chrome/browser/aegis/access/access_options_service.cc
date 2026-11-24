@@ -78,6 +78,18 @@ class AccessOptionsWorker {
   AccessTestProfileSaveResult Save(std::string editor, uint64_t expected_revision,
       std::string operation_id, AccessTestProfileDraft draft,
       std::shared_ptr<AccessOptionsCommitFence> commit_fence) {
+    return SaveDraft(std::move(editor), expected_revision, std::move(operation_id),
+                     std::move(draft), std::move(commit_fence), false);
+  }
+  AccessTestProfileSaveResult SavePreferences(uint64_t expected_revision,
+      std::string operation_id, AccessTestProfileDraft draft,
+      std::shared_ptr<AccessOptionsCommitFence> commit_fence) {
+    return SaveDraft(std::string(), expected_revision, std::move(operation_id),
+                     std::move(draft), std::move(commit_fence), true);
+  }
+  AccessTestProfileSaveResult SaveDraft(std::string editor, uint64_t expected_revision,
+      std::string operation_id, AccessTestProfileDraft draft,
+      std::shared_ptr<AccessOptionsCommitFence> commit_fence, bool committed_reference) {
     if (unknown_save_)
       return {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
               std::nullopt, std::nullopt, "previous_operation_uncertain"};
@@ -104,10 +116,19 @@ class AccessOptionsWorker {
       return {StoreStatus::kIoError, AccessOptionsCommitOutcome::kNotCommitted,
               std::nullopt, std::nullopt, "secure_storage_unavailable"};
     const AccessTestNodeSecretReference reference{draft.secret_reference};
-    // Only this editor's staged, still-readable native reference can be held.
-    if (!vault_.Read(reference) || !vault_.HoldForCommit(editor, reference, operation_id))
+    if (committed_reference) {
+      const auto& current = before.value->test_profile;
+      if (!current || current->configuration.id != draft.id ||
+          current->configuration.secret_reference != draft.secret_reference ||
+          !vault_.Read(reference))
+        return {StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
+                std::nullopt, std::nullopt, "committed_reference_unavailable"};
+    } else if (!vault_.Read(reference) ||
+               !vault_.HoldForCommit(editor, reference, operation_id)) {
+      // Only this editor's staged, still-readable native reference can be held.
       return {StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
               std::nullopt, std::nullopt, "draft_reference_unavailable"};
+    }
     auto result = store_.SaveTestProfile(expected_revision, operation_id, draft, std::move(commit_fence));
     if (result.outcome == AccessOptionsCommitOutcome::kUnknown) {
       unknown_save_ = UnknownSave{expected_revision, operation_id, std::move(draft), *before.value};
@@ -499,6 +520,49 @@ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
       std::move(operation_id), std::move(name), inbound, std::move(callback)));
 }
 
+void AccessOptionsService::SaveTestNodePreferences(const std::string& editor,
+    uint64_t expected_revision, std::string operation_id,
+    aegis_access::AccessInboundPreferences inbound,
+    base::OnceCallback<void(AccessTestProfileSaveResult)> callback) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const auto found = editors_.find(editor);
+  if (!CanPreviewTestNode() || !Admitted(aegis_access::AccessOptionsOperation::kWrite) ||
+      found == editors_.end()) {
+    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+                            std::nullopt, std::nullopt, "test_profile_not_admitted"});
+    return;
+  }
+  if (test_profile_core_ ||
+      (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
+       test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
+    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+                            std::nullopt, std::nullopt, "profile_runtime_in_use"});
+    return;
+  }
+  if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
+    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+                            std::nullopt, std::nullopt, "operation_in_progress"});
+    return;
+  }
+  if (found->second.reference ||
+      expected_revision >= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
+      !base::Uuid::ParseLowercase(operation_id).is_valid() ||
+      aegis_access::ValidateAccessInboundPreferences(inbound) !=
+          aegis_access::AccessInboundPreferenceError::kNone) {
+    std::move(callback).Run({StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
+                            std::nullopt, std::nullopt, "invalid_test_profile_draft"});
+    return;
+  }
+  found->second.saving = true;
+  test_profile_save_operation_ = operation_id;
+  test_profile_save_editor_ = editor;
+  test_profile_save_uncertain_ = false;
+  test_profile_commit_fence_ = std::make_shared<AccessOptionsCommitFence>();
+  Read(base::BindOnce(&AccessOptionsService::OnTestProfilePreferencesRead,
+      weak_factory_.GetWeakPtr(), editor, found->second.generation, expected_revision,
+      std::move(operation_id), inbound, std::move(callback)));
+}
+
 AccessTestProfileRuntimeState AccessOptionsService::test_profile_runtime_state() const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   return test_profile_runtime_state_;
@@ -879,6 +943,42 @@ void AccessOptionsService::OnTestProfileSaveRead(std::string editor, uint64_t ge
   AccessTestProfileDraft draft{id, std::move(name), found->second.reference->id, inbound};
   worker_.AsyncCall(&AccessOptionsWorker::Save)
       .WithArgs(editor, expected_revision, operation_id, std::move(draft), test_profile_commit_fence_)
+      .Then(base::BindOnce(&AccessOptionsService::OnTestProfileSaveComplete,
+          weak_factory_.GetWeakPtr(), editor, operation_id, std::move(callback)));
+}
+
+void AccessOptionsService::OnTestProfilePreferencesRead(std::string editor,
+    uint64_t generation, uint64_t expected_revision, std::string operation_id,
+    aegis_access::AccessInboundPreferences inbound,
+    base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+    StoreResult<AccessOptionsSnapshot> snapshot) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const auto found = editors_.find(editor);
+  if (!CanPreviewTestNode() || found == editors_.end() ||
+      found->second.generation != generation || found->second.reference) {
+    OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
+        {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+         std::nullopt, std::nullopt, "draft_canceled_before_commit"});
+    return;
+  }
+  if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
+      snapshot.value->revision != expected_revision) {
+    OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
+        {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict : snapshot.status,
+         AccessOptionsCommitOutcome::kNotCommitted, std::nullopt, std::move(snapshot.value),
+         "configuration_revision_conflict"});
+    return;
+  }
+  if (!snapshot.value->test_profile) {
+    OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
+        {StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
+         std::nullopt, std::move(snapshot.value), "no_saved_test_profile"});
+    return;
+  }
+  auto draft = snapshot.value->test_profile->configuration;
+  draft.inbound = inbound;
+  worker_.AsyncCall(&AccessOptionsWorker::SavePreferences)
+      .WithArgs(expected_revision, operation_id, std::move(draft), test_profile_commit_fence_)
       .Then(base::BindOnce(&AccessOptionsService::OnTestProfileSaveComplete,
           weak_factory_.GetWeakPtr(), editor, operation_id, std::move(callback)));
 }

@@ -23,6 +23,7 @@ function openOptions(t, capabilities = {enabled: true, private: false}) {
   const discards = [];
   const cancellations = [];
   const applies = [];
+  const preferenceApplies = [];
   const applyQueries = [];
   const revocations = [];
   let saved = {state: 'ready', revision: '0'};
@@ -45,6 +46,9 @@ function openOptions(t, capabilities = {enabled: true, private: false}) {
         }
         if (message === 'applyAccessTestNode') {
           return new Promise(resolve => applies.push({args, resolve}));
+        }
+        if (message === 'applyAccessTestNodePreferences') {
+          return new Promise(resolve => preferenceApplies.push({args, resolve}));
         }
         if (message === 'queryAccessTestNodeApply') {
           return new Promise(resolve => applyQueries.push({args, resolve}));
@@ -83,6 +87,7 @@ function openOptions(t, capabilities = {enabled: true, private: false}) {
     discards,
     cancellations,
     applies,
+    preferenceApplies,
     applyQueries,
     revocations,
     setSaved(snapshot) {
@@ -509,4 +514,101 @@ test('Return in the port field preserves the validated node preview', async t =>
   assert.equal(page.document.querySelector('#node-preview').hidden, false);
   assert.equal(page.input.value, '');
   assert.equal(page.status.textContent, 'Preview ready · not applied.');
+});
+
+test('editing the share field invalidates the staged preview before Apply', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const apply = page.document.getElementById('apply-node');
+  page.previewText('synthetic-node-a');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  assert.equal(apply.disabled, false);
+  const canceled = page.cancellations.length;
+  page.input.value = 'synthetic-node-b';
+  page.input.dispatchEvent(new page.Event('input'));
+  assert.equal(apply.disabled, true);
+  assert.equal(page.document.querySelector('#node-preview').hidden, true);
+  assert.equal(page.cancellations.length, canceled + 1);
+  assert.equal(page.status.textContent, 'Preview the edited link before applying.');
+  apply.click();
+  assert.equal(page.applies.length, 0);
+  assert.equal(page.preferenceApplies.length, 0);
+});
+
+test('listener preferences can be applied for the saved node without a new import', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  page.setSaved({state: 'ready', revision: '3',
+                 testProfile: {protocol: 'auto', portMode: 'random', requestedPort: 0}});
+  await tick();
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const apply = byId('apply-node');
+  const protocol = byId('inbound-protocol');
+  assert.equal(apply.disabled, true);
+  protocol.value = 'http';
+  protocol.dispatchEvent(new page.Event('change'));
+  assert.equal(apply.disabled, false);
+  apply.click();
+  assert.equal(page.applies.length, 0);
+  assert.equal(page.preferenceApplies.length, 1);
+  const [revision, operation, ...preferences] = page.preferenceApplies[0].args;
+  assert.equal(revision, '3');
+  assert.match(operation, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(preferences, ['http', 'random', '']);
+  page.preferenceApplies[0].resolve({state: 'savedUnavailable', revision: '4'});
+  await tick();
+  assert.equal(byId('saved-revision').textContent, '4');
+  assert.equal(apply.disabled, true);
+  protocol.value = 'auto';
+  protocol.dispatchEvent(new page.Event('change'));
+  assert.equal(apply.disabled, false);
+  protocol.value = 'http';
+  protocol.dispatchEvent(new page.Event('change'));
+  assert.equal(apply.disabled, true);
+});
+
+test('discarding a stale draft reloads the latest committed revision', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  page.setSaved({state: 'ready', revision: '1',
+                 testProfile: {protocol: 'auto', portMode: 'random', requestedPort: 0}});
+  await tick();
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  const protocol = byId('inbound-protocol');
+  protocol.value = 'socks5';
+  protocol.dispatchEvent(new page.Event('change'));
+  page.setSaved({state: 'ready', revision: '5',
+                 testProfile: {protocol: 'http', portMode: 'fixed', requestedPort: 8080}});
+  page.discard.click();
+  assert.equal(protocol.value, 'auto');
+  page.discards[0].resolve({state: 'canceled'});
+  await tick();
+  await tick();
+  assert.equal(byId('saved-revision').textContent, '5');
+  assert.equal(protocol.value, 'http');
+  assert.equal(byId('inbound-port-mode').value, 'fixed');
+  assert.equal(byId('inbound-port').value, '8080');
+  assert.equal(byId('draft-state').textContent, 'Saved preferences');
+  assert.equal(byId('apply-node').disabled, true);
+});
+
+test('an internal Alpha build can save a draft while activation stays unavailable', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true, testActivate: false});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  page.previewText('synthetic-alpha-node');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  assert.equal(byId('apply-node').disabled, false);
+  assert.equal(byId('apply-availability').textContent,
+               'Apply saves this draft. Connections are not available in this build.');
+  byId('apply-node').click();
+  assert.equal(page.applies.length, 1);
+  page.applies[0].resolve({state: 'savedUnavailable', revision: '1',
+                           reason: 'Connections are not available in this build.'});
+  await tick();
+  assert.equal(page.status.textContent, 'Saved. Connections are not available in this build.');
+  assert.equal(byId('connection-state').textContent, 'No active connection');
+  assert.equal(byId('saved-revision').textContent, '1');
 });

@@ -560,3 +560,4 @@
 0560-align-windows-uninstall-ui.patch
 0561-feat-macos-access-test-profile-routing.patch
 0562-test-macos-access-options-browser-fixtures.patch
+0563-fix-macos-access-options-review-drafts.patch

@@ -120,6 +120,7 @@ class AegisUIHandler : public content::WebUIMessageHandler,
   void HandleCancelAccessTestNodePreview(const base::ListValue& args);
   void HandleDiscardAccessTestNodeDraft(const base::ListValue& args);
   void HandleApplyAccessTestNode(const base::ListValue& args);
+  void HandleApplyAccessTestNodePreferences(const base::ListValue& args);
   void HandleQueryAccessTestNodeApply(const base::ListValue& args);
   void HandleRevokeAccessTestNode(const base::ListValue& args);
   void OnAccessTestNodeSaved(content::WeakDocumentPtr document,

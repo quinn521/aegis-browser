@@ -189,6 +189,74 @@ TEST(AccessOptionsServiceTest, RuntimeReservationBlocksProfileUpdateUntilConfirm
   EXPECT_EQ(retried.Get().snapshot->test_profile->configuration.name, "TEST02");
 }
 
+TEST(AccessOptionsServiceTest, PreferencesOnlySaveReusesCommittedReferenceBehindFences) {
+  content::BrowserTaskEnvironment environment;
+  if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))
+    GTEST_SKIP() << "Requires an admitted internal build";
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
+  network::mojom::NetworkContextParams params;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
+  auto state = std::make_shared<SyntheticVaultState>();
+  auto options = AccessOptionsService::CreateForTesting(profile.get(), std::make_unique<SyntheticVaultBackend>(state));
+  const auto editor = options->BeginTestNodeEditor();
+  ASSERT_TRUE(editor);
+  const aegis_access::AccessInboundPreferences http{
+      aegis_access::AccessInboundProtocolPreference::kHttp,
+      aegis_access::AccessInboundPortMode::kSystemAllocated, 0};
+  base::test::TestFuture<AccessTestProfileSaveResult> nothing_saved;
+  options->SaveTestNodePreferences(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      http, nothing_saved.GetCallback());
+  EXPECT_EQ(nothing_saved.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(nothing_saved.Get().detail, "no_saved_test_profile");
+  base::test::TestFuture<TestNodePreviewResult> preview;
+  options->PreviewTestNodeText(*editor, kSyntheticShare, preview.GetCallback());
+  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
+  base::test::TestFuture<AccessTestProfileSaveResult> pending_import;
+  options->SaveTestNodePreferences(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      http, pending_import.GetCallback());
+  EXPECT_EQ(pending_import.Get().detail, "invalid_test_profile_draft");
+  base::test::TestFuture<AccessTestProfileSaveResult> saved;
+  options->SaveTestNodeProfile(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      "TEST01", {}, saved.GetCallback());
+  ASSERT_EQ(saved.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
+  ASSERT_EQ(state->rows.size(), 1u);
+  const auto committed = saved.Get().snapshot->test_profile->configuration;
+  base::test::TestFuture<AccessTestProfileSaveResult> stale;
+  options->SaveTestNodePreferences(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      http, stale.GetCallback());
+  EXPECT_EQ(stale.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(stale.Get().detail, "configuration_revision_conflict");
+  const auto service = state->rows.begin()->first.first;
+  const std::string prefix = "app.gcsa.aegis.access.test-node.v1.";
+  ASSERT_TRUE(service.starts_with(prefix));
+  const auto scoped = service.substr(prefix.size());
+  const auto separator = scoped.find('.');
+  ASSERT_NE(separator, std::string::npos);
+  auto lease = AccessTestNodeVaultMac::ReserveRuntimeReference(scoped.substr(0, separator),
+      scoped.substr(separator + 1), {committed.secret_reference});
+  ASSERT_TRUE(lease);
+  base::test::TestFuture<AccessTestProfileSaveResult> in_use;
+  options->SaveTestNodePreferences(*editor, 1, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      http, in_use.GetCallback());
+  EXPECT_EQ(in_use.Get().detail, "profile_runtime_in_use");
+  lease.reset();
+  base::test::TestFuture<AccessTestProfileSaveResult> updated;
+  options->SaveTestNodePreferences(*editor, 1, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      http, updated.GetCallback());
+  ASSERT_EQ(updated.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
+  ASSERT_TRUE(updated.Get().snapshot && updated.Get().snapshot->test_profile);
+  const auto& stored = *updated.Get().snapshot->test_profile;
+  EXPECT_EQ(updated.Get().snapshot->revision, 2u);
+  EXPECT_EQ(stored.version, 2u);
+  EXPECT_EQ(stored.configuration.id, committed.id);
+  EXPECT_EQ(stored.configuration.name, "TEST01");
+  EXPECT_EQ(stored.configuration.secret_reference, committed.secret_reference);
+  EXPECT_EQ(stored.configuration.inbound, http);
+  EXPECT_EQ(state->rows.size(), 1u);
+}
+
 TEST(AccessOptionsServiceTest, CloseBeforeDeferredSaveCannotCommitStaleDraft) {
   content::BrowserTaskEnvironment environment;
   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))
