@@ -564,3 +564,4 @@
 0564-fix-macos-access-manual-retry-admission.patch
 0565-fix-macos-access-session-ending-reap.patch
 0566-fix-macos-access-active-profile-second-site.patch
+0567-access-rebind-test-profile-after-network-service-loss.patch

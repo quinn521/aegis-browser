@@ -1025,6 +1025,9 @@ bool AccessSiteProxyBubbleController::RegisterTestProfileForPublication(
         base::BindRepeating(&AccessSiteProxyBubbleController::RetireTestProfileConsumer,
                            weak_factory_.GetWeakPtr()));
     if (!test_profile_revoker_installed_) return false;
+    transport->SetTestListenerLostCallback(base::BindRepeating(
+        &AccessSiteProxyBubbleController::OnTestProfileListenerLost,
+        weak_factory_.GetWeakPtr()));
   }
   const std::string group = TestProfileGroup(ready);
   auto* selections = AccessProxySelectionGenerationSource::GetOrCreate(profile_);
@@ -1228,6 +1231,26 @@ void AccessSiteProxyBubbleController::OnTestProfileListenerAuthFault(
   }
   ++state_revision_;
   options->RevokeTestNodeProfile(base::DoNothing());
+}
+
+void AccessSiteProxyBubbleController::OnTestProfileListenerLost(
+    const OwnershipKey& owner, const std::string& group,
+    const std::string& registration_id) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (!options || registration_id.empty()) return;
+  const auto current = options->test_profile_runtime();
+  if (current.registration_id != registration_id || TestProfileGroup(current) != group)
+    return;
+  for (const auto& [host, selection] : test_profile_sites_) {
+    if (selection == group) {
+      host_states_[host] = {AccessSiteConnectionState::kUnavailable,
+                            "The network process restarted. Reconnecting the test Profile."};
+    }
+  }
+  ++state_revision_;
+  // The next protected request re-reads the saved Profile binding and starts
+  // from a new listener registration.
+  options->RevokeTestNodeProfileAfterNetworkLoss(registration_id);
 }
 #endif
 bool AccessSiteProxyBubbleController::CanViewCoreLogs() const {

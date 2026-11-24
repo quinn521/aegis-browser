@@ -115,6 +115,13 @@ class AccessNetworkContextTransport
       const std::string& group, const std::string& registration_id);
   std::optional<aegis_access::RegisteredProxyEndpoint> PreparedProxyForGroup(
       const aegis_access::OwnershipKey& owner, const std::string& group) const;
+  // Runs after the loss of a private Context removed an unauthenticated test
+  // listener registration. A replacement Context never inherits it; the owner
+  // must retire the listener and register again from its Profile.
+  using TestListenerLostCallback = base::RepeatingCallback<void(
+      const aegis_access::OwnershipKey& owner, const std::string& group,
+      const std::string& registration_id)>;
+  void SetTestListenerLostCallback(TestListenerLostCallback callback);
   // Removes the exact no-auth registration and waits for the policy snapshot
   // without it to be installed in each owning private Context.
   void RetirePreparedTestListener(
@@ -300,12 +307,17 @@ class AccessNetworkContextTransport
   void OnPrivateContextPublished(aegis_access::OwnershipKey owner,
       std::string incarnation, uint64_t attempt, uint64_t revision, bool accepted);
   void SettlePrivatePublication(PartitionState& state, bool accepted);
+  // Invalidates every unauthenticated test listener registration after a
+  // private Context was lost, so a replacement Context cannot install it.
+  void InvalidateTestListenersAfterContextLoss(
+      const aegis_access::OwnershipKey& owner, PartitionState& state);
   static bool SamePrivatePublication(const PrivatePublication& a,
                                      const PrivatePublication& b);
 
   std::string runtime_profile_token_;
   uint64_t network_epoch_ = 1;
   uint64_t private_install_attempt_ = 0;
+  TestListenerLostCallback test_listener_lost_;
   std::map<std::string, PartitionState> partitions_;
   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};
 };

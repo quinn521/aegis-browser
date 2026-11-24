@@ -1355,6 +1355,97 @@ TEST_F(AccessSavedTestProfileProductTest,
   EXPECT_TRUE(transport_->PreparedProxyForGroup(owner_, group_));
 }
 
+TEST_F(AccessSavedTestProfileProductTest,
+       NetworkServiceLossRequiresFreshTestProfileRegistration) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  const auto active = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(active);
+
+  // The Network Service restarts without a network epoch change.
+  context_.Disconnect();
+  environment_.RunUntilIdle();
+  ProductAckContext replacement;
+  replacement.incarnation = "replacement-context";
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
+  ASSERT_TRUE(bound.Get());
+  // The replacement Context never inherits the old registration, and a fresh
+  // ACK alone cannot make the old listener current again.
+  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+  EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return options->test_profile_runtime_state() == AccessTestProfileRuntimeState::kIdle;
+  })) << SavedProfileState(options);
+  EXPECT_TRUE(std::ranges::none_of(transport_->PrivateEndpoints(owner_), [&](const auto& entry) {
+    return entry.registration.registration_id == active->registration_id;
+  }));
+  EXPECT_NE(Snapshot().connection, AccessSiteConnectionState::kReady);
+
+  // The next protected request reads the saved Profile and registers again.
+  EXPECT_TRUE(options->CanRestoreSavedTestNodeProfile());
+  base::test::TestFuture<bool> again;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, again.GetCallback());
+  ASSERT_TRUE(again.Get()) << SavedProfileState(options);
+  const auto fresh = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(fresh);
+  EXPECT_NE(fresh->registration_id, active->registration_id);
+  EXPECT_GT(fresh->authorization_generation, active->authorization_generation);
+  EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       ExplicitRevokeAfterNetworkServiceLossKeepsRestoreClosed) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+
+  context_.Disconnect();
+  environment_.RunUntilIdle();
+  ProductAckContext replacement;
+  replacement.incarnation = "replacement-context";
+  replacement.hold_next = true;
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
+  ASSERT_TRUE(bound.Get());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return options->test_profile_runtime_state() ==
+           AccessTestProfileRuntimeState::kRevoking;
+  })) << SavedProfileState(options);
+  // The user revokes while the loss retirement is still in flight.
+  base::test::TestFuture<bool> revoked;
+  options->RevokeTestNodeProfile(revoked.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil([&] { return replacement.has_reply(); }));
+  replacement.Reply(true);
+  ASSERT_TRUE(revoked.Get()) << SavedProfileState(options);
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+  EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       AdditionalFactoryForLiveContextKeepsTestProfileRegistration) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  const auto active = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(active);
+
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &context_, bound.GetCallback());
+  ASSERT_TRUE(bound.Get());
+  environment_.RunUntilIdle();
+  const auto after = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(after);
+  EXPECT_EQ(after->registration_id, active->registration_id);
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
+  EXPECT_TRUE(transport_->PreparedProxyForGroup(owner_, group_));
+}
+
 TEST_F(AccessSavedTestProfileProductTest, RevokingHeldExplicitPublicationSettlesOriginalSite) {
   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
   ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));

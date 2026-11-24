@@ -807,6 +807,24 @@ void AccessOptionsService::RevokePreparedTestNodeIfCurrent(
     RevokeTestNodeProfile(base::DoNothing());
   }
 }
+bool AccessOptionsService::RevokeTestNodeProfileAfterNetworkLoss(
+    const std::string& registration_id) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (registration_id.empty() || registration_id != test_profile_ready_.registration_id ||
+      test_profile_runtime_state_ != AccessTestProfileRuntimeState::kActive ||
+      !profile_->IsRegularProfile()) {
+    return false;
+  }
+  RevokeTestNodeProfile(base::DoNothing());
+  // Set after the shared revocation entry, which clears it for every other
+  // caller. Retirement normally completes asynchronously and reads it then.
+  if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kRevoking) {
+    test_profile_network_loss_restore_ = true;
+  } else if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kIdle) {
+    test_profile_cold_preparation_consumed_ = false;
+  }
+  return true;
+}
 bool AccessOptionsService::SetTestNodeConsumerRevoker(base::RepeatingCallback<void(
     AccessLocalCoreReady, base::OnceCallback<void(bool)>)> revoker) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -825,6 +843,7 @@ void AccessOptionsService::RevokeTestNodeProfile(base::OnceCallback<void(bool)> 
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   test_profile_publication_attempt_.reset();
   test_profile_cold_preparation_consumed_ = true;
+  test_profile_network_loss_restore_ = false;
   test_profile_revoke_waiters_.push_back(std::move(callback));
   if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kRevoking) return;
   if (test_profile_core_) test_profile_core_->StopForwarding();
@@ -905,7 +924,11 @@ void AccessOptionsService::OnTestProfileCoreRetired(uint64_t epoch, bool confirm
     test_profile_ready_ = {};
     test_profile_runtime_revision_ = 0;
     test_profile_consumers_possible_ = false;
+    // Only a confirmed retirement after Network Service loss reopens the
+    // single cold restore from the persisted Profile binding.
+    if (test_profile_network_loss_restore_) test_profile_cold_preparation_consumed_ = false;
   }
+  test_profile_network_loss_restore_ = false;
   auto callbacks = std::move(test_profile_revoke_waiters_);
   test_profile_revoke_waiters_.clear();
   for (auto& pending : callbacks) std::move(pending).Run(confirmed);

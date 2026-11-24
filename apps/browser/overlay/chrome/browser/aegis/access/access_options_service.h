@@ -135,6 +135,10 @@ class AccessOptionsService : public base::SupportsUserData::Data {
       base::OnceCallback<void(bool)> callback);
   void RevokePreparedTestNodeIfCurrent(uint64_t revision,
                                       const AccessLocalCoreReady& ready);
+  // The private Context that acknowledged |registration_id| was lost. Revokes
+  // that listener and, once retirement is confirmed, admits exactly one fresh
+  // registration from the saved Profile binding.
+  bool RevokeTestNodeProfileAfterNetworkLoss(const std::string& registration_id);
   AccessTestProfileRuntimeState test_profile_runtime_state() const;
   AccessLocalCoreReady test_profile_runtime() const;
   std::optional<std::pair<uint64_t, AccessLocalCoreReady>> PreparedTestNode() const;
@@ -218,6 +222,9 @@ class AccessOptionsService : public base::SupportsUserData::Data {
   scoped_refptr<TestProfilePublicationAttempt> test_profile_publication_attempt_;
   // A stale saved binding advances the epoch without consuming cold recovery.
   bool test_profile_cold_preparation_consumed_ = false;
+  // Set only while a Network Service loss revocation is in flight. Explicit
+  // revocation clears it, so the user's choice is never undone.
+  bool test_profile_network_loss_restore_ = false;
   uint64_t test_profile_runtime_epoch_ = 0;
   uint64_t test_profile_runtime_revision_ = 0;
   uint64_t test_profile_authorization_generation_ = 0;

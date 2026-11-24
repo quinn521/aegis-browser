@@ -103,6 +103,10 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
   void OnTestProfileListenerAuthFault(
       const OwnershipKey& owner, const aegis_access::GenerationTuple& observed,
       const std::string& registration_id);
+  // The private Context holding this listener registration was lost.
+  void OnTestProfileListenerLost(const OwnershipKey& owner,
+                                 const std::string& group,
+                                 const std::string& registration_id);
 #endif
   // Called only after Browser-owned policy evaluation selects this local
   // group. Restores its runtime binding without mutating persisted intent.

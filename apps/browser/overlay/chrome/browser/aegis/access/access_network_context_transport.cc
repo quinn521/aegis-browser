@@ -414,6 +414,45 @@ bool AccessNetworkContextTransport::ForgetPreparedProxy(
   return true;
 }
 
+void AccessNetworkContextTransport::SetTestListenerLostCallback(
+    TestListenerLostCallback callback) {
+  test_listener_lost_ = std::move(callback);
+}
+
+void AccessNetworkContextTransport::InvalidateTestListenersAfterContextLoss(
+    const aegis_access::OwnershipKey& owner, PartitionState& state) {
+  std::vector<std::pair<std::string, std::string>> lost;
+  for (const auto& [group, entry] : state.private_endpoints) {
+    if (entry.listener_binding && entry.registration.owner == owner)
+      lost.emplace_back(group, entry.registration.registration_id);
+  }
+  if (lost.empty()) return;
+  for (const auto& [group, registration_id] : lost) {
+    const auto selection =
+        state.private_endpoints.at(group).registration.generations.selection_generation;
+    ForgetPreparedProxy(owner, group, registration_id);
+    // The listener keeps its address until its owner confirms retirement.
+    // Until then no registration for this group can be installed again.
+    state.retiring_test_listeners.insert_or_assign(
+        group, PartitionState::RetiringListener{registration_id});
+    if (state.private_publication) {
+      auto& publication = *state.private_publication;
+      std::erase_if(publication.endpoints, [&](const auto& published) {
+        return published.registration.registration_id == registration_id;
+      });
+      publication.unavailable.insert_or_assign(group, selection);
+    }
+  }
+  if (state.private_publication) ++state.private_revision;
+  for (const auto& [incarnation, entry] : state.private_contexts)
+    PublishPrivateContext(owner, incarnation);
+  if (!test_listener_lost_) return;
+  for (const auto& [group, registration_id] : lost) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(test_listener_lost_, owner, group, registration_id));
+  }
+}
+
 std::optional<aegis_access::RegisteredProxyEndpoint>
 AccessNetworkContextTransport::PreparedProxyForGroup(
     const aegis_access::OwnershipKey& owner, const std::string& group) const {
@@ -582,7 +621,12 @@ void AccessNetworkContextTransport::BindPrivateContext(
           lost |= disconnected;
           return disconnected;
         });
-        if (lost) self->SettlePrivatePublication(state, false);
+        if (lost) {
+          // The old Network Service is gone. Adding a factory to a live
+          // Context never reaches this branch.
+          self->InvalidateTestListenersAfterContextLoss(owner, state);
+          self->SettlePrivatePublication(state, false);
+        }
         const auto incarnation = client->incarnation();
         auto [entry, inserted] = state.private_contexts.try_emplace(
             incarnation, client);
