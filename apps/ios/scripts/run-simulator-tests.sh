@@ -320,7 +320,7 @@ ensure_device() {
         printf 'name=%s' "$name"
       else
         udid="$(xcrun simctl create "$name" "$type" "$RUNTIME_ID")" \
-          || die "创建 Simulator 失败：$name（runtime=${RUNTIME_ID}, type=${type}）"
+          || die "创建 Simulator 失败：${name}（runtime=${RUNTIME_ID}, type=${type}）"
         [[ "$udid" =~ $UDID_PATTERN ]] || die "创建 Simulator 返回的不是 UDID：$name ($udid)"
         printf '已创建专用 Simulator：%s (%s)\n' "$name" "$udid" >&2
         printf '%s' "$udid"
