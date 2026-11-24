@@ -63,15 +63,22 @@ def normalized_xcframework_info():
 def verify_frozen_xcframework_layout(framework):
     # The slice hashes cover the binary, headers and modules. Independently
     # lock the routing plist and exact paths so Xcode cannot choose another slice.
+    # gobind names headers after the exported bridge packages, so the header set
+    # follows the build as long as both slices agree and the umbrella is present.
     layout = normalized_xcframework_info()
+    leaves = [Path(library["LibraryIdentifier"]) / FRAMEWORK_NAME for library in layout["AvailableLibraries"]]
+    header_sets = {frozenset(path.name for path in (framework / leaf / "Headers").glob("*")) for leaf in leaves}
+    headers = next(iter(header_sets)) if len(header_sets) == 1 else frozenset()
+    if (CORE_NAME + ".h" not in headers
+            or not all(re.fullmatch(r"[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*\.h", name, flags=re.ASCII)
+                       for name in headers)):
+        raise ValueError("EmbeddedCore XCFramework does not match the frozen Alpha layout")
     directories = set()
     files = {Path("Info.plist")}
-    for library in layout["AvailableLibraries"]:
-        leaf = Path(library["LibraryIdentifier"]) / FRAMEWORK_NAME
+    for leaf in leaves:
         directories.update((leaf.parent, leaf, leaf / "Headers", leaf / "Modules"))
-        files.update(leaf / name for name in (CORE_NAME, "Info.plist", "Modules/module.modulemap",
-                     "Headers/AegisEmbeddedCore.h", "Headers/Embeddedcore.objc.h",
-                     "Headers/Universe.objc.h", "Headers/ref.h"))
+        files.update(leaf / name for name in (CORE_NAME, "Info.plist", "Modules/module.modulemap"))
+        files.update(leaf / "Headers" / name for name in headers)
     if (framework.is_symlink()
             or {path.relative_to(framework) for path in framework.rglob("*")} != directories | files
             or any((framework / path).is_symlink() or not (framework / path).is_dir() for path in directories)

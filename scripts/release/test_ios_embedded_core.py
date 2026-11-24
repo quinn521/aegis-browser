@@ -220,6 +220,34 @@ class EmbeddedCoreInputsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prepared Alpha source"):
             core.verify_prepared_source(rebuilt, prepared, verified["sourceCommit"], self.framework)
 
+    def test_frozen_layout_follows_generated_headers_only_when_both_slices_agree(self):
+        self.freeze_synthetic_slices()
+        leaves = [self.framework / library["LibraryIdentifier"] / core.FRAMEWORK_NAME / "Headers"
+                  for library in core.normalized_xcframework_info()["AvailableLibraries"]]
+        for headers in leaves:
+            (headers / "Newexport.objc.h").write_text("synthetic export\n")
+        core.verify_frozen_xcframework_layout(self.framework)
+        faults = {"one slice": [leaves[0] / "Extra.objc.h"],
+                  "hidden header": [headers / ".hidden.h" for headers in leaves],
+                  "non-header": [headers / "notes.txt" for headers in leaves]}
+        for fault, added in faults.items():
+            with self.subTest(fault=fault):
+                for path in added:
+                    path.write_text("synthetic\n")
+                with self.assertRaisesRegex(ValueError, "frozen Alpha layout"):
+                    core.verify_frozen_xcframework_layout(self.framework)
+                for path in added:
+                    path.unlink()
+        umbrellas = [headers / "AegisEmbeddedCore.h" for headers in leaves]
+        saved = [path.read_bytes() for path in umbrellas]
+        for path in umbrellas:
+            path.unlink()
+        with self.subTest(fault="missing umbrella"), self.assertRaisesRegex(ValueError, "frozen Alpha layout"):
+            core.verify_frozen_xcframework_layout(self.framework)
+        for path, data in zip(umbrellas, saved):
+            path.write_bytes(data)
+        core.verify_frozen_xcframework_layout(self.framework)
+
     def test_restoring_checkout_cannot_relabel_different_compiled_bridge(self):
         prepared = self.root / "prepared"
         shutil.copytree(self.root / "apps", prepared / "apps")
