@@ -1,0 +1,259 @@
+From 04f71e36a191bdd26be2c2c2e0c9aaed89956e4e Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 04:53:04 +0800
+Subject: [PATCH] fix(access): let a second site select the active Test Profile
+
+When the Test Profile is active and its listener is acknowledged, an explicit selection for another site reuses the current registration: only the site policy is committed and acknowledged. No re-registration, revocation or re-import happens, and a failed reuse never interrupts the sites already using the listener. The toolbar entry uses CanSelectTestProfileForSite and returns once the site is unprotected.
+---
+ .../access_site_proxy_bubble_controller.cc    | 73 ++++++++++++++++-
+ .../access_site_proxy_bubble_controller.h     | 13 +++
+ .../access_site_proxy_product_unittest.cc     | 80 +++++++++++++++++++
+ .../ui/views/toolbar/aegis_toolbar_button.cc  |  2 +-
+ 4 files changed, 164 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+index faf5a98d8589cb02bfc2940510232760b1da8cb2..09c34f3ef6a7424c0615ebcb32ef5027bbe4db43 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+@@ -708,19 +708,35 @@ AccessSiteProxyBubbleController::AcknowledgedTestProfileListener() const {
+   return active;
+ }
+ 
++bool AccessSiteProxyBubbleController::CanSelectTestProfileForSite(
++    const AccessSiteHost& requested_host) const {
++  const auto website = CanonicalWebsiteHost(requested_host);
++  if (!website.host) return false;
++  if (HasPreparedTestNode()) return true;
++  if (profile_->IsOffTheRecord() || publication_in_flight_ || restoring_core_ ||
++      saved_test_profile_restore_)
++    return false;
++  const auto active = AcknowledgedTestProfileListener();
++  if (!active) return false;
++  const auto bound = test_profile_sites_.find(*website.host);
++  return bound == test_profile_sites_.end() ||
++         bound->second != TestProfileGroup(*active);
++}
++
+ bool AccessSiteProxyBubbleController::RequestTestProfileForSite(
+     const AccessSiteHost& requested_host) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   const auto website = CanonicalWebsiteHost(requested_host);
+-  if (!website.host || !HasPreparedTestNode()) return false;
++  if (!website.host || !CanSelectTestProfileForSite(requested_host)) return false;
+   auto* options = AccessOptionsService::GetOrCreate(profile_);
+-  const auto prepared = options->PreparedTestNode();
++  const auto prepared = options ? options->PreparedTestNode() : std::nullopt;
++  const auto active = prepared ? std::nullopt : AcknowledgedTestProfileListener();
+   auto* transport = AccessNetworkContextTransport::Get(profile_);
+   const auto owner = transport
+       ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+       : std::nullopt;
+   auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile_);
+-  if (!prepared || !owner || !transport->OwnsConfiguredPartition(*owner) ||
++  if ((!prepared && !active) || !owner || !transport->OwnsConfiguredPartition(*owner) ||
+       !coordinator ||
+       std::ranges::any_of(transport->AccountSites(), [&](const auto& paid) {
+         return CanonicalWebsiteHost(AccessSiteHost{paid}).host == website.host;
+@@ -750,6 +766,13 @@ bool AccessSiteProxyBubbleController::RequestTestProfileForSite(
+            .runtime_fault = original_legacy_website_context
+                                 ? state.runtime_fault
+                                 : std::nullopt};
++  if (!prepared) {
++    coordinator->InitializeForProfile(*owner, base::BindOnce(
++        &AccessSiteProxyBubbleController::OnActiveTestProfileSiteRestored,
++        weak_factory_.GetWeakPtr(), *website.host, *owner, active->registration_id,
++        TestProfileGroup(*active), original_legacy_website_context));
++    return true;
++  }
+   coordinator->InitializeForProfile(*owner, base::BindOnce(
+       &AccessSiteProxyBubbleController::OnTestProfileSiteRestored,
+       weak_factory_.GetWeakPtr(), *website.host, *owner, prepared->first,
+@@ -757,6 +780,50 @@ bool AccessSiteProxyBubbleController::RequestTestProfileForSite(
+   return true;
+ }
+ 
++void AccessSiteProxyBubbleController::OnActiveTestProfileSiteRestored(
++    AccessSiteHost host, OwnershipKey owner, std::string registration_id,
++    std::string group, std::optional<bool> original_legacy_website_context,
++    bool restored) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_);
++  const auto common = restored ? CaptureTestProfilePolicy(owner, group) : std::nullopt;
++  if (!options || !common || !IsActiveTestProfileGroup(owner, group, *common) ||
++      options->test_profile_runtime().registration_id != registration_id) {
++    publication_in_flight_ = false;
++    ++state_revision_;
++    ReconcileCommittedSiteAfterTestPublication(
++        host, owner, original_legacy_website_context,
++        "The test Profile switch failed because the active listener changed.");
++    return;
++  }
++  BeginEnablePublication(host, {owner, group}, base::BindOnce(
++      [](base::WeakPtr<AccessSiteProxyBubbleController> self, AccessSiteHost host,
++         OwnershipKey owner, std::string registration_id, std::string group,
++         std::optional<bool> original_legacy_website_context,
++         AccessMutationTransactionResult result) {
++        if (!self) return;
++        self->publication_in_flight_ = false;
++        ++self->state_revision_;
++        const bool committed =
++            result.status == AccessMutationTransactionStatus::kCommitted;
++        auto* options = AccessOptionsService::GetOrCreate(self->profile_);
++        const auto common = self->CaptureTestProfilePolicy(owner, group);
++        const bool acknowledged = committed && options && common &&
++            options->test_profile_runtime().registration_id == registration_id &&
++            self->IsActiveTestProfileGroup(owner, group, *common);
++        if (acknowledged) {
++          self->AdoptWebsiteIntent(host, true);
++          self->test_profile_sites_.insert_or_assign(host, group);
++          self->host_states_[host] = {.connection = AccessSiteConnectionState::kReady};
++          return;
++        }
++        // Never revoke here: other sites keep using the same listener.
++        self->ReconcileCommittedSiteAfterTestPublication(
++            host, owner, original_legacy_website_context,
++            TestProfileSwitchCompletionMessage(result.status));
++      }, weak_factory_.GetWeakPtr(), host, owner, std::move(registration_id), group,
++      original_legacy_website_context));
++}
++
+ void AccessSiteProxyBubbleController::OnTestProfileSiteRestored(
+     AccessSiteHost host, OwnershipKey owner, uint64_t revision,
+     AccessLocalCoreReady ready,
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+index 11b8283a1c4045fc6eca97ea908698c40e215202..abc1d8ed64bf4fc1534e2f40533a49cedb871adb 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+@@ -95,6 +95,10 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
+   static bool IsTestProfileProxyGroup(std::string_view group);
+   bool HasPreparedTestNode() const;
+   std::optional<AccessLocalCoreReady> AcknowledgedTestProfileListener() const;
++  // True when |host| can explicitly select a Test Profile now: either a
++  // prepared listener awaits its first publication, or the active acknowledged
++  // listener can be reused for this site without re-registration.
++  bool CanSelectTestProfileForSite(const AccessSiteHost& host) const;
+   bool RequestTestProfileForSite(const AccessSiteHost& host);
+   void OnTestProfileListenerAuthFault(
+       const OwnershipKey& owner, const aegis_access::GenerationTuple& observed,
+@@ -155,6 +159,15 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
+       AccessLocalCoreReady ready,
+       std::optional<bool> original_legacy_website_context,
+       bool restored);
++  // Reuses the active acknowledged registration for one more site. Only the
++  // site policy is committed and ACKed; the listener is never revoked.
++  void OnActiveTestProfileSiteRestored(
++      AccessSiteHost host,
++      OwnershipKey owner,
++      std::string registration_id,
++      std::string group,
++      std::optional<bool> original_legacy_website_context,
++      bool restored);
+   void ReconcileCommittedSiteAfterTestPublication(
+       const AccessSiteHost& host,
+       const OwnershipKey& owner,
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 8d74313cffe400222cdb98d0419c5ef25c21e4c3..ca5cfa348cb1f94b966980c2515ade0dbe58494c 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1275,6 +1275,86 @@ TEST_F(AccessSavedTestProfileProductTest, NetworkChangeHidesActiveListenerButKee
+   EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       ActiveProfileServesSecondSiteWithoutReregistration) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Wait());
++  ASSERT_TRUE(restored.Get());
++  const auto active = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(active);
++  ASSERT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
++  const AccessSiteHost other{"other.example"};
++  EXPECT_FALSE(bubble_->HasPreparedTestNode());
++  EXPECT_FALSE(bubble_->CanSelectTestProfileForSite({"news.example"}));
++  ASSERT_TRUE(bubble_->CanSelectTestProfileForSite(other));
++
++  context_.hold_next = true;
++  ASSERT_TRUE(bubble_->RequestTestProfileForSite(other));
++  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
++  // The listener stays active and acknowledged for the first site meanwhile.
++  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
++  EXPECT_EQ(options->test_profile_runtime().registration_id, active->registration_id);
++  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kConnecting);
++  EXPECT_FALSE(bubble_->CanSelectTestProfileForSite(other));
++  context_.Reply(true);
++  ASSERT_NO_FATAL_FAILURE(WaitFor(AccessSiteConnectionState::kReady, "other.example"));
++
++  const auto after = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(after);
++  EXPECT_EQ(after->registration_id, active->registration_id);
++  EXPECT_EQ(after->authorization_generation, active->authorization_generation);
++  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
++  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
++  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
++  EXPECT_FALSE(bubble_->CanSelectTestProfileForSite(other));
++  const auto committed =
++      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(committed.value);
++  EXPECT_EQ(committed.value->site_groups.size(), 2u);
++  for (const auto& site : committed.value->site_groups) {
++    ASSERT_FALSE(site.members.empty());
++    EXPECT_EQ(site.members.front().policy.proxy_group_id, group_);
++  }
++
++  // Closing protection on the second site restores its entry and leaves the
++  // first site's connection untouched.
++  ASSERT_TRUE(bubble_->RequestHostProxySession(other, false));
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
++  }));
++  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kOff);
++  EXPECT_TRUE(bubble_->CanSelectTestProfileForSite(other));
++  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
++  EXPECT_EQ(bubble_->AcknowledgedTestProfileListener()->registration_id,
++            active->registration_id);
++  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
++}
++
++TEST_F(AccessSavedTestProfileProductTest,
++       FailedSecondSiteSelectionKeepsActiveListener) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Wait());
++  ASSERT_TRUE(restored.Get());
++  const auto active = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(active);
++  context_.hold_next = true;
++  ASSERT_TRUE(bubble_->RequestTestProfileForSite({"other.example"}));
++  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
++  context_.Reply(false);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
++  }));
++  EXPECT_NE(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
++  // A failed reuse never revokes the listener other sites still use.
++  EXPECT_NE(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kRevoking);
++  EXPECT_EQ(options->test_profile_runtime().registration_id, active->registration_id);
++  EXPECT_TRUE(transport_->PreparedProxyForGroup(owner_, group_));
++}
++
+ TEST_F(AccessSavedTestProfileProductTest, RevokingHeldExplicitPublicationSettlesOriginalSite) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+   ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+diff --git a/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc b/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
+index 427924e94c15153907452f762e4e9fb3f3b61bc2..38260890220d1341bc2e9e63cd74ba46fde56fcd 100644
+--- a/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
++++ b/chrome/browser/ui/views/toolbar/aegis_toolbar_button.cc
+@@ -787,7 +787,7 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
+       return;
+     }
+ #if BUILDFLAG(IS_MAC)
+-    if (controller->HasPreparedTestNode() && snap.toggle_enabled) {
++    if (controller->CanSelectTestProfileForSite(snap.host) && snap.toggle_enabled) {
+       Button(parent, Copy(u"用测试配置保护本站", u"Protect site with Test Profile",
+                           u"用測試設定保護本站"),
+              base::BindRepeating(&AegisPageBubble::UsePreparedTestProfile,
+-- 
+2.54.0 (Apple Git-157)
+

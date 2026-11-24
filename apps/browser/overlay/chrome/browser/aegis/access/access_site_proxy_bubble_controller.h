@@ -95,6 +95,10 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
   static bool IsTestProfileProxyGroup(std::string_view group);
   bool HasPreparedTestNode() const;
   std::optional<AccessLocalCoreReady> AcknowledgedTestProfileListener() const;
+  // True when |host| can explicitly select a Test Profile now: either a
+  // prepared listener awaits its first publication, or the active acknowledged
+  // listener can be reused for this site without re-registration.
+  bool CanSelectTestProfileForSite(const AccessSiteHost& host) const;
   bool RequestTestProfileForSite(const AccessSiteHost& host);
   void OnTestProfileListenerAuthFault(
       const OwnershipKey& owner, const aegis_access::GenerationTuple& observed,
@@ -153,6 +157,15 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
       OwnershipKey owner,
       uint64_t revision,
       AccessLocalCoreReady ready,
+      std::optional<bool> original_legacy_website_context,
+      bool restored);
+  // Reuses the active acknowledged registration for one more site. Only the
+  // site policy is committed and ACKed; the listener is never revoked.
+  void OnActiveTestProfileSiteRestored(
+      AccessSiteHost host,
+      OwnershipKey owner,
+      std::string registration_id,
+      std::string group,
       std::optional<bool> original_legacy_website_context,
       bool restored);
   void ReconcileCommittedSiteAfterTestPublication(

@@ -708,19 +708,35 @@ AccessSiteProxyBubbleController::AcknowledgedTestProfileListener() const {
   return active;
 }
 
+bool AccessSiteProxyBubbleController::CanSelectTestProfileForSite(
+    const AccessSiteHost& requested_host) const {
+  const auto website = CanonicalWebsiteHost(requested_host);
+  if (!website.host) return false;
+  if (HasPreparedTestNode()) return true;
+  if (profile_->IsOffTheRecord() || publication_in_flight_ || restoring_core_ ||
+      saved_test_profile_restore_)
+    return false;
+  const auto active = AcknowledgedTestProfileListener();
+  if (!active) return false;
+  const auto bound = test_profile_sites_.find(*website.host);
+  return bound == test_profile_sites_.end() ||
+         bound->second != TestProfileGroup(*active);
+}
+
 bool AccessSiteProxyBubbleController::RequestTestProfileForSite(
     const AccessSiteHost& requested_host) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const auto website = CanonicalWebsiteHost(requested_host);
-  if (!website.host || !HasPreparedTestNode()) return false;
+  if (!website.host || !CanSelectTestProfileForSite(requested_host)) return false;
   auto* options = AccessOptionsService::GetOrCreate(profile_);
-  const auto prepared = options->PreparedTestNode();
+  const auto prepared = options ? options->PreparedTestNode() : std::nullopt;
+  const auto active = prepared ? std::nullopt : AcknowledgedTestProfileListener();
   auto* transport = AccessNetworkContextTransport::Get(profile_);
   const auto owner = transport
       ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
       : std::nullopt;
   auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile_);
-  if (!prepared || !owner || !transport->OwnsConfiguredPartition(*owner) ||
+  if ((!prepared && !active) || !owner || !transport->OwnsConfiguredPartition(*owner) ||
       !coordinator ||
       std::ranges::any_of(transport->AccountSites(), [&](const auto& paid) {
         return CanonicalWebsiteHost(AccessSiteHost{paid}).host == website.host;
@@ -750,11 +766,62 @@ bool AccessSiteProxyBubbleController::RequestTestProfileForSite(
            .runtime_fault = original_legacy_website_context
                                 ? state.runtime_fault
                                 : std::nullopt};
+  if (!prepared) {
+    coordinator->InitializeForProfile(*owner, base::BindOnce(
+        &AccessSiteProxyBubbleController::OnActiveTestProfileSiteRestored,
+        weak_factory_.GetWeakPtr(), *website.host, *owner, active->registration_id,
+        TestProfileGroup(*active), original_legacy_website_context));
+    return true;
+  }
   coordinator->InitializeForProfile(*owner, base::BindOnce(
       &AccessSiteProxyBubbleController::OnTestProfileSiteRestored,
       weak_factory_.GetWeakPtr(), *website.host, *owner, prepared->first,
       prepared->second, original_legacy_website_context));
   return true;
+}
+
+void AccessSiteProxyBubbleController::OnActiveTestProfileSiteRestored(
+    AccessSiteHost host, OwnershipKey owner, std::string registration_id,
+    std::string group, std::optional<bool> original_legacy_website_context,
+    bool restored) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  const auto common = restored ? CaptureTestProfilePolicy(owner, group) : std::nullopt;
+  if (!options || !common || !IsActiveTestProfileGroup(owner, group, *common) ||
+      options->test_profile_runtime().registration_id != registration_id) {
+    publication_in_flight_ = false;
+    ++state_revision_;
+    ReconcileCommittedSiteAfterTestPublication(
+        host, owner, original_legacy_website_context,
+        "The test Profile switch failed because the active listener changed.");
+    return;
+  }
+  BeginEnablePublication(host, {owner, group}, base::BindOnce(
+      [](base::WeakPtr<AccessSiteProxyBubbleController> self, AccessSiteHost host,
+         OwnershipKey owner, std::string registration_id, std::string group,
+         std::optional<bool> original_legacy_website_context,
+         AccessMutationTransactionResult result) {
+        if (!self) return;
+        self->publication_in_flight_ = false;
+        ++self->state_revision_;
+        const bool committed =
+            result.status == AccessMutationTransactionStatus::kCommitted;
+        auto* options = AccessOptionsService::GetOrCreate(self->profile_);
+        const auto common = self->CaptureTestProfilePolicy(owner, group);
+        const bool acknowledged = committed && options && common &&
+            options->test_profile_runtime().registration_id == registration_id &&
+            self->IsActiveTestProfileGroup(owner, group, *common);
+        if (acknowledged) {
+          self->AdoptWebsiteIntent(host, true);
+          self->test_profile_sites_.insert_or_assign(host, group);
+          self->host_states_[host] = {.connection = AccessSiteConnectionState::kReady};
+          return;
+        }
+        // Never revoke here: other sites keep using the same listener.
+        self->ReconcileCommittedSiteAfterTestPublication(
+            host, owner, original_legacy_website_context,
+            TestProfileSwitchCompletionMessage(result.status));
+      }, weak_factory_.GetWeakPtr(), host, owner, std::move(registration_id), group,
+      original_legacy_website_context));
 }
 
 void AccessSiteProxyBubbleController::OnTestProfileSiteRestored(

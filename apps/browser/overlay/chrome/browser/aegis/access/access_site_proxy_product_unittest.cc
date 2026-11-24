@@ -1275,6 +1275,86 @@ TEST_F(AccessSavedTestProfileProductTest, NetworkChangeHidesActiveListenerButKee
   EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
 }
 
+TEST_F(AccessSavedTestProfileProductTest,
+       ActiveProfileServesSecondSiteWithoutReregistration) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Wait());
+  ASSERT_TRUE(restored.Get());
+  const auto active = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(active);
+  ASSERT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
+  const AccessSiteHost other{"other.example"};
+  EXPECT_FALSE(bubble_->HasPreparedTestNode());
+  EXPECT_FALSE(bubble_->CanSelectTestProfileForSite({"news.example"}));
+  ASSERT_TRUE(bubble_->CanSelectTestProfileForSite(other));
+
+  context_.hold_next = true;
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite(other));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  // The listener stays active and acknowledged for the first site meanwhile.
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
+  EXPECT_EQ(options->test_profile_runtime().registration_id, active->registration_id);
+  EXPECT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kConnecting);
+  EXPECT_FALSE(bubble_->CanSelectTestProfileForSite(other));
+  context_.Reply(true);
+  ASSERT_NO_FATAL_FAILURE(WaitFor(AccessSiteConnectionState::kReady, "other.example"));
+
+  const auto after = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(after);
+  EXPECT_EQ(after->registration_id, active->registration_id);
+  EXPECT_EQ(after->authorization_generation, active->authorization_generation);
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kAllow);
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
+  EXPECT_FALSE(bubble_->CanSelectTestProfileForSite(other));
+  const auto committed =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(committed.value);
+  EXPECT_EQ(committed.value->site_groups.size(), 2u);
+  for (const auto& site : committed.value->site_groups) {
+    ASSERT_FALSE(site.members.empty());
+    EXPECT_EQ(site.members.front().policy.proxy_group_id, group_);
+  }
+
+  // Closing protection on the second site restores its entry and leaves the
+  // first site's connection untouched.
+  ASSERT_TRUE(bubble_->RequestHostProxySession(other, false));
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  EXPECT_EQ(Snapshot("other.example").intent, AccessSiteIntent::kOff);
+  EXPECT_TRUE(bubble_->CanSelectTestProfileForSite(other));
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+  EXPECT_EQ(bubble_->AcknowledgedTestProfileListener()->registration_id,
+            active->registration_id);
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       FailedSecondSiteSelectionKeepsActiveListener) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Wait());
+  ASSERT_TRUE(restored.Get());
+  const auto active = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(active);
+  context_.hold_next = true;
+  ASSERT_TRUE(bubble_->RequestTestProfileForSite({"other.example"}));
+  ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+  context_.Reply(false);
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+  }));
+  EXPECT_NE(Snapshot("other.example").connection, AccessSiteConnectionState::kReady);
+  // A failed reuse never revokes the listener other sites still use.
+  EXPECT_NE(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kRevoking);
+  EXPECT_EQ(options->test_profile_runtime().registration_id, active->registration_id);
+  EXPECT_TRUE(transport_->PreparedProxyForGroup(owner_, group_));
+}
+
 TEST_F(AccessSavedTestProfileProductTest, RevokingHeldExplicitPublicationSettlesOriginalSite) {
   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
   ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));

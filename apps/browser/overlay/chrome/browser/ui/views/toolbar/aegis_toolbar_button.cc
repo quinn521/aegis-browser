@@ -787,7 +787,7 @@ class AegisPageBubble : public LocationBarBubbleDelegateView {
       return;
     }
 #if BUILDFLAG(IS_MAC)
-    if (controller->HasPreparedTestNode() && snap.toggle_enabled) {
+    if (controller->CanSelectTestProfileForSite(snap.host) && snap.toggle_enabled) {
       Button(parent, Copy(u"用测试配置保护本站", u"Protect site with Test Profile",
                           u"用測試設定保護本站"),
              base::BindRepeating(&AegisPageBubble::UsePreparedTestProfile,
