@@ -374,7 +374,7 @@ const defaultsOnlyEdit = defaultsEdit && !selfEdit;
 const deep = !docs && (legacyFull || selfEdit || strict
   || (defaultsOnlyEdit ? (event === 'push' || deepByType) : (pathRequiresArchive
     || (!platforms.ios && (event === 'push' || deepByType)))));
-const integrate = deep || (!docs && ((defaultsOnlyEdit ? false : pathRequiresContracts) || event === 'push' || typeList.some(type => integrateTypes.has(type))));
+const integrate = deep || (!docs && (pathRequiresContracts || event === 'push' || typeList.some(type => integrateTypes.has(type))));
 const plan = {
   schemaVersion: 3, event, base, head, tested, rulesSha: event === 'pull_request' ? base : tested, changes,
   types: [...types].sort(), strict, docs, ...platforms, gate: true, integrate, deep, reason,

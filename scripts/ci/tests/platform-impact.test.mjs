@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
+import {selectPlatformChecks} from '../check-platform-gate.mjs';
 
 const script = resolve('scripts/ci/platform-impact.mjs');
 
@@ -394,10 +395,12 @@ test('paths select platforms and commit types select stage depth', () => {
     }, 'test(android): cover release helpers');
     assert.deepEqual(route(releaseContracts), {...iosRoute, deep: false});
     const allPlatforms = {...iosRoute, android: true, windows: true, linux: true, macos: true};
-    for (const [type, integrate, deep] of [['ci', false, false], ['test', true, false], ['fix', true, true]]) {
+    for (const [type, integrate, deep] of [['ci', true, false], ['test', true, false], ['fix', true, true]]) {
       const defaults = pr(() => save(defaultsPath, '// edit'), `${type}: update routing defaults`);
       assert.deepEqual(route(defaults), {...allPlatforms, integrate, deep});
       assert.equal(defaults.strict, false);
+      assert.deepEqual(selectPlatformChecks(defaults, defaults.tested, defaults.rulesSha),
+        ['android', 'ios', 'linux', 'macos', 'windows']);
     }
     const unknownRelease = pr(() => save('scripts/release/prepare-ios-access-core-extra.sh', 'unknown'), 'fix: repair helper');
     assert.deepEqual(route(unknownRelease), {...iosRoute, ios: false, macos: true});
