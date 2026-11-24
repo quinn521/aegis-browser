@@ -298,7 +298,9 @@ final class AccessTestNodeRepository {
     func apply(_ draft: AccessInternalTestNode, expectedRevision: UUID?, isPrivate: Bool) throws -> UUID {
         guard let channel, !isPrivate else { throw AccessTestNodeError.unavailable }
         guard try revision(isPrivate: isPrivate) == expectedRevision else { throw AccessTestNodeError.conflict }
-        try AccessLocalV2RayConfigLoader.validateManualParameters(draft)
+        if case .realityVision(let parameters) = draft {
+            try AccessLocalV2RayConfigLoader.validateManualParameters(parameters)
+        }
         let record = AccessTestNodeRecord(draft)
         try storage.write(record, channel: channel)
         revokeOpenPages()

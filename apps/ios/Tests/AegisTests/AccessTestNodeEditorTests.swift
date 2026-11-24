@@ -124,7 +124,7 @@ final class AccessTestNodeEditorTests: XCTestCase {
         let previous = Data("""
         {"version":1,"revision":"E1EA5ABF-608B-40E3-886A-9D92520F79A1","address":"198.51.100.10",
          "port":443,"userID":"550e8400-e29b-41d4-a716-446655440000","serverName":"www.example.com",
-         "publicKey":"abcdefghijklmnopqrstuvwxyzABCDEFG","shortID":"abcd1234","fingerprint":"chrome","spiderX":""}
+         "publicKey":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8","shortID":"abcd1234","fingerprint":"chrome","spiderX":""}
         """.utf8)
         let restoredLegacy = try JSONDecoder().decode(AccessTestNodeRecord.self, from: previous)
         XCTAssertEqual(restoredLegacy.node, legacy.node)

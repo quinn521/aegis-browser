@@ -221,8 +221,9 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
     func testWebSocketQueryDoesNotAlterSharedDiagnosticHistory() async throws {
         let log = AccessDiagnosticLog(pollInterval: .milliseconds(15))
         defer { log.stop() }
-        let subscription = try XCTUnwrap(log.acquireShared(level: .info, secrets: []))
-        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: subscription.path))
+        let subscription = log.acquireShared(level: .info, secrets: [])
+        let subscriptionPath = try XCTUnwrap(subscription.path)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: subscriptionPath))
         defer { try? writer.close() }
         let prior = "2026/11/11 00:00:00 from local accepted //existing.example:443\n"
         try writer.write(contentsOf: Data(prior.utf8))
@@ -235,13 +236,13 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         let node = try AccessVLESSWebSocketTLSParameters(address: "route.example", port: 443,
             userID: "550e8400-e29b-41d4-a716-446655440000", serverName: "ws.example",
             requestHost: "ws.example", path: "/local-upgrade-path?v=2", fingerprint: "", alpn: "")
-        let webSocket = try XCTUnwrap(log.acquireShared(level: .info, secrets: node.diagnosticSecrets))
+        let webSocket = log.acquireShared(level: .info, secrets: node.diagnosticSecrets)
         XCTAssertTrue(log.snapshot().contains("2026/11/11 00:00:00 [Access] accepted existing.example:443"))
         try writer.write(contentsOf: Data((
             "2026/11/11 00:00:01 [Error] transport/internet/websocket: upgrade error /local-upgrade-path?v=2\n" +
             "2026/11/11 00:00:02 from local accepted https://ws.example/local-upgrade-path?v=2\n").utf8))
-        XCTAssertTrue(log.stop(capture: webSocket))
-        XCTAssertTrue(log.stop(capture: subscription))
+        XCTAssertTrue(log.stop(lease: webSocket))
+        XCTAssertTrue(log.stop(lease: subscription))
         let history = log.snapshot()
         XCTAssertTrue(history.contains("existing.example:443"))
         XCTAssertTrue(history.contains("ws.example:443"))
