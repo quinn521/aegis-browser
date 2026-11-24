@@ -399,6 +399,25 @@ test('paths select platforms and commit types select stage depth', () => {
     assert.deepEqual(route(mixedRelease), {...iosRoute, android: true});
     const windows = pr(() => save('scripts/ci/platform-tests/windows-acceptance.ps1', 'win'), 'perf: speed windows');
     assert.equal(windows.windows, true); assert.equal(windows.macos, false); assert.equal(windows.deep, true);
+    const windowsRoute = {...iosRoute, ios: false, windows: true};
+    for (const path of ['apps/browser/args/aegis-windows.gn', 'apps/browser/scripts/windows-uninstall-branding_test.py']) {
+      assert.deepEqual(route(pr(() => save(path, 'windows'), 'feat(windows): align uninstall dialog')), windowsRoute, path);
+    }
+    for (const path of [
+      'apps/browser/overlay/chrome/browser/ui/views/uninstall_view.cc',
+      'apps/browser/overlay/chrome/browser/ui/views/uninstall_view_unittest.cc',
+      'apps/browser/overlay/chrome/browser/ui/views/aegis_uninstall_test_main.cc',
+      'apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/chromium.ico',
+      'apps/browser/overlay/chrome/installer/setup/aegis_launch_policy.h',
+      'apps/browser/patches/0532-align-windows-uninstall-ui.patch',
+    ]) {
+      assert.deepEqual(route(pr(() => save(path, 'windows'), 'feat(windows): align uninstall dialog')), {...windowsRoute, macos: true}, path);
+    }
+    for (const path of ['apps/browser/patches/series', 'apps/browser/overlay/chrome/browser/ui/views/aegis_view.cc']) {
+      assert.deepEqual(route(pr(() => save(path, 'shared'), 'feat: change shared product')), {...iosRoute, ios: false, macos: true}, path);
+    }
+    const androidTrackPatch = pr(() => save('apps/browser/patches-android/0237-windows-midl-path-095.patch', 'android'), 'fix: refresh android track');
+    assert.deepEqual(route(androidTrackPatch), androidRoute);
     const linux = pr(() => save('scripts/ci/platform-tests/kcov-child.sh', 'kcov'), 'refactor: reshape coverage');
     assert.equal(linux.linux, true); assert.equal(linux.macos, false); assert.equal(linux.deep, true);
     const mixedContracts = pr(() => {

@@ -159,10 +159,20 @@ const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
 const selectsMacos = path => path.startsWith('.github/workflows/macos-')
   || path === browserCommonScript
   || (path.startsWith('scripts/release/') && path.toLowerCase().includes('macos'));
+const windowsOverlayPrefixes = [
+  'apps/browser/overlay/chrome/app/theme/gcsa_aegis/win/',
+  'apps/browser/overlay/chrome/installer/',
+];
+const windowsUninstallView = /^apps\/browser\/overlay\/chrome\/browser\/ui\/views\/(?:uninstall_view(?:_unittest)?\.(?:cc|h)|aegis_uninstall_test_main\.cc)$/u;
 const selectsWindows = path => path.endsWith('.ps1')
   || path.startsWith('scripts/ci/platform-tests/windows-')
   || path.startsWith('apps/browser/scripts/ci/windows')
-  || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'));
+  || path.startsWith('apps/browser/scripts/windows-')
+  || (path.startsWith('apps/browser/scripts/') && path.toLowerCase().includes('winrm'))
+  || path === 'apps/browser/args/aegis-windows.gn'
+  || windowsOverlayPrefixes.some(prefix => path.startsWith(prefix))
+  || windowsUninstallView.test(path)
+  || (path.startsWith('apps/browser/patches/') && path.toLowerCase().includes('windows'));
 const selectsLinux = path => path === 'scripts/ci/run-shell-coverage.sh'
   || path === 'scripts/ci/tests/shell-coverage.test.mjs'
   || path.startsWith('scripts/ci/platform-tests/kcov-');

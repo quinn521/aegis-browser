@@ -253,10 +253,10 @@ Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS
 | iOS | `apps/ios/**`、`ios-*` workflow、`scripts/ci/{ios-,run-ios-,tests/ios-}*`，以及 `scripts/release/` 中以 `ios-`、`ios_`、`test_ios_` 命名的入口和已登记的 iOS 专用输入，例如 `verify-ipa.py` 和 `product_delivery.py` |
 | Android | `apps/browser/patches-android/**`、`apps/browser/scripts/**` 内含 android 的路径、`android-*` workflow、`scripts/ci/{android-,run-android-,tests/android-}*`、Android 发布脚本及回归测试 |
 | macOS | `macos-*` workflow、`scripts/release/**` 内含 macos 的路径，以及共享产品和未知路径 |
-| Windows | `**/*.ps1`、`apps/browser/scripts/**` 内含 winrm 的路径、`scripts/ci/platform-tests/windows-*`、`apps/browser/scripts/ci/windows*` |
+| Windows | `**/*.ps1`、`apps/browser/scripts/**` 内含 winrm 的路径、`apps/browser/scripts/windows-*`、`scripts/ci/platform-tests/windows-*`、`apps/browser/scripts/ci/windows*`、`apps/browser/args/aegis-windows.gn`、`overlay/chrome/app/theme/gcsa_aegis/win/**`、`overlay/chrome/installer/**`、卸载视图 `uninstall_view*` 与 `aegis_uninstall_test_main.cc`，以及 `apps/browser/patches/` 中文件名含 windows 的补丁 |
 | Linux | `scripts/ci/run-shell-coverage.sh`、`scripts/ci/platform-tests/kcov-*`、`scripts/ci/tests/shell-coverage.test.mjs` |
 
-共享产品包括 `packages/core/**`、`apps/browser/overlay/**` 和 `apps/browser/patches/**`。单独变更 `apps/browser/scripts/common.sh` 会选中 Android 和 macOS。iOS unsigned archive 使用独立的归档入口和 Xcode 构建阶段；混合变更按各改动路径取平台并集。
+共享产品包括 `packages/core/**`、`apps/browser/overlay/**` 和 `apps/browser/patches/**`。单独变更 `apps/browser/scripts/common.sh` 会选中 Android 和 macOS，不选中 iOS。iOS unsigned archive 使用独立的归档入口和 Xcode 构建阶段；混合变更按各改动路径取平台并集。位于 overlay 或 `apps/browser/patches/` 下的 Windows 路径同时保留 macOS 合同，再叠加 Windows；`patches/series` 只按共享补丁选择 macOS，`patches-android/` 下文件名含 windows 的补丁只属于 Android。
 
 阶段只作用于自动作业：
 
@@ -266,5 +266,11 @@ Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS
 - 提升：签名、公证、TestFlight、Play 和 GitHub Release 仍只接受手动 dispatch
 
 iOS 合同在自己的 impact 成功且 `ios && integrate` 时启动，unsigned archive 再等待合同成功且 `deep`。macOS 自动合同等待自己的 impact 成功且 `macos && integrate`。两者可与基础 quality 并行。手动验证和交付沿用各自的入口及准入条件。
+
+平台合同是诊断结果，不是合并门禁。上游 `main` 与开发 Fork `develop` 的规则集只要求 `quality-gate`、`Codacy Static Code Analysis` 和 `gitleaks`；`quality-gate` 只汇总 `quality`。iOS 合同、unsigned archive、macOS 合同和 `other-platforms` 失败不会阻止合并，审查者需要单独查看这些结果。
+
+自动平台合同只在各 workflow 已声明的触发分支运行。`develop` push 运行 quality 和其中的 Android、Windows、Linux 合同，不运行 iOS 或 macOS 合同；iOS 维护线（如 `releases/ios/1.0`）的 push 只运行 quality，iOS 合同和归档通过手动 dispatch 验证。
+
+Windows 合同目前只有 `quality:windows` 的 WinRM 回环自测。安装器、卸载界面、品牌资源和 Windows 补丁被选中后会显示 Windows，但 Ubuntu 上没有对应的离线检查；`windows-uninstall-locales_test.py` 需要 Chromium 构建目录，仍随 Windows 构建验证执行。
 
 基础 quality 成功且 `integrate` 为真时，Android、Windows、Linux 任一被选中就分配一个 Ubuntu runner。这个 runner 只执行选中的合同，每个平台单独显示一个步骤。多平台改动共用一次 checkout 和 Node 安装。一个合同失败后，其余已选合同继续运行。取消或环境准备失败时停止。步骤保留各自的失败状态，作业级 `continue-on-error` 让该作业提供诊断。Linux 合同执行真实 Bash 父子 fixture，并用样例验证报告过滤、零命中和缺项拒绝。kcov、Pester、Android instrumentation 和 iOS Simulator 的覆盖率报告及触发条件见本指南的「PR、develop/main 与证据身份」。
