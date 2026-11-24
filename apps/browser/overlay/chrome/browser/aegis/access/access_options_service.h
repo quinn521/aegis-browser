@@ -155,6 +155,11 @@ class AccessOptionsService : public base::SupportsUserData::Data {
   void OnTestNodePreview(const std::string& editor, uint64_t generation,
       base::OnceCallback<void(TestNodePreviewResult)> callback,
       TestNodePreviewResult preview);
+  // Reports a stale draft as a revision conflict before reporting that the
+  // current test Profile runtime blocks the save.
+  void RejectRuntimeInUseAfterRevisionCheck(
+      uint64_t expected_revision,
+      base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
   void OnTestProfileSaveRead(std::string editor, uint64_t generation,
       uint64_t expected_revision, std::string operation_id, std::string name,
       aegis_access::AccessInboundPreferences inbound,

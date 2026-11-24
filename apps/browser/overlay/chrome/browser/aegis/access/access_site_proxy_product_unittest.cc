@@ -1427,6 +1427,64 @@ TEST_F(AccessSavedTestProfileProductTest,
 }
 
 TEST_F(AccessSavedTestProfileProductTest,
+       StaleWindowApplyDuringActiveProfileReportsRevisionConflict) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  const auto active = bubble_->AcknowledgedTestProfileListener();
+  ASSERT_TRUE(active);
+  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> latest;
+  options->Read(latest.GetCallback());
+  ASSERT_EQ(latest.Get().status, StoreStatus::kValid);
+  const uint64_t current = latest.Get().value->revision;
+  ASSERT_GT(current, 0u);
+
+  const auto editor = options->BeginTestNodeEditor();
+  ASSERT_TRUE(editor);
+  base::test::TestFuture<TestNodePreviewResult> preview;
+  options->PreviewTestNodeText(*editor, aegis_access::test::kSyntheticTestNodeShare,
+                               preview.GetCallback());
+  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
+  aegis_access::AccessInboundPreferences inbound;
+  inbound.protocol = aegis_access::AccessInboundProtocolPreference::kSocks5;
+
+  // A window still holding an older revision is told about the conflict,
+  // not asked to revoke the listener another window is using.
+  base::test::TestFuture<AccessTestProfileSaveResult> stale;
+  options->SaveTestNodeProfile(*editor, current - 1,
+                               base::Uuid::GenerateRandomV4().AsLowercaseString(), "B",
+                               inbound, stale.GetCallback());
+  EXPECT_EQ(stale.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(stale.Get().detail, "configuration_revision_conflict");
+  ASSERT_TRUE(stale.Get().snapshot);
+  EXPECT_EQ(stale.Get().snapshot->revision, current);
+
+  base::test::TestFuture<AccessTestProfileSaveResult> in_use;
+  options->SaveTestNodeProfile(*editor, current,
+                               base::Uuid::GenerateRandomV4().AsLowercaseString(), "B",
+                               inbound, in_use.GetCallback());
+  EXPECT_EQ(in_use.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(in_use.Get().detail, "profile_runtime_in_use");
+
+  base::test::TestFuture<AccessTestProfileSaveResult> stale_preferences;
+  options->EndTestNodeEditor(*editor);
+  const auto preferences_editor = options->BeginTestNodeEditor();
+  ASSERT_TRUE(preferences_editor);
+  options->SaveTestNodePreferences(*preferences_editor, current - 1,
+                                   base::Uuid::GenerateRandomV4().AsLowercaseString(),
+                                   inbound, stale_preferences.GetCallback());
+  EXPECT_EQ(stale_preferences.Get().detail, "configuration_revision_conflict");
+  options->EndTestNodeEditor(*preferences_editor);
+
+  // Neither rejection touched the active listener.
+  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+  EXPECT_EQ(bubble_->AcknowledgedTestProfileListener()->registration_id,
+            active->registration_id);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
        AdditionalFactoryForLiveContextKeepsTestProfileRegistration) {
   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
   base::test::TestFuture<bool> restored;

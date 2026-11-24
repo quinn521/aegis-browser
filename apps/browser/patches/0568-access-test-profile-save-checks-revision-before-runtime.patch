@@ -1,0 +1,180 @@
+From 70140ad8f33211ffba83ac48f2ebf8909c2612e1 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 05:25:41 +0800
+Subject: [PATCH] fix(access): report a stale Test Profile draft before the
+ runtime fence
+
+While a Test Profile runtime is active, Save and preferences-only Save first read the committed revision. A stale draft now reports configuration_revision_conflict with the current snapshot instead of profile_runtime_in_use, so a second window is not told to revoke a healthy listener. A current draft still reports profile_runtime_in_use. Replacing an active Profile behind the dispatch barrier is not part of this change.
+---
+ .../aegis/access/access_options_service.cc    | 32 ++++++++--
+ .../aegis/access/access_options_service.h     |  5 ++
+ .../access/access_options_service_unittest.cc |  6 +-
+ .../access_site_proxy_product_unittest.cc     | 58 +++++++++++++++++++
+ 4 files changed, 95 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index a7d9d5525972098e5ac456ed88b75682c0123f94..a74f23adc62d9de4105a8c3ea545f61b8120d61d 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -477,6 +477,32 @@ void AccessOptionsService::PreviewTestNodeQr(
+           weak_factory_.GetWeakPtr(), editor, *generation, std::move(callback)));
+ }
+ 
++void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
++    uint64_t expected_revision,
++    base::OnceCallback<void(AccessTestProfileSaveResult)> callback) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  // A stale window must learn about the newer revision instead of being told
++  // to revoke another window's healthy listener.
++  Read(base::BindOnce(
++      [](uint64_t expected_revision,
++         base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
++         StoreResult<AccessOptionsSnapshot> snapshot) {
++        if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
++            snapshot.value->revision != expected_revision) {
++          std::move(callback).Run(
++              {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict
++                                                      : snapshot.status,
++               AccessOptionsCommitOutcome::kNotCommitted, std::nullopt,
++               std::move(snapshot.value), "configuration_revision_conflict"});
++          return;
++        }
++        std::move(callback).Run({StoreStatus::kConflict,
++                                 AccessOptionsCommitOutcome::kNotCommitted, std::nullopt,
++                                 std::move(snapshot.value), "profile_runtime_in_use"});
++      },
++      expected_revision, std::move(callback)));
++}
++
+ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
+     uint64_t expected_revision, std::string operation_id, std::string name,
+     aegis_access::AccessInboundPreferences inbound,
+@@ -492,8 +518,7 @@ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
+   if (test_profile_core_ ||
+       (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
+        test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
+-    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+-                            std::nullopt, std::nullopt, "profile_runtime_in_use"});
++    RejectRuntimeInUseAfterRevisionCheck(expected_revision, std::move(callback));
+     return;
+   }
+   if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
+@@ -535,8 +560,7 @@ void AccessOptionsService::SaveTestNodePreferences(const std::string& editor,
+   if (test_profile_core_ ||
+       (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
+        test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
+-    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+-                            std::nullopt, std::nullopt, "profile_runtime_in_use"});
++    RejectRuntimeInUseAfterRevisionCheck(expected_revision, std::move(callback));
+     return;
+   }
+   if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
+diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
+index c2b06f44bb16d70d5d1616543b7f169d53da5856..66d4c0a7fbeadf9cf597bc454b0780629ff23c8f 100644
+--- a/chrome/browser/aegis/access/access_options_service.h
++++ b/chrome/browser/aegis/access/access_options_service.h
+@@ -155,6 +155,11 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+   void OnTestNodePreview(const std::string& editor, uint64_t generation,
+       base::OnceCallback<void(TestNodePreviewResult)> callback,
+       TestNodePreviewResult preview);
++  // Reports a stale draft as a revision conflict before reporting that the
++  // current test Profile runtime blocks the save.
++  void RejectRuntimeInUseAfterRevisionCheck(
++      uint64_t expected_revision,
++      base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
+   void OnTestProfileSaveRead(std::string editor, uint64_t generation,
+       uint64_t expected_revision, std::string operation_id, std::string name,
+       aegis_access::AccessInboundPreferences inbound,
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+index 224391e1ae9d59751805206e509f0b4569c85c69..4fb2e43c18d97f9dea2c183d607e42975b5779b7 100644
+--- a/chrome/browser/aegis/access/access_options_service_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -318,12 +318,14 @@ TEST(AccessOptionsServiceTest, PreparingFencesSecondWindowSaveBeforeAsynchronous
+   base::test::TestFuture<AccessTestProfileSaveResult> blocked;
+   options->SaveTestNodeProfile(*second, 1, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+       "TEST02", inbound, blocked.GetCallback());
+-  EXPECT_EQ(blocked.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+-  EXPECT_EQ(blocked.Get().detail, "profile_runtime_in_use");
+   // Cancel before the native read reply can create a core. This cannot open
+   // an endpoint or authorize a late preparation callback from the first call.
+   base::test::TestFuture<bool> revoked;
+   options->RevokeTestNodeProfile(revoked.GetCallback());
++  // The rejection first confirms the revision, so read it only after the
++  // revocation has fenced the preparation's own read.
++  EXPECT_EQ(blocked.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(blocked.Get().detail, "profile_runtime_in_use");
+   EXPECT_TRUE(revoked.Get());
+   EXPECT_FALSE(prepare.Get().ready);
+   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index fb38fcc7d1ea79f17e29df5bf31732e0432367b2..29ec78e765e233d2b6d33db5a519bff6f9fac656 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1426,6 +1426,64 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       StaleWindowApplyDuringActiveProfileReportsRevisionConflict) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  const auto active = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(active);
++  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> latest;
++  options->Read(latest.GetCallback());
++  ASSERT_EQ(latest.Get().status, StoreStatus::kValid);
++  const uint64_t current = latest.Get().value->revision;
++  ASSERT_GT(current, 0u);
++
++  const auto editor = options->BeginTestNodeEditor();
++  ASSERT_TRUE(editor);
++  base::test::TestFuture<TestNodePreviewResult> preview;
++  options->PreviewTestNodeText(*editor, aegis_access::test::kSyntheticTestNodeShare,
++                               preview.GetCallback());
++  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
++  aegis_access::AccessInboundPreferences inbound;
++  inbound.protocol = aegis_access::AccessInboundProtocolPreference::kSocks5;
++
++  // A window still holding an older revision is told about the conflict,
++  // not asked to revoke the listener another window is using.
++  base::test::TestFuture<AccessTestProfileSaveResult> stale;
++  options->SaveTestNodeProfile(*editor, current - 1,
++                               base::Uuid::GenerateRandomV4().AsLowercaseString(), "B",
++                               inbound, stale.GetCallback());
++  EXPECT_EQ(stale.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(stale.Get().detail, "configuration_revision_conflict");
++  ASSERT_TRUE(stale.Get().snapshot);
++  EXPECT_EQ(stale.Get().snapshot->revision, current);
++
++  base::test::TestFuture<AccessTestProfileSaveResult> in_use;
++  options->SaveTestNodeProfile(*editor, current,
++                               base::Uuid::GenerateRandomV4().AsLowercaseString(), "B",
++                               inbound, in_use.GetCallback());
++  EXPECT_EQ(in_use.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(in_use.Get().detail, "profile_runtime_in_use");
++
++  base::test::TestFuture<AccessTestProfileSaveResult> stale_preferences;
++  options->EndTestNodeEditor(*editor);
++  const auto preferences_editor = options->BeginTestNodeEditor();
++  ASSERT_TRUE(preferences_editor);
++  options->SaveTestNodePreferences(*preferences_editor, current - 1,
++                                   base::Uuid::GenerateRandomV4().AsLowercaseString(),
++                                   inbound, stale_preferences.GetCallback());
++  EXPECT_EQ(stale_preferences.Get().detail, "configuration_revision_conflict");
++  options->EndTestNodeEditor(*preferences_editor);
++
++  // Neither rejection touched the active listener.
++  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
++  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
++  EXPECT_EQ(bubble_->AcknowledgedTestProfileListener()->registration_id,
++            active->registration_id);
++}
++
+ TEST_F(AccessSavedTestProfileProductTest,
+        AdditionalFactoryForLiveContextKeepsTestProfileRegistration) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+-- 
+2.54.0 (Apple Git-157)
+

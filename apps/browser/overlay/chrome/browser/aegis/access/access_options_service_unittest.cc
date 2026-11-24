@@ -318,12 +318,14 @@ TEST(AccessOptionsServiceTest, PreparingFencesSecondWindowSaveBeforeAsynchronous
   base::test::TestFuture<AccessTestProfileSaveResult> blocked;
   options->SaveTestNodeProfile(*second, 1, base::Uuid::GenerateRandomV4().AsLowercaseString(),
       "TEST02", inbound, blocked.GetCallback());
-  EXPECT_EQ(blocked.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
-  EXPECT_EQ(blocked.Get().detail, "profile_runtime_in_use");
   // Cancel before the native read reply can create a core. This cannot open
   // an endpoint or authorize a late preparation callback from the first call.
   base::test::TestFuture<bool> revoked;
   options->RevokeTestNodeProfile(revoked.GetCallback());
+  // The rejection first confirms the revision, so read it only after the
+  // revocation has fenced the preparation's own read.
+  EXPECT_EQ(blocked.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(blocked.Get().detail, "profile_runtime_in_use");
   EXPECT_TRUE(revoked.Get());
   EXPECT_FALSE(prepare.Get().ready);
   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
