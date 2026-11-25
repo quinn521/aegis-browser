@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,9 +206,14 @@ func TestRetiredGRPCGenerationOutlastsDelayedDialAndRejectsLaterDials(t *testing
 	entered := make(chan struct{}, 8)
 	release := make(chan struct{})
 	created := make(chan []*grpc.ClientConn, 8)
+	var calls atomic.Int32
 	grpcTransportDial = func(ctx context.Context, dest xnet.Destination, settings *internet.MemoryStreamConfig) (stat.Connection, error) {
 		entered <- struct{}{}
-		<-release
+		// Only the first dial is held, so a regressed retired-generation probe
+		// reaches its assertion instead of blocking until the suite timeout.
+		if calls.Add(1) == 1 {
+			<-release
+		}
 		conn, err := pinned(ctx, dest, settings)
 		created <- cachedGRPCClients([]*internet.MemoryStreamConfig{settings})
 		return conn, err

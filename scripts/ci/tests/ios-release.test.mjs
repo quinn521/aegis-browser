@@ -55,7 +55,9 @@ test('private Alpha hands off to the protected store without publishing artifact
   const runnerAdmission = jobs.admission.steps.find(step => step.name === 'Require a dedicated runner for private Alpha');
   assert(runnerAdmission.if.includes("steps.plan.outputs.private_alpha == 'true'"));
   const sharedAdmission = jobs.admission.steps.find(step => step.id === 'shared-runner');
-  assert.equal(sharedAdmission.if, undefined, 'ordinary deliveries must validate the shared selector too');
+  assert.equal(sharedAdmission.if, "${{ !startsWith(steps.plan.outputs.operation, 'status-') }}",
+    'every route that can schedule macOS work validates the shared selector; hosted status queries do not');
+  assert.equal(jobs['status-query']['runs-on'], 'ubuntu-24.04');
   const admissionIds = jobs.admission.steps.map(step => step.id);
   assert(admissionIds.indexOf('plan') < admissionIds.indexOf('shared-runner'));
   assert(admissionIds.indexOf('shared-runner') < admissionIds.indexOf('private-alpha-runner'));
@@ -80,7 +82,8 @@ test('private Alpha hands off to the protected store without publishing artifact
     // Ordinary delivery: no private_alpha condition, with and without a configured private label.
     const admitShared = env => spawnSync(shell, ['-c', sharedAdmission.run],
       {env: {...process.env, PRIVATE_ALPHA_LABEL: '', SHARED_IOS_LABEL: 'shared', ...env}});
-    for (const valid of [{}, {PRIVATE_ALPHA_LABEL: 'Private-Runner'}, {SHARED_IOS_LABEL: 'aegis-ios-upstream'}]) {
+    for (const valid of [{}, {PRIVATE_ALPHA_LABEL: 'Private-Runner'}, {SHARED_IOS_LABEL: 'aegis-ios-upstream'},
+      {SHARED_IOS_LABEL: 'aegis.ios_upstream-1'}]) {
       assert.equal(admitShared(valid).status, 0, `${shell}: ${JSON.stringify(valid)}`);
     }
     for (const invalid of [
@@ -88,6 +91,10 @@ test('private Alpha hands off to the protected store without publishing artifact
       ...['ARM64', 'arm64', 'macOS', 'SELF-hosted', 'x64', 'Linux'].map(label => ({SHARED_IOS_LABEL: label})),
       ...['ARM64', 'MacOS'].map(label => ({SHARED_IOS_LABEL: label, PRIVATE_ALPHA_LABEL: 'Private-Runner'})),
       {SHARED_IOS_LABEL: 'Private-Runner', PRIVATE_ALPHA_LABEL: 'private-runner'},
+      // Non-ASCII case pairs collide on GitHub but not under tr.
+      {SHARED_IOS_LABEL: 'build-\u00e9', PRIVATE_ALPHA_LABEL: 'build-\u00c9'},
+      {SHARED_IOS_LABEL: 'build-\u00e9'}, {SHARED_IOS_LABEL: 'shared', PRIVATE_ALPHA_LABEL: 'build-\u00c9'},
+      {SHARED_IOS_LABEL: 'shared/x'},
     ]) {
       assert.equal(admitShared(invalid).status, 1, `${shell}: ${JSON.stringify(invalid)}`);
     }
@@ -102,6 +109,8 @@ test('private Alpha hands off to the protected store without publishing artifact
       {PRIVATE_ALPHA_LABEL: ''}, {SHARED_IOS_LABEL: ''}, {SHARED_IOS_LABEL: '   '},
       ...['SHARED', 'self-HOSTED', 'macOS', 'ARM64', ' shared '].map(label => ({PRIVATE_ALPHA_LABEL: label})),
       ...['SELF-hosted', 'MacOS', 'arm64'].map(label => ({SHARED_IOS_LABEL: label})),
+      {PRIVATE_ALPHA_LABEL: 'build-\u00c9', SHARED_IOS_LABEL: 'build-\u00e9'},
+      {PRIVATE_ALPHA_LABEL: 'Private-Runner', SHARED_IOS_LABEL: 'build-\u00e9'},
     ]) {
       assert.equal(admitRunner(invalid).status, 1, `${shell}: ${JSON.stringify(invalid)}`);
       assert.equal(readFileSync(output, 'utf8'), '');

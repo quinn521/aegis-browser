@@ -96,21 +96,13 @@ def control(character):
 
 
 def relay_host(address):
-    # Matches AccessInternalNodeFields.dialAddress: a percent-decoded ASCII
-    # host is used as written; a non-ASCII host dials its IDNA A-label form.
-    # Python's codec is IDNA 2003, so only names whose A-label decodes back to
-    # the same lowercase NFC name are admitted; mapped names (such as sharp s)
-    # could differ from the app and fail closed.
-    if address.isascii():
-        return address
-    try:
-        encoded = address.encode('idna').decode('ascii')
-        restored = encoded.encode('ascii').decode('idna')
-    except UnicodeError as error:
-        raise ValueError('Invalid VLESS URI') from error
-    if restored != unicodedata.normalize('NFC', address).lower():
+    # Foundation's IDNA handling of percent-encoded hosts differs from
+    # Python's codec, and one unloadable entry discards the whole bundled list.
+    # Admit only a percent-decoded ASCII host; international relays must be
+    # written as A-labels (xn--...).
+    if not address.isascii():
         raise ValueError('Invalid VLESS URI')
-    return encoded
+    return address
 
 
 def share(uri):
@@ -120,7 +112,7 @@ def share(uri):
     # The app parses everything before the label with
     # URLComponents(string:encodingInvalidCharacters: false), which rejects a
     # literal non-ASCII character; one such entry would discard the whole
-    # bundled list. International relays must be percent-encoded or A-labels.
+    # bundled list. International relays must be written as A-labels.
     if not uri.partition('#')[0].isascii():
         raise ValueError('Invalid VLESS URI')
     parts = urlsplit(uri)
