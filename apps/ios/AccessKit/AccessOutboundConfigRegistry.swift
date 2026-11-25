@@ -12,6 +12,12 @@ enum AccessOutboundConfigRegistry {
 
     private static let realityTag = AccessRealityVisionOutboundConfig.outboundTag
     private static let webSocketTag = "internal_vless_ws_tls"
+    // Written out so the validator cannot follow a change to the generator constant.
+    private static let visionFlow = "xtls-rprx-vision"
+    // Shorter query values carry no secret material and would match timestamps,
+    // ports, and fixed event text, which turns whole diagnostic lines into
+    // "[redacted]". Xray never emits the WS path as a diagnostic field.
+    static let minimumQuerySecretLength = 4
 
     private static let entries: [AccessOutboundProfileKey: Entry] = [
         .vlessRawReality: Entry(
@@ -124,12 +130,13 @@ enum AccessOutboundConfigRegistry {
             return [encoded, encoded.removingPercentEncoding,
                     encoded.replacingOccurrences(of: "+", with: " ").removingPercentEncoding]
                 .compactMap { $0 }
+                .filter { $0.count >= minimumQuerySecretLength }
         }
     }
 
     private static func vlessRule(tag: String, vision: Bool, stream: Rule) -> Rule {
         var user: [String: Rule] = ["id": .string, "encryption": .literal("none")]
-        if vision { user["flow"] = .literal(AccessRealityVisionParameters.admittedFlow) }
+        if vision { user["flow"] = .literal(visionFlow) }
         return .object([
             "tag": .literal(tag),
             "protocol": .literal("vless"),
@@ -178,8 +185,9 @@ enum AccessOutboundConfigRegistry {
                     throw AccessRealityVisionOutboundConfigError.allowInsecureRejected
                 }
                 guard required.keys.allSatisfy(object.keys.contains) else { throw invalid }
-                for (key, value) in object {
-                    guard let rule = required[key] ?? optional[key] else { throw invalid }
+                // Sorted so a document with several violations always reports the same field.
+                for key in object.keys.sorted() {
+                    guard let rule = required[key] ?? optional[key], let value = object[key] else { throw invalid }
                     try rule.validate(value, field: key)
                 }
             case .single(let rule):
@@ -196,6 +204,7 @@ enum AccessOutboundConfigRegistry {
                       number.boolValue else { throw invalid }
             case .integer(let range):
                 guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      !CFNumberIsFloatType(number as CFNumber),
                       let integer = Int64(number.stringValue), range.contains(integer) else { throw invalid }
             }
         }

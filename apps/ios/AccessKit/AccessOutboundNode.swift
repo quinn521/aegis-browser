@@ -33,18 +33,33 @@ public enum AccessOutboundNode: Codable, Equatable, Sendable {
         public let port: UInt16
     }
 
+    // Keychain v3 stores these enums with Swift's enum Codable layout. The
+    // explicit keys below are the stored wire names: renaming a case or label
+    // must keep its raw value, or existing v3 records stop decoding.
     public enum Security: Codable, Equatable, Sendable {
         case reality(serverName: String, fingerprint: String, publicKey: String, shortID: String, spiderX: String)
         case tls(serverName: String, fingerprint: String, alpn: String)
+
+        private enum CodingKeys: String, CodingKey { case reality, tls }
+        private enum RealityCodingKeys: String, CodingKey {
+            case serverName, fingerprint, publicKey, shortID, spiderX
+        }
+        private enum TlsCodingKeys: String, CodingKey { case serverName, fingerprint, alpn }
     }
 
     public enum Transport: Codable, Equatable, Sendable {
         case raw
         case ws(path: String, host: String)
+
+        private enum CodingKeys: String, CodingKey { case raw, ws }
+        private enum WsCodingKeys: String, CodingKey { case path, host }
     }
 
     public enum Credentials: Codable, Equatable, Sendable {
         case vless(userID: String, encryption: String, flow: String?)
+
+        private enum CodingKeys: String, CodingKey { case vless }
+        private enum VlessCodingKeys: String, CodingKey { case userID, encryption, flow }
     }
 
     public var kind: Kind {
@@ -107,6 +122,8 @@ public enum AccessOutboundNode: Codable, Equatable, Sendable {
         let credentials = try fields.decode(Credentials.self, forKey: .credentials)
 
         switch (kind, security, transport, credentials) {
+        // Stored v3 REALITY records carry the admitted flow value. Changing
+        // admittedFlow makes those records fail closed until they are re-saved.
         case (.vless, .reality(let serverName, let fingerprint, let publicKey, let shortID, let spiderX),
               .raw, .vless(let userID, AccessRealityVisionParameters.admittedEncryption,
                           AccessRealityVisionParameters.admittedFlow?)):
