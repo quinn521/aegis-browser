@@ -205,6 +205,25 @@ test('a conflicting draft keeps its preview and compares the newer committed rev
   assert.match(page.status.textContent, /^Saved\. Listener unavailable/);
 });
 
+test('activating another Profile while one runs is rejected and keeps the connection', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  page.previewText('synthetic-second-profile');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  byId('apply-node').click();
+  page.applies[0].resolve({state: 'notSaved', revision: '1',
+                           reason: 'active_profile_switch_requires_deactivation'});
+  await tick();
+  assert.equal(page.status.dataset['error'], 'true');
+  assert.match(page.status.textContent,
+               /^Deactivate the current Profile before activating another\./);
+  assert.match(page.status.textContent, /current connection was not changed/);
+  assert.doesNotMatch(page.status.textContent, /Another window saved changes/);
+  assert.equal(page.applies.length, 1);
+});
+
 test('an uncertain Apply queries the same operation without sending a second commit', async t => {
   const page = openOptions(t, {enabled: true, private: false, testApply: true});
   await tick();

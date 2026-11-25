@@ -325,7 +325,7 @@ TEST(AccessOptionsServiceTest, PreparingFencesSecondWindowSaveBeforeAsynchronous
   // The rejection first confirms the revision, so read it only after the
   // revocation has fenced the preparation's own read.
   EXPECT_EQ(blocked.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
-  EXPECT_EQ(blocked.Get().detail, "profile_runtime_in_use");
+  EXPECT_EQ(blocked.Get().detail, "active_profile_switch_requires_deactivation");
   EXPECT_TRUE(revoked.Get());
   EXPECT_FALSE(prepare.Get().ready);
   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);

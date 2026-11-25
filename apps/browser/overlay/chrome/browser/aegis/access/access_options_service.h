@@ -156,9 +156,10 @@ class AccessOptionsService : public base::SupportsUserData::Data {
       base::OnceCallback<void(TestNodePreviewResult)> callback,
       TestNodePreviewResult preview);
   // Reports a stale draft as a revision conflict before reporting that the
-  // current test Profile runtime blocks the save.
+  // current test Profile runtime blocks the save. |switches_profile| marks a
+  // request to activate another Profile, which Alpha rejects while one runs.
   void RejectRuntimeInUseAfterRevisionCheck(
-      uint64_t expected_revision,
+      uint64_t expected_revision, bool switches_profile,
       base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
   void OnTestProfileSaveRead(std::string editor, uint64_t generation,
       uint64_t expected_revision, std::string operation_id, std::string name,

@@ -478,13 +478,13 @@ void AccessOptionsService::PreviewTestNodeQr(
 }
 
 void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
-    uint64_t expected_revision,
+    uint64_t expected_revision, bool switches_profile,
     base::OnceCallback<void(AccessTestProfileSaveResult)> callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   // A stale window must learn about the newer revision instead of being told
   // to revoke another window's healthy listener.
   Read(base::BindOnce(
-      [](uint64_t expected_revision,
+      [](uint64_t expected_revision, bool switches_profile,
          base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
          StoreResult<AccessOptionsSnapshot> snapshot) {
         if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
@@ -496,11 +496,17 @@ void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
                std::move(snapshot.value), "configuration_revision_conflict"});
           return;
         }
+        // Alpha does not replace a running Profile in place. Fail closed: no
+        // registration, commit or site rule for the candidate is started, and
+        // the active Profile is left exactly as it was.
         std::move(callback).Run({StoreStatus::kConflict,
                                  AccessOptionsCommitOutcome::kNotCommitted, std::nullopt,
-                                 std::move(snapshot.value), "profile_runtime_in_use"});
+                                 std::move(snapshot.value),
+                                 switches_profile
+                                     ? "active_profile_switch_requires_deactivation"
+                                     : "profile_runtime_in_use"});
       },
-      expected_revision, std::move(callback)));
+      expected_revision, switches_profile, std::move(callback)));
 }
 
 void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
@@ -518,7 +524,9 @@ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
   if (test_profile_core_ ||
       (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
        test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
-    RejectRuntimeInUseAfterRevisionCheck(expected_revision, std::move(callback));
+    // A newly imported node is another Profile to activate.
+    RejectRuntimeInUseAfterRevisionCheck(expected_revision, /*switches_profile=*/true,
+                                         std::move(callback));
     return;
   }
   if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
@@ -560,7 +568,8 @@ void AccessOptionsService::SaveTestNodePreferences(const std::string& editor,
   if (test_profile_core_ ||
       (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
        test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
-    RejectRuntimeInUseAfterRevisionCheck(expected_revision, std::move(callback));
+    RejectRuntimeInUseAfterRevisionCheck(expected_revision, /*switches_profile=*/false,
+                                         std::move(callback));
     return;
   }
   if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {

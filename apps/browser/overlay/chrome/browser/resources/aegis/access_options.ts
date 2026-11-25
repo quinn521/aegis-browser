@@ -402,6 +402,9 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
     status.textContent = 'Another window saved changes. Review the saved settings before applying this draft.';
   } else if (result.reason === 'profile_runtime_in_use') {
     status.textContent = 'Revoke the current test connection before replacing its settings.';
+  } else if (result.reason === 'active_profile_switch_requires_deactivation') {
+    status.textContent =
+        'Deactivate the current Profile before activating another. The current connection was not changed.';
   } else {
     status.textContent = 'The draft was not saved. Check the preview and listener preferences.';
   }

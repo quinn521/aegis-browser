@@ -1434,6 +1434,10 @@ TEST_F(AccessSavedTestProfileProductTest,
   ASSERT_TRUE(restored.Get());
   const auto active = bubble_->AcknowledgedTestProfileListener();
   ASSERT_TRUE(active);
+  const auto endpoints_before = transport_->PrivateEndpoints(owner_);
+  const auto committed_before =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(committed_before.value);
   base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> latest;
   options->Read(latest.GetCallback());
   ASSERT_EQ(latest.Get().status, StoreStatus::kValid);
@@ -1465,7 +1469,10 @@ TEST_F(AccessSavedTestProfileProductTest,
                                base::Uuid::GenerateRandomV4().AsLowercaseString(), "B",
                                inbound, in_use.GetCallback());
   EXPECT_EQ(in_use.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
-  EXPECT_EQ(in_use.Get().detail, "profile_runtime_in_use");
+  // Alpha rejects activating another Profile while A runs (fail closed).
+  EXPECT_EQ(in_use.Get().detail, "active_profile_switch_requires_deactivation");
+  ASSERT_TRUE(in_use.Get().snapshot);
+  EXPECT_EQ(in_use.Get().snapshot->revision, current);
 
   base::test::TestFuture<AccessTestProfileSaveResult> stale_preferences;
   options->EndTestNodeEditor(*editor);
@@ -1482,6 +1489,33 @@ TEST_F(AccessSavedTestProfileProductTest,
   ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
   EXPECT_EQ(bubble_->AcknowledgedTestProfileListener()->registration_id,
             active->registration_id);
+  // A's registration, durable commit and site routes are unchanged.
+  const auto endpoints_after = transport_->PrivateEndpoints(owner_);
+  ASSERT_EQ(endpoints_after.size(), endpoints_before.size());
+  for (size_t i = 0; i < endpoints_after.size(); ++i) {
+    EXPECT_EQ(endpoints_after[i].registration, endpoints_before[i].registration);
+    EXPECT_EQ(endpoints_after[i].listener_binding, endpoints_before[i].listener_binding);
+  }
+  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> after;
+  options->Read(after.GetCallback());
+  ASSERT_EQ(after.Get().status, StoreStatus::kValid);
+  EXPECT_EQ(after.Get().value->revision, current);
+  EXPECT_EQ(after.Get().value->test_profile->configuration.id,
+            latest.Get().value->test_profile->configuration.id);
+  EXPECT_EQ(after.Get().value->test_profile->version,
+            latest.Get().value->test_profile->version);
+  const auto committed_after =
+      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
+  ASSERT_TRUE(committed_after.value);
+  EXPECT_EQ(committed_after.value->policy_generation,
+            committed_before.value->policy_generation);
+  ASSERT_EQ(committed_after.value->site_groups.size(),
+            committed_before.value->site_groups.size());
+  for (const auto& site : committed_after.value->site_groups) {
+    ASSERT_FALSE(site.members.empty());
+    EXPECT_EQ(site.members.front().policy.proxy_group_id, group_);
+  }
+  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
 }
 
 TEST_F(AccessSavedTestProfileProductTest,
