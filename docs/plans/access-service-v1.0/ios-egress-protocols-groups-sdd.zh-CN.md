@@ -18,7 +18,20 @@
 
 ## 2. 目标与优先级
 
-1. 当前在用出口节点的协议优先。3X-UI 签入订阅提供 VLESS + RAW + REALITY + Vision，TEST-PAGES 资源提供 VLESS + WS + TLS。两者先成为组内一等成员，并进入订阅解析。
+1. 当前在用出口节点的协议优先。现有节点清单（脱敏登记，凭据只保存在操作员本机）共 11 种组合，锁定 Xray 支持其中 8 种：
+
+| 组合键 | 节点标注 | 导入格式 | 依赖 UDP |
+| --- | --- | --- | --- |
+| `vless.raw.reality`（Vision） | VLESS reality_vision | `vless://` | 否 |
+| `vless.grpc.reality` | VLESS reality_gRPC | `vless://` | 否 |
+| `vless.raw.tls`（Vision） | VLESS TCP TLS_Vision | `vless://` | 否 |
+| `vless.ws.tls` | VLESS WS TLS | `vless://` | 否 |
+| `vmess.ws.tls` | VMess WS TLS | `vmess://`（v2rayN JSON，`aid=0`） | 否 |
+| `vmess.httpupgrade.tls` | VMess HTTPUpgrade TLS | `vmess://`（v2rayN JSON，`aid=0`） | 否 |
+| `trojan.raw.tls` | Trojan TLS | `trojan://`（ALPN `http/1.1`） | 否 |
+| `hysteria2` | Hysteria2 TLS | `hysteria2://`（`insecure=0`，ALPN `h3`，带 `upmbps`/`downmbps`） | 是 |
+
+   其余 3 种是 TUIC、Naive、AnyTLS。它们只有 sing-box 实现，锁定 Xray v26.11.9 源码中不存在，本 SDD 不覆盖。若要支持，需要另行评审引入 sing-box 内核。
 2. 多节点出口策略组按冻结规范第 7 节“自动检测 → 选定并保持 → 确认故障才切换”实现。
 3. 锁定 Xray 支持、能作为出口的其余协议分批进入 DEV，再按规范修订进入其他渠道。
 
@@ -62,6 +75,7 @@ AccessNodeLane { tag: "lane-<a-z0-9>", node: AccessOutboundNode }
 - Options 的文本与扫码入口按 scheme 分发到各解析器：`vless://`、`vmess://`（v2rayN Base64 JSON）、`trojan://`、`ss://`（SIP002）、`hysteria2://` 与 `hy2://`、`socks://`。WireGuard、MASQUE、mKCP 只接受单出站 JSON。单条输入、8192 字节上限、拒绝混入第二条分享等现有约束保留。
 - `AccessSubscriptionClient.parseNodes` 返回 `[AccessOutboundNode]`，再按渠道准入过滤成组。订阅中的全局路由、DNS、allow/block 和上游策略组仍不导入（规范 A41）。DEV 视图显示被过滤的条数与原因类别。
 - 签入订阅的用户 ID 绑定检查推广到每种 `kind` 的身份字段。
+- 解析器接受现有节点使用的别名：Trojan 与 Hysteria2 的 `peer` 等同 `sni`，VMess v2rayN JSON 的 `peer` 等同 `sni`。`upmbps`/`downmbps` 映射到 Hysteria2 的带宽字段，缺省时交给拥塞控制。
 
 ## 6. 出口策略组
 
@@ -94,16 +108,11 @@ AccessNodeLane { tag: "lane-<a-z0-9>", node: AccessOutboundNode }
 
 | 批次 | 组合 | 导入 | DEV | 内部 Alpha | Beta/Release |
 | --- | --- | --- | --- | --- | --- |
-| E1 | `vless.raw.reality`（Vision） | `vless://` | 是 | 是 | 现有签入订阅路径 |
-| E1 | `vless.ws.tls` | `vless://` | 是 | 是 | 待规范修订 |
-| E2 | VLESS 其余传输（raw/xhttp/grpc + REALITY，raw/httpupgrade/grpc/xhttp + TLS，`none` + mlkem） | `vless://` | 是 | 是 | 待规范修订 |
-| E2 | Trojan（raw/ws/grpc/xhttp/httpupgrade + TLS 或 REALITY） | `trojan://` | 是 | 是 | 待规范修订 |
-| E2 | VMess AEAD（可叠加 TLS） | `vmess://` | 是 | 是 | 待规范修订 |
-| E2 | Shadowsocks AEAD 与 2022-blake3 | `ss://` | 是 | 是 | 待规范修订 |
-| E3 | Hysteria2 | `hysteria2://`、`hy2://` | 是 | 是 | 依赖 #213 的计量结论 |
-| E3 | SOCKS／HTTP over TLS | `socks://`、JSON | 是 | 是 | 待规范修订 |
+| E1 | 现有节点的 7 种 TCP 组合：`vless.raw.reality`、`vless.grpc.reality`、`vless.raw.tls`、`vless.ws.tls`、`vmess.ws.tls`、`vmess.httpupgrade.tls`、`trojan.raw.tls` | `vless://`、`vmess://`、`trojan://` | 是 | 是 | `vless.raw.reality` 走现有签入订阅路径，其余待规范修订 |
+| E2 | 现有节点的 `hysteria2` | `hysteria2://`、`hy2://` | 是 | 是 | 依赖 #213 的计量结论 |
+| E3 | 其余 Xray 组合：VLESS 其他传输与 `none` + mlkem，Trojan 其他传输与 REALITY，VMess 其他传输，Shadowsocks AEAD 与 2022-blake3，SOCKS／HTTP over TLS | `vless://`、`trojan://`、`vmess://`、`ss://`、`socks://`、JSON | 是 | 是 | 待规范修订 |
 | E4 | WireGuard（强制 `noKernelTun: true`）、MASQUE、mKCP | JSON | 是 | 否 | 否 |
-| 排除 | `xdrive` 传输、明文上游、直连类出站 | 无 | 否 | 否 | 否 |
+| 排除 | TUIC、Naive、AnyTLS（Xray 不支持），`xdrive` 传输，明文上游，直连类出站 | 无 | 否 | 否 | 否 |
 
 ## 8. 规范修订项
 
@@ -111,19 +120,19 @@ AccessNodeLane { tag: "lane-<a-z0-9>", node: AccessOutboundNode }
 
 ## 9. 切片与验收
 
-按顺序实施，每片一个 PR。
+按顺序实施，每片一个 PR。现有节点协议（E1、E2）排在策略组之前。
 
 | 切片 | 内容 | 完成条件 |
 | --- | --- | --- |
 | E0 | 类型化节点模型、生成器注册表、按组合的校验器、Keychain v3 | 现有 REALITY 与 WS 配置字节一致；v1、v2 记录可恢复；共享用例文件建立 |
-| E1 | 当前节点协议成组：订阅解析保留 `vless.raw.reality` 与 `vless.ws.tls`（WS 仅 DEV／Alpha），用户 ID 绑定推广 | 订阅多节点得到稳定顺序；Beta/Release 只保留 REALITY；被过滤项计数正确 |
+| E1 | 现有节点的 7 种 TCP 组合：解析、生成、校验、脱敏，订阅解析返回 `[AccessOutboundNode]` 并按渠道过滤，用户身份绑定推广到各 kind | 共享用例覆盖每条拒绝规则；`bridge_test.go` 每种组合 `core.LoadConfig` + `core.New` 通过；macOS loopback 服务端联调经内嵌实例 Dial canary；Beta/Release 只保留 REALITY |
+| E2 | 现有节点的 Hysteria2 | 同 E1，另在真机蜂窝与 Wi-Fi 验证；Go 注册测试确认 `proxy/hysteria` 在内嵌构建中可加载 |
 | G1 | `AccessNodeGroup` 与 `AccessNodeLane`，测试 Profile 与签入订阅统一产出组 | 单 lane 组行为与现状一致 |
 | G2 | 选择状态机 | 注入时钟覆盖保持、suspect 确认、冷却退避、两次成功回池、不回切、UDP 整类冷却、pinned 失败保持、预算耗尽 fail closed |
 | G3 | 候选验证器与浏览器级资源槽 | 并发不超过 2；超时与取消后临时实例确认停止 |
 | G4 | 接入 publisher 换代 | 受控环境封掉当前节点，15 秒内切到下一节点并有新代次证据；全部失败时阻断，旧连接新增接收为零 |
-| E2 | 第 2 批协议 | 共享用例覆盖每条拒绝规则；`bridge_test.go` 每种组合 `core.LoadConfig` + `core.New` 通过；macOS loopback 服务端联调经内嵌实例 Dial canary |
-| E3 | 第 3 批协议 | 同 E2，另在真机蜂窝与 Wi-Fi 验证 UDP 类协议 |
-| E4 | 第 4 批（仅 DEV） | 同 E2，另记录 WireGuard 用户态网络栈的实例内存 |
+| E3 | 其余 Xray 组合 | 同 E1 |
+| E4 | 第 4 批（仅 DEV） | 同 E1，另记录 WireGuard 用户态网络栈的实例内存 |
 | G5 | DEV 调试视图与诊断 | 列出 lane 协议、安全别名、状态与冷却剩余；不显示 host、UUID、公钥 |
 | R1 | 规范修订与主浏览器准入 | 冻结修订合并后按批次开放 Beta/Release |
 
