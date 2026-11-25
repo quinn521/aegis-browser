@@ -2539,9 +2539,11 @@ extension AccessHostRecoveryWebKitTests {
             let expected = expectedManaged ? managed : original
             let other = expectedManaged ? original : managed
             tab.loadFromAddressBar(url)
-            try await waitUntil(seconds: 10, {
-                attach(tab.webView, to: window)
-                if tab.webView.navigationDelegate !== navigation { tab.webView.navigationDelegate = navigation }
+            // A store switch can start a cold WebContent process before the fixture sees the request.
+            try await waitUntil(seconds: 45, {
+                let view = tab.webView
+                if view.navigationDelegate !== navigation { view.navigationDelegate = navigation }
+                attach(view, to: window)
                 return tab.liveCommittedDocumentURL == committedURL && !tab.isLoading && expected.transcript.contains(marker)
             }, message: "Expected \(host) on the selected exit for \(path)")
             XCTAssertFalse(other.transcript.contains(marker))
