@@ -127,14 +127,6 @@ def share(uri):
     # bundled list. International relays must be written as A-labels.
     if not uri.partition('#')[0].isascii():
         raise ValueError('Invalid VLESS URI')
-    # The app splits the label at the first Character equal to '#'. Swift
-    # merges '#' with a following combining mark, format character, some
-    # modifiers, or a scalar unassigned in Python's (older) Unicode data into
-    # one Character, so the split would miss and the strict parser would reject
-    # the entry. Admit only a first label character that cannot extend '#'.
-    label = uri.partition('#')[2]
-    if label and not label_start(label[0]):
-        raise ValueError('Invalid VLESS URI')
     parts = urlsplit(uri)
     user, separator, authority = parts.netloc.partition('@')
     raw_address, port_separator, port = authority.rpartition(':')
@@ -209,6 +201,10 @@ def validate_transport(uri, *, anchor=False):
 
 def validated_route(uri, *, anchor=False):
     parts, identity, address = share(uri)
+    # The bundled list parser splits at the first Character equal to '#'.
+    # An extending scalar would hide the delimiter from that parser.
+    if not anchor and parts.fragment and not label_start(parts.fragment[0]):
+        raise ValueError('Invalid VLESS URI')
     query = share_query(parts.query)
     if anchor:
         # The shared quota session reads the legacy TCP/REALITY node. Its

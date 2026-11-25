@@ -185,13 +185,13 @@ jobs:
             printf '%s\n' 'Configure a dedicated private Alpha runner group and unique runner label.' >&2
             exit 1
           }
-          export LC_ALL=C
           for setting in "$PRIVATE_ALPHA_GROUP" "$PRIVATE_ALPHA_LABEL" "$SHARED_IOS_LABEL"; do
             case "$setting" in
               ''|[[:space:]]*|*[[:space:]]|*[[:cntrl:]]*) reject_runner ;;
             esac
           done
           # Labels compare case-insensitively on GitHub; only ASCII folds reliably here.
+          export LC_ALL=C
           for label in "$PRIVATE_ALPHA_LABEL" "$SHARED_IOS_LABEL"; do
             case "$label" in
               *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) reject_runner ;;

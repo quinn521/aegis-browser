@@ -251,6 +251,14 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         self.assertEqual(cleanup.returncode, 0, cleanup.stderr)
         self.assertFalse(root.exists())
 
+    def test_stage_preserves_quota_anchor_with_combining_mark_fragment(self):
+        anchor = ANCHOR + '#\u0301quota'
+        digest = hashlib.sha256(anchor.encode()).hexdigest()
+        root = self.stage(**secrets(anchor=anchor, descriptor=dict(DESCRIPTOR, nodeSHA256=digest)))
+        inputs = root / 'inputs'
+        self.assertEqual((inputs / NODE).read_text(), anchor)
+        self.assertEqual(json.loads((inputs / QUOTA).read_bytes())['nodeSHA256'], digest)
+
     def test_stage_fails_closed_without_leaving_private_bytes(self):
         cases = [{key: ''} for key in secrets()]
         cases += [dict(AEGIS_IOS_ALPHA_NODES_BASE64='not base64'),

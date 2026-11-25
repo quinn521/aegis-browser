@@ -77,6 +77,7 @@ test('private Alpha hands off to the protected store without publishing artifact
   context.after(() => rmSync(directory, {recursive: true, force: true}));
   const output = join(directory, 'output');
   const dedicated = {PRIVATE_ALPHA_GROUP: 'Private Group', PRIVATE_ALPHA_LABEL: 'Private-Runner', SHARED_IOS_LABEL: 'shared'};
+  const utf8Locale = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
   // Hosted Ubuntu runs a modern Bash; stock macOS /bin/bash is 3.2.
   for (const shell of ['bash', ...(existsSync('/bin/bash') ? ['/bin/bash'] : [])]) {
     // Ordinary delivery: no private_alpha condition, with and without a configured private label.
@@ -100,12 +101,14 @@ test('private Alpha hands off to the protected store without publishing artifact
     }
     const admitRunner = env => {
       writeFileSync(output, '');
-      return spawnSync(shell, ['-c', runnerAdmission.run], {env: {...process.env, ...dedicated, ...env, GITHUB_OUTPUT: output}});
+      return spawnSync(shell, ['-c', runnerAdmission.run],
+        {env: {...process.env, LC_ALL: utf8Locale, ...dedicated, ...env, GITHUB_OUTPUT: output}});
     };
     assert.equal(admitRunner({}).status, 0, shell);
     assert.equal(readFileSync(output, 'utf8'), 'group=Private Group\nlabel=Private-Runner\n');
     for (const invalid of [
       {PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_GROUP: 'DeFaUlT'}, {PRIVATE_ALPHA_GROUP: 'private\nlabel=shared'},
+      {PRIVATE_ALPHA_GROUP: '\u2003'}, {PRIVATE_ALPHA_GROUP: '\u2003Private'}, {PRIVATE_ALPHA_GROUP: 'Private\u2003'},
       {PRIVATE_ALPHA_LABEL: ''}, {SHARED_IOS_LABEL: ''}, {SHARED_IOS_LABEL: '   '},
       ...['SHARED', 'self-HOSTED', 'macOS', 'ARM64', ' shared '].map(label => ({PRIVATE_ALPHA_LABEL: label})),
       ...['SELF-hosted', 'MacOS', 'arm64'].map(label => ({SHARED_IOS_LABEL: label})),
