@@ -24,4 +24,4 @@
 
 ## 交付顺序
 
-[#404](https://github.com/quinn521/aegis-browser/pull/404) 合入 `develop` 后，以实际集成提交为基线单开海外加速 PR。记录固定 DAT、设置交互、模拟器双出口、托管 CI 和设备验收结果。新版验收通过后，单独移除「常用 AI 加速」。
+[#404](https://github.com/quinn521/aegis-browser/pull/404) 合入 `develop` 后，以实际集成提交为基线单开海外加速 PR。记录固定 DAT、设置交互、模拟器双出口、托管 CI 和设备验收结果。原「常用 AI 加速」已并入海外加速的「AI 工具」分类，不再单独保留入口。
