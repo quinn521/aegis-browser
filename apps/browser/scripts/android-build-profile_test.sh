@@ -75,6 +75,11 @@ sed 's/^chrome_public_manifest_package = .*/chrome_public_manifest_package = "or
   "$ARGS_FILE" > "$other_package"
 expect_profile_failure "非产品包名时仍生成内部配置" "$other_package" internal-alpha
 
+two_packages="$TEST_ROOT/two-packages.gn"
+{ cat "$ARGS_FILE"; echo 'chrome_public_manifest_package = "org.chromium.chrome"'; } > "$two_packages"
+expect_profile_failure "重复包名赋值时仍生成 alpha 内部配置" "$two_packages" internal-alpha
+expect_profile_failure "重复包名赋值时仍生成 debug 内部配置" "$two_packages" internal-debug
+
 # 入口只接受显式组合；宿主检查保持不变，任何宿主都不会在测试根目录留下输出。
 for bad in "--internal-access-options beta" "--internal-access-options release" \
            "--internal-access-options" "--internal-access-options alpha --app-bundle alpha"; do

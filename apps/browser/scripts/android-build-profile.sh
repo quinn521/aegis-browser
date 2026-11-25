@@ -34,7 +34,8 @@ aegis_android_gn_args() {
   esac
   if [[ "$(grep -cx 'android_channel = "default"' <<< "$args")" != 1 ||
         "$(grep -c '^[[:space:]]*android_channel[[:space:]]*=' <<< "$args")" != 1 ||
-        "$(grep -cx 'chrome_public_manifest_package = "com.gcsa.aegis"' <<< "$args")" != 1 ]]; then
+        "$(grep -cx 'chrome_public_manifest_package = "com.gcsa.aegis"' <<< "$args")" != 1 ||
+        "$(grep -c '^[[:space:]]*chrome_public_manifest_package[[:space:]]*=' <<< "$args")" != 1 ]]; then
     echo "Android 基础参数必须只有一个 default 渠道与 com.gcsa.aegis 包名。" >&2
     return 1
   fi
