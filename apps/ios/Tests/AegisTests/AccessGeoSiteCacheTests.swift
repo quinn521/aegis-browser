@@ -881,7 +881,7 @@ final class AccessGeoSiteCacheTests: XCTestCase {
         }
         let storage = try AccessGeoSiteStorage.overseasUITest(keep: false)
         let cache = AccessGeoSiteCache(storage: storage)
-        await cache.restore(migrating: .init(mode: .smart, categories: []))
+        await cache.restore(migrating: .init(mode: .manual, categories: [.debian]))
         try cache.requestOverseasPreview()
         let preview = try Self.overseas(1, positive: ["google.com", "fast.com"], excluding: ["dl.google.com"], now: Date())
         try await cache.apply(preview, using: XCTUnwrap(cache.updateContext()))

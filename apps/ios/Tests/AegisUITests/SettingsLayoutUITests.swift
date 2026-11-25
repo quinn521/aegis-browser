@@ -482,7 +482,7 @@ final class SettingsLayoutUITests: XCTestCase {
             // Overseas acceleration stays available when the mainland mode is manual.
             let manual = app.buttons["website-acceleration-manual"]
             XCTAssertTrue(manual.waitForExistence(timeout: 5))
-            if !manual.isSelected { manual.tap() }
+            // Observe the seeded mode on both launches without changing the persisted choice.
             let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: manual)
             XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
             let overseas = app.buttons["overseas-acceleration-link"]
@@ -497,7 +497,8 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(reveal(ai, app))
         XCTAssertEqual(ai.value as? String, "0")
         ai.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
-        XCTAssertEqual(ai.value as? String, "1")
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ai)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed)
         let review = app.buttons["overseas-review-choice"]
         XCTAssertTrue(reveal(review, app))
         review.tap()
