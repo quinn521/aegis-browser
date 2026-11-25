@@ -1,0 +1,276 @@
+From a8d9938ec37f76e83c2c1b25f965448dbdbde515 Mon Sep 17 00:00:00 2001
+From: Aegis Development <development@example.invalid>
+Date: Wed, 25 Nov 2026 20:40:41 +0800
+Subject: [PATCH] fix(android): bind Access Options editor to its window
+
+Issue the editor only after the receiver is attached, require the receiver window to match the tab window, and run the instrumentation in an internal-only APK with the product identity.
+---
+ chrome/android/BUILD.gn                       | 16 ++++++++++++
+ .../settings/AegisAccessOptionsFragment.java  | 22 +++++++++++++---
+ chrome/android/javatests/BUILD.gn             | 13 +++++++++-
+ .../AegisAccessOptionsFragmentTest.java       |  5 +++-
+ chrome/browser/android/BUILD.gn               |  7 ++----
+ .../browser/android/aegis_access_options.gni  | 10 ++++++++
+ .../android/aegis_access_options_bridge.cc    | 25 ++++++++++++++++---
+ 7 files changed, 84 insertions(+), 14 deletions(-)
+ create mode 100644 chrome/browser/android/aegis_access_options.gni
+
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 1381581d046097dd04335801822e15fa54abe461..cd6e1a0fd99bebabc77104b333b2ee171a0bb062 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -8,6 +8,7 @@ import("//build/toolchain/gcc_toolchain.gni")
+ 
+ import("//chrome/android/chrome_common_shared_library.gni")
+ import("//chrome/android/modules/chrome_feature_module_tmpl.gni")
++import("//chrome/browser/android/aegis_access_options.gni")
+ import("//components/supervised_user/buildflags.gni")
+ 
+ assert(!is_cronet_build)
+@@ -2474,6 +2475,21 @@ if (_is_default_toolchain) {
+     ]
+   }
+ 
++  if (aegis_android_internal_access_options) {
++    # Android Access Options admits only the product identity, so its
++    # instrumentation runs in an APK that carries that package name. Installing
++    # it replaces the product package; use a dedicated device.
++    chrome_public_test_apk_tmpl("aegis_access_options_test_apk") {
++      apk_name = "AegisAccessOptionsTest"
++      manifest_package = chrome_public_manifest_package
++      deps = [
++        ":chrome_test_apk_template_resources",
++        "javatests:aegis_access_options_test_java",
++      ]
++      data = [ "//chrome/test/data/android/" ]
++    }
++  }
++
+   if (enable_vr) {
+     # //chrome/android/javatests/src/org/chromium/chrome/browser/vr/README.md
+     chrome_public_test_apk_tmpl("chrome_public_test_vr_apk") {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
+index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..87c1eb8130d9179f26f4fff5c1d8e636018b7ffb 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
+@@ -23,6 +23,7 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.TabModel;
+ import org.chromium.content_public.browser.WebContents;
++import org.chromium.ui.base.WindowAndroid;
+ 
+ /** Read-only Access Options for the ordinary tab that opened this dialog. */
+ @NullMarked
+@@ -33,6 +34,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+     private final Callback<TabModel> mModelChanged = this::onModelChanged;
+     private @Nullable MonotonicObservableSupplier<TabModel> mModels;
+     private @Nullable TabModel mOriginModel;
++    private @Nullable WebContents mPendingContents;
+     private String mEditor = "";
+     private boolean mRevoked;
+ 
+@@ -51,15 +53,14 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+         if (contents == null || !canOffer(contents)) return;
+ 
+         var fragment = new AegisAccessOptionsFragment();
+-        fragment.mEditor = AegisAccessOptionsFragmentJni.get().open(contents, fragment);
+-        if (fragment.mEditor.isEmpty()) return;
+-
++        fragment.mPendingContents = contents;
+         MonotonicObservableSupplier<TabModel> models =
+                 activity.getTabModelSelector().getCurrentTabModelSupplier();
+         fragment.mModels = models;
+         fragment.mOriginModel = activity.getTabModelSelector().getCurrentModel();
+         models.addSyncObserverAndCallIfNonNull(fragment.mModelChanged);
+-        // The credential and its receiver live in this window. Fragment state has no credential.
++        // The editor is issued only after this receiver is attached to the tab's window.
++        // Fragment state has no credential.
+         fragment.showNow(manager, TAG);
+     }
+ 
+@@ -90,6 +91,11 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+ 
+     @Override
+     public Dialog onCreateDialog(@Nullable Bundle state) {
++        WebContents contents = mPendingContents;
++        mPendingContents = null;
++        if (contents != null && !mRevoked && mEditor.isEmpty()) {
++            mEditor = AegisAccessOptionsFragmentJni.get().open(contents, this);
++        }
+         boolean canRead = !mRevoked && canReadEditor();
+         return new AlertDialog.Builder(requireContext())
+                 .setTitle(R.string.aegis_access_options_title)
+@@ -114,6 +120,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+     }
+ 
+     private void closeEditor() {
++        mPendingContents = null;
+         MonotonicObservableSupplier<TabModel> models = mModels;
+         if (models != null) {
+             mModels = null;
+@@ -134,6 +141,13 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+         }
+     }
+ 
++    /** The window hosting this receiver, or null when it is not attached to one. */
++    @CalledByNative
++    @Nullable WindowAndroid getAttachedWindow() {
++        if (!isAdded() || isDetached() || isRemoving()) return null;
++        return getActivity() instanceof ChromeTabbedActivity host ? host.getWindowAndroid() : null;
++    }
++
+     @NativeMethods
+     interface Natives {
+         boolean canOffer(@JniType("content::WebContents*") WebContents contents);
+diff --git a/chrome/android/javatests/BUILD.gn b/chrome/android/javatests/BUILD.gn
+index cc94c9b075c9b426ae405305437e819d1d1b11eb..971de0171c419fe717c65f2e0b4a72740d2887a5 100644
+--- a/chrome/android/javatests/BUILD.gn
++++ b/chrome/android/javatests/BUILD.gn
+@@ -1316,6 +1316,18 @@ android_library("chrome_test_java_org.chromium.chrome.browser.search_engines") {
+   deps = [ ":chrome_test_java_helper" ]
+ }
+ 
++# Runs only in //chrome/android:aegis_access_options_test_apk, which carries the
++# admitted product identity. chrome_public_test_apk cannot admit it.
++android_library("aegis_access_options_test_java") {
++  resources_package = "org.chromium.chrome"
++
++  sources = [
++    "src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java",
++  ]
++
++  deps = [ ":chrome_test_java_helper" ]
++}
++
+ android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
+   resources_package = "org.chromium.chrome"
+ 
+@@ -1323,7 +1335,6 @@ android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
+     "src/org/chromium/chrome/browser/settings/MainSettingsFragmentTest.java",
+     "src/org/chromium/chrome/browser/settings/MultiColumnSettingsTest.java",
+     "src/org/chromium/chrome/browser/settings/SettingsActivityTest.java",
+-    "src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java",
+     "src/org/chromium/chrome/browser/settings/SettingsPageBackButtonTest.java",
+     "src/org/chromium/chrome/browser/settings/SettingsPageRenderTest.java",
+     "src/org/chromium/chrome/browser/settings/SettingsPageSigninTest.java",
+diff --git a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
+index b697c1e9da5b2da2692bcefd3a00264014ea3a16..5ca0f7c8f06ffd221f8df824fd58da92fc1bf6c3 100644
+--- a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
++++ b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
+@@ -30,7 +30,10 @@ public class AegisAccessOptionsFragmentTest {
+ 
+     @Test
+     @MediumTest
+-    @Manual(message = "Requires an Aegis DEV or internal Alpha APK with Access Options enabled.")
++    @Manual(
++            message =
++                    "Runs only in AegisAccessOptionsTest.apk from an internal DEV or Alpha"
++                            + " build; it replaces com.gcsa.aegis on a dedicated device.")
+     public void testPrimaryDocumentReplacementRevokesVisibleEditor() throws Exception {
+         mActivityRule.startMainActivityWithURL(
+                 mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index 04b9c7f6ba94372e29fed95b04871219155f600f..4695f8485265dbfa0ee466bce7c31407f782ba11 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -6,6 +6,7 @@ import("//build/buildflag_header.gni")
+ import("//build/config/android/channel.gni")
+ import("//build/config/buildflags_paint_preview.gni")
+ import("//chrome/android/features/dev_ui/dev_ui_module.gni")
++import("//chrome/browser/android/aegis_access_options.gni")
+ import("//chrome/common/features.gni")
+ import("//device/vr/buildflags/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+@@ -384,11 +385,6 @@ if (is_android) {
+     ]
+   }
+ 
+-  declare_args() {
+-    aegis_android_access_product_channel = "unknown"
+-    aegis_android_internal_access_options = false
+-  }
+-
+   assert(!aegis_android_internal_access_options ||
+              (aegis_android_access_product_channel == "debug" &&
+                   android_channel == "dev") ||
+@@ -1011,6 +1007,7 @@ if (is_android) {
+       "//third_party/libaddressinput:util",
+       "//third_party/libphonenumber",
+       "//ui/accessibility",
++      "//ui/android",
+       "//ui/base/unowned_user_data",
+       "//ui/menus",
+       "//ui/webui:buildflags",
+diff --git a/chrome/browser/android/aegis_access_options.gni b/chrome/browser/android/aegis_access_options.gni
+new file mode 100644
+index 0000000000000000000000000000000000000000..afca81297e2d4892caaf33b2d149bce9611e611b
+--- /dev/null
++++ b/chrome/browser/android/aegis_access_options.gni
+@@ -0,0 +1,10 @@
++# Copyright 2026 GCSA
++
++declare_args() {
++  # Product channel admitted by Android Access Options: "debug" or "alpha".
++  aegis_android_access_product_channel = "unknown"
++
++  # Explicit opt-in for internal DEV and Alpha builds. Ordinary builds keep
++  # Android Access Options disabled.
++  aegis_android_internal_access_options = false
++}
+diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
+index 12b85bb6e231cc784e30209d02446bb4958fe444..0d2f5eea2623e6540f05fa9c50a8aaf53b349167 100644
+--- a/chrome/browser/android/aegis_access_options_bridge.cc
++++ b/chrome/browser/android/aegis_access_options_bridge.cc
+@@ -27,6 +27,7 @@
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_observer.h"
++#include "ui/android/window_android.h"
+ 
+ // Must follow the FromJniType and ToJniType specializations.
+ #include "chrome/android/chrome_jni_headers/AegisAccessOptionsFragment_jni.h"
+@@ -76,6 +77,20 @@ BrowserWindowInterface* GetEligibleWindow(content::WebContents* contents) {
+              : nullptr;
+ }
+ 
++// The receiver must be attached to the same native window as the tab. A
++// detached receiver or one hosted by another window can never own an editor.
++bool IsReceiverInWindowOf(JNIEnv* env,
++                          const jni_zero::JavaRef<jobject>& receiver,
++                          content::WebContents* contents) {
++  if (!receiver || !contents) {
++    return false;
++  }
++  ui::WindowAndroid* receiver_window = ui::WindowAndroid::FromJavaWindowAndroid(
++      Java_AegisAccessOptionsFragment_getAttachedWindow(env, receiver));
++  return receiver_window &&
++         receiver_window == contents->GetTopLevelNativeWindow();
++}
++
+ class EditorSession final : public content::WebContentsObserver {
+  public:
+   EditorSession(JNIEnv* env,
+@@ -99,8 +114,12 @@ class EditorSession final : public content::WebContentsObserver {
+   }
+ 
+   bool IsLive(JNIEnv* env) const {
+-    return !revoked_ && window_ && receiver_.get(env) &&
+-           GetEligibleWindow(web_contents()) == window_.get();
++    if (revoked_ || !window_) {
++      return false;
++    }
++    auto owner = receiver_.get(env);
++    return owner && GetEligibleWindow(web_contents()) == window_.get() &&
++           IsReceiverInWindowOf(env, owner, web_contents());
+   }
+ 
+  private:
+@@ -162,7 +181,7 @@ static std::string JNI_AegisAccessOptionsFragment_Open(
+     return {};
+   }
+   auto* window = GetEligibleWindow(contents);
+-  if (!window) {
++  if (!window || !IsReceiverInWindowOf(env, receiver, contents)) {
+     return {};
+   }
+ 

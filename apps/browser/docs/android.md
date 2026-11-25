@@ -58,6 +58,15 @@ Expected candidate paths, which **do not currently exist as accepted outputs**, 
 
 An AAB path and Play signing identity must be defined and verified before store work.
 
+Ordinary APK and App Bundle builds keep Android Access Options disabled. Internal DEV and Alpha builds that need it use an explicit profile with a matching Chromium channel:
+
+```bash
+bash apps/browser/scripts/build-android.sh --internal-access-options alpha   # canary + alpha
+bash apps/browser/scripts/build-android.sh --internal-access-options debug   # dev + debug
+```
+
+They write only to `out/AegisAndroidInternalAlpha` or `out/AegisAndroidInternalDebug`, never to the `package:android` path, and also build `AegisAccessOptionsTest.apk`. That instrumentation APK carries the `com.gcsa.aegis` identity and replaces the installed product package, so run it only on a dedicated device.
+
 ## Acceptance criteria
 
 1. In a clean x86-64 Linux checkout, replay all 276 Chromium patches and 3 V8 patches from the independent Android pin, then verify the complete source tree and product version.

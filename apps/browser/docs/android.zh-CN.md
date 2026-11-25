@@ -52,6 +52,15 @@ pnpm --filter @gcsa-aegis/browser package:android
 
 开展商店工作前，还必须定义并验证 AAB 路径和 Play 签名身份。
 
+普通 APK 与 App Bundle 构建保持关闭 Android Access Options。需要它的内部 DEV 与 Alpha 构建使用显式配置，并设定一致的 Chromium 渠道：
+
+```bash
+bash apps/browser/scripts/build-android.sh --internal-access-options alpha   # canary + alpha
+bash apps/browser/scripts/build-android.sh --internal-access-options debug   # dev + debug
+```
+
+它们只写入 `out/AegisAndroidInternalAlpha` 或 `out/AegisAndroidInternalDebug`，不进入 `package:android` 路径，并同时构建 `AegisAccessOptionsTest.apk`。该 instrumentation APK 使用 `com.gcsa.aegis` 身份，会替换已安装的产品包，只能在专用设备上运行。
+
 ## 验收条件
 
 1. 在干净的x86-64 Linux源码目录，从固定基线精确重放当前276个Chromium补丁与3个V8补丁。

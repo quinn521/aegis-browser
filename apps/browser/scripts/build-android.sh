@@ -2,18 +2,23 @@
 # 在 Linux 上编 chrome_public_apk。macOS 会立刻退出并说明原因。
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+source "$ROOT_DIR/scripts/android-build-profile.sh"
 
 SRC="$CHROMIUM_ROOT/src"
 OUT="${OUT_DIR:-$SRC/out/AegisAndroid}"
 ARGS_FILE="$ROOT_DIR/args/aegis-android.gn"
 
 bundle_profile=""
+internal_profile=""
 if [[ "$#" -ne 0 ]]; then
-  if [[ "$#" != 2 || "$1" != --app-bundle || ! "$2" =~ ^(alpha|beta|release)$ ]]; then
-    echo "Usage: build-android.sh [--app-bundle alpha|beta|release]" >&2
+  if [[ "$#" == 2 && "$1" == --app-bundle && "$2" =~ ^(alpha|beta|release)$ ]]; then
+    bundle_profile="$2"
+  elif [[ "$#" == 2 && "$1" == --internal-access-options && "$2" =~ ^(alpha|debug)$ ]]; then
+    internal_profile="$2"
+  else
+    echo "Usage: build-android.sh [--app-bundle alpha|beta|release | --internal-access-options alpha|debug]" >&2
     exit 2
   fi
-  bundle_profile="$2"
 fi
 
 need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-80}"
@@ -95,6 +100,31 @@ if [[ -n "$bundle_profile" ]]; then
   gn gen "$OUT" --args="$args"
   autoninja -C "$OUT" chrome_public_bundle
   python3 "$ROOT_DIR/scripts/verify-build-source.py" --source "$SRC" --platform android
+  exit 0
+fi
+if [[ -n "$internal_profile" ]]; then
+  # 内部 DEV / Alpha 构建使用独立输出目录，不进入 package:android 产物路径。
+  OUT="$SRC/out/$(aegis_android_internal_out_name "$internal_profile")"
+  if [[ -n "${OUT_DIR:-}" || -L "$SRC/out" || -L "$OUT" ]]; then
+    echo "内部 Access Options 构建只使用固定的实际输出目录：$OUT" >&2
+    exit 1
+  fi
+  internal_args="$(mktemp "${TMPDIR:-/tmp}/aegis-android-internal-args.XXXXXX")"
+  trap 'rm -f "$internal_args"' EXIT
+  aegis_android_gn_args "$ARGS_FILE" "internal-$internal_profile" > "$internal_args"
+  if [[ -f "$OUT/build.ninja" ]] && ! gn_args_match "$internal_args" "$OUT/args.gn"; then
+    echo "已有内部 Android 构建参数与当前配置不同；请先核对并重新生成，禁止沿用旧构建图。" >&2
+    exit 1
+  fi
+  ensure_depot_tools_on_path
+  cd "$SRC"
+  if [[ ! -f "$OUT/build.ninja" ]]; then
+    echo "Generating $OUT with internal $internal_profile Access Options…"
+    gn gen "$OUT" --args="$(cat "$internal_args")"
+  fi
+  autoninja -C "$OUT" chrome_public_apk aegis_access_options_test_apk
+  echo "Internal APK: $OUT/apks/ChromePublic.apk"
+  echo "Instrumentation APK: $OUT/apks/AegisAccessOptionsTest.apk"
   exit 0
 fi
 if [[ "$OUT" != "$SRC/out/AegisAndroid" || -L "$SRC/out" || -L "$OUT" ]]; then

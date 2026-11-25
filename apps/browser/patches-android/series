@@ -360,3 +360,4 @@
 0360-open-android-access-options-from-trusted-tab.patch
 0361-revoke-access-options-on-document-replacement.patch
 0362-preserve-access-options-restore-hint.patch
+0363-bind-access-options-editor-to-its-window.patch
