@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Network
 
 /// Bounded diagnostics. Xray writes into a private FIFO; only filtered records
 /// reach the app's private, size-limited history file.
@@ -687,7 +688,19 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                   host.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 }) else { return "[redacted]" }
         }
         guard !secrets.contains(where: { target.range(of: $0, options: .caseInsensitive) != nil }) else { return "[redacted]" }
+        if let address = Self.ipIdentity(host), secrets.contains(where: { Self.ipIdentity($0) == address }) {
+            return "[redacted]"
+        }
         return target
+    }
+
+    private static let mappedIPv4Prefix: [UInt8] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff]
+
+    private static func ipIdentity(_ host: String) -> Data? {
+        let address = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
+        if let ipv4 = IPv4Address(address) { return ipv4.rawValue }
+        guard let bytes = IPv6Address(address)?.rawValue else { return nil }
+        return bytes.starts(with: mappedIPv4Prefix) ? Data(bytes.suffix(4)) : bytes
     }
 
     private static func firstMatch(_ pattern: String, in text: String, group: Int) -> String? {

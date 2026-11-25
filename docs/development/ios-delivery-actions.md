@@ -68,6 +68,8 @@ for upload. Keep both environments' approval and branch protections. Configure
 `AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP` and `AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL`
 as upstream repository variables. The group must restrict access to
 `gcsagroup/aegis-browser/.github/workflows/ios-delivery.yml@refs/heads/main`.
+Admission requires a named group other than `Default` and a custom label distinct
+from the configured shared `AEGIS_IOS_RUNNER_LABEL` and GitHub's built-in labels.
 Assign the label to exactly one ARM64 macOS runner in that group, using an OS
 account dedicated to this workflow and separate from PR validation. Keep its
 temporary storage on SSD with room for DerivedData and export. The read-only

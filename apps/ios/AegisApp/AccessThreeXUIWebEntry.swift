@@ -44,7 +44,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
             && ["com.gcsa.aegis", "com.gcsa.aegis.alpha.internal"].contains(bundleID ?? "") && data != nil
         guard isConfigured, let data, data.count <= 131_500,
               let links = try? JSONDecoder().decode([String].self, from: data),
-              (1...16).contains(links.count), Set(links).count == links.count else { return }
+              (1...16).contains(links.count) else { return }
         var loaded: [AccessInternalTestNode] = []
         var identities = Set<UUID>()
         var displayed: [Entry] = []
@@ -53,6 +53,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
                   let components = URLComponents(string: link),
                   let user = components.user.flatMap(UUID.init(uuidString:)),
                   let node = try? AccessInternalTestNode.parseSingleShareURI(link),
+                  !loaded.contains(where: { $0.isWireIdentical(to: node) }),
                   let protocolName = Self.protocolName(components.queryItems ?? []) else { return }
             loaded.append(node)
             identities.insert(user)

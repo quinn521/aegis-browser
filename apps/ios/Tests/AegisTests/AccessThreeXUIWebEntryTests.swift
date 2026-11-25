@@ -38,6 +38,18 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertNil(invalid.selectedIndex)
     }
 
+    func testAlphaCatalogueRejectsDuplicateParsedRoutes() throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let original = alphaWSNode(address: "first.example")
+        let equivalent = original.replacingOccurrences(of: "path=%2Finside", with: "path=/inside")
+        let data = try JSONEncoder().encode([original + "#one", equivalent + "#two"])
+        let nodes = alphaCatalogue(data: data, defaults: defaults)
+        XCTAssertTrue(nodes.isConfigured)
+        XCTAssertTrue(nodes.entries.isEmpty)
+        XCTAssertNil(nodes.selectedIndex)
+    }
+
     func testAlphaSelectionRoutesProductOnlyAfterQuotaAndRevokesOnChange() async throws {
         let (defaults, suite) = try isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

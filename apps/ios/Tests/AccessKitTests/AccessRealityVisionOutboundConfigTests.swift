@@ -1090,6 +1090,8 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
         // Synthetic canonical X25519 public key (bytes 0...31, base64url without padding).
         let reality = try makeParameters(address: "relay-reality.example",
                                          publicKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+        let expandedIPv6 = "[2001:0db8:0000:0000:0000:0000:0000:0001]"
+        let mappedIPv6 = "0000:0000:0000:0000:0000:ffff:c000:0201"
         let userID = reality.userID
         let nodes: [(String, AccessInternalTestNode)] = [
             ("relay-reality.example", .realityVision(reality)),
@@ -1100,7 +1102,16 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
                 port: 443, userID: userID, serverName: "cert.example"))),
             ("relay-grpc.example", .vlessGRPCReality(try AccessVLESSGRPCRealityParameters(address: "relay-grpc.example",
                 port: 443, userID: userID, serverName: "cert.example", publicKey: reality.publicKey,
-                shortID: reality.shortID, serviceName: "Tun"))),
+                shortID: reality.shortID, serviceName: "FixtureService"))),
+            ("[2001:db8::1]", .realityVision(try makeParameters(address: expandedIPv6))),
+            ("[2001:db8::1]", .vlessWebSocketTLS(try AccessVLESSWebSocketTLSParameters(address: expandedIPv6,
+                port: 443, userID: userID, serverName: "cert.example", requestHost: "cert.example", path: "/inside",
+                fingerprint: "", alpn: ""))),
+            ("192.0.2.1", .vlessTCPTLSVision(try AccessVLESSTCPTLSVisionParameters(address: mappedIPv6,
+                port: 443, userID: userID, serverName: "cert.example"))),
+            ("[::ffff:192.0.2.1]", .vlessGRPCReality(try AccessVLESSGRPCRealityParameters(address: mappedIPv6,
+                port: 443, userID: userID, serverName: "cert.example", publicKey: reality.publicKey,
+                shortID: reality.shortID, serviceName: "FixtureService"))),
         ]
         for (relay, node) in nodes {
             let line = "2026/11/11 00:00:00 [Info] proxy/vless/outbound: tunneling request to tcp:target.example:443 via \(relay):443\n"
@@ -1117,6 +1128,7 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
                 XCTAssertTrue(log.stop(lease: lease))
                 let history = log.snapshot().lowercased()
                 XCTAssertFalse(history.isEmpty, relay)
+                XCTAssertTrue(history.contains("via " + (redacts ? "[redacted]" : "\(relay):443")), relay)
                 XCTAssertEqual(history.contains(relay), !redacts, "\(relay) redacted=\(redacts)")
                 XCTAssertFalse(history.contains(userID.lowercased()), relay)
             }

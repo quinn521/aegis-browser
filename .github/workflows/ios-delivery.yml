@@ -127,6 +127,8 @@ jobs:
       package_entrypoint: ${{ steps.plan.outputs.package_entrypoint }}
       private_alpha: ${{ steps.plan.outputs.private_alpha }}
       private_beta: ${{ steps.plan.outputs.private_beta }}
+      private_alpha_runner_group: ${{ steps.private-alpha-runner.outputs.group }}
+      private_alpha_runner_label: ${{ steps.private-alpha-runner.outputs.label }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -141,19 +143,31 @@ jobs:
       - id: plan
         name: Normalize exact package or existing-state route
         run: python3 scripts/release/ios-delivery-plan.py
-      - name: Require a dedicated runner for private Alpha
+      - id: private-alpha-runner
+        name: Require a dedicated runner for private Alpha
         if: ${{ steps.plan.outputs.private_alpha == 'true' }}
         env:
           PRIVATE_ALPHA_GROUP: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}
           PRIVATE_ALPHA_LABEL: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}
           SHARED_IOS_LABEL: ${{ vars.AEGIS_IOS_RUNNER_LABEL }}
         run: |
-          private_label=$(printf '%s' "$PRIVATE_ALPHA_LABEL" | tr '[:upper:]' '[:lower:]')
-          shared_label=$(printf '%s' "$SHARED_IOS_LABEL" | tr '[:upper:]' '[:lower:]')
-          if [[ -z "$PRIVATE_ALPHA_GROUP" || -z "$PRIVATE_ALPHA_LABEL" || "$private_label" == "$shared_label" ]]; then
+          reject_runner() {
             printf '%s\n' 'Configure a dedicated private Alpha runner group and unique runner label.' >&2
             exit 1
-          fi
+          }
+          for setting in "$PRIVATE_ALPHA_GROUP" "$PRIVATE_ALPHA_LABEL" "$SHARED_IOS_LABEL"; do
+            case "$setting" in
+              ''|[[:space:]]*|*[[:space:]]|*[[:cntrl:]]*) reject_runner ;;
+            esac
+          done
+          private_group=$(printf '%s' "$PRIVATE_ALPHA_GROUP" | tr '[:upper:]' '[:lower:]')
+          private_label=$(printf '%s' "$PRIVATE_ALPHA_LABEL" | tr '[:upper:]' '[:lower:]')
+          shared_label=$(printf '%s' "$SHARED_IOS_LABEL" | tr '[:upper:]' '[:lower:]')
+          [[ "$private_group" != default ]] || reject_runner
+          case "$private_label" in
+            "$shared_label"|self-hosted|macos|linux|windows|x64|arm|arm64) reject_runner ;;
+          esac
+          printf 'group=%s\nlabel=%s\n' "$PRIVATE_ALPHA_GROUP" "$PRIVATE_ALPHA_LABEL" >> "$GITHUB_OUTPUT"
       - name: Reject an earlier unresolved upload for this version and build
         if: ${{ steps.plan.outputs.operation == 'package-upload' }}
         env:
@@ -380,8 +394,8 @@ jobs:
       contents: write
       actions: read
     runs-on:
-      group: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}
-      labels: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}']
+      group: ${{ needs.admission.outputs.private_alpha_runner_group }}
+      labels: [self-hosted, macOS, ARM64, '${{ needs.admission.outputs.private_alpha_runner_label }}']
     environment: aegis-ios-signing
     timeout-minutes: 70
     outputs:
@@ -474,8 +488,8 @@ jobs:
       contents: write
       actions: read
     runs-on:
-      group: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}
-      labels: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}']
+      group: ${{ needs.admission.outputs.private_alpha_runner_group }}
+      labels: [self-hosted, macOS, ARM64, '${{ needs.admission.outputs.private_alpha_runner_label }}']
     environment: aegis-ios-store
     timeout-minutes: 45
     env:

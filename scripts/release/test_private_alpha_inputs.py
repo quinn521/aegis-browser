@@ -105,7 +105,7 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         prefix = LIST[1].split('#', 1)[0] + '#'
         remaining = 8192 - len(prefix) - 2
         label = 'é' * (remaining // 2) + 'a' * (remaining % 2)
-        edge = [prefix + label + f'{i:02d}' for i in range(16)]
+        edge = [prefix.replace(':443?', f':{443 + index}?') + label + f'{index:02d}' for index in range(16)]
         source.write_text(json.dumps(edge))
         source.chmod(0o600)
         self.assertEqual(self.hook('alpha', source, target).returncode, 0)
@@ -130,6 +130,12 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         tcp, ws, reality, grpc = (item.split('#', 1)[0] for item in LIST)
         bad = {
             'duplicated resource entry': [LIST[0], LIST[0]],
+            'distinct labels for one route': [tcp + '#one', tcp + '#two'],
+            'equivalent WS query encoding': [ws, ws.replace('%2Fapp', '/app')],
+            'equivalent TCP defaults and hint': [tcp, tcp.replace('&fp=chrome&headerType=none&host=hint.invalid', '')],
+            'equivalent REALITY aliases': [reality, reality.replace('serverName=', 'sni=')
+                                           .replace('publicKey=', 'pbk=').replace('shortId=abcd1234', 'sid=ABCD1234')],
+            'equivalent gRPC service alias': [grpc, grpc.replace('&path=/service/Tun', '')],
             'unicode equivalent entry': [tcp + '#é', tcp + '#é'],
             'duplicated key': [tcp + '&type=tcp'],
             'percent encoded duplicate key': [tcp + '&%66low=xtls-rprx-vision'],
@@ -161,7 +167,8 @@ class PrivateAlphaInputsTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn(UID, result.stdout + result.stderr)
                 self.assertFalse(target.exists())
-        for label in ('duplicated resource entry', 'percent encoded duplicate key', 'conflicting gRPC service'):
+        for label in ('duplicated resource entry', 'distinct labels for one route',
+                      'percent encoded duplicate key', 'conflicting gRPC service'):
             with self.subTest(stage=label):
                 result = self.cli([HELPER, 'stage'], dict(self.env, **secrets(bad[label])))
                 self.assertNotEqual(result.returncode, 0)
@@ -171,7 +178,8 @@ class PrivateAlphaInputsTests(unittest.TestCase):
     def test_canonical_resource_size_has_the_same_bound_as_the_app(self):
         prefix = LIST[0].split('#', 1)[0] + '#'
         def links_at(extra):
-            links = [prefix + f'{i:02}' + 'a' * (8192 - len(prefix) - 2) for i in range(16)]
+            links = [prefix.replace(':443?', f':{443 + index}?') + f'{index:02}' + 'a' * (8192 - len(prefix) - 2)
+                     for index in range(16)]
             links[0] = links[0][:-extra] + '"' * extra
             return links
         source = self.root / 'input'

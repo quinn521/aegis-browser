@@ -39,7 +39,7 @@ test('private Beta inputs stay in the protected manual package step', () => {
   }
 });
 
-test('private Alpha hands off to the protected store without publishing artifacts', () => {
+test('private Alpha hands off to the protected store without publishing artifacts', context => {
   const simple = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
   const full = parse(readFileSync('.github/workflows/ios-delivery-full.yml', 'utf8'));
   assert.equal(simple.on.workflow_dispatch.inputs.private_alpha.default, 'no');
@@ -49,18 +49,32 @@ test('private Alpha hands off to the protected store without publishing artifact
   const store = jobs['private-alpha-store'];
   assert.equal(job.environment, 'aegis-ios-signing');
   assert.deepEqual(job['runs-on'], {
-    group: '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}',
-    labels: ['self-hosted', 'macOS', 'ARM64', '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}'],
+    group: '${{ needs.admission.outputs.private_alpha_runner_group }}',
+    labels: ['self-hosted', 'macOS', 'ARM64', '${{ needs.admission.outputs.private_alpha_runner_label }}'],
   });
   const runnerAdmission = jobs.admission.steps.find(step => step.name === 'Require a dedicated runner for private Alpha');
   assert(runnerAdmission.if.includes("steps.plan.outputs.private_alpha == 'true'"));
-  const dedicated = {PRIVATE_ALPHA_GROUP: 'private-group', PRIVATE_ALPHA_LABEL: 'private-runner', SHARED_IOS_LABEL: 'shared'};
+  assert.equal(jobs.admission.outputs.private_alpha_runner_group, '${{ steps.private-alpha-runner.outputs.group }}');
+  assert.equal(jobs.admission.outputs.private_alpha_runner_label, '${{ steps.private-alpha-runner.outputs.label }}');
+  const directory = mkdtempSync(join(tmpdir(), 'private-alpha-runner-'));
+  context.after(() => rmSync(directory, {recursive: true, force: true}));
+  const output = join(directory, 'output');
+  const dedicated = {PRIVATE_ALPHA_GROUP: 'Private Group', PRIVATE_ALPHA_LABEL: 'Private-Runner', SHARED_IOS_LABEL: 'shared'};
   // Hosted Ubuntu runs a modern Bash; stock macOS /bin/bash is 3.2.
   for (const shell of ['bash', ...(existsSync('/bin/bash') ? ['/bin/bash'] : [])]) {
-    const admitRunner = env => spawnSync(shell, ['-c', runnerAdmission.run], {env: {...process.env, ...dedicated, ...env}});
+    const admitRunner = env => {
+      writeFileSync(output, '');
+      return spawnSync(shell, ['-c', runnerAdmission.run], {env: {...process.env, ...dedicated, ...env, GITHUB_OUTPUT: output}});
+    };
     assert.equal(admitRunner({}).status, 0, shell);
-    for (const missingOrShared of [{PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_LABEL: ''}, {PRIVATE_ALPHA_LABEL: 'SHARED'}]) {
-      assert.equal(admitRunner(missingOrShared).status, 1, shell);
+    assert.equal(readFileSync(output, 'utf8'), 'group=Private Group\nlabel=Private-Runner\n');
+    for (const invalid of [
+      {PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_GROUP: 'DeFaUlT'}, {PRIVATE_ALPHA_GROUP: 'private\nlabel=shared'},
+      {PRIVATE_ALPHA_LABEL: ''}, {SHARED_IOS_LABEL: ''}, {SHARED_IOS_LABEL: '   '},
+      ...['SHARED', 'self-HOSTED', 'macOS', 'ARM64', ' shared '].map(label => ({PRIVATE_ALPHA_LABEL: label})),
+    ]) {
+      assert.equal(admitRunner(invalid).status, 1, `${shell}: ${JSON.stringify(invalid)}`);
+      assert.equal(readFileSync(output, 'utf8'), '');
     }
   }
   assert.deepEqual(job.needs, ['admission', 'check-unused']);

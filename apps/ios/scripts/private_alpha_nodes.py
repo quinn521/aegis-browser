@@ -161,6 +161,11 @@ def valid_spider(path):
 
 
 def validate_transport(uri, *, anchor=False):
+    identity, _ = validated_route(uri, anchor=anchor)
+    return identity
+
+
+def validated_route(uri, *, anchor=False):
     parts, identity = share(uri)
     query = share_query(parts.query)
     if anchor:
@@ -187,11 +192,16 @@ def validate_transport(uri, *, anchor=False):
     if not server or not dns_name(server):
         raise ValueError('Invalid VLESS server name')
     if fields == WS_FIELDS:
-        if (not valid_authority(query.get('host', server)) or not valid_ws_target(query.get('path', '/'))
-                or (finger if finger is not None else '') not in WS_FINGERPRINTS
-                or query.get('alpn', '') not in ('', 'http/1.1')):
+        request_host = query.get('host', server)
+        path = query.get('path', '/')
+        alpn = query.get('alpn', '')
+        finger = finger if finger is not None else ''
+        if (not valid_authority(request_host) or not valid_ws_target(path)
+                or finger not in WS_FINGERPRINTS or alpn not in ('', 'http/1.1')):
             raise ValueError('Invalid WS/TLS fields')
+        transport_settings = (request_host, path, alpn)
     else:
+        transport_settings = ()
         if finger is None or (fields == REALITY_FIELDS and not finger):
             finger = 'chrome'
         fingerprint = finger.lower()
@@ -210,13 +220,17 @@ def validate_transport(uri, *, anchor=False):
                 or query.get('support-x25519mlkem768', 'true') != 'true'
                 or not valid_spider(query.get('spx', ''))):
             raise ValueError('Invalid TCP/REALITY fields')
+        transport_settings = (key, short.lower(), query.get('spx', ''))
     if fields == GRPC_FIELDS:
         service = query.get('serviceName', query.get('path'))
         if (service is None or len(service) > 2048 or query.get('path', service) != service
                 or any(part in ('.', '..') or not re.fullmatch(r'[A-Za-z0-9._~-]+', part)
                        for part in service.removeprefix('/').split('/'))):
             raise ValueError('Invalid or ambiguous gRPC service name')
-    return identity
+        transport_settings = (key, short.lower(), service)
+    address = parts.netloc.split('@', 1)[1].rsplit(':', 1)[0]
+    route = (query['type'], query['security'], address, parts.port, identity, server, finger, *transport_settings)
+    return identity, route
 
 
 def canonicalize(raw, expected_user=None):
@@ -227,16 +241,14 @@ def canonicalize(raw, expected_user=None):
         raise ValueError('Expected a nonempty bounded Alpha list')
     seen = set()
     for uri in nodes:
-        identity = validate_transport(uri)
+        identity, route = validated_route(uri)
         if expected_user is None:
             expected_user = identity
         if identity != expected_user:
             raise ValueError('Alpha list user differs from the anchored node')
-        # Swift String equality treats NFC-equivalent labels as equal.
-        duplicate_key = unicodedata.normalize('NFC', uri)
-        if duplicate_key in seen:
+        if route in seen:
             raise ValueError('Duplicate Alpha node')
-        seen.add(duplicate_key)
+        seen.add(route)
     output = json.dumps(nodes, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     if len(output) > MAX_RESOURCE_BYTES:
         raise ValueError('Canonical Alpha resource exceeds the app limit')
