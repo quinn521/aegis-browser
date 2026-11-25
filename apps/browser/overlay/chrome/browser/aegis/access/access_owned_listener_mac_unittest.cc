@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -129,6 +130,29 @@ AccessListenerLeaseResultMac WaitForLease(int channel, const AccessOwnedChildMac
   return result;
 }
 
+bool IsZombie(pid_t pid) {
+  kinfo_proc process{};
+  size_t length = sizeof(process);
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+  return sysctl(mib, 4, &process, &length, nullptr, 0) == 0 &&
+         length == sizeof(process) && process.kp_proc.p_stat == SZOMB;
+}
+
+bool WaitForZombie(pid_t pid) {
+  const auto deadline = base::TimeTicks::Now() + base::Seconds(5);
+  while (!IsZombie(pid)) {
+    if (base::TimeTicks::Now() >= deadline) return false;
+    base::PlatformThread::Sleep(base::Milliseconds(10));
+  }
+  return true;
+}
+
+// The PID stays allocated while an exited child is unreaped.
+bool PidReleased(pid_t pid) {
+  errno = 0;
+  return kill(pid, 0) == -1 && errno == ESRCH;
+}
+
 TEST(AccessOwnedListenerMacTest, SameOwnedSocketReportsDistinctSystemAssignedPortsAndRetiresIndependently) {
   ScopedListenerChild a("exclusive"), b("exclusive");
   const auto owned_a = CaptureAccessOwnedChildMac(a.pid());
@@ -219,6 +243,20 @@ TEST(AccessOwnedListenerMacTest, NormalRetirementConfirmsExitWithoutReapingDurin
   EXPECT_FALSE(ReapAccessExitedChildMac(child.pid()));
   EXPECT_EQ(child.Retire(*owned, 2000), AccessOwnedChildRetirementMac::kRetired);
   EXPECT_FALSE(AccessOwnedChildStillMatchesMac(*owned));
+  EXPECT_TRUE(PidReleased(owned->pid()));
+}
+
+TEST(AccessOwnedListenerMacTest, RetirementReapsExactChildThatAlreadyExitedUnreaped) {
+  ScopedListenerChild child("none");
+  const auto owned = CaptureAccessOwnedChildMac(child.pid());
+  ASSERT_TRUE(owned);
+  ASSERT_EQ(kill(owned->pid(), SIGUSR1), 0);
+  ASSERT_TRUE(WaitForZombie(owned->pid()));
+  EXPECT_FALSE(AccessOwnedChildStillMatchesMac(*owned));
+  EXPECT_FALSE(PidReleased(owned->pid()));
+  EXPECT_EQ(child.Retire(*owned, 2000), AccessOwnedChildRetirementMac::kRetired);
+  EXPECT_TRUE(PidReleased(owned->pid()));
+  EXPECT_EQ(RetireAccessOwnedChildMac(*owned, 2000), AccessOwnedChildRetirementMac::kRetired);
 }
 
 TEST(AccessOwnedListenerMacTest, DuplicatedKernelListenerReservesAddressAfterChildDeathUntilNativeRelease) {

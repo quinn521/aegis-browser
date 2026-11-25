@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <sys/proc_info.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -32,6 +33,28 @@ bool OwnedProcess(pid_t pid, proc_bsdinfo& info) {
 bool SameProcess(const AccessOwnedChildMac& child, const proc_bsdinfo& info) {
   return info.pbi_start_tvsec == child.start_seconds() &&
          info.pbi_start_tvusec == child.start_microseconds();
+}
+// proc_pidinfo reports ESRCH for a child that has exited but is not yet reaped,
+// while its PID stays allocated. sysctl still exposes the zombie's birth, parent
+// and state, so only the exact captured child is reaped here. Returns true once
+// the captured child no longer holds the PID, false while that exact child has
+// not reached the zombie state yet, and nullopt when its identity is unclear.
+std::optional<bool> ReapExactExitedChild(const AccessOwnedChildMac& child) {
+  kinfo_proc process{};
+  size_t length = sizeof(process);
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, child.pid()};
+  if (sysctl(mib, 4, &process, &length, nullptr, 0) != 0) return std::nullopt;
+  if (length == 0) return true;  // The PID is fully released.
+  if (length != sizeof(process) || process.kp_proc.p_pid != child.pid())
+    return std::nullopt;
+  if (static_cast<uint64_t>(process.kp_proc.p_starttime.tv_sec) !=
+          static_cast<uint64_t>(child.start_seconds()) ||
+      static_cast<uint64_t>(process.kp_proc.p_starttime.tv_usec) !=
+          static_cast<uint64_t>(child.start_microseconds()))
+    return true;  // A different process now owns the PID.
+  if (process.kp_eproc.e_ppid != getpid()) return std::nullopt;
+  if (process.kp_proc.p_stat != SZOMB) return false;
+  return ReapAccessExitedChildMac(child.pid()) ? std::make_optional(true) : std::nullopt;
 }
 bool IsListener(const socket_fdinfo& info) {
   return info.psi.soi_kind == SOCKINFO_TCP &&
@@ -86,7 +109,7 @@ AccessOwnedChildRetirementMac RetireAccessOwnedChildMac(
     errno = 0;
     const auto size = proc_pidinfo(child.pid(), PROC_PIDTBSDINFO, 0, &info, sizeof(info));
     if (size != static_cast<int>(sizeof(info)))
-      return errno == ESRCH ? std::make_optional(true) : std::nullopt;
+      return errno == ESRCH ? ReapExactExitedChild(child) : std::nullopt;
     if (!SameProcess(child, info)) return true;
     if (info.pbi_pid != static_cast<uint32_t>(child.pid()) ||
         info.pbi_ppid != static_cast<uint32_t>(getpid()) || info.pbi_uid != geteuid())
