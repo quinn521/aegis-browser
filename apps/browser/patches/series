@@ -529,7 +529,6 @@
 0529-prepare-resource-recovery-build342.patch
 0530-adapt-chromium158-actor-surface343.patch
 0531-preserve-reading-split-default344.patch
-0532-align-windows-uninstall-ui.patch
 0532-fix-chromium158-native-runtime-regressions.patch
 0533-fix-preserve-aegis-context-menu-uma.patch
 0534-test-access-private-routing-fixtures.patch
@@ -558,3 +557,4 @@
 0557-stabilize-permission-focus-regression-fixtures.patch
 0558-bind-voice-focus-test-to-renderer-speech-constructor.patch
 0559-fix-aim-speech-fixture-constructor-type.patch
+0560-align-windows-uninstall-ui.patch
