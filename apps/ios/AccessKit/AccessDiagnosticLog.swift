@@ -22,7 +22,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         return AccessDiagnosticLog(storageDirectory: directory, initialLevel: selectedLevel())
     }()
     public static let preferenceKey = "access.diagnostics.logLevel"
-    private static let retiredSecretLimit = 256
+    private static let secretLimit = 256
     private let queue = DispatchQueue(label: "aegis.access.diagnostics")
     private let limit: Int
     private let pollInterval: DispatchTimeInterval
@@ -236,23 +236,14 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         } else {
             stopped = true
         }
-        let exhausted = queue.sync {
+        queue.sync {
             let retiring = liveSecrets.removeValue(forKey: lease.id) ?? []
             if lastOwner {
                 retiredCaptureSecrets.removeAll()
                 redactionExhausted = false
             } else if !redactionExhausted {
-                let filters = retiredCaptureSecrets.union(retiring)
-                if filters.count <= Self.retiredSecretLimit {
-                    retiredCaptureSecrets = filters
-                } else {
-                    // No filter may be evicted while any sink can ingest a late
-                    // record. Keep draining, with capture off until all owners end.
-                    enabled = false
-                    pending.removeAll()
-                    redactionExhausted = true
-                    retiredCaptureSecrets.removeAll()
-                }
+                // Keep retired values while an existing sink can ingest a late record.
+                retiredCaptureSecrets.formUnion(retiring)
             }
             rebuildSecretSetLocked()
             if let readerFD, enabled {
@@ -260,10 +251,6 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
                 discardingLine = discardingLine || !pending.isEmpty
                 pending.removeAll()
             }
-            return redactionExhausted
-        }
-        if exhausted, let generation = sharedCapture?.generation {
-            AccessGoEmbeddedCore.retireLogCaptureGeneration(generation)
         }
         leaseCaptures.removeValue(forKey: lease.id)
         for id in Array(disabledPipes.keys) where !leaseCaptures.values.contains(id) {
@@ -279,15 +266,26 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         defer { sharedLock.unlock() }
         let owner = UUID()
         let exhausted = queue.sync {
-            liveSecrets[owner] = secrets.filter { !$0.isEmpty }
-            updateRedactorLocked()
+            let incoming = Set(secrets.filter { !$0.isEmpty })
+            let filters = incoming.union(liveSecrets.values.joined())
+                .union(retiredCaptureSecrets).union(standaloneSecrets)
+            if !redactionExhausted && filters.count > Self.secretLimit {
+                redactionExhausted = true
+                clearLocked(disable: true, completion: nil)
+            }
+            // Capture stays disabled until every current owner retires.
+            liveSecrets[owner] = redactionExhausted ? [] : Array(incoming)
+            if !redactionExhausted { updateRedactorLocked() }
             return redactionExhausted
+        }
+        if exhausted {
+            if let generation = sharedCapture?.generation { AccessGoEmbeddedCore.retireLogCaptureGeneration(generation) }
+            return Lease(id: owner, path: nil, level: .none, generation: nil)
         }
         if level == .none {
             if disableCaptureWhenQuiet { disableSharedCaptureLocked() }
             return Lease(id: owner, path: nil, level: .none, generation: nil)
         }
-        if exhausted { return Lease(id: owner, path: nil, level: .none, generation: nil) }
         if let capture = sharedCapture {
             let state = queue.sync { () -> (usable: Bool, failed: Bool) in
                 guard captureID == capture.id else { return (false, false) }
@@ -337,7 +335,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         rebuildSecretSetLocked()
         if !storageReady, storageGeneration == 0, !discardRestoredHistory {
             let filters = historySecrets.union(secrets)
-            if filters.count <= Self.retiredSecretLimit {
+            if filters.count <= Self.secretLimit {
                 historySecrets = filters
             } else {
                 discardRestoredHistory = true
