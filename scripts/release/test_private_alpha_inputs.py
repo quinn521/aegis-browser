@@ -133,6 +133,8 @@ class PrivateAlphaInputsTests(unittest.TestCase):
             'distinct labels for one route': [tcp + '#one', tcp + '#two'],
             'equivalent WS query encoding': [ws, ws.replace('%2Fapp', '/app')],
             'equivalent TCP defaults and hint': [tcp, tcp.replace('&fp=chrome&headerType=none&host=hint.invalid', '')],
+            'equivalent TCP fingerprint case': [tcp, tcp.replace('fp=chrome', 'fp=Chrome')],
+            'equivalent WS relay encoding': [ws, ws.replace('@ws.invalid', '@w%73.invalid')],
             'equivalent REALITY aliases': [reality, reality.replace('serverName=', 'sni=')
                                            .replace('publicKey=', 'pbk=').replace('shortId=abcd1234', 'sid=ABCD1234')],
             'equivalent gRPC service alias': [grpc, grpc.replace('&path=/service/Tun', '')],
@@ -174,6 +176,15 @@ class PrivateAlphaInputsTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn(UID, result.stdout + result.stderr)
                 self.assertEqual(list(self.root.glob('aegis-private-alpha-*')), [])
+
+    def test_hook_accepts_single_encoded_relay(self):
+        source = self.root / 'input'
+        target = self.root / NODES
+        encoded = LIST[1].replace('@ws.invalid', '@w%73.invalid')
+        source.write_text(json.dumps([encoded]))
+        source.chmod(0o600)
+        self.assertEqual(self.hook('alpha', source, target).returncode, 0)
+        self.assertEqual(json.loads(target.read_bytes()), [encoded])
 
     def test_canonical_resource_size_has_the_same_bound_as_the_app(self):
         prefix = LIST[0].split('#', 1)[0] + '#'

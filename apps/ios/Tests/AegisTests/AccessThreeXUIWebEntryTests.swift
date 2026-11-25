@@ -130,6 +130,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
             await usage.refresh()?.value
             XCTAssertEqual(usage.availableConnectionCount, expected, "\(mode)")
             XCTAssertEqual(usage.connectionsUnavailable, expected == 0, "\(mode)")
+            XCTAssertEqual(usage.availableAlphaRouteIDs, expected == 0 ? [] : [0], "\(mode)")
             usage.setActive(false)
         }
     }

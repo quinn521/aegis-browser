@@ -72,6 +72,7 @@ test('private Alpha hands off to the protected store without publishing artifact
       {PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_GROUP: 'DeFaUlT'}, {PRIVATE_ALPHA_GROUP: 'private\nlabel=shared'},
       {PRIVATE_ALPHA_LABEL: ''}, {SHARED_IOS_LABEL: ''}, {SHARED_IOS_LABEL: '   '},
       ...['SHARED', 'self-HOSTED', 'macOS', 'ARM64', ' shared '].map(label => ({PRIVATE_ALPHA_LABEL: label})),
+      ...['SELF-hosted', 'MacOS', 'arm64'].map(label => ({SHARED_IOS_LABEL: label})),
     ]) {
       assert.equal(admitRunner(invalid).status, 1, `${shell}: ${JSON.stringify(invalid)}`);
       assert.equal(readFileSync(output, 'utf8'), '');

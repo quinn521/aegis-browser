@@ -25,19 +25,26 @@ struct AccessUsagePage: View {
                             Text("暂不可用")
                         }
                         ForEach(alphaNodes.entries) { entry in
+                            let available = subscription.availableAlphaRouteIDs.contains(entry.id)
+                            let selected = alphaNodes.selectedIndex == entry.id
                             Button {
+                                guard subscription.availableAlphaRouteIDs.contains(entry.id) else { return }
                                 alphaNodes.select(entry.id)
                             } label: {
                                 HStack {
                                     Text(verbatim: entry.protocolName)
                                     Spacer()
-                                    if alphaNodes.selectedIndex == entry.id {
+                                    if !available {
+                                        Text("暂不可用")
+                                    }
+                                    if selected {
                                         Image(systemName: "checkmark").accessibilityHidden(true)
                                     }
                                 }
                                 .contentShape(Rectangle())
                             }
-                            .accessibilityValue(alphaNodes.selectedIndex == entry.id ? Text("已启用") : Text("未选择"))
+                            .disabled(!available)
+                            .accessibilityValue(available ? (selected ? Text("已启用") : Text("未选择")) : Text("暂不可用"))
                             .accessibilityIdentifier("access-alpha-node-\(entry.id)")
                         }
                     }

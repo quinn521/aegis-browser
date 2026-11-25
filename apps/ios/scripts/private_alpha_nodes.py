@@ -101,11 +101,14 @@ def share(uri):
         raise ValueError('Invalid VLESS URI')
     parts = urlsplit(uri)
     user, separator, authority = parts.netloc.partition('@')
+    raw_address, port_separator, port = authority.rpartition(':')
+    address = unquote(raw_address, errors='strict')
     if (parts.scheme != 'vless' or not separator or not UUID.fullmatch(user)
-            or not valid_authority(authority, port_required=True) or parts.path not in ('', '/')
+            or not port_separator or not valid_authority(f'{address}:{port}', port_required=True)
+            or (address.startswith('[') and address != raw_address) or parts.path not in ('', '/')
             or '://' in parts.fragment or not URI_QUERY.fullmatch(parts.query)):
         raise ValueError('Invalid VLESS URI')
-    return parts, user.lower()
+    return parts, user.lower(), address
 
 
 def share_query(raw):
@@ -166,7 +169,7 @@ def validate_transport(uri, *, anchor=False):
 
 
 def validated_route(uri, *, anchor=False):
-    parts, identity = share(uri)
+    parts, identity, address = share(uri)
     query = share_query(parts.query)
     if anchor:
         # The shared quota session reads the legacy TCP/REALITY node. Its
@@ -204,8 +207,8 @@ def validated_route(uri, *, anchor=False):
         transport_settings = ()
         if finger is None or (fields == REALITY_FIELDS and not finger):
             finger = 'chrome'
-        fingerprint = finger.lower()
-        if fingerprint not in CORE_FINGERPRINTS or (query['security'] == 'reality' and not fingerprint):
+        finger = finger.lower()
+        if finger not in CORE_FINGERPRINTS or (query['security'] == 'reality' and not finger):
             raise ValueError('Invalid VLESS fingerprint')
     if fields in (TCP_TLS_FIELDS, REALITY_FIELDS) and query.get('headerType', 'none') != 'none':
         raise ValueError('Unsupported TCP header')
@@ -228,7 +231,6 @@ def validated_route(uri, *, anchor=False):
                        for part in service.removeprefix('/').split('/'))):
             raise ValueError('Invalid or ambiguous gRPC service name')
         transport_settings = (key, short.lower(), service)
-    address = parts.netloc.split('@', 1)[1].rsplit(':', 1)[0]
     route = (query['type'], query['security'], address, parts.port, identity, server, finger, *transport_settings)
     return identity, route
 

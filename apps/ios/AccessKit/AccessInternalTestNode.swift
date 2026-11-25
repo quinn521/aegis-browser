@@ -104,7 +104,7 @@ extension AccessInternalTestNode {
     }
 
     /// Swift `String` equality is canonical equivalence. Route authorization
-    /// compares the exact UTF-8 bytes that become the Xray outbound.
+    /// compares exact UTF-8 bytes after applying Xray's fingerprint case normalization.
     public func isWireIdentical(to other: Self) -> Bool {
         let lhs = wireFields, rhs = other.wireFields
         return lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
@@ -113,13 +113,14 @@ extension AccessInternalTestNode {
     private var wireFields: [String] {
         switch self {
         case .realityVision(let p):
-            ["reality", p.address, String(p.port), p.userID, p.serverName, p.publicKey, p.shortID, p.spiderX, p.fingerprint]
+            ["reality", p.address, String(p.port), p.userID, p.serverName, p.publicKey, p.shortID, p.spiderX, p.fingerprint.lowercased()]
         case .vlessWebSocketTLS(let p):
             ["ws-tls", p.address, String(p.port), p.userID, p.serverName, p.requestHost, p.path, p.fingerprint, p.alpn]
         case .vlessTCPTLSVision(let p):
-            ["tcp-tls-vision", p.address, String(p.port), p.userID, p.serverName, p.fingerprint]
+            ["tcp-tls-vision", p.address, String(p.port), p.userID, p.serverName, p.fingerprint.lowercased()]
         case .vlessGRPCReality(let p):
-            ["grpc-reality", p.address, String(p.port), p.userID, p.serverName, p.publicKey, p.shortID, p.fingerprint, p.serviceName]
+            ["grpc-reality", p.address, String(p.port), p.userID, p.serverName, p.publicKey, p.shortID,
+             p.fingerprint.lowercased(), p.serviceName]
         }
     }
 }

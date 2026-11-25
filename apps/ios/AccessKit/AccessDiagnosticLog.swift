@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import Network
 
 /// Bounded diagnostics. Xray writes into a private FIFO; only filtered records
 /// reach the app's private, size-limited history file.
@@ -550,7 +549,7 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     private func redactedLine(_ safe: String) -> String {
         var text = safe
-        for secret in secrets {
+        for secret in secrets where Self.ipIdentity(secret) == nil {
             text = text.replacingOccurrences(of: secret, with: "[redacted]", options: .caseInsensitive)
         }
         // Short secrets can also match timestamps or fixed event grammar.
@@ -687,9 +686,13 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
             guard !host.hasPrefix("."), !host.hasSuffix("."), !host.contains(".."),
                   host.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 }) else { return "[redacted]" }
         }
-        guard !secrets.contains(where: { target.range(of: $0, options: .caseInsensitive) != nil }) else { return "[redacted]" }
-        if let address = Self.ipIdentity(host), secrets.contains(where: { Self.ipIdentity($0) == address }) {
-            return "[redacted]"
+        let address = Self.ipIdentity(host)
+        for secret in secrets {
+            if let address, let secretAddress = Self.ipIdentity(secret) {
+                if secretAddress == address { return "[redacted]" }
+            } else if target.range(of: secret, options: .caseInsensitive) != nil {
+                return "[redacted]"
+            }
         }
         return target
     }
@@ -698,8 +701,13 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     private static func ipIdentity(_ host: String) -> Data? {
         let address = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
-        if let ipv4 = IPv4Address(address) { return ipv4.rawValue }
-        guard let bytes = IPv6Address(address)?.rawValue else { return nil }
+        var ipv4 = in_addr()
+        if inet_pton(AF_INET, address, &ipv4) == 1 {
+            return withUnsafeBytes(of: ipv4) { Data($0) }
+        }
+        var ipv6 = in6_addr()
+        guard inet_pton(AF_INET6, address, &ipv6) == 1 else { return nil }
+        let bytes = withUnsafeBytes(of: ipv6) { Data($0) }
         return bytes.starts(with: mappedIPv4Prefix) ? Data(bytes.suffix(4)) : bytes
     }
 

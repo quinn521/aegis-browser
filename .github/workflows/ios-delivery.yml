@@ -164,9 +164,12 @@ jobs:
           private_label=$(printf '%s' "$PRIVATE_ALPHA_LABEL" | tr '[:upper:]' '[:lower:]')
           shared_label=$(printf '%s' "$SHARED_IOS_LABEL" | tr '[:upper:]' '[:lower:]')
           [[ "$private_group" != default ]] || reject_runner
-          case "$private_label" in
-            "$shared_label"|self-hosted|macos|linux|windows|x64|arm|arm64) reject_runner ;;
-          esac
+          [[ "$private_label" != "$shared_label" ]] || reject_runner
+          for label in "$private_label" "$shared_label"; do
+            case "$label" in
+              self-hosted|macos|linux|windows|x64|arm|arm64) reject_runner ;;
+            esac
+          done
           printf 'group=%s\nlabel=%s\n' "$PRIVATE_ALPHA_GROUP" "$PRIVATE_ALPHA_LABEL" >> "$GITHUB_OUTPUT"
       - name: Reject an earlier unresolved upload for this version and build
         if: ${{ steps.plan.outputs.operation == 'package-upload' }}

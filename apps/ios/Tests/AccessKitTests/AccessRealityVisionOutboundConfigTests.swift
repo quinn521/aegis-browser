@@ -1134,6 +1134,26 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
             }
         }
     }
+
+    func testDiagnosticIPRedactionPreservesUnrelatedDestinationWithSamePrefix() throws {
+        let log = AccessDiagnosticLog(pollInterval: .milliseconds(15))
+        defer { log.stop() }
+        let lease = log.acquireShared(level: .info, secrets: ["192.0.2.1"])
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: try XCTUnwrap(lease.path)))
+        defer { try? writer.close() }
+        try writer.write(contentsOf: Data(
+            "2026/11/11 00:00:00 [Info] proxy/vless/outbound: tunneling request to tcp:192.0.2.10:443 via 192.0.2.1:443\n".utf8))
+        XCTAssertTrue(log.stop(lease: lease))
+        XCTAssertTrue(log.snapshot().contains("tunneling request to tcp:192.0.2.10:443 via [redacted]"))
+    }
+
+    func testAlphaRouteIdentityUsesCoreFingerprintCase() throws {
+        let userID = try makeParameters().userID
+        let link = "vless://\(userID)@relay.example:443?type=tcp&security=tls&flow=xtls-rprx-vision&sni=cert.example&fp="
+        let canonical = try AccessInternalTestNode.parseSingleShareURI(link + "chrome")
+        let differentCase = try AccessInternalTestNode.parseSingleShareURI(link + "Chrome")
+        XCTAssertTrue(canonical.isWireIdentical(to: differentCase))
+    }
 }
 
 private final class LogInitializationFailingCore: AccessEmbeddedCoreControlling, @unchecked Sendable {

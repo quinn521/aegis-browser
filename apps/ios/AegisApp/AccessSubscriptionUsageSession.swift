@@ -161,9 +161,9 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     private var nodes: [AccessRealityVisionParameters] = []
     private var selectedNode: AccessRealityVisionParameters?
     private let fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])?
-    private var alphaNodes: [AccessInternalTestNode] = []
     private let alphaRoutes: [AccessInternalTestNode]
     private var selectedAlphaNode: AccessInternalTestNode?
+    @Published private(set) var availableAlphaRouteIDs: Set<Int> = []
     @Published private(set) var availableConnectionCount = 0
     @Published private(set) var connectionsUnavailable = false
     private let fetch: @Sendable (AccessSubscriptionConfiguration) async throws -> AccessSubscriptionUsage
@@ -239,8 +239,12 @@ final class AccessSubscriptionUsageSession: ObservableObject {
 
     func authorizeAlphaNode(_ node: AccessInternalTestNode) async throws {
         try await refreshConnectionAllowance()
-        guard alphaNodes.contains(where: { $0.isWireIdentical(to: node) }) else { throw AccessSubscriptionQueryError.unavailable }
+        guard isAvailableAlphaRoute(node) else { throw AccessSubscriptionQueryError.unavailable }
         selectedAlphaNode = node
+    }
+
+    private func isAvailableAlphaRoute(_ route: AccessInternalTestNode) -> Bool {
+        availableAlphaRouteIDs.contains { alphaRoutes[$0].isWireIdentical(to: route) }
     }
 
     private func refreshConnectionAllowance() async throws {
@@ -256,7 +260,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     var permitsExistingConnection: Bool {
         let hasSelectedRoute = fetchAlphaNodes == nil
             ? selectedNode.map(nodes.contains) == true
-            : selectedAlphaNode.map { selected in alphaNodes.contains { $0.isWireIdentical(to: selected) } } == true
+            : selectedAlphaNode.map(isAvailableAlphaRoute) == true
         return !unavailable && hasSelectedRoute && snapshot?.permitsConnection == true
     }
 
@@ -286,13 +290,15 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 let value = try await fetch(configuration)
                 try value.validate(for: configuration)
                 var candidates: [AccessRealityVisionParameters] = []
-                var alphaCandidates: [AccessInternalTestNode] = []
+                var alphaRouteIDs: Set<Int> = []
                 if self?.managesConnections == true, value.permitsConnection, let userID = self?.nodeUserID {
                     // Node failure leaves valid counters visible but never reuses an old connection list.
                     if let fetchAlphaNodes = self?.fetchAlphaNodes {
                         // Only bundled choices the live subscription publishes byte-for-byte are usable.
                         let published = (try? await fetchAlphaNodes(configuration, userID)) ?? []
-                        alphaCandidates = alphaRoutes.filter { route in published.contains { $0.isWireIdentical(to: route) } }
+                        alphaRouteIDs = Set(alphaRoutes.indices.filter { index in
+                            published.contains { $0.isWireIdentical(to: alphaRoutes[index]) }
+                        })
                     } else {
                         candidates = (try? await self?.fetchNodes(configuration, userID)) ?? []
                         candidates = candidates.filter { $0.userID == userID.lowercased() }
@@ -300,8 +306,8 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 }
                 guard let self, self.active, self.generation == token, !Task.isCancelled else { return }
                 self.nodes = candidates
-                self.alphaNodes = alphaCandidates
-                self.availableConnectionCount = candidates.count + alphaCandidates.count
+                self.availableAlphaRouteIDs = alphaRouteIDs
+                self.availableConnectionCount = candidates.count + alphaRouteIDs.count
                 self.connectionsUnavailable = self.managesConnections && value.permitsConnection && self.availableConnectionCount == 0
                 self.snapshot = value
                 self.receivedAt = Date()
@@ -314,7 +320,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 guard let self, self.active, self.generation == token, !Task.isCancelled else { return }
                 self.unavailable = true
                 self.nodes = []
-                self.alphaNodes = []
+                self.availableAlphaRouteIDs = []
                 self.availableConnectionCount = 0
                 self.connectionsUnavailable = true
                 self.task = nil; self.isRefreshing = false
