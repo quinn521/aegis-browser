@@ -64,7 +64,7 @@ struct BrowserSettingsView: View {
                     NavigationLink("搜索、主页与浏览方式") { BrowserGeneralSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("general-browser-settings")
                     if let tab = browser.activeTab, hostStores.offersWebsiteAcceleration(for: tab) {
-                        NavigationLink("国内加速") {
+                        NavigationLink("网站加速") {
                             if let current = browser.activeTab { DomesticAccelerationSettingsView(tab: current) }
                         }
                         .accessibilityIdentifier("domestic-acceleration-link")
@@ -161,12 +161,8 @@ private struct DomesticAccelerationSettingsView: View {
                     if let categories = hostStores.websiteCategories(for: tab) {
                         WebsiteCategoriesLink(tab: tab, selected: categories.selected)
                     }
-                    if hostStores.geoSiteCache != nil, hostStores.websiteAccelerationMode == .smart {
-                        NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
-                            .accessibilityIdentifier("overseas-acceleration-link")
-                    }
                 } header: {
-                    Text("网站加速")
+                    Text("访问中国大陆网站")
                         .accessibilityIdentifier("website-acceleration-section")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
@@ -198,6 +194,12 @@ private struct DomesticAccelerationSettingsView: View {
                         }
                     }
                 }
+                if hostStores.geoSiteCache != nil, hostStores.websiteAccelerationMode == .smart {
+                    Section {
+                        NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
+                            .accessibilityIdentifier("overseas-acceleration-link")
+                    }
+                }
                 if let host = hostStores.websiteAccelerationHost(for: tab) {
                     Section {
                         LabeledContent("当前网站", value: host.rawValue)
@@ -222,7 +224,7 @@ private struct DomesticAccelerationSettingsView: View {
                 }
             }
         }
-        .localizedNavigationTitle("国内加速")
+        .localizedNavigationTitle("网站加速")
     }
 
     private func modeButton(_ mode: AccessWebsiteAccelerationMode, title: LocalizedStringKey, id: String) -> some View {

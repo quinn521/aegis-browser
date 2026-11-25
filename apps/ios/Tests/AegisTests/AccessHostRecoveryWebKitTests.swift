@@ -3145,7 +3145,7 @@ extension AccessHostRecoveryWebKitTests {
         let status = coordinator.snapshot(for: tab)
         XCTAssertEqual(status.connection, .unavailable)
         XCTAssertEqual(status.intentStatus, .overseasUnavailable)
-        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(status), "国外加速连接不可用")
+        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(status), "海外加速连接不可用")
         XCTAssertFalse(status.toggleOn)
         XCTAssertNil(tab.boundHostName)
     }

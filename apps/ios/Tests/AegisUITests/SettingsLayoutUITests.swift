@@ -299,7 +299,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(reveal(smart, app))
         smart.tap()
         XCTAssertTrue(app.buttons["website-acceleration-categories"].waitForExistence(timeout: 5))
-        app.navigationBars["国内加速"].buttons.element(boundBy: 0).tap()
+        app.navigationBars["网站加速"].buttons.element(boundBy: 0).tap()
         app.buttons["settings-done"].tap()
 
         more.tap()
@@ -315,7 +315,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(domestic.exists)
         XCTAssertFalse(app.buttons["overseas-acceleration-link"].exists)
         XCTAssertFalse(app.buttons["website-acceleration-categories"].exists)
-        capture("私密浏览-设置隐藏国内加速", app)
+        capture("私密浏览-设置隐藏网站加速", app)
     }
 
     func testWebsiteAccelerationBetaSelectionAndPersistence() {
@@ -469,7 +469,7 @@ final class SettingsLayoutUITests: XCTestCase {
             XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
             let domestic = app.buttons["domestic-acceleration-link"]
             XCTAssertTrue(reveal(domestic, app))
-            let domesticPage = app.navigationBars["国内加速"]
+            let domesticPage = app.navigationBars["网站加速"]
             // The first settings update after launch can recreate the link.
             domestic.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
             if !domesticPage.waitForExistence(timeout: 3), domestic.exists, domestic.isHittable {
@@ -525,14 +525,14 @@ final class SettingsLayoutUITests: XCTestCase {
 
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 10))
         let entry = app.buttons["domestic-acceleration-link"]
-        XCTAssertTrue(reveal(entry, app), "设置中的国内加速入口必须可见且可点击")
+        XCTAssertTrue(reveal(entry, app), "设置中的网站加速入口必须可见且可点击")
         assertInsideWindow(entry, app)
-        XCTAssertEqual(entry.label, "国内加速")
+        XCTAssertEqual(entry.label, "网站加速")
         entry.tap()
-        XCTAssertTrue(app.navigationBars["国内加速"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["网站加速"].waitForExistence(timeout: 5))
         let website = app.descendants(matching: .any)["website-acceleration-section"]
         XCTAssertTrue(website.waitForExistence(timeout: 5))
-        XCTAssertEqual(website.label, "网站加速")
+        XCTAssertEqual(website.label, "访问中国大陆网站")
         XCTAssertFalse(app.staticTexts["位置加速"].exists)
 
         let manual = app.buttons["website-acceleration-manual"]
@@ -556,7 +556,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(smartHint.firstMatch.exists)
         XCTAssertEqual(serviceNotice.count, 1)
         XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
-        capture("国内加速-网站加速-手动", app)
+        capture("网站加速-访问中国大陆网站-手动", app)
 
         XCTAssertTrue(reveal(smart, app))
         smart.tap()
@@ -569,7 +569,7 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertFalse(smartPrivacyNotice.exists)
         XCTAssertEqual(serviceNotice.count, 1)
         XCTAssertEqual(serviceNotice.firstMatch.identifier, "website-acceleration-service-unavailable")
-        capture("国内加速-网站加速-智能", app)
+        capture("网站加速-访问中国大陆网站-智能", app)
 
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
