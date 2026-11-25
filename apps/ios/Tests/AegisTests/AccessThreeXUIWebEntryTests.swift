@@ -10,6 +10,108 @@ import XCTest
 final class AccessThreeXUIWebEntryTests: XCTestCase {
     private let userID = "550e8400-e29b-41d4-a716-446655440000"
 
+    func testAlphaListIsChannelBoundAndSelectionDoesNotExposeCredentials() throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let data = try JSONEncoder().encode([alphaWSNode(address: "first.example"), alphaWSNode(address: "second.example")])
+        let nodes = alphaCatalogue(data: data, defaults: defaults)
+        XCTAssertTrue(nodes.isConfigured)
+        XCTAssertEqual(nodes.entries.map(\.protocolName), ["VLESS / WS / TLS", "VLESS / WS / TLS"])
+        XCTAssertEqual(nodes.selectedIndex, 0)
+        nodes.select(1)
+        XCTAssertEqual(nodes.selectedIndex, 1)
+        XCTAssertEqual(alphaCatalogue(data: data, defaults: defaults).selectedIndex, 1)
+        let changed = try JSONEncoder().encode([alphaWSNode(address: "different.example")])
+        XCTAssertEqual(alphaCatalogue(data: changed, defaults: defaults).selectedIndex, 0)
+        for channel in ["dev", "beta", "release"] {
+            let other = AccessAlphaNodeCatalogue(channel: channel, profile: channel, bundleID: "com.gcsa.aegis",
+                                                 data: data, defaults: defaults)
+            XCTAssertFalse(other.isConfigured)
+            XCTAssertTrue(other.entries.isEmpty)
+        }
+        let wrongProfile = AccessAlphaNodeCatalogue(channel: "alpha", profile: "beta", bundleID: "com.gcsa.aegis",
+                                                   data: data, defaults: defaults)
+        XCTAssertTrue(wrongProfile.entries.isEmpty)
+        let invalid = alphaCatalogue(data: Data("not json".utf8), defaults: defaults)
+        XCTAssertTrue(invalid.isConfigured)
+        XCTAssertTrue(invalid.entries.isEmpty)
+        XCTAssertNil(invalid.selectedIndex)
+    }
+
+    func testAlphaSelectionRoutesProductOnlyAfterQuotaAndRevokesOnChange() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let data = try JSONEncoder().encode([alphaWSNode(address: "first.example"), alphaWSNode(address: "second.example")])
+        let nodes = alphaCatalogue(data: data, defaults: defaults)
+        let fixture = ThreeXUIEntryFixture(userID: userID)
+        let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+            nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+            fetch: { config in try await fixture.usage(config) })
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
+        let operation = UUID()
+        defer { publisher.cancel(operationID: operation) }
+        let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
+        XCTAssertTrue(publisher.validateReady(ready))
+        let document = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(core.startedConfiguration)) as? [String: Any])
+        let outbound = try XCTUnwrap((document["outbounds"] as? [[String: Any]])?.first)
+        let settings = try XCTUnwrap(outbound["settings"] as? [String: Any])
+        let server = try XCTUnwrap((settings["vnext"] as? [[String: Any]])?.first)
+        XCTAssertEqual(server["address"] as? String, "first.example")
+        XCTAssertEqual(usage.snapshot?.usedBytes, 30)
+        nodes.select(1)
+        XCTAssertFalse(publisher.validateReady(ready), "Switching nodes must revoke the old listener")
+    }
+
+    func testAlphaNodeCannotBypassMissingQuotaOrDifferentSubscriptionIdentity() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let data = try JSONEncoder().encode([alphaWSNode(address: "first.example")])
+        let nodes = alphaCatalogue(data: data, defaults: defaults)
+        for mode in [ThreeXUIEntryFixture.Mode.unavailable, .exhausted, .foreignNode] {
+            let fixture = ThreeXUIEntryFixture(userID: userID, mode: mode)
+            let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+                nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+                fetch: { config in try await fixture.usage(config) })
+            usage.setActive(true)
+            let core = EntryRecordingCore()
+            let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
+            do { _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5))); XCTFail("Quota rejection must not start Alpha nodes") }
+            catch { }
+            XCTAssertNil(core.startedConfiguration)
+            usage.setActive(false)
+        }
+        let otherIdentity = try JSONEncoder().encode([alphaWSNode(address: "first.example")
+            .replacingOccurrences(of: userID, with: "550e8400-e29b-41d4-a716-446655440001")])
+        let differentNodes = alphaCatalogue(data: otherIdentity, defaults: defaults)
+        let fixture = ThreeXUIEntryFixture(userID: userID)
+        let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+            nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+            fetch: { config in try await fixture.usage(config) })
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: differentNodes)
+        do { _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5))); XCTFail("Foreign Alpha node authorized") }
+        catch { }
+        XCTAssertNil(core.startedConfiguration)
+    }
+
+    private func alphaWSNode(address: String) -> String {
+        "vless://\(userID)@\(address):443?security=tls&type=ws&host=ws.example.com&sni=cert.example.com&path=%2Finside&encryption=none"
+    }
+
+    private func alphaCatalogue(data: Data, defaults: UserDefaults) -> AccessAlphaNodeCatalogue {
+        AccessAlphaNodeCatalogue(channel: "alpha", profile: "alpha", bundleID: "com.gcsa.aegis", data: data, defaults: defaults)
+    }
+
+    private func isolatedDefaults() throws -> (UserDefaults, String) {
+        let suite = "test.alpha.nodes." + UUID().uuidString
+        return (try XCTUnwrap(UserDefaults(suiteName: suite)), suite)
+    }
+
     func testUnselectedOrReadOnlyUsageCannotBuildAnUnmeteredWebEntry() async throws {
         for (selected, manages) in [(false, false), (false, true), (true, false)] {
             let usage = AccessSubscriptionUsageSession(isSelected: selected, configuration: configuration(), managesConnections: manages)
@@ -125,9 +227,10 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         add(attachment)
     }
 
-    private func publisher(for usage: AccessSubscriptionUsageSession, core: EntryRecordingCore) -> any AccessProxyEntryPublishing {
+    private func publisher(for usage: AccessSubscriptionUsageSession, core: EntryRecordingCore,
+                           alphaNodes: AccessAlphaNodeCatalogue? = nil) -> any AccessProxyEntryPublishing {
         let lock = Data(#"{"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}"#.utf8)
-        return AccessThreeXUIWebEntry.makePublisher(for: usage, lockData: lock, verifiedCore: core,
+        return AccessThreeXUIWebEntry.makePublisher(for: usage, alphaNodes: alphaNodes, lockData: lock, verifiedCore: core,
                                                retireDocuments: { _, finish in finish() })
     }
 

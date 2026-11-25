@@ -4,6 +4,12 @@ import SwiftUI
 struct AccessUsagePage: View {
     let isPrivate: Bool
     @EnvironmentObject private var subscription: AccessSubscriptionUsageSession
+    @ObservedObject private var alphaNodes: AccessAlphaNodeCatalogue
+
+    init(isPrivate: Bool, alphaNodes: AccessAlphaNodeCatalogue = .shared) {
+        self.isPrivate = isPrivate
+        self.alphaNodes = alphaNodes
+    }
 
     var body: some View {
         Form {
@@ -13,7 +19,33 @@ struct AccessUsagePage: View {
                         .accessibilityIdentifier("access-usage-private")
                 }
             } else {
-                AccessSubscriptionUsageView(session: subscription)
+                if alphaNodes.isConfigured {
+                    Section("可用连接") {
+                        if alphaNodes.entries.isEmpty {
+                            Text("暂不可用")
+                        }
+                        ForEach(alphaNodes.entries) { entry in
+                            Button {
+                                alphaNodes.select(entry.id)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(entry.id + 1, format: .number)
+                                        Text(verbatim: entry.protocolName).font(.footnote).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if alphaNodes.selectedIndex == entry.id {
+                                        Image(systemName: "checkmark").accessibilityHidden(true)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .accessibilityValue(alphaNodes.selectedIndex == entry.id ? Text("已启用") : Text("未选择"))
+                            .accessibilityIdentifier("access-alpha-node-\(entry.id)")
+                        }
+                    }
+                }
+                AccessSubscriptionUsageView(session: subscription, usesAlphaNodeSelection: alphaNodes.isConfigured)
             }
         }
         .localizedNavigationTitle("隐藏地理位置服务")

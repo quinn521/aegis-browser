@@ -30,9 +30,53 @@ test('private Beta inputs stay in the protected manual package step', () => {
     assert(expression.endsWith("|| '' }}"));
     assert(!JSON.stringify({...job, steps: job.steps.filter(item => item !== step)}).includes(name));
     for (const [id, other] of Object.entries(workflow.jobs)) {
-      if (id !== 'ios-package') assert(!JSON.stringify(other).includes(name));
+      if (id === 'private-alpha') {
+        assert(!JSON.stringify({...other, steps: other.steps.filter(item => item.id !== 'inputs')}).includes(name));
+      } else if (id !== 'ios-package') {
+        assert(!JSON.stringify(other).includes(name));
+      }
     }
   }
+});
+
+test('private Alpha stages secrets separately and sends only a verified internal package to Apple', () => {
+  const simple = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
+  const full = parse(readFileSync('.github/workflows/ios-delivery-full.yml', 'utf8'));
+  assert.equal(simple.on.workflow_dispatch.inputs.private_alpha.default, 'no');
+  assert.equal(full.on.workflow_dispatch.inputs.private_alpha, undefined);
+  const {jobs} = simple;
+  const job = jobs['private-alpha'];
+  assert.equal(job.environment, 'aegis-ios-signing');
+  assert.equal(job['runs-on'], jobs['ios-package']['runs-on']);
+  assert(job['runs-on'].includes('vars.AEGIS_IOS_RUNNER_LABEL'));
+  assert.deepEqual(job.needs, ['admission', 'check-unused']);
+  for (const condition of ["private_alpha == 'true'", "private_beta == 'false'", "profile == 'alpha'",
+    "signing_mode == 'manual'", "operation == 'package-upload'", "destination == 'testflight'",
+    "github.ref == 'refs/heads/main'", "github.event_name == 'workflow_dispatch'", 'github.run_attempt == 1']) {
+    assert(job.if.includes(condition), condition);
+  }
+  for (const id of ['archive-settings', 'ios-archive', 'ios-package']) {
+    assert(jobs[id].if.includes("needs.admission.outputs.private_alpha == 'false'"));
+  }
+  for (const id of ['ios-draft', 'seal-package', 'upload-new']) {
+    assert(jobs[id].if.includes("needs.ios-package.result == 'success'"));
+  }
+  const steps = job.steps;
+  const inputs = steps.find(step => step.id === 'inputs');
+  const quota = steps.find(step => step.id === 'quota');
+  const upload = steps.find(step => step.run?.endsWith('private_alpha_inputs.py upload'));
+  const names = ['AEGIS_IOS_ALPHA_NODES_BASE64', 'AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64'];
+  assert.deepEqual(Object.keys(inputs.env), names);
+  for (const name of names) assert.equal(inputs.env[name], '${{ secrets.' + name + ' }}');
+  assert(!JSON.stringify({...job, steps: steps.filter(step => step !== inputs)}).includes('AEGIS_IOS_ALPHA_NODES_BASE64'));
+  assert(!JSON.stringify(full).includes('AEGIS_IOS_ALPHA_NODES_BASE64'));
+  assert(steps.indexOf(quota) < steps.indexOf(upload));
+  assert(!Object.keys(quota.env).some(name => name.startsWith('AEGIS_ASC_')));
+  assert.equal(upload.env.AEGIS_PRIVATE_ALPHA_VERIFIED_MANIFEST_SHA256, '${{ steps.quota.outputs.manifest_sha256 }}');
+  assert(!steps.some(step => /(?:upload|download)-artifact/u.test(step.uses || '')));
+  const cleanup = steps.find(step => step.run?.endsWith('private_alpha_inputs.py cleanup'));
+  assert(cleanup.if.includes('always()'));
+  assert.equal(cleanup.env.AEGIS_PRIVATE_ALPHA_DIRECTORY, '${{ steps.inputs.outputs.directory }}');
 });
 
 test('archive gets only non-secret settings from the existing environment', () => {
@@ -282,7 +326,8 @@ test('Simple and Full expose bounded English forms and share the same exact-sour
   const simple = workflow('ios-delivery');
   const full = workflow('ios-delivery-full');
   const inputs = simple.on.workflow_dispatch.inputs;
-  assert.deepEqual(Object.keys(inputs), ['operation', 'version', 'build', 'product', 'signing_mode', 'archive_signing', 'private_beta', 'approved_source_sha']);
+  assert.deepEqual(Object.keys(inputs), ['operation', 'version', 'build', 'product', 'signing_mode', 'archive_signing',
+    'private_alpha', 'private_beta', 'approved_source_sha']);
   assert.equal(inputs.signing_mode.default, 'cloud');
   assert.deepEqual(inputs.signing_mode.options, ['cloud', 'manual']);
   assert.equal(inputs.archive_signing.default, 'development');
@@ -484,7 +529,9 @@ test('Full explicitly forwards named secrets while protected jobs resolve enviro
   const signing = ['AEGIS_IOS_DISTRIBUTION_P12_BASE64', 'AEGIS_IOS_DISTRIBUTION_P12_PASSWORD',
     'AEGIS_IOS_APP_PROFILE_BASE64', 'AEGIS_IOS_SAFARI_PROFILE_BASE64', 'AEGIS_IOS_SHARE_PROFILE_BASE64'];
   const privateBeta = ['AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64'];
-  assert.deepEqual(Object.keys(simple.on.workflow_call.secrets), [...privateBeta, ...expected, ...signing]);
+  assert.deepEqual(Object.keys(simple.on.workflow_call.secrets),
+    ['AEGIS_IOS_ALPHA_NODES_BASE64', ...privateBeta, ...expected, ...signing]);
+  assert.equal(simple.on.workflow_call.secrets.AEGIS_IOS_ALPHA_NODES_BASE64.required, false);
   for (const name of privateBeta) assert.equal(simple.on.workflow_call.secrets[name].required, false);
   assert.deepEqual(Object.keys(full.jobs.delivery.secrets), [...expected, ...signing]);
   for (const name of expected) {

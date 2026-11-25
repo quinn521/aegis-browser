@@ -111,10 +111,11 @@ final class AccessEmbeddedProxyEntrySession {
     private let core: any AccessEmbeddedCoreControlling
     private enum Outbound {
         case realityVision(AccessRealityVisionOutboundConfig)
-        case vlessWebSocketTLS(AccessVLESSWebSocketTLSParameters)
+        case internalVLESS(any AccessInternalVLESSOutbound)
     }
 
     private let loadOutbound: @MainActor () async throws -> Outbound
+    private let redactsStartupErrors: Bool
     private var listener: AccessEmbeddedInboundListener?
     private let transport: AccessInboundTransport
     private var identity: String?
@@ -132,6 +133,7 @@ final class AccessEmbeddedProxyEntrySession {
         self.core = core
         self.transport = transport
         self.retireDocuments = retireDocuments
+        self.redactsStartupErrors = false
         self.loadOutbound = { .realityVision(outbound) }
         self.reserveSocket = { try await Self.reserveLoopbackSocket() }
     }
@@ -145,6 +147,7 @@ final class AccessEmbeddedProxyEntrySession {
          }) {
         self.core = core
         self.transport = transport
+        self.redactsStartupErrors = false
         self.loadOutbound = { .realityVision(try AccessRealityVisionOutboundConfigBuilder.build(parameters: await parameters())) }
         self.retireDocuments = retireDocuments
         self.reserveSocket = reserveSocket
@@ -161,12 +164,17 @@ final class AccessEmbeddedProxyEntrySession {
         self.transport = transport
         self.retireDocuments = retireDocuments
         self.reserveSocket = reserveSocket
+        self.redactsStartupErrors = true
         self.loadOutbound = {
             switch try await internalNode() {
             case .realityVision(let parameters):
                 return .realityVision(try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters))
             case .vlessWebSocketTLS(let parameters):
-                return .vlessWebSocketTLS(parameters)
+                return .internalVLESS(parameters)
+            case .vlessTCPTLSVision(let parameters):
+                return .internalVLESS(parameters)
+            case .vlessGRPCReality(let parameters):
+                return .internalVLESS(parameters)
             }
         }
     }
@@ -227,7 +235,7 @@ final class AccessEmbeddedProxyEntrySession {
                         core: core, outbound: config, diagnostics: .shared,
                         level: AccessDiagnosticLog.selectedLevel()
                     )
-                case .vlessWebSocketTLS(let parameters):
+                case .internalVLESS(let parameters):
                     logLease = try await Self.startCoreWithDiagnostics(
                         core: core, diagnostics: .shared, level: AccessDiagnosticLog.selectedLevel(),
                         secrets: parameters.diagnosticSecrets
@@ -239,8 +247,12 @@ final class AccessEmbeddedProxyEntrySession {
                         )
                     }
                 }
+            } catch let cancellation as CancellationError where redactsStartupErrors {
+                throw cancellation
             } catch {
-                throw AccessSiteSessionError.prepareFailed("core.start: \(error)")
+                // Native errors can include the private outbound configuration.
+                let detail = redactsStartupErrors ? "core.start failed" : "core.start: \(error)"
+                throw AccessSiteSessionError.prepareFailed(detail)
             }
             startedCore = true
         }

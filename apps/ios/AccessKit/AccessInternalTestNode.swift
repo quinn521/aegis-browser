@@ -5,6 +5,8 @@ import Network
 public enum AccessInternalTestNode: Equatable, Sendable {
     case realityVision(AccessRealityVisionParameters)
     case vlessWebSocketTLS(AccessVLESSWebSocketTLSParameters)
+    case vlessTCPTLSVision(AccessVLESSTCPTLSVisionParameters)
+    case vlessGRPCReality(AccessVLESSGRPCRealityParameters)
 
     public static func parseSingleShareURI(_ input: String) throws -> Self {
         let link = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -16,10 +18,25 @@ public enum AccessInternalTestNode: Equatable, Sendable {
         }
         let uri = link.prefix(while: { $0 != "#" })
         let share = String(uri)
-        guard URLComponents(string: share)?.queryItems?.contains(where: { $0.name == "type" && $0.value == "ws" }) == true else {
-            return .realityVision(try AccessLocalV2RayConfigLoader.parseSingleShareURI(input))
+        let hints = URLComponents(string: share)?.queryItems ?? []
+        let permitted: Set<String>
+        if hints.contains(where: { $0.name == "type" && $0.value == "ws" }) {
+            permitted = ["type", "security", "host", "sni", "fp", "path", "encryption", "alpn"]
+        } else if hints.contains(where: { $0.name == "type" && $0.value == "grpc" }) {
+            permitted = ["type", "security", "sni", "fp", "path", "serviceName", "pbk", "sid", "encryption"]
+        } else if hints.contains(where: { $0.name == "security" && $0.value == "tls" }) {
+            permitted = ["type", "security", "host", "sni", "fp", "flow", "headerType", "encryption"]
+        } else {
+            do {
+                return .realityVision(try AccessLocalV2RayConfigLoader.parseSingleShareURI(input))
+            } catch AccessLocalV2RayConfigError.unsupportedNetwork,
+                    AccessLocalV2RayConfigError.unsupportedSecurity,
+                    AccessLocalV2RayConfigError.unsupportedFlow {
+                // The legacy errors carry the query value. Never surface it from an internal share.
+                throw AccessLocalV2RayConfigError.invalidJSON
+            }
         }
-        // Only the path query may contain a nested URL. The display label
+        // Only a WS request target may contain a nested URL. The display label
         // is discarded, but may not contain a concatenated link.
         guard !link[uri.endIndex...].contains("://"),
               let components = URLComponents(string: share, encodingInvalidCharacters: false),
@@ -28,27 +45,55 @@ public enum AccessInternalTestNode: Equatable, Sendable {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
         let items = components.queryItems ?? []
-        let permitted: Set<String> = ["type", "security", "host", "sni", "fp", "path", "encryption", "alpn"]
         let names = Set(items.map(\.name))
         guard names.count == items.count, names.isSubset(of: permitted),
               items.allSatisfy({ $0.value != nil }),
               let host = components.encodedHost,
-              let address = dialAddress(from: host),
+              let address = AccessInternalNodeFields.dialAddress(from: host),
               let rawPort = components.port, let port = UInt16(exactly: rawPort),
               let id = components.user else { throw AccessLocalV2RayConfigError.invalidJSON }
         let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
-        guard query["type"] == "ws", query["security"] == "tls", [nil, "", "none"].contains(query["encryption"]),
-              let serverName = query["sni"] else {
+        guard [nil, "", "none"].contains(query["encryption"]), let serverName = query["sni"] else {
             throw AccessLocalV2RayConfigError.invalidJSON
         }
-        return .vlessWebSocketTLS(try AccessVLESSWebSocketTLSParameters(
-            address: address, port: port, userID: id, serverName: serverName,
-            requestHost: query["host"] ?? serverName, path: query["path"] ?? "/",
-            fingerprint: query["fp"] ?? "", alpn: query["alpn"] ?? ""
-        ))
+        switch (query["type"], query["security"]) {
+        case ("ws", "tls"):
+            return .vlessWebSocketTLS(try AccessVLESSWebSocketTLSParameters(
+                address: address, port: port, userID: id, serverName: serverName,
+                requestHost: query["host"] ?? serverName, path: query["path"] ?? "/",
+                fingerprint: query["fp"] ?? "", alpn: query["alpn"] ?? ""
+            ))
+        case ("tcp", "tls"):
+            let hostHint = query["host"] ?? ""
+            // RAW with no header has no HTTP Host. Only the explicit SNI goes to TLS.
+            guard query["flow"] == AccessRealityVisionParameters.admittedFlow,
+                  (query["headerType"] ?? "none") == "none",
+                  hostHint.isEmpty || AccessInternalNodeFields.isHTTPAuthority(hostHint) else {
+                throw AccessLocalV2RayConfigError.invalidJSON
+            }
+            return .vlessTCPTLSVision(try AccessVLESSTCPTLSVisionParameters(
+                address: address, port: port, userID: id, serverName: serverName,
+                fingerprint: query["fp"] ?? AccessRealityVisionParameters.defaultFingerprint
+            ))
+        case ("grpc", "reality"):
+            guard let serviceName = query["serviceName"] ?? query["path"],
+                  (query["path"] ?? serviceName).utf8.elementsEqual(serviceName.utf8),
+                  let publicKey = query["pbk"], let shortID = query["sid"] else {
+                throw AccessLocalV2RayConfigError.invalidJSON
+            }
+            return .vlessGRPCReality(try AccessVLESSGRPCRealityParameters(
+                address: address, port: port, userID: id, serverName: serverName, publicKey: publicKey,
+                shortID: shortID, fingerprint: query["fp"] ?? AccessRealityVisionParameters.defaultFingerprint,
+                serviceName: serviceName
+            ))
+        default:
+            throw AccessLocalV2RayConfigError.invalidJSON
+        }
     }
+}
 
-    private static func dialAddress(from encodedHost: String) -> String? {
+private enum AccessInternalNodeFields {
+    static func dialAddress(from encodedHost: String) -> String? {
         if encodedHost.hasPrefix("[") { return encodedHost }
         guard let host = encodedHost.removingPercentEncoding else { return nil }
         if host.utf8.allSatisfy({ $0 < 128 }) { return host }
@@ -57,55 +102,28 @@ public enum AccessInternalTestNode: Equatable, Sendable {
         components.host = host
         return components.encodedHost
     }
-}
 
-public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
-    public let address: String
-    public let port: UInt16
-    public let userID: String
-    public let serverName: String
-    public let requestHost: String
-    public let path: String
-    public let fingerprint: String
-    public let alpn: String
-
-    public init(address: String, port: UInt16, userID: String, serverName: String,
-                requestHost: String, path: String, fingerprint: String, alpn: String) throws {
+    static func endpoint(address: String, port: UInt16, userID: String) throws -> (address: String, userID: String) {
         guard !address.contains("%") else {
             throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
         }
         let normalizedAddress: String
         if address.hasPrefix("[") {
-            guard address.hasSuffix("]"), let literal = Self.ipv6Literal(address) else {
+            guard address.hasSuffix("]"), let literal = ipv6Literal(address) else {
                 throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
             }
             normalizedAddress = literal
         } else {
-            guard Self.isDNSName(address, allowsRootLabel: true) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
+            guard isDNSName(address, allowsRootLabel: true) || IPv4Address(address) != nil || IPv6Address(address) != nil else {
                 throw AccessLocalV2RayConfigError.fieldNotCanonical("address")
             }
             normalizedAddress = address
         }
         guard port != 0, let uuid = UUID(uuidString: userID) else { throw AccessLocalV2RayConfigError.invalidJSON }
-        guard Self.isDNSName(serverName), Self.isHTTPAuthority(requestHost) else {
-            throw AccessLocalV2RayConfigError.fieldNotCanonical("tls-host")
-        }
-        guard Self.isWebSocketRequestTarget(path) else {
-            throw AccessLocalV2RayConfigError.fieldNotCanonical("path")
-        }
-        guard ["", "chrome", "firefox", "safari", "ios", "android", "edge"].contains(fingerprint),
-              ["", "http/1.1"].contains(alpn) else { throw AccessLocalV2RayConfigError.invalidJSON }
-        self.address = normalizedAddress
-        self.port = port
-        self.userID = uuid.uuidString.lowercased()
-        self.serverName = serverName
-        self.requestHost = requestHost
-        self.path = path
-        self.fingerprint = fingerprint
-        self.alpn = alpn
+        return (normalizedAddress, uuid.uuidString.lowercased())
     }
 
-    private static func isDNSName(_ name: String, allowsRootLabel: Bool = false) -> Bool {
+    static func isDNSName(_ name: String, allowsRootLabel: Bool = false) -> Bool {
         let hostname = allowsRootLabel && name.hasSuffix(".") ? name.dropLast() : name[...]
         let labels = hostname.split(separator: ".", omittingEmptySubsequences: false)
         return hostname.utf8.count <= 253 && labels.count >= 2
@@ -121,6 +139,58 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         let value = String(bracketed.dropFirst().dropLast())
         guard !value.contains("%"), IPv6Address(value) != nil else { return nil }
         return value
+    }
+
+    static func isHTTPAuthority(_ authority: String) -> Bool {
+        guard !authority.contains("%") else { return false }
+        let hostEnd: String.Index
+        if authority.hasPrefix("[") {
+            guard let close = authority.firstIndex(of: "]") else { return false }
+            hostEnd = authority.index(after: close)
+            guard ipv6Literal(String(authority[..<hostEnd])) != nil else { return false }
+        } else {
+            hostEnd = authority.firstIndex(of: ":") ?? authority.endIndex
+            let host = String(authority[..<hostEnd])
+            guard isDNSName(host, allowsRootLabel: true) || IPv4Address(host) != nil else { return false }
+        }
+        let suffix = authority[hostEnd...]
+        if suffix.isEmpty { return true }
+        let digits = suffix.dropFirst()
+        guard suffix.first == ":", digits.utf8.allSatisfy({ (48...57).contains($0) }),
+              let port = UInt16(digits), port > 0 else { return false }
+        return true
+    }
+}
+
+public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
+    public let address: String
+    public let port: UInt16
+    public let userID: String
+    public let serverName: String
+    public let requestHost: String
+    public let path: String
+    public let fingerprint: String
+    public let alpn: String
+
+    public init(address: String, port: UInt16, userID: String, serverName: String,
+                requestHost: String, path: String, fingerprint: String, alpn: String) throws {
+        let endpoint = try AccessInternalNodeFields.endpoint(address: address, port: port, userID: userID)
+        guard AccessInternalNodeFields.isDNSName(serverName), AccessInternalNodeFields.isHTTPAuthority(requestHost) else {
+            throw AccessLocalV2RayConfigError.fieldNotCanonical("tls-host")
+        }
+        guard Self.isWebSocketRequestTarget(path) else {
+            throw AccessLocalV2RayConfigError.fieldNotCanonical("path")
+        }
+        guard ["", "chrome", "firefox", "safari", "ios", "android", "edge"].contains(fingerprint),
+              ["", "http/1.1"].contains(alpn) else { throw AccessLocalV2RayConfigError.invalidJSON }
+        self.address = endpoint.address
+        self.port = port
+        self.userID = endpoint.userID
+        self.serverName = serverName
+        self.requestHost = requestHost
+        self.path = path
+        self.fingerprint = fingerprint
+        self.alpn = alpn
     }
 
     private static func isWebSocketRequestTarget(_ path: String) -> Bool {
@@ -167,51 +237,140 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         }
         return String(decoding: decoded, as: UTF8.self)
     }
+}
 
-    private static func isHTTPAuthority(_ authority: String) -> Bool {
-        guard !authority.contains("%") else { return false }
-        let hostEnd: String.Index
-        if authority.hasPrefix("[") {
-            guard let close = authority.firstIndex(of: "]") else { return false }
-            hostEnd = authority.index(after: close)
-            guard ipv6Literal(String(authority[..<hostEnd])) != nil else { return false }
-        } else {
-            hostEnd = authority.firstIndex(of: ":") ?? authority.endIndex
-            let host = String(authority[..<hostEnd])
-            guard isDNSName(host, allowsRootLabel: true) || IPv4Address(host) != nil else { return false }
-        }
-        let suffix = authority[hostEnd...]
-        if suffix.isEmpty { return true }
-        let digits = suffix.dropFirst()
-        guard suffix.first == ":", digits.utf8.allSatisfy({ (48...57).contains($0) }),
-              let port = UInt16(digits), port > 0 else { return false }
-        return true
-    }
-
+extension AccessVLESSWebSocketTLSParameters: AccessInternalVLESSOutbound {
     // The diagnostic event filter admits only approved text and host/port
     // fields. WS paths and queries never become diagnostic fields.
     var diagnosticSecrets: [String] { [userID] }
 
-    /// Emits one typed outbound and requires normal TLS certificate verification.
+    var outboundTag: String { "internal_vless_ws_tls" }
+    var streamSettings: [String: Any] {
+        var tls = verifiedTLSSettings(serverName: serverName, fingerprint: fingerprint)
+        if !alpn.isEmpty { tls["alpn"] = [alpn] }
+        return [
+            "network": "ws",
+            "security": "tls",
+            "tlsSettings": tls,
+            "wsSettings": ["host": requestHost, "path": path],
+        ]
+    }
+}
+
+public struct AccessVLESSTCPTLSVisionParameters: Equatable, Sendable {
+    public let address: String
+    public let port: UInt16
+    public let userID: String
+    public let serverName: String
+    public let fingerprint: String
+
+    public init(address: String, port: UInt16, userID: String, serverName: String,
+                fingerprint: String = AccessRealityVisionParameters.defaultFingerprint) throws {
+        let endpoint = try AccessInternalNodeFields.endpoint(address: address, port: port, userID: userID)
+        guard AccessInternalNodeFields.isDNSName(serverName) else {
+            throw AccessLocalV2RayConfigError.fieldNotCanonical("tls-host")
+        }
+        try AccessGoEmbeddedCore.validateRealityClientFields(fingerprint: fingerprint, spiderX: "")
+        self.address = endpoint.address
+        self.port = port
+        self.userID = endpoint.userID
+        self.serverName = serverName
+        self.fingerprint = fingerprint
+    }
+}
+
+extension AccessVLESSTCPTLSVisionParameters: AccessInternalVLESSOutbound {
+    var diagnosticSecrets: [String] { [userID, address, serverName] }
+    var outboundTag: String { "internal_vless_tcp_tls_vision" }
+    var flow: String? { AccessRealityVisionParameters.admittedFlow }
+    var streamSettings: [String: Any] {
+        ["network": "tcp", "security": "tls", "tlsSettings": verifiedTLSSettings(serverName: serverName, fingerprint: fingerprint)]
+    }
+}
+
+public struct AccessVLESSGRPCRealityParameters: Equatable, Sendable {
+    public let address: String
+    public let port: UInt16
+    public let userID: String
+    public let serverName: String
+    public let publicKey: String
+    public let shortID: String
+    public let fingerprint: String
+    public let serviceName: String
+
+    public init(address: String, port: UInt16, userID: String, serverName: String, publicKey: String,
+                shortID: String, fingerprint: String = AccessRealityVisionParameters.defaultFingerprint,
+                serviceName: String) throws {
+        let endpoint = try AccessInternalNodeFields.endpoint(address: address, port: port, userID: userID)
+        guard AccessInternalNodeFields.isDNSName(serverName) else {
+            throw AccessLocalV2RayConfigError.fieldNotCanonical("serverName")
+        }
+        guard Self.isServiceName(serviceName) else { throw AccessLocalV2RayConfigError.fieldNotCanonical("serviceName") }
+        // The REALITY fields have the same constraints regardless of the transport.
+        let reality = try AccessRealityVisionParameters(address: endpoint.address, port: port, userID: endpoint.userID,
+            serverName: serverName, publicKey: publicKey, shortID: shortID, fingerprint: fingerprint)
+        try AccessLocalV2RayConfigLoader.validateManualParameters(reality)
+        self.address = reality.address
+        self.port = reality.port
+        self.userID = reality.userID
+        self.serverName = reality.serverName
+        self.publicKey = reality.publicKey
+        self.shortID = reality.shortID
+        self.fingerprint = reality.fingerprint
+        self.serviceName = serviceName
+    }
+
+    private static func isServiceName(_ name: String) -> Bool {
+        guard (1...2_048).contains(name.utf8.count) else { return false }
+        // Xray also accepts literal custom service/method paths beginning with '/'.
+        let parts = (name.hasPrefix("/") ? name.dropFirst() : name[...]).split(separator: "/", omittingEmptySubsequences: false)
+        return !parts.isEmpty && parts.allSatisfy { part in
+            !part.isEmpty && part != "." && part != ".." && part.utf8.allSatisfy {
+                (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0)
+                    || $0 == 45 || $0 == 46 || $0 == 95 || $0 == 126
+            }
+        }
+    }
+}
+
+extension AccessVLESSGRPCRealityParameters: AccessInternalVLESSOutbound {
+    var diagnosticSecrets: [String] { [userID, address, serverName, publicKey, shortID, serviceName] }
+    var outboundTag: String { "internal_vless_grpc_reality" }
+    var streamSettings: [String: Any] {
+        [
+            "network": "grpc",
+            "security": "reality",
+            "realitySettings": ["serverName": serverName, "fingerprint": fingerprint, "publicKey": publicKey, "shortId": shortID],
+            "grpcSettings": ["serviceName": serviceName],
+        ]
+    }
+}
+
+protocol AccessInternalVLESSOutbound: Sendable {
+    var address: String { get }
+    var port: UInt16 { get }
+    var userID: String { get }
+    var outboundTag: String { get }
+    var flow: String? { get }
+    var streamSettings: [String: Any] { get }
+    var diagnosticSecrets: [String] { get }
+}
+
+extension AccessInternalVLESSOutbound {
+    var flow: String? { nil }
+
     func embeddedInstanceJSONData(
         logLevel: AccessLogLevel = .none, errorLogPath: String? = nil, logCaptureGeneration: Int64? = nil
     ) throws -> Data {
-        var tls: [String: Any] = ["serverName": serverName, "useSystemCA": true]
-        if !fingerprint.isEmpty { tls["fingerprint"] = fingerprint }
-        if !alpn.isEmpty { tls["alpn"] = [alpn] }
+        var user = ["id": userID, "encryption": AccessRealityVisionParameters.admittedEncryption]
+        user["flow"] = flow
         let outbound: [String: Any] = [
-            "tag": "internal_vless_ws_tls",
+            "tag": outboundTag,
             "protocol": "vless",
             "settings": [
-                "vnext": [["address": address, "port": Int(port),
-                           "users": [["id": userID, "encryption": "none"]]]],
+                "vnext": [["address": address, "port": Int(port), "users": [user]]],
             ],
-            "streamSettings": [
-                "network": "ws",
-                "security": "tls",
-                "tlsSettings": tls,
-                "wsSettings": ["host": requestHost, "path": path],
-            ],
+            "streamSettings": streamSettings,
         ]
         let log = try AccessRealityVisionOutboundConfig.embeddedLog(
             logLevel: logLevel, errorLogPath: errorLogPath, includeAccessLog: true)
@@ -223,4 +382,10 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
         if let logCaptureGeneration { config["aegisLogCaptureGeneration"] = logCaptureGeneration }
         return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
     }
+}
+
+private func verifiedTLSSettings(serverName: String, fingerprint: String) -> [String: Any] {
+    var tls: [String: Any] = ["serverName": serverName, "useSystemCA": true]
+    if !fingerprint.isEmpty { tls["fingerprint"] = fingerprint }
+    return tls
 }

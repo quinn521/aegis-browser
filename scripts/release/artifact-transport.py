@@ -96,11 +96,12 @@ def verify_package(directory, sha, tree, expected_digest):
 
 
 def reject_private_resources(directory, manifest):
-    if any(manifest.get('details', {}).get(key) for key in ('privateBetaTestNode', 'privateBetaQuota')):
+    if any(manifest.get('details', {}).get(key) for key in ('privateBetaTestNode', 'privateBetaQuota', 'privateAlphaNodes')):
         raise ValueError('Private iOS test package cannot be published')
     ipa = next(asset['name'] for asset in manifest['assets'] if asset['name'].endswith('.ipa'))
     with zipfile.ZipFile(directory / ipa) as binary:
-        if any(Path(name.rstrip('/')).name in {'AegisPrivateTestNode.vless', 'AegisPrivateTestSubscription.json'}
+        private = {'aegisprivatetestnode.vless', 'aegisprivatetestsubscription.json', 'aegisalphatestnodes.json'}
+        if any(name.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1].casefold() in private
                for name in binary.namelist()):
             raise ValueError('Private iOS test resources cannot be published')
 
@@ -126,7 +127,8 @@ def main():
         with tempfile.TemporaryDirectory(prefix='.ios-import-', dir=args.directory.parent) as tmp:
             staged = Path(tmp)/'package'
             extract_flat(args.zip, staged)
-            verify_package(staged, args.sha, args.tree, args.manifest_sha256)
+            manifest = verify_package(staged, args.sha, args.tree, args.manifest_sha256)
+            reject_private_resources(staged, manifest)
             os.rename(staged, args.directory)
     else:
         # A package directory may contain rebuildable work; export only explicit delivery files.
