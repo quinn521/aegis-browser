@@ -2440,7 +2440,11 @@ extension AccessHostRecoveryWebKitTests {
         try await checkOverseasCategoryExits(.domesticOverlap)
     }
 
-    private enum OverseasExitScenario { case categories, officialCategories, legacyReuse, canonicalLanding, domesticOverlap }
+    func testOverseasCategoryRoutesIndependentlyOfManualDomesticMode() async throws {
+        try await checkOverseasCategoryExits(.domesticManual)
+    }
+
+    private enum OverseasExitScenario { case categories, officialCategories, legacyReuse, canonicalLanding, domesticOverlap, domesticManual }
 
     private func checkOverseasCategoryExits(_ scenario: OverseasExitScenario) async throws {
         typealias Vector = AccessGeoSiteTestVector
@@ -2473,7 +2477,8 @@ extension AccessHostRecoveryWebKitTests {
         let fixture = AccessGeoSiteCacheTests.Fixture()
         defer { fixture.clean() }
         let cache = fixture.cache()
-        await cache.restore(migrating: .init(mode: .smart, categories: scenario == .domesticOverlap ? [.debian] : []))
+        await cache.restore(migrating: .init(mode: scenario == .domesticManual ? .manual : .smart,
+                                             categories: scenario == .domesticOverlap ? [.debian] : []))
         try cache.requestOverseasPreview()
         try await cache.apply(candidate, using: XCTUnwrap(cache.updateContext()))
         if reusingLegacyStore { try cache.setSelection(.init(mode: .manual, categories: [])) }
@@ -2499,6 +2504,7 @@ extension AccessHostRecoveryWebKitTests {
         case .canonicalLanding: 18_704
         case .domesticOverlap: 18_706
         case .officialCategories: 18_708
+        case .domesticManual: 18_710
         }
         let originalPort = managedPort + 1
         let proxy = try await makeListener(port: managedPort, tunnels: FixtureOriginTunnels(port: managed.port, hosts: hosts, connectDelay: .milliseconds(350)))
@@ -2561,6 +2567,15 @@ extension AccessHostRecoveryWebKitTests {
             XCTAssertFalse(managed.transcript.contains("GET /overseas-download "))
             try await witness(domesticHost, path: "domestic-and-overseas", managed: true)
             XCTAssertEqual(coordinator.snapshot(for: tab).overseasGrant, .all(release: candidate.receipt.tag))
+            return
+        }
+        if scenario == .domesticManual {
+            XCTAssertEqual(coordinator.websiteAccelerationMode, .manual)
+            try await choose(.video)
+            try await witness("www.youtube.com", path: "manual-video", managed: true)
+            XCTAssertEqual(coordinator.snapshot(for: tab).overseasGrant, .categories([.video], release: candidate.receipt.tag))
+            try await witness("github.com", path: "manual-unselected", managed: false)
+            XCTAssertNil(coordinator.snapshot(for: tab).overseasGrant)
             return
         }
         if reusingLegacyStore {

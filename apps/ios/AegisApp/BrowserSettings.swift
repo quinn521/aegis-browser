@@ -146,7 +146,7 @@ struct BrowserSettingsView: View {
 }
 
 
-// 功能名称与桌面一致，使用 iOS 的导航、触控尺寸和动态字号。
+// 「访问中国大陆网站」与「海外加速」相互独立；使用 iOS 的导航、触控尺寸和动态字号。
 private struct DomesticAccelerationSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
@@ -194,10 +194,13 @@ private struct DomesticAccelerationSettingsView: View {
                         }
                     }
                 }
-                if hostStores.geoSiteCache != nil, hostStores.websiteAccelerationMode == .smart {
+                if hostStores.geoSiteCache != nil {
                     Section {
                         NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
                             .accessibilityIdentifier("overseas-acceleration-link")
+                    } header: {
+                        Text("访问海外网站")
+                            .accessibilityIdentifier("overseas-acceleration-section")
                     }
                 }
                 if let host = hostStores.websiteAccelerationHost(for: tab) {

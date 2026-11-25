@@ -340,6 +340,9 @@ final class SettingsLayoutUITests: XCTestCase {
         XCTAssertTrue(manual.waitForExistence(timeout: 5))
         XCTAssertTrue(manual.isSelected)
         XCTAssertFalse(categories.exists)
+        let overseasLink = app.buttons["overseas-acceleration-link"]
+        XCTAssertTrue(reveal(overseasLink, app), "海外加速入口不依赖「智能」")
+        XCTAssertEqual(app.descendants(matching: .any)["overseas-acceleration-section"].label, "访问海外网站")
         XCTAssertTrue(reveal(smart, app))
         smart.tap()
         capture("网站加速-智能-Beta 入口", app)
@@ -476,9 +479,12 @@ final class SettingsLayoutUITests: XCTestCase {
                 domestic.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
             }
             XCTAssertTrue(domesticPage.waitForExistence(timeout: 5))
-            let smart = app.buttons["website-acceleration-smart"]
-            XCTAssertTrue(smart.waitForExistence(timeout: 5))
-            if !smart.isSelected { smart.tap() }
+            // Overseas acceleration stays available when the mainland mode is manual.
+            let manual = app.buttons["website-acceleration-manual"]
+            XCTAssertTrue(manual.waitForExistence(timeout: 5))
+            if !manual.isSelected { manual.tap() }
+            let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isSelected == true"), object: manual)
+            XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
             let overseas = app.buttons["overseas-acceleration-link"]
             XCTAssertTrue(reveal(overseas, app))
             overseas.tap()
