@@ -496,7 +496,10 @@ final class SettingsLayoutUITests: XCTestCase {
         let ai = app.switches["overseas-category-AI"]
         XCTAssertTrue(reveal(ai, app))
         XCTAssertEqual(ai.value as? String, "0")
-        ai.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        // SwiftUI can expose both the labeled row and its native switch in the same cell.
+        let aiCell = app.cells.containing(.switch, identifier: "overseas-category-AI").firstMatch
+        let nativeSwitch = aiCell.switches.matching(NSPredicate(format: "identifier == %@", "")).firstMatch
+        (nativeSwitch.exists ? nativeSwitch : ai).tap()
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ai)
         XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 5), .completed)
         let review = app.buttons["overseas-review-choice"]
