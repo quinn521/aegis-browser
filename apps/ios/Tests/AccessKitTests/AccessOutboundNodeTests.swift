@@ -64,20 +64,28 @@ final class AccessOutboundNodeTests: XCTestCase {
             "kind": "vless",
             "endpoint": ["address": "192.0.2.20", "port": 8443],
             "security": ["tls": ["serverName": "cert.example.com", "fingerprint": "chrome", "alpn": "http/1.1"]],
-            "transport": ["ws": ["path": "/ws?token=%74est-value&opaque=%E9%E8", "host": "ws.example.com"]],
+            "transport": ["ws": ["path": "/ws?token=%74est-value&opaque=%E9", "host": "ws.example.com"]],
             "credentials": ["vless": ["userID": "00000000-0000-4000-8000-000000000002", "encryption": "none"]],
         ]
         XCTAssertEqual(stored, expected)
+        let storedWS = try JSONSerialization.data(withJSONObject: expected)
+        XCTAssertEqual(try JSONDecoder().decode(AccessOutboundNode.self, from: storedWS), ws)
 
         let reality = try AccessOutboundNode.parseSingleShareURI(fixtures[0].share)
-        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(reality)) as? [String: Any])
-        let security = try XCTUnwrap((fields["security"] as? [String: Any])?["reality"] as? [String: Any])
-        XCTAssertEqual(Set(security.keys), ["serverName", "fingerprint", "publicKey", "shortID", "spiderX"])
-        let transport = try XCTUnwrap(fields["transport"] as? [String: Any])
-        XCTAssertEqual(Set(transport.keys), ["raw"])
-        let credentials = try XCTUnwrap((fields["credentials"] as? [String: Any])?["vless"] as? [String: String])
-        XCTAssertEqual(credentials["flow"], "xtls-rprx-vision")
-        XCTAssertEqual(credentials["encryption"], "none")
+        guard case .realityVision(let parameters) = reality else { return XCTFail("Wrong outbound") }
+        let expectedReality: NSDictionary = [
+            "kind": "vless",
+            "endpoint": ["address": "192.0.2.10", "port": 443],
+            "security": ["reality": ["serverName": "cert.example.com", "fingerprint": "chrome",
+                                     "publicKey": parameters.publicKey, "shortID": "01020304", "spiderX": "/test"]],
+            "transport": ["raw": [:] as [String: String]],
+            "credentials": ["vless": ["userID": "00000000-0000-4000-8000-000000000001", "encryption": "none",
+                                      "flow": "xtls-rprx-vision"]],
+        ]
+        let storedReality = try JSONSerialization.jsonObject(with: JSONEncoder().encode(reality)) as? NSDictionary
+        XCTAssertEqual(storedReality, expectedReality)
+        let expectedRealityBytes = try JSONSerialization.data(withJSONObject: expectedReality)
+        XCTAssertEqual(try JSONDecoder().decode(AccessOutboundNode.self, from: expectedRealityBytes), reality)
     }
 
     func testStructuralWhitelistRejectsAddedFieldsAndWrongShapesForBothProfiles() throws {
@@ -129,11 +137,19 @@ final class AccessOutboundNodeTests: XCTestCase {
                 XCTAssertThrowsError(try AccessOutboundConfigRegistry.assertFailClosed(object, profile: key),
                                      "\(key.rawValue) mutation \(index)")
             }
+            let invalidStream = replacing(replacing(stream, "security", "none"), "network", 42)
+            XCTAssertThrowsError(try AccessOutboundConfigRegistry.assertFailClosed(
+                withStream(invalidStream), profile: key)) { error in
+                XCTAssertEqual(error as? AccessRealityVisionOutboundConfigError, .fieldNotCanonical("network"))
+            }
             XCTAssertThrowsError(try AccessOutboundConfigRegistry.assertFailClosed(root,
                 profile: key == .vlessRawReality ? .vlessWsTls : .vlessRawReality))
             if key == .vlessWsTls {
                 XCTAssertThrowsError(try AccessOutboundConfigRegistry.assertFailClosed(
                     withStream(replacing(stream, securityKey, replacing(security, "useSystemCA", 1))), profile: key))
+            } else {
+                XCTAssertThrowsError(try AccessOutboundConfigRegistry.assertFailClosed(
+                    withServer(replacing(vnext, "users", [replacing(user, "flow", "")])), profile: key))
             }
         }
     }
@@ -142,20 +158,17 @@ final class AccessOutboundNodeTests: XCTestCase {
         let fixtures = try fixtures()
         let reality = try AccessOutboundNode.parseSingleShareURI(fixtures[0].share)
         let ws = try AccessOutboundNode.parseSingleShareURI(fixtures[1].share)
-        XCTAssertTrue(try AccessOutboundConfigRegistry.diagnosticSecrets(for: reality).contains("01020304"))
+        XCTAssertTrue(try AccessOutboundConfigRegistry.diagnosticSecrets(for: reality).credentials.contains("01020304"))
         let secrets = try AccessOutboundConfigRegistry.diagnosticSecrets(for: ws)
-        XCTAssertTrue(secrets.contains("00000000-0000-4000-8000-000000000002"))
-        XCTAssertTrue(secrets.contains("%74est-value"))
-        XCTAssertTrue(secrets.contains("test-value"))
-        XCTAssertTrue(secrets.contains("%E9%E8"))
-        XCTAssertFalse(secrets.contains("/ws"))
+        XCTAssertEqual(secrets.credentials, ["00000000-0000-4000-8000-000000000002"])
+        XCTAssertEqual(secrets.queryValues, ["%74est-value", "test-value", "%E9"])
 
-        let query = (0..<256).map { "q=" + String(format: "%04d", $0) }.joined(separator: "&")
+        let query = (0..<256).map { "q=\($0)" }.joined(separator: "&")
         let params = try AccessVLESSWebSocketTLSParameters(address: "192.0.2.20", port: 443,
             userID: "00000000-0000-4000-8000-000000000002", serverName: "cert.example.com",
             requestHost: "ws.example.com", path: "/ws?" + query, fingerprint: "", alpn: "")
         let overflow = try AccessOutboundConfigRegistry.diagnosticSecrets(for: .vlessWebSocketTLS(params))
-        XCTAssertEqual(Set(overflow).count, 257)
+        XCTAssertEqual(overflow.count, 257)
         let log = AccessDiagnosticLog(pollInterval: .seconds(60))
         let first = log.acquireShared(level: .info, secrets: [])
         let path = try XCTUnwrap(first.path)
@@ -168,34 +181,42 @@ final class AccessOutboundNodeTests: XCTestCase {
         XCTAssertTrue(log.stop(lease: blocked))
         XCTAssertTrue(log.stop(lease: first))
         XCTAssertEqual(log.snapshot(), "")
-        let atLimit = Set(overflow).subtracting(["0255"])
+        let atLimit = AccessDiagnosticLog.RedactionSecrets(credentials: Array(overflow.credentials),
+            queryValues: Array(overflow.queryValues.subtracting(["255"])))
         XCTAssertEqual(atLimit.count, 256)
-        let recovered = log.acquireShared(level: .info, secrets: Array(atLimit))
+        let recovered = log.acquireShared(level: .info, secrets: atLimit)
         defer { log.stop(lease: recovered) }
         XCTAssertNotNil(recovered.path)
     }
 
-    func testShortQueryValuesDoNotRedactTimestampsOrEndpoints() async throws {
+    func testQueryValuesAreRemovedFromURLsWithoutChangingTimestampsOrEndpoints() throws {
         let userID = "00000000-0000-4000-8000-000000000002"
+        let requestTarget = "/ws?v=1&x=%31&k=a+b&id=abc&year=2026&token=fixture-query-value"
         let params = try AccessVLESSWebSocketTLSParameters(address: "192.0.2.20", port: 443,
             userID: userID, serverName: "cert.example.com", requestHost: "ws.example.com",
-            path: "/ws?v=1&x=%31&k=a+b&id=abc&token=long-value", fingerprint: "", alpn: "")
+            path: requestTarget, fingerprint: "", alpn: "")
         let secrets = try AccessOutboundConfigRegistry.diagnosticSecrets(for: .vlessWebSocketTLS(params))
-        XCTAssertEqual(Set(secrets), [userID, "long-value"])
+        XCTAssertEqual(secrets.credentials, [userID])
+        XCTAssertEqual(secrets.queryValues, ["1", "%31", "a+b", "a b", "abc", "2026", "fixture-query-value"])
 
-        let log = AccessDiagnosticLog(pollInterval: .milliseconds(15))
+        let log = AccessDiagnosticLog(pollInterval: .seconds(60))
         defer { log.stop() }
         let lease = log.acquireShared(level: .info, secrets: secrets)
         let path = try XCTUnwrap(lease.path)
         let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         defer { try? writer.close() }
-        try writer.write(contentsOf: Data("2026/11/11 00:00:01 from local accepted //abc.example.com:1443\n".utf8))
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !log.snapshot().contains("abc.example.com:1443"), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        XCTAssertTrue(log.snapshot().contains("2026/11/11 00:00:01 [Access] accepted abc.example.com:1443"))
+        let events = [
+            "2026/11/11 00:00:01 from local accepted https://abc.example.com:1443\(requestTarget)",
+            "2026/11/11 00:00:02 [Error] transport/internet/websocket: upgrade error \(requestTarget)",
+            "2026/11/11 00:00:03 from local accepted //\(userID).example.com:443",
+        ]
+        try writer.write(contentsOf: Data((events.joined(separator: "\n") + "\n").utf8))
         XCTAssertTrue(log.stop(lease: lease))
+        XCTAssertEqual(log.snapshot(), [
+            "2026/11/11 00:00:01 [Access] accepted abc.example.com:1443",
+            "2026/11/11 00:00:02 [Error] details withheld",
+            "2026/11/11 00:00:03 [Access] accepted [redacted]",
+        ].joined(separator: "\n"))
     }
 
     private struct Fixture {

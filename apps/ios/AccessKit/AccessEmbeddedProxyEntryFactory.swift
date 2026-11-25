@@ -337,7 +337,7 @@ final class AccessEmbeddedProxyEntrySession {
         core: any AccessEmbeddedCoreControlling,
         diagnostics: AccessDiagnosticLog,
         level: AccessLogLevel,
-        secrets: [String],
+        secrets: AccessDiagnosticLog.RedactionSecrets,
         disableCaptureWhenQuiet: Bool = true,
         render: (AccessDiagnosticLog.Lease?) throws -> Data
     ) async throws -> AccessDiagnosticLog.Lease {

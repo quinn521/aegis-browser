@@ -40,26 +40,47 @@ public enum AccessOutboundNode: Codable, Equatable, Sendable {
         case reality(serverName: String, fingerprint: String, publicKey: String, shortID: String, spiderX: String)
         case tls(serverName: String, fingerprint: String, alpn: String)
 
-        private enum CodingKeys: String, CodingKey { case reality, tls }
-        private enum RealityCodingKeys: String, CodingKey {
-            case serverName, fingerprint, publicKey, shortID, spiderX
+        private enum CodingKeys: String, CodingKey {
+            case reality = "reality"
+            case tls = "tls"
         }
-        private enum TlsCodingKeys: String, CodingKey { case serverName, fingerprint, alpn }
+        private enum RealityCodingKeys: String, CodingKey {
+            case serverName = "serverName"
+            case fingerprint = "fingerprint"
+            case publicKey = "publicKey"
+            case shortID = "shortID"
+            case spiderX = "spiderX"
+        }
+        private enum TlsCodingKeys: String, CodingKey {
+            case serverName = "serverName"
+            case fingerprint = "fingerprint"
+            case alpn = "alpn"
+        }
     }
 
     public enum Transport: Codable, Equatable, Sendable {
         case raw
         case ws(path: String, host: String)
 
-        private enum CodingKeys: String, CodingKey { case raw, ws }
-        private enum WsCodingKeys: String, CodingKey { case path, host }
+        private enum CodingKeys: String, CodingKey {
+            case raw = "raw"
+            case ws = "ws"
+        }
+        private enum WsCodingKeys: String, CodingKey {
+            case path = "path"
+            case host = "host"
+        }
     }
 
     public enum Credentials: Codable, Equatable, Sendable {
         case vless(userID: String, encryption: String, flow: String?)
 
-        private enum CodingKeys: String, CodingKey { case vless }
-        private enum VlessCodingKeys: String, CodingKey { case userID, encryption, flow }
+        private enum CodingKeys: String, CodingKey { case vless = "vless" }
+        private enum VlessCodingKeys: String, CodingKey {
+            case userID = "userID"
+            case encryption = "encryption"
+            case flow = "flow"
+        }
     }
 
     public var kind: Kind {
@@ -122,8 +143,8 @@ public enum AccessOutboundNode: Codable, Equatable, Sendable {
         let credentials = try fields.decode(Credentials.self, forKey: .credentials)
 
         switch (kind, security, transport, credentials) {
-        // Stored v3 REALITY records carry the admitted flow value. Changing
-        // admittedFlow makes those records fail closed until they are re-saved.
+        // Stored v3 REALITY records carry the Vision flow. A change to the
+        // admitted flow requires a migration for those records.
         case (.vless, .reality(let serverName, let fingerprint, let publicKey, let shortID, let spiderX),
               .raw, .vless(let userID, AccessRealityVisionParameters.admittedEncryption,
                           AccessRealityVisionParameters.admittedFlow?)):

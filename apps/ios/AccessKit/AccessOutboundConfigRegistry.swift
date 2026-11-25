@@ -7,17 +7,13 @@ enum AccessOutboundConfigRegistry {
     private struct Entry: Sendable {
         let outbound: Rule
         let generate: @Sendable (AccessOutboundNode) throws -> [String: Any]
-        let diagnosticSecrets: @Sendable (AccessOutboundNode) throws -> [String]
+        let diagnosticSecrets: @Sendable (AccessOutboundNode) throws -> AccessDiagnosticLog.RedactionSecrets
     }
 
     private static let realityTag = AccessRealityVisionOutboundConfig.outboundTag
     private static let webSocketTag = "internal_vless_ws_tls"
     // Written out so the validator cannot follow a change to the generator constant.
     private static let visionFlow = "xtls-rprx-vision"
-    // Shorter query values carry no secret material and would match timestamps,
-    // ports, and fixed event text, which turns whole diagnostic lines into
-    // "[redacted]". Xray never emits the WS path as a diagnostic field.
-    static let minimumQuerySecretLength = 4
 
     private static let entries: [AccessOutboundProfileKey: Entry] = [
         .vlessRawReality: Entry(
@@ -42,7 +38,7 @@ enum AccessOutboundConfigRegistry {
             },
             diagnosticSecrets: { node in
                 guard case .realityVision(let params) = node else { throw invalidProfile }
-                return [params.userID, params.publicKey, params.shortID]
+                return .init(credentials: [params.userID, params.publicKey, params.shortID])
             }
         ),
         .vlessWsTls: Entry(
@@ -68,7 +64,7 @@ enum AccessOutboundConfigRegistry {
             },
             diagnosticSecrets: { node in
                 guard case .vlessWebSocketTLS(let params) = node else { throw invalidProfile }
-                return [params.userID] + querySecrets(in: params.path)
+                return .init(credentials: [params.userID], queryValues: querySecrets(in: params.path))
             }
         ),
     ]
@@ -116,7 +112,7 @@ enum AccessOutboundConfigRegistry {
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
-    static func diagnosticSecrets(for node: AccessOutboundNode) throws -> [String] {
+    static func diagnosticSecrets(for node: AccessOutboundNode) throws -> AccessDiagnosticLog.RedactionSecrets {
         try entry(for: node.profileKey).diagnosticSecrets(node)
     }
 
@@ -130,7 +126,6 @@ enum AccessOutboundConfigRegistry {
             return [encoded, encoded.removingPercentEncoding,
                     encoded.replacingOccurrences(of: "+", with: " ").removingPercentEncoding]
                 .compactMap { $0 }
-                .filter { $0.count >= minimumQuerySecretLength }
         }
     }
 
@@ -186,8 +181,8 @@ enum AccessOutboundConfigRegistry {
                 }
                 guard required.keys.allSatisfy(object.keys.contains) else { throw invalid }
                 // Sorted so a document with several violations always reports the same field.
-                for key in object.keys.sorted() {
-                    guard let rule = required[key] ?? optional[key], let value = object[key] else { throw invalid }
+                for (key, value) in object.sorted(by: { $0.key < $1.key }) {
+                    guard let rule = required[key] ?? optional[key] else { throw invalid }
                     try rule.validate(value, field: key)
                 }
             case .single(let rule):
