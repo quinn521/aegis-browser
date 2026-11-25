@@ -224,6 +224,28 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(self.root.glob('aegis-private-alpha-*')), [])
 
+    @unittest.skipUnless(os.uname().sysname == 'Darwin', 'native ACL fixture')
+    def test_stage_rejects_an_inherited_runner_temp_acl_before_private_bytes(self):
+        subprocess.run(['/bin/chmod', '+a', 'user:nobody allow list,search,file_inherit,directory_inherit',
+                        str(self.root)], check=True)
+        self.addCleanup(subprocess.run, ['/bin/chmod', '-RN', str(self.root)], check=True)
+        result = self.cli([HELPER, 'stage'], dict(self.env, **secrets()))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Private Alpha', result.stderr)
+        self.assertNotIn(UID, result.stdout + result.stderr)
+        self.assertEqual(list(self.root.glob('aegis-private-alpha-*')), [])
+
+    @unittest.skipUnless(os.uname().sysname == 'Darwin', 'native ACL fixture')
+    def test_private_directory_check_rejects_any_acl(self):
+        private = self.root / 'private'
+        private.mkdir(mode=0o700)
+        alpha.require_private_dir(private)
+        subprocess.run(['/bin/chmod', '+a', 'user:nobody allow list', str(private)], check=True)
+        self.addCleanup(subprocess.run, ['/bin/chmod', '-N', str(private)], check=True)
+        self.assertTrue(alpha.acl_entries(private))
+        with self.assertRaisesRegex(ValueError, 'owner-only'):
+            alpha.require_private_dir(private)
+
     def test_exact_ipa_rejects_missing_mismatch_copy_and_noninternal_audience(self):
         root = self.stage()
         directory = root / 'inputs'

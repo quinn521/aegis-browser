@@ -46,7 +46,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let fixture = ThreeXUIEntryFixture(userID: userID)
         let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
             nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
-            fetch: { config in try await fixture.usage(config) })
+            alphaRoutes: nodes.routes, fetch: { config in try await fixture.usage(config) })
         usage.setActive(true)
         defer { usage.setActive(false) }
         let core = EntryRecordingCore()
@@ -63,6 +63,8 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let server = try XCTUnwrap((settings["vnext"] as? [[String: Any]])?.first)
         XCTAssertEqual(server["address"] as? String, "first.example")
         XCTAssertEqual(usage.snapshot?.usedBytes, 30)
+        XCTAssertEqual(usage.availableConnectionCount, 2)
+        XCTAssertFalse(usage.connectionsUnavailable)
         nodes.select(1)
         XCTAssertEqual(retired, [ready.endpoint.identity])
         XCTAssertFalse(publisher.validateReady(ready), "Switching nodes must revoke the old listener")
@@ -77,7 +79,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
             let fixture = ThreeXUIEntryFixture(userID: userID, mode: mode)
             let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
                 nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
-                fetch: { config in try await fixture.usage(config) })
+                alphaRoutes: nodes.routes, fetch: { config in try await fixture.usage(config) })
             usage.setActive(true)
             let core = EntryRecordingCore()
             let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
@@ -92,7 +94,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let fixture = ThreeXUIEntryFixture(userID: userID)
         let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
             nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
-            fetch: { config in try await fixture.usage(config) })
+            alphaRoutes: differentNodes.routes, fetch: { config in try await fixture.usage(config) })
         usage.setActive(true)
         defer { usage.setActive(false) }
         let core = EntryRecordingCore()
@@ -100,6 +102,24 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         do { _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5))); XCTFail("Foreign Alpha node authorized") }
         catch { }
         XCTAssertNil(core.startedConfiguration)
+    }
+
+    func testAlphaConnectionCountOnlyIncludesBundledRoutesTheSubscriptionPublishes() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let data = try JSONEncoder().encode([alphaWSNode(address: "first.example"), alphaWSNode(address: "absent.example")])
+        let nodes = alphaCatalogue(data: data, defaults: defaults)
+        for (mode, expected) in [(ThreeXUIEntryFixture.Mode.allowed, 1), (.unlistedRoute, 0)] {
+            let fixture = ThreeXUIEntryFixture(userID: userID, mode: mode)
+            let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+                nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
+                alphaRoutes: nodes.routes, fetch: { config in try await fixture.usage(config) })
+            usage.setActive(true)
+            await usage.refresh()?.value
+            XCTAssertEqual(usage.availableConnectionCount, expected, "\(mode)")
+            XCTAssertEqual(usage.connectionsUnavailable, expected == 0, "\(mode)")
+            usage.setActive(false)
+        }
     }
 
     private func alphaWSNode(address: String) -> String {

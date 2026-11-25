@@ -162,6 +162,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     private var selectedNode: AccessRealityVisionParameters?
     private let fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])?
     private var alphaNodes: [AccessInternalTestNode] = []
+    private let alphaRoutes: [AccessInternalTestNode]
     private var selectedAlphaNode: AccessInternalTestNode?
     @Published private(set) var availableConnectionCount = 0
     @Published private(set) var connectionsUnavailable = false
@@ -191,6 +192,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
          nodeUserID: String? = nil,
          fetchNodes: @escaping @Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessRealityVisionParameters] = { try await AccessSubscriptionClient.nodes($0, userID: $1) },
          fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])? = nil,
+         alphaRoutes: [AccessInternalTestNode] = [],
          fetch: @escaping @Sendable (AccessSubscriptionConfiguration) async throws -> AccessSubscriptionUsage = { try await AccessSubscriptionClient.read($0) }) {
         self.isSelected = isSelected
         self.configuration = configuration
@@ -198,10 +200,12 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         self.nodeUserID = nodeUserID
         self.fetchNodes = fetchNodes
         self.fetchAlphaNodes = fetchAlphaNodes
+        self.alphaRoutes = alphaRoutes
         self.fetch = fetch
     }
 
-    static func product(bundle: Bundle = .main, usesAlphaNodes: Bool = false) -> AccessSubscriptionUsageSession {
+    static func product(bundle: Bundle = .main, usesAlphaNodes: Bool = false,
+                        alphaRoutes: [AccessInternalTestNode] = []) -> AccessSubscriptionUsageSession {
         let channel = bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String
         guard ["dev", "alpha", "beta"].contains(channel ?? ""),
               let path = AccessLocalV2RayConfigLoader.productPath(bundle: bundle) else {
@@ -221,7 +225,8 @@ final class AccessSubscriptionUsageSession: ObservableObject {
             config = decoded
         } catch { config = nil }
         return .init(isSelected: true, configuration: config, managesConnections: true, nodeUserID: userID,
-                     fetchAlphaNodes: usesAlphaNodes ? AccessSubscriptionClient.alphaNodes : nil)
+                     fetchAlphaNodes: usesAlphaNodes ? AccessSubscriptionClient.alphaNodes : nil,
+                     alphaRoutes: alphaRoutes)
     }
 
     /// No static-node fallback: the account's current allowance and subscription must both succeed.
@@ -234,7 +239,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
 
     func authorizeAlphaNode(_ node: AccessInternalTestNode) async throws {
         try await refreshConnectionAllowance()
-        guard alphaNodes.contains(node) else { throw AccessSubscriptionQueryError.unavailable }
+        guard alphaNodes.contains(where: { $0.isWireIdentical(to: node) }) else { throw AccessSubscriptionQueryError.unavailable }
         selectedAlphaNode = node
     }
 
@@ -251,7 +256,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     var permitsExistingConnection: Bool {
         let hasSelectedRoute = fetchAlphaNodes == nil
             ? selectedNode.map(nodes.contains) == true
-            : selectedAlphaNode.map(alphaNodes.contains) == true
+            : selectedAlphaNode.map { selected in alphaNodes.contains { $0.isWireIdentical(to: selected) } } == true
         return !unavailable && hasSelectedRoute && snapshot?.permitsConnection == true
     }
 
@@ -274,6 +279,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         guard let configuration else { unavailable = true; return nil }
         let token = UUID(); generation = token
         let fetch = fetch
+        let alphaRoutes = alphaRoutes
         isRefreshing = true
         task = Task { [weak self] in
             do {
@@ -284,7 +290,9 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 if self?.managesConnections == true, value.permitsConnection, let userID = self?.nodeUserID {
                     // Node failure leaves valid counters visible but never reuses an old connection list.
                     if let fetchAlphaNodes = self?.fetchAlphaNodes {
-                        alphaCandidates = (try? await fetchAlphaNodes(configuration, userID)) ?? []
+                        // Only bundled choices the live subscription publishes byte-for-byte are usable.
+                        let published = (try? await fetchAlphaNodes(configuration, userID)) ?? []
+                        alphaCandidates = alphaRoutes.filter { route in published.contains { $0.isWireIdentical(to: route) } }
                     } else {
                         candidates = (try? await self?.fetchNodes(configuration, userID)) ?? []
                         candidates = candidates.filter { $0.userID == userID.lowercased() }

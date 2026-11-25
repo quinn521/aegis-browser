@@ -27,6 +27,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
     fileprivate var selectionDidChange: (() -> Void)?
 
     var enablesWebsiteAcceleration: Bool { isConfigured && !entries.isEmpty }
+    var routes: [AccessInternalTestNode] { candidates }
 
     static func product(bundle: Bundle = .main, defaults: UserDefaults = .standard) -> AccessAlphaNodeCatalogue {
         let channel = bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String

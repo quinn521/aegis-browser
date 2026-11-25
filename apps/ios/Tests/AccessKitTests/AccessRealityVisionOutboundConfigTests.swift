@@ -1070,6 +1070,58 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
             )
         }
     }
+
+    func testAlphaRouteIdentityComparesWireBytesNotCanonicalEquivalence() throws {
+        let base = try makeParameters()
+        func reality(_ spiderX: String) throws -> AccessRealityVisionParameters {
+            try AccessRealityVisionParameters(address: base.address, port: base.port, userID: base.userID,
+                serverName: base.serverName, publicKey: base.publicKey, shortID: base.shortID, spiderX: spiderX)
+        }
+        let composed = try reality("/caf\u{E9}"), decomposed = try reality("/cafe\u{301}")
+        XCTAssertEqual(composed, decomposed, "Swift String equality is canonical equivalence")
+        let lhs = AccessInternalTestNode.realityVision(composed), rhs = AccessInternalTestNode.realityVision(decomposed)
+        XCTAssertEqual(lhs, rhs)
+        XCTAssertTrue(lhs.isWireIdentical(to: .realityVision(try reality("/caf\u{E9}"))))
+        XCTAssertFalse(lhs.isWireIdentical(to: rhs))
+        XCTAssertFalse(rhs.isWireIdentical(to: lhs))
+    }
+
+    func testAlphaDiagnosticsRedactRelayAddressForEveryTransport() throws {
+        // Synthetic canonical X25519 public key (bytes 0...31, base64url without padding).
+        let reality = try makeParameters(address: "relay-reality.example",
+                                         publicKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+        let userID = reality.userID
+        let nodes: [(String, AccessInternalTestNode)] = [
+            ("relay-reality.example", .realityVision(reality)),
+            ("relay-ws.example", .vlessWebSocketTLS(try AccessVLESSWebSocketTLSParameters(address: "relay-ws.example",
+                port: 443, userID: userID, serverName: "cert.example", requestHost: "cert.example", path: "/inside",
+                fingerprint: "", alpn: ""))),
+            ("relay-tcp.example", .vlessTCPTLSVision(try AccessVLESSTCPTLSVisionParameters(address: "relay-tcp.example",
+                port: 443, userID: userID, serverName: "cert.example"))),
+            ("relay-grpc.example", .vlessGRPCReality(try AccessVLESSGRPCRealityParameters(address: "relay-grpc.example",
+                port: 443, userID: userID, serverName: "cert.example", publicKey: reality.publicKey,
+                shortID: reality.shortID, serviceName: "Tun"))),
+        ]
+        for (relay, node) in nodes {
+            let line = "2026/11/11 00:00:00 [Info] proxy/vless/outbound: tunneling request to tcp:target.example:443 via \(relay):443\n"
+            // The unredacted control proves the fixture line reaches the shared history.
+            for redacts in [false, true] {
+                let log = AccessDiagnosticLog(pollInterval: .milliseconds(15))
+                defer { log.stop() }
+                let lease = log.acquireShared(level: .info, secrets: redacts ? node.diagnosticSecrets : [])
+                let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: try XCTUnwrap(lease.path)))
+                defer { try? writer.close() }
+                try writer.write(contentsOf: Data(line.utf8))
+                let deadline = Date().addingTimeInterval(2)
+                while log.snapshot().isEmpty && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+                XCTAssertTrue(log.stop(lease: lease))
+                let history = log.snapshot().lowercased()
+                XCTAssertFalse(history.isEmpty, relay)
+                XCTAssertEqual(history.contains(relay), !redacts, "\(relay) redacted=\(redacts)")
+                XCTAssertFalse(history.contains(userID.lowercased()), relay)
+            }
+        }
+    }
 }
 
 private final class LogInitializationFailingCore: AccessEmbeddedCoreControlling, @unchecked Sendable {

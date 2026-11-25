@@ -107,7 +107,8 @@ struct AegisApp: App {
         _windows = StateObject(wrappedValue: BrowserWindowStore(persistenceURL: windowsURL, legacyURLs: workspaceStore.sessionURLs))
         let registry = AccessSiteProxyStoreRegistry()
         let alphaNodes = AccessAlphaNodeCatalogue.shared
-        let subscription = AccessSubscriptionUsageSession.product(usesAlphaNodes: alphaNodes.isConfigured)
+        let subscription = AccessSubscriptionUsageSession.product(usesAlphaNodes: alphaNodes.isConfigured,
+                                                                  alphaRoutes: alphaNodes.routes)
         _subscriptionUsage = StateObject(wrappedValue: subscription)
         let hostRegistry = AccessHostDataStoreRegistry()
         weak var retirementOwner: AccessHostStoreCoordinator?

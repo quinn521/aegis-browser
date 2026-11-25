@@ -92,6 +92,38 @@ public enum AccessInternalTestNode: Equatable, Sendable {
     }
 }
 
+extension AccessInternalTestNode {
+    var diagnosticSecrets: [String] {
+        switch self {
+        case .realityVision(let parameters):
+            [parameters.userID, parameters.address, parameters.publicKey, parameters.shortID]
+        case .vlessWebSocketTLS(let parameters): parameters.diagnosticSecrets
+        case .vlessTCPTLSVision(let parameters): parameters.diagnosticSecrets
+        case .vlessGRPCReality(let parameters): parameters.diagnosticSecrets
+        }
+    }
+
+    /// Swift `String` equality is canonical equivalence. Route authorization
+    /// compares the exact UTF-8 bytes that become the Xray outbound.
+    public func isWireIdentical(to other: Self) -> Bool {
+        let lhs = wireFields, rhs = other.wireFields
+        return lhs.count == rhs.count && zip(lhs, rhs).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+    }
+
+    private var wireFields: [String] {
+        switch self {
+        case .realityVision(let p):
+            ["reality", p.address, String(p.port), p.userID, p.serverName, p.publicKey, p.shortID, p.spiderX, p.fingerprint]
+        case .vlessWebSocketTLS(let p):
+            ["ws-tls", p.address, String(p.port), p.userID, p.serverName, p.requestHost, p.path, p.fingerprint, p.alpn]
+        case .vlessTCPTLSVision(let p):
+            ["tcp-tls-vision", p.address, String(p.port), p.userID, p.serverName, p.fingerprint]
+        case .vlessGRPCReality(let p):
+            ["grpc-reality", p.address, String(p.port), p.userID, p.serverName, p.publicKey, p.shortID, p.fingerprint, p.serviceName]
+        }
+    }
+}
+
 private enum AccessInternalNodeFields {
     static func dialAddress(from encodedHost: String) -> String? {
         if encodedHost.hasPrefix("[") { return encodedHost }
@@ -241,8 +273,9 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
 
 extension AccessVLESSWebSocketTLSParameters: AccessInternalVLESSOutbound {
     // The diagnostic event filter admits only approved text and host/port
-    // fields. WS paths and queries never become diagnostic fields.
-    var diagnosticSecrets: [String] { [userID] }
+    // fields. WS paths and queries never become diagnostic fields; the private
+    // relay endpoint is redacted like the other internal transports.
+    var diagnosticSecrets: [String] { [userID, address] }
 
     var outboundTag: String { "internal_vless_ws_tls" }
     var streamSettings: [String: Any] {

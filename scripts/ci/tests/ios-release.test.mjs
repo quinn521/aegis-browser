@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {copyFileSync, readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {copyFileSync, existsSync, readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -55,10 +55,13 @@ test('private Alpha hands off to the protected store without publishing artifact
   const runnerAdmission = jobs.admission.steps.find(step => step.name === 'Require a dedicated runner for private Alpha');
   assert(runnerAdmission.if.includes("steps.plan.outputs.private_alpha == 'true'"));
   const dedicated = {PRIVATE_ALPHA_GROUP: 'private-group', PRIVATE_ALPHA_LABEL: 'private-runner', SHARED_IOS_LABEL: 'shared'};
-  const admitRunner = env => spawnSync('bash', ['-c', runnerAdmission.run], {env: {...process.env, ...dedicated, ...env}});
-  assert.equal(admitRunner({}).status, 0);
-  for (const missingOrShared of [{PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_LABEL: ''}, {PRIVATE_ALPHA_LABEL: 'SHARED'}]) {
-    assert.equal(admitRunner(missingOrShared).status, 1);
+  // Hosted Ubuntu runs a modern Bash; stock macOS /bin/bash is 3.2.
+  for (const shell of ['bash', ...(existsSync('/bin/bash') ? ['/bin/bash'] : [])]) {
+    const admitRunner = env => spawnSync(shell, ['-c', runnerAdmission.run], {env: {...process.env, ...dedicated, ...env}});
+    assert.equal(admitRunner({}).status, 0, shell);
+    for (const missingOrShared of [{PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_LABEL: ''}, {PRIVATE_ALPHA_LABEL: 'SHARED'}]) {
+      assert.equal(admitRunner(missingOrShared).status, 1, shell);
+    }
   }
   assert.deepEqual(job.needs, ['admission', 'check-unused']);
   for (const condition of ["private_alpha == 'true'", "private_beta == 'false'", "profile == 'alpha'",

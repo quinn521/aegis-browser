@@ -71,10 +71,19 @@ def runner_location(env):
     return parent, f"aegis-private-alpha-{env['GITHUB_RUN_ID']}-1-"
 
 
+def acl_entries(path):
+    if sys.platform != 'darwin':
+        return []
+    # The fixed ls operation treats the path after -- as one literal operand.
+    listing = subprocess.check_output(  # nosec B603
+        ['/bin/ls', '-lde', '--', str(path)], shell=False, text=True, timeout=10)
+    return [line for line in listing.splitlines()[1:] if re.match(r'\s*\d+:\s', line)]
+
+
 def require_private_dir(path):
     info = path.lstat()
     if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
-            or info.st_uid != os.geteuid()):
+            or info.st_uid != os.geteuid() or acl_entries(path)):
         raise ValueError('Private Alpha directory must be owner-only')
 
 
@@ -120,11 +129,15 @@ def stage(env):
     parent, prefix = runner_location(env)
     directory = Path(tempfile.mkdtemp(dir=parent, prefix=prefix))
     try:
+        # An inherited runner-temp ACL would extend to every private file below.
+        require_private_dir(directory)
         # Publish only this nonsecret path, before writing any private bytes, for always() cleanup.
         output('directory', directory)
         inputs = directory / 'inputs'
         inputs.mkdir(mode=0o700)
+        require_private_dir(inputs)
         with tempfile.TemporaryDirectory(dir=directory, prefix='decode-') as work:
+            require_private_dir(Path(work))
             node, quota = Path(work) / 'node', Path(work) / 'quota'
             nodes.write_private(node, raw_node)
             nodes.write_private(quota, raw_quota)
@@ -243,16 +256,19 @@ def retain(directory, digest):
     retained, identity = handoff(digest, create=True)
     retained.mkdir(mode=0o700)
     try:
+        require_private_dir(retained)
         expected, _ = checked_inputs(directory / 'inputs')
         nodes = alpha_nodes()
         # Save the binding before copying private bytes so cancellation cleanup can check ownership.
         nodes.write_private(retained / HANDOFF, json.dumps(identity).encode())
         inputs = retained / 'inputs'
         inputs.mkdir(mode=0o700)
+        require_private_dir(inputs)
         for name, raw in expected.items():
             nodes.write_private(inputs / name, raw)
         package = retained / 'package'
         package.mkdir(mode=0o700)
+        require_private_dir(package)
         for name in (MANIFEST, MANIFEST + '.sha256', ipa.name):
             with (ipa.parent / name).open('rb') as original, (package / name).open('xb') as copy:
                 shutil.copyfileobj(original, copy)

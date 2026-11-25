@@ -148,7 +148,9 @@ jobs:
           PRIVATE_ALPHA_LABEL: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}
           SHARED_IOS_LABEL: ${{ vars.AEGIS_IOS_RUNNER_LABEL }}
         run: |
-          if [[ -z "$PRIVATE_ALPHA_GROUP" || -z "$PRIVATE_ALPHA_LABEL" || "${PRIVATE_ALPHA_LABEL,,}" == "${SHARED_IOS_LABEL,,}" ]]; then
+          private_label=$(printf '%s' "$PRIVATE_ALPHA_LABEL" | tr '[:upper:]' '[:lower:]')
+          shared_label=$(printf '%s' "$SHARED_IOS_LABEL" | tr '[:upper:]' '[:lower:]')
+          if [[ -z "$PRIVATE_ALPHA_GROUP" || -z "$PRIVATE_ALPHA_LABEL" || "$private_label" == "$shared_label" ]]; then
             printf '%s\n' 'Configure a dedicated private Alpha runner group and unique runner label.' >&2
             exit 1
           fi
