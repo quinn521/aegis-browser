@@ -12,18 +12,25 @@ import (
 	"errors"
 	"io"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+	_ "unsafe"
 
 	xraylog "github.com/xtls/xray-core/app/log"
 	clog "github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/features/outbound"
 	xrayjson "github.com/xtls/xray-core/infra/conf/json"
 	_ "github.com/xtls/xray-core/main/distro/all"
+	"github.com/xtls/xray-core/transport/internet"
+	_ "github.com/xtls/xray-core/transport/internet/grpc"
 	"github.com/xtls/xray-core/transport/internet/tls"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -38,6 +45,7 @@ type Runtime struct {
 	nextID          atomic.Int64
 	instanceContext context.Context
 	instanceCancel  context.CancelFunc
+	grpcSettings    []*internet.MemoryStreamConfig
 }
 
 func NewRuntime() *Runtime {
@@ -56,6 +64,111 @@ var activeLogConfig *xraylog.Config
 var activeLogGeneration int64
 var logCaptureGeneration atomic.Int64
 var xrayLogType = serial.GetMessageType(&xraylog.Config{})
+
+// The pinned Xray gRPC transport caches one ClientConn per destination and
+// outbound stream-settings pointer in a process-wide map and never releases
+// it. Every outbound handler owns its own stream settings, so the pointer
+// identifies the core generation. grpcDialerKey mirrors the pinned
+// transport/internet/grpc.dialerConf layout.
+type grpcDialerKey struct {
+	net.Destination
+	*internet.MemoryStreamConfig
+}
+
+//go:linkname grpcClients github.com/xtls/xray-core/transport/internet/grpc.globalDialerMap
+var grpcClients map[grpcDialerKey]*grpc.ClientConn
+
+//go:linkname grpcClientsMu github.com/xtls/xray-core/transport/internet/grpc.globalDialerAccess
+var grpcClientsMu sync.Mutex
+
+// Stream settings owned by live runtimes. Guarded by lifecycleMu.
+var liveStreamSettings = map[*internet.MemoryStreamConfig]struct{}{}
+
+var memoryStreamConfigType = reflect.TypeFor[*internet.MemoryStreamConfig]()
+
+func outboundStreamSettings(inst *core.Instance) []*internet.MemoryStreamConfig {
+	manager, ok := inst.GetFeature(outbound.ManagerType()).(outbound.Manager)
+	if !ok {
+		return nil
+	}
+	var settings []*internet.MemoryStreamConfig
+	for _, handler := range manager.ListHandlers(context.Background()) {
+		value := reflect.ValueOf(handler)
+		if value.Kind() != reflect.Pointer || value.IsNil() || value.Elem().Kind() != reflect.Struct {
+			continue
+		}
+		field := value.Elem().FieldByName("streamSettings")
+		if !field.IsValid() || field.Type() != memoryStreamConfigType || field.IsNil() {
+			continue
+		}
+		settings = append(settings, (*internet.MemoryStreamConfig)(field.UnsafePointer()))
+	}
+	return settings
+}
+
+// retireUnownedGRPCClients removes cached gRPC clients whose stream settings
+// belong to no live runtime, including clients a stopped generation created
+// while it was closing. The caller holds lifecycleMu and closes the result.
+func retireUnownedGRPCClients() []*grpc.ClientConn {
+	grpcClientsMu.Lock()
+	defer grpcClientsMu.Unlock()
+	var retired []*grpc.ClientConn
+	for key, client := range grpcClients {
+		if _, live := liveStreamSettings[key.MemoryStreamConfig]; live {
+			continue
+		}
+		delete(grpcClients, key)
+		if client != nil {
+			retired = append(retired, client)
+		}
+	}
+	return retired
+}
+
+func closeGRPCClients(clients []*grpc.ClientConn) {
+	for _, client := range clients {
+		_ = client.Close()
+	}
+}
+
+// A stopped generation's in-flight outbound retries (the pinned VLESS dialer
+// retries up to five times with about two seconds of backoff and ignores the
+// cancelled context) can recreate a client under retired stream settings after
+// Stop has swept the cache. Keep sweeping for a bounded window that covers that
+// retry budget. Every Start and Stop also sweeps.
+const (
+	grpcRetireWindow   = 5 * time.Second
+	grpcRetireInterval = 100 * time.Millisecond
+)
+
+// Guarded by lifecycleMu.
+var grpcReapDeadline time.Time
+var grpcReaping bool
+
+// scheduleGRPCReap extends the sweep window. The caller holds lifecycleMu.
+func scheduleGRPCReap() {
+	grpcReapDeadline = time.Now().Add(grpcRetireWindow)
+	if grpcReaping {
+		return
+	}
+	grpcReaping = true
+	go func() {
+		for {
+			time.Sleep(grpcRetireInterval)
+			lifecycleMu.Lock()
+			retired := retireUnownedGRPCClients()
+			done := !time.Now().Before(grpcReapDeadline)
+			if done {
+				grpcReaping = false
+			}
+			lifecycleMu.Unlock()
+			closeGRPCClients(retired)
+			if done {
+				return
+			}
+		}
+	}()
+}
 
 type discardedLog struct{}
 
@@ -213,6 +326,11 @@ func (r *Runtime) Start(configJSON string) error {
 	}
 	r.instance = inst
 	liveInstances++
+	r.grpcSettings = outboundStreamSettings(inst)
+	for _, settings := range r.grpcSettings {
+		liveStreamSettings[settings] = struct{}{}
+	}
+	closeGRPCClients(retireUnownedGRPCClients())
 	r.instanceContext, r.instanceCancel = context.WithCancel(context.Background())
 	return nil
 }
@@ -224,7 +342,9 @@ func (r *Runtime) Stop() error {
 	r.mu.Lock()
 	inst, cancel, closing := r.instance, r.instanceCancel, r.streams
 	pendingCloses := r.streamCloses
+	ownedSettings := r.grpcSettings
 	r.instance, r.instanceContext, r.instanceCancel = nil, nil, nil
+	r.grpcSettings = nil
 	r.streams = map[int64]*streamHandle{}
 	r.streamCloses = &sync.WaitGroup{}
 	r.mu.Unlock()
@@ -236,10 +356,16 @@ func (r *Runtime) Stop() error {
 		_ = handle.conn.Close()
 	}
 	var stopErr error
+	var retired []*grpc.ClientConn
 	if inst != nil {
 		lifecycleMu.Lock()
 		stopErr = inst.Close()
 		liveInstances--
+		for _, settings := range ownedSettings {
+			delete(liveStreamSettings, settings)
+		}
+		retired = retireUnownedGRPCClients()
+		scheduleGRPCReap()
 		if liveInstances == 0 && activeLogger != nil {
 			_ = activeLogger.Close()
 			activeLogger, activeLogConfig, activeLogGeneration = nil, nil, 0
@@ -247,6 +373,7 @@ func (r *Runtime) Stop() error {
 		}
 		lifecycleMu.Unlock()
 	}
+	closeGRPCClients(retired)
 	// A separately closed stream may already be absent from the map. Swapping the
 	// generation under mu excludes new Adds to this group before waiting.
 	if pendingCloses != nil {
