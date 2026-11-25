@@ -141,6 +141,17 @@ jobs:
       - id: plan
         name: Normalize exact package or existing-state route
         run: python3 scripts/release/ios-delivery-plan.py
+      - name: Require a dedicated runner for private Alpha
+        if: ${{ steps.plan.outputs.private_alpha == 'true' }}
+        env:
+          PRIVATE_ALPHA_GROUP: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}
+          PRIVATE_ALPHA_LABEL: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}
+          SHARED_IOS_LABEL: ${{ vars.AEGIS_IOS_RUNNER_LABEL }}
+        run: |
+          if [[ -z "$PRIVATE_ALPHA_GROUP" || -z "$PRIVATE_ALPHA_LABEL" || "${PRIVATE_ALPHA_LABEL,,}" == "${SHARED_IOS_LABEL,,}" ]]; then
+            printf '%s\n' 'Configure a dedicated private Alpha runner group and unique runner label.' >&2
+            exit 1
+          fi
       - name: Reject an earlier unresolved upload for this version and build
         if: ${{ steps.plan.outputs.operation == 'package-upload' }}
         env:
@@ -366,7 +377,9 @@ jobs:
     permissions:
       contents: write
       actions: read
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on:
+      group: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}
+      labels: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}']
     environment: aegis-ios-signing
     timeout-minutes: 70
     outputs:
@@ -458,7 +471,9 @@ jobs:
     permissions:
       contents: write
       actions: read
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on:
+      group: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}
+      labels: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}']
     environment: aegis-ios-store
     timeout-minutes: 45
     env:

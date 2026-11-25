@@ -48,8 +48,18 @@ test('private Alpha hands off to the protected store without publishing artifact
   const job = jobs['private-alpha'];
   const store = jobs['private-alpha-store'];
   assert.equal(job.environment, 'aegis-ios-signing');
-  assert.equal(job['runs-on'], jobs['ios-package']['runs-on']);
-  assert(job['runs-on'].includes('vars.AEGIS_IOS_RUNNER_LABEL'));
+  assert.deepEqual(job['runs-on'], {
+    group: '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP }}',
+    labels: ['self-hosted', 'macOS', 'ARM64', '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}'],
+  });
+  const runnerAdmission = jobs.admission.steps.find(step => step.name === 'Require a dedicated runner for private Alpha');
+  assert(runnerAdmission.if.includes("steps.plan.outputs.private_alpha == 'true'"));
+  const dedicated = {PRIVATE_ALPHA_GROUP: 'private-group', PRIVATE_ALPHA_LABEL: 'private-runner', SHARED_IOS_LABEL: 'shared'};
+  const admitRunner = env => spawnSync('bash', ['-c', runnerAdmission.run], {env: {...process.env, ...dedicated, ...env}});
+  assert.equal(admitRunner({}).status, 0);
+  for (const missingOrShared of [{PRIVATE_ALPHA_GROUP: ''}, {PRIVATE_ALPHA_LABEL: ''}, {PRIVATE_ALPHA_LABEL: 'SHARED'}]) {
+    assert.equal(admitRunner(missingOrShared).status, 1);
+  }
   assert.deepEqual(job.needs, ['admission', 'check-unused']);
   for (const condition of ["private_alpha == 'true'", "private_beta == 'false'", "profile == 'alpha'",
     "signing_mode == 'manual'", "operation == 'package-upload'", "destination == 'testflight'",
@@ -76,7 +86,7 @@ test('private Alpha hands off to the protected store without publishing artifact
   assert.equal(job.outputs.manifest_sha256, '${{ steps.retain.outputs.manifest_sha256 }}');
   assert.equal(store.environment, 'aegis-ios-store');
   assert.equal(job.name, 'private-alpha-package');
-  assert.equal(store['runs-on'], job['runs-on']);
+  assert.deepEqual(store['runs-on'], job['runs-on']);
   assert.deepEqual(store.needs, ['admission', 'private-alpha']);
   assert(store.if.includes("needs.private-alpha.result == 'success'"));
   assert(store.if.includes('github.run_attempt == 1'));

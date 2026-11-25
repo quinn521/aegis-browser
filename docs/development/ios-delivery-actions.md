@@ -64,11 +64,15 @@ admission. The tag, Full, Bot, cloud-archive, ordinary package, and GitHub Draft
 routes do not support private Alpha. A standard Alpha build still omits the list.
 
 Packaging uses `aegis-ios-signing` and `private-alpha-store` uses `aegis-ios-store`
-for upload. Keep both environments' approval and branch protections. Admit
-both jobs on the same trusted ARM64 macOS runner selected by
-`AEGIS_IOS_RUNNER_LABEL`. Keep temporary storage on SSD with room for
-DerivedData and export. The read-only unused-build check also uses
-`aegis-ios-store` and skips its Actions artifact for private Alpha.
+for upload. Keep both environments' approval and branch protections. Configure
+`AEGIS_IOS_PRIVATE_ALPHA_RUNNER_GROUP` and `AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL`
+as upstream repository variables. The group must restrict access to
+`gcsagroup/aegis-browser/.github/workflows/ios-delivery.yml@refs/heads/main`.
+Assign the label to exactly one ARM64 macOS runner in that group, using an OS
+account dedicated to this workflow and separate from PR validation. Keep its
+temporary storage on SSD with room for DerivedData and export. The read-only
+unused-build check uses `aegis-ios-store` and skips its Actions artifact for
+private Alpha.
 
 These inputs belong only in `aegis-ios-signing` as Environment secrets,
 with no repository or organization fallback. Do
