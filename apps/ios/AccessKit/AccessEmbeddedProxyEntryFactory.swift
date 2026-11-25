@@ -110,8 +110,8 @@ public enum AccessEmbeddedProxyEntryFactory {
 final class AccessEmbeddedProxyEntrySession {
     private let core: any AccessEmbeddedCoreControlling
     private enum Outbound {
-        case realityVision(AccessRealityVisionOutboundConfig, diagnosticSecrets: [String]? = nil)
-        case internalVLESS(any AccessInternalVLESSOutbound)
+        case realityVision(AccessRealityVisionOutboundConfig)
+        case internalNode(AccessOutboundNode)
     }
 
     private let loadOutbound: @MainActor () async throws -> Outbound
@@ -165,20 +165,7 @@ final class AccessEmbeddedProxyEntrySession {
         self.retireDocuments = retireDocuments
         self.reserveSocket = reserveSocket
         self.redactsStartupErrors = true
-        self.loadOutbound = {
-            let node = try await internalNode()
-            switch node {
-            case .realityVision(let parameters):
-                return .realityVision(try AccessRealityVisionOutboundConfigBuilder.build(parameters: parameters),
-                                      diagnosticSecrets: node.diagnosticSecrets)
-            case .vlessWebSocketTLS(let parameters):
-                return .internalVLESS(parameters)
-            case .vlessTCPTLSVision(let parameters):
-                return .internalVLESS(parameters)
-            case .vlessGRPCReality(let parameters):
-                return .internalVLESS(parameters)
-            }
-        }
+        self.loadOutbound = { .internalNode(try await internalNode()) }
     }
 
     func provision(generation: UInt64, deadline: Duration) async throws -> AccessProxyEntryPublisher.Provision {
@@ -232,20 +219,20 @@ final class AccessEmbeddedProxyEntrySession {
             try Task.checkCancellation()
             do {
                 switch outbound {
-                case .realityVision(let config, let secrets):
+                case .realityVision(let config):
                     logLease = try await Self.startCoreWithDiagnostics(
                         core: core, outbound: config, diagnostics: .shared,
-                        level: AccessDiagnosticLog.selectedLevel(), secrets: secrets
+                        level: AccessDiagnosticLog.selectedLevel()
                     )
-                case .internalVLESS(let parameters):
+                case .internalNode(let node):
                     logLease = try await Self.startCoreWithDiagnostics(
                         core: core, diagnostics: .shared, level: AccessDiagnosticLog.selectedLevel(),
-                        secrets: parameters.diagnosticSecrets
+                        secrets: AccessOutboundConfigRegistry.diagnosticSecrets(for: node)
+                            .union(.init(credentials: node.diagnosticSecrets))
                     ) { lease in
-                        guard let lease else { return try parameters.embeddedInstanceJSONData() }
-                        return try parameters.embeddedInstanceJSONData(
-                            logLevel: lease.level, errorLogPath: lease.path,
-                            logCaptureGeneration: lease.generation
+                        try AccessOutboundConfigRegistry.embeddedInstanceJSONData(
+                            for: node, logLevel: lease?.level ?? .none, errorLogPath: lease?.path,
+                            logCaptureGeneration: lease?.generation
                         )
                     }
                 }
@@ -340,13 +327,11 @@ final class AccessEmbeddedProxyEntrySession {
         outbound: AccessRealityVisionOutboundConfig,
         diagnostics: AccessDiagnosticLog,
         level: AccessLogLevel,
-        secrets: [String]? = nil,
         disableCaptureWhenQuiet: Bool = true
     ) async throws -> AccessDiagnosticLog.Lease {
-        let parameters = outbound.parameters
-        return try await startCoreWithDiagnostics(
+        try await startCoreWithDiagnostics(
             core: core, diagnostics: diagnostics, level: level,
-            secrets: secrets ?? [parameters.userID, parameters.publicKey, parameters.shortID],
+            secrets: AccessOutboundConfigRegistry.diagnosticSecrets(for: .realityVision(outbound.parameters)),
             disableCaptureWhenQuiet: disableCaptureWhenQuiet
         ) { lease in
             guard let lease else { return try outbound.embeddedInstanceJSONData() }
@@ -361,7 +346,7 @@ final class AccessEmbeddedProxyEntrySession {
         core: any AccessEmbeddedCoreControlling,
         diagnostics: AccessDiagnosticLog,
         level: AccessLogLevel,
-        secrets: [String],
+        secrets: AccessDiagnosticLog.RedactionSecrets,
         disableCaptureWhenQuiet: Bool = true,
         render: (AccessDiagnosticLog.Lease?) throws -> Data
     ) async throws -> AccessDiagnosticLog.Lease {

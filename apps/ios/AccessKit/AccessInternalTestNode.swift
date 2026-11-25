@@ -1,13 +1,10 @@
 import Foundation
 import Network
 
-/// Outbound choices for the isolated native DEV/internal Alpha test Profile.
-public enum AccessInternalTestNode: Equatable, Sendable {
-    case realityVision(AccessRealityVisionParameters)
-    case vlessWebSocketTLS(AccessVLESSWebSocketTLSParameters)
-    case vlessTCPTLSVision(AccessVLESSTCPTLSVisionParameters)
-    case vlessGRPCReality(AccessVLESSGRPCRealityParameters)
+/// Compatibility name for the native DEV/internal Alpha single-node path.
+public typealias AccessInternalTestNode = AccessOutboundNode
 
+extension AccessOutboundNode {
     public static func parseSingleShareURI(_ input: String) throws -> Self {
         let link = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let forbidden = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
@@ -92,7 +89,7 @@ public enum AccessInternalTestNode: Equatable, Sendable {
     }
 }
 
-extension AccessInternalTestNode {
+extension AccessOutboundNode {
     var diagnosticSecrets: [String] {
         switch self {
         case .realityVision(let parameters):
@@ -272,23 +269,8 @@ public struct AccessVLESSWebSocketTLSParameters: Equatable, Sendable {
     }
 }
 
-extension AccessVLESSWebSocketTLSParameters: AccessInternalVLESSOutbound {
-    // The diagnostic event filter admits only approved text and host/port
-    // fields. WS paths and queries never become diagnostic fields; the private
-    // relay endpoint is redacted like the other internal transports.
+extension AccessVLESSWebSocketTLSParameters {
     var diagnosticSecrets: [String] { [userID, AccessDiagnosticLog.relayFilter(address)] }
-
-    var outboundTag: String { "internal_vless_ws_tls" }
-    var streamSettings: [String: Any] {
-        var tls = verifiedTLSSettings(serverName: serverName, fingerprint: fingerprint)
-        if !alpn.isEmpty { tls["alpn"] = [alpn] }
-        return [
-            "network": "ws",
-            "security": "tls",
-            "tlsSettings": tls,
-            "wsSettings": ["host": requestHost, "path": path],
-        ]
-    }
 }
 
 public struct AccessVLESSTCPTLSVisionParameters: Equatable, Sendable {
@@ -313,13 +295,8 @@ public struct AccessVLESSTCPTLSVisionParameters: Equatable, Sendable {
     }
 }
 
-extension AccessVLESSTCPTLSVisionParameters: AccessInternalVLESSOutbound {
+extension AccessVLESSTCPTLSVisionParameters {
     var diagnosticSecrets: [String] { [userID, AccessDiagnosticLog.relayFilter(address), serverName] }
-    var outboundTag: String { "internal_vless_tcp_tls_vision" }
-    var flow: String? { AccessRealityVisionParameters.admittedFlow }
-    var streamSettings: [String: Any] {
-        ["network": "tcp", "security": "tls", "tlsSettings": verifiedTLSSettings(serverName: serverName, fingerprint: fingerprint)]
-    }
 }
 
 public struct AccessVLESSGRPCRealityParameters: Equatable, Sendable {
@@ -367,61 +344,8 @@ public struct AccessVLESSGRPCRealityParameters: Equatable, Sendable {
     }
 }
 
-extension AccessVLESSGRPCRealityParameters: AccessInternalVLESSOutbound {
+extension AccessVLESSGRPCRealityParameters {
     var diagnosticSecrets: [String] {
         [userID, AccessDiagnosticLog.relayFilter(address), serverName, publicKey, shortID, serviceName]
     }
-    var outboundTag: String { "internal_vless_grpc_reality" }
-    var streamSettings: [String: Any] {
-        [
-            "network": "grpc",
-            "security": "reality",
-            "realitySettings": ["serverName": serverName, "fingerprint": fingerprint, "publicKey": publicKey, "shortId": shortID],
-            "grpcSettings": ["serviceName": serviceName],
-        ]
-    }
-}
-
-protocol AccessInternalVLESSOutbound: Sendable {
-    var address: String { get }
-    var port: UInt16 { get }
-    var userID: String { get }
-    var outboundTag: String { get }
-    var flow: String? { get }
-    var streamSettings: [String: Any] { get }
-    var diagnosticSecrets: [String] { get }
-}
-
-extension AccessInternalVLESSOutbound {
-    var flow: String? { nil }
-
-    func embeddedInstanceJSONData(
-        logLevel: AccessLogLevel = .none, errorLogPath: String? = nil, logCaptureGeneration: Int64? = nil
-    ) throws -> Data {
-        var user = ["id": userID, "encryption": AccessRealityVisionParameters.admittedEncryption]
-        user["flow"] = flow
-        let outbound: [String: Any] = [
-            "tag": outboundTag,
-            "protocol": "vless",
-            "settings": [
-                "vnext": [["address": address, "port": Int(port), "users": [user]]],
-            ],
-            "streamSettings": streamSettings,
-        ]
-        let log = try AccessRealityVisionOutboundConfig.embeddedLog(
-            logLevel: logLevel, errorLogPath: errorLogPath, includeAccessLog: true)
-        var config: [String: Any] = [
-            "log": log,
-            "inbounds": [],
-            "outbounds": [outbound],
-        ]
-        if let logCaptureGeneration { config["aegisLogCaptureGeneration"] = logCaptureGeneration }
-        return try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
-    }
-}
-
-private func verifiedTLSSettings(serverName: String, fingerprint: String) -> [String: Any] {
-    var tls: [String: Any] = ["serverName": serverName, "useSystemCA": true]
-    if !fingerprint.isEmpty { tls["fingerprint"] = fingerprint }
-    return tls
 }

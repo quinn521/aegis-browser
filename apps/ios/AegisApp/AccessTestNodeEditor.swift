@@ -78,13 +78,14 @@ enum AccessTestNodeError: Error {
 struct AccessTestNodeRecord: Codable {
     let revision: UUID
     let node: AccessInternalTestNode
+    private static let currentVersion = 3
 
     private enum CodingKeys: String, CodingKey {
-        case version, revision, address, port, userID, serverName, publicKey, shortID, fingerprint, spiderX
+        case version, revision, node, address, port, userID, serverName, publicKey, shortID, fingerprint, spiderX
         case requestHost, path, alpn, serviceName
     }
 
-    private enum Version: Int {
+    private enum LegacyVersion: Int {
         case realityVision = 1
         case vlessWebSocketTLS = 2
         case vlessTCPTLSVision = 3
@@ -99,7 +100,7 @@ struct AccessTestNodeRecord: Codable {
     /// Revise or remove a known record even if its outbound can no longer run.
     static func storedRevision(in data: Data) throws -> UUID {
         let identity = try JSONDecoder().decode(StoredIdentity.self, from: data)
-        guard Version(rawValue: identity.version) != nil else { throw AccessTestNodeError.storageUnavailable }
+        guard LegacyVersion(rawValue: identity.version) != nil else { throw AccessTestNodeError.storageUnavailable }
         return identity.revision
     }
 
@@ -121,16 +122,23 @@ struct AccessTestNodeRecord: Codable {
 
     init(from decoder: any Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
-        guard let version = Version(rawValue: try fields.decode(Int.self, forKey: .version)) else {
+        let version = try fields.decode(Int.self, forKey: .version)
+        revision = try fields.decode(UUID.self, forKey: .revision)
+        if version == Self.currentVersion && fields.contains(.node) {
+            // The field's presence distinguishes typed v3 from Alpha's flat
+            // TCP/TLS v3. A malformed typed record must fail decoding.
+            node = try fields.decode(AccessOutboundNode.self, forKey: .node)
+            return
+        }
+        guard !fields.contains(.node), let legacy = LegacyVersion(rawValue: version) else {
             throw AccessTestNodeError.storageUnavailable
         }
-        revision = try fields.decode(UUID.self, forKey: .revision)
         let address = try fields.decode(String.self, forKey: .address)
         let port = try fields.decode(UInt16.self, forKey: .port)
         let userID = try fields.decode(String.self, forKey: .userID)
         let serverName = try fields.decode(String.self, forKey: .serverName)
         let fingerprint = try fields.decode(String.self, forKey: .fingerprint)
-        switch version {
+        switch legacy {
         case .realityVision:
             node = .realityVision(try AccessRealityVisionParameters(
                 address: address, port: port, userID: userID, serverName: serverName,
@@ -162,38 +170,8 @@ struct AccessTestNodeRecord: Codable {
     func encode(to encoder: any Encoder) throws {
         var fields = encoder.container(keyedBy: CodingKeys.self)
         try fields.encode(revision, forKey: .revision)
-        func encodeEndpoint(_ version: Version, address: String, port: UInt16, userID: String,
-                            serverName: String, fingerprint: String) throws {
-            try fields.encode(version.rawValue, forKey: .version)
-            try fields.encode(address, forKey: .address)
-            try fields.encode(port, forKey: .port)
-            try fields.encode(userID, forKey: .userID)
-            try fields.encode(serverName, forKey: .serverName)
-            try fields.encode(fingerprint, forKey: .fingerprint)
-        }
-        switch node {
-        case .realityVision(let parameters):
-            try encodeEndpoint(.realityVision, address: parameters.address, port: parameters.port,
-                userID: parameters.userID, serverName: parameters.serverName, fingerprint: parameters.fingerprint)
-            try fields.encode(parameters.publicKey, forKey: .publicKey)
-            try fields.encode(parameters.shortID, forKey: .shortID)
-            try fields.encode(parameters.spiderX, forKey: .spiderX)
-        case .vlessWebSocketTLS(let parameters):
-            try encodeEndpoint(.vlessWebSocketTLS, address: parameters.address, port: parameters.port,
-                userID: parameters.userID, serverName: parameters.serverName, fingerprint: parameters.fingerprint)
-            try fields.encode(parameters.requestHost, forKey: .requestHost)
-            try fields.encode(parameters.path, forKey: .path)
-            try fields.encode(parameters.alpn, forKey: .alpn)
-        case .vlessTCPTLSVision(let parameters):
-            try encodeEndpoint(.vlessTCPTLSVision, address: parameters.address, port: parameters.port,
-                userID: parameters.userID, serverName: parameters.serverName, fingerprint: parameters.fingerprint)
-        case .vlessGRPCReality(let parameters):
-            try encodeEndpoint(.vlessGRPCReality, address: parameters.address, port: parameters.port,
-                userID: parameters.userID, serverName: parameters.serverName, fingerprint: parameters.fingerprint)
-            try fields.encode(parameters.publicKey, forKey: .publicKey)
-            try fields.encode(parameters.shortID, forKey: .shortID)
-            try fields.encode(parameters.serviceName, forKey: .serviceName)
-        }
+        try fields.encode(Self.currentVersion, forKey: .version)
+        try fields.encode(node, forKey: .node)
     }
 }
 
@@ -243,8 +221,10 @@ struct AccessTestNodeKeychain: AccessTestNodeStoring {
 
     func write(_ record: AccessTestNodeRecord, channel: AccessInternalOptions) throws {
         let request = query(for: channel)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         let attributes: [String: Any] = [
-            kSecValueData as String: try JSONEncoder().encode(record),
+            kSecValueData as String: try encoder.encode(record),
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         var status = SecItemUpdate(request as CFDictionary, attributes as CFDictionary)
