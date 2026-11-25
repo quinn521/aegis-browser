@@ -198,17 +198,34 @@ final class AccessGeoSiteFullFrozenAdmissionTests: XCTestCase {
         XCTAssertEqual(overseas.counts.rejected, 36)
         XCTAssertEqual(overseas.counts.unsupported, 13)
         XCTAssertEqual(overseas.counts.exclusions, 32)
-        XCTAssertEqual(overseas.hosts.values.reduce(0) { $0 + $1.count }, 30)
+        XCTAssertEqual(overseas.hosts.values.reduce(0) { $0 + $1.count }, 34)
         XCTAssertEqual(overseas.hosts, [
-            .video: ["www.youtube.com", "www.netflix.com", "vimeo.com", "www.twitch.tv"],
+            .video: ["www.youtube.com", "www.netflix.com", "vimeo.com", "www.twitch.tv", "m.youtube.com", "m.twitch.tv"],
             .ai: ["chatgpt.com", "claude.ai", "gemini.google.com", "www.perplexity.ai"],
             .web: ["www.google.com", "duckduckgo.com", "search.yahoo.com"],
-            .social: ["x.com", "www.instagram.com", "t.me", "discord.com"],
+            .social: ["x.com", "www.instagram.com", "t.me", "discord.com", "telegram.org"],
             .news: ["www.bbc.com", "www.nytimes.com", "www.reuters.com", "www.dw.com"],
             .development: ["github.com", "gist.github.com", "raw.githubusercontent.com", "hub.docker.com"],
             .reference: ["zh.wikipedia.org", "scholar.google.com", "archive.org"],
-            .cloud: ["drive.google.com", "docs.google.com", "www.dropbox.com", "onedrive.live.com"],
+            .cloud: ["drive.google.com", "docs.google.com", "www.dropbox.com", "onedrive.live.com", "accounts.google.com"],
         ])
+        // iPhone WebKit lands on these hosts after the first hop of a listed entry.
+        // Category mode must keep them on the overseas route, and only in their own category.
+        for (entry, landing, category, other) in [
+            ("www.youtube.com", "m.youtube.com", AccessOverseasCategory.video, AccessOverseasCategory.ai),
+            ("www.twitch.tv", "m.twitch.tv", .video, .social),
+            ("drive.google.com", "accounts.google.com", .cloud, .web),
+            ("docs.google.com", "accounts.google.com", .cloud, .ai),
+            ("t.me", "telegram.org", .social, .video),
+        ] {
+            let entryURL = try XCTUnwrap(URL(string: "https://\(entry)/"))
+            let landingURL = try XCTUnwrap(URL(string: "https://\(landing)/"))
+            XCTAssertTrue(overseas.matches(entryURL, scope: .categories([category])), entry)
+            XCTAssertTrue(overseas.matches(landingURL, scope: .categories([category])), landing)
+            XCTAssertFalse(overseas.matches(landingURL, scope: .categories([other])), landing)
+            XCTAssertFalse(overseas.matches(try XCTUnwrap(URL(string: "https://child.\(landing)/")),
+                                            scope: .categories([category])), landing)
+        }
         try await checkOverseasColdCache(combined, name: "official DAT", positive: "ampproject.org",
                                          exception: "www.ampproject.org")
     }

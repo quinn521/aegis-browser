@@ -62,6 +62,10 @@ public struct AccessOverseasCatalogue: Sendable {
         .init(category: .video, host: "www.netflix.com", source: "NETFLIX"),
         .init(category: .video, host: "vimeo.com", source: "VIMEO"),
         .init(category: .video, host: "www.twitch.tv", source: "TWITCH"),
+        // WebKit on iPhone is redirected to these hosts from the entries above.
+        // Each is still proven by GFWLIST-CN and its own service group.
+        .init(category: .video, host: "m.youtube.com", source: "YOUTUBE"),
+        .init(category: .video, host: "m.twitch.tv", source: "TWITCH"),
         .init(category: .ai, host: "chatgpt.com", source: "OPENAI"),
         .init(category: .ai, host: "claude.ai", source: "ANTHROPIC"),
         .init(category: .ai, host: "gemini.google.com", source: "GOOGLE-GEMINI"),
@@ -72,6 +76,7 @@ public struct AccessOverseasCatalogue: Sendable {
         .init(category: .social, host: "x.com", source: "TWITTER"),
         .init(category: .social, host: "www.instagram.com", source: "INSTAGRAM"),
         .init(category: .social, host: "t.me", source: "TELEGRAM"),
+        .init(category: .social, host: "telegram.org", source: "TELEGRAM"),
         .init(category: .social, host: "discord.com", source: "DISCORD"),
         .init(category: .news, host: "www.bbc.com", source: "BBC"),
         .init(category: .news, host: "www.nytimes.com", source: "NYTIMES"),
@@ -86,6 +91,7 @@ public struct AccessOverseasCatalogue: Sendable {
         .init(category: .reference, host: "archive.org", source: "ARCHIVE"),
         .init(category: .cloud, host: "drive.google.com", source: "GOOGLE"),
         .init(category: .cloud, host: "docs.google.com", source: "GOOGLE"),
+        .init(category: .cloud, host: "accounts.google.com", source: "GOOGLE"),
         .init(category: .cloud, host: "www.dropbox.com", source: "DROPBOX"),
         .init(category: .cloud, host: "onedrive.live.com", source: "MICROSOFT"),
     ]
