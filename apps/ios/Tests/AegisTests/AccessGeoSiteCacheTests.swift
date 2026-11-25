@@ -333,6 +333,12 @@ final class AccessGeoSiteCacheTests: XCTestCase {
         XCTAssertEqual(cache.runtimeView().overseas.match(speed), .original)
         let conditional = try await cache.conditionalReceipt(using: XCTUnwrap(cache.updateContext()))
         XCTAssertEqual(conditional?.etag, "\"overseas\"")
+        // A domestic choice without an accepted release must not discard the
+        // overseas proof of the stored release (no full redownload).
+        try cache.setSelection(.init(mode: .smart, categories: [.debian]))
+        let withDomestic = try await cache.conditionalReceipt(using: XCTUnwrap(cache.updateContext()))
+        XCTAssertEqual(withDomestic?.etag, "\"overseas\"")
+        try cache.setSelection(.init(mode: .smart, categories: []))
 
         let reopened = fixture.cache()
         await reopened.restore()

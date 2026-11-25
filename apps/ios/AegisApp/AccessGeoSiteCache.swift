@@ -1034,11 +1034,12 @@ final class AccessGeoSiteCache {
         let now = readClock().date
         guard (try? receipt.expiry(at: now)) != nil else { return false }
         let selected = snapshot.ledger.selection.categories.map { Self.scope($0, in: snapshot, at: now) }
-        if selected.isEmpty {
-            return snapshot.ledger.overseasSelection?.enabled == true && snapshot.overseasWithdrawal == nil
-                && snapshot.overseasActive.map { $0.expiresAt > now } == true
-        }
-        return selected.contains { if case .available(_, .some) = $0 { return true }; return false }
+        // An enabled, unexpired overseas snapshot proves the stored release too,
+        // including when every domestic category is bundled or awaiting approval.
+        let overseasCurrent = snapshot.ledger.overseasSelection?.enabled == true && snapshot.overseasWithdrawal == nil
+            && snapshot.overseasActive.map { $0.expiresAt > now } == true
+        if selected.isEmpty { return overseasCurrent }
+        return (overseasCurrent || selected.contains { if case .available(_, .some) = $0 { return true }; return false })
             && selected.allSatisfy {
                 switch $0 {
                 case .available, .withdrawn: true
