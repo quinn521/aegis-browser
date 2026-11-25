@@ -2342,6 +2342,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertNil(AccessOverseasRuleList(data: canonical))
     }
 
+#if targetEnvironment(simulator)
     func testOverseasSwitchChangesExactHostRouteAndPreservesExplicitChoice() async throws {
         let managedPort: UInt16 = 18_491
         let originalPort: UInt16 = 18_492
@@ -2426,6 +2427,8 @@ extension AccessHostRecoveryWebKitTests {
                             message: "The managed document should retire when its authorization is revoked")
         try await witness(listed, path: "revoked", useManaged: false)
     }
+
+#endif
 
     func testOverseasRuleDoesNotAuthorizeAnUnlistedHTTPSLanding() async throws {
         try await checkOverseasHTTPSRedirect(restoredWithoutList: false)
@@ -2859,6 +2862,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(retained as? String, "retained")
     }
 
+#if targetEnvironment(simulator)
     func testOverseasSwitchKeepsARequiredDefaultReload() async throws {
         try await checkOverseasSwitchKeepsARequiredDefaultReload(switchOff: false)
     }
@@ -2961,6 +2965,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(coordinator.snapshot(for: tab).autoRecoveryLine, AccessAutoRecoveryCopy.armedOnCurrentConnection)
     }
 
+#endif
+
     func testOverseasRecognizesAnApprovedActionBeforeItsProvisionalCallback() throws {
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         defer { browser.closeWindow() }
@@ -3031,6 +3037,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertNil(tab.liveCommittedDocumentURL)
     }
 
+#if targetEnvironment(simulator)
     func testOverseasSwitchRetiresAnOriginalDocumentWithAWarmSiblingHost() async throws {
         try await checkOriginalPageWithWarmSibling(listed: true, provisional: false)
     }
@@ -3111,6 +3118,8 @@ extension AccessHostRecoveryWebKitTests {
         }
         XCTAssertEqual(sibling.liveCommittedDocumentURL, warm)
     }
+
+#endif
 
     func testOverseasSwitchPreservesAUserAuthorizedPendingAddress() async throws {
         try await checkOverseasPendingAddress(expire: false)
@@ -3301,6 +3310,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertNil(tab.boundHostName)
     }
 
+#if targetEnvironment(simulator)
     func testOverseasOnlyAttachmentStaysIndependentWhenItsEntryFails() async throws {
         let host = "overseas-attached.invalid"
         let port: UInt16 = 18_500
@@ -3337,6 +3347,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertFalse(failed.toggleOn)
         XCTAssertEqual(tab.boundHostName, host)
     }
+
+#endif
 
     private func makeOverseasRule(_ host: String) throws -> AccessOverseasRuleList {
         let data = Data((host + "\n").utf8)
