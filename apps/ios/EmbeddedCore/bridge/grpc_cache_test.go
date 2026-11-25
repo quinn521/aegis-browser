@@ -206,14 +206,21 @@ func TestRetiredGRPCGenerationOutlastsDelayedDialAndRejectsLaterDials(t *testing
 	entered := make(chan struct{}, 8)
 	release := make(chan struct{})
 	created := make(chan []*grpc.ClientConn, 8)
+	errUnexpectedDial := errors.New("unexpected later gRPC transport dial")
 	var calls atomic.Int32
 	grpcTransportDial = func(ctx context.Context, dest xnet.Destination, settings *internet.MemoryStreamConfig) (stat.Connection, error) {
-		entered <- struct{}{}
-		// Only the first dial is held, so a regressed retired-generation probe
-		// reaches its assertion instead of blocking until the suite timeout.
-		if calls.Add(1) == 1 {
-			<-release
+		// Claim the call number before signalling, so a regressed
+		// retired-generation probe can never take the held first slot. Later
+		// calls are recorded and fail fast without reaching the real transport.
+		call := calls.Add(1)
+		select {
+		case entered <- struct{}{}:
+		default:
 		}
+		if call != 1 {
+			return nil, errUnexpectedDial
+		}
+		<-release
 		conn, err := pinned(ctx, dest, settings)
 		created <- cachedGRPCClients([]*internet.MemoryStreamConfig{settings})
 		return conn, err
@@ -278,6 +285,9 @@ func TestRetiredGRPCGenerationOutlastsDelayedDialAndRejectsLaterDials(t *testing
 	}
 	if len(entered) != 0 {
 		t.Fatal("retired generation dial reached the gRPC transport")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("gRPC transport dialled %d times, want only the delayed dial", got)
 	}
 
 	// The delayed dial resumes and the pinned transport caches a new client

@@ -111,7 +111,10 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         self.assertEqual(self.hook('alpha', source, target).returncode, 0)
         self.assertEqual(json.loads(target.read_bytes()), edge)
         for nodes in ([], edge + [LIST[0]], [edge[0] + 'é'], [4], ['vless://no-host'],
-                      [prefix + chr(92) + 'suffix'], [' https://invalid.example'], [prefix + chr(0)]):
+                      [prefix + chr(92) + 'suffix'], [' https://invalid.example'], [prefix + chr(0)],
+                      # Label starts Swift merges with '#' into one Character.
+                      [prefix + '\u0301test'], [prefix + '\u0e33test'], [prefix + '\u0eb3test'],
+                      [prefix + '\u0897test'], [prefix + '\uff9etest'], [prefix + '\U0001f3fbtest']):
             with self.subTest(case=type(nodes).__name__, count=len(nodes)):
                 source.write_text(json.dumps(nodes))
                 result = self.hook('alpha', source, target)

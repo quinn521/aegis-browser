@@ -95,6 +95,18 @@ def control(character):
     return unicodedata.category(character) in ('Cc', 'Cf')
 
 
+# Assigned letters, numbers, punctuation and symbols, minus the modifier
+# categories (Lm, Sk) and the two spacing vowels Swift treats as extenders.
+LABEL_START_CATEGORIES = frozenset(('Lu', 'Ll', 'Lt', 'Lo', 'Nd', 'Nl', 'No', 'Pc', 'Pd', 'Ps',
+                                    'Pe', 'Pi', 'Pf', 'Po', 'Sm', 'Sc', 'So'))
+LABEL_START_EXCLUDED = frozenset(('\u0e33', '\u0eb3'))
+
+
+def label_start(character):
+    return character.isascii() or (unicodedata.category(character) in LABEL_START_CATEGORIES
+                                   and character not in LABEL_START_EXCLUDED)
+
+
 def relay_host(address):
     # Foundation's IDNA handling of percent-encoded hosts differs from
     # Python's codec, and one unloadable entry discards the whole bundled list.
@@ -114,6 +126,14 @@ def share(uri):
     # literal non-ASCII character; one such entry would discard the whole
     # bundled list. International relays must be written as A-labels.
     if not uri.partition('#')[0].isascii():
+        raise ValueError('Invalid VLESS URI')
+    # The app splits the label at the first Character equal to '#'. Swift
+    # merges '#' with a following combining mark, format character, some
+    # modifiers, or a scalar unassigned in Python's (older) Unicode data into
+    # one Character, so the split would miss and the strict parser would reject
+    # the entry. Admit only a first label character that cannot extend '#'.
+    label = uri.partition('#')[2]
+    if label and not label_start(label[0]):
         raise ValueError('Invalid VLESS URI')
     parts = urlsplit(uri)
     user, separator, authority = parts.netloc.partition('@')
