@@ -39,13 +39,14 @@ test('private Beta inputs stay in the protected manual package step', () => {
   }
 });
 
-test('private Alpha stages secrets separately and sends only a verified internal package to Apple', () => {
+test('private Alpha hands off to the protected store without publishing artifacts', () => {
   const simple = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
   const full = parse(readFileSync('.github/workflows/ios-delivery-full.yml', 'utf8'));
   assert.equal(simple.on.workflow_dispatch.inputs.private_alpha.default, 'no');
   assert.equal(full.on.workflow_dispatch.inputs.private_alpha, undefined);
   const {jobs} = simple;
   const job = jobs['private-alpha'];
+  const store = jobs['private-alpha-store'];
   assert.equal(job.environment, 'aegis-ios-signing');
   assert.equal(job['runs-on'], jobs['ios-package']['runs-on']);
   assert(job['runs-on'].includes('vars.AEGIS_IOS_RUNNER_LABEL'));
@@ -63,20 +64,43 @@ test('private Alpha stages secrets separately and sends only a verified internal
   }
   const steps = job.steps;
   const inputs = steps.find(step => step.id === 'inputs');
-  const quota = steps.find(step => step.id === 'quota');
-  const upload = steps.find(step => step.run?.endsWith('private_alpha_inputs.py upload'));
   const names = ['AEGIS_IOS_ALPHA_NODES_BASE64', 'AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64'];
   assert.deepEqual(Object.keys(inputs.env), names);
   for (const name of names) assert.equal(inputs.env[name], '${{ secrets.' + name + ' }}');
   assert(!JSON.stringify({...job, steps: steps.filter(step => step !== inputs)}).includes('AEGIS_IOS_ALPHA_NODES_BASE64'));
   assert(!JSON.stringify(full).includes('AEGIS_IOS_ALPHA_NODES_BASE64'));
-  assert(steps.indexOf(quota) < steps.indexOf(upload));
-  assert(!Object.keys(quota.env).some(name => name.startsWith('AEGIS_ASC_')));
+  assert(!JSON.stringify(job).includes('AEGIS_ASC_'));
+  const removeSigning = steps.findIndex(step => step.run?.endsWith('hosted-signing.py cleanup'));
+  const retain = steps.findIndex(step => step.run?.endsWith('private_alpha_inputs.py retain'));
+  assert(removeSigning >= 0 && removeSigning < retain);
+  assert.equal(job.outputs.manifest_sha256, '${{ steps.retain.outputs.manifest_sha256 }}');
+  assert.equal(store.environment, 'aegis-ios-store');
+  assert.equal(job.name, 'private-alpha-package');
+  assert.equal(store['runs-on'], job['runs-on']);
+  assert.deepEqual(store.needs, ['admission', 'private-alpha']);
+  assert(store.if.includes("needs.private-alpha.result == 'success'"));
+  assert(store.if.includes('github.run_attempt == 1'));
+  assert.equal(store.env.RELEASE_MANIFEST_SHA256, '${{ needs.private-alpha.outputs.manifest_sha256 }}');
+  assert(!names.some(name => JSON.stringify(store).includes(name)));
+  assert(!JSON.stringify(store).includes('DISTRIBUTION'));
+  const quota = store.steps.find(step => step.id === 'quota');
+  const authorize = store.steps.find(step => step.run?.endsWith('private_alpha_inputs.py require-preflight'));
+  const upload = store.steps.find(step => step.run?.endsWith('private_alpha_inputs.py upload'));
+  assert(store.steps.indexOf(quota) < store.steps.indexOf(authorize));
+  assert(store.steps.indexOf(authorize) < store.steps.indexOf(upload));
+  assert.equal(authorize.env.AEGIS_PRIVATE_ALPHA_VERIFIED_MANIFEST_SHA256, '${{ steps.quota.outputs.manifest_sha256 }}');
   assert.equal(upload.env.AEGIS_PRIVATE_ALPHA_VERIFIED_MANIFEST_SHA256, '${{ steps.quota.outputs.manifest_sha256 }}');
-  assert(!steps.some(step => /(?:upload|download)-artifact/u.test(step.uses || '')));
+  assert.equal(upload.env.AEGIS_ASC_KEY_BASE64, '${{ secrets.AEGIS_ASC_KEY_BASE64 }}');
+  assert(!JSON.stringify({...store, steps: store.steps.filter(step => step !== upload)}).includes('AEGIS_ASC_'));
+  assert(![...steps, ...store.steps].some(step => /(?:upload|download)-artifact/u.test(step.uses || '')));
+  assert(jobs['check-unused'].steps.find(step => step.uses?.startsWith('actions/upload-artifact@'))
+    .if.includes("needs.admission.outputs.private_alpha == 'false'"));
   const cleanup = steps.find(step => step.run?.endsWith('private_alpha_inputs.py cleanup'));
   assert(cleanup.if.includes('always()'));
   assert.equal(cleanup.env.AEGIS_PRIVATE_ALPHA_DIRECTORY, '${{ steps.inputs.outputs.directory }}');
+  assert.equal(store.steps.find(step => step.id === 'checkout').with.ref, '${{ github.sha }}');
+  const cleanupHandoff = store.steps.find(step => step.run?.endsWith('private_alpha_inputs.py cleanup-handoff'));
+  assert.equal(cleanupHandoff.if, "${{ always() && steps.checkout.outcome == 'success' }}");
 });
 
 test('archive gets only non-secret settings from the existing environment', () => {

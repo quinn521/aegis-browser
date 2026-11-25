@@ -65,25 +65,47 @@ enum AccessSubscriptionClient {
     /// Only the signed private descriptor chooses the origin. Ignore URLs in the info reply.
     static func nodes(_ configuration: AccessSubscriptionConfiguration, userID: String,
                       sessionConfiguration settings: URLSessionConfiguration = .ephemeral) async throws -> [AccessRealityVisionParameters] {
+        try parseNodes(await nodeData(configuration, settings: settings), userID: userID)
+    }
+
+    static func alphaNodes(_ configuration: AccessSubscriptionConfiguration, userID: String) async throws -> [AccessInternalTestNode] {
+        try parseAlphaNodes(await nodeData(configuration, settings: .ephemeral), userID: userID)
+    }
+
+    private static func nodeData(_ configuration: AccessSubscriptionConfiguration,
+                                 settings: URLSessionConfiguration) async throws -> Data {
         try configuration.validateEndpoint()
         guard var parts = URLComponents(url: configuration.subscriptionInfoURL, resolvingAgainstBaseURL: false) else {
             throw AccessSubscriptionQueryError.invalid
         }
         parts.query = nil
         guard let url = parts.url else { throw AccessSubscriptionQueryError.invalid }
-        let data = try await request(url, accept: "text/plain", settings: settings)
-        return try parseNodes(data, userID: userID)
+        return try await request(url, accept: "text/plain", settings: settings)
     }
 
-    static func parseNodes(_ data: Data, userID: String) throws -> [AccessRealityVisionParameters] {
-        guard data.count <= 65_536, UUID(uuidString: userID) != nil else { throw AccessSubscriptionQueryError.invalid }
+    private static func nodeLines(_ data: Data) throws -> [Substring] {
+        guard data.count <= 65_536 else { throw AccessSubscriptionQueryError.invalid }
         let compact = data.filter { ![9, 10, 13, 32].contains($0) }
         let decoded = Data(base64Encoded: compact) ?? data
         guard let text = String(data: decoded, encoding: .utf8) else { throw AccessSubscriptionQueryError.invalid }
         let lines = text.split(whereSeparator: \.isNewline)
         guard lines.count <= 128 else { throw AccessSubscriptionQueryError.invalid }
+        return lines
+    }
+
+    static func parseAlphaNodes(_ data: Data, userID: String) throws -> [AccessInternalTestNode] {
+        guard let identity = UUID(uuidString: userID) else { throw AccessSubscriptionQueryError.invalid }
+        return try nodeLines(data).compactMap { line in
+            let uri = String(line)
+            guard URLComponents(string: uri)?.user.flatMap(UUID.init(uuidString:)) == identity else { return nil }
+            return try? AccessInternalTestNode.parseSingleShareURI(uri)
+        }
+    }
+
+    static func parseNodes(_ data: Data, userID: String) throws -> [AccessRealityVisionParameters] {
+        guard UUID(uuidString: userID) != nil else { throw AccessSubscriptionQueryError.invalid }
         var nodes: [AccessRealityVisionParameters] = []
-        for line in lines {
+        for line in try nodeLines(data) {
             // The existing iOS core admits Reality/Vision only. Other protocols are not candidates.
             guard line.lowercased().hasPrefix("vless://"),
                   let node = try? AccessLocalV2RayConfigLoader.parseShareURI(String(line)),
@@ -138,6 +160,9 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     private let fetchNodes: @Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessRealityVisionParameters]
     private var nodes: [AccessRealityVisionParameters] = []
     private var selectedNode: AccessRealityVisionParameters?
+    private let fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])?
+    private var alphaNodes: [AccessInternalTestNode] = []
+    private var selectedAlphaNode: AccessInternalTestNode?
     @Published private(set) var availableConnectionCount = 0
     @Published private(set) var connectionsUnavailable = false
     private let fetch: @Sendable (AccessSubscriptionConfiguration) async throws -> AccessSubscriptionUsage
@@ -165,16 +190,18 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     init(isSelected: Bool, configuration: AccessSubscriptionConfiguration?, managesConnections: Bool,
          nodeUserID: String? = nil,
          fetchNodes: @escaping @Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessRealityVisionParameters] = { try await AccessSubscriptionClient.nodes($0, userID: $1) },
+         fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])? = nil,
          fetch: @escaping @Sendable (AccessSubscriptionConfiguration) async throws -> AccessSubscriptionUsage = { try await AccessSubscriptionClient.read($0) }) {
         self.isSelected = isSelected
         self.configuration = configuration
         self.managesConnections = managesConnections
         self.nodeUserID = nodeUserID
         self.fetchNodes = fetchNodes
+        self.fetchAlphaNodes = fetchAlphaNodes
         self.fetch = fetch
     }
 
-    static func product(bundle: Bundle = .main) -> AccessSubscriptionUsageSession {
+    static func product(bundle: Bundle = .main, usesAlphaNodes: Bool = false) -> AccessSubscriptionUsageSession {
         let channel = bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String
         guard ["dev", "alpha", "beta"].contains(channel ?? ""),
               let path = AccessLocalV2RayConfigLoader.productPath(bundle: bundle) else {
@@ -193,25 +220,39 @@ final class AccessSubscriptionUsageSession: ObservableObject {
             userID = try AccessLocalV2RayConfigLoader.load(path: path).parameters.userID
             config = decoded
         } catch { config = nil }
-        return .init(isSelected: true, configuration: config, managesConnections: true, nodeUserID: userID)
+        return .init(isSelected: true, configuration: config, managesConnections: true, nodeUserID: userID,
+                     fetchAlphaNodes: usesAlphaNodes ? AccessSubscriptionClient.alphaNodes : nil)
     }
 
     /// No static-node fallback: the account's current allowance and subscription must both succeed.
     func connectionParameters() async throws -> AccessRealityVisionParameters {
+        try await refreshConnectionAllowance()
+        guard let node = nodes.first else { throw AccessSubscriptionQueryError.unavailable }
+        selectedNode = node
+        return node
+    }
+
+    func authorizeAlphaNode(_ node: AccessInternalTestNode) async throws {
+        try await refreshConnectionAllowance()
+        guard alphaNodes.contains(node) else { throw AccessSubscriptionQueryError.unavailable }
+        selectedAlphaNode = node
+    }
+
+    private func refreshConnectionAllowance() async throws {
         guard active, managesConnections else { throw AccessSubscriptionQueryError.unavailable }
         guard let request = refresh() else { throw AccessSubscriptionQueryError.unavailable }
         let requestedGeneration = generation
         await request.value
         try Task.checkCancellation()
         guard generation == requestedGeneration, successfulGeneration == requestedGeneration,
-              active, !unavailable, let usage = snapshot, usage.permitsConnection,
-              let node = nodes.first else { throw AccessSubscriptionQueryError.unavailable }
-        selectedNode = node
-        return node
+              active, !unavailable, snapshot?.permitsConnection == true else { throw AccessSubscriptionQueryError.unavailable }
     }
 
     var permitsExistingConnection: Bool {
-        !unavailable && selectedNode.map(nodes.contains) == true && snapshot?.permitsConnection == true
+        let hasSelectedRoute = fetchAlphaNodes == nil
+            ? selectedNode.map(nodes.contains) == true
+            : selectedAlphaNode.map(alphaNodes.contains) == true
+        return !unavailable && hasSelectedRoute && snapshot?.permitsConnection == true
     }
 
     func setActive(_ value: Bool) {
@@ -239,15 +280,21 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 let value = try await fetch(configuration)
                 try value.validate(for: configuration)
                 var candidates: [AccessRealityVisionParameters] = []
+                var alphaCandidates: [AccessInternalTestNode] = []
                 if self?.managesConnections == true, value.permitsConnection, let userID = self?.nodeUserID {
                     // Node failure leaves valid counters visible but never reuses an old connection list.
-                    candidates = (try? await self?.fetchNodes(configuration, userID)) ?? []
-                    candidates = candidates.filter { $0.userID == userID.lowercased() }
+                    if let fetchAlphaNodes = self?.fetchAlphaNodes {
+                        alphaCandidates = (try? await fetchAlphaNodes(configuration, userID)) ?? []
+                    } else {
+                        candidates = (try? await self?.fetchNodes(configuration, userID)) ?? []
+                        candidates = candidates.filter { $0.userID == userID.lowercased() }
+                    }
                 }
                 guard let self, self.active, self.generation == token, !Task.isCancelled else { return }
                 self.nodes = candidates
-                self.availableConnectionCount = candidates.count
-                self.connectionsUnavailable = self.managesConnections && value.permitsConnection && candidates.isEmpty
+                self.alphaNodes = alphaCandidates
+                self.availableConnectionCount = candidates.count + alphaCandidates.count
+                self.connectionsUnavailable = self.managesConnections && value.permitsConnection && self.availableConnectionCount == 0
                 self.snapshot = value
                 self.receivedAt = Date()
                 self.receivedUptime = ProcessInfo.processInfo.systemUptime
@@ -259,6 +306,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 guard let self, self.active, self.generation == token, !Task.isCancelled else { return }
                 self.unavailable = true
                 self.nodes = []
+                self.alphaNodes = []
                 self.availableConnectionCount = 0
                 self.connectionsUnavailable = true
                 self.task = nil; self.isRefreshing = false

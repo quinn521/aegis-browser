@@ -29,10 +29,7 @@ struct AccessUsagePage: View {
                                 alphaNodes.select(entry.id)
                             } label: {
                                 HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(entry.id + 1, format: .number)
-                                        Text(verbatim: entry.protocolName).font(.footnote).foregroundStyle(.secondary)
-                                    }
+                                    Text(verbatim: entry.protocolName)
                                     Spacer()
                                     if alphaNodes.selectedIndex == entry.id {
                                         Image(systemName: "checkmark").accessibilityHidden(true)

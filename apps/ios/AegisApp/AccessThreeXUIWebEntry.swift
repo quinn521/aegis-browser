@@ -12,11 +12,6 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         let protocolName: String
     }
 
-    private struct Candidate {
-        let node: AccessInternalTestNode
-        let userID: String
-    }
-
     private static let fingerprintKey = "access.alpha.nodes.fingerprint.v1"
     private static let selectionKey = "access.alpha.nodes.selection.v1"
     static let shared = product()
@@ -25,10 +20,11 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
     @Published private(set) var entries: [Entry] = []
     @Published private(set) var selectedIndex: Int?
     private let defaults: UserDefaults
-    private var candidates: [Candidate] = []
+    private var candidates: [AccessInternalTestNode] = []
     private var fingerprint = ""
     private var revision = UUID()
     private var activeRevision: UUID?
+    fileprivate var selectionDidChange: (() -> Void)?
 
     var enablesWebsiteAcceleration: Bool { isConfigured && !entries.isEmpty }
 
@@ -48,7 +44,8 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         guard isConfigured, let data, data.count <= 131_500,
               let links = try? JSONDecoder().decode([String].self, from: data),
               (1...16).contains(links.count), Set(links).count == links.count else { return }
-        var loaded: [Candidate] = []
+        var loaded: [AccessInternalTestNode] = []
+        var identities = Set<UUID>()
         var displayed: [Entry] = []
         for (index, link) in links.enumerated() {
             guard link.utf8.count <= 8_192,
@@ -56,11 +53,12 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
                   let user = components.user.flatMap(UUID.init(uuidString:)),
                   let node = try? AccessInternalTestNode.parseSingleShareURI(link),
                   let protocolName = Self.protocolName(components.queryItems ?? []) else { return }
-            loaded.append(Candidate(node: node, userID: user.uuidString.lowercased()))
+            loaded.append(node)
+            identities.insert(user)
             displayed.append(Entry(id: index, protocolName: protocolName))
         }
         // One quota descriptor cannot authorize unrelated test identities.
-        guard Set(loaded.map(\.userID)).count == 1 else { return }
+        guard identities.count == 1 else { return }
         fingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         candidates = loaded
         entries = displayed
@@ -90,14 +88,14 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         selectedIndex = index
         revision = UUID()
         activeRevision = nil
+        selectionDidChange?()
         defaults.set(fingerprint, forKey: Self.fingerprintKey)
         defaults.set(index, forKey: Self.selectionKey)
     }
 
-    fileprivate func selected() throws -> (node: AccessInternalTestNode, userID: String, revision: UUID) {
+    fileprivate func selected() throws -> (node: AccessInternalTestNode, revision: UUID) {
         guard let index = selectedIndex, candidates.indices.contains(index) else { throw AccessSubscriptionQueryError.unavailable }
-        let candidate = candidates[index]
-        return (candidate.node, candidate.userID, revision)
+        return (candidates[index], revision)
     }
 
     fileprivate func activate(_ expected: UUID) -> Bool {
@@ -126,19 +124,22 @@ enum AccessThreeXUIWebEntry {
                   let core = verifiedCore ?? (try? AccessGoEmbeddedCore()) else {
                 return AccessFailClosedProxyEntryPublisher()
             }
-            return AccessEmbeddedProxyEntryFactory.makeInternalTestPublisher(
+            let publisher = AccessEmbeddedProxyEntryFactory.makeInternalTestPublisher(
                 lockData: lockData, verifiedCore: core,
                 node: {
                     let candidate = try alphaNodes.selected()
-                    let accountNode = try await usage.connectionParameters()
+                    try await usage.authorizeAlphaNode(candidate.node)
                     try Task.checkCancellation()
-                    guard candidate.userID == accountNode.userID.lowercased(),
-                          alphaNodes.activate(candidate.revision) else { throw AccessSubscriptionQueryError.unavailable }
+                    guard alphaNodes.activate(candidate.revision) else { throw AccessSubscriptionQueryError.unavailable }
                     return candidate.node
                 },
                 connectionAllowed: { alphaNodes.isActiveSelection && usage.permitsExistingConnection },
                 retireDocuments: retireDocuments, transport: .http
             )
+            if let publisher = publisher as? AccessProxyEntryPublisher {
+                alphaNodes.selectionDidChange = { [weak publisher] in publisher?.closeCurrentGeneration() }
+            }
+            return publisher
         }
         return AccessEmbeddedProxyEntryFactory.makeProductPublisher(
             lockData: lockData,

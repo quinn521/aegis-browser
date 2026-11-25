@@ -44,7 +44,8 @@ ROUTE = dict(GITHUB_ACTIONS='true', GITHUB_EVENT_NAME='workflow_dispatch', GITHU
              GITHUB_REPOSITORY='gcsagroup/aegis-browser', GITHUB_RUN_ID='456', GITHUB_RUN_ATTEMPT='1',
              RUNNER_OS='macOS', RUNNER_ENVIRONMENT='self-hosted', DELIVERY_MODE='simple', RELEASE_OPERATION='package-upload',
              RELEASE_PROFILE='alpha', RELEASE_SIGNING_MODE='manual', RELEASE_DESTINATION='testflight',
-             AEGIS_IOS_ALPHA_NODES_ENABLED='true', RELEASE_VERSION='3.2', RELEASE_BUILD='70')
+             AEGIS_IOS_ALPHA_NODES_ENABLED='true', RELEASE_VERSION='3.2', RELEASE_BUILD='70',
+             RELEASE_RUN_ID='ios-gh-456-1')
 
 
 def encode(value):
@@ -63,7 +64,10 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.output = self.root / 'output'
-        self.env = dict(ROUTE, RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(self.output))
+        self.home = self.root / 'home'
+        self.home.mkdir()
+        self.env = dict(ROUTE, RUNNER_TEMP=str(self.root), GITHUB_OUTPUT=str(self.output),
+                        RUNNER_NAME='fixture-mac', HOME=str(self.home), PATH=os.defpath)
 
     def cli(self, command, env):
         return subprocess.run([sys.executable, '-B', str(command[0]), *command[1:]],
@@ -253,8 +257,7 @@ class PrivateAlphaInputsTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         test_verify_ipa.ipa.verify(path, '3.2', '70', 'alpha', private_alpha_directory=directory)
 
-    def test_upload_refuses_unverified_or_mutated_package_before_transport(self):
-        self.addCleanup(os.umask, os.umask(0o077))
+    def signed_fixture(self):
         directory = self.stage()
         source = alpha.load('ios_action', RELEASE / 'ios-action.py')
         sha, tree = source.source()
@@ -274,13 +277,100 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         (package / 'ios-manifest.json').write_bytes(raw)
         digest = hashlib.sha256(raw).hexdigest()
         (package / 'ios-manifest.json.sha256').write_text(f'{digest}  ios-manifest.json\n')
-        env = dict(self.env, PATH=os.defpath, GITHUB_SHA=sha, RELEASE_MANIFEST_SHA256=digest,
-                   AEGIS_PRIVATE_ALPHA_DIRECTORY=str(directory), AEGIS_ASC_KEY_ID='synthetic',
-                   AEGIS_ASC_ISSUER_ID='synthetic', AEGIS_ASC_KEY_BASE64='synthetic')
+        env = dict(self.env, GITHUB_SHA=sha, RELEASE_MANIFEST_SHA256=digest)
+        return directory, path.name, source, env
+
+    def retain_fixture(self):
+        directory, ipa, source, env = self.signed_fixture()
+        staging_env = dict(env, AEGIS_PRIVATE_ALPHA_DIRECTORY=str(directory))
+        (directory / 'work').mkdir()
+        (directory / 'work' / 'build.log').touch()
+        self.output.unlink()
+        result = self.cli([HELPER, 'retain'], staging_env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.output.read_text(), f"manifest_sha256={env['RELEASE_MANIFEST_SHA256']}\n")
+        retained = self.home / '.local/share/aegis-private-alpha/ios-gh-456-1'
+        cleanup = self.cli([HELPER, 'cleanup'], staging_env)
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr)
+        self.assertFalse(directory.exists())
+        return retained, retained / 'package' / ipa, source, env
+
+    def test_handoff_is_owner_only_and_rejects_wrong_binding_before_cleanup(self):
+        directory, ipa, _, env = self.retain_fixture()
+        self.assertEqual(set(entry.name for entry in directory.iterdir()), {'inputs', 'package', 'handoff.json'})
+        self.assertEqual(set(entry.name for entry in ipa.parent.iterdir()),
+                         {ipa.name, 'ios-manifest.json', 'ios-manifest.json.sha256'})
+        for entry in (directory, *directory.rglob('*')):
+            self.assertEqual(stat.S_IMODE(entry.stat().st_mode), 0o700 if entry.is_dir() else 0o600)
+        for changes in (dict(RUNNER_NAME='different-mac'), dict(GITHUB_RUN_ID='457', RELEASE_RUN_ID='ios-gh-457-1'),
+                        dict(GITHUB_RUN_ATTEMPT='2'), dict(GITHUB_SHA='0' * 40),
+                        dict(RELEASE_MANIFEST_SHA256='0' * 64)):
+            with self.subTest(changes=changes):
+                result = self.cli([HELPER, 'cleanup-handoff'], dict(env, **changes))
+                # A different run can only clean its own path, which is absent here.
+                if 'GITHUB_RUN_ID' not in changes:
+                    self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(ipa.exists())
+        marker = directory / 'handoff.json'
+        identity = json.loads(marker.read_bytes())
+        self.assertEqual(identity['sourceTree'], subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip())
+        marker.write_text(json.dumps(dict(identity, sourceTree='0' * 40)))
+        self.assertNotEqual(self.cli([HELPER, 'cleanup-handoff'], env).returncode, 0)
+        self.assertTrue(ipa.exists())
+        marker.write_text(json.dumps(identity))
+        with ipa.open('ab') as output:
+            output.write(b'corrupt after retain')
+        outside = self.root / 'unrelated'
+        outside.touch()
+        (directory / 'foreign').symlink_to(outside)
+        cleanup = self.cli([HELPER, 'cleanup-handoff'], env)
+        self.assertEqual(cleanup.returncode, 0, cleanup.stderr)
+        self.assertFalse(directory.exists())
+        self.assertTrue(outside.exists())
+
+    def test_store_preflight_publishes_digest_only_after_credential_free_quota_check(self):
+        self.addCleanup(os.umask, os.umask(0o077))
+        _, _, source, env = self.retain_fixture()
+        self.output.unlink()
+        digest = env['RELEASE_MANIFEST_SHA256']
+        quota = alpha.legacy()
+        load = alpha.load
+        with (patch.dict(os.environ, env, clear=True),
+              patch.object(sys, 'argv', [str(HELPER), 'preflight']),
+              patch.object(alpha, 'load', side_effect=lambda name, path: source if name == 'ios_action' else load(name, path)),
+              patch.object(alpha, 'legacy', return_value=quota),
+              patch.object(source, 'check_new_upload_runs'),
+              patch.object(quota, 'run_live_quota', side_effect=ValueError('Fixture quota refused')) as live,
+              redirect_stderr(io.StringIO())):
+            for bypass in (dict(AEGIS_ASC_KEY_ID='fixture-key'), dict(RUNNER_NAME='different-mac')):
+                with patch.dict(os.environ, bypass), self.assertRaises(SystemExit):
+                    alpha.main()
+            live.assert_not_called()
+            with self.assertRaises(SystemExit):
+                alpha.main()
+            self.assertFalse(self.output.exists())
+            live.side_effect = None
+            with patch('sys.stdout', new=io.StringIO()):
+                alpha.main()
+            self.assertEqual(self.output.read_text(), f'manifest_sha256={digest}\n')
+            self.assertEqual(live.call_args.args[0]['allowedTestClient'], DESCRIPTOR['allowedTestClient'])
+            sys.argv[-1] = 'require-preflight'
+            with self.assertRaises(SystemExit):
+                alpha.main()
+            os.environ['AEGIS_PRIVATE_ALPHA_VERIFIED_MANIFEST_SHA256'] = digest
+            alpha.main()
+
+    def test_upload_refuses_unverified_or_mutated_package_before_transport(self):
+        self.addCleanup(os.umask, os.umask(0o077))
+        directory, path, source, env = self.retain_fixture()
+        digest = env['RELEASE_MANIFEST_SHA256']
+        credentials = dict(AEGIS_ASC_KEY_ID='synthetic', AEGIS_ASC_ISSUER_ID='synthetic',
+                           AEGIS_ASC_KEY_BASE64='synthetic')
         # Only stub the two external operations. The workspace, manifest, IPA
         # verification and digest checks are the real implementations.
         load = alpha.load
-        with (patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', [str(HELPER), 'upload']),
+        with (patch.dict(os.environ, env | credentials, clear=True), patch.object(sys, 'argv', [str(HELPER), 'upload']),
               patch.object(alpha, 'run_private') as upload,
               patch.object(source, 'check_new_upload_runs') as inventory,
               patch.object(alpha, 'load', side_effect=lambda name, path: source if name == 'ios_action' else load(name, path)),

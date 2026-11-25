@@ -45,12 +45,14 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let nodes = alphaCatalogue(data: data, defaults: defaults)
         let fixture = ThreeXUIEntryFixture(userID: userID)
         let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
-            nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+            nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
             fetch: { config in try await fixture.usage(config) })
         usage.setActive(true)
         defer { usage.setActive(false) }
         let core = EntryRecordingCore()
-        let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
+        var retired: [String] = []
+        let publisher = publisher(for: usage, core: core, alphaNodes: nodes,
+                                  retireDocuments: { identity, finish in retired.append(identity); finish() })
         let operation = UUID()
         defer { publisher.cancel(operationID: operation) }
         let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
@@ -62,6 +64,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertEqual(server["address"] as? String, "first.example")
         XCTAssertEqual(usage.snapshot?.usedBytes, 30)
         nodes.select(1)
+        XCTAssertEqual(retired, [ready.endpoint.identity])
         XCTAssertFalse(publisher.validateReady(ready), "Switching nodes must revoke the old listener")
     }
 
@@ -70,10 +73,10 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let data = try JSONEncoder().encode([alphaWSNode(address: "first.example")])
         let nodes = alphaCatalogue(data: data, defaults: defaults)
-        for mode in [ThreeXUIEntryFixture.Mode.unavailable, .exhausted, .foreignNode] {
+        for mode in [ThreeXUIEntryFixture.Mode.unavailable, .exhausted, .foreignNode, .unlistedRoute] {
             let fixture = ThreeXUIEntryFixture(userID: userID, mode: mode)
             let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
-                nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+                nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
                 fetch: { config in try await fixture.usage(config) })
             usage.setActive(true)
             let core = EntryRecordingCore()
@@ -88,7 +91,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let differentNodes = alphaCatalogue(data: otherIdentity, defaults: defaults)
         let fixture = ThreeXUIEntryFixture(userID: userID)
         let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
-            nodeUserID: userID, fetchNodes: { config, id in try await fixture.nodes(config, id: id) },
+            nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
             fetch: { config in try await fixture.usage(config) })
         usage.setActive(true)
         defer { usage.setActive(false) }
@@ -228,10 +231,12 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
     }
 
     private func publisher(for usage: AccessSubscriptionUsageSession, core: EntryRecordingCore,
-                           alphaNodes: AccessAlphaNodeCatalogue? = nil) -> any AccessProxyEntryPublishing {
+                           alphaNodes: AccessAlphaNodeCatalogue? = nil,
+                           retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void = { _, finish in finish() }
+    ) -> any AccessProxyEntryPublishing {
         let lock = Data(#"{"status":"verified_build","xrayCore":{"commit":"676eaf66f8f05d4d558ee7a74b4736623d3feeb9","tag":"v26.11.9"},"artifacts":{"iosArm64Sha256":"aa","iosArm64SimulatorSha256":"bb"}}"#.utf8)
         return AccessThreeXUIWebEntry.makePublisher(for: usage, alphaNodes: alphaNodes, lockData: lock, verifiedCore: core,
-                                               retireDocuments: { _, finish in finish() })
+                                               retireDocuments: retireDocuments)
     }
 
     private func configuration() -> AccessSubscriptionConfiguration {
@@ -241,7 +246,7 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
 }
 
 private actor ThreeXUIEntryFixture {
-    enum Mode { case allowed, unavailable, exhausted, foreignNode }
+    enum Mode { case allowed, unavailable, exhausted, foreignNode, unlistedRoute }
     let userID: String
     private var mode: Mode
     private(set) var observedSources: [String] = []
@@ -259,6 +264,15 @@ private actor ThreeXUIEntryFixture {
         return [try .init(address: "fixture-node.invalid", port: 443,
             userID: mode == .foreignNode ? "550e8400-e29b-41d4-a716-446655440001" : userID,
             serverName: "www.example.com", publicKey: "fixture-key", shortID: "")]
+    }
+    func alphaNodes(_ configuration: AccessSubscriptionConfiguration, id: String) throws -> [AccessInternalTestNode] {
+        observedSources.append(configuration.subscriptionInfoURL.absoluteString)
+        let identity = mode == .foreignNode ? "550e8400-e29b-41d4-a716-446655440001" : userID
+        let addresses = mode == .unlistedRoute ? ["unlisted.example"] : ["first.example", "second.example"]
+        let shares = addresses.map {
+            "vless://\(identity)@\($0):443?security=tls&type=ws&host=ws.example.com&sni=cert.example.com&path=%2Finside&encryption=none"
+        }.joined(separator: "\n")
+        return try AccessSubscriptionClient.parseAlphaNodes(Data(shares.utf8).base64EncodedData(), userID: id)
     }
 }
 

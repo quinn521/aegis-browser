@@ -20,6 +20,8 @@ NODE = 'AegisPrivateTestNode.vless'
 QUOTA = 'AegisPrivateTestSubscription.json'
 INPUTS = ('AEGIS_IOS_ALPHA_NODES_BASE64', 'AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64')
 ASC = ('AEGIS_ASC_KEY_ID', 'AEGIS_ASC_ISSUER_ID', 'AEGIS_ASC_KEY_BASE64', 'AEGIS_ASC_KEY_PATH')
+MANIFEST = 'ios-manifest.json'
+HANDOFF = 'handoff.json'
 ROUTE = {
     'GITHUB_ACTIONS': 'true',
     'GITHUB_REPOSITORY': 'gcsagroup/aegis-browser',
@@ -56,6 +58,7 @@ def legacy():
 def require_route(env):
     if (any(env.get(key) != value for key, value in ROUTE.items())
             or not re.fullmatch(r'[1-9][0-9]{0,19}', env.get('GITHUB_RUN_ID', ''))
+            or env.get('RELEASE_RUN_ID') != f"ios-gh-{env['GITHUB_RUN_ID']}-1"
             or not re.fullmatch(r'[0-9]{1,10}\.[0-9]{1,10}(?:\.[0-9]{1,10})?', env.get('RELEASE_VERSION', ''))
             or not re.fullmatch(r'[1-9][0-9]{0,9}', env.get('RELEASE_BUILD', ''))):
         raise ValueError('Private Alpha route refused')
@@ -182,34 +185,120 @@ def run_private(operation, directory):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def checked_package(directory, expected_digest):
-    action = load('ios_action', RELEASE / 'ios-action.py')
+def admitted_source(action):
+    sha, tree = action.source()
+    if sha != os.environ['GITHUB_SHA']:
+        raise ValueError('Private Alpha package source differs from the workflow')
+    return sha, tree
+
+
+def checked_package(directory, expected_digest, *, retained=False):
     package = directory / 'package'
     require_private_dir(package)
-    manifest_path = package / 'ios-manifest.json'
     if not re.fullmatch(r'[0-9a-f]{64}', expected_digest):
         raise ValueError('Private Alpha package digest is missing')
-    sha, tree = action.source()
-    if sha != os.environ['GITHUB_SHA'] or manifest_path.is_symlink():
-        raise ValueError('Private Alpha package source differs from the workflow')
+    for member in package.iterdir():
+        info = member.lstat()
+        if not stat.S_ISREG(info.st_mode) or (retained and (
+                info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1)):
+            raise ValueError('Invalid private Alpha package file')
+    action = load('ios_action', RELEASE / 'ios-action.py')
+    sha, tree = admitted_source(action)
     manifest = action.transport.verify_package(package, sha, tree, expected_digest)
     details = manifest['details']
     if (manifest.get('schemaVersion') != 1 or manifest.get('releaseReady') is not False
             or manifest.get('format') != 'ipa' or manifest.get('applicationId') != 'com.gcsa.aegis'
             or (manifest['profile'], manifest['version'], manifest['build']) !=
                 ('alpha', os.environ['RELEASE_VERSION'], os.environ['RELEASE_BUILD'])
-            or details.get('privateAlphaNodes') is not True or details.get('signingMode') != 'manual'
+            or len(manifest['assets']) != 1 or details.get('privateAlphaNodes') is not True
+            or details.get('signingMode') != 'manual'
             or details.get('testFlightInternalTestingOnly') is not True):
         raise ValueError('Private Alpha manifest identity differs')
-    ipa = package / next(asset['name'] for asset in manifest['assets'] if asset['name'].endswith('.ipa'))
+    ipa = package / manifest['assets'][0]['name']
     verifier = load('verify_private_alpha_ipa', RELEASE / 'verify-ipa.py')
     verifier.verify(ipa, manifest['version'], manifest['build'], 'alpha', private_alpha_directory=directory / 'inputs')
-    return action
+    return action, ipa
+
+
+def handoff(digest, *, create=False):
+    runner = os.environ['RUNNER_NAME']
+    if not runner or not re.fullmatch(r'[0-9a-f]{64}', digest):
+        raise ValueError('Private Alpha handoff requires a runner and a package digest')
+    base = Path.home() / '.local/share/aegis-private-alpha'
+    # RUNNER_TEMP is cleared between jobs. Keep only the transfer under the runner account.
+    if base.resolve() != base or base.is_relative_to(ROOT):
+        raise ValueError('Aliased or in-checkout private Alpha handoff root')
+    if create:
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    require_private_dir(base)
+    sha, tree = admitted_source(load('ios_action', RELEASE / 'ios-action.py'))
+    identity = dict(repository=os.environ['GITHUB_REPOSITORY'], runId=os.environ['GITHUB_RUN_ID'],
+                    attempt=os.environ['GITHUB_RUN_ATTEMPT'], runner=runner, sourceSha=sha,
+                    sourceTree=tree, manifestSha256=digest)
+    return base / os.environ['RELEASE_RUN_ID'], identity
+
+
+def retain(directory, digest):
+    _, ipa = checked_package(directory, digest)
+    retained, identity = handoff(digest, create=True)
+    retained.mkdir(mode=0o700)
+    try:
+        expected, _ = checked_inputs(directory / 'inputs')
+        nodes = alpha_nodes()
+        # Save the binding before copying private bytes so cancellation cleanup can check ownership.
+        nodes.write_private(retained / HANDOFF, json.dumps(identity).encode())
+        inputs = retained / 'inputs'
+        inputs.mkdir(mode=0o700)
+        for name, raw in expected.items():
+            nodes.write_private(inputs / name, raw)
+        package = retained / 'package'
+        package.mkdir(mode=0o700)
+        for name in (MANIFEST, MANIFEST + '.sha256', ipa.name):
+            with (ipa.parent / name).open('rb') as original, (package / name).open('xb') as copy:
+                shutil.copyfileobj(original, copy)
+        checked_package(retained, digest, retained=True)
+        output('manifest_sha256', digest)
+    except BaseException:
+        shutil.rmtree(retained)
+        raise
+
+
+def check_handoff(directory, identity):
+    require_private_dir(directory)
+    if json.loads(alpha_nodes().read_private(directory / HANDOFF, 4096)) != identity:
+        raise ValueError('Private Alpha handoff belongs to a different source, run or runner')
+
+
+def cleanup_handoff(digest):
+    try:
+        directory, identity = handoff(digest)
+        require_private_dir(directory)
+    except FileNotFoundError:
+        return
+    check_handoff(directory, identity)
+    # Keep the binding until the private bytes are gone, even if cleanup is interrupted.
+    marker = directory / HANDOFF
+    for member in directory.iterdir():
+        if member == marker:
+            continue
+        if not member.is_symlink() and member.is_dir():
+            shutil.rmtree(member)
+        else:
+            member.unlink()
+    marker.unlink()
+    directory.rmdir()
+
+
+def require_preflight(digest):
+    if (not re.fullmatch(r'[0-9a-f]{64}', digest)
+            or os.environ.get('AEGIS_PRIVATE_ALPHA_VERIFIED_MANIFEST_SHA256') != digest):
+        raise ValueError('Private Alpha requires completed quota verification for this IPA')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('stage', 'package', 'preflight', 'upload', 'cleanup'))
+    parser.add_argument('operation', choices=('stage', 'package', 'retain', 'preflight',
+                                              'require-preflight', 'upload', 'cleanup', 'cleanup-handoff'))
     operation = parser.parse_args().operation
     # Do not let generated files inherit a permissive runner umask, including legacy Xcode inputs.
     os.umask(0o077)
@@ -227,24 +316,30 @@ def main():
                     shutil.rmtree(existing_directory(os.environ))
                 except FileNotFoundError:
                     pass  # Staging may already have removed its own directory after validation failed.
-        else:
+        elif operation == 'package':
             directory = existing_directory(os.environ)
             checked_inputs(directory / 'inputs')
-            if operation == 'package':
-                run_private(operation, directory)
-                manifest_path = directory / 'package' / 'ios-manifest.json'
-                digest = hashlib.sha256(alpha_nodes().read_private(manifest_path, 65536)).hexdigest()
-                checked_package(directory, digest)
-                output('manifest_sha256', digest)
-                print('Private Alpha signed IPA and exact bundle resources verified.')
+            run_private(operation, directory)
+            digest = hashlib.sha256(alpha_nodes().read_private(directory / 'package' / MANIFEST, 65536)).hexdigest()
+            checked_package(directory, digest)
+            output('manifest_sha256', digest)
+            print('Private Alpha signed IPA and exact bundle resources verified.')
+        else:
+            digest = os.environ['RELEASE_MANIFEST_SHA256']
+            if operation == 'retain':
+                retain(existing_directory(os.environ), digest)
+            elif operation == 'cleanup-handoff':
+                cleanup_handoff(digest)
+            elif operation == 'require-preflight':
+                require_preflight(digest)
             else:
-                digest = os.environ['RELEASE_MANIFEST_SHA256']
                 if operation == 'upload':
-                    if os.environ.get('AEGIS_PRIVATE_ALPHA_VERIFIED_MANIFEST_SHA256') != digest:
-                        raise ValueError('Private Alpha requires completed quota verification for this IPA')
+                    require_preflight(digest)
                     if not all(os.environ.get(key) for key in ASC[:3]) or os.environ.get(ASC[3]):
                         raise ValueError('Private Alpha requires the protected ASC upload key')
-                action = checked_package(directory, digest)
+                directory, identity = handoff(digest)
+                check_handoff(directory, identity)
+                action, _ = checked_package(directory, digest, retained=True)
                 action.check_new_upload_runs()
                 if operation == 'preflight':
                     _, configuration = checked_inputs(directory / 'inputs')

@@ -108,17 +108,25 @@ def reject_private_resources(directory, manifest):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=['import', 'export'])
+    parser.add_argument('operation', choices=['import', 'export', 'assert-public'])
     parser.add_argument('--directory', type=Path, required=True)
-    parser.add_argument('--zip', type=Path, required=True)
-    parser.add_argument('--sha', required=True)
-    parser.add_argument('--tree', required=True)
+    parser.add_argument('--zip', type=Path)
+    parser.add_argument('--sha')
+    parser.add_argument('--tree')
     parser.add_argument('--manifest-sha256', required=True)
     parser.add_argument('--run-json', type=Path)
     parser.add_argument('--repository')
     parser.add_argument('--run-id', type=int)
     parser.add_argument('--attempt', type=int)
     args = parser.parse_args()
+    if args.operation == 'assert-public':
+        manifest_path = args.directory / 'ios-manifest.json'
+        if digest(manifest_path) != args.manifest_sha256:
+            raise ValueError('Manifest digest mismatch')
+        reject_private_resources(args.directory, json.loads(manifest_path.read_text()))
+        return
+    if not (args.zip and args.sha and args.tree):
+        parser.error('Import and export require --zip, --sha, and --tree')
     if args.operation == 'import':
         verify_run(json.loads(args.run_json.read_text()), args.repository, args.sha, args.run_id, args.attempt)
         if args.directory.exists():
