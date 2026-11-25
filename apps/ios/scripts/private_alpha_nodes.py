@@ -95,6 +95,24 @@ def control(character):
     return unicodedata.category(character) in ('Cc', 'Cf')
 
 
+def relay_host(address):
+    # Matches AccessInternalNodeFields.dialAddress: a percent-decoded ASCII
+    # host is used as written; a non-ASCII host dials its IDNA A-label form.
+    # Python's codec is IDNA 2003, so only names whose A-label decodes back to
+    # the same lowercase NFC name are admitted; mapped names (such as sharp s)
+    # could differ from the app and fail closed.
+    if address.isascii():
+        return address
+    try:
+        encoded = address.encode('idna').decode('ascii')
+        restored = encoded.encode('ascii').decode('idna')
+    except UnicodeError as error:
+        raise ValueError('Invalid VLESS URI') from error
+    if restored != unicodedata.normalize('NFC', address).lower():
+        raise ValueError('Invalid VLESS URI')
+    return encoded
+
+
 def share(uri):
     if (not isinstance(uri, str) or len(uri.encode('utf-8')) > MAX_URI_BYTES
             or any(c.isspace() or control(c) or ord(c) == 92 for c in uri) or BAD_ESCAPE.search(uri)):
@@ -102,7 +120,10 @@ def share(uri):
     parts = urlsplit(uri)
     user, separator, authority = parts.netloc.partition('@')
     raw_address, port_separator, port = authority.rpartition(':')
-    address = unquote(raw_address, errors='strict')
+    try:
+        address = relay_host(unquote(raw_address, errors='strict'))
+    except UnicodeError as error:
+        raise ValueError('Invalid VLESS URI') from error
     if (parts.scheme != 'vless' or not separator or not UUID.fullmatch(user)
             or not port_separator or not valid_authority(f'{address}:{port}', port_required=True)
             or (address.startswith('[') and address != raw_address) or parts.path not in ('', '/')

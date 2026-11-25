@@ -549,8 +549,14 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
 
     private func redactedLine(_ safe: String) -> String {
         var text = safe
-        for secret in secrets where Self.ipIdentity(secret) == nil {
-            text = text.replacingOccurrences(of: secret, with: "[redacted]", options: .caseInsensitive)
+        for secret in secrets {
+            let filter = Self.filterValue(secret)
+            // Only the relay address field is matched by IP identity, on parsed
+            // hosts in safeTarget. Every other credential is textual, even when
+            // it happens to look like an IP address.
+            if filter.relay && Self.ipIdentity(filter.value) != nil { continue }
+            guard !filter.value.isEmpty else { continue }
+            text = text.replacingOccurrences(of: filter.value, with: "[redacted]", options: .caseInsensitive)
         }
         // Short secrets can also match timestamps or fixed event grammar.
         // Both live and restored records must retain a readable safe form.
@@ -688,13 +694,29 @@ public final class AccessDiagnosticLog: @unchecked Sendable {
         }
         let address = Self.ipIdentity(host)
         for secret in secrets {
-            if let address, let secretAddress = Self.ipIdentity(secret) {
+            let filter = Self.filterValue(secret)
+            if filter.relay, let address, let secretAddress = Self.ipIdentity(filter.value) {
                 if secretAddress == address { return "[redacted]" }
-            } else if target.range(of: secret, options: .caseInsensitive) != nil {
+            } else if !filter.value.isEmpty, target.range(of: filter.value, options: .caseInsensitive) != nil {
                 return "[redacted]"
             }
         }
         return target
+    }
+
+    // Redaction filters are plain strings so that retired, live and history
+    // filter sets keep their existing representation. A relay address carries
+    // this marker, which no canonical record can contain.
+    private static let relayFilterMarker = "\u{0}relay:"
+
+    /// Marks a relay address so that only it is matched by IP identity.
+    static func relayFilter(_ address: String) -> String {
+        address.isEmpty ? "" : relayFilterMarker + address
+    }
+
+    private static func filterValue(_ raw: String) -> (value: String, relay: Bool) {
+        guard raw.hasPrefix(relayFilterMarker) else { return (raw, false) }
+        return (String(raw.dropFirst(relayFilterMarker.count)), true)
     }
 
     private static let mappedIPv4Prefix: [UInt8] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff]

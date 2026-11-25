@@ -16,7 +16,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 	_ "unsafe"
 
 	xraylog "github.com/xtls/xray-core/app/log"
@@ -29,6 +28,7 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"github.com/xtls/xray-core/transport/internet"
 	_ "github.com/xtls/xray-core/transport/internet/grpc"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -81,12 +81,114 @@ var grpcClients map[grpcDialerKey]*grpc.ClientConn
 //go:linkname grpcClientsMu github.com/xtls/xray-core/transport/internet/grpc.globalDialerAccess
 var grpcClientsMu sync.Mutex
 
-// Stream settings owned by live runtimes. Guarded by lifecycleMu.
-var liveStreamSettings = map[*internet.MemoryStreamConfig]struct{}{}
+// grpcDialFunc mirrors the pinned transport/internet.dialFunc signature.
+type grpcDialFunc func(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error)
+
+//go:linkname transportDialers github.com/xtls/xray-core/transport/internet.transportDialerCache
+var transportDialers map[string]grpcDialFunc
+
+// grpcTransportDial is the pinned gRPC transport dialer that dialOwnedGRPC
+// wraps. Tests replace it only while no dial is running.
+var grpcTransportDial grpcDialFunc
+
+func init() {
+	grpcTransportDial = transportDialers["grpc"]
+	if grpcTransportDial == nil {
+		panic("pinned Xray gRPC transport dialer is not registered")
+	}
+	transportDialers["grpc"] = dialOwnedGRPC
+}
+
+// A gRPC generation is the stream settings of one gRPC outbound handler of
+// one runtime. The pinned VLESS retry loop ignores cancellation, so a stopped
+// generation may dial again after Stop. Retirement therefore rejects every
+// later dial and releases the generation's cached clients once its in-flight
+// dials have returned, however long they are delayed.
+type grpcGeneration struct {
+	inflight int
+	retired  bool
+}
+
+// Lock order: grpcGenerationsMu before grpcClientsMu.
+var grpcGenerationsMu sync.Mutex
+var grpcGenerations = map[*internet.MemoryStreamConfig]*grpcGeneration{}
+
+func dialOwnedGRPC(ctx context.Context, dest net.Destination, settings *internet.MemoryStreamConfig) (stat.Connection, error) {
+	grpcGenerationsMu.Lock()
+	generation := grpcGenerations[settings]
+	if generation == nil || generation.retired {
+		grpcGenerationsMu.Unlock()
+		return nil, errNotRunning
+	}
+	generation.inflight++
+	grpcGenerationsMu.Unlock()
+	defer finishGRPCDial(settings, generation)
+	return grpcTransportDial(ctx, dest, settings)
+}
+
+func finishGRPCDial(settings *internet.MemoryStreamConfig, generation *grpcGeneration) {
+	grpcGenerationsMu.Lock()
+	generation.inflight--
+	var released []*grpc.ClientConn
+	if generation.retired && generation.inflight == 0 {
+		released = releaseGRPCGeneration(settings)
+	}
+	grpcGenerationsMu.Unlock()
+	closeGRPCClients(released)
+}
+
+func registerGRPCGenerations(settings []*internet.MemoryStreamConfig) {
+	grpcGenerationsMu.Lock()
+	defer grpcGenerationsMu.Unlock()
+	for _, s := range settings {
+		grpcGenerations[s] = &grpcGeneration{}
+	}
+}
+
+// retireGRPCGenerations rejects later dials and returns the cached clients of
+// generations with no dial in flight. The last in-flight dial of any other
+// generation releases it.
+func retireGRPCGenerations(settings []*internet.MemoryStreamConfig) []*grpc.ClientConn {
+	grpcGenerationsMu.Lock()
+	defer grpcGenerationsMu.Unlock()
+	var released []*grpc.ClientConn
+	for _, s := range settings {
+		generation := grpcGenerations[s]
+		if generation == nil {
+			continue
+		}
+		generation.retired = true
+		if generation.inflight == 0 {
+			released = append(released, releaseGRPCGeneration(s)...)
+		}
+	}
+	return released
+}
+
+// releaseGRPCGeneration forgets a retired generation and removes its cached
+// clients. The caller holds grpcGenerationsMu and closes the result.
+func releaseGRPCGeneration(settings *internet.MemoryStreamConfig) []*grpc.ClientConn {
+	delete(grpcGenerations, settings)
+	grpcClientsMu.Lock()
+	defer grpcClientsMu.Unlock()
+	var released []*grpc.ClientConn
+	for key, client := range grpcClients {
+		if key.MemoryStreamConfig != settings {
+			continue
+		}
+		delete(grpcClients, key)
+		if client != nil {
+			released = append(released, client)
+		}
+	}
+	return released
+}
 
 var memoryStreamConfigType = reflect.TypeFor[*internet.MemoryStreamConfig]()
 
-func outboundStreamSettings(inst *core.Instance) []*internet.MemoryStreamConfig {
+// grpcStreamSettings returns the stream settings of the instance's gRPC
+// outbound handlers. Other transports never reach the gRPC client cache.
+func grpcStreamSettings(inst *core.Instance) []*internet.MemoryStreamConfig {
 	manager, ok := inst.GetFeature(outbound.ManagerType()).(outbound.Manager)
 	if !ok {
 		return nil
@@ -101,73 +203,17 @@ func outboundStreamSettings(inst *core.Instance) []*internet.MemoryStreamConfig 
 		if !field.IsValid() || field.Type() != memoryStreamConfigType || field.IsNil() {
 			continue
 		}
-		settings = append(settings, (*internet.MemoryStreamConfig)(field.UnsafePointer()))
+		if s := (*internet.MemoryStreamConfig)(field.UnsafePointer()); s.ProtocolName == "grpc" {
+			settings = append(settings, s)
+		}
 	}
 	return settings
-}
-
-// retireUnownedGRPCClients removes cached gRPC clients whose stream settings
-// belong to no live runtime, including clients a stopped generation created
-// while it was closing. The caller holds lifecycleMu and closes the result.
-func retireUnownedGRPCClients() []*grpc.ClientConn {
-	grpcClientsMu.Lock()
-	defer grpcClientsMu.Unlock()
-	var retired []*grpc.ClientConn
-	for key, client := range grpcClients {
-		if _, live := liveStreamSettings[key.MemoryStreamConfig]; live {
-			continue
-		}
-		delete(grpcClients, key)
-		if client != nil {
-			retired = append(retired, client)
-		}
-	}
-	return retired
 }
 
 func closeGRPCClients(clients []*grpc.ClientConn) {
 	for _, client := range clients {
 		_ = client.Close()
 	}
-}
-
-// A stopped generation's in-flight outbound retries (the pinned VLESS dialer
-// retries up to five times with about two seconds of backoff and ignores the
-// cancelled context) can recreate a client under retired stream settings after
-// Stop has swept the cache. Keep sweeping for a bounded window that covers that
-// retry budget. Every Start and Stop also sweeps.
-const (
-	grpcRetireWindow   = 5 * time.Second
-	grpcRetireInterval = 100 * time.Millisecond
-)
-
-// Guarded by lifecycleMu.
-var grpcReapDeadline time.Time
-var grpcReaping bool
-
-// scheduleGRPCReap extends the sweep window. The caller holds lifecycleMu.
-func scheduleGRPCReap() {
-	grpcReapDeadline = time.Now().Add(grpcRetireWindow)
-	if grpcReaping {
-		return
-	}
-	grpcReaping = true
-	go func() {
-		for {
-			time.Sleep(grpcRetireInterval)
-			lifecycleMu.Lock()
-			retired := retireUnownedGRPCClients()
-			done := !time.Now().Before(grpcReapDeadline)
-			if done {
-				grpcReaping = false
-			}
-			lifecycleMu.Unlock()
-			closeGRPCClients(retired)
-			if done {
-				return
-			}
-		}
-	}()
 }
 
 type discardedLog struct{}
@@ -326,11 +372,8 @@ func (r *Runtime) Start(configJSON string) error {
 	}
 	r.instance = inst
 	liveInstances++
-	r.grpcSettings = outboundStreamSettings(inst)
-	for _, settings := range r.grpcSettings {
-		liveStreamSettings[settings] = struct{}{}
-	}
-	closeGRPCClients(retireUnownedGRPCClients())
+	r.grpcSettings = grpcStreamSettings(inst)
+	registerGRPCGenerations(r.grpcSettings)
 	r.instanceContext, r.instanceCancel = context.WithCancel(context.Background())
 	return nil
 }
@@ -355,17 +398,12 @@ func (r *Runtime) Stop() error {
 		handle.cancel()
 		_ = handle.conn.Close()
 	}
+	closeGRPCClients(retireGRPCGenerations(ownedSettings))
 	var stopErr error
-	var retired []*grpc.ClientConn
 	if inst != nil {
 		lifecycleMu.Lock()
 		stopErr = inst.Close()
 		liveInstances--
-		for _, settings := range ownedSettings {
-			delete(liveStreamSettings, settings)
-		}
-		retired = retireUnownedGRPCClients()
-		scheduleGRPCReap()
 		if liveInstances == 0 && activeLogger != nil {
 			_ = activeLogger.Close()
 			activeLogger, activeLogConfig, activeLogGeneration = nil, nil, 0
@@ -373,7 +411,6 @@ func (r *Runtime) Stop() error {
 		}
 		lifecycleMu.Unlock()
 	}
-	closeGRPCClients(retired)
 	// A separately closed stream may already be absent from the map. Swapping the
 	// generation under mu excludes new Adds to this group before waiting.
 	if pendingCloses != nil {

@@ -1138,13 +1138,56 @@ final class AccessRealityVisionOutboundConfigTests: XCTestCase {
     func testDiagnosticIPRedactionPreservesUnrelatedDestinationWithSamePrefix() throws {
         let log = AccessDiagnosticLog(pollInterval: .milliseconds(15))
         defer { log.stop() }
-        let lease = log.acquireShared(level: .info, secrets: ["192.0.2.1"])
+        let lease = log.acquireShared(level: .info, secrets: [AccessDiagnosticLog.relayFilter("192.0.2.1")])
         let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: try XCTUnwrap(lease.path)))
         defer { try? writer.close() }
         try writer.write(contentsOf: Data(
             "2026/11/11 00:00:00 [Info] proxy/vless/outbound: tunneling request to tcp:192.0.2.10:443 via 192.0.2.1:443\n".utf8))
         XCTAssertTrue(log.stop(lease: lease))
         XCTAssertTrue(log.snapshot().contains("tunneling request to tcp:192.0.2.10:443 via [redacted]"))
+    }
+
+    func testIPShapedTextualCredentialStaysOnSubstringRedactionInLiveAndRestoredRecords() throws {
+        // Synthetic canonical X25519 public key (bytes 0...31, base64url without padding).
+        let syntheticKey = Data(0...31).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let reality = try makeParameters(publicKey: syntheticKey)
+        let grpc = try AccessVLESSGRPCRealityParameters(address: "198.51.100.7", port: 443,
+            userID: reality.userID, serverName: "cert.example", publicKey: reality.publicKey,
+            shortID: reality.shortID, serviceName: "192.0.2.1")
+        let line = "2026/11/11 00:00:00 [Info] proxy/vless/outbound: tunneling request to tcp:192.0.2.10:443 via 198.51.100.7:443\n"
+        let expected = "tunneling request to [redacted] via [redacted]"
+
+        // Live record: the service name is textual, so the IP-shaped destination
+        // containing it is withheld rather than compared by identity.
+        let live = AccessDiagnosticLog(pollInterval: .milliseconds(15))
+        defer { live.stop() }
+        let lease = live.acquireShared(level: .info, secrets: grpc.diagnosticSecrets)
+        let writer = try FileHandle(forWritingTo: URL(fileURLWithPath: try XCTUnwrap(lease.path)))
+        try writer.write(contentsOf: Data(line.utf8))
+        try writer.close()
+        XCTAssertTrue(live.stop(lease: lease))
+        XCTAssertTrue(live.snapshot().contains(expected), live.snapshot())
+        XCTAssertFalse(live.snapshot().contains("192.0.2.1"))
+        XCTAssertFalse(live.snapshot().contains("198.51.100.7"))
+
+        // Recorded before the gRPC owner registers, then redacted again when it does.
+        let restored = AccessDiagnosticLog(pollInterval: .milliseconds(15))
+        defer { restored.stop() }
+        let first = restored.acquireShared(level: .info, secrets: [])
+        let earlier = try FileHandle(forWritingTo: URL(fileURLWithPath: try XCTUnwrap(first.path)))
+        try earlier.write(contentsOf: Data(line.utf8))
+        try earlier.close()
+        let deadline = Date().addingTimeInterval(2)
+        while restored.snapshot().isEmpty && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        XCTAssertTrue(restored.snapshot().contains("192.0.2.10:443"), "unredacted control must reach history")
+        let second = restored.acquireShared(level: .info, secrets: grpc.diagnosticSecrets)
+        XCTAssertTrue(restored.stop(lease: second))
+        XCTAssertTrue(restored.stop(lease: first))
+        XCTAssertTrue(restored.snapshot().contains(expected), restored.snapshot())
+        XCTAssertFalse(restored.snapshot().contains("192.0.2.1"))
+        XCTAssertFalse(restored.snapshot().contains("198.51.100.7"))
     }
 
     func testAlphaRouteIdentityUsesCoreFingerprintCase() throws {

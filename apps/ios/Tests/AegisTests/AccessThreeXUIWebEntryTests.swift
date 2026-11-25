@@ -135,6 +135,38 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         }
     }
 
+    func testExpiredAllowanceCannotShowOrSaveAnEnabledAlphaRoute() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let data = try JSONEncoder().encode([alphaWSNode(address: "first.example"), alphaWSNode(address: "second.example")])
+        let nodes = alphaCatalogue(data: data, defaults: defaults)
+        let fixture = ThreeXUIEntryFixture(userID: userID)
+        await fixture.setExpire(UInt64(Date.now.timeIntervalSince1970) + 2)
+        let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+            nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
+            alphaRoutes: nodes.routes, fetch: { config in try await fixture.usage(config) })
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        await usage.refresh()?.value
+        XCTAssertTrue(usage.isAlphaRouteSelectable(1))
+        let deadline = Date.now.addingTimeInterval(6)
+        while usage.isAlphaRouteSelectable(1), Date.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertFalse(usage.snapshot?.permitsConnection ?? true)
+        XCTAssertFalse(usage.isAlphaRouteSelectable(0))
+        XCTAssertFalse(usage.isAlphaRouteSelectable(1))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(usage.availableAlphaRouteIDs, [], "Known expiry must refresh the published route list")
+        XCTAssertEqual(usage.availableConnectionCount, 0)
+        XCTAssertFalse(usage.permitsExistingConnection)
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
+        do { _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5))); XCTFail("Expired allowance started an Alpha route") }
+        catch { }
+        XCTAssertNil(core.startedConfiguration)
+    }
+
     private func alphaWSNode(address: String) -> String {
         "vless://\(userID)@\(address):443?security=tls&type=ws&host=ws.example.com&sni=cert.example.com&path=%2Finside&encryption=none"
     }
@@ -282,14 +314,16 @@ private actor ThreeXUIEntryFixture {
     enum Mode { case allowed, unavailable, exhausted, foreignNode, unlistedRoute }
     let userID: String
     private var mode: Mode
+    private var expire: UInt64 = 0
     private(set) var observedSources: [String] = []
     init(userID: String, mode: Mode = .allowed) { self.userID = userID; self.mode = mode }
     func setMode(_ mode: Mode) { self.mode = mode }
+    func setExpire(_ value: UInt64) { expire = value }
     func usage(_ configuration: AccessSubscriptionConfiguration) throws -> AccessSubscriptionUsage {
         observedSources.append(configuration.subscriptionInfoURL.absoluteString)
         if mode == .unavailable { throw AccessSubscriptionQueryError.unavailable }
         return .init(sId: "fixture", emails: ["fixture"], uploadByte: mode == .exhausted ? 10_000_000 : 10,
-                     downloadByte: mode == .exhausted ? 0 : 20, totalByte: 10_000_000, expire: 0, enabled: true)
+                     downloadByte: mode == .exhausted ? 0 : 20, totalByte: 10_000_000, expire: expire, enabled: true)
     }
     func nodes(_ configuration: AccessSubscriptionConfiguration, id: String) throws -> [AccessRealityVisionParameters] {
         observedSources.append(configuration.subscriptionInfoURL.absoluteString)

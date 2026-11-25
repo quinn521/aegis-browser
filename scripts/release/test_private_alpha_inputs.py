@@ -135,6 +135,8 @@ class PrivateAlphaInputsTests(unittest.TestCase):
             'equivalent TCP defaults and hint': [tcp, tcp.replace('&fp=chrome&headerType=none&host=hint.invalid', '')],
             'equivalent TCP fingerprint case': [tcp, tcp.replace('fp=chrome', 'fp=Chrome')],
             'equivalent WS relay encoding': [ws, ws.replace('@ws.invalid', '@w%73.invalid')],
+            'equivalent WS relay IDNA spelling': [ws.replace('@ws.invalid', '@b%C3%BCcher.invalid'),
+                                                  ws.replace('@ws.invalid', '@xn--bcher-kva.invalid')],
             'equivalent REALITY aliases': [reality, reality.replace('serverName=', 'sni=')
                                            .replace('publicKey=', 'pbk=').replace('shortId=abcd1234', 'sid=ABCD1234')],
             'equivalent gRPC service alias': [grpc, grpc.replace('&path=/service/Tun', '')],
@@ -185,6 +187,26 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         source.chmod(0o600)
         self.assertEqual(self.hook('alpha', source, target).returncode, 0)
         self.assertEqual(json.loads(target.read_bytes()), [encoded])
+
+    def test_hook_accepts_single_international_relay_and_rejects_mapped_names(self):
+        for index, relay in enumerate(('@b%C3%BCcher.invalid', '@xn--bcher-kva.invalid')):
+            source = self.root / f'input-{index}'
+            target = self.root / f'idna-{index}' / NODES
+            target.parent.mkdir()
+            share = LIST[1].replace('@ws.invalid', relay)
+            source.write_text(json.dumps([share]))
+            source.chmod(0o600)
+            self.assertEqual(self.hook('alpha', source, target).returncode, 0, relay)
+            self.assertEqual(json.loads(target.read_bytes()), [share])
+        for index, relay in enumerate(('@stra%C3%9Fe.invalid', '@%E2%80%8Bws.invalid')):
+            source = self.root / f'rejected-input-{index}'
+            target = self.root / f'rejected-{index}' / NODES
+            target.parent.mkdir()
+            source.write_text(json.dumps([LIST[1].replace('@ws.invalid', relay)]))
+            source.chmod(0o600)
+            result = self.hook('alpha', source, target)
+            self.assertNotEqual(result.returncode, 0, relay)
+            self.assertFalse(target.exists(), relay)
 
     def test_canonical_resource_size_has_the_same_bound_as_the_app(self):
         prefix = LIST[0].split('#', 1)[0] + '#'

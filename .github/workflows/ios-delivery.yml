@@ -143,6 +143,28 @@ jobs:
       - id: plan
         name: Normalize exact package or existing-state route
         run: python3 scripts/release/ios-delivery-plan.py
+      - id: shared-runner
+        name: Require a shared iOS runner label that excludes the private Alpha runner
+        env:
+          PRIVATE_ALPHA_LABEL: ${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}
+          SHARED_IOS_LABEL: ${{ vars.AEGIS_IOS_RUNNER_LABEL }}
+        run: |
+          # Every macOS delivery job selects [self-hosted, macOS, ARM64, shared].
+          # A built-in, empty or private label would let those jobs land on the
+          # dedicated private Alpha runner, whose group admits this workflow.
+          reject_shared() {
+            printf '%s\n' 'Configure a custom shared iOS runner label distinct from the private Alpha runner label.' >&2
+            exit 1
+          }
+          case "$SHARED_IOS_LABEL" in
+            ''|[[:space:]]*|*[[:space:]]|*[[:cntrl:]]*) reject_shared ;;
+          esac
+          shared_label=$(printf '%s' "$SHARED_IOS_LABEL" | tr '[:upper:]' '[:lower:]')
+          case "$shared_label" in
+            self-hosted|macos|linux|windows|x64|arm|arm64) reject_shared ;;
+          esac
+          private_label=$(printf '%s' "$PRIVATE_ALPHA_LABEL" | tr '[:upper:]' '[:lower:]')
+          [[ -z "$private_label" || "$private_label" != "$shared_label" ]] || reject_shared
       - id: private-alpha-runner
         name: Require a dedicated runner for private Alpha
         if: ${{ steps.plan.outputs.private_alpha == 'true' }}

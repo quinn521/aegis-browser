@@ -96,7 +96,7 @@ extension AccessInternalTestNode {
     var diagnosticSecrets: [String] {
         switch self {
         case .realityVision(let parameters):
-            [parameters.userID, parameters.address, parameters.publicKey, parameters.shortID]
+            [parameters.userID, AccessDiagnosticLog.relayFilter(parameters.address), parameters.publicKey, parameters.shortID]
         case .vlessWebSocketTLS(let parameters): parameters.diagnosticSecrets
         case .vlessTCPTLSVision(let parameters): parameters.diagnosticSecrets
         case .vlessGRPCReality(let parameters): parameters.diagnosticSecrets
@@ -276,7 +276,7 @@ extension AccessVLESSWebSocketTLSParameters: AccessInternalVLESSOutbound {
     // The diagnostic event filter admits only approved text and host/port
     // fields. WS paths and queries never become diagnostic fields; the private
     // relay endpoint is redacted like the other internal transports.
-    var diagnosticSecrets: [String] { [userID, address] }
+    var diagnosticSecrets: [String] { [userID, AccessDiagnosticLog.relayFilter(address)] }
 
     var outboundTag: String { "internal_vless_ws_tls" }
     var streamSettings: [String: Any] {
@@ -314,7 +314,7 @@ public struct AccessVLESSTCPTLSVisionParameters: Equatable, Sendable {
 }
 
 extension AccessVLESSTCPTLSVisionParameters: AccessInternalVLESSOutbound {
-    var diagnosticSecrets: [String] { [userID, address, serverName] }
+    var diagnosticSecrets: [String] { [userID, AccessDiagnosticLog.relayFilter(address), serverName] }
     var outboundTag: String { "internal_vless_tcp_tls_vision" }
     var flow: String? { AccessRealityVisionParameters.admittedFlow }
     var streamSettings: [String: Any] {
@@ -368,7 +368,9 @@ public struct AccessVLESSGRPCRealityParameters: Equatable, Sendable {
 }
 
 extension AccessVLESSGRPCRealityParameters: AccessInternalVLESSOutbound {
-    var diagnosticSecrets: [String] { [userID, address, serverName, publicKey, shortID, serviceName] }
+    var diagnosticSecrets: [String] {
+        [userID, AccessDiagnosticLog.relayFilter(address), serverName, publicKey, shortID, serviceName]
+    }
     var outboundTag: String { "internal_vless_grpc_reality" }
     var streamSettings: [String: Any] {
         [

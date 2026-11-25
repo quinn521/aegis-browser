@@ -176,6 +176,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     private var successfulGeneration: UUID?
     private var receivedUptime: TimeInterval?
     private var task: Task<Void, Never>?
+    private var expiryTask: Task<Void, Never>?
     lazy var usageRefresh = AccessAccountUsageRefreshCoordinator(refresh: { [weak self] in self?.refresh() })
     var isStale: Bool {
         guard let receivedUptime else { return true }
@@ -247,6 +248,36 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         availableAlphaRouteIDs.contains { alphaRoutes[$0].isWireIdentical(to: route) }
     }
 
+    /// A bundled route may be shown as enabled or saved only while the current allowance still permits it.
+    func isAlphaRouteSelectable(_ id: Int) -> Bool {
+        !unavailable && snapshot?.permitsConnection == true && availableAlphaRouteIDs.contains(id)
+    }
+
+    private func scheduleAllowanceExpiry(for value: AccessSubscriptionUsage) {
+        expiryTask?.cancel(); expiryTask = nil
+        guard value.expire > 0 else { return }
+        let expiry = TimeInterval(value.expire)
+        expiryTask = Task { [weak self] in
+            while true {
+                let remaining = expiry - Date.now.timeIntervalSince1970
+                if remaining <= 0 { break }
+                do { try await Task.sleep(for: .seconds(min(remaining, 3600))) } catch { return }
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.expiryTask = nil
+            self.revokeExpiredAllowance()
+        }
+    }
+
+    private func revokeExpiredAllowance() {
+        guard snapshot?.permitsConnection == false else { return }
+        nodes = []
+        availableAlphaRouteIDs = []
+        availableConnectionCount = 0
+        connectionsUnavailable = false
+        objectWillChange.send()
+    }
+
     private func refreshConnectionAllowance() async throws {
         guard active, managesConnections else { throw AccessSubscriptionQueryError.unavailable }
         guard let request = refresh() else { throw AccessSubscriptionQueryError.unavailable }
@@ -314,11 +345,13 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 self.receivedUptime = ProcessInfo.processInfo.systemUptime
                 self.unavailable = false
                 self.successfulGeneration = token
+                self.scheduleAllowanceExpiry(for: value)
                 self.task = nil; self.isRefreshing = false
                 self.usageRefresh.didComplete(succeeded: true)
             } catch {
                 guard let self, self.active, self.generation == token, !Task.isCancelled else { return }
                 self.unavailable = true
+                self.expiryTask?.cancel(); self.expiryTask = nil
                 self.nodes = []
                 self.availableAlphaRouteIDs = []
                 self.availableConnectionCount = 0

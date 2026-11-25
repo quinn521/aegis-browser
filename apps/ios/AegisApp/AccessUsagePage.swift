@@ -25,10 +25,10 @@ struct AccessUsagePage: View {
                             Text("暂不可用")
                         }
                         ForEach(alphaNodes.entries) { entry in
-                            let available = subscription.availableAlphaRouteIDs.contains(entry.id)
+                            let available = subscription.isAlphaRouteSelectable(entry.id)
                             let selected = alphaNodes.selectedIndex == entry.id
                             Button {
-                                guard subscription.availableAlphaRouteIDs.contains(entry.id) else { return }
+                                guard subscription.isAlphaRouteSelectable(entry.id) else { return }
                                 alphaNodes.select(entry.id)
                             } label: {
                                 HStack {
