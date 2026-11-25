@@ -117,6 +117,12 @@ def share(uri):
     if (not isinstance(uri, str) or len(uri.encode('utf-8')) > MAX_URI_BYTES
             or any(c.isspace() or control(c) or ord(c) == 92 for c in uri) or BAD_ESCAPE.search(uri)):
         raise ValueError('Invalid VLESS URI')
+    # The app parses everything before the label with
+    # URLComponents(string:encodingInvalidCharacters: false), which rejects a
+    # literal non-ASCII character; one such entry would discard the whole
+    # bundled list. International relays must be percent-encoded or A-labels.
+    if not uri.partition('#')[0].isascii():
+        raise ValueError('Invalid VLESS URI')
     parts = urlsplit(uri)
     user, separator, authority = parts.netloc.partition('@')
     raw_address, port_separator, port = authority.rpartition(':')

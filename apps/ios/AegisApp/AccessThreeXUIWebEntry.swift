@@ -10,6 +10,8 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
     struct Entry: Identifiable, Equatable {
         let id: Int
         let protocolName: String
+        /// Routes may share a protocol; the nonsecret ordinal tells them apart without exposing the relay.
+        var displayName: String { "\(id + 1) · \(protocolName)" }
     }
 
     private static let fingerprintKey = "access.alpha.nodes.fingerprint.v1"

@@ -198,7 +198,8 @@ class PrivateAlphaInputsTests(unittest.TestCase):
             source.chmod(0o600)
             self.assertEqual(self.hook('alpha', source, target).returncode, 0, relay)
             self.assertEqual(json.loads(target.read_bytes()), [share])
-        for index, relay in enumerate(('@stra%C3%9Fe.invalid', '@%E2%80%8Bws.invalid')):
+        # A literal Unicode authority is rejected: the app's strict URL parser cannot load it.
+        for index, relay in enumerate(('@stra%C3%9Fe.invalid', '@%E2%80%8Bws.invalid', '@b\u00fccher.invalid')):
             source = self.root / f'rejected-input-{index}'
             target = self.root / f'rejected-{index}' / NODES
             target.parent.mkdir()

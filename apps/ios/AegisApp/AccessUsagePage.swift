@@ -32,7 +32,7 @@ struct AccessUsagePage: View {
                                 alphaNodes.select(entry.id)
                             } label: {
                                 HStack {
-                                    Text(verbatim: entry.protocolName)
+                                    Text(verbatim: entry.displayName)
                                     Spacer()
                                     if !available {
                                         Text("暂不可用")

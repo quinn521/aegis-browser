@@ -240,7 +240,7 @@ jobs:
       manifest_sha256: ${{ steps.archive.outputs.manifest_sha256 }}
     needs: [admission, check-unused, archive-settings]
     if: ${{ !cancelled() && needs.admission.result == 'success' && needs.admission.outputs.private_alpha == 'false' && needs.admission.outputs.signing_mode == 'cloud' && (needs.admission.outputs.operation == 'package' || (needs.admission.outputs.operation == 'package-upload' && needs.check-unused.result == 'success')) }}
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_RUNNER_LABEL }}']
     timeout-minutes: 50
     env:
       RELEASE_PROFILE: ${{ needs.admission.outputs.profile }}
@@ -298,7 +298,7 @@ jobs:
       - admission
       - check-unused
       - ios-archive
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_RUNNER_LABEL }}']
     environment: aegis-ios-signing
     timeout-minutes: 50
     outputs:
@@ -564,7 +564,7 @@ jobs:
     permissions:
       contents: write
       actions: read
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_RUNNER_LABEL }}']
     environment: aegis-ios-store
     timeout-minutes: 45
     env:
@@ -758,7 +758,7 @@ jobs:
     needs:
       - admission
       - import
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_RUNNER_LABEL }}']
     environment: aegis-ios-store
     timeout-minutes: 45
     env:
@@ -821,7 +821,7 @@ jobs:
       - admission
       - ios-package
       - seal-package
-    runs-on: ${{ fromJSON(format('["self-hosted","macOS","ARM64","{0}"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}
+    runs-on: [self-hosted, macOS, ARM64, '${{ vars.AEGIS_IOS_RUNNER_LABEL }}']
     environment: aegis-ios-store
     timeout-minutes: 45
     env:

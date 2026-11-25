@@ -17,6 +17,8 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let nodes = alphaCatalogue(data: data, defaults: defaults)
         XCTAssertTrue(nodes.isConfigured)
         XCTAssertEqual(nodes.entries.map(\.protocolName), ["VLESS / WS / TLS", "VLESS / WS / TLS"])
+        XCTAssertEqual(nodes.entries.map(\.displayName), ["1 · VLESS / WS / TLS", "2 · VLESS / WS / TLS"])
+        XCTAssertFalse(nodes.entries.contains { $0.displayName.contains("example") || $0.displayName.contains(userID) })
         XCTAssertEqual(nodes.selectedIndex, 0)
         nodes.select(1)
         XCTAssertEqual(nodes.selectedIndex, 1)

@@ -213,17 +213,28 @@ func TestRetiredGRPCGenerationOutlastsDelayedDialAndRejectsLaterDials(t *testing
 		return conn, err
 	}
 	released := false
-	t.Cleanup(func() {
+	r := NewRuntime()
+	var stopped chan error
+	// Teardown runs on success and on t.Fatal: unblock the delayed dial first so
+	// a regressed Stop that waits for it cannot deadlock the deferred Stop, then
+	// stop the runtime and restore the process-wide transport stub.
+	defer func() {
 		if !released {
+			released = true
 			close(release)
 		}
-	})
-
-	r := NewRuntime()
+		if stopped != nil {
+			select {
+			case <-stopped:
+			case <-time.After(10 * time.Second):
+			}
+		}
+		_ = r.Stop()
+		grpcTransportDial = pinned
+	}()
 	if err := r.Start(config); err != nil {
 		t.Fatal(err)
 	}
-	defer r.Stop()
 	settings := runtimeStreamSettings(r)
 	if len(settings) != 1 {
 		t.Fatalf("runtime owns %d gRPC stream settings, want 1", len(settings))
@@ -240,10 +251,12 @@ func TestRetiredGRPCGenerationOutlastsDelayedDialAndRejectsLaterDials(t *testing
 		t.Fatalf("live generation state = %+v", state)
 	}
 
-	stopped := make(chan error, 1)
-	go func() { stopped <- r.Stop() }()
+	stopResult := make(chan error, 1)
+	stopped = stopResult
+	go func() { stopResult <- r.Stop() }()
 	select {
-	case err := <-stopped:
+	case err := <-stopResult:
+		stopped = nil
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -278,9 +291,6 @@ func TestRetiredGRPCGenerationOutlastsDelayedDialAndRejectsLaterDials(t *testing
 	if _, err := dialOwnedGRPC(context.Background(), xnet.TCPDestination(xnet.LocalHostIP, 443), settings[0]); !errors.Is(err, errNotRunning) {
 		t.Fatalf("released generation dial error = %v, want errNotRunning", err)
 	}
-	// Restore only after the generation's last dial has returned; any later
-	// dial is rejected before reading the transport.
-	grpcTransportDial = pinned
 }
 
 func TestNonGRPCRuntimeRegistersNoGRPCGeneration(t *testing.T) {

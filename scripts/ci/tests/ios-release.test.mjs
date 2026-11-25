@@ -61,6 +61,14 @@ test('private Alpha hands off to the protected store without publishing artifact
   assert(admissionIds.indexOf('shared-runner') < admissionIds.indexOf('private-alpha-runner'));
   assert.equal(sharedAdmission.env.SHARED_IOS_LABEL, '${{ vars.AEGIS_IOS_RUNNER_LABEL }}');
   assert.equal(sharedAdmission.env.PRIVATE_ALPHA_LABEL, '${{ vars.AEGIS_IOS_PRIVATE_ALPHA_RUNNER_LABEL }}');
+  // Scheduling must use the literal label admission checked; a JSON round trip could decode escapes.
+  const sharedJobs = Object.entries(jobs).filter(([, value]) => JSON.stringify(value['runs-on'] ?? '').includes('AEGIS_IOS_RUNNER_LABEL'));
+  assert(sharedJobs.length >= 5, 'expected the shared macOS delivery jobs');
+  for (const [name, value] of sharedJobs) {
+    assert.deepEqual(value['runs-on'], ['self-hosted', 'macOS', 'ARM64', '${{ vars.AEGIS_IOS_RUNNER_LABEL }}'], name);
+  }
+  assert(!readFileSync('.github/workflows/ios-delivery.yml', 'utf8').includes('fromJSON(format('),
+    'delivery runner selectors must not be built through fromJSON');
   assert.equal(jobs.admission.outputs.private_alpha_runner_group, '${{ steps.private-alpha-runner.outputs.group }}');
   assert.equal(jobs.admission.outputs.private_alpha_runner_label, '${{ steps.private-alpha-runner.outputs.label }}');
   const directory = mkdtempSync(join(tmpdir(), 'private-alpha-runner-'));
@@ -624,7 +632,7 @@ test('Full explicitly forwards named secrets while protected jobs resolve enviro
 test('hosted signing loads only environment secrets after source admission and cleans up before artifact upload', () => {
   const doc = parse(readFileSync('.github/workflows/ios-delivery.yml', 'utf8'));
   const job = doc.jobs['ios-package'];
-  assert.equal(job['runs-on'], "${{ fromJSON(format('[\"self-hosted\",\"macOS\",\"ARM64\",\"{0}\"]', vars.AEGIS_IOS_RUNNER_LABEL)) }}");
+  assert.deepEqual(job['runs-on'], ['self-hosted', 'macOS', 'ARM64', '${{ vars.AEGIS_IOS_RUNNER_LABEL }}']);
   assert.equal(job.environment, 'aegis-ios-signing');
   assert.equal(job.env.DEVELOPER_DIR, '/Applications/Xcode.app/Contents/Developer');
   const ruby = job.steps.findIndex(s => s.uses === './.github/actions/ensure-ios-ruby');
