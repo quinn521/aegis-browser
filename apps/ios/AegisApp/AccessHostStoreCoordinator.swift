@@ -326,6 +326,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         reconcileGeoSiteRefresh(using: transport)
     }
 
+    func cancelOverseasPreview(for tab: BrowserTab) {
+        guard offersWebsiteAcceleration(for: tab) else { return }
+        geoSiteCache?.cancelOverseasPreview()
+    }
+
     struct OverseasSettingsConfirmation: Identifiable {
         let offer: AccessGeoSiteCache.OverseasConfirmation
         fileprivate let window: UUID
@@ -808,7 +813,6 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     private func overseasRoute(_ url: URL) -> (match: AccessGeoSiteCache.Match, grant: AccessGeoSiteCache.OverseasView.Grant?) {
         if let geoSiteCache {
-            guard websiteAccelerationMode == .smart else { return (.original, nil) }
             let view = comparingWebsitePolicy ? geoSiteView : geoSiteCache.runtimeView()
             return view?.overseas.route(for: url) ?? (.indeterminate, nil)
         }

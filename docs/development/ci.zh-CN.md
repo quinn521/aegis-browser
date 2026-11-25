@@ -159,7 +159,7 @@ PR 检查测试 M；develop/main push 检查 S。协调者必须从 GitHub API �
 
 普通功能/修复 PR → develop 使用 squash；晋升 PR → upstream/main 与上游回流 PR → develop 使用 merge commit，保留来源与修复的祖先关系。仅在最终 HEAD 检查和 Review 齐备后由协调者合并；控制器不批准、合并或启用候选 auto-merge。已知 CI/Review 阻塞不得通过管理员身份绕过。
 
-`Sync PR Merge Method` 使用 `pull_request_target: auto_merge_enabled` 处理同仓库的 `main` 或 `codex/backflow-<完整SHA>` → develop，以及 `codex/promote-<D完整SHA>-<B完整SHA>` → main。它使用目标分支的 base SHA 和 `GITHUB_TOKEN` 检查 PR 当前的合并方式，关闭仍启用的 squash/rebase auto-merge，并在 PR 留言提示协调者在最终 HEAD 验收后使用 merge commit。控制器仅接受未启用 auto-merge 或使用 merge commit 的候选。
+`Sync PR Merge Method` 使用 `pull_request_target: auto_merge_enabled` 处理同仓库的 `main` 或 `codex/backflow-<完整SHA>` → develop，以及 `codex/promote-<D完整SHA>-<B完整SHA>` → main。它按目标分支检出同仓库的固定引用 `refs/heads/develop` 或 `refs/heads/main`，用 `GITHUB_TOKEN` 检查当前的合并方式，关闭仍启用的 squash/rebase auto-merge，并在 PR 留言提示协调者在最终 HEAD 验收后使用 merge commit。控制器仅接受未启用 auto-merge 或使用 merge commit 的候选。
 
 该 workflow 是异步纠正措施。它只能关闭尚未执行的 auto-merge，跨仓库晋升 PR 和手动合并仍由协调者核对合并方式。
 
@@ -259,7 +259,7 @@ Linux 上的 Access standalone 与 DMG fixture 归为合同证据。手动 macOS
 | 平台 | 选中路径 |
 | --- | --- |
 | iOS | `apps/ios/**`、`ios-*` workflow、`scripts/ci/{ios-,run-ios-,tests/ios-}*`，以及 `scripts/release/` 中以 `ios-`、`ios_`、`test_ios_` 命名的入口和已登记的 iOS 专用输入，例如 `verify-ipa.py` 和 `product_delivery.py` |
-| Android | `apps/browser/patches-android/**`、`apps/browser/scripts/**` 内含 android 的路径、`android-*` workflow、`scripts/ci/{android-,run-android-,tests/android-}*`、Android 发布脚本及回归测试 |
+| Android | `apps/browser/patches-android/**`、`apps/browser/scripts/**` 内含 android 的路径、`android-*` workflow、`scripts/ci/{android-,run-android-,tests/android-}*`、Android 发布脚本及回归测试，以及 `docs/**` 和 Markdown 之外的未知路径 |
 | macOS | `macos-*` workflow、`scripts/release/**` 内含 macos 的路径，以及共享产品和未知路径 |
 | Windows | `**/*.ps1`、`apps/browser/scripts/**` 内含 winrm 的路径、`scripts/ci/platform-tests/windows-*`、`apps/browser/scripts/ci/windows*` |
 | Linux | `scripts/ci/run-shell-coverage.sh`、`scripts/ci/platform-tests/kcov-*`、`scripts/ci/tests/shell-coverage.test.mjs` |
