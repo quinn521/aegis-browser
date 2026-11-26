@@ -585,3 +585,4 @@
 0585-access-settle-retirement-after-early-context-events.patch
 0586-access-bound-context-rebind-and-settle-final-disconnect.patch
 0587-access-run-mock-rebind-regression-without-node-fixture.patch
+0588-access-use-safe-hex-encoding-for-native-query.patch

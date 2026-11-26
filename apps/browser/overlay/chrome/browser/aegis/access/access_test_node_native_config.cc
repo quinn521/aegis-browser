@@ -13,7 +13,6 @@ namespace {
 std::string EscapeNativeQueryValue(std::string_view value,
                                    bool escape_nested_uri = false) {
   // The share decoder splits on '&' and '#' and decodes '%' exactly once.
-  constexpr char kHex[] = "0123456789ABCDEF";
   std::string result;
   result.reserve(value.size());
   for (; !value.empty(); value.remove_prefix(1)) {
@@ -21,8 +20,7 @@ std::string EscapeNativeQueryValue(std::string_view value,
     if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
         byte == '%' || (escape_nested_uri && value.starts_with("://"))) {
       result.push_back('%');
-      result.push_back(kHex[byte >> 4]);
-      result.push_back(kHex[byte & 15]);
+      base::AppendHexEncodedByte(byte, result);
     } else {
       result.push_back(static_cast<char>(byte));
     }
