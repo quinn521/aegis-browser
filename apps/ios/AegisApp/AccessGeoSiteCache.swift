@@ -503,6 +503,7 @@ final class AccessGeoSiteCache {
         var overseasStaged: AccessOverseasCacheSnapshot?
         var overseasWithdrawal: OverseasWithdrawal?
         var overseasRecoveryHeld = false
+        var bundledOverseasSealPending = false
         var overseasInterruptedBeforeAdmission = false
     }
 
@@ -622,6 +623,7 @@ final class AccessGeoSiteCache {
                     } catch {
                         // A seal failure holds the overseas scope while leaving the recovered ledger usable.
                         recovered.overseasRecoveryHeld = true
+                        recovered.bundledOverseasSealPending = true
                     }
                 }
                 return (recovered, bundled)
@@ -719,10 +721,14 @@ final class AccessGeoSiteCache {
     }
 
     func beginOverseasRefresh(using context: Context, required: Bool = false, allowUnavailableJournal: Bool = false) throws -> UUID? {
-        guard let snapshot = current, required || wantsOverseasRules || snapshot.ledger.overseasStaged != nil
+        guard var snapshot = current, required || wantsOverseasRules || snapshot.ledger.overseasStaged != nil
             || snapshot.ledger.overseasReceiptFloor != nil
             || snapshot.overseasWithdrawal != nil || snapshot.overseasRecoveryHeld else { return nil }
         guard context.owner == snapshot.ledger.owner, context.session == session, overseasFlight == nil else { throw Failure.stale }
+        if snapshot.bundledOverseasSealPending, !allowUnavailableJournal {
+            guard !writing, context == updateContext() else { throw Failure.stale }
+            snapshot = try retryBundledOverseasSeal(snapshot)
+        }
         let id = UUID()
         let flight = OverseasFlight(owner: context.owner, publication: snapshot.ledger.overseasPublication,
                                     id: id, inherited: snapshot.overseasWithdrawal, admitted: nil,
@@ -732,6 +738,19 @@ final class AccessGeoSiteCache {
         catch { if !allowUnavailableJournal { throw error } }
         overseasFlight = (flight, snapshot.overseasRecoveryHeld || snapshot.overseasWithdrawal != nil)
         return id
+    }
+
+    private func retryBundledOverseasSeal(_ snapshot: Snapshot) throws -> Snapshot {
+        guard let bundledOverseas else { throw Failure.unavailable }
+        var retry = snapshot
+        retry.overseasRecoveryHeld = false
+        retry.bundledOverseasSealPending = false
+        // Re-seal the narrowed approval before journaling another refresh.
+        // A retry failure leaves the published snapshot and hold intact.
+        let adopted = try Self.adoptBundledScope(bundledOverseas, in: retry, storage: storage)
+        current = adopted
+        display(status)
+        return adopted
     }
 
     func endOverseasRefresh(_ id: UUID?) {
@@ -889,6 +908,7 @@ final class AccessGeoSiteCache {
             next.ledger.overseasPublication = UUID()
             next.overseasWithdrawal = nil
             next.overseasRecoveryHeld = false
+            next.bundledOverseasSealPending = false
             try commit(next, status: selectionUnsaved ? .unsaved : (clock.rollback ? .clockRollback : .ready),
                        clearsOverseasUnsaved: true)
             overseasFlight?.keepJournal = false
@@ -922,6 +942,10 @@ final class AccessGeoSiteCache {
                refreshed: RefreshState? = nil, whileValid: @MainActor () -> Bool = { true }) async throws {
         guard var next = current, context.owner == next.ledger.owner, context.session == session else { throw Failure.ineligible }
         let ownsWrite = !writing
+        if next.bundledOverseasSealPending {
+            guard ownsWrite, overseasFlight == nil, context == updateContext(), whileValid() else { throw Failure.ineligible }
+            next = try retryBundledOverseasSeal(next)
+        }
         if ownsWrite { writing = true }
         defer { if ownsWrite { writing = false } }
         var ownedFlight: UUID?

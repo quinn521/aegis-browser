@@ -202,6 +202,17 @@ final class AccessGeoSiteCacheTests: XCTestCase {
         XCTAssertNotEqual(duringFailure.runtimeView().overseas.match(retired), .managed)
         fixture.fault.withLock { $0 = nil }
 
+        let resources = try XCTUnwrap(Bundle.main.resourceURL)
+        let downloaded = try AccessGeoSiteAdmission.admitBundled(resources: resources)
+        let context = try XCTUnwrap(duringFailure.updateContext())
+        let flight = try duringFailure.beginOverseasRefresh(using: context)
+        do {
+            defer { duringFailure.endOverseasRefresh(flight) }
+            try await duringFailure.apply(downloaded, using: context)
+        }
+        XCTAssertEqual(duringFailure.runtimeView().overseas.match(retained), .managed)
+        XCTAssertEqual(duringFailure.runtimeView().overseas.match(retired), .original)
+
         for _ in 0..<2 {
             let reopened = fixture.cache(useProductBaseline: true)
             await reopened.restore()
