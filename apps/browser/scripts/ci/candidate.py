@@ -293,7 +293,12 @@ def build(name, evidence):
             args_file = out / 'args.gn'
             old_args = args_file.read_bytes() if args_file.exists() else None
             try:
-                gn_args = (BROWSER / 'args' / args_name).read_text()
+                template = BROWSER / 'args' / args_name
+                profile_script = BROWSER / 'scripts/android-build-profile.sh'
+                if name == 'android':
+                    run(['bash', profile_script, '--validate-template', template], src,
+                        evidence / 'gn-profile-template.log', src, minimum)
+                gn_args = template.read_text()
                 gn_args = re.sub(r'^use_siso\s*=.*$', '', gn_args, flags=re.M)
                 args_file.write_text(gn_args + '\nuse_siso = false\nv8_enable_memory_corruption_api = false\n', encoding='utf-8')
                 gn = src / 'buildtools' / {'mac': 'mac', 'windows': 'win', 'android': 'linux64'}[name] / ('gn.exe' if name == 'windows' else 'gn')
@@ -305,7 +310,7 @@ def build(name, evidence):
                     targets = ['chrome_public_apk', 'aegis_agent_core_unittests']
                 run([gn, 'gen', out, '--check'], src, evidence / 'gn.log', src, minimum)
                 if name == 'android':
-                    run(['bash', BROWSER / 'scripts/android-build-profile.sh', '--verify', out, 'default', gn],
+                    run(['bash', profile_script, '--verify', out, 'default', gn],
                         src, evidence / 'gn-profile.log', src, minimum)
                 run([ninja, '-C', out, '-j', str(max(1, int(config.get('jobs', 6)))), *targets], src, evidence / 'build.log', src, minimum)
                 result['build'] = 'passed'

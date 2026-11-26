@@ -123,10 +123,8 @@ if [[ -n "$internal_profile" ]]; then
   fi
   ensure_depot_tools_on_path
   cd "$SRC"
-  if [[ ! -f "$OUT/build.ninja" ]]; then
-    echo "Generating $OUT with internal $internal_profile Access Options…"
-    gn gen "$OUT" --args="$(cat "$internal_args")"
-  fi
+  echo "Generating $OUT with internal $internal_profile Access Options…"
+  gn gen "$OUT" --args="$(cat "$internal_args")"
   aegis_android_verify_gn_args "$OUT" "internal-$internal_profile"
   autoninja -C "$OUT" chrome_public_apk aegis_access_options_test_apk
   echo "Internal APK: $OUT/apks/ChromePublic.apk"
@@ -145,10 +143,10 @@ fi
 ensure_depot_tools_on_path
 
 cd "$SRC"
-if [[ ! -f "$OUT/build.ninja" ]]; then
-  echo "Generating $OUT with aegis-android.gn…"
-  gn gen "$OUT" --args="$default_args"
-fi
+# Re-evaluate imports and their environment before the effective profile check.
+# Equivalent args.gn text alone cannot identify the configuration in build.ninja.
+echo "Generating $OUT with aegis-android.gn…"
+gn gen "$OUT" --args="$default_args"
 aegis_android_verify_gn_args "$OUT" default
 
 echo "Building chrome_public_apk at $OUT…"

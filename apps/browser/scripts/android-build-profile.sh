@@ -10,17 +10,56 @@ aegis_android_internal_out_name() {
   esac
 }
 
-# 每行输出一个 GN token。忽略注释和分隔空白，保留语句顺序和字符串原值。
-aegis_android_gn_tokens() {
-  LC_ALL=C awk '
+# 未指定渠道时逐行输出记号，供守卫和参数比较使用。指定渠道时只改写
+# 原有 android_channel 的字符串字面量，保留它和包名赋值附近的排版与注释。
+aegis_android_gn_scan() {
+  local channel="$1"
+  shift
+  LC_ALL=C awk -v channel="$channel" '
+    function record(token, position) {
+      if (channel == "") {
+        print token
+        return
+      }
+      if (token == "=") {
+        if (previous == "android_channel") channels++
+        if (previous == "chrome_public_manifest_package") packages++
+      }
+      if (previous == "=") {
+        if (name == "android_channel" && token == "\"default\"") {
+          channel_line = NR
+          channel_column = position
+        }
+        if (name == "chrome_public_manifest_package" && token == "\"com.gcsa.aegis\"") {
+          has_package = 1
+        }
+      }
+      name = previous
+      previous = token
+    }
     {
       line = $0
+      column = 1
+      if (channel != "") source[NR] = line
       while (1) {
-        sub(/^[[:space:]]+/, "", line)
+        match(line, /^[[:space:]]*/)
+        column += RLENGTH
+        line = substr(line, RLENGTH + 1)
         if (line == "" || line ~ /^#/) break
         match(line, /^("([^"\\]|\\.)*"|[[:alpha:]_][[:alnum:]_]*|-?[0-9]+|[-+=!<>&|][=|&]|.)/)
-        print substr(line, 1, RLENGTH)
-        line = substr(line, RLENGTH + 1)
+        width = RLENGTH
+        record(substr(line, 1, width), column)
+        column += width
+        line = substr(line, width + 1)
+      }
+    }
+    END {
+      if (channel != "") {
+        if (channels != 1 || packages != 1 || !channel_line || !has_package) exit 1
+        line = source[channel_line]
+        source[channel_line] = substr(line, 1, channel_column - 1) "\"" channel "\"" \
+            substr(line, channel_column + length("\"default\""))
+        for (i = 1; i <= NR; i++) print source[i]
       }
     }
   ' "$@"
@@ -28,8 +67,8 @@ aegis_android_gn_tokens() {
 
 aegis_android_gn_args_match() {
   local expected actual
-  expected="$(aegis_android_gn_tokens "$1")" || return 1
-  actual="$(aegis_android_gn_tokens "$2")" || return 1
+  expected="$(aegis_android_gn_scan "" "$1")" || return 1
+  actual="$(aegis_android_gn_scan "" "$2")" || return 1
   [[ "$expected" == "$actual" ]]
 }
 
@@ -38,10 +77,8 @@ aegis_android_gn_args() {
   local args_file="$1"
   local profile="$2"
   local args tokens channel product
-  local default_channel_pattern='^([[:blank:]]*android_channel[[:blank:]]*=[[:blank:]]*)"default"([[:blank:]]*(#.*)?)$'
-  local package_pattern='^[[:blank:]]*chrome_public_manifest_package[[:blank:]]*=[[:blank:]]*"com[.]gcsa[.]aegis"[[:blank:]]*(#.*)?$'
   args="$(cat "$args_file")" || return 1
-  tokens="$(aegis_android_gn_tokens <<< "$args")" || return 1
+  tokens="$(aegis_android_gn_scan "" <<< "$args")" || return 1
   if grep -Exq 'aegis_android_(internal_access_options|access_product_channel)' <<< "$tokens"; then
     echo "Android 基础参数不得开启内部 Access Options。" >&2
     return 1
@@ -58,15 +95,10 @@ aegis_android_gn_args() {
       return 1
       ;;
   esac
-  if [[ "$(grep -Ec "$default_channel_pattern" <<< "$args")" != 1 ||
-        "$(grep -c '^[[:space:]]*android_channel[[:space:]]*=' <<< "$args")" != 1 ||
-        "$(grep -Ec "$package_pattern" <<< "$args")" != 1 ||
-        "$(grep -c '^[[:space:]]*chrome_public_manifest_package[[:space:]]*=' <<< "$args")" != 1 ]]; then
+  if ! args="$(aegis_android_gn_scan "$channel" <<< "$args")"; then
     echo "Android 基础参数必须只有一个 default 渠道与 com.gcsa.aegis 包名。" >&2
     return 1
   fi
-  args="$(sed -E "s/$default_channel_pattern/\1\"$channel\"\2/" <<< "$args")" ||
-    return 1
   printf '%s\n%s\n%s\n' "$args" \
     "aegis_android_access_product_channel = \"$product\"" \
     'aegis_android_internal_access_options = true'
@@ -106,9 +138,12 @@ aegis_android_verify_gn_args() {
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   set -euo pipefail
-  if [[ "$#" != 4 || "$1" != --verify ]]; then
-    echo "用法：android-build-profile.sh --verify <out-dir> <profile> <gn>" >&2
+  if [[ "$#" == 2 && "$1" == --validate-template ]]; then
+    aegis_android_gn_args "$2" default >/dev/null
+  elif [[ "$#" == 4 && "$1" == --verify ]]; then
+    aegis_android_verify_gn_args "$2" "$3" "$4"
+  else
+    echo "用法：android-build-profile.sh --validate-template <args-file> | --verify <out-dir> <profile> <gn>" >&2
     exit 2
   fi
-  aegis_android_verify_gn_args "$2" "$3" "$4"
 fi

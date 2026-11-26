@@ -64,6 +64,22 @@ grep -Fxq '  android_channel="canary"  # aegis_android_access_product_channel = 
 grep -Fxq ' chrome_public_manifest_package="com.gcsa.aegis"' \
   <<< "$spaced_internal" || fail "内部配置改动了包名排版"
 
+wrapped_base="$TEST_ROOT/wrapped.gn"
+sed -e 's/^android_channel = /android_channel =\
+# channel comment\
+  /' \
+  -e 's/^chrome_public_manifest_package = /chrome_public_manifest_package =\
+    /' "$commented_base" > "$wrapped_base"
+wrapped_internal="$(aegis_android_gn_args "$wrapped_base" internal-debug)" ||
+  fail "合法的跨行 GN 赋值导致内部 Debug 配置失败"
+expected_wrapped="$(
+  sed 's/^  "default"/  "dev"/' "$wrapped_base"
+  printf '%s\n' 'aegis_android_access_product_channel = "debug"' \
+    'aegis_android_internal_access_options = true'
+)"
+[[ "$wrapped_internal" == "$expected_wrapped" ]] ||
+  fail "改写跨行赋值时修改了渠道值之外的基础参数"
+
 check_internal() {
   local profile="$1" channel="$2" product="$3" args
   args="$(aegis_android_gn_args "$ARGS_FILE" "internal-$profile")"
@@ -152,7 +168,7 @@ check_default_build_rejects_enabled_args
       gen)
         mkdir -p "$2"
         printf '%s\n' "${3#--args=}" > "$2/args.gn"
-        touch "$2/build.ninja"
+        printf '%s\n' generated-profile > "$2/build.ninja"
         ;;
       args)
         [[ "$3" == --list && "$4" == --short ]] || return 1
@@ -175,6 +191,7 @@ check_default_build_rejects_enabled_args
   }
   autoninja() {
     touch "$CHROMIUM_ROOT/ninja-invoked"
+    cp "$2/build.ninja" "$CHROMIUM_ROOT/ninja-graph"
     return 1
   }
   export -f uname python3 gn autoninja
@@ -222,13 +239,24 @@ check_default_build_rejects_enabled_args
   sed 's/ # expected"/ # stale"/' "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
   check_build_rejects_args '已有 Android 构建参数与当前配置不同'
 
-  # Comment and spacing changes outside literals must still allow cache reuse.
+  # Smuggle a stale graph behind equivalent arguments. A successful args query
+  # describes the current profile, while Ninja must use a freshly generated graph.
   sed 's/^android_channel = "default"$/android_channel="default" # cached comment/' \
     "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
+  printf '%s\n' stale-internal-profile > "$fixture_out/build.ninja"
   if bash "$fixture/scripts/build-android.sh" > /dev/null 2>&1; then
     fail "模拟 autoninja 应以失败状态结束"
   fi
-  [[ -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "只改注释和排版时未复用构建图"
+  [[ -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "只改注释和排版时没有进入构建"
+  grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "普通 APK 使用了旧构建图"
+
+  rm "$CHROMIUM_ROOT/ninja-graph"
+  aegis_android_gn_args "$fixture/args/aegis-android.gn" internal-alpha > "$internal_out/args.gn"
+  printf '%s\n' stale-default-profile > "$internal_out/build.ninja"
+  if bash "$fixture/scripts/build-android.sh" --internal-access-options alpha > /dev/null 2>&1; then
+    fail "模拟 autoninja 应以失败状态结束"
+  fi
+  grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "内部 APK 使用了旧构建图"
 )
 
 no_channel="$TEST_ROOT/no-channel.gn"
