@@ -30,6 +30,12 @@ browser acceptance and pass the binary to native integration tests using
 `--aegis-owned-core-test-binary`. Build output and private test inputs stay in
 the acceptance directory.
 
+Run the held-open-stdin startup regression with the prepared binary.
+
+```sh
+python3 apps/browser/access-owned-core/test_startup.py /absolute/path/to/new-output/xray
+```
+
 When upgrading Xray or Go, review the iOS pin, replay the compatibility patch on
 the new tagged source, and update the lock and patch together. Rebuild in a
 second clean checkout and compare digests before refreshing the expected binary
