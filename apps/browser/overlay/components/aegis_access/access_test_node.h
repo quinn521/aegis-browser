@@ -18,11 +18,16 @@ enum class AccessTestNodeError {
   kUnsupportedOutbound,
 };
 
-enum class AccessTestNodeImportMode { kRealityOnly, kAllowWebSocketTls };
+enum class AccessTestNodeImportMode {
+  kRealityOnly,
+  kAllowWebSocketTls,
+  kAllowExtendedVless,
+};
 
 struct AccessTestNodeWebSocketTls {
   std::string host;
   std::string path;
+  std::string alpn = {};
 
   bool operator==(const AccessTestNodeWebSocketTls&) const = default;
 };
@@ -43,6 +48,8 @@ struct AccessTestNode {
   // Runtime admission is based on the exact core and official JSON semantics.
   bool advertises_x25519_mlkem768 = false;
   std::optional<AccessTestNodeWebSocketTls> web_socket_tls = std::nullopt;
+  bool tcp_tls_vision = false;
+  std::optional<std::string> grpc_reality_service_name = std::nullopt;
 
   bool operator==(const AccessTestNode&) const = default;
 };
@@ -52,8 +59,9 @@ struct AccessTestNodeParseResult {
   std::optional<AccessTestNode> node;
 };
 
-// Accepts one VLESS/TCP/REALITY/Vision share by default. macOS DEV text import
-// may also admit VLESS over WebSocket with verified TLS. The fragment is ignored.
+// Accepts one VLESS/TCP/REALITY/Vision share by default. Admitted macOS DEV
+// import may also select WS/TLS, TCP/TLS/Vision, or gRPC/REALITY explicitly.
+// The fragment is never retained.
 AccessTestNodeParseResult ParseAccessTestNodeShare(
     std::string_view share,
     AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly);

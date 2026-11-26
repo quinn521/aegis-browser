@@ -37,11 +37,17 @@ enum class TestNodePreviewStatus {
   kBusy,
   kSecureStorageUnavailable,
 };
+enum class TestNodePreviewProtocol {
+  kTcpRealityVision,
+  kWebSocketTls,
+  kTcpTlsVision,
+  kGrpcReality,
+};
 // The editor retains an opaque reference only; node fields stay in the vault.
 struct TestNodePreviewResult {
   TestNodePreviewStatus status;
   std::optional<AccessTestNodeSecretReference> reference = std::nullopt;
-  bool uses_web_socket_tls = false;
+  TestNodePreviewProtocol protocol = TestNodePreviewProtocol::kTcpRealityVision;
 };
 class AccessOptionsWorker;
 enum class AccessTestProfileRuntimeState {

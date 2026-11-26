@@ -179,22 +179,38 @@ bool ValidId(std::string_view value) {
   return base::Uuid::ParseLowercase(value).is_valid();
 }
 
+bool RequiresDevChannel(const Node& node) {
+  return node.web_socket_tls || node.tcp_tls_vision ||
+         node.grpc_reality_service_name;
+}
+
 std::optional<std::string> Encode(const Node& node) {
   if (!ValidateAccessTestNodeNative(node)) return std::nullopt;
   auto value = base::DictValue()
       .Set("address", node.address).Set("port", node.port)
       .Set("userId", node.user_id).Set("serverName", node.server_name)
       .Set("fingerprint", node.fingerprint);
-  if (const auto& ws = node.web_socket_tls) {
-    value.Set("schemaVersion", 2);
-    value.Set("wsHost", ws->host);
-    value.Set("wsPath", ws->path);
-  } else {
+  if (!RequiresDevChannel(node)) {
     value.Set("schemaVersion", 1);
     value.Set("publicKey", node.public_key);
     value.Set("shortId", node.short_id);
     value.Set("spiderX", node.spider_x);
     value.Set("shareSupportsX25519Mlkem768", node.advertises_x25519_mlkem768);
+  } else {
+    value.Set("schemaVersion", 3);
+    if (const auto& ws = node.web_socket_tls) {
+      value.Set("outbound", "vless.ws.tls");
+      value.Set("wsHost", ws->host);
+      value.Set("wsPath", ws->path);
+      value.Set("wsAlpn", ws->alpn);
+    } else if (node.tcp_tls_vision) {
+      value.Set("outbound", "vless.raw.tls");
+    } else {
+      value.Set("outbound", "vless.grpc.reality");
+      value.Set("publicKey", node.public_key);
+      value.Set("shortId", node.short_id);
+      value.Set("serviceName", *node.grpc_reality_service_name);
+    }
   }
   std::string encoded;
   if (!base::JSONWriter::Write(value, &encoded) || encoded.size() > 8192)
@@ -202,7 +218,8 @@ std::optional<std::string> Encode(const Node& node) {
   return encoded;
 }
 
-std::optional<Node> Decode(std::string_view encoded, bool allows_web_socket_tls) {
+std::optional<Node> Decode(std::string_view encoded,
+                           bool allows_extended_vless) {
   if (encoded.size() > 8192) return std::nullopt;
   auto value = base::JSONReader::ReadDict(encoded, base::JSON_PARSE_RFC);
   if (!value) return std::nullopt;
@@ -214,13 +231,45 @@ std::optional<Node> Decode(std::string_view encoded, bool allows_web_socket_tls)
   if (!address || port < 1 || port > 65535 || !user || !server || !fingerprint)
     return std::nullopt;
   const auto version = value->FindInt("schemaVersion");
-  if (version == 2 && value->size() == 8 && allows_web_socket_tls) {
+  Node node{*address,     static_cast<uint16_t>(port),
+            *user,        *server,
+            {},           {},
+            *fingerprint, {}};
+  if (version == 2 && value->size() == 8 && allows_extended_vless) {
     const auto* host = value->FindString("wsHost");
     const auto* path = value->FindString("wsPath");
     if (!host || !path) return std::nullopt;
-    return ValidateAccessTestNodeNative(
-        {*address, static_cast<uint16_t>(port), *user, *server, {}, {},
-         *fingerprint, {}, false, aegis_access::AccessTestNodeWebSocketTls{*host, *path}});
+    node.web_socket_tls =
+        aegis_access::AccessTestNodeWebSocketTls{*host, *path};
+    return ValidateAccessTestNodeNative(node);
+  }
+  if (version == 3 && allows_extended_vless) {
+    const auto* outbound = value->FindString("outbound");
+    if (!outbound)
+      return std::nullopt;
+    if (*outbound == "vless.ws.tls" && value->size() == 10) {
+      const auto* host = value->FindString("wsHost");
+      const auto* path = value->FindString("wsPath");
+      const auto* alpn = value->FindString("wsAlpn");
+      if (!host || !path || !alpn)
+        return std::nullopt;
+      node.web_socket_tls =
+          aegis_access::AccessTestNodeWebSocketTls{*host, *path, *alpn};
+    } else if (*outbound == "vless.raw.tls" && value->size() == 7) {
+      node.tcp_tls_vision = true;
+    } else if (*outbound == "vless.grpc.reality" && value->size() == 10) {
+      const auto* key = value->FindString("publicKey");
+      const auto* short_id = value->FindString("shortId");
+      const auto* service_name = value->FindString("serviceName");
+      if (!key || !short_id || !service_name)
+        return std::nullopt;
+      node.public_key = *key;
+      node.short_id = *short_id;
+      node.grpc_reality_service_name = *service_name;
+    } else {
+      return std::nullopt;
+    }
+    return ValidateAccessTestNodeNative(node);
   }
   if (version != 1 || value->size() != 10) return std::nullopt;
   const auto* key = value->FindString("publicKey");
@@ -228,9 +277,11 @@ std::optional<Node> Decode(std::string_view encoded, bool allows_web_socket_tls)
   const auto* spider = value->FindString("spiderX");
   const auto mlkem = value->FindBool("shareSupportsX25519Mlkem768");
   if (!key || !short_id || !spider || !mlkem) return std::nullopt;
-  return ValidateAccessTestNodeNative(
-      {*address, static_cast<uint16_t>(port), *user, *server,
-       *key, *short_id, *fingerprint, *spider, *mlkem});
+  node.public_key = *key;
+  node.short_id = *short_id;
+  node.spider_x = *spider;
+  node.advertises_x25519_mlkem768 = *mlkem;
+  return ValidateAccessTestNodeNative(node);
 }
 }  // namespace
 
@@ -239,12 +290,12 @@ std::optional<std::vector<std::string>> AccessTestNodeVaultMac::Backend::ListAcc
   return std::nullopt;
 }
 
-AccessTestNodeVaultMac::AccessTestNodeVaultMac(
-    std::string channel,
-    std::string scope_hash,
-    std::unique_ptr<Backend> backend)
-    : allows_web_socket_tls_(channel == "debug"),
-      backend_(backend ? std::move(backend) : std::make_unique<KeychainBackend>()) {
+AccessTestNodeVaultMac::AccessTestNodeVaultMac(std::string channel,
+                                               std::string scope_hash,
+                                               std::unique_ptr<Backend> backend)
+    : allows_extended_vless_(channel == "debug"),
+      backend_(backend ? std::move(backend)
+                       : std::make_unique<KeychainBackend>()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
   service_ = ServiceForScope(channel, scope_hash);
 }
@@ -301,7 +352,7 @@ AccessTestNodeVaultStageResult AccessTestNodeVaultMac::Stage(
     const std::string& editor, const Node& node) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (service_.empty()) return {Status::kNotAdmitted, std::nullopt};
-  if (node.web_socket_tls && !allows_web_socket_tls_)
+  if (RequiresDevChannel(node) && !allows_extended_vless_)
     return {Status::kNotAdmitted, std::nullopt};
   if (!ValidId(editor)) return {Status::kInvalidReference, std::nullopt};
   if (pending_.size() >= 32) return {Status::kLimitReached, std::nullopt};
@@ -352,7 +403,7 @@ std::optional<Node> AccessTestNodeVaultMac::Read(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (service_.empty() || !ValidId(reference.id)) return std::nullopt;
   auto encoded = backend_->Read(service_, reference.id);
-  return encoded ? Decode(*encoded, allows_web_socket_tls_) : std::nullopt;
+  return encoded ? Decode(*encoded, allows_extended_vless_) : std::nullopt;
 }
 
 bool AccessTestNodeVaultMac::HoldForCommit(

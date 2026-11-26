@@ -4,34 +4,74 @@
 #include <utility>
 
 #include "base/json/json_writer.h"
-#include "base/strings/escape.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 
 namespace aegis::access {
+namespace {
+
+std::string EscapeNativeQueryValue(std::string_view value) {
+  // The share decoder splits on '&' and '#' and decodes '%' exactly once.
+  // Preserve every other printable character to avoid expanding the request
+  // target or gRPC service name beyond the parser's share budget.
+  constexpr char kHex[] = "0123456789ABCDEF";
+  std::string result;
+  result.reserve(value.size());
+  for (unsigned char byte : value) {
+    if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
+        byte == '%') {
+      result.push_back('%');
+      result.push_back(kHex[byte >> 4]);
+      result.push_back(kHex[byte & 15]);
+    } else {
+      result.push_back(static_cast<char>(byte));
+    }
+  }
+  return result;
+}
+
+}  // namespace
+
 std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
     const aegis_access::AccessTestNode& node) {
-  const auto escaped = [](std::string_view text) {
-    return base::EscapeQueryParamValue(text, /*use_plus=*/false);
-  };
   const std::string address = node.address.find(':') == std::string::npos
       ? node.address : "[" + node.address + "]";
   auto share = "vless://" + node.user_id + "@" + address + ":" +
-               base::NumberToString(node.port) + "?sni=" +
-               escaped(node.server_name) + "&fp=" + escaped(node.fingerprint);
+               base::NumberToString(node.port) +
+               "?sni=" + EscapeNativeQueryValue(node.server_name);
+  const std::string_view default_fingerprint =
+      node.web_socket_tls ? "" : "chrome";
+  if (node.fingerprint != default_fingerprint) {
+    share += "&fp=" + EscapeNativeQueryValue(node.fingerprint);
+  }
   if (const auto& ws = node.web_socket_tls) {
-    share += "&type=ws&security=tls&host=" + escaped(ws->host) +
-             "&path=" + escaped(ws->path);
+    share += "&type=ws&security=tls";
+    if (ws->host != node.server_name) {
+      share += "&host=" + EscapeNativeQueryValue(ws->host);
+    }
+    if (ws->path != "/") {
+      share += "&path=" + EscapeNativeQueryValue(ws->path);
+    }
+    if (!ws->alpn.empty()) {
+      share += "&alpn=" + EscapeNativeQueryValue(ws->alpn);
+    }
+  } else if (node.tcp_tls_vision) {
+    share += "&type=tcp&security=tls&flow=xtls-rprx-vision";
+  } else if (const auto& service_name = node.grpc_reality_service_name) {
+    share += "&type=grpc&security=reality&pbk=" +
+             EscapeNativeQueryValue(node.public_key) +
+             "&sid=" + EscapeNativeQueryValue(node.short_id) +
+             "&path=" + EscapeNativeQueryValue(*service_name);
   } else {
-    share += "&type=tcp&security=reality&flow=xtls-rprx-vision&pbk=" +
-             escaped(node.public_key) + "&sid=" + escaped(node.short_id) +
-             "&spx=" + escaped(node.spider_x) +
-             (node.advertises_x25519_mlkem768
-                  ? "&support-x25519mlkem768=true"
-                  : "");
+    share +=
+        "&type=tcp&security=reality&flow=xtls-rprx-vision&pbk=" +
+        EscapeNativeQueryValue(node.public_key) +
+        "&sid=" + EscapeNativeQueryValue(node.short_id) +
+        "&spx=" + EscapeNativeQueryValue(node.spider_x) +
+        (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
   }
   auto parsed = aegis_access::ParseAccessTestNodeShare(
-      share, aegis_access::AccessTestNodeImportMode::kAllowWebSocketTls);
+      share, aegis_access::AccessTestNodeImportMode::kAllowExtendedVless);
   return parsed.node == node ? std::move(parsed.node) : std::nullopt;
 }
 
@@ -61,24 +101,41 @@ std::optional<std::string> BuildAccessTestNodeCoreConfiguration(
   inbound.Set("settings", socks ? base::DictValue().Set("auth", "noauth").Set("udp", false)
                                 : base::DictValue());
   auto user = base::DictValue().Set("id", node.user_id).Set("encryption", "none");
-  auto transport = base::DictValue().Set("serverName", node.server_name)
-                       .Set("fingerprint", node.fingerprint);
+  auto transport = base::DictValue().Set("serverName", node.server_name);
+  if (!node.fingerprint.empty()) {
+    transport.Set("fingerprint", node.fingerprint);
+  }
   base::DictValue stream;
-  if (const auto& ws = node.web_socket_tls) {
+  if (node.web_socket_tls || node.tcp_tls_vision) {
     transport.Set("allowInsecure", false);
-    stream.Set("network", "ws");
+    transport.Set("useSystemCA", true);
     stream.Set("security", "tls");
+    if (const auto& ws = node.web_socket_tls) {
+      if (!ws->alpn.empty()) {
+        transport.Set("alpn", base::ListValue().Append(ws->alpn));
+      }
+      stream.Set("network", "ws");
+      stream.Set("wsSettings",
+                 base::DictValue().Set("host", ws->host).Set("path", ws->path));
+    } else {
+      user.Set("flow", "xtls-rprx-vision");
+      stream.Set("network", "tcp");
+    }
     stream.Set("tlsSettings", std::move(transport));
-    stream.Set("wsSettings", base::DictValue().Set("host", ws->host)
-                                 .Set("path", ws->path));
   } else {
-    user.Set("flow", "xtls-rprx-vision");
     // The advertised capability remains metadata. The core uses its pinned
     // fingerprint and the explicit REALITY fields for the handshake.
     transport.Set("publicKey", node.public_key);
     transport.Set("shortId", node.short_id);
-    transport.Set("spiderX", node.spider_x);
-    stream.Set("network", "tcp");
+    if (const auto& service_name = node.grpc_reality_service_name) {
+      stream.Set("network", "grpc");
+      stream.Set("grpcSettings",
+                 base::DictValue().Set("serviceName", *service_name));
+    } else {
+      transport.Set("spiderX", node.spider_x);
+      user.Set("flow", "xtls-rprx-vision");
+      stream.Set("network", "tcp");
+    }
     stream.Set("security", "reality");
     stream.Set("realitySettings", std::move(transport));
   }

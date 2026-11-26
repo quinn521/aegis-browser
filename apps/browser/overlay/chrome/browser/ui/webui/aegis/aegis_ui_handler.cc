@@ -677,7 +677,7 @@ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& a
   result.Set("enabled", aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kPage));
   result.Set("identityConflict", identity.conflict);
   result.Set("private", Profile::FromWebUI(web_ui())->IsOffTheRecord());
-  result.Set("testWebSocketTls", IsAccessOptionsDocument() &&
+  result.Set("testExtendedVless", IsAccessOptionsDocument() &&
       !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
       identity.product == aegis_access::AccessProductChannel::kDebug &&
       aegis_access::CanUseAccessOptions(
@@ -908,8 +908,21 @@ void AegisUIHandler::OnAccessTestNodePreview(
   base::DictValue result;
   result.Set("state", AccessTestNodePreviewState(status));
   if (status == aegis::access::TestNodePreviewStatus::kPreview) {
-    result.Set("protocol", preview.uses_web_socket_tls
-        ? "VLESS · WebSocket · TLS" : "VLESS · TCP · REALITY · Vision");
+    using Protocol = aegis::access::TestNodePreviewProtocol;
+    switch (preview.protocol) {
+      case Protocol::kTcpRealityVision:
+        result.Set("protocol", "VLESS · TCP · REALITY · Vision");
+        break;
+      case Protocol::kWebSocketTls:
+        result.Set("protocol", "VLESS · WebSocket · TLS");
+        break;
+      case Protocol::kTcpTlsVision:
+        result.Set("protocol", "VLESS · TCP · TLS · Vision");
+        break;
+      case Protocol::kGrpcReality:
+        result.Set("protocol", "VLESS · gRPC · REALITY");
+        break;
+    }
   }
   ResolveJavascriptCallback(base::Value(callback_id), result);
 }
@@ -1072,6 +1085,16 @@ void AegisUIHandler::OnAccessTestNodeSaved(
             std::to_string(result.snapshot->revision)));
     return;
   } else {
+    // An operation query never prepares a listener. Its receipt and current
+    // row can still prove that this editor's exact native draft was consumed.
+    if (editor.empty() && access_test_node_draft_ && result.operation &&
+        result.snapshot->test_profile &&
+        result.snapshot->test_profile->operation_id ==
+            result.operation->operation_id &&
+        result.snapshot->test_profile->configuration.secret_reference ==
+            access_test_node_draft_->id) {
+      access_test_node_draft_.reset();
+    }
     response.Set("state", "saved");
   }
   ResolveJavascriptCallback(base::Value(callback_id), response);

@@ -162,9 +162,9 @@ test('Apply binds the preview to its revision and the selected port before any s
   assert.equal(byId('connection-address').textContent, '—');
 });
 
-test('DEV WebSocket preview displays the fixed transport label and hides input', async t => {
+test('DEV text and QR previews display only the fixed transport labels', {timeout: 1500}, async t => {
   const page = openOptions(t, {
-    enabled: true, private: false, testApply: true, testWebSocketTls: true,
+    enabled: true, private: false, testApply: true, testExtendedVless: true,
   });
   await tick();
   assert.match(page.document.querySelector('#share-hint').textContent, /WebSocket\/TLS/);
@@ -175,6 +175,17 @@ test('DEV WebSocket preview displays the fixed transport label and hides input',
   assert.equal(page.input.value, '');
   assert.doesNotMatch(page.document.body.textContent, /private-synthetic-share/);
   assert.equal(page.applies.length, 0);
+  for (const label of ['VLESS · TCP · TLS · Vision', 'VLESS · gRPC · REALITY']) {
+    const count = page.previews.length;
+    page.selectImage(page.makeImage([0, 1, 250]));
+    while (page.previews.length === count) {
+      await tick();
+    }
+    assert.equal(page.previews.at(-1).source, 'image');
+    page.previews.at(-1).resolve({state: 'preview', protocol: label});
+    await tick();
+    assert.equal(page.document.querySelector('#node-preview-protocol').textContent, label);
+  }
 });
 
 test('a conflicting draft keeps its preview and compares the newer committed revision before retry', async t => {

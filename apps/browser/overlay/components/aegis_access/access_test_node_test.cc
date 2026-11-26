@@ -12,15 +12,28 @@ namespace {
 using aegis_access::AccessTestNodeError;
 using aegis_access::AccessTestNodeImportMode;
 using aegis_access::ParseAccessTestNodeShare;
+using aegis_access::test::kSyntheticGrpcRealityShare;
+using aegis_access::test::kSyntheticTcpTlsVisionShare;
 using aegis_access::test::kSyntheticTestNodeShare;
+using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
 using aegis_access::test::kSyntheticWebSocketTlsShare;
 
-std::string Replace(std::string_view old_value, std::string_view new_value) {
-  std::string share(kSyntheticTestNodeShare);
+std::string ReplaceIn(std::string_view input,
+                      std::string_view old_value,
+                      std::string_view new_value) {
+  std::string share(input);
   const auto position = share.find(old_value);
   assert(position != std::string::npos);
   share.replace(position, old_value.size(), new_value);
   return share;
+}
+
+std::string Replace(std::string_view old_value, std::string_view new_value) {
+  return ReplaceIn(kSyntheticTestNodeShare, old_value, new_value);
+}
+
+std::string_view WithoutFragment(std::string_view share) {
+  return share.substr(0, share.find('#'));
 }
 
 void ExpectRejection(std::string_view share, AccessTestNodeError error) {
@@ -144,6 +157,12 @@ int main() {
   assert(ws.node->web_socket_tls->path == "/test");
   assert(ws.node->server_name == "tls.example.test");
   assert(ws.node->public_key.empty() && ws.node->short_id.empty());
+  const auto ws_query_alpn =
+      ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kDev);
+  assert(ws_query_alpn.node && ws_query_alpn.node->web_socket_tls);
+  assert(ws_query_alpn.node->web_socket_tls->path ==
+         "/ws?token=%74est-value&opaque=%E9");
+  assert(ws_query_alpn.node->web_socket_tls->alpn == "http/1.1");
   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kDev).node ==
          result.node);
   const auto ws_query = kSyntheticWebSocketTlsShare.substr(
@@ -157,5 +176,114 @@ int main() {
   std::string injected_path(ws_query);
   injected_path.replace(injected_path.find("%2Ftest"), 7, "%2Ftest%0d%0a");
   assert(ParseAccessTestNodeShare(injected_path, kDev).error == kInvalid);
+
+  constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
+  assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
+         result.node);
+  assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended)
+             .node == ws_query_alpn.node);
+  const auto ws_without_fragment =
+      WithoutFragment(kSyntheticWebSocketTlsQueryShare);
+  const auto default_ws = ParseAccessTestNodeShare(
+      ReplaceIn(ReplaceIn(ws_without_fragment, "&host=ws.example.com", ""),
+                "&fp=chrome", ""),
+      kExtended);
+  assert(default_ws.node && default_ws.node->web_socket_tls);
+  assert(default_ws.node->web_socket_tls->host == "cert.example.com");
+  assert(default_ws.node->fingerprint.empty());
+  const auto nested_web_url = ParseAccessTestNodeShare(
+      ReplaceIn(ws_query, "%2Ftest",
+                "%2Fws%3Fx%3Dhttps%3A%2F%2Fcallback.example%2Fa%3Fq%3D1"),
+      kExtended);
+  assert(nested_web_url.node && nested_web_url.node->web_socket_tls);
+  assert(nested_web_url.node->web_socket_tls->path ==
+         "/ws?x=https://callback.example/a?q=1");
+  for (const auto* bad_target : {
+           "%2F%2Fother.example",
+           "%2Ftest%23fragment",
+           "%2Ftest%5Cother",
+           "%2Ftest%250d%250a",
+           "%2Ftest%25broken",
+           "%2Ftest%3Fed%3D2048",
+           "%2Ftest%3Fx%3D%25E9%26%2565d%3D32",
+           "%2Ftest%3Fx%3Dvless%3A%2F%2Fother.example",
+           "%2Ftest%3Fx%3Dvless%253A%252F%252Fother.example",
+       }) {
+    assert(!ParseAccessTestNodeShare(ReplaceIn(ws_query, "%2Ftest", bad_target),
+                                     kExtended)
+                .node);
+  }
+  for (const auto* alpn : {"h2", "h2,http%2F1.1", "HTTP%2F1.1"}) {
+    assert(!ParseAccessTestNodeShare(
+                ReplaceIn(ws_without_fragment, "http%2F1.1", alpn), kExtended)
+                .node);
+  }
+
+  const auto tcp =
+      ParseAccessTestNodeShare(kSyntheticTcpTlsVisionShare, kExtended);
+  assert(tcp.node && tcp.node->tcp_tls_vision && !tcp.node->web_socket_tls &&
+         !tcp.node->grpc_reality_service_name);
+  assert(tcp.node->server_name == "tls.example" &&
+         tcp.node->public_key.empty());
+  const auto grpc =
+      ParseAccessTestNodeShare(kSyntheticGrpcRealityShare, kExtended);
+  assert(grpc.node && grpc.node->grpc_reality_service_name == "/sample/Tun" &&
+         !grpc.node->tcp_tls_vision && !grpc.node->web_socket_tls);
+  assert(grpc.node->address == "2001:db8::30" &&
+         grpc.node->short_id == "a1b2c3d4");
+  for (const auto share :
+       {kSyntheticTcpTlsVisionShare, kSyntheticGrpcRealityShare}) {
+    ExpectRejection(share, kUnsupported);
+    assert(ParseAccessTestNodeShare(share, kDev).error == kUnsupported);
+  }
+  const auto tcp_query = WithoutFragment(kSyntheticTcpTlsVisionShare);
+  for (const auto* hint :
+       {"&allowInsecure=1", "&alpn=h2", "&%66low=xtls-rprx-vision"}) {
+    assert(!ParseAccessTestNodeShare(std::string(tcp_query) + hint, kExtended)
+                .node);
+  }
+  assert(!ParseAccessTestNodeShare(
+              ReplaceIn(tcp_query, "headerType=none", "headerType=http"),
+              kExtended)
+              .node);
+  assert(!ParseAccessTestNodeShare(
+              ReplaceIn(tcp_query, "flow=xtls-rprx-vision", "flow="), kExtended)
+              .node);
+  assert(!ParseAccessTestNodeShare(
+              ReplaceIn(tcp_query, "fp=chrome", "fp=unsafe"), kExtended)
+              .node);
+  const auto grpc_query = WithoutFragment(kSyntheticGrpcRealityShare);
+  for (const auto* hint : {"&flow=xtls-rprx-vision", "&allowInsecure=1",
+                           "&mode=multi", "&%73erviceName=%2Fsample%2FTun"}) {
+    assert(!ParseAccessTestNodeShare(std::string(grpc_query) + hint, kExtended)
+                .node);
+  }
+  for (const auto& equivalent : {
+           ReplaceIn(grpc_query, "&serviceName=%2Fsample%2FTun", ""),
+           ReplaceIn(grpc_query, "&path=%2Fsample%2FTun", ""),
+       }) {
+    assert(ParseAccessTestNodeShare(equivalent, kExtended).node == grpc.node);
+  }
+  assert(
+      !ParseAccessTestNodeShare(
+           ReplaceIn(grpc_query, "path=%2Fsample", "path=%2Fother"), kExtended)
+           .node);
+  assert(!ParseAccessTestNodeShare(ReplaceIn(grpc_query, "&pbk=", "&pbk=x"),
+                                   kExtended)
+              .node);
+  assert(!ParseAccessTestNodeShare(
+              ReplaceIn(grpc_query, "sid=a1b2c3d4", "sid=abc"), kExtended)
+              .node);
+  assert(!ParseAccessTestNodeShare(
+              ReplaceIn(grpc_query, "%2Fsample%2FTun", "%2Fsample%2F%2E%2E"),
+              kExtended)
+              .node);
+  assert(!ParseAccessTestNodeShare(std::string(kSyntheticGrpcRealityShare) +
+                                       std::string(kSyntheticTcpTlsVisionShare),
+                                   kExtended)
+              .node);
+  assert(
+      !ParseAccessTestNodeShare("https://example.test/subscription", kExtended)
+           .node);
   std::cout << "PASS: Access test node share and rejection cases\n";
 }

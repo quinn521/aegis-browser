@@ -29,7 +29,8 @@ struct AccessTestNodeQrResult {
 // Worker-only local decoding of bytes from an explicitly selected image.
 // The result owns only a validated native draft and never the input image or
 // the decoded URI. Callers must check admission before reading the file.
-AccessTestNodeQrResult DecodeAccessTestNodeQrImage(std::string_view image);
+AccessTestNodeQrResult DecodeAccessTestNodeQrImage(
+    std::string_view image, aegis_access::AccessTestNodeImportMode mode);
 
 }  // namespace aegis::access
 

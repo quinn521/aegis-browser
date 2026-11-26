@@ -37,7 +37,8 @@ bool IsSupportedImage(NSData* image) {
 
 }  // namespace
 
-AccessTestNodeQrResult DecodeAccessTestNodeQrImage(std::string_view image) {
+AccessTestNodeQrResult DecodeAccessTestNodeQrImage(
+    std::string_view image, aegis_access::AccessTestNodeImportMode mode) {
   using Status = AccessTestNodeQrStatus;
   if (image.empty() || image.size() > kMaxAccessTestNodeQrImageBytes) {
     return {Status::kInvalidImage, std::nullopt};
@@ -68,8 +69,10 @@ AccessTestNodeQrResult DecodeAccessTestNodeQrImage(std::string_view image) {
     if (!utf8) {
       return {Status::kInvalidShare, std::nullopt};
     }
-    auto result = aegis_access::ParseAccessTestNodeShare(std::string_view(
-        utf8, [payload lengthOfBytesUsingEncoding:NSUTF8StringEncoding]));
+    auto result = aegis_access::ParseAccessTestNodeShare(
+        std::string_view(
+            utf8, [payload lengthOfBytesUsingEncoding:NSUTF8StringEncoding]),
+        mode);
     switch (result.error) {
       case aegis_access::AccessTestNodeError::kNone:
         return {Status::kDecoded, std::move(result.node)};

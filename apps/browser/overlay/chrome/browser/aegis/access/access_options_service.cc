@@ -55,11 +55,13 @@ class AccessOptionsWorker {
       base::FilePath path, std::string profile_id, bool is_private,
       std::string channel, std::string scope,
       std::unique_ptr<AccessTestNodeVaultMac::Backend> backend)
-      : allows_web_socket_tls_(
+      : import_mode_(
             !is_private &&
             identity.product == aegis_access::AccessProductChannel::kDebug &&
             aegis_access::CanUseAccessOptions(
-                identity, aegis_access::AccessOptionsOperation::kImport)),
+                identity, aegis_access::AccessOptionsOperation::kImport)
+                ? aegis_access::AccessTestNodeImportMode::kAllowExtendedVless
+                : aegis_access::AccessTestNodeImportMode::kRealityOnly),
         store_(identity, std::move(path), std::move(profile_id), is_private),
         vault_(std::move(channel), std::move(scope), std::move(backend)) {}
   StoreResult<AccessOptionsSnapshot> ReadOptions() { return store_.OpenAndRead(); }
@@ -175,10 +177,7 @@ class AccessOptionsWorker {
   TestNodePreviewResult Text(std::string editor, std::string share) {
     if (vault_.CloseEditor(editor) != AccessTestNodeVaultStatus::kOk)
       return {TestNodePreviewStatus::kSecureStorageUnavailable};
-    auto parsed = aegis_access::ParseAccessTestNodeShare(
-        share, allows_web_socket_tls_
-                   ? aegis_access::AccessTestNodeImportMode::kAllowWebSocketTls
-                   : aegis_access::AccessTestNodeImportMode::kRealityOnly);
+    auto parsed = aegis_access::ParseAccessTestNodeShare(share, import_mode_);
     switch (parsed.error) {
       case aegis_access::AccessTestNodeError::kNone:
         return Stage(editor, *parsed.node);
@@ -194,7 +193,7 @@ class AccessOptionsWorker {
     std::string image;
     if (!base::Base64Decode(encoded, &image))
       return {TestNodePreviewStatus::kInvalidImage};
-    auto parsed = DecodeAccessTestNodeQrImage(image);
+    auto parsed = DecodeAccessTestNodeQrImage(image, import_mode_);
     switch (parsed.status) {
       case AccessTestNodeQrStatus::kDecoded:
         return Stage(editor, *parsed.node);
@@ -227,14 +226,23 @@ class AccessOptionsWorker {
   TestNodePreviewResult Stage(const std::string& editor,
                               const aegis_access::AccessTestNode& node) {
     auto staged = vault_.Stage(editor, node);
-    if (staged.status == AccessTestNodeVaultStatus::kOk)
-      return {TestNodePreviewStatus::kPreview, std::move(staged.reference),
-              node.web_socket_tls.has_value()};
-    return {staged.status == AccessTestNodeVaultStatus::kLimitReached
-                ? TestNodePreviewStatus::kBusy
-                : TestNodePreviewStatus::kSecureStorageUnavailable};
+    if (staged.status != AccessTestNodeVaultStatus::kOk) {
+      return {staged.status == AccessTestNodeVaultStatus::kLimitReached
+                  ? TestNodePreviewStatus::kBusy
+                  : TestNodePreviewStatus::kSecureStorageUnavailable};
+    }
+    auto protocol = TestNodePreviewProtocol::kTcpRealityVision;
+    if (node.web_socket_tls) {
+      protocol = TestNodePreviewProtocol::kWebSocketTls;
+    } else if (node.tcp_tls_vision) {
+      protocol = TestNodePreviewProtocol::kTcpTlsVision;
+    } else if (node.grpc_reality_service_name) {
+      protocol = TestNodePreviewProtocol::kGrpcReality;
+    }
+    return {TestNodePreviewStatus::kPreview, std::move(staged.reference),
+            protocol};
   }
-  const bool allows_web_socket_tls_;
+  const aegis_access::AccessTestNodeImportMode import_mode_;
   AccessOptionsStore store_;
   AccessTestNodeVaultMac vault_;
   std::optional<UnknownSave> unknown_save_;

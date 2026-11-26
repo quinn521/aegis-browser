@@ -10,8 +10,12 @@ namespace {
 using Protocol = aegis_access::AccessInboundProtocolPreference;
 using Mode = aegis_access::AccessInboundPortMode;
 using Transport = aegis_access::RegisteredProxyTransport;
+constexpr auto kExtended =
+    aegis_access::AccessTestNodeImportMode::kAllowExtendedVless;
 aegis_access::AccessTestNode Node() {
-  return *aegis_access::ParseAccessTestNodeShare(aegis_access::test::kSyntheticTestNodeShare).node;
+  return *aegis_access::ParseAccessTestNodeShare(
+              aegis_access::test::kSyntheticPinnedRealityVisionShare)
+              .node;
 }
 
 TEST(AccessTestNodeNativeConfigTest, SocksUsesSameSocketPortZeroNoAuthAndKeepsUpstreamIndependent) {
@@ -125,6 +129,169 @@ TEST(AccessTestNodeNativeConfigTest, WebSocketUsesVerifiedTlsAndNoVisionFlow) {
   auto mixed = *parsed.node;
   mixed.public_key = "mixed";
   EXPECT_FALSE(ValidateAccessTestNodeNative(mixed));
+}
+
+TEST(AccessTestNodeNativeConfigTest, WebSocketKeepsExplicitAlpnAndWireQuery) {
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(
+      aegis_access::test::kSyntheticWebSocketTlsQueryShare, kExtended);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(*parsed.node), parsed.node);
+  const auto encoded =
+      BuildAccessTestNodeCoreConfiguration(*parsed.node, {}, Transport::kHttp);
+  ASSERT_TRUE(encoded);
+  const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(root->FindList("outbounds"));
+  ASSERT_EQ(root->FindList("outbounds")->size(), 1u);
+  const auto& outbound = root->FindList("outbounds")->front().GetDict();
+  const auto* tls = outbound.FindDictByDottedPath("streamSettings.tlsSettings");
+  ASSERT_TRUE(tls);
+  EXPECT_EQ(tls->FindBool("allowInsecure"), false);
+  EXPECT_EQ(tls->FindBool("useSystemCA"), true);
+  auto* alpn = tls->FindList("alpn");
+  ASSERT_TRUE(alpn);
+  ASSERT_EQ(alpn->size(), 1u);
+  EXPECT_EQ(alpn->front().GetString(), "http/1.1");
+  const auto* path =
+      outbound.FindStringByDottedPath("streamSettings.wsSettings.path");
+  ASSERT_TRUE(path);
+  EXPECT_EQ(*path, "/ws?token=%74est-value&opaque=%E9");
+  EXPECT_EQ(encoded->find("vless://"), std::string::npos);
+}
+
+TEST(AccessTestNodeNativeConfigTest, WebSocketRevalidatesLongRequestTarget) {
+  const std::string path = "/ws" + std::string(2045, '/');
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(
+      "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
+      "?type=ws&security=tls&sni=cert.example.com&path=" +
+          path,
+      kExtended);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(*parsed.node), parsed.node);
+  const auto encoded =
+      BuildAccessTestNodeCoreConfiguration(*parsed.node, {}, Transport::kHttp);
+  ASSERT_TRUE(encoded);
+  const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(root->FindList("outbounds"));
+  ASSERT_EQ(root->FindList("outbounds")->size(), 1u);
+  const auto& outbound = root->FindList("outbounds")->front().GetDict();
+  const auto* wire_path =
+      outbound.FindStringByDottedPath("streamSettings.wsSettings.path");
+  ASSERT_TRUE(wire_path);
+  EXPECT_EQ(*wire_path, path);
+  EXPECT_FALSE(
+      outbound.FindByDottedPath("streamSettings.tlsSettings.fingerprint"));
+  EXPECT_FALSE(outbound.FindByDottedPath("streamSettings.tlsSettings.alpn"));
+}
+
+TEST(AccessTestNodeNativeConfigTest, TcpTlsUsesVisionAndTheExplicitServerName) {
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(
+      aegis_access::test::kSyntheticTcpTlsVisionShare, kExtended);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(*parsed.node), parsed.node);
+  const auto encoded = BuildAccessTestNodeCoreConfiguration(*parsed.node, {},
+                                                            Transport::kSocks5);
+  ASSERT_TRUE(encoded);
+  const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(root->FindList("outbounds"));
+  ASSERT_EQ(root->FindList("outbounds")->size(), 1u);
+  const auto& outbound = root->FindList("outbounds")->front().GetDict();
+  const auto* network =
+      outbound.FindStringByDottedPath("streamSettings.network");
+  const auto* security =
+      outbound.FindStringByDottedPath("streamSettings.security");
+  ASSERT_TRUE(network && security);
+  EXPECT_EQ(*network, "tcp");
+  EXPECT_EQ(*security, "tls");
+  const auto* tls = outbound.FindDictByDottedPath("streamSettings.tlsSettings");
+  ASSERT_TRUE(tls && tls->FindString("serverName"));
+  EXPECT_EQ(*tls->FindString("serverName"), "tls.example");
+  EXPECT_EQ(tls->FindBool("allowInsecure"), false);
+  EXPECT_EQ(tls->FindBool("useSystemCA"), true);
+  EXPECT_FALSE(tls->contains("alpn"));
+  EXPECT_FALSE(outbound.FindByDottedPath("streamSettings.wsSettings"));
+  EXPECT_FALSE(outbound.FindByDottedPath("streamSettings.realitySettings"));
+  const auto* servers = outbound.FindListByDottedPath("settings.vnext");
+  ASSERT_TRUE(servers);
+  ASSERT_EQ(servers->size(), 1u);
+  const auto* users = servers->front().GetDict().FindList("users");
+  ASSERT_TRUE(users);
+  ASSERT_EQ(users->size(), 1u);
+  const auto* flow = users->front().GetDict().FindString("flow");
+  ASSERT_TRUE(flow);
+  EXPECT_EQ(*flow, "xtls-rprx-vision");
+  EXPECT_EQ(encoded->find("metadata.example"), std::string::npos);
+}
+
+TEST(AccessTestNodeNativeConfigTest, GrpcRealityKeepsServiceNameWithoutVision) {
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(
+      aegis_access::test::kSyntheticGrpcRealityShare, kExtended);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(*parsed.node), parsed.node);
+  const auto encoded = BuildAccessTestNodeCoreConfiguration(*parsed.node, {},
+                                                            Transport::kSocks5);
+  ASSERT_TRUE(encoded);
+  const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(root);
+  ASSERT_TRUE(root->FindList("outbounds"));
+  ASSERT_EQ(root->FindList("outbounds")->size(), 1u);
+  const auto& outbound = root->FindList("outbounds")->front().GetDict();
+  const auto* network =
+      outbound.FindStringByDottedPath("streamSettings.network");
+  const auto* security =
+      outbound.FindStringByDottedPath("streamSettings.security");
+  const auto* service = outbound.FindStringByDottedPath(
+      "streamSettings.grpcSettings.serviceName");
+  ASSERT_TRUE(network && security && service);
+  EXPECT_EQ(*network, "grpc");
+  EXPECT_EQ(*security, "reality");
+  EXPECT_EQ(*service, "/sample/Tun");
+  const auto* reality =
+      outbound.FindDictByDottedPath("streamSettings.realitySettings");
+  ASSERT_TRUE(reality && reality->FindString("publicKey") &&
+              reality->FindString("shortId"));
+  EXPECT_EQ(*reality->FindString("publicKey"), parsed.node->public_key);
+  EXPECT_EQ(*reality->FindString("shortId"), "a1b2c3d4");
+  EXPECT_FALSE(reality->contains("spiderX"));
+  EXPECT_FALSE(outbound.FindByDottedPath("streamSettings.tlsSettings"));
+  const auto* servers = outbound.FindListByDottedPath("settings.vnext");
+  ASSERT_TRUE(servers);
+  ASSERT_EQ(servers->size(), 1u);
+  const auto* users = servers->front().GetDict().FindList("users");
+  ASSERT_TRUE(users);
+  ASSERT_EQ(users->size(), 1u);
+  EXPECT_FALSE(users->front().GetDict().contains("flow"));
+}
+
+TEST(AccessTestNodeNativeConfigTest,
+     RejectsFabricatedMixedAndUnsafeNativeNodes) {
+  auto ws = aegis_access::ParseAccessTestNodeShare(
+                aegis_access::test::kSyntheticWebSocketTlsQueryShare, kExtended)
+                .node;
+  auto tcp = aegis_access::ParseAccessTestNodeShare(
+                 aegis_access::test::kSyntheticTcpTlsVisionShare, kExtended)
+                 .node;
+  auto grpc = aegis_access::ParseAccessTestNodeShare(
+                  aegis_access::test::kSyntheticGrpcRealityShare, kExtended)
+                  .node;
+  ASSERT_TRUE(ws && tcp && grpc);
+  ws->web_socket_tls->alpn = "h2";
+  EXPECT_FALSE(BuildAccessTestNodeCoreConfiguration(*ws, {}, Transport::kHttp));
+  ws->web_socket_tls->alpn = "http/1.1";
+  ws->web_socket_tls->path = "/test?%65d=512";
+  EXPECT_FALSE(BuildAccessTestNodeCoreConfiguration(*ws, {}, Transport::kHttp));
+  tcp->short_id = "abcd";
+  EXPECT_FALSE(
+      BuildAccessTestNodeCoreConfiguration(*tcp, {}, Transport::kHttp));
+  grpc->tcp_tls_vision = true;
+  EXPECT_FALSE(
+      BuildAccessTestNodeCoreConfiguration(*grpc, {}, Transport::kHttp));
+  grpc->tcp_tls_vision = false;
+  grpc->spider_x = "/test";
+  EXPECT_FALSE(
+      BuildAccessTestNodeCoreConfiguration(*grpc, {}, Transport::kHttp));
 }
 }  // namespace
 }  // namespace aegis::access

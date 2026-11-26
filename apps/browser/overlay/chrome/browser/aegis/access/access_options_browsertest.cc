@@ -16,6 +16,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/aegis_access/access_test_node_test_fixture.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/test/browser_test_utils.h"
@@ -243,6 +244,49 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
   EXPECT_EQ(initial.value->revision, saved.value->revision);
   EXPECT_EQ(initial.value->configuration, saved.value->configuration);
   EXPECT_FALSE(saved.value->test_profile);
+}
+
+IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+                       CommittedApplyQueryClearsOnlyMatchingNativeDraft) {
+  if (!CanUseAccessOptionsForCurrentBuild(
+          aegis_access::AccessOptionsOperation::kWrite)) {
+    GTEST_SKIP() << "The test requires an admitted internal build";
+  }
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("chrome://aegis/access-options")));
+  auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
+  auto* options = AccessOptionsService::GetOrCreate(browser()->GetProfile());
+  ASSERT_TRUE(options);
+  using Failure = AccessOptionsStore::SaveFailurePointForTesting;
+  options->SetSaveFailureForTesting(Failure::kAfterCommit);
+
+  EXPECT_EQ("saved,preview,preserved", content::EvalJs(contents, content::JsReplace(R"JS(
+    (async () => {
+      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
+      const share = $1;
+      const initial = await send('readAccessOptions');
+      const preview = await send('previewAccessTestNode', 'text', share);
+      if (preview.state !== 'preview') return preview.state;
+      const operation = crypto.randomUUID();
+      const apply = await send('applyAccessTestNode', initial.revision, operation,
+          'socks5', 'random', '');
+      if (apply.state !== 'uncertain') return apply.state;
+      const recovered = await send('queryAccessTestNodeApply', operation);
+      if (recovered.state !== 'saved') return recovered.state;
+      const preferencesOperation = crypto.randomUUID();
+      const prefs = await send('applyAccessTestNodePreferences', recovered.revision,
+          preferencesOperation, 'http', 'random', '');
+      if (prefs.state !== 'uncertain') return 'preferences:' + prefs.state;
+      const prefsRecovered = await send('queryAccessTestNodeApply', preferencesOperation);
+      if (prefsRecovered.state !== 'saved') return 'preferences:' + prefsRecovered.state;
+      const fresh = await send('previewAccessTestNode', 'text', share);
+      const confirmed = await send('queryAccessTestNodeApply', preferencesOperation);
+      const pending = await send('applyAccessTestNodePreferences', confirmed.revision,
+          crypto.randomUUID(), 'socks5', 'random', '');
+      return [confirmed.state, fresh.state,
+        pending.state === 'previewPending' ? 'preserved' : pending.state].join(',');
+    })()
+  )JS", aegis_access::test::kSyntheticTestNodeShare)));
 }
 
 IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,

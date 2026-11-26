@@ -15,6 +15,7 @@ namespace {
 
 using aegis::access::AccessTestNodeQrStatus;
 using aegis::access::DecodeAccessTestNodeQrImage;
+using aegis_access::AccessTestNodeImportMode;
 
 CIImage* MakeCode(std::string_view payload) {
   CIFilter<CIQRCodeGenerator>* generator = [CIFilter QRCodeGenerator];
@@ -51,9 +52,12 @@ NSData* DrawCodes(CIImage* first, CIImage* second = nil) {
   return data;
 }
 
-aegis::access::AccessTestNodeQrResult Decode(NSData* image) {
+aegis::access::AccessTestNodeQrResult Decode(
+    NSData* image,
+    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly) {
   return DecodeAccessTestNodeQrImage(
-      std::string_view(static_cast<const char*>(image.bytes), image.length));
+      std::string_view(static_cast<const char*>(image.bytes), image.length),
+      mode);
 }
 
 void ExpectStatus(NSData* image, AccessTestNodeQrStatus status) {
@@ -72,6 +76,32 @@ int main() {
     assert(typed.node);
     assert(scanned.status == AccessTestNodeQrStatus::kDecoded);
     assert(scanned.node == typed.node);
+    using namespace aegis_access::test;
+    constexpr auto extended = AccessTestNodeImportMode::kAllowExtendedVless;
+    for (const auto vector : {kSyntheticTestNodeShare,
+                              kSyntheticWebSocketTlsShare,
+                              kSyntheticWebSocketTlsQueryShare,
+                              kSyntheticTcpTlsVisionShare,
+                              kSyntheticGrpcRealityShare}) {
+      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
+      const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
+      assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
+      assert(qr.node == text.node);
+      if (vector != kSyntheticTestNodeShare) {
+        ExpectStatus(DrawCodes(MakeCode(vector)),
+                     AccessTestNodeQrStatus::kUnsupportedOutbound);
+      }
+    }
+    for (const auto vector : {kSyntheticWebSocketTlsQueryShare,
+                              kSyntheticTcpTlsVisionShare}) {
+      std::string unverified(vector);
+      unverified.insert(unverified.find('#'), "&allowInsecure=1");
+      const auto text =
+          aegis_access::ParseAccessTestNodeShare(unverified, extended);
+      const auto qr = Decode(DrawCodes(MakeCode(unverified)), extended);
+      assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
+      assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
+    }
     std::string exporter_share(share);
     exporter_share.insert(exporter_share.find('#'), "&pcks=");
     const auto scanned_exporter = Decode(DrawCodes(MakeCode(exporter_share)));
@@ -107,7 +137,8 @@ int main() {
                  AccessTestNodeQrStatus::kInvalidImage);
     const std::string oversized(
         aegis::access::kMaxAccessTestNodeQrImageBytes + 1, 'x');
-    assert(DecodeAccessTestNodeQrImage(oversized).status ==
+    assert(DecodeAccessTestNodeQrImage(
+               oversized, AccessTestNodeImportMode::kRealityOnly).status ==
            AccessTestNodeQrStatus::kInvalidImage);
     std::cout
         << "PASS: Access Mac QR image text equivalence and rejection cases\n";

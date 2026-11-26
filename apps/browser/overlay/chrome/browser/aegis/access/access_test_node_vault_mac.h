@@ -121,7 +121,7 @@ class AccessTestNodeVaultMac {
     bool editor_closed = false;
   };
   std::string service_;
-  const bool allows_web_socket_tls_;
+  const bool allows_extended_vless_;
   std::unique_ptr<Backend> backend_;
   std::map<std::string, Pending> pending_;
   SEQUENCE_CHECKER(sequence_checker_);

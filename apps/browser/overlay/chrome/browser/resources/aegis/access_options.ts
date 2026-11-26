@@ -44,7 +44,11 @@ const nodePreview = document.querySelector<HTMLElement>('#node-preview')!;
 const previewProtocol =
     document.querySelector<HTMLElement>('#node-preview-protocol')!;
 const realityProtocol = 'VLESS · TCP · REALITY · Vision';
-const webSocketProtocol = 'VLESS · WebSocket · TLS';
+const extendedProtocols = new Set([
+  'VLESS · WebSocket · TLS',
+  'VLESS · TCP · TLS · Vision',
+  'VLESS · gRPC · REALITY',
+]);
 const draftState = document.querySelector<HTMLElement>('#draft-state')!;
 const protocol = document.querySelector<HTMLSelectElement>('#inbound-protocol')!;
 const portMode = document.querySelector<HTMLSelectElement>('#inbound-port-mode')!;
@@ -66,16 +70,17 @@ const messages: Record<string, string> = {
   busy: 'Wait for the previous preview to finish, then try again.',
   secureStorageUnavailable: 'Secure storage is unavailable. Unlock the keychain and try again.',
 };
-const devTextMessages: Record<string, string> = {
+const extendedImportMessages: Record<string, string> = {
   invalidShare: 'Enter one complete node share link.',
-  unsupportedOutbound: 'Use a VLESS share link with REALITY/Vision or WebSocket/TLS.',
+  unsupportedOutbound:
+      'Use a supported VLESS node with TLS or REALITY.',
 };
 
 let generation = 0;
 let reader: FileReader|null = null;
 let canApply = false;
 let canActivate = false;
-let canImportWebSocket = false;
+let canImportExtendedVless = false;
 let working = false;
 let previewReady = false;
 let hasDraft = false;
@@ -196,18 +201,17 @@ async function preview(source: 'text'|'image', data: string, request: number) {
     }
     nodePreview.hidden = result.state !== 'preview';
     previewReady = result.state === 'preview';
+    const label = result.protocol ?? '';
     previewProtocol.textContent = previewReady ?
-        (canImportWebSocket && result.protocol === webSocketProtocol ?
-             webSocketProtocol :
-             realityProtocol) :
-        '';
+        (canImportExtendedVless && extendedProtocols.has(label) ?
+             label : realityProtocol) : '';
     syncActions();
     status.dataset['error'] = String(
         result.state !== 'preview' && result.state !== 'canceled');
-    const devMessage = source === 'text' && canImportWebSocket ?
-        devTextMessages[result.state] : undefined;
+    const importMessage = canImportExtendedVless ?
+        extendedImportMessages[result.state] : undefined;
     status.textContent =
-        devMessage ?? messages[result.state] ?? 'Preview unavailable.';
+        importMessage ?? messages[result.state] ?? 'Preview unavailable.';
   } catch {
     if (request === generation) {
       status.textContent = 'Preview unavailable.';
@@ -502,7 +506,7 @@ void sendWithPromise<{
   private: boolean,
   testApply?: boolean,
   testActivate?: boolean,
-  testWebSocketTls?: boolean,
+  testExtendedVless?: boolean,
 }>(
     'getAccessOptionsCapabilities').then(async result => {
   if (!result.enabled || result.private) {
@@ -511,12 +515,12 @@ void sendWithPromise<{
   }
   canApply = result.testApply === true;
   canActivate = canApply && result.testActivate === true;
-  canImportWebSocket = result.testWebSocketTls === true;
-  if (canImportWebSocket) {
+  canImportExtendedVless = result.testExtendedVless === true;
+  if (canImportExtendedVless) {
     document.querySelector('#share-label')!.textContent = 'Node share link';
     document.querySelector('#share-hint')!.textContent =
-        'Paste one VLESS link using REALITY/Vision or WebSocket/TLS. ' +
-        'QR images support REALITY/Vision.';
+        'Paste one VLESS link or choose its QR image. Supported modes are ' +
+        'TCP/REALITY/Vision, WebSocket/TLS, TCP/TLS/Vision and gRPC/REALITY.';
   }
   if (!canApply) availability.textContent = 'This build supports preview only.';
   if (canApply) {

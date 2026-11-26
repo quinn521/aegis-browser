@@ -472,7 +472,9 @@ TEST(AccessOptionsServiceTest, WebSocketTextPreviewUsesNativeDevAdmission) {
   EXPECT_EQ(preview.Get().status, debug ? TestNodePreviewStatus::kPreview
                                       : TestNodePreviewStatus::kUnsupportedOutbound);
   EXPECT_EQ(preview.Get().reference.has_value(), debug);
-  EXPECT_EQ(preview.Get().uses_web_socket_tls, debug);
+  EXPECT_EQ(preview.Get().protocol,
+            debug ? TestNodePreviewProtocol::kWebSocketTls
+                  : TestNodePreviewProtocol::kTcpRealityVision);
   EXPECT_EQ(state->stored, debug ? 1u : 0u);
   EXPECT_FALSE(base::PathExists(dir.GetPath().AppendASCII("AccessOptions")));
 }

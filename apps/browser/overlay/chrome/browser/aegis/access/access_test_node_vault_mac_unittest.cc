@@ -81,6 +81,87 @@ TEST(AccessTestNodeVaultMacTest, WebSocketDraftIsStoredOnlyInDevScope) {
   EXPECT_TRUE(rows->values.empty());
 }
 
+TEST(AccessTestNodeVaultMacTest,
+     ExtendedProfilesRecoverAfterExplicitDevCommit) {
+  auto rows = std::make_shared<Rows>();
+  const std::string scope(64, 'a');
+  constexpr auto kExtended =
+      aegis_access::AccessTestNodeImportMode::kAllowExtendedVless;
+  for (const auto share : {aegis_access::test::kSyntheticWebSocketTlsQueryShare,
+                           aegis_access::test::kSyntheticTcpTlsVisionShare,
+                           aegis_access::test::kSyntheticGrpcRealityShare}) {
+    const auto parsed =
+        aegis_access::ParseAccessTestNodeShare(share, kExtended);
+    ASSERT_TRUE(parsed.node);
+    AccessTestNodeSecretReference committed;
+    {
+      AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
+      const auto editor = Id();
+      const auto operation = Id();
+      auto staged = dev.Stage(editor, *parsed.node);
+      ASSERT_EQ(staged.status, Status::kOk);
+      ASSERT_TRUE(staged.reference);
+      committed = *staged.reference;
+      ASSERT_TRUE(dev.HoldForCommit(editor, committed, operation));
+      dev.ResolveCommit(operation, true);
+    }
+    AccessTestNodeVaultMac restored("debug", scope, Backend(rows));
+    EXPECT_EQ(restored.Read(committed), parsed.node);
+    AccessTestNodeVaultMac alpha("alpha", scope, Backend(rows));
+    EXPECT_EQ(alpha.Stage(Id(), *parsed.node).status, Status::kNotAdmitted);
+    ASSERT_FALSE(rows->values.empty());
+    const auto stored = rows->values.find(
+        {"app.gcsa.aegis.access.test-node.v1.debug." + scope, committed.id});
+    ASSERT_NE(stored, rows->values.end());
+    EXPECT_EQ(stored->second.find("vless://"), std::string::npos);
+    // A copied record must fail the channel check even within Alpha's
+    // namespace.
+    rows->values.emplace(
+        std::make_pair("app.gcsa.aegis.access.test-node.v1.alpha." + scope,
+                       committed.id),
+        stored->second);
+    EXPECT_FALSE(alpha.Read(committed));
+  }
+}
+
+TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketRecordWithoutAlpn) {
+  auto rows = std::make_shared<Rows>();
+  const std::string scope(64, 'a');
+  AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
+  const AccessTestNodeSecretReference saved{Id()};
+  rows->values.emplace(
+      std::make_pair("app.gcsa.aegis.access.test-node.v1.debug." + scope,
+                     saved.id),
+      R"({"schemaVersion":2,"address":"192.0.2.8","port":8443,)"
+      R"("userId":"550e8400-e29b-41d4-a716-446655440000",)"
+      R"("serverName":"tls.example.test","fingerprint":"chrome",)"
+      R"("wsHost":"edge.example.test","wsPath":"/test"})");
+  const auto restored = dev.Read(saved);
+  ASSERT_TRUE(restored && restored->web_socket_tls);
+  EXPECT_EQ(restored->web_socket_tls->host, "edge.example.test");
+  EXPECT_EQ(restored->web_socket_tls->path, "/test");
+  EXPECT_TRUE(restored->web_socket_tls->alpn.empty());
+}
+
+TEST(AccessTestNodeVaultMacTest, RejectsMixedAndUnknownExtendedRecordShapes) {
+  auto rows = std::make_shared<Rows>();
+  const std::string scope(64, 'a');
+  AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
+  const AccessTestNodeSecretReference saved{Id()};
+  auto& encoded = rows->values[{
+      "app.gcsa.aegis.access.test-node.v1.debug." + scope, saved.id}];
+  const std::string common =
+      R"({"schemaVersion":3,"address":"192.0.2.30","port":443,)"
+      R"("userId":"550e8400-e29b-41d4-a716-446655440000",)"
+      R"("serverName":"tls.example","fingerprint":"chrome",)";
+  encoded = common + R"("outbound":"vless.raw.tls"})";
+  ASSERT_TRUE(dev.Read(saved));
+  encoded = common + R"("outbound":"vless.raw.tls","serviceName":"synthetic"})";
+  EXPECT_FALSE(dev.Read(saved));
+  encoded = common + R"("outbound":"vless.raw.reality"})";
+  EXPECT_FALSE(dev.Read(saved));
+}
+
 TEST(AccessTestNodeVaultMacTest, EditorCannotDiscardAnotherWindowsReference) {
   auto rows = std::make_shared<Rows>();
   AccessTestNodeVaultMac vault("debug", std::string(64, 'a'), Backend(rows));

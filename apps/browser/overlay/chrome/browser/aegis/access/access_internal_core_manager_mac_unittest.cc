@@ -14,6 +14,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -259,6 +260,36 @@ TEST_F(AccessInternalCoreManagerMacTest, SessionEndingCompletesAfterReapWhilePub
   EXPECT_TRUE(retired.Get());
   EXPECT_FALSE(LoopbackPortHeld(port));
   EXPECT_FALSE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
+}
+
+TEST_F(AccessInternalCoreManagerMacTest,
+       SessionEndingCompletesAfterManagerDestroyedWithPublishedListener) {
+  block_retirement.store(false);
+  input_.skip_internal_canary_for_testing = true;
+  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
+  base::test::TestFuture<AccessLocalCoreReady> prepared;
+  manager_->Prepare(prepared.GetCallback());
+  ASSERT_TRUE(prepared.Get().ready) << prepared.Get().error;
+  ASSERT_TRUE(prepared.Get().parent_listener_lease_held);
+  const uint16_t port = prepared.Get().port;
+  ASSERT_GT(port, 0);
+
+  manager_.reset();
+  // The manager posts the worker-thread join to the ThreadPool.
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  const pid_t pid = retirement_pid.load();
+  ASSERT_GT(pid, 0);
+  ASSERT_EQ(kill(pid, 0), -1);
+  ASSERT_EQ(errno, ESRCH);
+
+  auto stopped = std::make_shared<base::WaitableEvent>();
+  AccessLocalCoreManager::StopAllForSessionEnding(base::BindOnce(
+      [](std::shared_ptr<base::WaitableEvent> event) { event->Signal(); },
+      stopped));
+  base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+  EXPECT_TRUE(stopped->TimedWait(base::Seconds(5)));
+  EXPECT_TRUE(LoopbackPortHeld(port));
+  EXPECT_TRUE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
 }
 }  // namespace
 }  // namespace aegis::access

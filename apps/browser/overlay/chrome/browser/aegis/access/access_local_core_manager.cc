@@ -241,7 +241,6 @@ class AccessLocalCoreManager::ShutdownHandle
     return *handles;
   }
   bool stop_requested() const { return stop_requested_.load(); }
-  bool session_ending() const { return session_ending_.load(); }
   void SetWorker(Worker* worker) { worker_ = worker; }  // Core thread only.
 
   // A session-ending stop completes once forwarding has stopped and the child
@@ -306,7 +305,9 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     if (!retired) QuarantineInternalCore();
 #endif
     shutdown_->SetWorker(nullptr);
-    if (retired || (reaped_with_listener_held_ && shutdown_->session_ending()))
+    // The worker is going away. Record confirmed reap while its handle can
+    // still complete callbacks. Quarantine holds the independent Network lease.
+    if (retired || reaped_with_listener_held_)
       shutdown_->CompleteStop();
   }
 
