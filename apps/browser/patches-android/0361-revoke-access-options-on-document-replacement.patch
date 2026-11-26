@@ -1,4 +1,4 @@
-From 3f73258d8e3706d5a3568e9f038c502e086ec028 Mon Sep 17 00:00:00 2001
+From c92213b1308f478dbe0c804065604174cf123567 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Mon, 23 Nov 2026 18:32:53 +0800
 Subject: [PATCH] fix(android): revoke Access Options on primary document
@@ -15,30 +15,32 @@ only when internal Access Options are enabled. Blink and Chrome share one
 declare_args in a Blink-visible gni, so the flag is not declared twice.
 
 The explicit-open browser tests follow the same flag. Internal builds wait
-for one notification. Ordinary builds idle and expect none, so a default
-content_browsertests run does not time out. The javascript: replacement test
-stays unconditional because it uses DidCommitDocumentReplacement().
+for one notification. Ordinary builds flush the LocalFrameHost receiver and
+expect none, so a default content_browsertests run does not time out and a
+late frame-channel message cannot pass the zero-count check. The javascript:
+replacement test stays unconditional because it uses
+DidCommitDocumentReplacement().
 ---
- .../chrome/browser/ChromeTabbedActivity.java  |  4 +
- .../settings/AegisAccessOptionsFragment.java  | 22 +++++
- chrome/browser/android/BUILD.gn               |  2 +-
- .../android/aegis_access_options_bridge.cc    |  1 +
- .../render_frame_host_delegate.h              |  3 +
- .../renderer_host/render_frame_host_impl.cc   | 10 ++
- .../renderer_host/render_frame_host_impl.h    |  1 +
- .../browser/web_contents/web_contents_impl.cc |  8 ++
- .../browser/web_contents/web_contents_impl.h  |  1 +
- .../web_contents_impl_browsertest.cc          | 97 +++++++++++++++++++
- .../public/browser/web_contents_observer.h    |  5 +
- content/test/BUILD.gn                         |  1 +
- third_party/blink/public/common/BUILD.gn      |  8 ++
- .../public/common/aegis_android_access.gni    | 10 ++
- .../blink/public/mojom/frame/frame.mojom      |  6 ++
- third_party/blink/renderer/core/BUILD.gn      |  1 +
- .../renderer/core/loader/frame_loader.cc      | 12 +++
- .../core/testing/fake_local_frame_host.cc     |  2 +
- .../core/testing/fake_local_frame_host.h      |  1 +
- 19 files changed, 194 insertions(+), 1 deletion(-)
+ .../chrome/browser/ChromeTabbedActivity.java  |   4 +
+ .../settings/AegisAccessOptionsFragment.java  |  22 ++++
+ chrome/browser/android/BUILD.gn               |   2 +-
+ .../android/aegis_access_options_bridge.cc    |   1 +
+ .../render_frame_host_delegate.h              |   3 +
+ .../renderer_host/render_frame_host_impl.cc   |  10 ++
+ .../renderer_host/render_frame_host_impl.h    |   1 +
+ .../browser/web_contents/web_contents_impl.cc |   8 ++
+ .../browser/web_contents/web_contents_impl.h  |   1 +
+ .../web_contents_impl_browsertest.cc          | 105 ++++++++++++++++++
+ .../public/browser/web_contents_observer.h    |   5 +
+ content/test/BUILD.gn                         |   1 +
+ third_party/blink/public/common/BUILD.gn      |   8 ++
+ .../public/common/aegis_android_access.gni    |  10 ++
+ .../blink/public/mojom/frame/frame.mojom      |   6 +
+ third_party/blink/renderer/core/BUILD.gn      |   1 +
+ .../renderer/core/loader/frame_loader.cc      |  12 ++
+ .../core/testing/fake_local_frame_host.cc     |   2 +
+ .../core/testing/fake_local_frame_host.h      |   1 +
+ 19 files changed, 202 insertions(+), 1 deletion(-)
  create mode 100644 third_party/blink/public/common/aegis_android_access.gni
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -221,7 +223,7 @@ index 928d746f122ef71ab26f31881aabb55c5fa72307..6dd8087516d4cafcf77bd20993c78e0b
                       const std::string& name) override;
    void DidReceiveUserActivation(
 diff --git a/content/browser/web_contents/web_contents_impl_browsertest.cc b/content/browser/web_contents/web_contents_impl_browsertest.cc
-index 23ae692aa98f39882d5e3186dc4b148c8cca5537..3557b9dfd4d0ea8f4f5c274b0d48f1ca7b267fcf 100644
+index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d095795669775613b6c3bb6 100644
 --- a/content/browser/web_contents/web_contents_impl_browsertest.cc
 +++ b/content/browser/web_contents/web_contents_impl_browsertest.cc
 @@ -39,6 +39,7 @@
@@ -248,7 +250,7 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..3557b9dfd4d0ea8f4f5c274b0d48f1ca
  #include "third_party/blink/public/common/client_hints/client_hints.h"
  #include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/common/page/page_zoom.h"
-@@ -201,6 +204,100 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
+@@ -201,6 +204,108 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
    base::test::ScopedFeatureList scoped_feature_list_;
  };
  
@@ -302,9 +304,13 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..3557b9dfd4d0ea8f4f5c274b0d48f1ca
 +  base::RunLoop().RunUntilIdle();
 +  EXPECT_EQ(1, counter.count());
 +#else
-+  // Ordinary builds do not compile the explicit-open IPC. Idling proves the
-+  // replacement happened without a notification, instead of waiting for one.
-+  base::RunLoop().RunUntilIdle();
++  // Script completion and the DevTools reply use other pipes. Flushing the
++  // frame-host receiver is ordered on that channel, so a LocalFrameHost
++  // message sent before the flush is dispatched before the counter is read.
++  static_cast<RenderFrameHostImpl*>(
++      shell()->web_contents()->GetPrimaryMainFrame())
++      ->local_frame_host_receiver_for_testing()
++      .FlushForTesting();
 +  EXPECT_EQ(0, counter.count());
 +#endif
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
@@ -338,9 +344,13 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..3557b9dfd4d0ea8f4f5c274b0d48f1ca
 +  base::RunLoop().RunUntilIdle();
 +  EXPECT_EQ(1, counter.count());
 +#else
-+  // Ordinary builds do not compile the explicit-open IPC. Idling proves the
-+  // replacement happened without a notification, instead of waiting for one.
-+  base::RunLoop().RunUntilIdle();
++  // Script completion and the DevTools reply use other pipes. Flushing the
++  // frame-host receiver is ordered on that channel, so a LocalFrameHost
++  // message sent before the flush is dispatched before the counter is read.
++  static_cast<RenderFrameHostImpl*>(
++      shell()->web_contents()->GetPrimaryMainFrame())
++      ->local_frame_host_receiver_for_testing()
++      .FlushForTesting();
 +  EXPECT_EQ(0, counter.count());
 +#endif
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));

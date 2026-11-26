@@ -1,4 +1,4 @@
-From 407496862616b9ffb1ffd0ae2eef767501cd4793 Mon Sep 17 00:00:00 2001
+From 0455c2fbe3f6a1161d56e2f1db474152c5c6a1b4 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 25 Nov 2026 20:40:41 +0800
 Subject: [PATCH] fix(android): bind Access Options editor to a menu grant in
@@ -35,22 +35,27 @@ When Fragment restoration is suppressed, native resume shows the unavailable dia
 
 The regression opens the activity menu and clicks the displayed Access Options row, so a menu that no longer dispatches that item fails. Normal recreation must restore the existing dialog. Only suppressed Fragment restoration may create the unavailable dialog from the saved hint.
 
-
 Destroying the dialog view closes the editor. Fragment detach does not run onDestroy, so a reattached receiver cannot reuse the old handle. The regression detaches and reattaches that same receiver.
+
+A detached or dialog-less receiver is not a visible dialog. Restoration between
+detach and reattach removes that tag and shows unavailable from the saved hint.
+The menu can then open a new editor. The regression recreates the Activity
+while the receiver is detached, dismisses the restored dialog, and opens the
+menu again.
 ---
  chrome/android/BUILD.gn                       |  26 +
  chrome/android/chrome_public_apk_tmpl.gni     |   1 +
  .../chrome/browser/ChromeTabbedActivity.java  |  46 +-
- .../settings/AegisAccessOptionsFragment.java  |  63 ++-
+ .../settings/AegisAccessOptionsFragment.java  | 108 +++-
  chrome/android/javatests/BUILD.gn             |  37 +-
  .../aegis_access_options_AndroidManifest.xml  |  11 +
- .../AegisAccessOptionsFragmentTest.java       | 482 +++++++++++++++++-
+ .../AegisAccessOptionsFragmentTest.java       | 545 +++++++++++++++++-
  chrome/browser/android/BUILD.gn               |   6 +-
  .../browser/android/aegis_access_options.gni  |   8 +
  .../android/aegis_access_options_bridge.cc    | 110 +++-
  .../ui/appmenu/AppMenuHandlerImpl.java        |  26 +
  .../browser/ui/appmenu/AppMenuHandler.java    |   9 +
- 12 files changed, 785 insertions(+), 40 deletions(-)
+ 12 files changed, 889 insertions(+), 44 deletions(-)
  create mode 100644 chrome/android/javatests/aegis_access_options_AndroidManifest.xml
  create mode 100644 chrome/browser/android/aegis_access_options.gni
 
@@ -188,7 +193,7 @@ index 60c7bb905c83f289da7329b721c642040119b86b..588f6f69b2accc46fba8e3ee10d89191
              // FragmentManager state before native is initialized, as restored fragments (such as
              // SettingsPage) may depend on native/profile and crash during onCreate(). This is the
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
-index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe0aacdadc 100644
+index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..0626bb5eff9493cc8c5364336bc2c0439cbd4c14 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 @@ -23,6 +23,7 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -207,7 +212,16 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe
      private String mEditor = "";
      private boolean mRevoked;
  
-@@ -51,16 +53,24 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -44,28 +46,39 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+ 
+     public static void showFromBrowserMenu(ChromeTabbedActivity activity) {
+         FragmentManager manager = activity.getSupportFragmentManager();
+-        if (manager.isStateSaved() || manager.findFragmentByTag(TAG) != null) return;
++        if (manager.isStateSaved() || isDisplayingDialog(manager)) return;
++        if (!removeDetachedReceiver(manager)) return;
+         Tab origin = activity.getActivityTab();
+         if (origin == null) return;
+         WebContents contents = origin.getWebContents();
          if (contents == null || !canOffer(contents)) return;
  
          var fragment = new AegisAccessOptionsFragment();
@@ -237,18 +251,68 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe
      }
  
      /** Retains a presentation hint in Activity state, without persisting an editor. */
-@@ -75,6 +85,10 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+     public static void saveUnavailableHint(
+             FragmentManager manager, Bundle outState, boolean awaitingRestore) {
++        // A detached receiver still owns the tag and has no dialog. Keep the hint
++        // so restoration shows unavailable instead of leaving that tag invisible.
+         if (awaitingRestore || manager.findFragmentByTag(TAG) != null) {
+             outState.putBoolean(RESTORE_UNAVAILABLE, true);
+         }
+@@ -75,21 +88,76 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
          return state != null && state.getBoolean(RESTORE_UNAVAILABLE);
      }
  
 +    public static boolean isShowing(FragmentManager manager) {
-+        return manager.findFragmentByTag(TAG) != null;
++        return isDisplayingDialog(manager);
 +    }
 +
      public static boolean showUnavailable(FragmentManager manager) {
          if (manager.isStateSaved()) return false;
-         if (manager.findFragmentByTag(TAG) == null) {
-@@ -88,8 +102,25 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+-        if (manager.findFragmentByTag(TAG) == null) {
+-            new AegisAccessOptionsFragment().showNow(manager, TAG);
+-        }
++        // Success without a visible dialog would clear the restore hint and leave
++        // the tag blocking the menu. A detached or dialog-less receiver is removed.
++        if (isDisplayingDialog(manager)) return true;
++        if (!removeDetachedReceiver(manager)) return false;
++        new AegisAccessOptionsFragment().showNow(manager, TAG);
+         return true;
+     }
+ 
++    private static @Nullable AegisAccessOptionsFragment findTagged(FragmentManager manager) {
++        return manager.findFragmentByTag(TAG) instanceof AegisAccessOptionsFragment fragment
++                ? fragment
++                : null;
++    }
++
++    /** True only when the tagged receiver is added and its dialog is visible. */
++    private static boolean isDisplayingDialog(FragmentManager manager) {
++        AegisAccessOptionsFragment fragment = findTagged(manager);
++        if (fragment == null
++                || !fragment.isAdded()
++                || fragment.isDetached()
++                || fragment.isRemoving()) {
++            return false;
++        }
++        Dialog dialog = fragment.getDialog();
++        return dialog != null && dialog.isShowing();
++    }
++
++    /**
++     * Drops a tagged receiver that is not displaying a dialog. Returns false when the
++     * transaction cannot run, so the caller does not treat the hidden tag as success.
++     */
++    private static boolean removeDetachedReceiver(FragmentManager manager) {
++        if (findTagged(manager) == null) return true;
++        if (isDisplayingDialog(manager)) return false;
++        AegisAccessOptionsFragment existing = findTagged(manager);
++        if (existing.isRemoving() || manager.isStateSaved()) return false;
++        manager.beginTransaction().remove(existing).commitNow();
++        return findTagged(manager) == null;
++    }
++
+     boolean canReadEditor() {
+         return !mEditor.isEmpty()
                  && AegisAccessOptionsFragmentJni.get().canRead(mEditor, this);
      }
  
@@ -274,7 +338,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe
          boolean canRead = !mRevoked && canReadEditor();
          return new AlertDialog.Builder(requireContext())
                  .setTitle(R.string.aegis_access_options_title)
-@@ -101,6 +132,14 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -101,6 +169,14 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
                  .create();
      }
  
@@ -289,7 +353,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe
      @Override
      public void onDestroy() {
          closeEditor();
-@@ -114,6 +153,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -114,6 +190,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
      }
  
      private void closeEditor() {
@@ -297,7 +361,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe
          MonotonicObservableSupplier<TabModel> models = mModels;
          if (models != null) {
              mModels = null;
-@@ -134,10 +174,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -134,10 +211,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
          }
      }
  
@@ -394,15 +458,16 @@ index 0000000000000000000000000000000000000000..002eeeb8d851374249b9af17b2b7d126
 +        android:label="Aegis Access Options tests for {{manifest_package}}"/>
 +{% endblock %}
 diff --git a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
-index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca723051323c6e4 100644
+index b697c1e9da5b2da2692bcefd3a00264014ea3a16..bbef6bf24a9caed4d33622d3fed2185d7085a136 100644
 --- a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 +++ b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
-@@ -2,8 +2,15 @@
+@@ -2,8 +2,16 @@
  
  package org.chromium.chrome.browser.settings;
  
 +import static org.junit.Assert.assertFalse;
 +import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNotSame;
 +import static org.junit.Assert.assertSame;
  import static org.junit.Assert.assertTrue;
  
@@ -413,7 +478,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca72305
  import android.widget.TextView;
  
  import androidx.test.filters.MediumTest;
-@@ -12,17 +19,31 @@ import org.junit.Rule;
+@@ -12,17 +20,31 @@ import org.junit.Rule;
  import org.junit.Test;
  import org.junit.runner.RunWith;
  
@@ -446,7 +511,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca72305
  public class AegisAccessOptionsFragmentTest {
      @Rule public ChromeTabbedActivityTestRule mActivityRule = new ChromeTabbedActivityTestRule();
  
-@@ -30,7 +51,6 @@ public class AegisAccessOptionsFragmentTest {
+@@ -30,7 +52,6 @@ public class AegisAccessOptionsFragmentTest {
  
      @Test
      @MediumTest
@@ -454,7 +519,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca72305
      public void testPrimaryDocumentReplacementRevokesVisibleEditor() throws Exception {
          mActivityRule.startMainActivityWithURL(
                  mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
-@@ -38,25 +58,7 @@ public class AegisAccessOptionsFragmentTest {
+@@ -38,25 +59,7 @@ public class AegisAccessOptionsFragmentTest {
          WebContents contents =
                  ThreadUtils.runOnUiThreadBlocking(
                          () -> activity.getActivityTab().getWebContents());
@@ -481,7 +546,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca72305
  
          JavaScriptUtils.executeJavaScriptAndWaitForResult(
                  contents,
-@@ -68,6 +70,444 @@ public class AegisAccessOptionsFragmentTest {
+@@ -68,6 +71,506 @@ public class AegisAccessOptionsFragmentTest {
                          !editor.canReadEditor()
                                  && hasMessage(editor, R.string.aegis_access_options_unavailable),
                  "The same editor must reject native reads and show unavailable.");
@@ -690,6 +755,68 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca72305
 +                "The reattached receiver must not obtain an editor without a new menu action.",
 +                ThreadUtils.runOnUiThreadBlocking(
 +                        () -> editor.issuesEditorWithoutMenuForTesting(contents)));
++    }
++
++    @Test
++    @MediumTest
++    public void testRecreationBetweenDetachAndReattachShowsUnavailableAndCanReopen()
++            throws Exception {
++        mActivityRule.startMainActivityWithURL(
++                mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
++        ChromeTabbedActivity activity = mActivityRule.getActivity();
++        AegisAccessOptionsFragment editor = openLiveEditor(activity);
++        String liveHandle =
++                ThreadUtils.runOnUiThreadBlocking(editor::getEditorHandleForTesting);
++        assertFalse(liveHandle.isEmpty());
++
++        ThreadUtils.runOnUiThreadBlocking(
++                () ->
++                        activity.getSupportFragmentManager()
++                                .beginTransaction()
++                                .detach(editor)
++                                .commitNow());
++        assertFalse(
++                "Detaching the dialog must close the editor before recreation.",
++                canRead(liveHandle, editor));
++
++        mActivityRule.recreateActivity();
++        mActivityRule.waitForActivityNativeInitializationComplete();
++        mActivityRule.waitForActivityCompletelyLoaded();
++        ChromeTabbedActivity recreated = mActivityRule.getActivity();
++        CriteriaHelper.pollUiThread(
++                () -> {
++                    AegisAccessOptionsFragment candidate = findEditorOrNull(recreated);
++                    return candidate != null
++                            && candidate != editor
++                            && hasMessage(candidate, R.string.aegis_access_options_unavailable);
++                },
++                "Recreation while detached must show the unavailable dialog.");
++        assertTrue(
++                "The detached tag must not count as an already visible dialog.",
++                recreated.unavailableDialogCreatedFromHintForTesting());
++        assertFalse(
++                "The pre-recreation handle must stay closed.",
++                canRead(liveHandle, editor));
++        AegisAccessOptionsFragment restored =
++                ThreadUtils.runOnUiThreadBlocking(() -> findEditor(recreated));
++        assertFalse(ThreadUtils.runOnUiThreadBlocking(restored::canReadEditor));
++        ThreadUtils.runOnUiThreadBlocking(() -> restored.getDialog().dismiss());
++        CriteriaHelper.pollUiThread(
++                () -> findEditorOrNull(recreated) == null,
++                "Dismissing the restored dialog must release its tag.");
++        AegisAccessOptionsFragment reopened = openLiveEditor(recreated);
++        assertNotSame(
++                "Reopening after the detached restore must use a new receiver.", editor, reopened);
++        assertTrue(
++                "The menu must be able to open a readable editor after the detached tag is gone.",
++                ThreadUtils.runOnUiThreadBlocking(reopened::canReadEditor));
++        WebContents recreatedContents =
++                ThreadUtils.runOnUiThreadBlocking(
++                        () -> recreated.getActivityTab().getWebContents());
++        assertTrue(
++                "The recreated tab must still be eligible for Access Options.",
++                ThreadUtils.runOnUiThreadBlocking(
++                        () -> AegisAccessOptionsFragment.canOffer(recreatedContents)));
 +    }
 +
 +    @Test
