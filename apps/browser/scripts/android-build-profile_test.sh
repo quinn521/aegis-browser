@@ -23,10 +23,34 @@ count_matches() {
   grep -c "$2" <<< "$1" || true
 }
 
-grep -q 'aegis_android_' "$ARGS_FILE" && fail "基础 Android 参数开启了 Access Options"
 default_args="$(aegis_android_gn_args "$ARGS_FILE" default)"
 [[ "$default_args" == "$(cat "$ARGS_FILE")" ]] || fail "default 配置改动了基础参数"
 has_line "$default_args" 'android_channel = "default"' || fail "default 配置改动了渠道"
+
+commented_base="$TEST_ROOT/commented.gn"
+{
+  sed 's/^android_channel = "default"$/&  # aegis_android_access_product_channel = "debug"/' \
+    "$ARGS_FILE"
+  printf '%s\n' \
+    '  # aegis_android_internal_access_options = true' \
+    'assert(true, "escaped quote: \" and hash: #") # aegis_android_access_product_channel'
+} > "$commented_base"
+default_with_comments="$(aegis_android_gn_args "$commented_base" default)" ||
+  fail "default 配置拒绝了只在注释里出现的内部参数"
+[[ "$default_with_comments" == "$(cat "$commented_base")" ]] ||
+  fail "default 配置改动了含注释的基础参数"
+for profile in alpha debug; do
+  case "$profile" in
+    alpha) channel=canary ;;
+    debug) channel=dev ;;
+  esac
+  internal_with_comments="$(aegis_android_gn_args "$commented_base" "internal-$profile")" ||
+    fail "$profile 配置拒绝了只在注释里出现的内部参数"
+  grep -Fxq "android_channel = \"$channel\"  # aegis_android_access_product_channel = \"debug\"" \
+    <<< "$internal_with_comments" || fail "$profile 未改写频道或保留行末注释"
+  grep -Fxq "aegis_android_access_product_channel = \"$profile\"" \
+    <<< "$internal_with_comments" || fail "$profile 未设置实际产品渠道"
+done
 
 check_internal() {
   local profile="$1" channel="$2" product="$3" args
@@ -62,8 +86,12 @@ expect_profile_failure "基础参数已开启时仍生成 default" "$enabled_bas
 expect_profile_failure "基础参数已开启时仍生成内部配置" "$enabled_base" internal-alpha
 
 nested_base="$TEST_ROOT/nested.gn"
-{ cat "$ARGS_FILE"; echo 'if (true) { aegis_android_access_product_channel = "alpha" }'; } > "$nested_base"
-expect_profile_failure "接受了块内渠道设置" "$nested_base" default
+{
+  cat "$commented_base"
+  printf '%s\n' 'if ("\"#tag" == "\"#tag") { aegis_android_access_product_channel = "alpha" } # valid comment'
+} > "$nested_base"
+expect_profile_failure "接受了含引号和井号的块内渠道设置" "$nested_base" default
+expect_profile_failure "接受了含引号和井号的块内渠道设置" "$nested_base" internal-debug
 expect_profile_failure "接受了缺失的基础参数文件" "$TEST_ROOT/missing.gn" default
 
 check_default_build_rejects_enabled_args() {
@@ -96,7 +124,7 @@ check_default_build_rejects_enabled_args
   printf 'target_os = ["android"]\n' > "$CHROMIUM_ROOT/.gclient"
   printf '%s\n' 'aegis_android_internal_access_options = true' \
     'aegis_android_access_product_channel = "alpha"' > "$CHROMIUM_ROOT/src/internal.gni"
-  { cat "$ARGS_FILE"; echo 'import("//internal.gni")'; } > "$fixture/args/aegis-android.gn"
+  { cat "$commented_base"; echo 'import("//internal.gni")'; } > "$fixture/args/aegis-android.gn"
   cp "$fixture/args/aegis-android.gn" "$fixture_out/args.gn"
 
   uname() {
