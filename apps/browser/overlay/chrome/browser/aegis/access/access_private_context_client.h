@@ -9,6 +9,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "base/unguessable_token.h"
 #include "components/aegis_access/access_route_types.h"
 #include "components/aegis_access/access_policy_evaluator.h"
@@ -66,6 +67,7 @@ class AccessPrivateContextClient
   }
   const base::UnguessableToken& control_id() const { return control_id_; }
   uint64_t process_id() const { return process_id_; }
+  base::TimeTicks bind_deadline() const { return bind_deadline_; }
   network::mojom::AegisAccessOwnerPtr owner_for_binding() const { return owner_.Clone(); }
   const std::string& incarnation() const { return incarnation_; }
   uint64_t published_sequence() const { return published_sequence_; }
@@ -75,6 +77,7 @@ class AccessPrivateContextClient
   void OnContextRetired() override;
   const base::UnguessableToken control_id_ = base::UnguessableToken::Create();
   uint64_t process_id_ = 0;
+  base::TimeTicks bind_deadline_;
   network::mojom::AegisAccessOwnerPtr owner_;
   std::string incarnation_;
   mojo::Remote<network::mojom::AegisAccessContext> context_;

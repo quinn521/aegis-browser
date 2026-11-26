@@ -7,6 +7,7 @@
 #include "base/time/time.h"
 #include "net/test/embedded_test_server/controllable_http_response.h"
 #include "mojo/core/embedder/embedder.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "mojo/public/cpp/test_support/fake_message_dispatch_context.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -28,6 +29,18 @@
 
 namespace network {
 namespace {
+
+class ContextLifetimeSink final : public mojom::AegisAccessContextLifetime {
+ public:
+  mojo::PendingRemote<mojom::AegisAccessContextLifetime> Bind() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+
+ private:
+  void OnContextRetired() override {}
+  mojo::Receiver<mojom::AegisAccessContextLifetime> receiver_{this};
+};
+
 using namespace aegis_access;
 mojom::AegisAccessSnapshotPtr WireSnapshot() {
   auto s = mojom::AegisAccessSnapshot::New();
@@ -75,11 +88,13 @@ class AccessNetworkContextIPCTest : public testing::Test {
     params->initial_proxy_config = net::ProxyConfigWithAnnotation::CreateDirect();
     context_ = std::make_unique<NetworkContext>(service_.get(),
         context_remote_.BindNewPipeAndPassReceiver(), std::move(params));
-    base::test::TestFuture<std::string> bind_future;
+    base::test::TestFuture<mojom::AegisAccessContextIdentityPtr> bind_future;
     context_remote_->BindAegisAccessContext(
-        capability_.BindNewPipeAndPassReceiver(),
-        bind_future.GetCallback<const std::string&>());
-    incarnation_ = bind_future.Get();
+        capability_.BindNewPipeAndPassReceiver(), lifetime_.Bind(),
+        bind_future.GetCallback());
+    const auto& identity = bind_future.Get();
+    ASSERT_TRUE(identity);
+    incarnation_ = identity->incarnation;
     ASSERT_FALSE(incarnation_.empty());
     auto factory_params = mojom::URLLoaderFactoryParams::New();
     factory_params->process_id = OriginatingProcessId::FromUnsafeValue(42);
@@ -251,6 +266,7 @@ class AccessNetworkContextIPCTest : public testing::Test {
   std::unique_ptr<NetworkService> service_;
   mojo::Remote<mojom::NetworkContext> context_remote_;
   mojo::Remote<mojom::AegisAccessContext> capability_;
+  ContextLifetimeSink lifetime_;
   std::string incarnation_;
   std::unique_ptr<NetworkContext> context_;
   cors::OriginAccessList origin_access_list_;
@@ -507,12 +523,15 @@ TEST_F(AccessNetworkContextIPCTest, InFlightRequestCanCancelAfterFactoryReset) {
 }
 TEST_F(AccessNetworkContextIPCTest, RetainedPrivateContextUsesExactOriginalContext) {
   mojo::Remote<mojom::AegisAccessContext> capability;
-  base::test::TestFuture<std::string> future;
+  ContextLifetimeSink lifetime;
+  base::test::TestFuture<mojom::AegisAccessContextIdentityPtr> future;
   context_remote_->BindAegisAccessContext(
-      capability.BindNewPipeAndPassReceiver(),
-      future.GetCallback<const std::string&>());
-  const auto incarnation = future.Get();
-  EXPECT_FALSE(incarnation.empty());
+      capability.BindNewPipeAndPassReceiver(), lifetime.Bind(),
+      future.GetCallback());
+  const auto& identity = future.Get();
+  ASSERT_TRUE(identity);
+  ASSERT_FALSE(identity->incarnation.empty());
+  const auto& incarnation = identity->incarnation;
   base::test::TestFuture<bool> restored;
   capability->BeginRestore(Snapshot()->owner.Clone(), incarnation,
                            restored.GetCallback());

@@ -1,8 +1,11 @@
 // Copyright 2026 GCSA
 #include <atomic>
 #include "base/functional/bind.h"
+#include "base/process/process_handle.h"
 #include "base/test/task_environment.h"
 #include "mojo/core/embedder/embedder.h"
+#include "mojo/public/cpp/bindings/remote_set.h"
+#include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/test_support/test_utils.h"
 #include "mojo/public/cpp/test_support/fake_message_dispatch_context.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
@@ -29,6 +32,18 @@
 
 namespace network {
 namespace {
+
+class ContextLifetimeSink final : public mojom::AegisAccessContextLifetime {
+ public:
+  mojo::PendingRemote<mojom::AegisAccessContextLifetime> Bind() {
+    return receiver_.BindNewPipeAndPassRemote();
+  }
+
+ private:
+  void OnContextRetired() override {}
+  mojo::Receiver<mojom::AegisAccessContextLifetime> receiver_{this};
+};
+
 using namespace aegis_access;
 mojom::AegisAccessSnapshotPtr WireSnapshot() {
   auto s = mojom::AegisAccessSnapshot::New();
@@ -64,9 +79,12 @@ class AckContext final : public TestNetworkContext,
  public:
   void BindAegisAccessContext(
       mojo::PendingReceiver<mojom::AegisAccessContext> receiver,
+      mojo::PendingRemote<mojom::AegisAccessContextLifetime> lifetime,
       BindAegisAccessContextCallback callback) override {
     receivers_.Add(this, std::move(receiver));
-    std::move(callback).Run("ack-context");
+    lifetime_remotes_.Add(std::move(lifetime));
+    std::move(callback).Run(mojom::AegisAccessContextIdentity::New(
+        "ack-context", base::GetCurrentProcId()));
   }
   void InstallSnapshot(mojom::AegisAccessSnapshotPtr snapshot,
                        InstallSnapshotCallback callback) override {
@@ -134,6 +152,7 @@ class AckContext final : public TestNetworkContext,
   mojom::AegisAccessSnapshotAckPtr held_ack;
   InstallSnapshotCallback held_callback;
   mojo::ReceiverSet<mojom::AegisAccessContext> receivers_;
+  mojo::RemoteSet<mojom::AegisAccessContextLifetime> lifetime_remotes_;
 };
 class AccessPrivateContextAckTest : public testing::Test {
  protected:
@@ -654,12 +673,15 @@ TEST_F(AccessPrivateContextClientTest, ResetPreservesExemptServiceWorkerFactory)
 }
 TEST_F(AccessPrivateContextClientTest, RetainedPrivateContextUsesExactOriginalContext) {
   mojo::Remote<mojom::AegisAccessContext> capability;
-  base::test::TestFuture<std::string> future;
+  ContextLifetimeSink lifetime;
+  base::test::TestFuture<mojom::AegisAccessContextIdentityPtr> future;
   context_remote_->BindAegisAccessContext(
-      capability.BindNewPipeAndPassReceiver(),
-      future.GetCallback<const std::string&>());
-  const auto incarnation = future.Get();
-  EXPECT_FALSE(incarnation.empty());
+      capability.BindNewPipeAndPassReceiver(), lifetime.Bind(),
+      future.GetCallback());
+  const auto& identity = future.Get();
+  ASSERT_TRUE(identity);
+  ASSERT_FALSE(identity->incarnation.empty());
+  const auto& incarnation = identity->incarnation;
   base::test::TestFuture<bool> restored;
   capability->BeginRestore(Snapshot()->owner.Clone(), incarnation,
                            restored.GetCallback());

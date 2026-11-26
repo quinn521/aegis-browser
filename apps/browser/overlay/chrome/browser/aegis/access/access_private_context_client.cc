@@ -18,6 +18,8 @@ namespace aegis::access {
 namespace {
 using namespace network;
 
+constexpr auto kPrivateContextSetupTimeout = base::Seconds(30);
+
 // The Mojo responder may outlive the deadline. Settle the Browser callback
 // once and release its resources even while the responder is still pending.
 template <typename Reply>
@@ -45,9 +47,8 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
   };
   if (reject) *reject = base::BindOnce(fail, std::weak_ptr(pending));
   if (BUILDFLAG(IS_MAC)) {
-    constexpr auto kSetupTimeout = base::Seconds(30);
-    pending->deadline = base::TimeTicks::Now() + kSetupTimeout;
-    pending->timer.Start(FROM_HERE, kSetupTimeout,
+    pending->deadline = base::TimeTicks::Now() + kPrivateContextSetupTimeout;
+    pending->timer.Start(FROM_HERE, kPrivateContextSetupTimeout,
                          base::BindOnce(fail, std::weak_ptr(pending)));
   }
   return base::BindOnce(
@@ -156,6 +157,7 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
     base::OnceCallback<void(bool)> completion) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(!context_.is_bound());
+  bind_deadline_ = base::TimeTicks::Now() + kPrivateContextSetupTimeout;
   const auto operation = ++operation_;
   auto receiver = context_.BindNewPipeAndPassReceiver();
   context_.set_disconnect_with_reason_handler(base::BindOnce(

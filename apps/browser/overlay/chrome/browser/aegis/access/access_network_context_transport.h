@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
@@ -147,6 +148,11 @@ class AccessNetworkContextTransport
       const std::string& registration_id) const;
 #endif
   using PrivateContext = std::shared_ptr<AccessPrivateContextClient>;
+  void SetNetworkServiceLookupForTesting(
+      base::RepeatingCallback<std::optional<content::ServiceProcessId>(uint64_t)>
+          lookup) {
+    network_service_lookup_for_testing_ = std::move(lookup);
+  }
   void BindPrivateContext(const aegis_access::OwnershipKey& owner,
       network::mojom::NetworkContext* context,
       base::OnceCallback<void(PrivateContext)> completion);
@@ -272,6 +278,7 @@ class AccessNetworkContextTransport
 
   void OnNetworkChanged(
       net::NetworkChangeNotifier::ConnectionType type) override;
+  void OnServiceProcessLaunched(const content::ServiceProcessInfo& info) override;
   void OnServiceProcessTerminatedNormally(const content::ServiceProcessInfo& info) override;
   void OnServiceProcessCrashed(const content::ServiceProcessInfo& info) override;
   void OnNetworkServiceExited(content::ServiceProcessId service_process);
@@ -318,6 +325,11 @@ class AccessNetworkContextTransport
                                std::string incarnation);
   void ForgetPrivateControl(const aegis_access::OwnershipKey& owner,
                             const std::string& incarnation);
+  void WaitForNetworkService(aegis_access::OwnershipKey owner,
+      PrivateContext client, base::OnceCallback<void(PrivateContext)> completion);
+  void FinishWaitingPrivateContext(const base::UnguessableToken& control,
+                                   bool launched);
+  std::optional<content::ServiceProcessId> FindNetworkService(uint64_t pid) const;
 #if BUILDFLAG(IS_MAC)
   bool HasAcknowledgedPrivateProxy(
       const aegis_access::OwnershipKey& owner,
@@ -340,6 +352,14 @@ class AccessNetworkContextTransport
   std::string runtime_profile_token_;
   uint64_t network_epoch_ = 1;
   uint64_t private_install_attempt_ = 0;
+  struct PendingPrivateBind {
+    uint64_t pid = 0;
+    base::OneShotTimer deadline;
+    base::OnceCallback<void(bool)> done;
+  };
+  std::map<base::UnguessableToken, PendingPrivateBind> pending_private_binds_;
+  base::RepeatingCallback<std::optional<content::ServiceProcessId>(uint64_t)>
+      network_service_lookup_for_testing_;
   TestListenerLostCallback test_listener_lost_;
   std::map<std::string, PartitionState> partitions_;
   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};

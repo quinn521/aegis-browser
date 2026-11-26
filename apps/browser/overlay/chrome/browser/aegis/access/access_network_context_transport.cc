@@ -138,6 +138,21 @@ AccessNetworkContextTransport::~AccessNetworkContextTransport() {
   net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
 }
 
+void AccessNetworkContextTransport::OnServiceProcessLaunched(
+    const content::ServiceProcessInfo& info) {
+  if (!info.IsService<network::mojom::NetworkService>()) return;
+  const auto pid = static_cast<uint64_t>(info.GetProcess().Pid());
+  std::vector<base::UnguessableToken> ready;
+  for (const auto& [control, waiting] : pending_private_binds_) {
+    if (waiting.pid == pid) ready.push_back(control);
+  }
+  const auto self = weak_factory_.GetWeakPtr();
+  for (const auto& control : ready) {
+    if (!self) return;
+    self->FinishWaitingPrivateContext(control, true);
+  }
+}
+
 void AccessNetworkContextTransport::OnServiceProcessTerminatedNormally(
     const content::ServiceProcessInfo& info) {
   if (info.IsService<network::mojom::NetworkService>()) {
@@ -563,9 +578,14 @@ void AccessNetworkContextTransport::RetirePreparedTestListener(
     return;
   }
   retiring->second.completion = std::move(completion);
-  if (PublishPrivatePolicy(policy, common, base::DoNothing()).status ==
-      AccessNetworkConfigAckStatus::kInvalidPublication) {
+  const auto publication =
+      PublishPrivatePolicy(policy, common, base::DoNothing());
+  if (publication.status == AccessNetworkConfigAckStatus::kInvalidPublication) {
     std::move(retiring->second.completion).Run(false);
+  } else if (publication.status == AccessNetworkConfigAckStatus::kNoClients) {
+    // Retirement proof can precede this request. The updated publication and
+    // disconnected-consumer records still fence any unproven listener lease.
+    SettleTestListenerRetirements(state, true);
   }
 }
 bool AccessNetworkContextTransport::HasReadyPrivateContext(
@@ -705,9 +725,14 @@ void AccessNetworkContextTransport::FinishPrivateContextBind(
     std::move(completion).Run(nullptr);
     return;
   }
-  const auto service_process = NetworkServiceProcessFor(client->process_id());
-  if (!service_process) {
+  if (base::TimeTicks::Now() >= client->bind_deadline()) {
     std::move(completion).Run(nullptr);
+    return;
+  }
+  const auto service_process = FindNetworkService(client->process_id());
+  if (!service_process) {
+    WaitForNetworkService(std::move(owner), std::move(client),
+                          std::move(completion));
     return;
   }
   auto& state = partitions_.at(owner.storage_partition_token);
@@ -747,6 +772,57 @@ void AccessNetworkContextTransport::FinishPrivateContextBind(
     PublishPrivateContext(owner, incarnation);
   }
   std::move(completion).Run(std::move(client));
+}
+
+std::optional<content::ServiceProcessId>
+AccessNetworkContextTransport::FindNetworkService(uint64_t pid) const {
+  if (network_service_lookup_for_testing_) {
+    return network_service_lookup_for_testing_.Run(pid);
+  }
+  return NetworkServiceProcessFor(pid);
+}
+
+void AccessNetworkContextTransport::WaitForNetworkService(
+    aegis_access::OwnershipKey owner, PrivateContext client,
+    base::OnceCallback<void(PrivateContext)> completion) {
+  const auto pid = client->process_id();
+  const auto remaining = client->bind_deadline() - base::TimeTicks::Now();
+  if (pid > static_cast<uint64_t>(std::numeric_limits<base::ProcessId>::max()) ||
+      !remaining.is_positive()) {
+    std::move(completion).Run(nullptr);
+    return;
+  }
+  const auto control = client->control_id();
+  auto [entry, inserted] = pending_private_binds_.try_emplace(control);
+  CHECK(inserted);
+  auto& pending = entry->second;
+  pending.pid = pid;
+  pending.done = base::BindOnce(
+      [](base::WeakPtr<AccessNetworkContextTransport> self,
+         aegis_access::OwnershipKey owner, PrivateContext client,
+         base::OnceCallback<void(PrivateContext)> completion, bool launched) {
+        if (!self || !launched) {
+          std::move(completion).Run(nullptr);
+          return;
+        }
+        self->AdmitPrivateContext(std::move(owner), std::move(client),
+                                  std::move(completion));
+      }, weak_factory_.GetWeakPtr(), std::move(owner), std::move(client),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindPostTaskToCurrentDefault(std::move(completion)),
+          PrivateContext()));
+  pending.deadline.Start(FROM_HERE, remaining, base::BindOnce(
+      &AccessNetworkContextTransport::FinishWaitingPrivateContext,
+      weak_factory_.GetWeakPtr(), control, false));
+}
+
+void AccessNetworkContextTransport::FinishWaitingPrivateContext(
+    const base::UnguessableToken& control, bool launched) {
+  const auto entry = pending_private_binds_.find(control);
+  if (entry == pending_private_binds_.end()) return;
+  auto done = std::move(entry->second.done);
+  pending_private_binds_.erase(entry);
+  std::move(done).Run(launched);
 }
 
 void AccessNetworkContextTransport::OnPrivateContextDisconnected(

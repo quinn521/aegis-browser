@@ -14,6 +14,7 @@
 #include <string_view>
 
 #include "base/command_line.h"
+#include "base/process/process.h"
 #include "base/process/process_handle.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
@@ -47,6 +48,7 @@
 #include "mojo/public/cpp/bindings/receiver_set.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_network_context.h"
 #include "services/network/test/test_url_loader_client.h"
@@ -1500,6 +1502,44 @@ TEST_F(AccessSavedTestProfileProductTest,
 }
 
 TEST_F(AccessSavedTestProfileProductTest,
+       BindReplyBeforeLaunchNotificationWaitsForExactProcess) {
+  ProductAckContext early;
+  early.incarnation = "early-service-context";
+  constexpr auto pid = std::numeric_limits<base::ProcessId>::max();
+  early.process_id = pid;
+  const auto process_id = content::ServiceProcessId::FromUnsafeValue(42);
+  bool registered = false;
+  transport_->SetNetworkServiceLookupForTesting(base::BindLambdaForTesting(
+      [&](uint64_t candidate) -> std::optional<content::ServiceProcessId> {
+        if (candidate == pid && registered) return process_id;
+        return std::nullopt;
+      }));
+
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &early, bound.GetCallback());
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(bound.IsReady());
+
+  registered = true;
+  auto* observer = static_cast<content::ServiceProcessHost::Observer*>(
+      transport_);
+  content::ServiceProcessInfo unrelated_launch(
+      network::mojom::NetworkService::Name_, std::nullopt,
+      content::ServiceProcessId::FromUnsafeValue(43),
+      base::Process::Open(pid - 1));
+  observer->OnServiceProcessLaunched(unrelated_launch);
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(bound.IsReady());
+
+  content::ServiceProcessInfo launch(
+      network::mojom::NetworkService::Name_, std::nullopt, process_id,
+      base::Process::Open(pid));
+  observer->OnServiceProcessLaunched(launch);
+  EXPECT_TRUE(bound.Get());
+  transport_->SetNetworkServiceLookupForTesting({});
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
        UntrackedNetworkProcessIdentityRejectsBinding) {
   ProductAckContext untracked;
   untracked.incarnation = "untracked-process-context";
@@ -1527,6 +1567,25 @@ TEST_F(AccessSavedTestProfileProductTest,
   EXPECT_FALSE(previous->is_connected());
   EXPECT_TRUE(current->is_connected());
   EXPECT_NE(current->control_id(), previous->control_id());
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       ContextLifetimeProofBeforeRevokeWithNoReplacementCompletes) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+
+  context_.DisconnectRetiredContext();
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return !bubble_->AcknowledgedTestProfileListener();
+  }));
+  base::test::TestFuture<bool> revoked;
+  options->RevokeTestNodeProfile(revoked.GetCallback());
+  EXPECT_TRUE(revoked.Get());
+  EXPECT_EQ(options->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kIdle);
 }
 
 TEST_F(AccessSavedTestProfileProductTest,
