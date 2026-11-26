@@ -1,4 +1,4 @@
-From c92213b1308f478dbe0c804065604174cf123567 Mon Sep 17 00:00:00 2001
+From 4192119b037de08e78cb24d04077b4130814e05e Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Mon, 23 Nov 2026 18:32:53 +0800
 Subject: [PATCH] fix(android): revoke Access Options on primary document
@@ -14,33 +14,30 @@ Ordinary builds do not send that notification. The renderer IPC is compiled
 only when internal Access Options are enabled. Blink and Chrome share one
 declare_args in a Blink-visible gni, so the flag is not declared twice.
 
-The explicit-open browser tests follow the same flag. Internal builds wait
-for one notification. Ordinary builds flush the LocalFrameHost receiver and
-expect none, so a default content_browsertests run does not time out and a
-late frame-channel message cannot pass the zero-count check. The javascript:
-replacement test stays unconditional because it uses
-DidCommitDocumentReplacement().
+Both build profiles flush the LocalFrameHost receiver before checking the
+notification count. Internal builds require one callback and ordinary builds
+require zero. The javascript: replacement test remains unconditional.
 ---
- .../chrome/browser/ChromeTabbedActivity.java  |   4 +
- .../settings/AegisAccessOptionsFragment.java  |  22 ++++
- chrome/browser/android/BUILD.gn               |   2 +-
- .../android/aegis_access_options_bridge.cc    |   1 +
- .../render_frame_host_delegate.h              |   3 +
- .../renderer_host/render_frame_host_impl.cc   |  10 ++
- .../renderer_host/render_frame_host_impl.h    |   1 +
- .../browser/web_contents/web_contents_impl.cc |   8 ++
- .../browser/web_contents/web_contents_impl.h  |   1 +
- .../web_contents_impl_browsertest.cc          | 105 ++++++++++++++++++
- .../public/browser/web_contents_observer.h    |   5 +
- content/test/BUILD.gn                         |   1 +
- third_party/blink/public/common/BUILD.gn      |   8 ++
- .../public/common/aegis_android_access.gni    |  10 ++
- .../blink/public/mojom/frame/frame.mojom      |   6 +
- third_party/blink/renderer/core/BUILD.gn      |   1 +
- .../renderer/core/loader/frame_loader.cc      |  12 ++
- .../core/testing/fake_local_frame_host.cc     |   2 +
- .../core/testing/fake_local_frame_host.h      |   1 +
- 19 files changed, 202 insertions(+), 1 deletion(-)
+ .../chrome/browser/ChromeTabbedActivity.java  |  4 +
+ .../settings/AegisAccessOptionsFragment.java  | 22 +++++
+ chrome/browser/android/BUILD.gn               |  2 +-
+ .../android/aegis_access_options_bridge.cc    |  1 +
+ .../render_frame_host_delegate.h              |  3 +
+ .../renderer_host/render_frame_host_impl.cc   | 10 ++
+ .../renderer_host/render_frame_host_impl.h    |  1 +
+ .../browser/web_contents/web_contents_impl.cc |  8 ++
+ .../browser/web_contents/web_contents_impl.h  |  1 +
+ .../web_contents_impl_browsertest.cc          | 94 +++++++++++++++++++
+ .../public/browser/web_contents_observer.h    |  5 +
+ content/test/BUILD.gn                         |  1 +
+ third_party/blink/public/common/BUILD.gn      |  8 ++
+ .../public/common/aegis_android_access.gni    | 10 ++
+ .../blink/public/mojom/frame/frame.mojom      |  6 ++
+ third_party/blink/renderer/core/BUILD.gn      |  1 +
+ .../renderer/core/loader/frame_loader.cc      | 12 +++
+ .../core/testing/fake_local_frame_host.cc     |  2 +
+ .../core/testing/fake_local_frame_host.h      |  1 +
+ 19 files changed, 191 insertions(+), 1 deletion(-)
  create mode 100644 third_party/blink/public/common/aegis_android_access.gni
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -223,7 +220,7 @@ index 928d746f122ef71ab26f31881aabb55c5fa72307..6dd8087516d4cafcf77bd20993c78e0b
                       const std::string& name) override;
    void DidReceiveUserActivation(
 diff --git a/content/browser/web_contents/web_contents_impl_browsertest.cc b/content/browser/web_contents/web_contents_impl_browsertest.cc
-index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d095795669775613b6c3bb6 100644
+index 23ae692aa98f39882d5e3186dc4b148c8cca5537..6817345780afeacb3f14e2e457dede6ae5a59ba1 100644
 --- a/content/browser/web_contents/web_contents_impl_browsertest.cc
 +++ b/content/browser/web_contents/web_contents_impl_browsertest.cc
 @@ -39,6 +39,7 @@
@@ -250,7 +247,7 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d09579566977561
  #include "third_party/blink/public/common/client_hints/client_hints.h"
  #include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/common/page/page_zoom.h"
-@@ -201,6 +204,108 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
+@@ -201,6 +204,97 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
    base::test::ScopedFeatureList scoped_feature_list_;
  };
  
@@ -271,6 +268,14 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d09579566977561
 +      : WebContentsObserver(contents) {}
 +  void PrimaryMainFrameDocumentReplaced() override { ++count_; }
 +  int count() const { return count_; }
++
++  int CountAfterFrameHostFlush() const {
++    // Script completion and DevTools replies do not drain LocalFrameHost.
++    static_cast<RenderFrameHostImpl*>(web_contents()->GetPrimaryMainFrame())
++        ->local_frame_host_receiver_for_testing()
++        .FlushForTesting();
++    return count_;
++  }
 +
 + private:
 +  int count_ = 0;
@@ -301,18 +306,9 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d09579566977561
 +                     "document.close();"));
 +#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
 +  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
-+  base::RunLoop().RunUntilIdle();
-+  EXPECT_EQ(1, counter.count());
-+#else
-+  // Script completion and the DevTools reply use other pipes. Flushing the
-+  // frame-host receiver is ordered on that channel, so a LocalFrameHost
-+  // message sent before the flush is dispatched before the counter is read.
-+  static_cast<RenderFrameHostImpl*>(
-+      shell()->web_contents()->GetPrimaryMainFrame())
-+      ->local_frame_host_receiver_for_testing()
-+      .FlushForTesting();
-+  EXPECT_EQ(0, counter.count());
 +#endif
++  EXPECT_EQ(BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS) ? 1 : 0,
++            counter.CountAfterFrameHostFlush());
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
 +}
 +
@@ -324,9 +320,8 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d09579566977561
 +
 +  PrimaryDocumentReplacementCounter counter(shell()->web_contents());
 +  ASSERT_TRUE(ExecJs(shell(), "document.body.textContent = 'edited';"));
-+  base::RunLoop().RunUntilIdle();
 +  EXPECT_EQ("edited", EvalJs(shell(), "document.body.textContent"));
-+  EXPECT_EQ(0, counter.count());
++  EXPECT_EQ(0, counter.CountAfterFrameHostFlush());
 +
 +  TestDevToolsProtocolClient client;
 +  client.AttachToWebContents(shell()->web_contents());
@@ -341,18 +336,9 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..d1d14bb9923c19b74d09579566977561
 +  client.DetachProtocolClient();
 +#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
 +  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
-+  base::RunLoop().RunUntilIdle();
-+  EXPECT_EQ(1, counter.count());
-+#else
-+  // Script completion and the DevTools reply use other pipes. Flushing the
-+  // frame-host receiver is ordered on that channel, so a LocalFrameHost
-+  // message sent before the flush is dispatched before the counter is read.
-+  static_cast<RenderFrameHostImpl*>(
-+      shell()->web_contents()->GetPrimaryMainFrame())
-+      ->local_frame_host_receiver_for_testing()
-+      .FlushForTesting();
-+  EXPECT_EQ(0, counter.count());
 +#endif
++  EXPECT_EQ(BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS) ? 1 : 0,
++            counter.CountAfterFrameHostFlush());
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
 +}
 +
@@ -388,7 +374,7 @@ index 68b5fc8bd68280b497962151919c3b90e0678e45..5bf1f00f1b2da6e39cfc0222d7057569
      "//third_party/inspector_protocol:crdtp",
      "//third_party/leveldatabase",
 diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
-index cada4d794bc822c3cf83e8c0b719f0d6da490f54..4bce9dfd393d3a2595290209796f4bf9b9405181 100644
+index 7baef4adc0b2438797a550b0dbaaad63ba33edef..b5a00717cba49cd291823b26a4dbe9a34a12835d 100644
 --- a/third_party/blink/public/common/BUILD.gn
 +++ b/third_party/blink/public/common/BUILD.gn
 @@ -9,6 +9,7 @@ import("//build/config/rust.gni")
@@ -447,10 +433,10 @@ index 3c4d724903f522ac5bb1478f9528cbb774d2f808..2f51dc6dd78563b6346f105d22d2050d
    [Sync]
    RunModalAlertDialog(mojo_base.mojom.String16 alert_message,
 diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
-index a96e9c9df209abba41bccf9d348eee89058b5f83..4c19059db5b5a24caa78ecf77aff99fb4fe34023 100644
+index 5408d5fdec9ffda1c2d555cdc92782b07d86eea3..f168281f5ff2e30f8985546f9cf115839c347768 100644
 --- a/third_party/blink/renderer/core/BUILD.gn
 +++ b/third_party/blink/renderer/core/BUILD.gn
-@@ -433,6 +433,7 @@ component("core") {
+@@ -437,6 +437,7 @@ component("core") {
      "//third_party/blink/public:image_resources_grit",
      "//third_party/blink/public:resources",
      "//third_party/blink/public/common",
