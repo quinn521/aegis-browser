@@ -233,6 +233,15 @@ TEST(AccessTestNodeNativeConfigTest, StoredRealityRetainsV1Grammar) {
 }
 
 TEST(AccessTestNodeNativeConfigTest,
+     DevRealityRevalidationEscapesNestedFieldUri) {
+  auto node = Node();
+  node.spider_x = "/manual?next=https://callback.example";
+  EXPECT_EQ(ValidateAccessTestNodeNative(
+                node, AccessTestNodeNativeValidation::kFreshDevImport),
+            node);
+}
+
+TEST(AccessTestNodeNativeConfigTest,
      RejectsExtendedModelsWithInvalidDialAddress) {
   for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
                            aegis_access::test::kSyntheticGrpcRealityShare}) {

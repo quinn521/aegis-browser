@@ -409,7 +409,7 @@ bool HasOnlyKeys(const Query& query, const std::string_view (&keys)[N]) {
   });
 }
 
-std::optional<Query> ParseQuery(std::string_view query) {
+std::optional<Query> ParseQuery(std::string_view query, bool& has_alias) {
   Query result;
   for (;;) {
     const auto next = query.find('&');
@@ -420,8 +420,12 @@ std::optional<Query> ParseQuery(std::string_view query) {
     }
     const auto key = Unescape(item.substr(0, equal));
     auto value = Unescape(item.substr(equal + 1));
-    if (!key || !value ||
-        !result.emplace(CanonicalQueryKey(*key), std::move(*value)).second) {
+    if (!key || !value) {
+      return std::nullopt;
+    }
+    const auto canonical = CanonicalQueryKey(*key);
+    has_alias |= canonical != *key;
+    if (!result.emplace(canonical, std::move(*value)).second) {
       return std::nullopt;
     }
     if (next == std::string_view::npos) {
@@ -473,6 +477,9 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
     return {kUnsupported, std::nullopt};
   }
   share.remove_prefix(kScheme.size());
+  const bool extended = mode == AccessTestNodeImportMode::kAllowExtendedVless;
+  const bool has_nested_uri =
+      extended && share.find("://") != std::string_view::npos;
   const auto fragment_start = share.find('#');
   const auto fragment = share.substr(std::min(fragment_start, share.size()));
   share = share.substr(0, fragment_start);
@@ -481,7 +488,10 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
     return {kInvalid, std::nullopt};
   }
 
-  const auto authority = share.substr(0, query_start);
+  auto authority = share.substr(0, query_start);
+  if (extended && authority.ends_with('/')) {
+    authority.remove_suffix(1);
+  }
   const auto at = authority.find('@');
   const auto colon = authority.rfind(':');
   if (at == std::string_view::npos || colon == std::string_view::npos ||
@@ -499,7 +509,8 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
     return {kInvalid, std::nullopt};
   }
 
-  const auto query = ParseQuery(share.substr(query_start + 1));
+  bool has_alias = false;
+  const auto query = ParseQuery(share.substr(query_start + 1), has_alias);
   if (!query) {
     return {kInvalid, std::nullopt};
   }
@@ -515,16 +526,23 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
   }
   const auto type = ValueOr(*query, "type", "tcp");
   const auto security = ValueOr(*query, "security");
-  const bool extended = mode == AccessTestNodeImportMode::kAllowExtendedVless;
   const bool can_use_ws =
       extended || mode == AccessTestNodeImportMode::kAllowWebSocketTls;
   const bool ws = can_use_ws && type == "ws" && security == "tls";
   const bool tcp_tls =
       extended && type == "tcp" && security == "tls" && query->contains("type");
   const bool grpc = extended && type == "grpc" && security == "reality";
-  if (extended && (ws || tcp_tls || grpc) &&
-      (!IsExtendedAddress(address) ||
-       fragment.find("://") != std::string_view::npos)) {
+  if (extended && (ws || tcp_tls || grpc)) {
+    if (!IsExtendedAddress(address) ||
+        fragment.find("://") != std::string_view::npos) {
+      return {kInvalid, std::nullopt};
+    }
+    // Only the original RAW/REALITY import accepts the exporter aliases.
+    if (has_alias) {
+      return {kUnsupported, std::nullopt};
+    }
+  }
+  if (has_nested_uri && type == "tcp" && security == "reality") {
     return {kInvalid, std::nullopt};
   }
   AccessTestNode node{std::move(host),
@@ -602,16 +620,17 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
   }
   // Preserve the legacy RAW/REALITY query grammar, including empty pcks and
   // the optional affirmative exporter capability.
-  if (!grpc &&
-      (!std::ranges::all_of(
-           *query,
-           [](const auto& entry) { return IsRealityQueryKey(entry.first); }) ||
-       type != "tcp" || security != "reality" ||
-       ValueOr(*query, "flow", "xtls-rprx-vision") != "xtls-rprx-vision" ||
-       ValueOr(*query, "headerType", "none") != "none" ||
-       !ValueOr(*query, "pcks").empty() ||
-       (query->contains("support-x25519mlkem768") &&
-        ValueOr(*query, "support-x25519mlkem768") != "true"))) {
+  if (!grpc && (!std::ranges::all_of(*query,
+                                     [](const auto& entry) {
+                                       return IsRealityQueryKey(entry.first);
+                                     }) ||
+                type != "tcp" || security != "reality" ||
+                ValueOr(*query, "flow", extended ? "" : "xtls-rprx-vision") !=
+                    "xtls-rprx-vision" ||
+                ValueOr(*query, "headerType", "none") != "none" ||
+                !ValueOr(*query, "pcks").empty() ||
+                (query->contains("support-x25519mlkem768") &&
+                 ValueOr(*query, "support-x25519mlkem768") != "true"))) {
     return {kUnsupported, std::nullopt};
   }
 

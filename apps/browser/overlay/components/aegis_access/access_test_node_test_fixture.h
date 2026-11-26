@@ -91,6 +91,71 @@ inline constexpr std::string_view kSyntheticGrpcRealityInvalidDialAddressShare =
     "?type=grpc&security=reality&sni=grpc.example&serviceName=sample&sid=0123"
     "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
 
+inline constexpr std::string_view
+    kSyntheticTcpRealityVisionSlashAndAliasesShare =
+        "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443/"
+        "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+        "&serverName=www.example.com&fingerprint=chrome"
+        "&public_key=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&shortId="
+        "abcd1234"
+        "&headerType=none#demo-reality-vision";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsSlashShare =
+    "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443/?type=ws"
+    "&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
+    "&path=%2Fws%3Ftoken%3D%2574est-value%26opaque%3D%25E9&encryption=none"
+    "&alpn=http%2F1.1#synthetic-ws";
+
+inline constexpr std::string_view kSyntheticTcpTlsVisionSlashShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443/"
+    "?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none"
+    "&host=metadata.example&security=tls&sni=tls.example&type=tcp"
+    "#synthetic-tcp";
+
+inline constexpr std::string_view kSyntheticGrpcRealitySlashShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443/"
+    "?encryption=none&fp=chrome&path=%2Fsample%2FTun"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality"
+    "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
+    "#synthetic-grpc";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionMissingFlowShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?security=reality&encryption=none&type=tcp&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none#demo-reality-vision";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionConcatenatedShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+    "&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none"
+    "#demo-reality-visionvless://"
+    "550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+    "&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsFingerprintAliasShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.8:8443?security=tls"
+    "&type=ws&host=edge.example.test&fingerprint=chrome&sni=tls.example.test"
+    "&path=%2Ftest&encryption=none&alpn=#ignored";
+
+inline constexpr std::string_view kSyntheticTcpTlsVisionFingerprintAliasShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443"
+    "?encryption=none&flow=xtls-rprx-vision&fingerprint=chrome"
+    "&headerType=none&host=metadata.example&security=tls&sni=tls.example"
+    "&type=tcp#synthetic-tcp";
+
+inline constexpr std::string_view kSyntheticGrpcRealityFingerprintAliasShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443"
+    "?encryption=none&fingerprint=chrome&path=%2Fsample%2FTun"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality"
+    "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
+    "#synthetic-grpc";
+
 }  // namespace aegis_access::test
 
 #endif  // COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_

@@ -4,6 +4,7 @@
 #include <cassert>
 #include <iostream>
 #include <string>
+#include <utility>
 
 #include "components/aegis_access/access_test_node_test_fixture.h"
 
@@ -12,17 +13,26 @@ namespace {
 using aegis_access::AccessTestNodeError;
 using aegis_access::AccessTestNodeImportMode;
 using aegis_access::ParseAccessTestNodeShare;
+using aegis_access::test::kSyntheticGrpcRealityFingerprintAliasShare;
 using aegis_access::test::kSyntheticGrpcRealityInvalidDialAddressShare;
 using aegis_access::test::kSyntheticGrpcRealityShare;
+using aegis_access::test::kSyntheticGrpcRealitySlashShare;
+using aegis_access::test::kSyntheticTcpRealityVisionConcatenatedShare;
 using aegis_access::test::kSyntheticTcpRealityVisionInvalidFingerprintShare;
 using aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare;
+using aegis_access::test::kSyntheticTcpRealityVisionMissingFlowShare;
 using aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare;
+using aegis_access::test::kSyntheticTcpRealityVisionSlashAndAliasesShare;
 using aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare;
+using aegis_access::test::kSyntheticTcpTlsVisionFingerprintAliasShare;
 using aegis_access::test::kSyntheticTcpTlsVisionInvalidDialAddressShare;
 using aegis_access::test::kSyntheticTcpTlsVisionShare;
+using aegis_access::test::kSyntheticTcpTlsVisionSlashShare;
 using aegis_access::test::kSyntheticTestNodeShare;
+using aegis_access::test::kSyntheticWebSocketTlsFingerprintAliasShare;
 using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
 using aegis_access::test::kSyntheticWebSocketTlsShare;
+using aegis_access::test::kSyntheticWebSocketTlsSlashShare;
 using aegis_access::test::kSyntheticWebSocketTlsUnknownFingerprintShare;
 
 std::string ReplaceIn(std::string_view input,
@@ -227,6 +237,73 @@ int main() {
            .node);
   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
          result.node);
+  const auto missing_vision = ParseAccessTestNodeShare(
+      kSyntheticTcpRealityVisionMissingFlowShare, kExtended);
+  assert(missing_vision.error == kUnsupported && !missing_vision.node);
+  const auto concatenated = ParseAccessTestNodeShare(
+      kSyntheticTcpRealityVisionConcatenatedShare, kExtended);
+  assert(concatenated.error == kInvalid && !concatenated.node);
+  assert(ParseAccessTestNodeShare(kSyntheticTcpRealityVisionMissingFlowShare)
+             .node == result.node);
+  assert(ParseAccessTestNodeShare(kSyntheticTcpRealityVisionConcatenatedShare)
+             .node == result.node);
+  const auto escaped_spider_uri = ParseAccessTestNodeShare(
+      Replace(
+          "fp=chrome",
+          "fp=chrome&spx=%2Fmanual%3Fnext%3Dhttps%3A%2F%2Fcallback.example"),
+      kExtended);
+  assert(escaped_spider_uri.node &&
+         escaped_spider_uri.node->spider_x ==
+             "/manual?next=https://callback.example");
+  assert(ParseAccessTestNodeShare(
+             Replace("fp=chrome",
+                     "fp=chrome&spx=/manual?next=https://callback.example"),
+             kExtended)
+             .error == kInvalid);
+  for (const auto& [with_slash, plain] : {
+           std::pair{kSyntheticTcpRealityVisionSlashAndAliasesShare,
+                     kSyntheticTestNodeShare},
+           std::pair{kSyntheticWebSocketTlsSlashShare,
+                     kSyntheticWebSocketTlsQueryShare},
+           std::pair{kSyntheticTcpTlsVisionSlashShare,
+                     kSyntheticTcpTlsVisionShare},
+           std::pair{kSyntheticGrpcRealitySlashShare,
+                     kSyntheticGrpcRealityShare},
+       }) {
+    const auto parsed = ParseAccessTestNodeShare(with_slash, kExtended);
+    assert(parsed.node &&
+           parsed.node == ParseAccessTestNodeShare(plain, kExtended).node);
+    for (const auto* path : {"//?", "/extra?", "%2F?"}) {
+      assert(
+          ParseAccessTestNodeShare(ReplaceIn(with_slash, "/?", path), kExtended)
+              .error == kInvalid);
+    }
+  }
+  assert(
+      ParseAccessTestNodeShare(kSyntheticTcpRealityVisionSlashAndAliasesShare)
+          .error == kInvalid);
+  assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsFingerprintAliasShare,
+                                  kDev)
+             .node == ws.node);
+  for (const auto alias : {
+           kSyntheticWebSocketTlsFingerprintAliasShare,
+           kSyntheticTcpTlsVisionFingerprintAliasShare,
+           kSyntheticGrpcRealityFingerprintAliasShare,
+       }) {
+    const auto invalid = ParseAccessTestNodeShare(alias, kExtended);
+    assert(invalid.error == kUnsupported && !invalid.node);
+    assert(!ParseAccessTestNodeShare(
+                ReplaceIn(alias, "&fingerprint=", "&%66ingerprint="), kExtended)
+                .node);
+  }
+  assert(ParseAccessTestNodeShare(
+             ReplaceIn(kSyntheticWebSocketTlsShare, "&sni=", "&server_name="),
+             kExtended)
+             .error == kUnsupported);
+  assert(ParseAccessTestNodeShare(
+             ReplaceIn(kSyntheticGrpcRealityShare, "&pbk=", "&publicKey="),
+             kExtended)
+             .error == kUnsupported);
   for (const auto share : {kSyntheticTcpRealityVisionInvalidFingerprintShare,
                            kSyntheticTcpRealityVisionInvalidPublicKeyShare,
                            kSyntheticTcpRealityVisionOddShortIdShare,

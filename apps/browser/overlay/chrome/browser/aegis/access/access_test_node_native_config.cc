@@ -12,14 +12,15 @@ namespace {
 
 std::string EscapeNativeQueryValue(std::string_view value) {
   // The share decoder splits on '&' and '#' and decodes '%' exactly once.
-  // Preserve every other printable character to avoid expanding the request
-  // target or gRPC service name beyond the parser's share budget.
+  // Escape URI delimiters in field data so they cannot look like a second
+  // share. Preserve other printable bytes to stay within the share budget.
   constexpr char kHex[] = "0123456789ABCDEF";
   std::string result;
   result.reserve(value.size());
-  for (unsigned char byte : value) {
+  for (; !value.empty(); value.remove_prefix(1)) {
+    const auto byte = static_cast<unsigned char>(value.front());
     if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
-        byte == '%') {
+        byte == '%' || value.starts_with("://")) {
       result.push_back('%');
       result.push_back(kHex[byte >> 4]);
       result.push_back(kHex[byte & 15]);
