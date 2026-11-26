@@ -1,4 +1,4 @@
-From 6c6e89daa5a8a41a642488ac80ac8f36ece72e07 Mon Sep 17 00:00:00 2001
+From 3c752c23825afc4a0d7255def9160c82d025eca1 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 25 Nov 2026 20:40:41 +0800
 Subject: [PATCH] fix(android): bind Access Options editor to a menu grant in
@@ -32,18 +32,22 @@ or a missing menu grant.
 A receiver attached to another window cannot read the original editor handle, while the owning receiver still can.
 
 When Fragment restoration is suppressed, native resume shows the unavailable dialog from the hint saved by the Activity and does not issue an editor. The regression recreates the Activity through that production path, so removing the hint capture or the resume hook fails the test.
+
+The regression opens the activity menu and clicks the displayed Access Options row, so a menu that no longer dispatches that item fails. Normal recreation must restore the existing dialog. Only suppressed Fragment restoration may create the unavailable dialog from the saved hint.
 ---
  chrome/android/BUILD.gn                       |  25 +
  chrome/android/chrome_public_apk_tmpl.gni     |   1 +
- .../chrome/browser/ChromeTabbedActivity.java  |  38 +-
- .../settings/AegisAccessOptionsFragment.java  |  51 ++-
+ .../chrome/browser/ChromeTabbedActivity.java  |  46 +-
+ .../settings/AegisAccessOptionsFragment.java  |  55 ++-
  chrome/android/javatests/BUILD.gn             |  37 +-
  .../aegis_access_options_AndroidManifest.xml  |  11 +
- .../AegisAccessOptionsFragmentTest.java       | 429 +++++++++++++++++-
+ .../AegisAccessOptionsFragmentTest.java       | 435 +++++++++++++++++-
  chrome/browser/android/BUILD.gn               |   7 +-
  .../browser/android/aegis_access_options.gni  |  10 +
  .../android/aegis_access_options_bridge.cc    | 110 ++++-
- 10 files changed, 683 insertions(+), 36 deletions(-)
+ .../ui/appmenu/AppMenuHandlerImpl.java        |   6 +
+ .../browser/ui/appmenu/AppMenuHandler.java    |   9 +
+ 12 files changed, 711 insertions(+), 41 deletions(-)
  create mode 100644 chrome/android/javatests/aegis_access_options_AndroidManifest.xml
  create mode 100644 chrome/browser/android/aegis_access_options.gni
 
@@ -103,20 +107,21 @@ index 7817cd680fe2c3827bbadc85f8684f64d94fc82e..2df9c6c20a465adb3c9c21da9bde7b34
                                   "manifest_package",
                                   "proguard_configs",
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-index 60c7bb905c83f289da7329b721c642040119b86b..04231d837d4969ebdb9aa1126dab1ed613416da7 100644
+index 60c7bb905c83f289da7329b721c642040119b86b..588f6f69b2accc46fba8e3ee10d89191861ee56f 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -704,6 +704,9 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -704,6 +704,10 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
      // onCreate(), a cold startup.
      private boolean mFromResumption;
      private boolean mRestoreUnavailableAccessOptions;
 +    private boolean mFragmentRestoreSuppressed;
++    private boolean mUnavailableDialogCreatedFromHint;
 +    private boolean mNativeResumeFinishedForTesting;
 +    private static boolean sSuppressFragmentRestoreForTesting;
  
      private NextTabPolicySupplier mNextTabPolicySupplier;
      private HubProvider mHubProvider;
-@@ -1771,10 +1774,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -1771,10 +1775,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          }
  
          super.onResumeWithNative();
@@ -129,15 +134,17 @@ index 60c7bb905c83f289da7329b721c642040119b86b..04231d837d4969ebdb9aa1126dab1ed6
  
          DefaultBrowserPromoUtils.getInstance().maybeRecordDeepLinkOutcome();
  
-@@ -3483,12 +3484,39 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3483,12 +3485,46 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          return true;
      }
  
 +    private void showUnavailableAccessOptionsFromHint() {
-+        if (mRestoreUnavailableAccessOptions
-+                && AegisAccessOptionsFragment.showUnavailable(getSupportFragmentManager())) {
-+            mRestoreUnavailableAccessOptions = false;
-+        }
++        if (!mRestoreUnavailableAccessOptions) return;
++        var manager = getSupportFragmentManager();
++        boolean alreadyShowing = AegisAccessOptionsFragment.isShowing(manager);
++        if (!AegisAccessOptionsFragment.showUnavailable(manager)) return;
++        mRestoreUnavailableAccessOptions = false;
++        if (!alreadyShowing) mUnavailableDialogCreatedFromHint = true;
 +    }
 +
 +    /**
@@ -159,6 +166,11 @@ index 60c7bb905c83f289da7329b721c642040119b86b..04231d837d4969ebdb9aa1126dab1ed6
 +        return mNativeResumeFinishedForTesting;
 +    }
 +
++    @VisibleForTesting
++    public boolean unavailableDialogCreatedFromHintForTesting() {
++        return mUnavailableDialogCreatedFromHint;
++    }
++
      @Override
      protected @Nullable Bundle transformSavedInstanceStateForOnCreate(
              @Nullable Bundle savedInstanceState) {
@@ -171,7 +183,7 @@ index 60c7bb905c83f289da7329b721c642040119b86b..04231d837d4969ebdb9aa1126dab1ed6
              // FragmentManager state before native is initialized, as restored fragments (such as
              // SettingsPage) may depend on native/profile and crash during onCreate(). This is the
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
-index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3405539f65787ddaee79bdc220d958bfd584bf14 100644
+index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3b04e300262a80cd8038b64a372995f054b1b732 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 @@ -23,6 +23,7 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -220,7 +232,18 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3405539f65787ddaee79bdc220d958bf
      }
  
      /** Retains a presentation hint in Activity state, without persisting an editor. */
-@@ -88,8 +98,25 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -75,6 +85,10 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+         return state != null && state.getBoolean(RESTORE_UNAVAILABLE);
+     }
+ 
++    public static boolean isShowing(FragmentManager manager) {
++        return manager.findFragmentByTag(TAG) != null;
++    }
++
+     public static boolean showUnavailable(FragmentManager manager) {
+         if (manager.isStateSaved()) return false;
+         if (manager.findFragmentByTag(TAG) == null) {
+@@ -88,8 +102,25 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
                  && AegisAccessOptionsFragmentJni.get().canRead(mEditor, this);
      }
  
@@ -246,7 +269,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3405539f65787ddaee79bdc220d958bf
          boolean canRead = !mRevoked && canReadEditor();
          return new AlertDialog.Builder(requireContext())
                  .setTitle(R.string.aegis_access_options_title)
-@@ -114,6 +141,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -114,6 +145,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
      }
  
      private void closeEditor() {
@@ -254,7 +277,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3405539f65787ddaee79bdc220d958bf
          MonotonicObservableSupplier<TabModel> models = mModels;
          if (models != null) {
              mModels = null;
-@@ -134,10 +162,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -134,10 +166,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
          }
      }
  
@@ -351,10 +374,10 @@ index 0000000000000000000000000000000000000000..002eeeb8d851374249b9af17b2b7d126
 +        android:label="Aegis Access Options tests for {{manifest_package}}"/>
 +{% endblock %}
 diff --git a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
-index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac49015a0591ee 100644
+index b697c1e9da5b2da2692bcefd3a00264014ea3a16..8f5a9368ae46076f0fc034b1057e4e4ad03b4b11 100644
 --- a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 +++ b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
-@@ -2,8 +2,14 @@
+@@ -2,8 +2,15 @@
  
  package org.chromium.chrome.browser.settings;
  
@@ -366,10 +389,11 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +import android.app.Activity;
 +import android.content.Intent;
 +import android.os.Bundle;
++import android.view.View;
  import android.widget.TextView;
  
  import androidx.test.filters.MediumTest;
-@@ -12,17 +18,34 @@ import org.junit.Rule;
+@@ -12,17 +19,31 @@ import org.junit.Rule;
  import org.junit.Test;
  import org.junit.runner.RunWith;
  
@@ -385,16 +409,13 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +import org.chromium.chrome.browser.ChromeTabbedActivity;
 +import org.chromium.chrome.browser.flags.ChromeSwitches;
 +import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
-+import org.chromium.chrome.browser.tabbed_mode.TabbedAppMenuPropertiesDelegate;
 +import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
-+import org.chromium.chrome.browser.ui.appmenu.AppMenuItemProperties;
  import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
  import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
  import org.chromium.content_public.browser.WebContents;
  import org.chromium.content_public.browser.test.util.JavaScriptUtils;
  import org.chromium.net.test.EmbeddedTestServerRule;
 +import org.chromium.ui.base.WindowAndroid;
-+import org.chromium.ui.modelutil.MVCListAdapter;
  
 +import java.util.HashSet;
 +import java.util.concurrent.atomic.AtomicReference;
@@ -405,7 +426,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
  public class AegisAccessOptionsFragmentTest {
      @Rule public ChromeTabbedActivityTestRule mActivityRule = new ChromeTabbedActivityTestRule();
  
-@@ -30,7 +53,6 @@ public class AegisAccessOptionsFragmentTest {
+@@ -30,7 +51,6 @@ public class AegisAccessOptionsFragmentTest {
  
      @Test
      @MediumTest
@@ -413,22 +434,37 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
      public void testPrimaryDocumentReplacementRevokesVisibleEditor() throws Exception {
          mActivityRule.startMainActivityWithURL(
                  mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
-@@ -38,36 +60,411 @@ public class AegisAccessOptionsFragmentTest {
+@@ -38,25 +58,7 @@ public class AegisAccessOptionsFragmentTest {
          WebContents contents =
                  ThreadUtils.runOnUiThreadBlocking(
                          () -> activity.getActivityTab().getWebContents());
+-        AegisAccessOptionsFragment editor =
+-                ThreadUtils.runOnUiThreadBlocking(
+-                        () -> {
+-                            assertTrue(
+-                                    activity.onMenuOrKeyboardAction(
+-                                            R.id.aegis_access_options_menu_id,
+-                                            /* fromMenu= */ true,
+-                                            null,
+-                                            null));
+-                            return activity.getSupportFragmentManager().getFragments().stream()
+-                                    .filter(AegisAccessOptionsFragment.class::isInstance)
+-                                    .map(AegisAccessOptionsFragment.class::cast)
+-                                    .findFirst()
+-                                    .orElseThrow();
+-                        });
+-        assertTrue(ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
+-        CriteriaHelper.pollUiThread(
+-                () -> hasMessage(editor, R.string.aegis_access_options_read_only),
+-                "The admitted editor must visibly display its read-only state.");
 +        AegisAccessOptionsFragment editor = openLiveEditor(activity);
-+
-+        JavaScriptUtils.executeJavaScriptAndWaitForResult(
-+                contents,
-+                "setTimeout(() => { location.href = 'javascript:\"replacement\"'; }, 0);"
-+                        + "'scheduled';");
-+
-+        CriteriaHelper.pollUiThread(
-+                () ->
-+                        !editor.canReadEditor()
-+                                && hasMessage(editor, R.string.aegis_access_options_unavailable),
-+                "The same editor must reject native reads and show unavailable.");
+ 
+         JavaScriptUtils.executeJavaScriptAndWaitForResult(
+                 contents,
+@@ -68,6 +70,397 @@ public class AegisAccessOptionsFragmentTest {
+                         !editor.canReadEditor()
+                                 && hasMessage(editor, R.string.aegis_access_options_unavailable),
+                 "The same editor must reject native reads and show unavailable.");
 +
 +        assertFalse(
 +                "A revoked receiver must not obtain an editor without a new menu action.",
@@ -520,6 +556,9 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +            assertTrue(
 +                    "A saved state without the hint must not create a dialog.",
 +                    ThreadUtils.runOnUiThreadBlocking(() -> findEditorOrNull(suppressed) == null));
++            assertFalse(
++                    "A recreation without the hint must not create a dialog from the hint.",
++                    suppressed.unavailableDialogCreatedFromHintForTesting());
 +
 +            AegisAccessOptionsFragment editor = openLiveEditor(suppressed);
 +            mActivityRule.recreateActivity();
@@ -540,6 +579,9 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +                                && hasMessage(candidate, R.string.aegis_access_options_unavailable);
 +                    },
 +                    "Native resume must show unavailable from the saved hint alone.");
++            assertTrue(
++                    "Suppressed restoration must create the unavailable dialog from the saved hint.",
++                    recreated.unavailableDialogCreatedFromHintForTesting());
 +            AegisAccessOptionsFragment restored =
 +                    ThreadUtils.runOnUiThreadBlocking(() -> findEditor(recreated));
 +            assertTrue(
@@ -666,26 +708,6 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +        return ThreadUtils.runOnUiThreadBlocking(activity::getWindowAndroid);
 +    }
 +
-+    /** The positive path must fail if the app menu no longer offers Access Options. */
-+    private static boolean menuOffersAccessOptions(ChromeTabbedActivity activity) {
-+        TabbedAppMenuPropertiesDelegate delegate =
-+                (TabbedAppMenuPropertiesDelegate) activity.createAppMenuPropertiesDelegate();
-+        try {
-+            MVCListAdapter.ModelList model = delegate.buildMenuModelList();
-+            for (int i = 0; i < model.size(); i++) {
-+                MVCListAdapter.ListItem item = model.get(i);
-+                if (item.type == AppMenuHandler.AppMenuItemType.STANDARD
-+                        && item.model.get(AppMenuItemProperties.MENU_ITEM_ID)
-+                                == R.id.aegis_access_options_menu_id) {
-+                    return true;
-+                }
-+            }
-+            return false;
-+        } finally {
-+            delegate.destroy();
-+        }
-+    }
-+
 +    /**
 +     * Starts a second tabbed Activity. API 31 multi-instance builds use a new ChromeTabbedActivity.
 +     * Older builds use ChromeTabbedActivity2. The new Activity is only a host for the foreign
@@ -740,37 +762,36 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +    }
 +
 +    private static AegisAccessOptionsFragment openLiveEditor(ChromeTabbedActivity activity) {
-         AegisAccessOptionsFragment editor =
-                 ThreadUtils.runOnUiThreadBlocking(
-                         () -> {
-+                            assertTrue(
-+                                    "Access Options must appear in the visible app menu.",
-+                                    menuOffersAccessOptions(activity));
-                             assertTrue(
-                                     activity.onMenuOrKeyboardAction(
-                                             R.id.aegis_access_options_menu_id,
-                                             /* fromMenu= */ true,
-                                             null,
-                                             null));
--                            return activity.getSupportFragmentManager().getFragments().stream()
--                                    .filter(AegisAccessOptionsFragment.class::isInstance)
--                                    .map(AegisAccessOptionsFragment.class::cast)
--                                    .findFirst()
--                                    .orElseThrow();
-+                            return findEditor(activity);
-                         });
--        assertTrue(ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
-         CriteriaHelper.pollUiThread(
-                 () -> hasMessage(editor, R.string.aegis_access_options_read_only),
-                 "The admitted editor must visibly display its read-only state.");
++        AtomicReference<View> item = new AtomicReference<>();
++        ThreadUtils.runOnUiThreadBlocking(
++                () -> {
++                    AppMenuHandler handler =
++                            activity.getRootUiCoordinatorForTesting().getAppMenuHandler();
++                    assertNotNull("The activity must own an app menu.", handler);
++                    assertTrue("The app menu must open.", handler.showAppMenu(null, false));
++                });
++        CriteriaHelper.pollUiThread(
++                () -> {
++                    AppMenuHandler handler =
++                            activity.getRootUiCoordinatorForTesting().getAppMenuHandler();
++                    View found =
++                            handler.getDisplayedMenuItemForTesting(
++                                    R.id.aegis_access_options_menu_id);
++                    if (found == null) return false;
++                    item.set(found);
++                    return true;
++                },
++                "Access Options must appear in the displayed app menu.");
++        ThreadUtils.runOnUiThreadBlocking(() -> item.get().performClick());
++        AegisAccessOptionsFragment editor =
++                ThreadUtils.runOnUiThreadBlocking(() -> findEditor(activity));
++        CriteriaHelper.pollUiThread(
++                () -> hasMessage(editor, R.string.aegis_access_options_read_only),
++                "The admitted editor must visibly display its read-only state.");
 +        assertTrue(ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
 +        return editor;
 +    }
- 
--        JavaScriptUtils.executeJavaScriptAndWaitForResult(
--                contents,
--                "setTimeout(() => { location.href = 'javascript:\"replacement\"'; }, 0);"
--                        + "'scheduled';");
++
 +    private void assertRecreatedEditorUnavailable(AegisAccessOptionsFragment editor) {
 +        mActivityRule.recreateActivity();
 +        mActivityRule.waitForActivityNativeInitializationComplete();
@@ -780,12 +801,8 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +        assertFalse(
 +                "Old receiver from destroyed activity must not read the editor.",
 +                ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
- 
-         CriteriaHelper.pollUiThread(
--                () ->
--                        !editor.canReadEditor()
--                                && hasMessage(editor, R.string.aegis_access_options_unavailable),
--                "The same editor must reject native reads and show unavailable.");
++
++        CriteriaHelper.pollUiThread(
 +                () -> {
 +                    AegisAccessOptionsFragment candidate = findEditorOrNull(recreated);
 +                    WebContents contents =
@@ -799,6 +816,9 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..9663b47eb16af375ff51920df7ac4901
 +                            && hasMessage(candidate, R.string.aegis_access_options_unavailable);
 +                },
 +                "The recreated window must restore only the unavailable state.");
++        assertFalse(
++                "Normal recreation must restore the existing dialog, not create one from the saved hint.",
++                recreated.unavailableDialogCreatedFromHintForTesting());
 +
 +        AegisAccessOptionsFragment restored =
 +                ThreadUtils.runOnUiThreadBlocking(() -> findEditor(recreated));
@@ -1048,3 +1068,40 @@ index 12b85bb6e231cc784e30209d02446bb4958fe444..90c289ef27586a245db30e2ed815a4a6
      return {};
    }
  
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
+index cc8ac963bc098f9f976a8d53f499622ce3f2d451..749459919617228b69a018567eaa8c116fb3a31b 100644
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
+@@ -587,6 +587,12 @@ class AppMenuHandlerImpl
+         mTestOptionsItemSelectedListener = onOptionsItemSelectedListener;
+     }
+ 
++    @Override
++    public @Nullable View getDisplayedMenuItemForTesting(int itemId) {
++        if (mAppMenu == null || mAppMenu.getListView() == null) return null;
++        return mAppMenu.getListView().findViewById(itemId);
++    }
++
+     @Override
+     public AppMenuPropertiesDelegate getMenuPropertiesDelegate() {
+         return mDelegate;
+diff --git a/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandler.java b/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandler.java
+index 49327f8c018c4521486027694a4b63481e81814d..b57d4fa42d6c161cb2747fe21ab987f11962e172 100644
+--- a/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandler.java
++++ b/chrome/browser/ui/android/appmenu/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandler.java
+@@ -177,6 +177,15 @@ public interface AppMenuHandler {
+         return showAppMenu(anchorView, startDragging);
+     }
+ 
++    /**
++     * Returns the row currently displayed for {@code itemId}, or null when the menu is hidden or
++     * does not contain that row. Instrumentation clicks this view so the production click handler
++     * dispatches the item.
++     */
++    default @Nullable View getDisplayedMenuItemForTesting(int itemId) {
++        return null;
++    }
++
+     /**
+      * @return A new {@link AppMenuButtonHelper} to hook up to a view containing a menu button.
+      */
