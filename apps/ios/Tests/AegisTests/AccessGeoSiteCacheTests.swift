@@ -177,12 +177,12 @@ final class AccessGeoSiteCacheTests: XCTestCase {
         let previousInstall = published.addingTimeInterval(-2 * 86_400)
         fixture.clock.setWall(previousInstall)
         let old = fixture.cache()
-        await old.restore()
+        await old.restore(migrating: smartAll)
         try old.requestOverseasPreview()
         let retired = URL(string: "https://www.aegis-retired-test-domain.com")!
         let retained = URL(string: "https://www.google.com")!
         let previous = try Self.overseas(1, positive: ["google.com", "aegis-retired-test-domain.com"],
-                                         excluding: [], now: previousInstall)
+                                         excluding: [], now: previousInstall, domestic: Vector.selectedProjection)
         try await old.apply(previous, using: XCTUnwrap(old.updateContext()))
         let selection = AccessOverseasSelection(enabled: true, mode: .all)
         try await old.confirmOverseas(old.overseasConfirmation(for: selection)) { true }
@@ -194,6 +194,14 @@ final class AccessGeoSiteCacheTests: XCTestCase {
 
         fixture.clock.setWall(published)
         XCTAssertLessThan(fixture.clock.wall, previous.expiresAt)
+        fixture.fault.withLock { $0 = .afterFileSync }
+        let duringFailure = fixture.cache(useProductBaseline: true)
+        await duringFailure.restore()
+        XCTAssertEqual(duringFailure.status, .ready)
+        XCTAssertEqual(duringFailure.match(debian), .managed)
+        XCTAssertNotEqual(duringFailure.runtimeView().overseas.match(retired), .managed)
+        fixture.fault.withLock { $0 = nil }
+
         for _ in 0..<2 {
             let reopened = fixture.cache(useProductBaseline: true)
             await reopened.restore()
@@ -245,6 +253,25 @@ final class AccessGeoSiteCacheTests: XCTestCase {
         try await cache.confirmOverseas(confirmation) { true }
         XCTAssertFalse(cache.runtimeView().overseas.usingBundledRules)
         XCTAssertEqual(cache.refreshState.nextAttempt, downloaded.expiresAt.addingTimeInterval(-86_400))
+    }
+
+    func testExactBundleDownloadDoesNotReplaceItsApprovalSource() async throws {
+        let fixture = Fixture()
+        defer { fixture.clean() }
+        let resources = try XCTUnwrap(Bundle.main.resourceURL)
+        let downloaded = try AccessGeoSiteAdmission.admitBundled(resources: resources)
+        let published = try XCTUnwrap(ISO8601DateFormatter().date(from: downloaded.receipt.publishedAt))
+        fixture.clock.setWall(published.addingTimeInterval(86_400))
+        let cache = fixture.cache(useProductBaseline: true)
+        await cache.restore()
+        let selection = AccessOverseasSelection(enabled: true, mode: .all)
+        try await cache.confirmOverseas(cache.overseasConfirmation(for: selection)) { true }
+        XCTAssertTrue(cache.runtimeView().overseas.usingBundledRules)
+        try await cache.apply(downloaded, using: XCTUnwrap(cache.updateContext()))
+        XCTAssertTrue(cache.runtimeView().overseas.usingBundledRules)
+        let cold = fixture.cache(useProductBaseline: true)
+        await cold.restore()
+        XCTAssertTrue(cold.runtimeView().overseas.usingBundledRules)
     }
 
     func testExpiryRetainsOnlyApprovedIntersectionWithOfflineRules() async throws {
@@ -1259,8 +1286,8 @@ final class AccessGeoSiteCacheTests: XCTestCase {
     }
 
     static func overseas(_ sequence: Int, positive: [String], excluding: [String],
-                          now: Date? = nil) throws -> AccessGeoSiteAdmission.Candidate {
-        let data = Vector.group("GFWLIST-CN", rules: positive.map { Vector.rule(2, $0) })
+                          now: Date? = nil, domestic: Data = Data()) throws -> AccessGeoSiteAdmission.Candidate {
+        let data = domestic + Vector.group("GFWLIST-CN", rules: positive.map { Vector.rule(2, $0) })
             + Vector.group("GFWLIST-CN-EXCLUDE", rules: excluding.map { Vector.rule(2, $0) })
             + Vector.group("GOOGLE-GEMINI", rules: [Vector.rule(3, "gemini.google.com")])
         return try Self.candidate(sequence, database: data, includeOverseas: true, now: now)

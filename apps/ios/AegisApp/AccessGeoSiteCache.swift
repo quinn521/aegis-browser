@@ -613,11 +613,18 @@ final class AccessGeoSiteCache {
         let loadBundle = useProductBaseline
         do {
             let (recovered, bundled) = try await Task.detached(priority: .utility) {
-                let recovered = try Self.recover(store, migrating: migrating, now: wall,
+                var recovered = try Self.recover(store, migrating: migrating, now: wall,
                                                  usesLegacyBundledConsent: usesLegacyBundledConsent)
                 let bundled = loadBundle ? try? AccessOverseasCacheSnapshot.bundled() : nil
-                let snapshot = try bundled.map { try Self.adoptBundledScope($0, in: recovered, storage: store) } ?? recovered
-                return (snapshot, bundled)
+                if let bundled {
+                    do {
+                        recovered = try Self.adoptBundledScope(bundled, in: recovered, storage: store)
+                    } catch {
+                        // A seal failure holds the overseas scope while leaving the recovered ledger usable.
+                        recovered.overseasRecoveryHeld = true
+                    }
+                }
+                return (recovered, bundled)
             }.value
             try Task.checkCancellation()
             bundledOverseas = bundled
@@ -970,7 +977,7 @@ final class AccessGeoSiteCache {
             next.overseasStaged = prepared.staged
             next.ledger.overseasAdmissionFailed = false
             next.overseasActive = prepared.active
-            if prepared.active == nil || prior.ledger.overseasSelection?.enabled == true {
+            if prepared.active == nil || prepared.active?.receipt != prior.overseasActive?.receipt {
                 next.ledger.overseasApprovedFromBundle = nil
             }
             next.ledger.overseasExpansionPending = prepared.awaitingApproval
