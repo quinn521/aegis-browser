@@ -1,4 +1,4 @@
-From 3c752c23825afc4a0d7255def9160c82d025eca1 Mon Sep 17 00:00:00 2001
+From fb3f7ffe3941cdd7c27a256d5f9f5a3b89e71732 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 25 Nov 2026 20:40:41 +0800
 Subject: [PATCH] fix(android): bind Access Options editor to a menu grant in
@@ -45,9 +45,9 @@ The regression opens the activity menu and clicks the displayed Access Options r
  chrome/browser/android/BUILD.gn               |   7 +-
  .../browser/android/aegis_access_options.gni  |  10 +
  .../android/aegis_access_options_bridge.cc    | 110 ++++-
- .../ui/appmenu/AppMenuHandlerImpl.java        |   6 +
+ .../ui/appmenu/AppMenuHandlerImpl.java        |  26 ++
  .../browser/ui/appmenu/AppMenuHandler.java    |   9 +
- 12 files changed, 711 insertions(+), 41 deletions(-)
+ 12 files changed, 731 insertions(+), 41 deletions(-)
  create mode 100644 chrome/android/javatests/aegis_access_options_AndroidManifest.xml
  create mode 100644 chrome/browser/android/aegis_access_options.gni
 
@@ -1069,17 +1069,44 @@ index 12b85bb6e231cc784e30209d02446bb4958fe444..90c289ef27586a245db30e2ed815a4a6
    }
  
 diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
-index cc8ac963bc098f9f976a8d53f499622ce3f2d451..749459919617228b69a018567eaa8c116fb3a31b 100644
+index cc8ac963bc098f9f976a8d53f499622ce3f2d451..2718989b6dbd25cb9677718c1ce868487d2ff45f 100644
 --- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
 +++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenuHandlerImpl.java
-@@ -587,6 +587,12 @@ class AppMenuHandlerImpl
+@@ -51,6 +51,7 @@ import org.chromium.ui.hierarchicalmenu.FlyoutController.FlyoutHandler;
+ import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController;
+ import org.chromium.ui.hierarchicalmenu.HierarchicalMenuController.SubmenuHeaderFactory;
+ import org.chromium.ui.modelutil.LayoutViewBuilder;
++import org.chromium.ui.modelutil.MVCListAdapter;
+ import org.chromium.ui.modelutil.ListObservable;
+ import org.chromium.ui.modelutil.ListObservable.ListObserver;
+ import org.chromium.ui.modelutil.MVCListAdapter.ListItem;
+@@ -587,6 +588,31 @@ class AppMenuHandlerImpl
          mTestOptionsItemSelectedListener = onOptionsItemSelectedListener;
      }
  
 +    @Override
 +    public @Nullable View getDisplayedMenuItemForTesting(int itemId) {
 +        if (mAppMenu == null || mAppMenu.getListView() == null) return null;
-+        return mAppMenu.getListView().findViewById(itemId);
++        var listView = mAppMenu.getListView();
++        View shown = listView.findViewById(itemId);
++        if (shown != null) return shown;
++        var adapter = listView.getAdapter();
++        if (adapter == null) return null;
++        for (int i = 0; i < adapter.getCount(); ++i) {
++            Object raw = adapter.getItem(i);
++            if (!(raw instanceof MVCListAdapter.ListItem)) continue;
++            MVCListAdapter.ListItem listItem = (MVCListAdapter.ListItem) raw;
++            if (listItem.type != AppMenuItemType.STANDARD
++                    && listItem.type != AppMenuItemType.STANDARD_NO_ICON) {
++                continue;
++            }
++            if (listItem.model.get(AppMenuItemProperties.MENU_ITEM_ID) != itemId) continue;
++            // ListView only materializes visible rows. Bring the row on screen, then let the
++            // caller poll until the view exists.
++            listView.setSelection(i);
++            return listView.findViewById(itemId);
++        }
++        return null;
 +    }
 +
      @Override
