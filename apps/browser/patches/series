@@ -586,3 +586,4 @@
 0586-access-bound-context-rebind-and-settle-final-disconnect.patch
 0587-access-run-mock-rebind-regression-without-node-fixture.patch
 0588-access-use-safe-hex-encoding-for-native-query.patch
+0589-access-test-retirement-proof-before-fresh-registration.patch

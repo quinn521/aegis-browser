@@ -1421,8 +1421,8 @@ TEST_F(AccessSavedTestProfileProductTest,
       options->TestNodeRevocationTokenAtRevision(options_before_.revision);
   ASSERT_FALSE(stale_token.empty());
 
-  // The Network Service restarts without a network epoch change.
-  context_.DisconnectRetiredContext();
+  // The control pipe closes before the old Context's retirement is proven.
+  context_.Disconnect();
   environment_.RunUntilIdle();
   EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
   EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
@@ -1450,6 +1450,11 @@ TEST_F(AccessSavedTestProfileProductTest,
   EXPECT_FALSE(replacement.HoldsRegistration(active->registration_id));
   EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
   replacement.Reply(true);
+  environment_.RunUntilIdle();
+  EXPECT_EQ(options->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kRevoking);
+  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
+  context_.NotifyRetired();
   ASSERT_TRUE(base::test::RunUntil([&] {
     return options->test_profile_runtime_state() == AccessTestProfileRuntimeState::kIdle;
   })) << SavedProfileState(options);
