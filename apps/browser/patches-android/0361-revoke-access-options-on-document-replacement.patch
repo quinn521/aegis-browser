@@ -1,4 +1,4 @@
-From e5568996036fa3fbd6fa84af8c856e6d4b3765cc Mon Sep 17 00:00:00 2001
+From 3f73258d8e3706d5a3568e9f038c502e086ec028 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Mon, 23 Nov 2026 18:32:53 +0800
 Subject: [PATCH] fix(android): revoke Access Options on primary document
@@ -13,26 +13,32 @@ DOM edits do not reopen the document and stay readable.
 Ordinary builds do not send that notification. The renderer IPC is compiled
 only when internal Access Options are enabled. Blink and Chrome share one
 declare_args in a Blink-visible gni, so the flag is not declared twice.
+
+The explicit-open browser tests follow the same flag. Internal builds wait
+for one notification. Ordinary builds idle and expect none, so a default
+content_browsertests run does not time out. The javascript: replacement test
+stays unconditional because it uses DidCommitDocumentReplacement().
 ---
  .../chrome/browser/ChromeTabbedActivity.java  |  4 +
  .../settings/AegisAccessOptionsFragment.java  | 22 +++++
  chrome/browser/android/BUILD.gn               |  2 +-
  .../android/aegis_access_options_bridge.cc    |  1 +
  .../render_frame_host_delegate.h              |  3 +
- .../renderer_host/render_frame_host_impl.cc   | 10 +++
+ .../renderer_host/render_frame_host_impl.cc   | 10 ++
  .../renderer_host/render_frame_host_impl.h    |  1 +
  .../browser/web_contents/web_contents_impl.cc |  8 ++
  .../browser/web_contents/web_contents_impl.h  |  1 +
- .../web_contents_impl_browsertest.cc          | 81 +++++++++++++++++++
- .../public/browser/web_contents_observer.h    |  5 ++
+ .../web_contents_impl_browsertest.cc          | 97 +++++++++++++++++++
+ .../public/browser/web_contents_observer.h    |  5 +
+ content/test/BUILD.gn                         |  1 +
  third_party/blink/public/common/BUILD.gn      |  8 ++
- .../public/common/aegis_android_access.gni    | 10 +++
+ .../public/common/aegis_android_access.gni    | 10 ++
  .../blink/public/mojom/frame/frame.mojom      |  6 ++
  third_party/blink/renderer/core/BUILD.gn      |  1 +
  .../renderer/core/loader/frame_loader.cc      | 12 +++
  .../core/testing/fake_local_frame_host.cc     |  2 +
  .../core/testing/fake_local_frame_host.h      |  1 +
- 18 files changed, 177 insertions(+), 1 deletion(-)
+ 19 files changed, 194 insertions(+), 1 deletion(-)
  create mode 100644 third_party/blink/public/common/aegis_android_access.gni
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -215,10 +221,18 @@ index 928d746f122ef71ab26f31881aabb55c5fa72307..6dd8087516d4cafcf77bd20993c78e0b
                       const std::string& name) override;
    void DidReceiveUserActivation(
 diff --git a/content/browser/web_contents/web_contents_impl_browsertest.cc b/content/browser/web_contents/web_contents_impl_browsertest.cc
-index 23ae692aa98f39882d5e3186dc4b148c8cca5537..8c6f0a6e210e1c81e050d53f3a6d60a359acb4a9 100644
+index 23ae692aa98f39882d5e3186dc4b148c8cca5537..3557b9dfd4d0ea8f4f5c274b0d48f1ca7b267fcf 100644
 --- a/content/browser/web_contents/web_contents_impl_browsertest.cc
 +++ b/content/browser/web_contents/web_contents_impl_browsertest.cc
-@@ -108,6 +108,7 @@
+@@ -39,6 +39,7 @@
+ #include "base/time/time.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "build/buildflag.h"
+ #include "components/input/render_widget_host_input_event_router.h"
+ #include "components/ukm/test_ukm_recorder.h"
+ #include "components/url_formatter/url_formatter.h"
+@@ -108,6 +109,7 @@
  #include "content/public/test/prerender_test_util.h"
  #include "content/public/test/resource_load_observer.h"
  #include "content/public/test/test_content_browser_client.h"
@@ -226,7 +240,15 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..8c6f0a6e210e1c81e050d53f3a6d60a3
  #include "content/public/test/test_navigation_observer.h"
  #include "content/public/test/test_utils.h"
  #include "content/public/test/text_input_test_utils.h"
-@@ -201,6 +202,86 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
+@@ -134,6 +136,7 @@
+ #include "testing/gmock/include/gmock/gmock.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
++#include "third_party/blink/public/common/aegis_android_access_buildflags.h"
+ #include "third_party/blink/public/common/client_hints/client_hints.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/page/page_zoom.h"
+@@ -201,6 +204,100 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
    base::test::ScopedFeatureList scoped_feature_list_;
  };
  
@@ -275,9 +297,16 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..8c6f0a6e210e1c81e050d53f3a6d60a3
 +  ASSERT_TRUE(ExecJs(shell(),
 +                     "document.open(); document.write('replacement');"
 +                     "document.close();"));
++#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
 +  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
 +  base::RunLoop().RunUntilIdle();
 +  EXPECT_EQ(1, counter.count());
++#else
++  // Ordinary builds do not compile the explicit-open IPC. Idling proves the
++  // replacement happened without a notification, instead of waiting for one.
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(0, counter.count());
++#endif
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
 +}
 +
@@ -304,9 +333,16 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..8c6f0a6e210e1c81e050d53f3a6d60a3
 +  params.Set("html", "<html><body>replacement</body></html>");
 +  ASSERT_TRUE(client.SendCommandSync("Page.setDocumentContent", std::move(params)));
 +  client.DetachProtocolClient();
++#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
 +  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
 +  base::RunLoop().RunUntilIdle();
 +  EXPECT_EQ(1, counter.count());
++#else
++  // Ordinary builds do not compile the explicit-open IPC. Idling proves the
++  // replacement happened without a notification, instead of waiting for one.
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(0, counter.count());
++#endif
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
 +}
 +
@@ -329,6 +365,18 @@ index 4a7e6555fd1e9af16c35b365f33df8185b84b81e..af273dc05fb95974de1c932bff2de412
    // This method is invoked when the primary page of a WebContents is about to
    // be deactivated. This happens when the primary page is being replaced by
    // another page (due to a commit of a navigation). Note that this will not be
+diff --git a/content/test/BUILD.gn b/content/test/BUILD.gn
+index 68b5fc8bd68280b497962151919c3b90e0678e45..5bf1f00f1b2da6e39cfc0222d70575691ffaf360 100644
+--- a/content/test/BUILD.gn
++++ b/content/test/BUILD.gn
+@@ -2027,6 +2027,7 @@ test("content_browsertests") {
+     "//testing/gmock",
+     "//testing/gtest",
+     "//third_party/angle:includes",
++    "//third_party/blink/public/common:aegis_android_access_buildflags",
+     "//third_party/blink/public:blink",
+     "//third_party/inspector_protocol:crdtp",
+     "//third_party/leveldatabase",
 diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
 index cada4d794bc822c3cf83e8c0b719f0d6da490f54..4bce9dfd393d3a2595290209796f4bf9b9405181 100644
 --- a/third_party/blink/public/common/BUILD.gn
