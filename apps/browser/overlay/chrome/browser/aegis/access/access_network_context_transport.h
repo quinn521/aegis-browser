@@ -24,7 +24,7 @@
 #include "components/aegis_access/policy_publication_ack_tracker.h"
 #include "components/aegis_access/access_route_types.h"
 #include "chrome/browser/aegis/access/access_private_context_client.h"
-#include "content/public/browser/network_service_instance.h"
+#include "content/public/browser/service_process_host.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
@@ -66,7 +66,7 @@ struct AccessTransportSelection {
 class AccessNetworkContextTransport
     : public base::SupportsUserData::Data,
       public net::NetworkChangeNotifier::NetworkChangeObserver,
-      public content::NetworkServiceProcessObserver {
+      public content::ServiceProcessHost::Observer {
  public:
   static AccessNetworkContextTransport* Get(Profile* profile);
   static AccessNetworkContextTransport* GetOrCreate(Profile* profile);
@@ -249,6 +249,8 @@ class AccessNetworkContextTransport
       uint64_t sequence;
       content::ServiceProcessId service_process;
       std::set<std::string> possible_listeners;
+      // The independent lifecycle pipe still carries the Context's retirement.
+      PrivateContext lifetime_client;
     };
     std::map<std::string, DisconnectedContext> disconnected_private_contexts;
     std::optional<PrivatePublication> private_publication;
@@ -270,9 +272,8 @@ class AccessNetworkContextTransport
 
   void OnNetworkChanged(
       net::NetworkChangeNotifier::ConnectionType type) override;
-  void OnServiceLaunched(const content::ServiceProcessInfo& info) override;
-  void OnServiceTerminatedNormally(const content::ServiceProcessInfo& info) override;
-  void OnServiceCrashed(const content::ServiceProcessInfo& info) override;
+  void OnServiceProcessTerminatedNormally(const content::ServiceProcessInfo& info) override;
+  void OnServiceProcessCrashed(const content::ServiceProcessInfo& info) override;
   void OnNetworkServiceExited(content::ServiceProcessId service_process);
 
   static std::optional<std::string> PartitionKey(
@@ -306,8 +307,17 @@ class AccessNetworkContextTransport
   void Broadcast(PartitionState& state);
   void PublishPrivateContext(const aegis_access::OwnershipKey& owner,
                              const std::string& incarnation);
+  void AdmitPrivateContext(aegis_access::OwnershipKey owner, PrivateContext client,
+                           base::OnceCallback<void(PrivateContext)> completion);
+  void FinishPrivateContextBind(aegis_access::OwnershipKey owner,
+      PrivateContext client, base::UnguessableToken previous_control,
+      base::OnceCallback<void(PrivateContext)> completion, bool previous_alive);
   void OnPrivateContextDisconnected(aegis_access::OwnershipKey owner,
-                                    std::string incarnation, bool retired);
+      std::string incarnation, base::UnguessableToken control, bool retired);
+  void OnPrivateContextRetired(aegis_access::OwnershipKey owner,
+                               std::string incarnation);
+  void ForgetPrivateControl(const aegis_access::OwnershipKey& owner,
+                            const std::string& incarnation);
 #if BUILDFLAG(IS_MAC)
   bool HasAcknowledgedPrivateProxy(
       const aegis_access::OwnershipKey& owner,
@@ -330,7 +340,6 @@ class AccessNetworkContextTransport
   std::string runtime_profile_token_;
   uint64_t network_epoch_ = 1;
   uint64_t private_install_attempt_ = 0;
-  content::ServiceProcessId network_service_process_;
   TestListenerLostCallback test_listener_lost_;
   std::map<std::string, PartitionState> partitions_;
   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};

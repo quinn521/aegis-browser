@@ -1,6 +1,8 @@
 // Copyright 2026 GCSA
 
 #include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
+
+#include <limits>
 #include "chrome/browser/aegis/access/access_async_rule_store.h"
 #include "chrome/browser/aegis/access/access_browser_request_adapter.h"
 #include "chrome/browser/aegis/access/access_build_channel.h"
@@ -12,6 +14,7 @@
 #include <string_view>
 
 #include "base/command_line.h"
+#include "base/process/process_handle.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -42,6 +45,7 @@
 #include "net/url_request/redirect_info.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote_set.h"
 #include "services/network/public/cpp/url_loader_completion_status.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "services/network/test/test_network_context.h"
@@ -376,9 +380,12 @@ class ProductAckContext final : public network::TestNetworkContext,
  public:
   void BindAegisAccessContext(
       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
+      mojo::PendingRemote<network::mojom::AegisAccessContextLifetime> lifetime,
       BindAegisAccessContextCallback callback) override {
     receivers_.Add(this, std::move(receiver));
-    std::move(callback).Run(incarnation);
+    lifetimes_.Add(std::move(lifetime));
+    std::move(callback).Run(network::mojom::AegisAccessContextIdentity::New(
+        incarnation, process_id));
   }
   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
                        InstallSnapshotCallback callback) override {
@@ -438,8 +445,16 @@ class ProductAckContext final : public network::TestNetworkContext,
   bool hold_next = false;
   std::string hold_next_registration;
   std::string incarnation = "product-test-context";
+  uint64_t process_id = base::GetCurrentProcId();
   void Disconnect() { receivers_.Clear(); }
+  void NotifyRetired() {
+    for (const auto& observer : lifetimes_) {
+      observer->OnContextRetired();
+    }
+    lifetimes_.Clear();
+  }
   void DisconnectRetiredContext() {
+    NotifyRetired();
     receivers_.ClearWithReason(network::mojom::kAegisAccessContextRetired,
                                "Access context retired");
   }
@@ -448,6 +463,7 @@ class ProductAckContext final : public network::TestNetworkContext,
   network::mojom::AegisAccessSnapshotAckPtr held_ack_;
   InstallSnapshotCallback held_reply_;
   mojo::ReceiverSet<network::mojom::AegisAccessContext> receivers_;
+  mojo::RemoteSet<network::mojom::AegisAccessContextLifetime> lifetimes_;
 };
 
 class AccessSiteProxyProductTest : public testing::Test {
@@ -1481,6 +1497,67 @@ TEST_F(AccessSavedTestProfileProductTest,
   rebound.Reply(true);
   EXPECT_TRUE(revoked.Get());
   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       UntrackedNetworkProcessIdentityRejectsBinding) {
+  ProductAckContext untracked;
+  untracked.incarnation = "untracked-process-context";
+  untracked.process_id = std::numeric_limits<uint64_t>::max();
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &untracked, bound.GetCallback());
+  EXPECT_FALSE(bound.Get());
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       RebindBeforeOldDisconnectIsDispatchedUsesNewControl) {
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> first;
+  transport_->BindPrivateContext(owner_, &context_, first.GetCallback());
+  const auto previous = first.Get();
+  ASSERT_TRUE(previous);
+
+  ProductAckContext rebound;
+  rebound.incarnation = context_.incarnation;
+  context_.Disconnect();
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> next;
+  transport_->BindPrivateContext(owner_, &rebound, next.GetCallback());
+  const auto current = next.Get();
+  ASSERT_TRUE(current);
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(previous->is_connected());
+  EXPECT_TRUE(current->is_connected());
+  EXPECT_NE(current->control_id(), previous->control_id());
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       DisconnectedControlStillReceivesContextLifetimeProof) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ProductAckContext survivor;
+  survivor.incarnation = "surviving-context";
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &survivor, bound.GetCallback());
+  ASSERT_TRUE(bound.Get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+
+  context_.hold_next = survivor.hold_next = true;
+  base::test::TestFuture<bool> revoked;
+  options->RevokeTestNodeProfile(revoked.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return context_.has_reply() && survivor.has_reply();
+  }));
+  context_.Disconnect();
+  survivor.Reply(true);
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(revoked.IsReady());
+  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
+
+  context_.NotifyRetired();
+  EXPECT_TRUE(revoked.Get());
+  EXPECT_EQ(options->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kIdle);
 }
 
 TEST_F(AccessSavedTestProfileProductTest,

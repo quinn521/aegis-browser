@@ -2,6 +2,7 @@
 #include "chrome/browser/aegis/access/access_private_context_client.h"
 
 #include <memory>
+#include <utility>
 #include <type_traits>
 
 #include "base/check.h"
@@ -31,7 +32,7 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
         std::move(completion).Run(std::remove_cvref_t<Reply>{});
         return;
       }
-      std::move(completion).Run(reply);
+      std::move(completion).Run(std::forward<Reply>(reply));
     }
     base::TimeTicks deadline;
     base::OneShotTimer timer;
@@ -51,7 +52,7 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
   }
   return base::BindOnce(
       [](std::shared_ptr<PendingReply> pending, Reply reply) {
-        pending->Finish(reply);
+        pending->Finish(std::forward<Reply>(reply));
       }, std::move(pending));
 }
 
@@ -162,13 +163,15 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
   auto reply = BoundFactorySetupReply(base::BindOnce(
           [](base::WeakPtr<AccessPrivateContextClient> self, uint64_t operation,
              base::OnceCallback<void(bool)> completion,
-             const std::string& incarnation) {
+             mojom::AegisAccessContextIdentityPtr identity) {
             const bool current = self && operation == self->operation_;
-            const bool accepted = current && !incarnation.empty();
+            const bool accepted = current && !self->retired_ && identity &&
+                !identity->incarnation.empty() && identity->process_id;
             if (current) {
               self->reject_initialize_.Reset();
               if (accepted) {
-                self->incarnation_ = incarnation;
+                self->incarnation_ = identity->incarnation;
+                self->process_id_ = identity->process_id;
                 self->connected_ = true;
               } else {
                 self->context_.reset();
@@ -177,9 +180,26 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
             std::move(completion).Run(accepted);
           }, weak_factory_.GetWeakPtr(), operation, std::move(completion)),
           &reject_initialize_);
-  context->BindAegisAccessContext(std::move(receiver),
-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(reply), std::string()));
+  context->BindAegisAccessContext(
+      std::move(receiver), lifetime_.BindNewPipeAndPassRemote(),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          std::move(reply), mojom::AegisAccessContextIdentityPtr()));
 }
+
+void AccessPrivateContextClient::CheckConnected(
+    base::OnceCallback<void(bool)> completion) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!is_connected()) {
+    std::move(completion).Run(false);
+    return;
+  }
+  auto reply = BoundFactorySetupReply(std::move(completion));
+  context_.QueryVersion(base::BindOnce(
+      [](base::OnceCallback<void(bool)> reply, uint32_t) {
+        std::move(reply).Run(true);
+      }, mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(reply), false)));
+}
+
 void AccessPrivateContextClient::PublishSnapshot(
     network::mojom::AegisAccessSnapshotPtr snapshot,
     base::OnceCallback<void(bool)> completion) {
@@ -364,6 +384,22 @@ void AccessPrivateContextClient::SetDisconnectHandler(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   CHECK(connected_ && !on_disconnect_);
   on_disconnect_ = std::move(handler);
+}
+
+void AccessPrivateContextClient::SetRetirementHandler(base::OnceClosure handler) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(!retired_ && !on_retired_);
+  on_retired_ = std::move(handler);
+}
+
+void AccessPrivateContextClient::OnContextRetired() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  retired_ = true;
+  connected_ = ready_ = publication_pending_ = false;
+  ++operation_;
+  auto notify = std::move(on_retired_);
+  if (reject_initialize_) std::move(reject_initialize_).Run();
+  if (notify) std::move(notify).Run();
 }
 
 void AccessPrivateContextClient::OnDisconnect(uint32_t reason, const std::string&) {

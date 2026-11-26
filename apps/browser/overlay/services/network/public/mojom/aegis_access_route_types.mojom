@@ -7,6 +7,13 @@ import "services/network/public/mojom/url_request.mojom";
 
 const uint32 kAegisAccessContextRetired = 1;
 
+// Issued by the actual NetworkContext, never inferred from a Browser-side
+// launch observer sampled before an asynchronous bind.
+struct AegisAccessContextIdentity {
+  string incarnation;
+  uint64 process_id;
+};
+
 // These interfaces are issued only through the Browser-owned NetworkContext.
 // They must never be exposed to a renderer or embedded in ResourceRequest.
 enum AegisAccessChannel { kDev, kAlpha, kBeta, kRelease };

@@ -6,12 +6,14 @@
 #include <vector>
 
 #include "base/test/task_environment.h"
+#include "base/process/process_handle.h"
 #include "base/test/test_future.h"
 #include "build/build_config.h"
 #include "chrome/browser/aegis/access/access_private_context_client.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/test/browser_task_environment.h"
 #include "mojo/public/cpp/bindings/receiver_set.h"
+#include "mojo/public/cpp/bindings/remote_set.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/schemeful_site.h"
 #include "net/proxy_resolution/proxy_info.h"
@@ -43,8 +45,10 @@ class HeldPrivateContext final : public network::TestNetworkContext,
  public:
   void BindAegisAccessContext(
       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
+      mojo::PendingRemote<network::mojom::AegisAccessContextLifetime> lifetime,
       BindAegisAccessContextCallback callback) override {
     receivers.Add(this, std::move(receiver));
+    lifetime_remotes.Add(std::move(lifetime));
 #if BUILDFLAG(IS_MAC)
     if (hold_bind) {
       CHECK(!bind_reply);
@@ -52,7 +56,8 @@ class HeldPrivateContext final : public network::TestNetworkContext,
       return;
     }
 #endif
-    std::move(callback).Run(incarnation);
+    std::move(callback).Run(network::mojom::AegisAccessContextIdentity::New(
+        incarnation, base::GetCurrentProcId()));
   }
   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr value,
                        InstallSnapshotCallback callback) override {
@@ -123,6 +128,7 @@ class HeldPrivateContext final : public network::TestNetworkContext,
   network::mojom::AegisAccessSnapshotPtr snapshot;
   InstallSnapshotCallback reply;
   mojo::ReceiverSet<network::mojom::AegisAccessContext> receivers;
+  mojo::RemoteSet<network::mojom::AegisAccessContextLifetime> lifetime_remotes;
 };
 
 class AccessPrivatePublicationTest : public testing::Test {
@@ -398,7 +404,9 @@ TEST_F(AccessPrivatePublicationDeadlineTest, BindReplyAtDeadlineBeforeTimerIsRej
   ASSERT_TRUE(context.bind_reply);
   environment_.AdvanceClock(base::Seconds(30));
   ASSERT_FALSE(bound.IsReady());
-  std::move(context.bind_reply).Run(context.incarnation);
+  std::move(context.bind_reply).Run(
+      network::mojom::AegisAccessContextIdentity::New(
+          context.incarnation, base::GetCurrentProcId()));
   ASSERT_TRUE(bound.IsReady());
   EXPECT_FALSE(bound.Get());
   environment_.RunUntilIdle();
@@ -478,7 +486,9 @@ TEST_F(AccessPrivateFactoryDeadlineTest, HeldBindClosesFactoryWithoutRetiringSta
   EXPECT_EQ(context_.receivers.size(), 1u);
   EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
 
-  std::move(context_.bind_reply).Run(context_.incarnation);
+  std::move(context_.bind_reply).Run(
+      network::mojom::AegisAccessContextIdentity::New(
+          context_.incarnation, base::GetCurrentProcId()));
   environment_.RunUntilIdle();
   EXPECT_FALSE(waiting.is_connected());
   EXPECT_EQ(context_.install_count, 1u);
@@ -527,7 +537,9 @@ TEST_F(AccessPrivateFactoryDeadlineTest, PrivatePipeClosureBeforeBindReplyCloses
   EXPECT_TRUE(disconnected.IsReady());
   EXPECT_FALSE(waiting.is_connected());
   EXPECT_TRUE(network_.is_connected());
-  std::move(context_.bind_reply).Run(context_.incarnation);
+  std::move(context_.bind_reply).Run(
+      network::mojom::AegisAccessContextIdentity::New(
+          context_.incarnation, base::GetCurrentProcId()));
   environment_.RunUntilIdle();
   EXPECT_FALSE(waiting.is_connected());
   EXPECT_EQ(context_.install_count, 0u);
