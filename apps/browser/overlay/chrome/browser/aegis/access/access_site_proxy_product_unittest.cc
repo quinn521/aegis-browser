@@ -495,6 +495,10 @@ class AccessSiteProxyProductTest : public testing::Test {
       GTEST_SKIP() << "Real product core tests require authorized DEV inputs.";
     }
 #endif
+    SetUpProfile();
+  }
+
+  void SetUpProfile() {
     ASSERT_TRUE(directory_.CreateUniqueTempDir());
     ASSERT_NO_FATAL_FAILURE(OpenProfile());
   }
@@ -1570,6 +1574,9 @@ class AccessPrivateContextRebindDeadlineTest : public AccessSiteProxyProductTest
  public:
   AccessPrivateContextRebindDeadlineTest()
       : AccessSiteProxyProductTest(TimeSource::MOCK_TIME) {}
+
+ protected:
+  void SetUp() override { SetUpProfile(); }
 };
 
 TEST_F(AccessPrivateContextRebindDeadlineTest,

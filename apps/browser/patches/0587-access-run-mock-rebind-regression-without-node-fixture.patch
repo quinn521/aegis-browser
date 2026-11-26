@@ -1,0 +1,35 @@
+From aba0dcc5a61b691a775819046ff5b0d9ba3719f2 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 21:26:00 -0800
+Subject: [PATCH] test(access): run the mock rebind regression without a DEV
+ node
+
+---
+ .../aegis/access/access_site_proxy_product_unittest.cc     | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 279afe08abd6202bcbdff014df5a2f61d75f27ac..7a26bd8ca261cf0305eedcfba6f05756bfa09e5b 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -495,6 +495,10 @@ class AccessSiteProxyProductTest : public testing::Test {
+       GTEST_SKIP() << "Real product core tests require authorized DEV inputs.";
+     }
+ #endif
++    SetUpProfile();
++  }
++
++  void SetUpProfile() {
+     ASSERT_TRUE(directory_.CreateUniqueTempDir());
+     ASSERT_NO_FATAL_FAILURE(OpenProfile());
+   }
+@@ -1570,6 +1574,9 @@ class AccessPrivateContextRebindDeadlineTest : public AccessSiteProxyProductTest
+  public:
+   AccessPrivateContextRebindDeadlineTest()
+       : AccessSiteProxyProductTest(TimeSource::MOCK_TIME) {}
++
++ protected:
++  void SetUp() override { SetUpProfile(); }
+ };
+ 
+ TEST_F(AccessPrivateContextRebindDeadlineTest,
