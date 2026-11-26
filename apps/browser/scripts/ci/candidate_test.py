@@ -311,7 +311,8 @@ class CandidateTests(unittest.TestCase):
                 ]))
                 gn.write_text('#!/bin/sh\n'
                               'if [ "$1" = gen ]; then exit 0; fi\n'
-                              '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] && [ "$5" = --json ] &&\n'
+                              '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] &&\n'
+                              '[ "$5" = --json ] && [ "$6" = -q ] &&\n'
                               "grep -Fxq 'import(\"//internal.gni\")' \"$2/args.gn\" && cat effective-args.json\n")
                 ninja.write_text('#!/bin/sh\ntouch ninja-invoked\nexit 19\n')
                 for tool in (gn, ninja):

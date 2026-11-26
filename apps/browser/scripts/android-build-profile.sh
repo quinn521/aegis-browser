@@ -124,7 +124,8 @@ aegis_android_verify_gn_args() {
       'chrome_public_manifest_package = "com.gcsa.aegis"'
     )
   fi
-  if ! effective_args="$("$gn_bin" args "$out_dir" --list --short --json)"; then
+  # GN print() diagnostics share stdout with the listing unless GN is quiet.
+  if ! effective_args="$("$gn_bin" args "$out_dir" --list --short --json -q)"; then
     echo "无法读取 Android $profile 构建的生效 GN 参数。" >&2
     return 1
   fi

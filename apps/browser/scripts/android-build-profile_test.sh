@@ -217,15 +217,18 @@ check_default_build_rejects_enabled_args
         local enabled=false product='\"unknown\"' channel='\"default\"' package='\"com.gcsa.aegis\"'
         if grep -Fxq 'import("//internal.gni")' "$2/args.gn"; then
           enabled=true product='\"alpha\"'
-          if [[ "${GN_PROFILE_DIAGNOSTICS:-}" == 1 ]]; then
-            printf '%s\n' 'aegis_android_internal_access_options = false' \
-              'aegis_android_access_product_channel = "unknown"'
-          fi
         elif grep -Fxq 'aegis_android_internal_access_options = true' "$2/args.gn"; then
           enabled=true product='\"alpha\"' channel='\"canary\"'
           if grep -Fxq 'chrome_public_manifest_package += ".internal"' "$2/args.gn"; then
             package='\"com.gcsa.aegis.internal\"'
           fi
+        fi
+        if [[ "${GN_PROFILE_DIAGNOSTICS:-}" == 1 && "${6:-}" != -q ]]; then
+          printf '%s\n' 'aegis_android_internal_access_options = false' \
+            'aegis_android_access_product_channel = "unknown"'
+        fi
+        if [[ "${GN_PROFILE_MALFORMED:-}" == 1 ]]; then
+          printf '%s\n' 'unexpected non-JSON output'
         fi
         printf '['
         if [[ "${GN_PROFILE_DUPLICATE:-}" == 1 ]]; then
@@ -265,7 +268,7 @@ check_default_build_rejects_enabled_args
   clean_out="$CHROMIUM_ROOT/src/out/no-import"
   mkdir "$clean_out"
   cp "$ARGS_FILE" "$clean_out/args.gn"
-  aegis_android_verify_gn_args "$clean_out" default
+  GN_PROFILE_DIAGNOSTICS=1 aegis_android_verify_gn_args "$clean_out" default
   aegis_android_gn_args "$ARGS_FILE" internal-alpha > "$clean_out/args.gn"
   aegis_android_verify_gn_args "$clean_out" internal-alpha
   default_error='生效 GN 参数必须包含：aegis_android_internal_access_options = false'
@@ -275,7 +278,8 @@ check_default_build_rejects_enabled_args
   GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
     OUT_DIR="$CHROMIUM_ROOT/src/out/AegisAndroidDelivery-42-1" \
     check_build_rejects_args "$default_error" --app-bundle alpha
-  GN_PROFILE_DIAGNOSTICS=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
+  GN_PROFILE_DIAGNOSTICS=1 check_build_rejects_args "$default_error"
+  GN_PROFILE_MALFORMED=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
   GN_PROFILE_DUPLICATE=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
 
   { cat "$ARGS_FILE"; echo 'chrome_public_manifest_package += ".internal"'; } > "$fixture/args/aegis-android.gn"
