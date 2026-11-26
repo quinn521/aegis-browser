@@ -235,9 +235,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
           return reply.state + ',' + Object.keys(reply).sort().join(',');
         })()
       )JS",
-      "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
-      "?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.example.com"
-      "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#demo-reality-vision")));
+      aegis_access::test::kSyntheticTestNodeShare)));
   base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> after;
   options->Read(after.GetCallback());
   const auto& saved = after.Get();

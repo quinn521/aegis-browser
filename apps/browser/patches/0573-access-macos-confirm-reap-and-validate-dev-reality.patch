@@ -1,0 +1,745 @@
+From 85ecfbb1dfa9f436915207ccbe0217368145c634 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 08:29:55 +0800
+Subject: [PATCH] fix(access): require confirmed reap and validate DEV Reality
+ import
+
+---
+ chrome/browser/aegis/BUILD.gn                 |  5 +-
+ ...cess_internal_core_manager_mac_unittest.cc | 42 +++++++++++++
+ .../aegis/access/access_local_core_manager.cc | 24 ++++----
+ .../access/access_options_browsertest.cc      |  4 +-
+ .../access/access_options_service_unittest.cc |  5 +-
+ .../access/access_test_node_native_config.cc  | 15 ++++-
+ .../access/access_test_node_native_config.h   | 12 +++-
+ ...access_test_node_native_config_unittest.cc | 51 ++++++++++++++++
+ .../access/access_test_node_qr_mac_test.mm    | 19 ++++--
+ .../access/access_test_node_vault_mac.mm      | 14 ++---
+ .../access_test_node_vault_mac_unittest.cc    | 56 +++++++++++++++++
+ components/aegis_access/access_test_node.cc   | 60 ++++++++++++++++---
+ .../aegis_access/access_test_node_test.cc     | 54 ++++++++++++++++-
+ .../access_test_node_test_fixture.h           | 42 ++++++++++++-
+ 14 files changed, 358 insertions(+), 45 deletions(-)
+
+diff --git a/chrome/browser/aegis/BUILD.gn b/chrome/browser/aegis/BUILD.gn
+index 05d2e9d28bc26376bccc3c13543dcef1e41e9937..25fd75c0392b90d72f1c45b21f19df21cdeb22a9 100644
+--- a/chrome/browser/aegis/BUILD.gn
++++ b/chrome/browser/aegis/BUILD.gn
+@@ -381,7 +381,10 @@ if (!is_android) {
+       "webpage_capture_browsertest.cc",
+     ]
+     if (is_mac) {
+-      sources += [ "access/access_options_browsertest.cc" ]
++      sources += [
++        "access/access_options_browsertest.cc",
++        "//components/aegis_access/access_test_node_test_fixture.h",
++      ]
+     }
+     deps = [
+       "//chrome/browser/aegis/access:access_buildflags",
+diff --git a/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc b/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc
+index 70312fd01ef46ba431b573692846846bf400acb3..5f346e50f2d40bbd5b05b8b3eef4a2503fd430af 100644
+--- a/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc
++++ b/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc
+@@ -14,6 +14,7 @@
+ #include "base/json/json_writer.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/synchronization/waitable_event.h"
++#include "base/task/execution_fence.h"
+ #include "base/task/thread_pool/thread_pool_instance.h"
+ #include "base/test/scoped_run_loop_timeout.h"
+ #include "base/test/task_environment.h"
+@@ -291,5 +292,46 @@ TEST_F(AccessInternalCoreManagerMacTest,
+   EXPECT_TRUE(LoopbackPortHeld(port));
+   EXPECT_TRUE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
+ }
++
++TEST_F(AccessInternalCoreManagerMacTest,
++       QueuedSessionStopWaitsForQuarantinedChildReap) {
++  input_.skip_internal_canary_for_testing = true;
++  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
++  base::test::TestFuture<AccessLocalCoreReady> prepared;
++  manager_->Prepare(prepared.GetCallback());
++  ASSERT_TRUE(prepared.Get().ready) << prepared.Get().error;
++  ASSERT_TRUE(prepared.Get().parent_listener_lease_held);
++  const uint16_t port = prepared.Get().port;
++  ASSERT_GT(port, 0);
++
++  auto stopped = std::make_shared<base::WaitableEvent>();
++  {
++    // Queue session stop behind worker destruction and ahead of the join.
++    base::ScopedThreadPoolExecutionFence defer_thread_join;
++    manager_.reset();
++    AccessLocalCoreManager::StopAllForSessionEnding(base::BindOnce(
++        [](std::shared_ptr<base::WaitableEvent> event) { event->Signal(); },
++        stopped));
++  }
++  base::ThreadPoolInstance::Get()->FlushForTesting();
++  const pid_t pid = retirement_pid.load();
++  ASSERT_GT(pid, 0);
++  EXPECT_EQ(kill(pid, 0), 0);
++  EXPECT_FALSE(stopped->IsSignaled());
++  EXPECT_TRUE(LoopbackPortHeld(port));
++
++  // A subsequent attempt can reap the quarantined child. Its prior Network
++  // binding still prevents this new manager from using the listener.
++  block_retirement.store(false);
++  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
++  base::test::TestFuture<AccessLocalCoreReady> retry;
++  manager_->Prepare(retry.GetCallback());
++  EXPECT_FALSE(retry.Get().ready);
++  base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
++  EXPECT_TRUE(stopped->TimedWait(base::Seconds(5)));
++  EXPECT_EQ(kill(pid, 0), -1);
++  EXPECT_EQ(errno, ESRCH);
++  EXPECT_TRUE(LoopbackPortHeld(port));
++}
+ }  // namespace
+ }  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_local_core_manager.cc b/chrome/browser/aegis/access/access_local_core_manager.cc
+index 27bc7e3964173099761cac501dea64c6cfae4e36..e04dc2296760f494b20142491d9351ff8ea39bf2 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager.cc
++++ b/chrome/browser/aegis/access/access_local_core_manager.cc
+@@ -307,7 +307,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     shutdown_->SetWorker(nullptr);
+     // The worker is going away. Record confirmed reap while its handle can
+     // still complete callbacks. Quarantine holds the independent Network lease.
+-    if (retired || reaped_with_listener_held_)
++    if (child_reaped_)
+       shutdown_->CompleteStop();
+   }
+ 
+@@ -438,8 +438,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+   // released only by the Network fence or by process exit.
+   void StopForSessionEnding() {
+     StopWithResult(base::BindOnce(
+-        [](Worker* worker, bool retired) {
+-          if (retired || worker->reaped_with_listener_held_)
++        [](Worker* worker, bool) {
++          if (worker->child_reaped_)
+             worker->shutdown_->CompleteStop();
+         },
+         base::Unretained(this)));
+@@ -964,13 +964,16 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+           ++entry;
+           continue;
+         }
+-        if (!RetireInternalProcess(old.process, old.child) ||
+-            (old.directory.IsValid() && !old.directory.Delete()) ||
+-            old.network_lease_pending) {
++        if (!RetireInternalProcess(old.process, old.child)) {
+           retired = false;
+           break;
+         }
+         completed.push_back(old.shutdown);
++        if ((old.directory.IsValid() && !old.directory.Delete()) ||
++            old.network_lease_pending) {
++          retired = false;
++          break;
++        }
+         entry = entries.erase(entry);
+       }
+     }
+@@ -998,7 +1001,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+   }
+ #endif
+   bool StopChild(bool release_reference = true, bool consumers_revoked = false) {
+-    reaped_with_listener_held_ = false;
++    child_reaped_ = false;
+     if (IsInternal()) retirement_pending_ = true;
+ #if BUILDFLAG(IS_MAC)
+     if (IsInternal() && release_reference) internal_binding_spent_ = true;
+@@ -1028,6 +1031,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+       process_.Close();
+     }
+ #endif
++    child_reaped_ = true;
+     DrainLog();
+     CloseLogPipe();
+     framer_ = CoreLogFramer();
+@@ -1039,7 +1043,6 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+ #if BUILDFLAG(IS_MAC)
+     if (IsInternal() && network_lease_pending_ && !consumers_revoked) {
+       // The child is reaped; only the published address remains held.
+-      reaped_with_listener_held_ = true;
+       return false;
+     }
+     if (consumers_revoked) network_lease_pending_ = false;
+@@ -1083,7 +1086,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+   std::optional<net::AuthCredentials> credentials_;
+   bool authenticated_ = false;
+   bool retirement_pending_ = false;
+-  bool reaped_with_listener_held_ = false;
++  bool child_reaped_ = false;
+   int auth_attempts_ = 0;
+   base::TimeTicks started_;
+   base::TimeTicks probe_deadline_;
+@@ -1109,7 +1112,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+ 
+ void AccessLocalCoreManager::ShutdownHandle::StopOnCoreThread() {
+   if (!worker_) {
+-    CompleteStop();
++    // Destruction can leave a live child in quarantine. Only a confirmed reap
++    // by the worker or quarantine cleanup can complete this handle.
+     return;
+   }
+   if (session_ending_.load()) {
+diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
+index 27f405d03e80390b0f27ddd85dd76e4199626210..b1f1b5c71759eb9e4b06a654a468d03c2b1617e2 100644
+--- a/chrome/browser/aegis/access/access_options_browsertest.cc
++++ b/chrome/browser/aegis/access/access_options_browsertest.cc
+@@ -235,9 +235,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+           return reply.state + ',' + Object.keys(reply).sort().join(',');
+         })()
+       )JS",
+-      "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+-      "?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.example.com"
+-      "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#demo-reality-vision")));
++      aegis_access::test::kSyntheticTestNodeShare)));
+   base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> after;
+   options->Read(after.GetCallback());
+   const auto& saved = after.Get();
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+index 6ec903a8ff6a7b34680118494fb6fba29954f61e..59205b1eacfb291c277c61a005ced58714c76e93 100644
+--- a/chrome/browser/aegis/access/access_options_service_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -19,10 +19,7 @@
+ namespace aegis::access {
+ #if BUILDFLAG(IS_MAC)
+ namespace {
+-constexpr char kSyntheticShare[] =
+-    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+-    "?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.example.com"
+-    "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic";
++constexpr auto kSyntheticShare = aegis_access::test::kSyntheticTestNodeShare;
+ struct SyntheticVaultState {
+   std::map<std::pair<std::string, std::string>, std::string> rows;
+   std::atomic<size_t> stored{0};
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.cc b/chrome/browser/aegis/access/access_test_node_native_config.cc
+index c0c5f8604df776f4707e2d52efe11b5e8ee0d274..0774d7d085a9972581e355c92aa721d4c98f970a 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config.cc
+@@ -33,10 +33,17 @@ std::string EscapeNativeQueryValue(std::string_view value) {
+ }  // namespace
+ 
+ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+-    const aegis_access::AccessTestNode& node) {
++    const aegis_access::AccessTestNode& node,
++    AccessTestNodeNativeValidation validation) {
+   using Mode = aegis_access::AccessTestNodeImportMode;
+   const auto& ws = node.web_socket_tls;
+   const bool legacy_ws = ws && ws->restored_from_v2;
++  const bool fresh_dev =
++      validation == AccessTestNodeNativeValidation::kFreshDevImport;
++  if (legacy_ws && fresh_dev) {
++    return std::nullopt;
++  }
++  auto mode = fresh_dev ? Mode::kAllowExtendedVless : Mode::kRealityOnly;
+   const std::string address = node.address.find(':') == std::string::npos
+       ? node.address : "[" + node.address + "]";
+   auto share = "vless://" + node.user_id + "@" + address + ":" +
+@@ -47,6 +54,7 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+     share += "&fp=" + EscapeNativeQueryValue(node.fingerprint);
+   }
+   if (ws) {
++    mode = legacy_ws ? Mode::kAllowWebSocketTls : Mode::kAllowExtendedVless;
+     share += "&type=ws&security=tls";
+     if (legacy_ws || ws->host != node.server_name) {
+       share += "&host=" + EscapeNativeQueryValue(ws->host);
+@@ -58,8 +66,10 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+       share += "&alpn=" + EscapeNativeQueryValue(ws->alpn);
+     }
+   } else if (node.tcp_tls_vision) {
++    mode = Mode::kAllowExtendedVless;
+     share += "&type=tcp&security=tls&flow=xtls-rprx-vision";
+   } else if (const auto& service_name = node.grpc_reality_service_name) {
++    mode = Mode::kAllowExtendedVless;
+     share += "&type=grpc&security=reality&pbk=" +
+              EscapeNativeQueryValue(node.public_key) +
+              "&sid=" + EscapeNativeQueryValue(node.short_id) +
+@@ -72,8 +82,7 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+         "&spx=" + EscapeNativeQueryValue(node.spider_x) +
+         (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
+   }
+-  auto parsed = aegis_access::ParseAccessTestNodeShare(
+-      share, legacy_ws ? Mode::kAllowWebSocketTls : Mode::kAllowExtendedVless);
++  auto parsed = aegis_access::ParseAccessTestNodeShare(share, mode);
+   if (legacy_ws && parsed.node && parsed.node->web_socket_tls) {
+     parsed.node->web_socket_tls->restored_from_v2 = true;
+   }
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.h b/chrome/browser/aegis/access/access_test_node_native_config.h
+index a619bae45c0021257a186e2e4c96cfbb2928a5f9..0b3179520fc09a716e84fb1da9dc9644e715e229 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.h
++++ b/chrome/browser/aegis/access/access_test_node_native_config.h
+@@ -10,9 +10,17 @@
+ #include "components/aegis_access/access_test_node.h"
+ 
+ namespace aegis::access {
+-// Revalidates a native/Keychain model against the same bounded sharing grammar.
++enum class AccessTestNodeNativeValidation {
++  kStored,
++  kFreshDevImport,
++};
++
++// Fresh DEV staging uses current import rules. Stored v1 records keep their
++// original TCP/REALITY validation, including when generating core config.
+ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+-    const aegis_access::AccessTestNode& node);
++    const aegis_access::AccessTestNode& node,
++    AccessTestNodeNativeValidation validation =
++        AccessTestNodeNativeValidation::kStored);
+ 
+ // Ephemeral secret bytes for an anonymous pipe to the exact admitted core.
+ // Callers must not persist, log or export this result. This serializer neither
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+index d07e0f81390a1cc3bfe9757bc803cfdf4644baa7..4ce7a9bc1fba58400747200d1211960749bcf355 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+@@ -26,6 +26,9 @@ TEST(AccessTestNodeNativeConfigTest, SocksUsesSameSocketPortZeroNoAuthAndKeepsUp
+   node.spider_x = "/synthetic?value=%22";
+   node.advertises_x25519_mlkem768 = true;
+   EXPECT_EQ(ValidateAccessTestNodeNative(node), node);
++  EXPECT_EQ(ValidateAccessTestNodeNative(
++                node, AccessTestNodeNativeValidation::kFreshDevImport),
++            node);
+   const auto encoded = BuildAccessTestNodeCoreConfiguration(node, {}, Transport::kSocks5);
+   ASSERT_TRUE(encoded);
+   const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+@@ -194,6 +197,54 @@ TEST(AccessTestNodeNativeConfigTest, RestoredV2WebSocketKeepsLegacyConfig) {
+   EXPECT_EQ(*ws->FindString("path"), "//path");
+ }
+ 
++TEST(AccessTestNodeNativeConfigTest, StoredRealityRetainsV1Grammar) {
++  for (const auto share : {
++           aegis_access::test::
++               kSyntheticTcpRealityVisionInvalidFingerprintShare,
++           aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare,
++           aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare,
++           aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare,
++       }) {
++    const auto legacy = aegis_access::ParseAccessTestNodeShare(share);
++    ASSERT_TRUE(legacy.node);
++    EXPECT_FALSE(ValidateAccessTestNodeNative(
++        *legacy.node, AccessTestNodeNativeValidation::kFreshDevImport));
++    const auto encoded = BuildAccessTestNodeCoreConfiguration(*legacy.node, {},
++                                                              Transport::kHttp);
++    ASSERT_TRUE(encoded);
++    const auto root =
++        base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
++    ASSERT_TRUE(root && root->FindList("outbounds"));
++    ASSERT_EQ(root->FindList("outbounds")->size(), 1u);
++    const auto* reality =
++        root->FindList("outbounds")
++            ->front()
++            .GetDict()
++            .FindDictByDottedPath("streamSettings.realitySettings");
++    ASSERT_TRUE(reality && reality->FindString("fingerprint") &&
++                reality->FindString("publicKey") &&
++                reality->FindString("shortId") &&
++                reality->FindString("spiderX"));
++    EXPECT_EQ(*reality->FindString("fingerprint"), legacy.node->fingerprint);
++    EXPECT_EQ(*reality->FindString("publicKey"), legacy.node->public_key);
++    EXPECT_EQ(*reality->FindString("shortId"), legacy.node->short_id);
++    EXPECT_EQ(*reality->FindString("spiderX"), legacy.node->spider_x);
++  }
++}
++
++TEST(AccessTestNodeNativeConfigTest,
++     RejectsExtendedModelsWithInvalidDialAddress) {
++  for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
++                           aegis_access::test::kSyntheticGrpcRealityShare}) {
++    auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);
++    ASSERT_TRUE(parsed.node);
++    parsed.node->address = "single-label";
++    EXPECT_FALSE(ValidateAccessTestNodeNative(*parsed.node));
++    EXPECT_FALSE(BuildAccessTestNodeCoreConfiguration(*parsed.node, {},
++                                                      Transport::kHttp));
++  }
++}
++
+ TEST(AccessTestNodeNativeConfigTest, WebSocketRevalidatesLongRequestTarget) {
+   const std::string path = "/ws" + std::string(2045, '/');
+   const auto parsed = aegis_access::ParseAccessTestNodeShare(
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+index 6dec844d0b3948af3dd0d111a459ba9502b13256..31c45da92072e02b0cd4834ca3b05c4a336716a9 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+@@ -81,7 +81,7 @@ int main() {
+     assert(scanned.node == typed.node);
+     using namespace aegis_access::test;
+     constexpr auto extended = AccessTestNodeImportMode::kAllowExtendedVless;
+-    for (const auto vector : {kSyntheticTestNodeShare,
++    for (const auto vector : {kSyntheticPinnedRealityVisionShare,
+                               kSyntheticWebSocketTlsShare,
+                               kSyntheticWebSocketTlsQueryShare,
+                               kSyntheticTcpTlsVisionShare,
+@@ -90,7 +90,7 @@ int main() {
+       const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
+       assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
+       assert(qr.node == text.node);
+-      if (vector != kSyntheticTestNodeShare) {
++      if (vector != kSyntheticPinnedRealityVisionShare) {
+         ExpectStatus(DrawCodes(MakeCode(vector)),
+                      AccessTestNodeQrStatus::kUnsupportedOutbound);
+       }
+@@ -105,8 +105,19 @@ int main() {
+       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
+       assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
+     }
+-    ExpectStatus(DrawCodes(MakeCode(kSyntheticWebSocketTlsUnknownFingerprintShare)),
+-                 AccessTestNodeQrStatus::kInvalidShare, extended);
++    for (const auto vector :
++         {kSyntheticWebSocketTlsUnknownFingerprintShare,
++          kSyntheticTcpRealityVisionInvalidFingerprintShare,
++          kSyntheticTcpRealityVisionInvalidPublicKeyShare,
++          kSyntheticTcpRealityVisionOddShortIdShare,
++          kSyntheticTcpRealityVisionUnsafeSpiderXShare,
++          kSyntheticTcpTlsVisionInvalidDialAddressShare,
++          kSyntheticGrpcRealityInvalidDialAddressShare}) {
++      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      assert(text.error == aegis_access::AccessTestNodeError::kInvalidShare);
++      ExpectStatus(DrawCodes(MakeCode(vector)),
++                   AccessTestNodeQrStatus::kInvalidShare, extended);
++    }
+     std::string exporter_share(share);
+     exporter_share.insert(exporter_share.find('#'), "&pcks=");
+     const auto scanned_exporter = Decode(DrawCodes(MakeCode(exporter_share)));
+diff --git a/chrome/browser/aegis/access/access_test_node_vault_mac.mm b/chrome/browser/aegis/access/access_test_node_vault_mac.mm
+index a606990f6a33d3dea25c95be96d82ff6c067ba25..6f2dc95dfaaa301680cde542abfcc05d3bd07b2f 100644
+--- a/chrome/browser/aegis/access/access_test_node_vault_mac.mm
++++ b/chrome/browser/aegis/access/access_test_node_vault_mac.mm
+@@ -184,13 +184,10 @@ bool RequiresDevChannel(const Node& node) {
+          node.grpc_reality_service_name;
+ }
+ 
+-std::optional<std::string> Encode(const Node& node) {
+-  // Compatibility applies to restored references. Staging always writes a
+-  // fresh record that must satisfy the current import grammar.
+-  if (node.web_socket_tls && node.web_socket_tls->restored_from_v2) {
++std::optional<std::string> Encode(const Node& node,
++                                  AccessTestNodeNativeValidation validation) {
++  if (!ValidateAccessTestNodeNative(node, validation))
+     return std::nullopt;
+-  }
+-  if (!ValidateAccessTestNodeNative(node)) return std::nullopt;
+   auto value = base::DictValue()
+       .Set("address", node.address).Set("port", node.port)
+       .Set("userId", node.user_id).Set("serverName", node.server_name)
+@@ -361,7 +358,10 @@ bool RequiresDevChannel(const Node& node) {
+     return {Status::kNotAdmitted, std::nullopt};
+   if (!ValidId(editor)) return {Status::kInvalidReference, std::nullopt};
+   if (pending_.size() >= 32) return {Status::kLimitReached, std::nullopt};
+-  const auto encoded = Encode(node);
++  const auto validation = allows_extended_vless_
++                              ? AccessTestNodeNativeValidation::kFreshDevImport
++                              : AccessTestNodeNativeValidation::kStored;
++  const auto encoded = Encode(node, validation);
+   if (!encoded) return {Status::kInvalidNode, std::nullopt};
+   auto id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+   const auto status = backend_->Add(service_, id, *encoded);
+diff --git a/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc b/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc
+index 36933a23f34145a6c60ba955a04cd5c0322c6cc8..daba28894cb5d5fcc0db0f857f13f5748368aa6c 100644
+--- a/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc
+@@ -170,6 +170,62 @@ TEST(AccessTestNodeVaultMacTest, RejectsMixedAndUnknownExtendedRecordShapes) {
+   EXPECT_FALSE(dev.Read(saved));
+ }
+ 
++TEST(AccessTestNodeVaultMacTest,
++     FreshDevRealityIsStrictWhileV1AndAlphaRestore) {
++  auto rows = std::make_shared<Rows>();
++  const std::string scope(64, 'a');
++  AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
++  AccessTestNodeVaultMac alpha("alpha", scope, Backend(rows));
++  for (const auto share : {
++           aegis_access::test::
++               kSyntheticTcpRealityVisionInvalidFingerprintShare,
++           aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare,
++           aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare,
++           aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare,
++       }) {
++    const auto legacy = aegis_access::ParseAccessTestNodeShare(share);
++    ASSERT_TRUE(legacy.node);
++    EXPECT_EQ(dev.Stage(Id(), *legacy.node).status, Status::kInvalidNode);
++    const auto saved = alpha.Stage(Id(), *legacy.node);
++    ASSERT_EQ(saved.status, Status::kOk);
++    ASSERT_TRUE(saved.reference);
++    EXPECT_EQ(alpha.Read(*saved.reference), legacy.node);
++    // Simulate a v1 record created by the DEV build before strict admission.
++    const auto stored =
++        rows->values.find({"app.gcsa.aegis.access.test-node.v1.alpha." + scope,
++                           saved.reference->id});
++    ASSERT_NE(stored, rows->values.end());
++    rows->values.emplace(
++        std::make_pair("app.gcsa.aegis.access.test-node.v1.debug." + scope,
++                       saved.reference->id),
++        stored->second);
++    EXPECT_EQ(dev.Read(*saved.reference), legacy.node);
++  }
++}
++
++TEST(AccessTestNodeVaultMacTest, V3RejectsInvalidDialAddresses) {
++  constexpr auto kExtended =
++      aegis_access::AccessTestNodeImportMode::kAllowExtendedVless;
++  for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
++                           aegis_access::test::kSyntheticGrpcRealityShare}) {
++    auto rows = std::make_shared<Rows>();
++    AccessTestNodeVaultMac dev("debug", std::string(64, 'a'), Backend(rows));
++    const auto parsed =
++        aegis_access::ParseAccessTestNodeShare(share, kExtended);
++    ASSERT_TRUE(parsed.node);
++    const auto saved = dev.Stage(Id(), *parsed.node);
++    ASSERT_EQ(saved.status, Status::kOk);
++    ASSERT_TRUE(saved.reference);
++    ASSERT_EQ(dev.Read(*saved.reference), parsed.node);
++    ASSERT_EQ(rows->values.size(), 1u);
++    auto& encoded = rows->values.begin()->second;
++    const auto address = encoded.find(parsed.node->address);
++    ASSERT_NE(address, std::string::npos);
++    encoded.replace(address, parsed.node->address.size(), "single-label");
++    EXPECT_FALSE(dev.Read(*saved.reference));
++  }
++}
++
+ TEST(AccessTestNodeVaultMacTest, EditorCannotDiscardAnotherWindowsReference) {
+   auto rows = std::make_shared<Rows>();
+   AccessTestNodeVaultMac vault("debug", std::string(64, 'a'), Backend(rows));
+diff --git a/components/aegis_access/access_test_node.cc b/components/aegis_access/access_test_node.cc
+index 536b25178afe54e4a6c0a38c08e443ceb2c71672..fefcfe24db14bfcd1a924231e3d670d6872ed55e 100644
+--- a/components/aegis_access/access_test_node.cc
++++ b/components/aegis_access/access_test_node.cc
+@@ -342,6 +342,47 @@ bool IsWebSocketRequestTarget(std::string_view path) {
+   }
+ }
+ 
++bool IsSafeRealitySpiderPath(std::string_view path) {
++  if (path.empty()) {
++    return true;
++  }
++  // Keep the input relative to the admitted server. The bridge checks that
++  // the pinned Go URL parser accepts the path, fragment, and query escapes.
++  if (!path.starts_with('/') || path.starts_with("//")) {
++    return false;
++  }
++  for (auto percent = path.find('%'); percent != std::string_view::npos;
++       percent = path.find('%', percent + 3)) {
++    if (percent + 2 >= path.size() || HexValue(path[percent + 1]) < 0 ||
++        HexValue(path[percent + 2]) < 0) {
++      return false;
++    }
++  }
++  const auto target = path.substr(0, path.find('#'));
++  const auto question = target.find('?');
++  if (question == std::string_view::npos) {
++    return true;
++  }
++  auto fields = target.substr(question + 1);
++  if (fields.find(';') != std::string_view::npos) {
++    return false;  // Go's url.ParseQuery rejects raw query semicolons.
++  }
++  constexpr std::string_view kWorkKeys[]{"p", "c", "t", "i", "r"};
++  while (!fields.empty()) {
++    const auto ampersand = fields.find('&');
++    const auto field = fields.substr(0, ampersand);
++    const auto name = Unescape(field.substr(0, field.find('=')));
++    if (name && std::ranges::find(kWorkKeys, *name) != std::end(kWorkKeys)) {
++      return false;
++    }
++    if (ampersand == std::string_view::npos) {
++      break;
++    }
++    fields.remove_prefix(ampersand + 1);
++  }
++  return true;
++}
++
+ std::string_view CanonicalQueryKey(std::string_view key) {
+   if (key == "serverName" || key == "server_name") {
+     return "sni";
+@@ -481,8 +522,9 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+   const bool tcp_tls =
+       extended && type == "tcp" && security == "tls" && query->contains("type");
+   const bool grpc = extended && type == "grpc" && security == "reality";
+-  if (((ws && extended) || tcp_tls || grpc) &&
+-      fragment.find("://") != std::string_view::npos) {
++  if (extended && (ws || tcp_tls || grpc) &&
++      (!IsExtendedAddress(address) ||
++       fragment.find("://") != std::string_view::npos)) {
+     return {kInvalid, std::nullopt};
+   }
+   AccessTestNode node{std::move(host),
+@@ -505,8 +547,7 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+         extended ? std::string_view(node.server_name) : std::string_view();
+     auto request_host = ValueOr(*query, "host", default_host);
+     auto path = ValueOr(*query, "path", "/");
+-    const bool valid = extended ? IsExtendedAddress(address) &&
+-                                      IsExtendedServerName(node.server_name) &&
++    const bool valid = extended ? IsExtendedServerName(node.server_name) &&
+                                       IsHttpAuthority(request_host) &&
+                                       IsWebSocketRequestTarget(path) &&
+                                       IsWebSocketFingerprint(node.fingerprint)
+@@ -587,10 +628,13 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+                            [](char c) { return HexValue(c) >= 0; }) ||
+       !IsFingerprint(node.fingerprint) ||
+       (!node.spider_x.empty() && !node.spider_x.starts_with('/')) ||
+-      (grpc &&
+-       (!IsExtendedServerName(node.server_name) ||
+-        !IsExtendedFingerprint(node.fingerprint) ||
+-        node.public_key.size() != 43 || node.short_id.size() % 2 != 0))) {
++      (grpc && !IsExtendedServerName(node.server_name)) ||
++      // The accepted base64url alphabet and 43-byte length decode to exactly
++      // 32 bytes under the pinned core's unpadded decoder.
++      (extended &&
++       (!IsExtendedFingerprint(node.fingerprint) ||
++        node.public_key.size() != 43 || node.short_id.size() % 2 != 0 ||
++        !IsSafeRealitySpiderPath(node.spider_x)))) {
+     return {kInvalid, std::nullopt};
+   }
+ 
+diff --git a/components/aegis_access/access_test_node_test.cc b/components/aegis_access/access_test_node_test.cc
+index 6bd98842c12d458573805200a17970ed550973df..a658b16ae8137ea2e5bc301359bd6f300b029fe8 100644
+--- a/components/aegis_access/access_test_node_test.cc
++++ b/components/aegis_access/access_test_node_test.cc
+@@ -12,7 +12,13 @@ namespace {
+ using aegis_access::AccessTestNodeError;
+ using aegis_access::AccessTestNodeImportMode;
+ using aegis_access::ParseAccessTestNodeShare;
++using aegis_access::test::kSyntheticGrpcRealityInvalidDialAddressShare;
+ using aegis_access::test::kSyntheticGrpcRealityShare;
++using aegis_access::test::kSyntheticTcpRealityVisionInvalidFingerprintShare;
++using aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare;
++using aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare;
++using aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare;
++using aegis_access::test::kSyntheticTcpTlsVisionInvalidDialAddressShare;
+ using aegis_access::test::kSyntheticTcpTlsVisionShare;
+ using aegis_access::test::kSyntheticTestNodeShare;
+ using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
+@@ -53,7 +59,8 @@ int main() {
+   assert(result.node->port == 443);
+   assert(result.node->user_id == "550e8400-e29b-41d4-a716-446655440000");
+   assert(result.node->server_name == "www.example.com");
+-  assert(result.node->public_key == "abcdefghijklmnopqrstuvwxyzABCDEFG");
++  assert(result.node->public_key ==
++         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8");
+   assert(result.node->short_id == "abcd1234");
+   assert(result.node->fingerprint == "chrome");
+   assert(result.node->spider_x.empty());
+@@ -220,6 +227,51 @@ int main() {
+            .node);
+   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
+          result.node);
++  for (const auto share : {kSyntheticTcpRealityVisionInvalidFingerprintShare,
++                           kSyntheticTcpRealityVisionInvalidPublicKeyShare,
++                           kSyntheticTcpRealityVisionOddShortIdShare,
++                           kSyntheticTcpRealityVisionUnsafeSpiderXShare}) {
++    const auto dev = ParseAccessTestNodeShare(share, kExtended);
++    assert(dev.error == kInvalid && !dev.node);
++    assert(ParseAccessTestNodeShare(share).node);
++  }
++  const auto strict_exporter = ParseAccessTestNodeShare(
++      Replace("fp=chrome",
++              "fp=Chrome&pcks=&support-x25519mlkem768=true"
++              "&spx=%2Fmanual%2520path%3Fq%3D%253B%26q%3D2"),
++      kExtended);
++  assert(strict_exporter.node &&
++         strict_exporter.node->fingerprint == "Chrome" &&
++         strict_exporter.node->advertises_x25519_mlkem768 &&
++         strict_exporter.node->spider_x == "/manual%20path?q=%3B&q=2");
++  for (const auto* path : {
++           "relative",
++           "%2F%2Fother.example",
++           "%2Fbad%25ZZ",
++           "%2Fbad%00",
++           "%2Fpath%3Fx%3D1%3Bc%3D2",
++           "%2Fpath%3Fx%3D%25ZZ",
++           "%2Fpath%3Fx%3D1%26p",
++           "%2Fpath%3Fc%3D",
++           "%2Fpath%3F%2574%3D1",
++           "%2Fpath%3Fi%3D1",
++           "%2Fpath%3Fr%3D1",
++       }) {
++    assert(!ParseAccessTestNodeShare(
++                Replace("fp=chrome", std::string("fp=chrome&spx=") + path),
++                kExtended)
++                .node);
++  }
++  for (const auto* name : {"unsafe", "HelloGolang"}) {
++    assert(!ParseAccessTestNodeShare(
++                Replace("fp=chrome", std::string("fp=") + name), kExtended)
++                .node);
++  }
++  for (const auto share : {kSyntheticTcpTlsVisionInvalidDialAddressShare,
++                           kSyntheticGrpcRealityInvalidDialAddressShare}) {
++    const auto dev = ParseAccessTestNodeShare(share, kExtended);
++    assert(dev.error == kInvalid && !dev.node);
++  }
+   assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended)
+              .node == ws_query_alpn.node);
+   const auto ws_without_fragment =
+diff --git a/components/aegis_access/access_test_node_test_fixture.h b/components/aegis_access/access_test_node_test_fixture.h
+index 24d18e70ad9fb7e4239496f39f7ece28156591c6..6b2b0d85bfa8b531341cd92b98bba4099c953fdb 100644
+--- a/components/aegis_access/access_test_node_test_fixture.h
++++ b/components/aegis_access/access_test_node_test_fixture.h
+@@ -6,12 +6,12 @@
+ 
+ namespace aegis_access::test {
+ 
+-// Matches the iOS AccessLocalV2RayConfigTests TEST-NET node.
++// TEST-NET node with an iOS-compatible synthetic 32-byte public key.
+ inline constexpr std::string_view kSyntheticTestNodeShare =
+     "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+     "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+     "&sni=www.example.com&fp=chrome"
+-    "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234"
++    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+     "&headerType=none#demo-reality-vision";
+ 
+ inline constexpr std::string_view kSyntheticWebSocketTlsShare =
+@@ -53,6 +53,44 @@ inline constexpr std::string_view kSyntheticGrpcRealityShare =
+     "&security=reality&serviceName=%2Fsample%2FTun&sid=a1b2c3d4"
+     "&sni=grpc.example&type=grpc#synthetic-grpc";
+ 
++// Each RAW/REALITY negative has a single invalid field for text and QR.
++inline constexpr std::string_view
++    kSyntheticTcpRealityVisionInvalidFingerprintShare =
++        "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
++        "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
++        "&fp=synthetic_unknown"
++        "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123";
++
++inline constexpr std::string_view
++    kSyntheticTcpRealityVisionInvalidPublicKeyShare =
++        "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
++        "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
++        "&fp=chrome"
++        "&pbk=synthetic_short_key&sid=0123";
++
++inline constexpr std::string_view kSyntheticTcpRealityVisionOddShortIdShare =
++    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
++    "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
++    "&fp=chrome"
++    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=123";
++
++inline constexpr std::string_view kSyntheticTcpRealityVisionUnsafeSpiderXShare =
++    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
++    "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
++    "&fp=chrome"
++    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123"
++    "&spx=%2Ftest%3Fx%3D1%26%2570%3D2";
++
++inline constexpr std::string_view
++    kSyntheticTcpTlsVisionInvalidDialAddressShare =
++        "vless://550e8400-e29b-41d4-a716-446655440000@single-label:443"
++        "?flow=xtls-rprx-vision&security=tls&sni=tls.example&type=tcp";
++
++inline constexpr std::string_view kSyntheticGrpcRealityInvalidDialAddressShare =
++    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@single-label:8443"
++    "?type=grpc&security=reality&sni=grpc.example&serviceName=sample&sid=0123"
++    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
++
+ }  // namespace aegis_access::test
+ 
+ #endif  // COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_
+-- 
+2.54.0 (Apple Git-157)
+

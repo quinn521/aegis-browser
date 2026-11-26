@@ -12,7 +12,13 @@ namespace {
 using aegis_access::AccessTestNodeError;
 using aegis_access::AccessTestNodeImportMode;
 using aegis_access::ParseAccessTestNodeShare;
+using aegis_access::test::kSyntheticGrpcRealityInvalidDialAddressShare;
 using aegis_access::test::kSyntheticGrpcRealityShare;
+using aegis_access::test::kSyntheticTcpRealityVisionInvalidFingerprintShare;
+using aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare;
+using aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare;
+using aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare;
+using aegis_access::test::kSyntheticTcpTlsVisionInvalidDialAddressShare;
 using aegis_access::test::kSyntheticTcpTlsVisionShare;
 using aegis_access::test::kSyntheticTestNodeShare;
 using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
@@ -53,7 +59,8 @@ int main() {
   assert(result.node->port == 443);
   assert(result.node->user_id == "550e8400-e29b-41d4-a716-446655440000");
   assert(result.node->server_name == "www.example.com");
-  assert(result.node->public_key == "abcdefghijklmnopqrstuvwxyzABCDEFG");
+  assert(result.node->public_key ==
+         "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8");
   assert(result.node->short_id == "abcd1234");
   assert(result.node->fingerprint == "chrome");
   assert(result.node->spider_x.empty());
@@ -220,6 +227,51 @@ int main() {
            .node);
   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
          result.node);
+  for (const auto share : {kSyntheticTcpRealityVisionInvalidFingerprintShare,
+                           kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+                           kSyntheticTcpRealityVisionOddShortIdShare,
+                           kSyntheticTcpRealityVisionUnsafeSpiderXShare}) {
+    const auto dev = ParseAccessTestNodeShare(share, kExtended);
+    assert(dev.error == kInvalid && !dev.node);
+    assert(ParseAccessTestNodeShare(share).node);
+  }
+  const auto strict_exporter = ParseAccessTestNodeShare(
+      Replace("fp=chrome",
+              "fp=Chrome&pcks=&support-x25519mlkem768=true"
+              "&spx=%2Fmanual%2520path%3Fq%3D%253B%26q%3D2"),
+      kExtended);
+  assert(strict_exporter.node &&
+         strict_exporter.node->fingerprint == "Chrome" &&
+         strict_exporter.node->advertises_x25519_mlkem768 &&
+         strict_exporter.node->spider_x == "/manual%20path?q=%3B&q=2");
+  for (const auto* path : {
+           "relative",
+           "%2F%2Fother.example",
+           "%2Fbad%25ZZ",
+           "%2Fbad%00",
+           "%2Fpath%3Fx%3D1%3Bc%3D2",
+           "%2Fpath%3Fx%3D%25ZZ",
+           "%2Fpath%3Fx%3D1%26p",
+           "%2Fpath%3Fc%3D",
+           "%2Fpath%3F%2574%3D1",
+           "%2Fpath%3Fi%3D1",
+           "%2Fpath%3Fr%3D1",
+       }) {
+    assert(!ParseAccessTestNodeShare(
+                Replace("fp=chrome", std::string("fp=chrome&spx=") + path),
+                kExtended)
+                .node);
+  }
+  for (const auto* name : {"unsafe", "HelloGolang"}) {
+    assert(!ParseAccessTestNodeShare(
+                Replace("fp=chrome", std::string("fp=") + name), kExtended)
+                .node);
+  }
+  for (const auto share : {kSyntheticTcpTlsVisionInvalidDialAddressShare,
+                           kSyntheticGrpcRealityInvalidDialAddressShare}) {
+    const auto dev = ParseAccessTestNodeShare(share, kExtended);
+    assert(dev.error == kInvalid && !dev.node);
+  }
   assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended)
              .node == ws_query_alpn.node);
   const auto ws_without_fragment =

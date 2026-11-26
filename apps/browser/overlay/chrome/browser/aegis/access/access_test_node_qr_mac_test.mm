@@ -81,7 +81,7 @@ int main() {
     assert(scanned.node == typed.node);
     using namespace aegis_access::test;
     constexpr auto extended = AccessTestNodeImportMode::kAllowExtendedVless;
-    for (const auto vector : {kSyntheticTestNodeShare,
+    for (const auto vector : {kSyntheticPinnedRealityVisionShare,
                               kSyntheticWebSocketTlsShare,
                               kSyntheticWebSocketTlsQueryShare,
                               kSyntheticTcpTlsVisionShare,
@@ -90,7 +90,7 @@ int main() {
       const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
       assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
       assert(qr.node == text.node);
-      if (vector != kSyntheticTestNodeShare) {
+      if (vector != kSyntheticPinnedRealityVisionShare) {
         ExpectStatus(DrawCodes(MakeCode(vector)),
                      AccessTestNodeQrStatus::kUnsupportedOutbound);
       }
@@ -105,8 +105,19 @@ int main() {
       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
       assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
     }
-    ExpectStatus(DrawCodes(MakeCode(kSyntheticWebSocketTlsUnknownFingerprintShare)),
-                 AccessTestNodeQrStatus::kInvalidShare, extended);
+    for (const auto vector :
+         {kSyntheticWebSocketTlsUnknownFingerprintShare,
+          kSyntheticTcpRealityVisionInvalidFingerprintShare,
+          kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+          kSyntheticTcpRealityVisionOddShortIdShare,
+          kSyntheticTcpRealityVisionUnsafeSpiderXShare,
+          kSyntheticTcpTlsVisionInvalidDialAddressShare,
+          kSyntheticGrpcRealityInvalidDialAddressShare}) {
+      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
+      assert(text.error == aegis_access::AccessTestNodeError::kInvalidShare);
+      ExpectStatus(DrawCodes(MakeCode(vector)),
+                   AccessTestNodeQrStatus::kInvalidShare, extended);
+    }
     std::string exporter_share(share);
     exporter_share.insert(exporter_share.find('#'), "&pcks=");
     const auto scanned_exporter = Decode(DrawCodes(MakeCode(exporter_share)));

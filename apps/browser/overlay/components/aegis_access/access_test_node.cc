@@ -342,6 +342,47 @@ bool IsWebSocketRequestTarget(std::string_view path) {
   }
 }
 
+bool IsSafeRealitySpiderPath(std::string_view path) {
+  if (path.empty()) {
+    return true;
+  }
+  // Keep the input relative to the admitted server. The bridge checks that
+  // the pinned Go URL parser accepts the path, fragment, and query escapes.
+  if (!path.starts_with('/') || path.starts_with("//")) {
+    return false;
+  }
+  for (auto percent = path.find('%'); percent != std::string_view::npos;
+       percent = path.find('%', percent + 3)) {
+    if (percent + 2 >= path.size() || HexValue(path[percent + 1]) < 0 ||
+        HexValue(path[percent + 2]) < 0) {
+      return false;
+    }
+  }
+  const auto target = path.substr(0, path.find('#'));
+  const auto question = target.find('?');
+  if (question == std::string_view::npos) {
+    return true;
+  }
+  auto fields = target.substr(question + 1);
+  if (fields.find(';') != std::string_view::npos) {
+    return false;  // Go's url.ParseQuery rejects raw query semicolons.
+  }
+  constexpr std::string_view kWorkKeys[]{"p", "c", "t", "i", "r"};
+  while (!fields.empty()) {
+    const auto ampersand = fields.find('&');
+    const auto field = fields.substr(0, ampersand);
+    const auto name = Unescape(field.substr(0, field.find('=')));
+    if (name && std::ranges::find(kWorkKeys, *name) != std::end(kWorkKeys)) {
+      return false;
+    }
+    if (ampersand == std::string_view::npos) {
+      break;
+    }
+    fields.remove_prefix(ampersand + 1);
+  }
+  return true;
+}
+
 std::string_view CanonicalQueryKey(std::string_view key) {
   if (key == "serverName" || key == "server_name") {
     return "sni";
@@ -481,8 +522,9 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
   const bool tcp_tls =
       extended && type == "tcp" && security == "tls" && query->contains("type");
   const bool grpc = extended && type == "grpc" && security == "reality";
-  if (((ws && extended) || tcp_tls || grpc) &&
-      fragment.find("://") != std::string_view::npos) {
+  if (extended && (ws || tcp_tls || grpc) &&
+      (!IsExtendedAddress(address) ||
+       fragment.find("://") != std::string_view::npos)) {
     return {kInvalid, std::nullopt};
   }
   AccessTestNode node{std::move(host),
@@ -505,8 +547,7 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
         extended ? std::string_view(node.server_name) : std::string_view();
     auto request_host = ValueOr(*query, "host", default_host);
     auto path = ValueOr(*query, "path", "/");
-    const bool valid = extended ? IsExtendedAddress(address) &&
-                                      IsExtendedServerName(node.server_name) &&
+    const bool valid = extended ? IsExtendedServerName(node.server_name) &&
                                       IsHttpAuthority(request_host) &&
                                       IsWebSocketRequestTarget(path) &&
                                       IsWebSocketFingerprint(node.fingerprint)
@@ -587,10 +628,13 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
                            [](char c) { return HexValue(c) >= 0; }) ||
       !IsFingerprint(node.fingerprint) ||
       (!node.spider_x.empty() && !node.spider_x.starts_with('/')) ||
-      (grpc &&
-       (!IsExtendedServerName(node.server_name) ||
-        !IsExtendedFingerprint(node.fingerprint) ||
-        node.public_key.size() != 43 || node.short_id.size() % 2 != 0))) {
+      (grpc && !IsExtendedServerName(node.server_name)) ||
+      // The accepted base64url alphabet and 43-byte length decode to exactly
+      // 32 bytes under the pinned core's unpadded decoder.
+      (extended &&
+       (!IsExtendedFingerprint(node.fingerprint) ||
+        node.public_key.size() != 43 || node.short_id.size() % 2 != 0 ||
+        !IsSafeRealitySpiderPath(node.spider_x)))) {
     return {kInvalid, std::nullopt};
   }
 

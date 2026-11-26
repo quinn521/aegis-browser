@@ -19,10 +19,7 @@
 namespace aegis::access {
 #if BUILDFLAG(IS_MAC)
 namespace {
-constexpr char kSyntheticShare[] =
-    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
-    "?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.example.com"
-    "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#synthetic";
+constexpr auto kSyntheticShare = aegis_access::test::kSyntheticTestNodeShare;
 struct SyntheticVaultState {
   std::map<std::pair<std::string, std::string>, std::string> rows;
   std::atomic<size_t> stored{0};

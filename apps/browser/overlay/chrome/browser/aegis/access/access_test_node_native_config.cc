@@ -33,10 +33,17 @@ std::string EscapeNativeQueryValue(std::string_view value) {
 }  // namespace
 
 std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
-    const aegis_access::AccessTestNode& node) {
+    const aegis_access::AccessTestNode& node,
+    AccessTestNodeNativeValidation validation) {
   using Mode = aegis_access::AccessTestNodeImportMode;
   const auto& ws = node.web_socket_tls;
   const bool legacy_ws = ws && ws->restored_from_v2;
+  const bool fresh_dev =
+      validation == AccessTestNodeNativeValidation::kFreshDevImport;
+  if (legacy_ws && fresh_dev) {
+    return std::nullopt;
+  }
+  auto mode = fresh_dev ? Mode::kAllowExtendedVless : Mode::kRealityOnly;
   const std::string address = node.address.find(':') == std::string::npos
       ? node.address : "[" + node.address + "]";
   auto share = "vless://" + node.user_id + "@" + address + ":" +
@@ -47,6 +54,7 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
     share += "&fp=" + EscapeNativeQueryValue(node.fingerprint);
   }
   if (ws) {
+    mode = legacy_ws ? Mode::kAllowWebSocketTls : Mode::kAllowExtendedVless;
     share += "&type=ws&security=tls";
     if (legacy_ws || ws->host != node.server_name) {
       share += "&host=" + EscapeNativeQueryValue(ws->host);
@@ -58,8 +66,10 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
       share += "&alpn=" + EscapeNativeQueryValue(ws->alpn);
     }
   } else if (node.tcp_tls_vision) {
+    mode = Mode::kAllowExtendedVless;
     share += "&type=tcp&security=tls&flow=xtls-rprx-vision";
   } else if (const auto& service_name = node.grpc_reality_service_name) {
+    mode = Mode::kAllowExtendedVless;
     share += "&type=grpc&security=reality&pbk=" +
              EscapeNativeQueryValue(node.public_key) +
              "&sid=" + EscapeNativeQueryValue(node.short_id) +
@@ -72,8 +82,7 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
         "&spx=" + EscapeNativeQueryValue(node.spider_x) +
         (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
   }
-  auto parsed = aegis_access::ParseAccessTestNodeShare(
-      share, legacy_ws ? Mode::kAllowWebSocketTls : Mode::kAllowExtendedVless);
+  auto parsed = aegis_access::ParseAccessTestNodeShare(share, mode);
   if (legacy_ws && parsed.node && parsed.node->web_socket_tls) {
     parsed.node->web_socket_tls->restored_from_v2 = true;
   }

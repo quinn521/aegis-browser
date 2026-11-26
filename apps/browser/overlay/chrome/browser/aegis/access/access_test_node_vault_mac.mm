@@ -184,13 +184,10 @@ bool RequiresDevChannel(const Node& node) {
          node.grpc_reality_service_name;
 }
 
-std::optional<std::string> Encode(const Node& node) {
-  // Compatibility applies to restored references. Staging always writes a
-  // fresh record that must satisfy the current import grammar.
-  if (node.web_socket_tls && node.web_socket_tls->restored_from_v2) {
+std::optional<std::string> Encode(const Node& node,
+                                  AccessTestNodeNativeValidation validation) {
+  if (!ValidateAccessTestNodeNative(node, validation))
     return std::nullopt;
-  }
-  if (!ValidateAccessTestNodeNative(node)) return std::nullopt;
   auto value = base::DictValue()
       .Set("address", node.address).Set("port", node.port)
       .Set("userId", node.user_id).Set("serverName", node.server_name)
@@ -361,7 +358,10 @@ AccessTestNodeVaultStageResult AccessTestNodeVaultMac::Stage(
     return {Status::kNotAdmitted, std::nullopt};
   if (!ValidId(editor)) return {Status::kInvalidReference, std::nullopt};
   if (pending_.size() >= 32) return {Status::kLimitReached, std::nullopt};
-  const auto encoded = Encode(node);
+  const auto validation = allows_extended_vless_
+                              ? AccessTestNodeNativeValidation::kFreshDevImport
+                              : AccessTestNodeNativeValidation::kStored;
+  const auto encoded = Encode(node, validation);
   if (!encoded) return {Status::kInvalidNode, std::nullopt};
   auto id = base::Uuid::GenerateRandomV4().AsLowercaseString();
   const auto status = backend_->Add(service_, id, *encoded);

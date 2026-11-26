@@ -26,6 +26,9 @@ TEST(AccessTestNodeNativeConfigTest, SocksUsesSameSocketPortZeroNoAuthAndKeepsUp
   node.spider_x = "/synthetic?value=%22";
   node.advertises_x25519_mlkem768 = true;
   EXPECT_EQ(ValidateAccessTestNodeNative(node), node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(
+                node, AccessTestNodeNativeValidation::kFreshDevImport),
+            node);
   const auto encoded = BuildAccessTestNodeCoreConfiguration(node, {}, Transport::kSocks5);
   ASSERT_TRUE(encoded);
   const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
@@ -192,6 +195,54 @@ TEST(AccessTestNodeNativeConfigTest, RestoredV2WebSocketKeepsLegacyConfig) {
   ASSERT_TRUE(ws && ws->FindString("host") && ws->FindString("path"));
   EXPECT_EQ(*ws->FindString("host"), "Edge.");
   EXPECT_EQ(*ws->FindString("path"), "//path");
+}
+
+TEST(AccessTestNodeNativeConfigTest, StoredRealityRetainsV1Grammar) {
+  for (const auto share : {
+           aegis_access::test::
+               kSyntheticTcpRealityVisionInvalidFingerprintShare,
+           aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+           aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare,
+           aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare,
+       }) {
+    const auto legacy = aegis_access::ParseAccessTestNodeShare(share);
+    ASSERT_TRUE(legacy.node);
+    EXPECT_FALSE(ValidateAccessTestNodeNative(
+        *legacy.node, AccessTestNodeNativeValidation::kFreshDevImport));
+    const auto encoded = BuildAccessTestNodeCoreConfiguration(*legacy.node, {},
+                                                              Transport::kHttp);
+    ASSERT_TRUE(encoded);
+    const auto root =
+        base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(root && root->FindList("outbounds"));
+    ASSERT_EQ(root->FindList("outbounds")->size(), 1u);
+    const auto* reality =
+        root->FindList("outbounds")
+            ->front()
+            .GetDict()
+            .FindDictByDottedPath("streamSettings.realitySettings");
+    ASSERT_TRUE(reality && reality->FindString("fingerprint") &&
+                reality->FindString("publicKey") &&
+                reality->FindString("shortId") &&
+                reality->FindString("spiderX"));
+    EXPECT_EQ(*reality->FindString("fingerprint"), legacy.node->fingerprint);
+    EXPECT_EQ(*reality->FindString("publicKey"), legacy.node->public_key);
+    EXPECT_EQ(*reality->FindString("shortId"), legacy.node->short_id);
+    EXPECT_EQ(*reality->FindString("spiderX"), legacy.node->spider_x);
+  }
+}
+
+TEST(AccessTestNodeNativeConfigTest,
+     RejectsExtendedModelsWithInvalidDialAddress) {
+  for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
+                           aegis_access::test::kSyntheticGrpcRealityShare}) {
+    auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);
+    ASSERT_TRUE(parsed.node);
+    parsed.node->address = "single-label";
+    EXPECT_FALSE(ValidateAccessTestNodeNative(*parsed.node));
+    EXPECT_FALSE(BuildAccessTestNodeCoreConfiguration(*parsed.node, {},
+                                                      Transport::kHttp));
+  }
 }
 
 TEST(AccessTestNodeNativeConfigTest, WebSocketRevalidatesLongRequestTarget) {

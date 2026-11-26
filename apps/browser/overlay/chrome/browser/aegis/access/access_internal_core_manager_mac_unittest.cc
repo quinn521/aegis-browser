@@ -14,6 +14,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/execution_fence.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
@@ -290,6 +291,47 @@ TEST_F(AccessInternalCoreManagerMacTest,
   EXPECT_TRUE(stopped->TimedWait(base::Seconds(5)));
   EXPECT_TRUE(LoopbackPortHeld(port));
   EXPECT_TRUE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
+}
+
+TEST_F(AccessInternalCoreManagerMacTest,
+       QueuedSessionStopWaitsForQuarantinedChildReap) {
+  input_.skip_internal_canary_for_testing = true;
+  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
+  base::test::TestFuture<AccessLocalCoreReady> prepared;
+  manager_->Prepare(prepared.GetCallback());
+  ASSERT_TRUE(prepared.Get().ready) << prepared.Get().error;
+  ASSERT_TRUE(prepared.Get().parent_listener_lease_held);
+  const uint16_t port = prepared.Get().port;
+  ASSERT_GT(port, 0);
+
+  auto stopped = std::make_shared<base::WaitableEvent>();
+  {
+    // Queue session stop behind worker destruction and ahead of the join.
+    base::ScopedThreadPoolExecutionFence defer_thread_join;
+    manager_.reset();
+    AccessLocalCoreManager::StopAllForSessionEnding(base::BindOnce(
+        [](std::shared_ptr<base::WaitableEvent> event) { event->Signal(); },
+        stopped));
+  }
+  base::ThreadPoolInstance::Get()->FlushForTesting();
+  const pid_t pid = retirement_pid.load();
+  ASSERT_GT(pid, 0);
+  EXPECT_EQ(kill(pid, 0), 0);
+  EXPECT_FALSE(stopped->IsSignaled());
+  EXPECT_TRUE(LoopbackPortHeld(port));
+
+  // A subsequent attempt can reap the quarantined child. Its prior Network
+  // binding still prevents this new manager from using the listener.
+  block_retirement.store(false);
+  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
+  base::test::TestFuture<AccessLocalCoreReady> retry;
+  manager_->Prepare(retry.GetCallback());
+  EXPECT_FALSE(retry.Get().ready);
+  base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
+  EXPECT_TRUE(stopped->TimedWait(base::Seconds(5)));
+  EXPECT_EQ(kill(pid, 0), -1);
+  EXPECT_EQ(errno, ESRCH);
+  EXPECT_TRUE(LoopbackPortHeld(port));
 }
 }  // namespace
 }  // namespace aegis::access

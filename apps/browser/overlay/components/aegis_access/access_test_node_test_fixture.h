@@ -6,12 +6,12 @@
 
 namespace aegis_access::test {
 
-// Matches the iOS AccessLocalV2RayConfigTests TEST-NET node.
+// TEST-NET node with an iOS-compatible synthetic 32-byte public key.
 inline constexpr std::string_view kSyntheticTestNodeShare =
     "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
     "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
     "&sni=www.example.com&fp=chrome"
-    "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
     "&headerType=none#demo-reality-vision";
 
 inline constexpr std::string_view kSyntheticWebSocketTlsShare =
@@ -52,6 +52,44 @@ inline constexpr std::string_view kSyntheticGrpcRealityShare =
     "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI"
     "&security=reality&serviceName=%2Fsample%2FTun&sid=a1b2c3d4"
     "&sni=grpc.example&type=grpc#synthetic-grpc";
+
+// Each RAW/REALITY negative has a single invalid field for text and QR.
+inline constexpr std::string_view
+    kSyntheticTcpRealityVisionInvalidFingerprintShare =
+        "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+        "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+        "&fp=synthetic_unknown"
+        "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123";
+
+inline constexpr std::string_view
+    kSyntheticTcpRealityVisionInvalidPublicKeyShare =
+        "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+        "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+        "&fp=chrome"
+        "&pbk=synthetic_short_key&sid=0123";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionOddShortIdShare =
+    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+    "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+    "&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=123";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionUnsafeSpiderXShare =
+    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+    "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+    "&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123"
+    "&spx=%2Ftest%3Fx%3D1%26%2570%3D2";
+
+inline constexpr std::string_view
+    kSyntheticTcpTlsVisionInvalidDialAddressShare =
+        "vless://550e8400-e29b-41d4-a716-446655440000@single-label:443"
+        "?flow=xtls-rprx-vision&security=tls&sni=tls.example&type=tcp";
+
+inline constexpr std::string_view kSyntheticGrpcRealityInvalidDialAddressShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@single-label:8443"
+    "?type=grpc&security=reality&sni=grpc.example&serviceName=sample&sid=0123"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
 
 }  // namespace aegis_access::test
 

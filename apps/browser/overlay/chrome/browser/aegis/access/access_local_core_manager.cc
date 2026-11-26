@@ -307,7 +307,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     shutdown_->SetWorker(nullptr);
     // The worker is going away. Record confirmed reap while its handle can
     // still complete callbacks. Quarantine holds the independent Network lease.
-    if (retired || reaped_with_listener_held_)
+    if (child_reaped_)
       shutdown_->CompleteStop();
   }
 
@@ -438,8 +438,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   // released only by the Network fence or by process exit.
   void StopForSessionEnding() {
     StopWithResult(base::BindOnce(
-        [](Worker* worker, bool retired) {
-          if (retired || worker->reaped_with_listener_held_)
+        [](Worker* worker, bool) {
+          if (worker->child_reaped_)
             worker->shutdown_->CompleteStop();
         },
         base::Unretained(this)));
@@ -964,13 +964,16 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
           ++entry;
           continue;
         }
-        if (!RetireInternalProcess(old.process, old.child) ||
-            (old.directory.IsValid() && !old.directory.Delete()) ||
-            old.network_lease_pending) {
+        if (!RetireInternalProcess(old.process, old.child)) {
           retired = false;
           break;
         }
         completed.push_back(old.shutdown);
+        if ((old.directory.IsValid() && !old.directory.Delete()) ||
+            old.network_lease_pending) {
+          retired = false;
+          break;
+        }
         entry = entries.erase(entry);
       }
     }
@@ -998,7 +1001,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   }
 #endif
   bool StopChild(bool release_reference = true, bool consumers_revoked = false) {
-    reaped_with_listener_held_ = false;
+    child_reaped_ = false;
     if (IsInternal()) retirement_pending_ = true;
 #if BUILDFLAG(IS_MAC)
     if (IsInternal() && release_reference) internal_binding_spent_ = true;
@@ -1028,6 +1031,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
       process_.Close();
     }
 #endif
+    child_reaped_ = true;
     DrainLog();
     CloseLogPipe();
     framer_ = CoreLogFramer();
@@ -1039,7 +1043,6 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
 #if BUILDFLAG(IS_MAC)
     if (IsInternal() && network_lease_pending_ && !consumers_revoked) {
       // The child is reaped; only the published address remains held.
-      reaped_with_listener_held_ = true;
       return false;
     }
     if (consumers_revoked) network_lease_pending_ = false;
@@ -1083,7 +1086,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
   std::optional<net::AuthCredentials> credentials_;
   bool authenticated_ = false;
   bool retirement_pending_ = false;
-  bool reaped_with_listener_held_ = false;
+  bool child_reaped_ = false;
   int auth_attempts_ = 0;
   base::TimeTicks started_;
   base::TimeTicks probe_deadline_;
@@ -1109,7 +1112,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
 
 void AccessLocalCoreManager::ShutdownHandle::StopOnCoreThread() {
   if (!worker_) {
-    CompleteStop();
+    // Destruction can leave a live child in quarantine. Only a confirmed reap
+    // by the worker or quarantine cleanup can complete this handle.
     return;
   }
   if (session_ending_.load()) {

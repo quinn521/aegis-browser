@@ -170,6 +170,62 @@ TEST(AccessTestNodeVaultMacTest, RejectsMixedAndUnknownExtendedRecordShapes) {
   EXPECT_FALSE(dev.Read(saved));
 }
 
+TEST(AccessTestNodeVaultMacTest,
+     FreshDevRealityIsStrictWhileV1AndAlphaRestore) {
+  auto rows = std::make_shared<Rows>();
+  const std::string scope(64, 'a');
+  AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
+  AccessTestNodeVaultMac alpha("alpha", scope, Backend(rows));
+  for (const auto share : {
+           aegis_access::test::
+               kSyntheticTcpRealityVisionInvalidFingerprintShare,
+           aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+           aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare,
+           aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare,
+       }) {
+    const auto legacy = aegis_access::ParseAccessTestNodeShare(share);
+    ASSERT_TRUE(legacy.node);
+    EXPECT_EQ(dev.Stage(Id(), *legacy.node).status, Status::kInvalidNode);
+    const auto saved = alpha.Stage(Id(), *legacy.node);
+    ASSERT_EQ(saved.status, Status::kOk);
+    ASSERT_TRUE(saved.reference);
+    EXPECT_EQ(alpha.Read(*saved.reference), legacy.node);
+    // Simulate a v1 record created by the DEV build before strict admission.
+    const auto stored =
+        rows->values.find({"app.gcsa.aegis.access.test-node.v1.alpha." + scope,
+                           saved.reference->id});
+    ASSERT_NE(stored, rows->values.end());
+    rows->values.emplace(
+        std::make_pair("app.gcsa.aegis.access.test-node.v1.debug." + scope,
+                       saved.reference->id),
+        stored->second);
+    EXPECT_EQ(dev.Read(*saved.reference), legacy.node);
+  }
+}
+
+TEST(AccessTestNodeVaultMacTest, V3RejectsInvalidDialAddresses) {
+  constexpr auto kExtended =
+      aegis_access::AccessTestNodeImportMode::kAllowExtendedVless;
+  for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
+                           aegis_access::test::kSyntheticGrpcRealityShare}) {
+    auto rows = std::make_shared<Rows>();
+    AccessTestNodeVaultMac dev("debug", std::string(64, 'a'), Backend(rows));
+    const auto parsed =
+        aegis_access::ParseAccessTestNodeShare(share, kExtended);
+    ASSERT_TRUE(parsed.node);
+    const auto saved = dev.Stage(Id(), *parsed.node);
+    ASSERT_EQ(saved.status, Status::kOk);
+    ASSERT_TRUE(saved.reference);
+    ASSERT_EQ(dev.Read(*saved.reference), parsed.node);
+    ASSERT_EQ(rows->values.size(), 1u);
+    auto& encoded = rows->values.begin()->second;
+    const auto address = encoded.find(parsed.node->address);
+    ASSERT_NE(address, std::string::npos);
+    encoded.replace(address, parsed.node->address.size(), "single-label");
+    EXPECT_FALSE(dev.Read(*saved.reference));
+  }
+}
+
 TEST(AccessTestNodeVaultMacTest, EditorCannotDiscardAnotherWindowsReference) {
   auto rows = std::make_shared<Rows>();
   AccessTestNodeVaultMac vault("debug", std::string(64, 'a'), Backend(rows));
