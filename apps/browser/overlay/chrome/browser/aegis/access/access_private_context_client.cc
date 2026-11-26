@@ -157,7 +157,7 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
   CHECK(!context_.is_bound());
   const auto operation = ++operation_;
   auto receiver = context_.BindNewPipeAndPassReceiver();
-  context_.set_disconnect_handler(base::BindOnce(
+  context_.set_disconnect_with_reason_handler(base::BindOnce(
       &AccessPrivateContextClient::OnDisconnect, weak_factory_.GetWeakPtr()));
   auto reply = BoundFactorySetupReply(base::BindOnce(
           [](base::WeakPtr<AccessPrivateContextClient> self, uint64_t operation,
@@ -359,11 +359,22 @@ void AccessPrivateContextClient::CreateFactory(
   context_->CreateFactory(std::move(receiver), std::move(params), std::move(binding),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(reply), false));
 }
-void AccessPrivateContextClient::OnDisconnect() {
+void AccessPrivateContextClient::SetDisconnectHandler(
+    base::OnceCallback<void(bool)> handler) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(connected_ && !on_disconnect_);
+  on_disconnect_ = std::move(handler);
+}
+
+void AccessPrivateContextClient::OnDisconnect(uint32_t reason, const std::string&) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   connected_ = ready_ = publication_pending_ = false;
   incarnation_.clear();
   ++operation_;
+  auto notify = std::move(on_disconnect_);
   if (reject_initialize_) std::move(reject_initialize_).Run();
+  if (notify) {
+    std::move(notify).Run(reason == network::mojom::kAegisAccessContextRetired);
+  }
 }
 }  // namespace aegis::access

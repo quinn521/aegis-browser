@@ -27,6 +27,7 @@ function openOptions(t, capabilities = {enabled: true, private: false}) {
   const applyQueries = [];
   const revocations = [];
   let saved = {state: 'ready', revision: '0'};
+  let readFails = false;
   const {document, Event} = dom.window;
   const context = dom.getInternalVMContext();
   context.exports = {};
@@ -42,7 +43,8 @@ function openOptions(t, capabilities = {enabled: true, private: false}) {
           return new Promise((resolve, reject) => discards.push({resolve, reject}));
         }
         if (message === 'readAccessOptions') {
-          return Promise.resolve(saved);
+          return readFails ? Promise.reject(new Error('read unavailable')) :
+                             Promise.resolve(saved);
         }
         if (message === 'applyAccessTestNode') {
           return new Promise(resolve => applies.push({args, resolve}));
@@ -92,6 +94,9 @@ function openOptions(t, capabilities = {enabled: true, private: false}) {
     revocations,
     setSaved(snapshot) {
       saved = snapshot;
+    },
+    failReads() {
+      readFails = true;
     },
   };
 }
@@ -148,14 +153,15 @@ test('Apply binds the preview to its revision and the selected port before any s
   assert.equal(revision, '0');
   assert.match(operation, /^[a-f0-9-]{36}$/);
   assert.deepEqual(preferences, ['socks5', 'fixed', '10806']);
-  page.applies[0].resolve({state: 'prepared', revision: '1', protocol: 'SOCKS5', port: 10806});
+  page.applies[0].resolve({state: 'prepared', revision: '1', revokeToken: 'listener-a',
+                           protocol: 'SOCKS5', port: 10806});
   await tick();
   assert.equal(byId('connection-state').textContent, 'Listener prepared');
   assert.equal(byId('connection-address').textContent, '127.0.0.1:10806');
   assert.equal(byId('saved-revision').textContent, '1');
   assert.doesNotMatch(page.document.body.textContent, /synthetic-test-profile/);
   byId('revoke-node').click();
-  assert.deepEqual(page.revocations[0].args, ['1']);
+  assert.deepEqual(page.revocations[0].args, ['1', 'listener-a']);
   page.revocations[0].resolve({state: 'revoked'});
   await tick();
   assert.equal(byId('connection-state').textContent, 'No active connection');
@@ -216,6 +222,23 @@ test('a conflicting draft keeps its preview and compares the newer committed rev
   assert.match(page.status.textContent, /^Saved\. Listener unavailable/);
 });
 
+test('an unavailable options read keeps the preview and allows a retry', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  page.previewText('synthetic-node');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  const apply = byId('apply-node');
+  apply.click();
+  page.applies[0].resolve({state: 'notSaved', reason: 'options_unavailable'});
+  await tick();
+  assert.match(page.status.textContent, /saved settings could not be read/i);
+  assert.equal(byId('review-revision').hidden, true);
+  assert.equal(byId('node-preview').hidden, false);
+  assert.equal(apply.disabled, false);
+});
+
 test('activating another Profile while one runs is rejected and keeps the connection', async t => {
   const page = openOptions(t, {enabled: true, private: false, testApply: true});
   await tick();
@@ -260,25 +283,27 @@ test('an uncertain Apply queries the same operation without sending a second com
   assert.equal(page.fields.disabled, false);
 });
 
-test('a stale revoke refreshes status and waits for a new explicit action', async t => {
+test('a stale revoke at the same revision requires a fresh connection token', async t => {
   const page = openOptions(t, {enabled: true, private: false, testApply: true});
   page.setSaved({state: 'ready', revision: '1',
     testProfile: {protocol: 'socks5', portMode: 'random', requestedPort: 0},
-    connection: {state: 'active', revision: '1', protocol: 'SOCKS5', port: 45122}});
+    connection: {state: 'active', revision: '1', revokeToken: 'listener-a',
+                 protocol: 'SOCKS5', port: 45122}});
   await tick();
   const revoke = page.document.getElementById('revoke-node');
   revoke.click();
-  assert.deepEqual(page.revocations[0].args, ['1']);
-  page.setSaved({state: 'ready', revision: '2',
-    testProfile: {protocol: 'http', portMode: 'random', requestedPort: 0},
-    connection: {state: 'prepared', revision: '2', protocol: 'HTTP', port: 45123}});
+  assert.deepEqual(page.revocations[0].args, ['1', 'listener-a']);
+  page.setSaved({state: 'ready', revision: '1',
+    testProfile: {protocol: 'socks5', portMode: 'random', requestedPort: 0},
+    connection: {state: 'prepared', revision: '1', revokeToken: 'listener-b',
+                 protocol: 'SOCKS5', port: 45123}});
   page.revocations[0].resolve({state: 'connectionChanged'});
   await tick();
   assert.equal(page.revocations.length, 1);
   assert.equal(page.document.getElementById('connection-address').textContent, '127.0.0.1:45123');
   assert.match(page.status.textContent, /review its current status/i);
   revoke.click();
-  assert.deepEqual(page.revocations[1].args, ['2']);
+  assert.deepEqual(page.revocations[1].args, ['1', 'listener-b']);
   page.revocations[1].resolve({state: 'revoked'});
   await tick();
 });
@@ -299,18 +324,53 @@ test('revoke uses the owned revision while publishing or unavailable', async t =
     ['publishing', 'Waiting for connection confirmation…'],
     ['unavailable', 'Connection status unavailable'],
   ]) {
-    page.setSaved({...snapshot, connection: {state, revision: '7'}});
+    page.setSaved({...snapshot, connection: {state, revision: '7', revokeToken: state}});
     byId('refresh-connection').click();
     await tick();
     assert.equal(byId('connection-state').textContent, label);
     assert.equal(byId('connection-address').textContent, '—');
     assert.equal(revoke.disabled, false);
     revoke.click();
-    assert.deepEqual(page.revocations.at(-1).args, ['7']);
+    assert.deepEqual(page.revocations.at(-1).args, ['7', state]);
     page.revocations.at(-1).resolve({state: 'revoked'});
     await tick();
   }
   assert.equal(page.revocations.length, 2);
+});
+
+test('a failed refresh never restores a token rejected as stale', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  page.setSaved({state: 'ready', revision: '1',
+    connection: {state: 'active', revision: '1', revokeToken: 'listener-a'}});
+  await tick();
+  const revoke = page.document.getElementById('revoke-node');
+  revoke.click();
+  page.failReads();
+  page.revocations[0].resolve({state: 'connectionChanged'});
+  await tick();
+  assert.equal(revoke.disabled, true);
+  assert.equal(page.document.getElementById('connection-state').dataset.state, 'unavailable');
+  revoke.click();
+  assert.equal(page.revocations.length, 1);
+});
+
+test('editing the link while revoke is pending still discards the staged node', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  page.setSaved({state: 'ready', revision: '1',
+    connection: {state: 'active', revision: '1', revokeToken: 'listener-a'}});
+  await tick();
+  page.previewText('synthetic-node-a');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  page.document.getElementById('revoke-node').click();
+  page.input.value = 'synthetic-node-b';
+  page.input.dispatchEvent(new page.Event('input'));
+  page.revocations[0].resolve({state: 'revoked'});
+  await tick();
+  const apply = page.document.getElementById('apply-node');
+  assert.equal(apply.disabled, true);
+  apply.click();
+  assert.equal(page.applies.length, 0);
 });
 
 test('late replies after discard stay in their originating page and cannot restore a preview', async t => {
@@ -566,6 +626,29 @@ test('editing the share field invalidates the staged preview before Apply', asyn
   assert.equal(page.preferenceApplies.length, 0);
 });
 
+test('editing the link during preview prevents an older reply from enabling Apply', async t => {
+  const page = openOptions(t, {enabled: true, private: false, testApply: true});
+  await tick();
+  const apply = page.document.getElementById('apply-node');
+  page.previewText('synthetic-node-a');
+  const canceled = page.cancellations.length;
+  page.input.value = 'synthetic-node-b';
+  page.input.dispatchEvent(new page.Event('input'));
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  assert.equal(apply.disabled, true);
+  assert.equal(page.document.querySelector('#node-preview').hidden, true);
+  assert.equal(page.cancellations.length, canceled + 1);
+  apply.click();
+  assert.equal(page.applies.length, 0);
+
+  page.previewText(page.input.value);
+  assert.equal(page.previews[1].payload, 'synthetic-node-b');
+  page.previews[1].resolve({state: 'preview'});
+  await tick();
+  assert.equal(apply.disabled, false);
+});
+
 test('listener preferences can be applied for the saved node without a new import', async t => {
   const page = openOptions(t, {enabled: true, private: false, testApply: true});
   page.setSaved({state: 'ready', revision: '3',
@@ -621,6 +704,29 @@ test('discarding a stale draft reloads the latest committed revision', async t =
   assert.equal(byId('inbound-port').value, '8080');
   assert.equal(byId('draft-state').textContent, 'Saved preferences');
   assert.equal(byId('apply-node').disabled, true);
+});
+
+test('DEV requires an explicit protocol until automatic activation is admitted', async t => {
+  const page = openOptions(t, {
+    enabled: true, private: false, testApply: true,
+    testActivate: true, testAutoProtocol: false,
+  });
+  await tick();
+  const byId = id => page.document.getElementById(id);
+  page.previewText('synthetic-dev-node');
+  page.previews[0].resolve({state: 'preview'});
+  await tick();
+  const apply = byId('apply-node');
+  assert.equal(byId('inbound-protocol').value, 'auto');
+  assert.equal(apply.disabled, true);
+  assert.match(byId('apply-availability').textContent, /choose HTTP or SOCKS5/i);
+  apply.click();
+  assert.equal(page.applies.length, 0);
+  byId('inbound-protocol').value = 'http';
+  byId('inbound-protocol').dispatchEvent(new page.Event('change'));
+  assert.equal(apply.disabled, false);
+  apply.click();
+  assert.equal(page.applies[0].args[2], 'http');
 });
 
 test('an internal Alpha build can save a draft while activation stays unavailable', async t => {

@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 12:02:31 +0800
+Subject: [PATCH] fix(access): scope pending retirement to its possible consumers
+
+---
+diff --git a/chrome/browser/aegis/access/BUILD.gn b/chrome/browser/aegis/access/BUILD.gn
+index 19f200c6bc3c02dc656da1c9a1cec1fbb00b6517..d9fe68db98f60b05d326020d18384eb4e7114e57 100644
+--- a/chrome/browser/aegis/access/BUILD.gn
++++ b/chrome/browser/aegis/access/BUILD.gn
+@@ -399,6 +399,7 @@ source_set("access_network_context_transport") {
+   public_deps = [
+     ":access_private_context_client",
+     "//components/aegis_access:policy_publication_ack_tracker",
++    "//content/public/browser",
+   ]
+   deps = [
+     "//base",
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+index 88334eb97df72ba75e7b400731be4c09b8e13ff4..dd6658eb2d43336ca917b52dcad31ac390c6da26 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
+@@ -645,6 +645,7 @@ void AccessNetworkContextTransport::BindPrivateContext(
+           if (const auto lost = state.disconnected_private_contexts.find(incarnation);
+               lost != state.disconnected_private_contexts.end()) {
+             entry->second.sequence = lost->second.sequence;
++            entry->second.possible_listeners = lost->second.possible_listeners;
+           }
+           client->SetDisconnectHandler(base::BindOnce(
+               &AccessNetworkContextTransport::OnPrivateContextDisconnected,
+@@ -672,7 +673,8 @@ void AccessNetworkContextTransport::OnPrivateContextDisconnected(
+     state.disconnected_private_contexts.insert_or_assign(
+         incarnation, PartitionState::DisconnectedContext{
+                          context->second.sequence,
+-                         context->second.service_process});
++                         context->second.service_process,
++                         std::move(context->second.possible_listeners)});
+   }
+   state.private_contexts.erase(context);
+   SettlePrivatePublication(state, false);
+@@ -767,6 +769,10 @@ void AccessNetworkContextTransport::PublishPrivateContext(
+   if (entry.install_attempt || !state.private_publication ||
+       (entry.applied_revision == state.private_revision && entry.client->is_ready())) return;
+   const auto& publication = *state.private_publication;
++  for (const auto& endpoint : publication.endpoints) {
++    if (endpoint.listener_binding)
++      entry.possible_listeners.insert(endpoint.registration.registration_id);
++  }
+   entry.install_attempt = ++private_install_attempt_;
+   if (BUILDFLAG(IS_MAC)) {
+     entry.install_deadline = base::TimeTicks::Now() + kPrivateInstallTimeout;
+@@ -825,6 +831,11 @@ void AccessNetworkContextTransport::OnPrivateContextPublished(
+     return;
+   }
+   state.disconnected_private_contexts.erase(incarnation);
++  install.possible_listeners.clear();
++  for (const auto& endpoint : state.private_publication->endpoints) {
++    if (endpoint.listener_binding)
++      install.possible_listeners.insert(endpoint.registration.registration_id);
++  }
+   entry->second.applied_revision = revision;
+   if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
+ }
+@@ -843,7 +854,10 @@ void AccessNetworkContextTransport::SettleTestListenerRetirements(
+     if (!listener.completion) continue;
+     if (accepted) {
+       if (!state.private_publication ||
+-          !state.disconnected_private_contexts.empty() ||
++          std::ranges::any_of(state.disconnected_private_contexts,
++              [&](const auto& entry) {
++                return entry.second.possible_listeners.contains(listener.registration_id);
++              }) ||
+           state.private_publication->common.network_epoch != network_epoch_ ||
+           state.private_endpoints.contains(group) ||
+           std::ranges::any_of(state.private_publication->endpoints,
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/chrome/browser/aegis/access/access_network_context_transport.h
+index fb497e66795eb2e46f5b627b7a95f0564df9855f..b415e7b027a4ea47b7fa32c7d1f7ef6b17ccde35 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.h
++++ b/chrome/browser/aegis/access/access_network_context_transport.h
+@@ -224,6 +224,7 @@ class AccessNetworkContextTransport
+ 
+     PrivateContext client;
+     content::ServiceProcessId service_process;
++    std::set<std::string> possible_listeners;
+     uint64_t sequence = 0;
+     uint64_t applied_revision = 0;
+     // Remains set after timeout until Mojo actually settles the install.
+@@ -247,6 +248,7 @@ class AccessNetworkContextTransport
+     struct DisconnectedContext {
+       uint64_t sequence;
+       content::ServiceProcessId service_process;
++      std::set<std::string> possible_listeners;
+     };
+     std::map<std::string, DisconnectedContext> disconnected_private_contexts;
+     std::optional<PrivatePublication> private_publication;

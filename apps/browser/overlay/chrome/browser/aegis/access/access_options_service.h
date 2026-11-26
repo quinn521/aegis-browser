@@ -119,6 +119,8 @@ class AccessOptionsService : public base::SupportsUserData::Data {
   bool HasUncertainTestNodeApply() const;
   void ReconcileUncertainTestNodeApply(base::OnceClosure completion);
   void SetSaveFailureForTesting(AccessOptionsStore::SaveFailurePointForTesting point);
+  static bool SupportsTestNodeActivationProtocol(
+      aegis_access::AccessInboundProtocolPreference protocol);
   // Native consumer API. No renderer supplies a node reference, probe, manifest
   // path, endpoint or authorization generation. Prepare fences Save before IO.
   void PrepareTestNodeProfile(uint64_t expected_revision,
@@ -136,8 +138,8 @@ class AccessOptionsService : public base::SupportsUserData::Data {
   bool SetTestNodeConsumerRevoker(base::RepeatingCallback<void(
       AccessLocalCoreReady, base::OnceCallback<void(bool)>)> revoker);
   void RevokeTestNodeProfile(base::OnceCallback<void(bool)> callback);
-  bool CanRevokeTestNodeProfileAtRevision(uint64_t revision) const;
-  bool RevokeTestNodeProfileAtRevision(uint64_t revision,
+  std::string TestNodeRevocationTokenAtRevision(uint64_t revision) const;
+  bool RevokeTestNodeProfileAtRevision(uint64_t revision, std::string_view token,
       base::OnceCallback<void(bool)> callback);
   void RevokePreparedTestNodeIfCurrent(uint64_t revision,
                                       const AccessLocalCoreReady& ready);
@@ -239,6 +241,7 @@ class AccessOptionsService : public base::SupportsUserData::Data {
   bool test_profile_network_loss_restore_ = false;
   uint64_t test_profile_runtime_epoch_ = 0;
   uint64_t test_profile_runtime_revision_ = 0;
+  std::string test_profile_revocation_token_;
   uint64_t test_profile_authorization_generation_ = 0;
   bool test_profile_consumers_possible_ = false;
   base::RepeatingCallback<void(AccessLocalCoreReady, base::OnceCallback<void(bool)>)>

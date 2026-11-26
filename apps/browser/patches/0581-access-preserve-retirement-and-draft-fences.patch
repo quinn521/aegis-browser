@@ -1,0 +1,249 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:43:57 +0800
+Subject: [PATCH] fix(access): preserve retirement ACK and draft fences during disconnects
+
+---
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+index c876be9c097feef732d0bf814b86b2db592f5cd6..86b676b874b2c67d02ba9138a861ff7abe91fd10 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
+@@ -500,30 +500,11 @@ void AccessNetworkContextTransport::RetirePreparedTestListener(
+     std::move(completion).Run(true);
+     return;
+   }
+-  PublishPrivatePolicy(policy, common, base::BindOnce(
+-      &AccessNetworkContextTransport::OnTestListenerRetirementPublished,
+-      weak_factory_.GetWeakPtr(), policy.owner, group, registration_id,
+-      std::move(completion)));
+-}
+-
+-void AccessNetworkContextTransport::OnTestListenerRetirementPublished(
+-    aegis_access::OwnershipKey owner, std::string group,
+-    std::string registration_id, base::OnceCallback<void(bool)> completion,
+-    bool acknowledged) {
+-  if (!OwnsConfiguredPartition(owner)) {
+-    std::move(completion).Run(false);
+-    return;
+-  }
+-  auto& state = partitions_.at(owner.storage_partition_token);
+-  auto retiring = state.retiring_test_listeners.find(group);
+-  if (retiring == state.retiring_test_listeners.end() ||
+-      retiring->second.registration_id != registration_id ||
+-      state.private_endpoints.contains(group)) {
+-    std::move(completion).Run(false);
+-    return;
++  retiring->second.completion = std::move(completion);
++  if (PublishPrivatePolicy(policy, common, base::DoNothing()).status ==
++      AccessNetworkConfigAckStatus::kInvalidPublication) {
++    std::move(retiring->second.completion).Run(false);
+   }
+-  retiring->second.acknowledged |= acknowledged;
+-  std::move(completion).Run(retiring->second.acknowledged);
+ }
+ bool AccessNetworkContextTransport::HasReadyPrivateContext(
+     const aegis_access::OwnershipKey& owner) const {
+@@ -622,6 +603,10 @@ void AccessNetworkContextTransport::BindPrivateContext(
+           client->SetDisconnectHandler(base::BindOnce(
+               &AccessNetworkContextTransport::OnPrivateContextDisconnected,
+               self, owner, incarnation));
++          if (std::ranges::any_of(state.retiring_test_listeners,
++                  [](const auto& item) { return !!item.second.completion; })) {
++            self->PublishPrivateContext(owner, incarnation);
++          }
+         }
+         // All factories for the same actual Context share one sequence owner.
+         std::move(completion).Run(entry->second.client);
+@@ -635,10 +620,7 @@ void AccessNetworkContextTransport::OnPrivateContextDisconnected(
+   if (!state.private_contexts.erase(incarnation)) return;
+   SettlePrivatePublication(state, false);
+   InvalidateTestListenersAfterContextLoss(owner, state);
+-  if (state.private_contexts.empty()) {
+-    for (auto& [group, listener] : state.retiring_test_listeners)
+-      listener.acknowledged = true;
+-  }
++  if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
+ }
+ bool AccessNetworkContextTransport::SamePrivatePublication(
+     const PrivatePublication& a, const PrivatePublication& b) {
+@@ -709,6 +691,7 @@ AccessNetworkConfigAckResult AccessNetworkContextTransport::PublishPrivatePolicy
+     // Keep the desired snapshot for catch-up, but fail callers while a live
+     // Context still holds an expired install. Other Contexts can still catch up.
+     SettlePrivatePublication(state, false);
++    SettleTestListenerRetirements(state, false);
+     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+         FROM_HERE, base::BindOnce(std::move(completion), false));
+   } else {
+@@ -749,6 +732,7 @@ void AccessNetworkContextTransport::OnPrivateContextInstallTimeout(
+   if (entry == state.private_contexts.end() || entry->second.install_attempt != attempt)
+     return;
+   SettlePrivatePublication(state, false);
++  SettleTestListenerRetirements(state, false);
+ }
+ void AccessNetworkContextTransport::OnPrivateContextPublished(
+     aegis_access::OwnershipKey owner, std::string incarnation,
+@@ -768,6 +752,7 @@ void AccessNetworkContextTransport::OnPrivateContextPublished(
+   if (expired) {
+     install.applied_revision = 0;
+     SettlePrivatePublication(state, false);
++    SettleTestListenerRetirements(state, false);
+     if (install.client->incarnation() != incarnation ||
+         state.private_publication->common.network_epoch != network_epoch_) return;
+   }
+@@ -790,6 +775,28 @@ void AccessNetworkContextTransport::SettlePrivatePublication(PartitionState& sta
+   state.private_publication_waiters.clear();
+   for (auto& callback : callbacks) base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+       FROM_HERE, base::BindOnce(std::move(callback), accepted));
++  if (accepted) SettleTestListenerRetirements(state, true);
++}
++
++void AccessNetworkContextTransport::SettleTestListenerRetirements(
++    PartitionState& state, bool accepted) {
++  for (auto& [group, listener] : state.retiring_test_listeners) {
++    if (!listener.completion) continue;
++    if (accepted) {
++      if (!state.private_publication ||
++          state.private_publication->common.network_epoch != network_epoch_ ||
++          state.private_endpoints.contains(group) ||
++          std::ranges::any_of(state.private_publication->endpoints,
++              [&](const auto& endpoint) {
++                return endpoint.registration.registration_id == listener.registration_id;
++              })) {
++        continue;
++      }
++      listener.acknowledged = true;
++    }
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(std::move(listener.completion), accepted));
++  }
+ }
+ 
+ std::optional<aegis_access::RegisteredProxyEndpoint>
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/chrome/browser/aegis/access/access_network_context_transport.h
+index ffa08f53dcef0bd0e37947ed99165b58a74230cf..fe8bb1bce902d1aebe56a0127e5dde1e5b505ee7 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.h
++++ b/chrome/browser/aegis/access/access_network_context_transport.h
+@@ -236,6 +236,7 @@ class AccessNetworkContextTransport
+     struct RetiringListener {
+       std::string registration_id;
+       bool acknowledged = false;
++      base::OnceCallback<void(bool)> completion = {};
+     };
+     std::map<std::string, RetiringListener> retiring_test_listeners;
+     std::map<std::string, uint64_t> private_unavailable_generations;
+@@ -257,11 +258,6 @@ class AccessNetworkContextTransport
+ 
+   AccessNetworkContextTransport();
+ 
+-  void OnTestListenerRetirementPublished(
+-      aegis_access::OwnershipKey owner,
+-      std::string group, std::string registration_id,
+-      base::OnceCallback<void(bool)> completion, bool acknowledged);
+-
+   void OnNetworkChanged(
+       net::NetworkChangeNotifier::ConnectionType type) override;
+ 
+@@ -309,6 +305,7 @@ class AccessNetworkContextTransport
+   void OnPrivateContextPublished(aegis_access::OwnershipKey owner,
+       std::string incarnation, uint64_t attempt, uint64_t revision, bool accepted);
+   void SettlePrivatePublication(PartitionState& state, bool accepted);
++  void SettleTestListenerRetirements(PartitionState& state, bool accepted);
+   // Invalidates every unauthenticated test listener registration after a
+   // private Context was lost, so a replacement Context cannot install it.
+   void InvalidateTestListenersAfterContextLoss(
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 174d028d273ec33e4072ea36e656954ba10473d5..3441335eaef23a1f7ae7a3e613edb31cee20bc70 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1384,6 +1384,9 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+   EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+   EXPECT_NE(Snapshot().connection, AccessSiteConnectionState::kReady);
++  EXPECT_EQ(options->test_profile_runtime_state(),
++            AccessTestProfileRuntimeState::kRevoking);
++  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
+   ProductAckContext failed_replacement;
+   failed_replacement.incarnation.clear();
+   base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> failed;
+@@ -1392,6 +1395,7 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+   ProductAckContext replacement;
+   replacement.incarnation = "replacement-context";
++  replacement.hold_next = true;
+   base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+   transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
+   ASSERT_TRUE(bound.Get());
+@@ -1399,6 +1403,10 @@ TEST_F(AccessSavedTestProfileProductTest,
+   // ACK alone cannot make the old listener current again.
+   EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+   EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
++  ASSERT_TRUE(base::test::RunUntil([&] { return replacement.has_reply(); }));
++  EXPECT_FALSE(replacement.HoldsRegistration(active->registration_id));
++  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
++  replacement.Reply(true);
+   ASSERT_TRUE(base::test::RunUntil([&] {
+     return options->test_profile_runtime_state() == AccessTestProfileRuntimeState::kIdle;
+   })) << SavedProfileState(options);
+@@ -1430,6 +1438,34 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_TRUE(revoked.Get());
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       ContextLossDuringRetirementKeepsWaitingForOtherContexts) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  ProductAckContext survivor;
++  survivor.incarnation = "surviving-context";
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &survivor, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
++
++  context_.hold_next = survivor.hold_next = true;
++  base::test::TestFuture<bool> revoked;
++  options->RevokeTestNodeProfile(revoked.GetCallback());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return context_.has_reply() && survivor.has_reply();
++  }));
++  context_.Disconnect();
++  environment_.RunUntilIdle();
++  EXPECT_FALSE(revoked.IsReady());
++  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
++  survivor.Reply(true);
++  EXPECT_TRUE(revoked.Get());
++  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
++}
++
+ TEST_F(AccessSavedTestProfileProductTest,
+        ExplicitRevokeAfterNetworkServiceLossKeepsRestoreClosed) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index 85a1353aa2909c3c22368455c7c47439125f5793..5ae45d60cc7679ebcc569a4b32c2b966be80b3ca 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -241,7 +241,7 @@ form.addEventListener('submit', event => {
+ });
+ 
+ link.addEventListener('input', () => {
+-  if (!nodeDraft || working) return;
++  if (!nodeDraft || fields.disabled) return;
+   cancel();
+   status.dataset['error'] = 'false';
+   status.textContent = 'Preview the edited link before applying.';
+@@ -495,8 +495,12 @@ revoke.addEventListener('click', async () => {
+         'revokeAccessTestNode', connectionRevision, revokeToken);
+     if (result.state === 'connectionChanged') {
+       showConnection({state: 'unavailable'});
+-      await readOptions(false);
+-      status.textContent = 'The test connection changed. Review its current status before revoking.';
++      try {
++        await readOptions(false);
++        status.textContent = 'The test connection changed. Review its current status before revoking.';
++      } catch {
++        status.textContent = 'The test connection changed. Refresh its status before revoking.';
++      }
+       return;
+     }
+     showConnection(result.state === 'revoked' ? {state: 'inactive'} :

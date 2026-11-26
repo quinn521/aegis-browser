@@ -43,6 +43,23 @@ std::string VaultScope(Profile* profile) {
       "\naccess-test-node-v1\n" + profile->GetPath().AsUTF8Unsafe();
   return base::HexEncodeLower(crypto::hash::Sha256(base::as_byte_span(scope)));
 }
+
+std::optional<AccessTestProfileSaveResult> CheckOptionsRevision(
+    const StoreResult<AccessOptionsSnapshot>& snapshot, uint64_t expected_revision) {
+  if (snapshot.status != StoreStatus::kValid || !snapshot.value) {
+    const auto status = snapshot.status == StoreStatus::kValid
+        ? StoreStatus::kIoError : snapshot.status;
+    return AccessTestProfileSaveResult{
+        status, AccessOptionsCommitOutcome::kNotCommitted,
+        std::nullopt, std::nullopt, "options_unavailable"};
+  }
+  if (snapshot.value->revision != expected_revision) {
+    return AccessTestProfileSaveResult{
+        StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+        std::nullopt, snapshot.value, "configuration_revision_conflict"};
+  }
+  return std::nullopt;
+}
 #endif
 
 }  // namespace
@@ -96,12 +113,8 @@ class AccessOptionsWorker {
       return {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
               std::nullopt, std::nullopt, "previous_operation_uncertain"};
     const auto before = store_.OpenAndRead();
-    if (before.status != StoreStatus::kValid)
-      return {before.status, AccessOptionsCommitOutcome::kNotCommitted,
-              std::nullopt, std::nullopt, "options_unavailable"};
-    if (before.value->revision != expected_revision)
-      return {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
-              std::nullopt, before.value, "configuration_revision_conflict"};
+    if (auto error = CheckOptionsRevision(before, expected_revision))
+      return std::move(*error);
     // This store currently has one typed test Profile. Retain a scope-wide
     // barrier even when an abandoned older instance references a prior row.
     if (vault_.HasRuntimeReferences())
@@ -495,13 +508,8 @@ void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
       [](uint64_t expected_revision, bool switches_profile,
          base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
          StoreResult<AccessOptionsSnapshot> snapshot) {
-        if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
-            snapshot.value->revision != expected_revision) {
-          std::move(callback).Run(
-              {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict
-                                                      : snapshot.status,
-               AccessOptionsCommitOutcome::kNotCommitted, std::nullopt,
-               std::move(snapshot.value), "configuration_revision_conflict"});
+        if (auto error = CheckOptionsRevision(snapshot, expected_revision)) {
+          std::move(callback).Run(std::move(*error));
           return;
         }
         // Alpha does not replace a running Profile in place. Fail closed: no
@@ -686,6 +694,12 @@ void AccessOptionsService::StartTestProfilePreparation(
   Read(base::BindOnce(&AccessOptionsService::OnTestProfileRuntimeRead,
       weak_factory_.GetWeakPtr(), epoch, std::move(expectation)));
 }
+bool AccessOptionsService::SupportsTestNodeActivationProtocol(
+    aegis_access::AccessInboundProtocolPreference protocol) {
+  using Protocol = aegis_access::AccessInboundProtocolPreference;
+  return protocol == Protocol::kHttp || protocol == Protocol::kSocks5;
+}
+
 void AccessOptionsService::OnTestProfileRuntimeRead(uint64_t epoch, TestProfileExpectation expectation,
     StoreResult<AccessOptionsSnapshot> snapshot) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
@@ -720,8 +734,7 @@ void AccessOptionsService::OnTestProfileRuntimeRead(uint64_t epoch, TestProfileE
   }
   using Protocol = aegis_access::AccessInboundProtocolPreference;
   using Transport = aegis_access::RegisteredProxyTransport;
-  if (stored.configuration.inbound.protocol != Protocol::kHttp &&
-      stored.configuration.inbound.protocol != Protocol::kSocks5) {
+  if (!SupportsTestNodeActivationProtocol(stored.configuration.inbound.protocol)) {
     fail("Automatic protocol selection is not admitted in this candidate. Choose an explicit internal protocol.");
     return;
   }
@@ -740,6 +753,7 @@ void AccessOptionsService::OnTestProfileRuntimeRead(uint64_t epoch, TestProfileE
     return;
   }
   test_profile_runtime_revision_ = snapshot.value->revision;
+  test_profile_revocation_token_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
   test_profile_ready_ = {};
   test_profile_ready_.profile_id = stored.configuration.id;
   test_profile_ready_.profile_version = stored.version;
@@ -921,17 +935,22 @@ void AccessOptionsService::RevokeTestNodeProfile(base::OnceCallback<void(bool)> 
   }
 }
 
-bool AccessOptionsService::CanRevokeTestNodeProfileAtRevision(uint64_t revision) const {
+std::string AccessOptionsService::TestNodeRevocationTokenAtRevision(
+    uint64_t revision) const {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  return revision && revision == test_profile_runtime_revision_ &&
-      test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
-      test_profile_runtime_state_ != AccessTestProfileRuntimeState::kPreparing;
+  if (!revision || revision != test_profile_runtime_revision_ ||
+      test_profile_runtime_state_ == AccessTestProfileRuntimeState::kIdle ||
+      test_profile_runtime_state_ == AccessTestProfileRuntimeState::kPreparing) {
+    return {};
+  }
+  return test_profile_revocation_token_;
 }
 
 bool AccessOptionsService::RevokeTestNodeProfileAtRevision(
-    uint64_t revision, base::OnceCallback<void(bool)> callback) {
+    uint64_t revision, std::string_view token,
+    base::OnceCallback<void(bool)> callback) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (!CanRevokeTestNodeProfileAtRevision(revision)) {
+  if (token.empty() || token != TestNodeRevocationTokenAtRevision(revision)) {
     return false;
   }
   if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kPublishing &&
@@ -964,6 +983,7 @@ void AccessOptionsService::OnTestProfileCoreRetired(uint64_t epoch, bool confirm
     test_profile_core_.reset();
     test_profile_ready_ = {};
     test_profile_runtime_revision_ = 0;
+    test_profile_revocation_token_.clear();
     test_profile_consumers_possible_ = false;
     // Only a confirmed retirement after Network Service loss reopens the
     // single cold restore from the persisted Profile binding.
@@ -994,12 +1014,9 @@ void AccessOptionsService::OnTestProfileSaveRead(std::string editor, uint64_t ge
          std::nullopt, std::nullopt, "draft_canceled_before_commit"});
     return;
   }
-  if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
-      snapshot.value->revision != expected_revision) {
+  if (auto error = CheckOptionsRevision(snapshot, expected_revision)) {
     OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
-        {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict : snapshot.status,
-         AccessOptionsCommitOutcome::kNotCommitted, std::nullopt, std::move(snapshot.value),
-         "configuration_revision_conflict"});
+                              std::move(*error));
     return;
   }
   const auto id = snapshot.value->test_profile
@@ -1025,12 +1042,9 @@ void AccessOptionsService::OnTestProfilePreferencesRead(std::string editor,
          std::nullopt, std::nullopt, "draft_canceled_before_commit"});
     return;
   }
-  if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
-      snapshot.value->revision != expected_revision) {
+  if (auto error = CheckOptionsRevision(snapshot, expected_revision)) {
     OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
-        {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict : snapshot.status,
-         AccessOptionsCommitOutcome::kNotCommitted, std::nullopt, std::move(snapshot.value),
-         "configuration_revision_conflict"});
+                              std::move(*error));
     return;
   }
   if (!snapshot.value->test_profile) {

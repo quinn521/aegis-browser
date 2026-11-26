@@ -685,8 +685,12 @@ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& a
   result.Set("testApply", IsAccessOptionsDocument() &&
       !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
       aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kWrite));
-  result.Set("testActivate", IsAccessOptionsDocument() &&
-      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode());
+  const bool can_activate = IsAccessOptionsDocument() &&
+      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode();
+  result.Set("testActivate", can_activate);
+  result.Set("testAutoProtocol", can_activate &&
+      aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
+          aegis_access::AccessInboundProtocolPreference::kAuto));
   ResolveJavascriptCallback(args[0], result);
 }
 
@@ -757,8 +761,8 @@ void AegisUIHandler::OnAccessOptionsRead(
       auto* options = aegis::access::AccessOptionsService::GetOrCreate(browser_profile);
       if (options) {
         auto* controller = aegis::access::AccessSiteProxyBubbleController::Get(browser_profile);
-        const bool revocable = options->CanRevokeTestNodeProfileAtRevision(result.value->revision);
-        const auto active = revocable && controller
+        const auto revoke_token = options->TestNodeRevocationTokenAtRevision(result.value->revision);
+        const auto active = !revoke_token.empty() && controller
             ? controller->AcknowledgedTestProfileListener() : std::nullopt;
         const auto prepared = options->PreparedTestNode();
         const auto* listener = active ? &*active
@@ -766,7 +770,10 @@ void AegisUIHandler::OnAccessOptionsRead(
         using Runtime = aegis::access::AccessTestProfileRuntimeState;
         const auto runtime = options->test_profile_runtime_state();
         base::DictValue connection;
-        if (revocable) connection.Set("revision", std::to_string(result.value->revision));
+        if (!revoke_token.empty()) {
+          connection.Set("revision", std::to_string(result.value->revision));
+          connection.Set("revokeToken", revoke_token);
+        }
         connection.Set("state", active ? "active" : listener ? "prepared"
             : runtime == Runtime::kUncertain ? "uncertain"
             : runtime == Runtime::kRevoking ? "revoking"
@@ -1002,6 +1009,12 @@ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
     reject("invalidPreferences");
     return;
   }
+  if (CanActivateAccessTestNode() &&
+      !aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
+          inbound->protocol)) {
+    reject("automaticProtocolNotAdmitted");
+    return;
+  }
   service->SaveTestNodeProfile(access_test_node_editor_, *revision, args[2].GetString(),
       "Test node", *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
           account_weak_factory_.GetWeakPtr(), access_options_document_,
@@ -1031,6 +1044,12 @@ void AegisUIHandler::HandleApplyAccessTestNodePreferences(const base::ListValue&
   const auto inbound = ParseAccessTestNodeInbound(args);
   if (!revision || !inbound) {
     reject("invalidPreferences");
+    return;
+  }
+  if (CanActivateAccessTestNode() &&
+      !aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
+          inbound->protocol)) {
+    reject("automaticProtocolNotAdmitted");
     return;
   }
   service->SaveTestNodePreferences(access_test_node_editor_, *revision, args[2].GetString(),
@@ -1105,9 +1124,14 @@ void AegisUIHandler::OnAccessTestNodePrepared(
     return;
   }
   base::DictValue response;
-  response.Set("revision", std::move(revision));
+  response.Set("revision", revision);
   response.Set("state", result.ready ? "prepared" : "savedUnavailable");
   if (result.ready) {
+    const auto revision_number = aegis::access::ParseAccessOptionsRevision(revision);
+    if (revision_number && access_test_node_service_) {
+      response.Set("revokeToken",
+          access_test_node_service_->TestNodeRevocationTokenAtRevision(*revision_number));
+    }
     response.Set("port", static_cast<int>(result.port));
     response.Set("protocol", result.transport == aegis_access::RegisteredProxyTransport::kSocks5
                                  ? "SOCKS5" : "HTTP");
@@ -1118,7 +1142,8 @@ void AegisUIHandler::OnAccessTestNodePrepared(
 }
 
 void AegisUIHandler::HandleRevokeAccessTestNode(const base::ListValue& args) {
-  if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) return;
+  if (args.size() != 3 || !args[0].is_string() || !args[1].is_string() ||
+      !args[2].is_string()) return;
   AllowJavascript();
   auto* profile = Profile::FromWebUI(web_ui());
   auto* service = IsAccessOptionsDocument() && profile && !profile->IsOffTheRecord()
@@ -1133,7 +1158,8 @@ void AegisUIHandler::HandleRevokeAccessTestNode(const base::ListValue& args) {
     ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "invalidRevision"));
     return;
   }
-  const bool requested = service->RevokeTestNodeProfileAtRevision(*revision, base::BindOnce(
+  const bool requested = service->RevokeTestNodeProfileAtRevision(
+      *revision, args[2].GetString(), base::BindOnce(
       [](base::WeakPtr<AegisUIHandler> self, content::WeakDocumentPtr document,
          std::string callback_id, bool confirmed) {
         if (self && self->IsJavascriptAllowed() && self->IsAccessOptionsDocument() &&

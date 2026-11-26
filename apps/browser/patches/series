@@ -573,3 +573,11 @@
 0573-access-macos-confirm-reap-and-validate-dev-reality.patch
 0574-access-macos-align-dev-share-grammar.patch
 0575-access-macos-canonicalize-dial-hosts-and-preserve-native-validation.patch
+0576-access-cancel-pending-preview-on-link-edit.patch
+0577-access-retire-listeners-on-context-loss.patch
+0578-access-bind-revocation-to-listener-instance.patch
+0579-access-gate-automatic-activation-before-save.patch
+0580-access-report-unavailable-options-separately.patch
+0581-access-preserve-retirement-and-draft-fences.patch
+0582-access-confirm-disconnected-context-retirement.patch
+0583-access-scope-disconnected-listener-consumers.patch

@@ -399,6 +399,7 @@ source_set("access_network_context_transport") {
   public_deps = [
     ":access_private_context_client",
     "//components/aegis_access:policy_publication_ack_tracker",
+    "//content/public/browser",
   ]
   deps = [
     "//base",

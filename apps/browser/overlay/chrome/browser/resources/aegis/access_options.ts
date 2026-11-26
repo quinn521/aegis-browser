@@ -13,6 +13,7 @@ interface InboundPreferences {
 interface Connection {
   state: string;
   revision?: string;
+  revokeToken?: string;
   protocol?: string;
   port?: number;
 }
@@ -80,6 +81,7 @@ let generation = 0;
 let reader: FileReader|null = null;
 let canApply = false;
 let canActivate = false;
+let canActivateAutomatically = false;
 let canImportExtendedVless = false;
 let working = false;
 let previewReady = false;
@@ -107,10 +109,13 @@ function preferencesOnlyDraft() {
 
 function syncActions() {
   const preferencesOnly = preferencesOnlyDraft();
+  const autoBlocked = canActivate && !canActivateAutomatically && protocol.value === 'auto';
   apply.disabled = !canApply || !(previewReady || preferencesOnly) || !revision || working ||
-      requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden;
+      requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden ||
+      autoBlocked;
   discard.disabled = !hasDraft || working || !!uncertainOperation;
   revoke.disabled = !canApply || working || !lastConnection.revision ||
+      !lastConnection.revokeToken ||
       !['active', 'prepared', 'publishing', 'uncertain', 'revoking', 'unavailable']
       .includes(lastConnection.state);
   review.hidden = !requiresReview;
@@ -118,7 +123,9 @@ function syncActions() {
   checkApply.disabled = working;
   refresh.disabled = !canApply || working;
   if (canApply) {
-    availability.textContent = previewReady ?
+    availability.textContent = autoBlocked ?
+        'Automatic activation is unavailable. Choose HTTP or SOCKS5 to apply.' :
+        previewReady ?
         (canActivate ? 'Apply saves this draft and prepares the listener.' :
                        'Apply saves this draft. Connections are not available in this build.') :
         preferencesOnly ?
@@ -234,7 +241,7 @@ form.addEventListener('submit', event => {
 });
 
 link.addEventListener('input', () => {
-  if (!previewReady) return;
+  if (!nodeDraft || fields.disabled) return;
   cancel();
   status.dataset['error'] = 'false';
   status.textContent = 'Preview the edited link before applying.';
@@ -401,9 +408,13 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
     return;
   }
   status.dataset['error'] = 'true';
-  if (result.reason === 'configuration_revision_conflict') {
+  if (result.state === 'automaticProtocolNotAdmitted') {
+    status.textContent = 'Automatic activation is unavailable. Choose HTTP or SOCKS5 to apply.';
+  } else if (result.reason === 'configuration_revision_conflict') {
     requiresReview = true;
     status.textContent = 'Another window saved changes. Review the saved settings before applying this draft.';
+  } else if (result.reason === 'options_unavailable') {
+    status.textContent = 'Saved settings could not be read. Try applying this draft again.';
   } else if (result.reason === 'profile_runtime_in_use') {
     status.textContent = 'Revoke the current test connection before replacing its settings.';
   } else if (result.reason === 'active_profile_switch_requires_deactivation') {
@@ -475,24 +486,29 @@ refresh.addEventListener('click', () => {
 });
 
 revoke.addEventListener('click', async () => {
-  const connectionRevision = lastConnection.revision;
-  if (revoke.disabled || !connectionRevision) return;
+  const {revision: connectionRevision, revokeToken} = lastConnection;
+  if (revoke.disabled || !connectionRevision || !revokeToken) return;
   working = true;
-  showConnection({state: 'revoking', revision: connectionRevision});
+  showConnection({state: 'revoking', revision: connectionRevision, revokeToken});
   try {
-    const result = await sendWithPromise<Connection>('revokeAccessTestNode', connectionRevision);
+    const result = await sendWithPromise<Connection>(
+        'revokeAccessTestNode', connectionRevision, revokeToken);
     if (result.state === 'connectionChanged') {
       showConnection({state: 'unavailable'});
-      await readOptions(false);
-      status.textContent = 'The test connection changed. Review its current status before revoking.';
+      try {
+        await readOptions(false);
+        status.textContent = 'The test connection changed. Review its current status before revoking.';
+      } catch {
+        status.textContent = 'The test connection changed. Refresh its status before revoking.';
+      }
       return;
     }
     showConnection(result.state === 'revoked' ? {state: 'inactive'} :
-        {state: 'uncertain', revision: connectionRevision});
+        {state: 'uncertain', revision: connectionRevision, revokeToken});
     status.textContent = result.state === 'revoked' ?
         'Test connection revoked.' : 'Retirement is unconfirmed. Protected sites stay blocked.';
   } catch {
-    showConnection({state: 'uncertain', revision: connectionRevision});
+    showConnection({state: 'uncertain', revision: connectionRevision, revokeToken});
   } finally {
     working = false;
     syncActions();
@@ -506,6 +522,7 @@ void sendWithPromise<{
   private: boolean,
   testApply?: boolean,
   testActivate?: boolean,
+  testAutoProtocol?: boolean,
   testExtendedVless?: boolean,
 }>(
     'getAccessOptionsCapabilities').then(async result => {
@@ -515,6 +532,7 @@ void sendWithPromise<{
   }
   canApply = result.testApply === true;
   canActivate = canApply && result.testActivate === true;
+  canActivateAutomatically = canActivate && result.testAutoProtocol === true;
   canImportExtendedVless = result.testExtendedVless === true;
   if (canImportExtendedVless) {
     document.querySelector('#share-label')!.textContent = 'Node share link';

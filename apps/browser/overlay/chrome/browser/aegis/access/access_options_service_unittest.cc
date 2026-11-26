@@ -53,6 +53,45 @@ class SyntheticVaultBackend final : public AccessTestNodeVaultMac::Backend {
 };
 }  // namespace
 
+TEST(AccessOptionsServiceTest, UnreadableOptionsDoNotReportRevisionConflict) {
+  content::BrowserTaskEnvironment environment;
+  if (!CanUseAccessOptionsForCurrentBuild(
+          aegis_access::AccessOptionsOperation::kImport)) {
+    GTEST_SKIP() << "Requires an admitted internal build";
+  }
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
+  network::mojom::NetworkContextParams params;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(
+      profile.get(), {}, &params));
+  ASSERT_TRUE(base::WriteFile(dir.GetPath().AppendASCII("AccessOptions"), ""));
+  auto state = std::make_shared<SyntheticVaultState>();
+  auto options = AccessOptionsService::CreateForTesting(
+      profile.get(), std::make_unique<SyntheticVaultBackend>(state));
+  const auto preference_editor = options->BeginTestNodeEditor();
+  const auto node_editor = options->BeginTestNodeEditor();
+  ASSERT_TRUE(preference_editor);
+  ASSERT_TRUE(node_editor);
+
+  base::test::TestFuture<AccessTestProfileSaveResult> preferences;
+  options->SaveTestNodePreferences(*preference_editor, 0,
+      base::Uuid::GenerateRandomV4().AsLowercaseString(), {}, preferences.GetCallback());
+  EXPECT_EQ(preferences.Get().status, StoreStatus::kIoError);
+  EXPECT_EQ(preferences.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(preferences.Get().detail, "options_unavailable");
+
+  base::test::TestFuture<TestNodePreviewResult> preview;
+  options->PreviewTestNodeText(*node_editor, kSyntheticShare, preview.GetCallback());
+  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
+  base::test::TestFuture<AccessTestProfileSaveResult> node;
+  options->SaveTestNodeProfile(*node_editor, 0,
+      base::Uuid::GenerateRandomV4().AsLowercaseString(), "TEST01", {}, node.GetCallback());
+  EXPECT_EQ(node.Get().status, StoreStatus::kIoError);
+  EXPECT_EQ(node.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+  EXPECT_EQ(node.Get().detail, "options_unavailable");
+}
+
 TEST(AccessOptionsServiceTest, NativeEditorsCompeteWithoutDeletingCommittedReference) {
   content::BrowserTaskEnvironment environment;
   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))

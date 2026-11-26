@@ -24,6 +24,7 @@
 #include "components/aegis_access/policy_publication_ack_tracker.h"
 #include "components/aegis_access/access_route_types.h"
 #include "chrome/browser/aegis/access/access_private_context_client.h"
+#include "content/public/browser/network_service_instance.h"
 #include "mojo/public/cpp/bindings/remote_set.h"
 #include "net/base/network_change_notifier.h"
 #include "services/network/public/mojom/network_context.mojom-forward.h"
@@ -64,7 +65,8 @@ struct AccessTransportSelection {
 // transport without changing the AccessRuleStore or RoutePlan contracts.
 class AccessNetworkContextTransport
     : public base::SupportsUserData::Data,
-      public net::NetworkChangeNotifier::NetworkChangeObserver {
+      public net::NetworkChangeNotifier::NetworkChangeObserver,
+      public content::NetworkServiceProcessObserver {
  public:
   static AccessNetworkContextTransport* Get(Profile* profile);
   static AccessNetworkContextTransport* GetOrCreate(Profile* profile);
@@ -221,6 +223,8 @@ class AccessNetworkContextTransport
     }
 
     PrivateContext client;
+    content::ServiceProcessId service_process;
+    std::set<std::string> possible_listeners;
     uint64_t sequence = 0;
     uint64_t applied_revision = 0;
     // Remains set after timeout until Mojo actually settles the install.
@@ -236,10 +240,17 @@ class AccessNetworkContextTransport
     struct RetiringListener {
       std::string registration_id;
       bool acknowledged = false;
+      base::OnceCallback<void(bool)> completion = {};
     };
     std::map<std::string, RetiringListener> retiring_test_listeners;
     std::map<std::string, uint64_t> private_unavailable_generations;
     std::map<std::string, PrivateContextEntry> private_contexts;
+    struct DisconnectedContext {
+      uint64_t sequence;
+      content::ServiceProcessId service_process;
+      std::set<std::string> possible_listeners;
+    };
+    std::map<std::string, DisconnectedContext> disconnected_private_contexts;
     std::optional<PrivatePublication> private_publication;
     uint64_t private_revision = 0;
     std::vector<base::OnceCallback<void(bool)>> private_publication_waiters;
@@ -257,13 +268,12 @@ class AccessNetworkContextTransport
 
   AccessNetworkContextTransport();
 
-  void OnTestListenerRetirementPublished(
-      aegis_access::OwnershipKey owner,
-      std::string group, std::string registration_id,
-      base::OnceCallback<void(bool)> completion, bool acknowledged);
-
   void OnNetworkChanged(
       net::NetworkChangeNotifier::ConnectionType type) override;
+  void OnServiceLaunched(const content::ServiceProcessInfo& info) override;
+  void OnServiceTerminatedNormally(const content::ServiceProcessInfo& info) override;
+  void OnServiceCrashed(const content::ServiceProcessInfo& info) override;
+  void OnNetworkServiceExited(content::ServiceProcessId service_process);
 
   static std::optional<std::string> PartitionKey(
       const base::FilePath& relative_partition_path);
@@ -296,6 +306,8 @@ class AccessNetworkContextTransport
   void Broadcast(PartitionState& state);
   void PublishPrivateContext(const aegis_access::OwnershipKey& owner,
                              const std::string& incarnation);
+  void OnPrivateContextDisconnected(aegis_access::OwnershipKey owner,
+                                    std::string incarnation, bool retired);
 #if BUILDFLAG(IS_MAC)
   bool HasAcknowledgedPrivateProxy(
       const aegis_access::OwnershipKey& owner,
@@ -307,6 +319,7 @@ class AccessNetworkContextTransport
   void OnPrivateContextPublished(aegis_access::OwnershipKey owner,
       std::string incarnation, uint64_t attempt, uint64_t revision, bool accepted);
   void SettlePrivatePublication(PartitionState& state, bool accepted);
+  void SettleTestListenerRetirements(PartitionState& state, bool accepted);
   // Invalidates every unauthenticated test listener registration after a
   // private Context was lost, so a replacement Context cannot install it.
   void InvalidateTestListenersAfterContextLoss(
@@ -317,6 +330,7 @@ class AccessNetworkContextTransport
   std::string runtime_profile_token_;
   uint64_t network_epoch_ = 1;
   uint64_t private_install_attempt_ = 0;
+  content::ServiceProcessId network_service_process_;
   TestListenerLostCallback test_listener_lost_;
   std::map<std::string, PartitionState> partitions_;
   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};

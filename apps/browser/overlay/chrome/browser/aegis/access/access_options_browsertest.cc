@@ -150,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
   constexpr char kRevoke[] = R"JS(
     (async () => {
       const {sendWithPromise} = await import('chrome://resources/js/cr.js');
-      return (await sendWithPromise('revokeAccessTestNode', '1')).state;
+      return (await sendWithPromise('revokeAccessTestNode', '1', 'stale-token')).state;
     })()
   )JS";
   auto* options = AccessOptionsService::GetOrCreate(browser()->GetProfile());

@@ -34,6 +34,7 @@ class AccessPrivateContextClient {
   ~AccessPrivateContextClient();
   void Initialize(network::mojom::NetworkContext* context,
                   base::OnceCallback<void(bool)> completion);
+  void SetDisconnectHandler(base::OnceCallback<void(bool)> handler);
   void PublishSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
                        base::OnceCallback<void(bool)> completion);
   // Encodes the whole validated Browser policy and all registered groups.
@@ -55,16 +56,18 @@ class AccessPrivateContextClient {
       mojo::PendingReceiver<network::mojom::AegisAccessURLLoaderFactory> receiver,
       base::OnceCallback<void(bool)> completion);
   bool is_ready() const { return ready_; }
+  bool is_connected() const { return connected_ && context_.is_connected(); }
   network::mojom::AegisAccessOwnerPtr owner_for_binding() const { return owner_.Clone(); }
   const std::string& incarnation() const { return incarnation_; }
   uint64_t published_sequence() const { return published_sequence_; }
 
  private:
-  void OnDisconnect();
+  void OnDisconnect(uint32_t reason, const std::string& description);
   network::mojom::AegisAccessOwnerPtr owner_;
   std::string incarnation_;
   mojo::Remote<network::mojom::AegisAccessContext> context_;
   base::OnceClosure reject_initialize_;
+  base::OnceCallback<void(bool)> on_disconnect_;
   bool connected_ = false;
   bool ready_ = false;
   bool publication_pending_ = false;
