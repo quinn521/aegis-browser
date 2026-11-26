@@ -53,6 +53,17 @@ for profile in alpha debug; do
     <<< "$internal_with_comments" || fail "$profile 未设置实际产品渠道"
 done
 
+spaced_base="$TEST_ROOT/spaced.gn"
+sed -e 's/^android_channel = /  android_channel=/' \
+  -e 's/^chrome_public_manifest_package = / chrome_public_manifest_package=/' \
+  "$commented_base" > "$spaced_base"
+spaced_internal="$(aegis_android_gn_args "$spaced_base" internal-alpha)" ||
+  fail "合法的 GN 缩进或等号间距导致内部 Alpha 配置失败"
+grep -Fxq '  android_channel="canary"  # aegis_android_access_product_channel = "debug"' \
+  <<< "$spaced_internal" || fail "内部配置改动了渠道的缩进、等号间距或注释"
+grep -Fxq ' chrome_public_manifest_package="com.gcsa.aegis"' \
+  <<< "$spaced_internal" || fail "内部配置改动了包名排版"
+
 check_internal() {
   local profile="$1" channel="$2" product="$3" args
   args="$(aegis_android_gn_args "$ARGS_FILE" "internal-$profile")"

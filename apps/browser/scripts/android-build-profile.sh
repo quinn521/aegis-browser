@@ -38,7 +38,8 @@ aegis_android_gn_args() {
   local args_file="$1"
   local profile="$2"
   local args tokens channel product
-  local default_channel_pattern='^android_channel = "default"([[:blank:]]*(#.*)?)$'
+  local default_channel_pattern='^([[:blank:]]*android_channel[[:blank:]]*=[[:blank:]]*)"default"([[:blank:]]*(#.*)?)$'
+  local package_pattern='^[[:blank:]]*chrome_public_manifest_package[[:blank:]]*=[[:blank:]]*"com[.]gcsa[.]aegis"[[:blank:]]*(#.*)?$'
   args="$(cat "$args_file")" || return 1
   tokens="$(aegis_android_gn_tokens <<< "$args")" || return 1
   if grep -Exq 'aegis_android_(internal_access_options|access_product_channel)' <<< "$tokens"; then
@@ -59,12 +60,12 @@ aegis_android_gn_args() {
   esac
   if [[ "$(grep -Ec "$default_channel_pattern" <<< "$args")" != 1 ||
         "$(grep -c '^[[:space:]]*android_channel[[:space:]]*=' <<< "$args")" != 1 ||
-        "$(grep -Ec '^chrome_public_manifest_package = "com[.]gcsa[.]aegis"[[:blank:]]*(#.*)?$' <<< "$args")" != 1 ||
+        "$(grep -Ec "$package_pattern" <<< "$args")" != 1 ||
         "$(grep -c '^[[:space:]]*chrome_public_manifest_package[[:space:]]*=' <<< "$args")" != 1 ]]; then
     echo "Android 基础参数必须只有一个 default 渠道与 com.gcsa.aegis 包名。" >&2
     return 1
   fi
-  args="$(sed -E "s/$default_channel_pattern/android_channel = \"$channel\"\1/" <<< "$args")" ||
+  args="$(sed -E "s/$default_channel_pattern/\1\"$channel\"\2/" <<< "$args")" ||
     return 1
   printf '%s\n%s\n%s\n' "$args" \
     "aegis_android_access_product_channel = \"$product\"" \
@@ -72,7 +73,8 @@ aegis_android_gn_args() {
 }
 
 aegis_android_verify_gn_args() {
-  local out_dir="$1" profile="$2" effective_args enabled product channel setting
+  local out_dir="$1" profile="$2" gn_bin="${3:-gn}"
+  local effective_args enabled product channel setting
   local -a expected_args
   case "$profile" in
     default) enabled=false product=unknown ;;
@@ -90,7 +92,7 @@ aegis_android_verify_gn_args() {
       'chrome_public_manifest_package = "com.gcsa.aegis"'
     )
   fi
-  if ! effective_args="$(gn args "$out_dir" --list --short)"; then
+  if ! effective_args="$("$gn_bin" args "$out_dir" --list --short)"; then
     echo "无法读取 Android $profile 构建的生效 GN 参数。" >&2
     return 1
   fi
@@ -101,3 +103,12 @@ aegis_android_verify_gn_args() {
     fi
   done
 }
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  set -euo pipefail
+  if [[ "$#" != 4 || "$1" != --verify ]]; then
+    echo "用法：android-build-profile.sh --verify <out-dir> <profile> <gn>" >&2
+    exit 2
+  fi
+  aegis_android_verify_gn_args "$2" "$3" "$4"
+fi

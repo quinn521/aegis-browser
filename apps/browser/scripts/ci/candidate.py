@@ -304,6 +304,9 @@ def build(name, evidence):
                 if name == 'android':
                     targets = ['chrome_public_apk', 'aegis_agent_core_unittests']
                 run([gn, 'gen', out, '--check'], src, evidence / 'gn.log', src, minimum)
+                if name == 'android':
+                    run(['bash', BROWSER / 'scripts/android-build-profile.sh', '--verify', out, 'default', gn],
+                        src, evidence / 'gn-profile.log', src, minimum)
                 run([ninja, '-C', out, '-j', str(max(1, int(config.get('jobs', 6)))), *targets], src, evidence / 'build.log', src, minimum)
                 result['build'] = 'passed'
                 if name != 'android':

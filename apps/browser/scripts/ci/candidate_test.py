@@ -278,6 +278,57 @@ class CandidateTests(unittest.TestCase):
             self.assertFalse(result['releaseReady'])
             self.assertEqual(result['runtimeAcceptance'], 'pending')
 
+    @unittest.skipIf(ci.os.name == 'nt', 'Android 候选使用 Linux 工具')
+    def test_android_candidate_rejects_imported_internal_profile_before_ninja(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, browser, evidence = root / 'source', root / 'browser', root / 'evidence'
+            gn = source / 'buildtools/linux64/gn'
+            ninja = source / 'third_party/ninja/ninja'
+            gn.parent.mkdir(parents=True)
+            ninja.parent.mkdir(parents=True)
+            (source / 'BUILD.gn').touch()
+            (root / '.gclient').touch()
+            (browser / 'args').mkdir(parents=True)
+            (browser / 'scripts').mkdir()
+            verifier = ci.BROWSER / 'scripts/android-build-profile.sh'
+            (browser / 'scripts' / verifier.name).write_bytes(verifier.read_bytes())
+            (browser / 'args/aegis-android.gn').write_text('import("//internal.gni")\n')
+            (source / 'internal.gni').write_text(
+                'aegis_android_internal_access_options = true\n'
+                'aegis_android_access_product_channel = "alpha"\n')
+            gn.write_text('#!/bin/sh\n'
+                          'if [ "$1" = gen ]; then exit 0; fi\n'
+                          '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] &&\n'
+                          "grep -Fxq 'import(\"//internal.gni\")' \"$2/args.gn\" && cat internal.gni\n")
+            ninja.write_text('#!/bin/sh\ntouch ninja-invoked\nexit 19\n')
+            for tool in (gn, ninja):
+                tool.chmod(0o755)
+            (evidence / 'upstream').mkdir(parents=True)
+            (evidence / 'upstream/latest.json').write_text('{}')
+            config = root / 'config.json'
+            config.write_text(json.dumps({'sourceRoot': str(source)}))
+            commit = '1' * 40
+            pin = {'commit': commit, 'version': '158.0.8127.92'}
+            with (patch.dict(ci.os.environ, {'AEGIS_CI_CONFIG': str(config), 'GITHUB_SHA': commit}),
+                  patch.object(ci, 'BROWSER', browser), patch.object(ci, 'product_status', return_value=''),
+                  patch.object(ci, 'git', return_value=commit),
+                  patch.object(ci.contract, 'load', return_value=({'features': []}, 'contract')),
+                  patch.object(ci.contract, 'validate_version', return_value=('2.0.0.1', 1)),
+                  patch.object(ci.platform, 'system', return_value='Linux'),
+                  patch.object(ci.platform, 'machine', return_value='x86_64'),
+                  patch.object(ci, 'candidate_pin', return_value=(pin, browser / 'patches')),
+                  patch.object(ci.shutil, 'disk_usage') as usage,
+                  patch.object(ci, 'apply_if_base'), patch.object(ci, 'verify_tree', return_value='tree')):
+                usage.return_value.free = 200 * 1024**3
+                with self.assertRaisesRegex(RuntimeError, 'gn-profile[.]log'):
+                    ci.build('android', evidence)
+
+            self.assertFalse((source / 'ninja-invoked').exists())
+            self.assertIn('aegis_android_internal_access_options = false',
+                          (evidence / 'gn-profile.log').read_text())
+            self.assertEqual(json.loads((evidence / 'result.json').read_text())['status'], 'failed')
+
     def test_summary_keeps_missing_installation_explicit(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(ci.os.environ, {}, clear=True):
             path = Path(directory)
