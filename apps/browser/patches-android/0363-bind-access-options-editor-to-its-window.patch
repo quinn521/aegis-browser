@@ -1,4 +1,4 @@
-From 036bba307c89af31b5e1adf7b593b7bac5843664 Mon Sep 17 00:00:00 2001
+From 194f4b48d1fa4f8bc3b10fc5810ab5f0f6321b95 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 25 Nov 2026 20:40:41 +0800
 Subject: [PATCH] fix(android): bind Access Options editor to a menu grant in
@@ -55,7 +55,7 @@ resume can remove the restored fragment.
  chrome/android/chrome_public_apk_tmpl.gni     |   1 +
  .../chrome/browser/ChromeTabbedActivity.java  |  53 +-
  .../settings/AegisAccessOptionsFragment.java  | 142 +++-
- chrome/android/javatests/BUILD.gn             |  37 +-
+ chrome/android/javatests/BUILD.gn             |  38 +-
  .../aegis_access_options_AndroidManifest.xml  |  11 +
  .../AegisAccessOptionsFragmentTest.java       | 617 +++++++++++++++++-
  chrome/browser/android/BUILD.gn               |   6 +-
@@ -63,7 +63,7 @@ resume can remove the restored fragment.
  .../android/aegis_access_options_bridge.cc    | 114 +++-
  .../ui/appmenu/AppMenuHandlerImpl.java        |  26 +
  .../browser/ui/appmenu/AppMenuHandler.java    |   9 +
- 12 files changed, 1007 insertions(+), 43 deletions(-)
+ 12 files changed, 1008 insertions(+), 43 deletions(-)
  create mode 100644 chrome/android/javatests/aegis_access_options_AndroidManifest.xml
  create mode 100644 chrome/browser/android/aegis_access_options.gni
 
@@ -439,10 +439,10 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..c817425894d616461507098b84ad4b2e
          String open(
                  @JniType("content::WebContents*") WebContents contents,
 diff --git a/chrome/android/javatests/BUILD.gn b/chrome/android/javatests/BUILD.gn
-index cc94c9b075c9b426ae405305437e819d1d1b11eb..e16cf1d91f761dcb065b8fef9fccc2a37777f206 100644
+index cc94c9b075c9b426ae405305437e819d1d1b11eb..e459f46a3a8988e15610c22393c44e5c8965e4aa 100644
 --- a/chrome/android/javatests/BUILD.gn
 +++ b/chrome/android/javatests/BUILD.gn
-@@ -1316,6 +1316,42 @@ android_library("chrome_test_java_org.chromium.chrome.browser.search_engines") {
+@@ -1316,6 +1316,43 @@ android_library("chrome_test_java_org.chromium.chrome.browser.search_engines") {
    deps = [ ":chrome_test_java_helper" ]
  }
  
@@ -476,6 +476,7 @@ index cc94c9b075c9b426ae405305437e819d1d1b11eb..e16cf1d91f761dcb065b8fef9fccc2a3
 +    "//net/android:net_java_test_support",
 +    "//third_party/androidx:androidx_appcompat_appcompat_java",
 +    "//third_party/androidx:androidx_fragment_fragment_java",
++    "//third_party/androidx:androidx_test_monitor_java",
 +    "//third_party/androidx:androidx_test_runner_java",
 +    "//third_party/junit",
 +    "//ui/android:ui_java",
@@ -485,7 +486,7 @@ index cc94c9b075c9b426ae405305437e819d1d1b11eb..e16cf1d91f761dcb065b8fef9fccc2a3
  android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
    resources_package = "org.chromium.chrome"
  
-@@ -1323,7 +1359,6 @@ android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
+@@ -1323,7 +1360,6 @@ android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
      "src/org/chromium/chrome/browser/settings/MainSettingsFragmentTest.java",
      "src/org/chromium/chrome/browser/settings/MultiColumnSettingsTest.java",
      "src/org/chromium/chrome/browser/settings/SettingsActivityTest.java",
