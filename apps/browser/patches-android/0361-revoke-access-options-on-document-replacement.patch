@@ -126,7 +126,7 @@ index 04b9c7f6ba94372e29fed95b04871219155f600f..74b1640c22b0ab8b541640e05dc82680
  
    assert(!aegis_android_internal_access_options ||
 diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
-index e4d3838ab90e4b29cef61142561cb8793e1249dc..2821ed59c90ebfd7f99306eec8fe7ffefcf6cf51 100644
+index b9be522d93ac240ecf47ed0581a5e9ee1d4cdc71..05218a3f3e2ce39650ff6aa7b1e7d19bdedad06b 100644
 --- a/chrome/browser/android/aegis_access_options_bridge.cc
 +++ b/chrome/browser/android/aegis_access_options_bridge.cc
 @@ -105,6 +105,7 @@ class EditorSession final : public content::WebContentsObserver {

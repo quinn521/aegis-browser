@@ -12,12 +12,12 @@ Subject: [PATCH] feat(android): bind internal Access Options to the
  .../settings/AegisAccessOptionsFragment.java  | 128 +++++++++++
  .../TabbedAppMenuPropertiesDelegate.java      |  19 ++
  chrome/browser/android/BUILD.gn               |  30 +++
- .../android/aegis_access_options_bridge.cc    | 210 ++++++++++++++++++
+ .../android/aegis_access_options_bridge.cc    | 212 ++++++++++++++++++
  .../android/aegis_access_options_identity.h   |  50 +++++
  .../aegis_access_options_identity_unittest.cc |  53 +++++
  .../strings/android_chrome_strings.grd        |   9 +
  components/aegis_access/BUILD.gn              |   5 +
- 12 files changed, 512 insertions(+)
+ 12 files changed, 514 insertions(+)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
  create mode 100644 chrome/browser/android/aegis_access_options_bridge.cc
  create mode 100644 chrome/browser/android/aegis_access_options_identity.h
@@ -356,10 +356,10 @@ index f6469ff50925052355ae8098d15151ccf6da9f48..04b9c7f6ba94372e29fed95b04871219
      "//components/autofill/core/browser:test_support",
 diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f97335d3d2c756a0fd15c1b1437218c7e7394b8c
+index 0000000000000000000000000000000000000000..b9be522d93ac240ecf47ed0581a5e9ee1d4cdc71
 --- /dev/null
 +++ b/chrome/browser/android/aegis_access_options_bridge.cc
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,212 @@
 +// Copyright 2026 GCSA
 +
 +#include <cstddef>
