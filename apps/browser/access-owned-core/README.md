@@ -25,9 +25,11 @@ python3 apps/browser/access-owned-core/prepare.py /absolute/path/to/new-output
 Use `--source /absolute/path/to/xray-clone` to reuse a local copy of the tagged
 source. Preparation checks the tag, source and patched trees, module files,
 and binary digest. It writes `xray` and a schema v2 `core-manifest.json` for that
-directory. Use the manifest with `--aegis-access-dev-core-manifest` for DEV
-browser acceptance and pass the binary to native integration tests using
-`--aegis-owned-core-test-binary`. Build output and private test inputs stay in
+directory. Pass the manifest with `--aegis-access-dev-core-manifest` on a DEV
+browser launch. To test activation, also set `--aegis-access-dev-canary-base-url`
+to a controlled HTTPS endpoint that echoes the `nonce` query value in its
+response body. Native integration tests accept the binary through
+`--aegis-owned-core-test-binary`. Keep build output and private test inputs in
 the acceptance directory.
 
 Run the held-open-stdin startup regression with the prepared binary.
