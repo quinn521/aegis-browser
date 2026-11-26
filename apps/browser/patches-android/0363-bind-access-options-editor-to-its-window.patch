@@ -1,4 +1,4 @@
-From fb3f7ffe3941cdd7c27a256d5f9f5a3b89e71732 Mon Sep 17 00:00:00 2001
+From 407496862616b9ffb1ffd0ae2eef767501cd4793 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 25 Nov 2026 20:40:41 +0800
 Subject: [PATCH] fix(android): bind Access Options editor to a menu grant in
@@ -34,36 +34,41 @@ A receiver attached to another window cannot read the original editor handle, wh
 When Fragment restoration is suppressed, native resume shows the unavailable dialog from the hint saved by the Activity and does not issue an editor. The regression recreates the Activity through that production path, so removing the hint capture or the resume hook fails the test.
 
 The regression opens the activity menu and clicks the displayed Access Options row, so a menu that no longer dispatches that item fails. Normal recreation must restore the existing dialog. Only suppressed Fragment restoration may create the unavailable dialog from the saved hint.
+
+
+Destroying the dialog view closes the editor. Fragment detach does not run onDestroy, so a reattached receiver cannot reuse the old handle. The regression detaches and reattaches that same receiver.
 ---
- chrome/android/BUILD.gn                       |  25 +
+ chrome/android/BUILD.gn                       |  26 +
  chrome/android/chrome_public_apk_tmpl.gni     |   1 +
  .../chrome/browser/ChromeTabbedActivity.java  |  46 +-
- .../settings/AegisAccessOptionsFragment.java  |  55 ++-
+ .../settings/AegisAccessOptionsFragment.java  |  63 ++-
  chrome/android/javatests/BUILD.gn             |  37 +-
  .../aegis_access_options_AndroidManifest.xml  |  11 +
- .../AegisAccessOptionsFragmentTest.java       | 435 +++++++++++++++++-
- chrome/browser/android/BUILD.gn               |   7 +-
- .../browser/android/aegis_access_options.gni  |  10 +
- .../android/aegis_access_options_bridge.cc    | 110 ++++-
- .../ui/appmenu/AppMenuHandlerImpl.java        |  26 ++
+ .../AegisAccessOptionsFragmentTest.java       | 482 +++++++++++++++++-
+ chrome/browser/android/BUILD.gn               |   6 +-
+ .../browser/android/aegis_access_options.gni  |   8 +
+ .../android/aegis_access_options_bridge.cc    | 110 +++-
+ .../ui/appmenu/AppMenuHandlerImpl.java        |  26 +
  .../browser/ui/appmenu/AppMenuHandler.java    |   9 +
- 12 files changed, 731 insertions(+), 41 deletions(-)
+ 12 files changed, 785 insertions(+), 40 deletions(-)
  create mode 100644 chrome/android/javatests/aegis_access_options_AndroidManifest.xml
  create mode 100644 chrome/browser/android/aegis_access_options.gni
 
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
-index 1381581d046097dd04335801822e15fa54abe461..a10427583b26a3e1e50fdb8424bdd5efda006f81 100644
+index 1381581d046097dd04335801822e15fa54abe461..ff3def859d5f49c6b6365ca29fdb0bca9ecc5baf 100644
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
-@@ -8,6 +8,7 @@ import("//build/toolchain/gcc_toolchain.gni")
+@@ -8,7 +8,9 @@ import("//build/toolchain/gcc_toolchain.gni")
  
  import("//chrome/android/chrome_common_shared_library.gni")
  import("//chrome/android/modules/chrome_feature_module_tmpl.gni")
 +import("//chrome/browser/android/aegis_access_options.gni")
  import("//components/supervised_user/buildflags.gni")
++import("//third_party/blink/public/common/aegis_android_access.gni")
  
  assert(!is_cronet_build)
-@@ -2474,6 +2475,30 @@ if (_is_default_toolchain) {
+ assert(enable_supervised_users)
+@@ -2474,6 +2476,30 @@ if (_is_default_toolchain) {
      ]
    }
  
@@ -183,7 +188,7 @@ index 60c7bb905c83f289da7329b721c642040119b86b..588f6f69b2accc46fba8e3ee10d89191
              // FragmentManager state before native is initialized, as restored fragments (such as
              // SettingsPage) may depend on native/profile and crash during onCreate(). This is the
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
-index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3b04e300262a80cd8038b64a372995f054b1b732 100644
+index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a7b2df4fadcc6899a6d3ac24b20fa2fe0aacdadc 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 @@ -23,6 +23,7 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -269,7 +274,22 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3b04e300262a80cd8038b64a372995f0
          boolean canRead = !mRevoked && canReadEditor();
          return new AlertDialog.Builder(requireContext())
                  .setTitle(R.string.aegis_access_options_title)
-@@ -114,6 +145,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -101,6 +132,14 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+                 .create();
+     }
+ 
++    @Override
++    public void onDestroyView() {
++        // FragmentTransaction.detach() destroys the dialog view without
++        // onDestroy(). Close the editor so this receiver cannot reuse it.
++        closeEditor();
++        super.onDestroyView();
++    }
++
+     @Override
+     public void onDestroy() {
+         closeEditor();
+@@ -114,6 +153,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
      }
  
      private void closeEditor() {
@@ -277,7 +297,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..3b04e300262a80cd8038b64a372995f0
          MonotonicObservableSupplier<TabModel> models = mModels;
          if (models != null) {
              mModels = null;
-@@ -134,10 +166,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -134,10 +174,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
          }
      }
  
@@ -374,7 +394,7 @@ index 0000000000000000000000000000000000000000..002eeeb8d851374249b9af17b2b7d126
 +        android:label="Aegis Access Options tests for {{manifest_package}}"/>
 +{% endblock %}
 diff --git a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
-index b697c1e9da5b2da2692bcefd3a00264014ea3a16..8f5a9368ae46076f0fc034b1057e4e4ad03b4b11 100644
+index b697c1e9da5b2da2692bcefd3a00264014ea3a16..49686e2726f8f2e754cc621a7ca723051323c6e4 100644
 --- a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 +++ b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 @@ -2,8 +2,15 @@
@@ -461,7 +481,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..8f5a9368ae46076f0fc034b1057e4e4a
  
          JavaScriptUtils.executeJavaScriptAndWaitForResult(
                  contents,
-@@ -68,6 +70,397 @@ public class AegisAccessOptionsFragmentTest {
+@@ -68,6 +70,444 @@ public class AegisAccessOptionsFragmentTest {
                          !editor.canReadEditor()
                                  && hasMessage(editor, R.string.aegis_access_options_unavailable),
                  "The same editor must reject native reads and show unavailable.");
@@ -623,6 +643,53 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..8f5a9368ae46076f0fc034b1057e4e4a
 +                "Native must reject the pre-recreation handle and receiver.",
 +                ThreadUtils.runOnUiThreadBlocking(
 +                        () -> AegisAccessOptionsFragmentJni.get().canRead(liveHandle, editor)));
++    }
++
++    @Test
++    @MediumTest
++    public void testDetachAndReattachRevokesTheSameReceiver() throws Exception {
++        mActivityRule.startMainActivityWithURL(
++                mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
++        ChromeTabbedActivity activity = mActivityRule.getActivity();
++        WebContents contents =
++                ThreadUtils.runOnUiThreadBlocking(
++                        () -> activity.getActivityTab().getWebContents());
++        AegisAccessOptionsFragment editor = openLiveEditor(activity);
++        String liveHandle =
++                ThreadUtils.runOnUiThreadBlocking(editor::getEditorHandleForTesting);
++        assertFalse(liveHandle.isEmpty());
++
++        ThreadUtils.runOnUiThreadBlocking(
++                () ->
++                        activity.getSupportFragmentManager()
++                                .beginTransaction()
++                                .detach(editor)
++                                .commitNow());
++        assertFalse(
++                "Detaching the dialog must close the editor.",
++                canRead(liveHandle, editor));
++        assertFalse(ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
++
++        ThreadUtils.runOnUiThreadBlocking(
++                () ->
++                        activity.getSupportFragmentManager()
++                                .beginTransaction()
++                                .attach(editor)
++                                .commitNow());
++        assertSame(
++                "Reattach must keep the same receiver.",
++                editor,
++                ThreadUtils.runOnUiThreadBlocking(() -> findEditor(activity)));
++        CriteriaHelper.pollUiThread(
++                () ->
++                        !AegisAccessOptionsFragmentJni.get().canRead(liveHandle, editor)
++                                && !editor.canReadEditor()
++                                && hasMessage(editor, R.string.aegis_access_options_unavailable),
++                "The reattached receiver must show unavailable and reject the old handle.");
++        assertFalse(
++                "The reattached receiver must not obtain an editor without a new menu action.",
++                ThreadUtils.runOnUiThreadBlocking(
++                        () -> editor.issuesEditorWithoutMenuForTesting(contents)));
 +    }
 +
 +    @Test
@@ -860,7 +927,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..8f5a9368ae46076f0fc034b1057e4e4a
  
      private static boolean hasMessage(AegisAccessOptionsFragment editor, int expected) {
 diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
-index 04b9c7f6ba94372e29fed95b04871219155f600f..4695f8485265dbfa0ee466bce7c31407f782ba11 100644
+index 74b1640c22b0ab8b541640e05dc826800c324b20..56c1fcb18718ac1182d09d8a5a2494eea9154214 100644
 --- a/chrome/browser/android/BUILD.gn
 +++ b/chrome/browser/android/BUILD.gn
 @@ -6,6 +6,7 @@ import("//build/buildflag_header.gni")
@@ -871,19 +938,18 @@ index 04b9c7f6ba94372e29fed95b04871219155f600f..4695f8485265dbfa0ee466bce7c31407
  import("//chrome/common/features.gni")
  import("//device/vr/buildflags/buildflags.gni")
  import("//extensions/buildflags/buildflags.gni")
-@@ -384,11 +385,6 @@ if (is_android) {
+@@ -385,10 +386,6 @@ if (is_android) {
      ]
    }
  
 -  declare_args() {
 -    aegis_android_access_product_channel = "unknown"
--    aegis_android_internal_access_options = false
 -  }
 -
    assert(!aegis_android_internal_access_options ||
               (aegis_android_access_product_channel == "debug" &&
                    android_channel == "dev") ||
-@@ -1011,6 +1007,7 @@ if (is_android) {
+@@ -1011,6 +1008,7 @@ if (is_android) {
        "//third_party/libaddressinput:util",
        "//third_party/libphonenumber",
        "//ui/accessibility",
@@ -893,19 +959,17 @@ index 04b9c7f6ba94372e29fed95b04871219155f600f..4695f8485265dbfa0ee466bce7c31407
        "//ui/webui:buildflags",
 diff --git a/chrome/browser/android/aegis_access_options.gni b/chrome/browser/android/aegis_access_options.gni
 new file mode 100644
-index 0000000000000000000000000000000000000000..afca81297e2d4892caaf33b2d149bce9611e611b
+index 0000000000000000000000000000000000000000..ab37ad89fed513b18fd4eca128b4671d4529cfb6
 --- /dev/null
 +++ b/chrome/browser/android/aegis_access_options.gni
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,8 @@
 +# Copyright 2026 GCSA
++
++import("//third_party/blink/public/common/aegis_android_access.gni")
 +
 +declare_args() {
 +  # Product channel admitted by Android Access Options: "debug" or "alpha".
 +  aegis_android_access_product_channel = "unknown"
-+
-+  # Explicit opt-in for internal DEV and Alpha builds. Ordinary builds keep
-+  # Android Access Options disabled.
-+  aegis_android_internal_access_options = false
 +}
 diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
 index 12b85bb6e231cc784e30209d02446bb4958fe444..90c289ef27586a245db30e2ed815a4a6588099ec 100644

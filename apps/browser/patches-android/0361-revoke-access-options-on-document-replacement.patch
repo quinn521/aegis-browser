@@ -1,4 +1,4 @@
-From fa49b3fa99f19a7209a757a702e0924f1f8d327a Mon Sep 17 00:00:00 2001
+From e5568996036fa3fbd6fa84af8c856e6d4b3765cc Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Mon, 23 Nov 2026 18:32:53 +0800
 Subject: [PATCH] fix(android): revoke Access Options on primary document
@@ -9,9 +9,14 @@ Document::SetContent and the parameterless Document::open(). That path emits
 neither DidOpenDocumentInputStream nor DidCommitDocumentReplacement. Notify
 the browser from the explicit open so the existing editor is revoked. Ordinary
 DOM edits do not reopen the document and stay readable.
+
+Ordinary builds do not send that notification. The renderer IPC is compiled
+only when internal Access Options are enabled. Blink and Chrome share one
+declare_args in a Blink-visible gni, so the flag is not declared twice.
 ---
  .../chrome/browser/ChromeTabbedActivity.java  |  4 +
  .../settings/AegisAccessOptionsFragment.java  | 22 +++++
+ chrome/browser/android/BUILD.gn               |  2 +-
  .../android/aegis_access_options_bridge.cc    |  1 +
  .../render_frame_host_delegate.h              |  3 +
  .../renderer_host/render_frame_host_impl.cc   | 10 +++
@@ -20,11 +25,15 @@ DOM edits do not reopen the document and stay readable.
  .../browser/web_contents/web_contents_impl.h  |  1 +
  .../web_contents_impl_browsertest.cc          | 81 +++++++++++++++++++
  .../public/browser/web_contents_observer.h    |  5 ++
+ third_party/blink/public/common/BUILD.gn      |  8 ++
+ .../public/common/aegis_android_access.gni    | 10 +++
  .../blink/public/mojom/frame/frame.mojom      |  6 ++
- .../renderer/core/loader/frame_loader.cc      |  8 ++
+ third_party/blink/renderer/core/BUILD.gn      |  1 +
+ .../renderer/core/loader/frame_loader.cc      | 12 +++
  .../core/testing/fake_local_frame_host.cc     |  2 +
  .../core/testing/fake_local_frame_host.h      |  1 +
- 14 files changed, 153 insertions(+)
+ 18 files changed, 177 insertions(+), 1 deletion(-)
+ create mode 100644 third_party/blink/public/common/aegis_android_access.gni
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 index 1074503a4c4956c565857e00294a6cc3179d57c0..ab7d55f791cdd07e2e396446202635b5426da142 100644
@@ -88,6 +97,26 @@ index cd83a8afd39c9db726b115c61d23c650c48b15ce..ce854333a2e79595cfdee1550cb16936
      @Override
      public Dialog onCreateDialog(@Nullable Bundle state) {
          boolean canRead =
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index 04b9c7f6ba94372e29fed95b04871219155f600f..74b1640c22b0ab8b541640e05dc826800c324b20 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -10,6 +10,7 @@ import("//chrome/common/features.gni")
+ import("//device/vr/buildflags/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ import("//printing/buildflags/buildflags.gni")
++import("//third_party/blink/public/common/aegis_android_access.gni")
+ import("//third_party/protobuf/proto_library.gni")
+ import("//ui/webui/webui_features.gni")
+ 
+@@ -386,7 +387,6 @@ if (is_android) {
+ 
+   declare_args() {
+     aegis_android_access_product_channel = "unknown"
+-    aegis_android_internal_access_options = false
+   }
+ 
+   assert(!aegis_android_internal_access_options ||
 diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
 index e4d3838ab90e4b29cef61142561cb8793e1249dc..2821ed59c90ebfd7f99306eec8fe7ffefcf6cf51 100644
 --- a/chrome/browser/android/aegis_access_options_bridge.cc
@@ -300,6 +329,48 @@ index 4a7e6555fd1e9af16c35b365f33df8185b84b81e..af273dc05fb95974de1c932bff2de412
    // This method is invoked when the primary page of a WebContents is about to
    // be deactivated. This happens when the primary page is being replaced by
    // another page (due to a commit of a navigation). Note that this will not be
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+index cada4d794bc822c3cf83e8c0b719f0d6da490f54..4bce9dfd393d3a2595290209796f4bf9b9405181 100644
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -9,6 +9,7 @@ import("//build/config/rust.gni")
+ import("//skia/features.gni")
+ import("//testing/test.gni")
+ import("//third_party/blink/public/public_features.gni")
++import("//third_party/blink/public/common/aegis_android_access.gni")
+ import("//third_party/blink/renderer/build/scripts/scripts.gni")
+ import("//third_party/blink/renderer/config.gni")
+ import("//third_party/protobuf/proto_library.gni")
+@@ -90,6 +91,13 @@ buildflag_header("buildflags") {
+   ]
+ }
+ 
++buildflag_header("aegis_android_access_buildflags") {
++  header = "aegis_android_access_buildflags.h"
++  flags = [
++    "AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS=$aegis_android_internal_access_options",
++  ]
++}
++
+ source_set("common_export") {
+   visibility = [
+     "//third_party/blink/common/*",
+diff --git a/third_party/blink/public/common/aegis_android_access.gni b/third_party/blink/public/common/aegis_android_access.gni
+new file mode 100644
+index 0000000000000000000000000000000000000000..d429d685f996bf73735e17a7ab9a2c5381f6900b
+--- /dev/null
++++ b/third_party/blink/public/common/aegis_android_access.gni
+@@ -0,0 +1,10 @@
++# Copyright 2026 GCSA
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++declare_args() {
++  # Explicit opt-in for internal DEV and Alpha Android builds. Ordinary
++  # builds keep Android Access Options disabled, including the renderer
++  # notification for an in-place document.open().
++  aegis_android_internal_access_options = false
++}
 diff --git a/third_party/blink/public/mojom/frame/frame.mojom b/third_party/blink/public/mojom/frame/frame.mojom
 index 3c4d724903f522ac5bb1478f9528cbb774d2f808..2f51dc6dd78563b6346f105d22d2050d867694e2 100644
 --- a/third_party/blink/public/mojom/frame/frame.mojom
@@ -317,11 +388,31 @@ index 3c4d724903f522ac5bb1478f9528cbb774d2f808..2f51dc6dd78563b6346f105d22d2050d
    // A request to run a JavaScript dialog displaying |alert_message|.
    [Sync]
    RunModalAlertDialog(mojo_base.mojom.String16 alert_message,
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+index a96e9c9df209abba41bccf9d348eee89058b5f83..4c19059db5b5a24caa78ecf77aff99fb4fe34023 100644
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+@@ -433,6 +433,7 @@ component("core") {
+     "//third_party/blink/public:image_resources_grit",
+     "//third_party/blink/public:resources",
+     "//third_party/blink/public/common",
++    "//third_party/blink/public/common:aegis_android_access_buildflags",
+     "//third_party/blink/public/mojom:web_feature_mojo_bindings",
+     "//third_party/blink/public/strings",
+     "//third_party/blink/public/strings:generate_permission_element_strings_mono_grd",
 diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
-index 286d40b0ddf879efc1a95676db27f5ad1551cca7..b68e4adead325932895f3aa0e3ddd5ff6cfc2e38 100644
+index 286d40b0ddf879efc1a95676db27f5ad1551cca7..b627b4d9357e28816da92ea05a05ddfbc56a3411 100644
 --- a/third_party/blink/renderer/core/loader/frame_loader.cc
 +++ b/third_party/blink/renderer/core/loader/frame_loader.cc
-@@ -449,6 +449,14 @@ void FrameLoader::DispatchUnloadEventAndFillOldDocumentInfoIfNeeded(
+@@ -52,6 +52,7 @@
+ #include "services/network/public/cpp/features.h"
+ #include "services/network/public/cpp/web_sandbox_flags.h"
+ #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
++#include "third_party/blink/public/common/aegis_android_access_buildflags.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/storage_key/storage_key.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+@@ -449,6 +450,17 @@ void FrameLoader::DispatchUnloadEventAndFillOldDocumentInfoIfNeeded(
  }
  
  void FrameLoader::DidExplicitOpen() {
@@ -329,10 +420,13 @@ index 286d40b0ddf879efc1a95676db27f5ad1551cca7..b68e4adead325932895f3aa0e3ddd5ff
 +  // the document without DidOpenDocumentInputStream or a replacement commit.
 +  // DevTools Page.setDocumentContent uses that path. Subframes cannot own the
 +  // editor, so they do not send the IPC; the browser still ignores anything
-+  // that is not the primary main frame.
++  // that is not the primary main frame. Ordinary builds have no editor, so
++  // the notification exists only for the internal feature.
++#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
 +  if (frame_->IsOutermostMainFrame()) {
 +    frame_->GetLocalFrameHostRemote().DidExplicitlyOpenDocument();
 +  }
++#endif
    probe::DidOpenDocument(frame_.Get(), GetDocumentLoader());
    if (initial_empty_document_status_ ==
        InitialEmptyDocumentStatus::kInitialOrSynchronousAboutBlank) {
