@@ -11,6 +11,27 @@
 namespace aegis::access {
 namespace {
 
+std::optional<std::string> CanonicalizeIdnaHost(std::string_view decoded_host) {
+  @autoreleasepool {
+    NSString* hostname = [[NSString alloc] initWithBytes:decoded_host.data()
+                                                  length:decoded_host.size()
+                                                encoding:NSUTF8StringEncoding];
+    if (!hostname) {
+      return std::nullopt;
+    }
+    NSURLComponents* components = [[NSURLComponents alloc] init];
+    components.scheme = @"https";
+    components.host = hostname;
+    NSString* canonical = components.URL.host;
+    const char* utf8 = canonical.UTF8String;
+    if (!utf8) {
+      return std::nullopt;
+    }
+    return std::string(
+        utf8, [canonical lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+  }
+}
+
 bool IsSupportedImage(NSData* image) {
   CGImageSourceRef source =
       CGImageSourceCreateWithData((__bridge CFDataRef)image, nullptr);
@@ -36,6 +57,13 @@ bool IsSupportedImage(NSData* image) {
 }
 
 }  // namespace
+
+aegis_access::AccessTestNodeParseResult ParseAccessTestNodeShareMac(
+    std::string_view share,
+    aegis_access::AccessTestNodeImportMode mode) {
+  return aegis_access::ParseAccessTestNodeShare(share, mode,
+                                                CanonicalizeIdnaHost);
+}
 
 AccessTestNodeQrResult DecodeAccessTestNodeQrImage(
     std::string_view image, aegis_access::AccessTestNodeImportMode mode) {
@@ -69,7 +97,7 @@ AccessTestNodeQrResult DecodeAccessTestNodeQrImage(
     if (!utf8) {
       return {Status::kInvalidShare, std::nullopt};
     }
-    auto result = aegis_access::ParseAccessTestNodeShare(
+    auto result = ParseAccessTestNodeShareMac(
         std::string_view(
             utf8, [payload lengthOfBytesUsingEncoding:NSUTF8StringEncoding]),
         mode);

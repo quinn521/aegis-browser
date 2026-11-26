@@ -62,12 +62,24 @@ struct AccessTestNodeParseResult {
   std::optional<AccessTestNode> node;
 };
 
+// Platform IDNA conversion for a once-decoded, non-ASCII dial hostname.
+using AccessTestNodeIdnaCanonicalizer =
+    std::optional<std::string> (*)(std::string_view decoded_host);
+
 // Accepts one VLESS/TCP/REALITY/Vision share by default. Admitted macOS DEV
 // import may also select WS/TLS, TCP/TLS/Vision, or gRPC/REALITY explicitly.
 // The fragment is never retained.
 AccessTestNodeParseResult ParseAccessTestNodeShare(
     std::string_view share,
-    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly);
+    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly,
+    AccessTestNodeIdnaCanonicalizer canonicalize_idna = nullptr);
+
+// For a share reconstructed from a native model. Escaping and explicit
+// defaults can grow it past the external input limit. Importers must use
+// ParseAccessTestNodeShare to enforce that limit before parsing user input.
+AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
+    std::string_view share,
+    AccessTestNodeImportMode mode);
 
 }  // namespace aegis_access
 

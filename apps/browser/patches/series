@@ -572,3 +572,4 @@
 0572-access-macos-recovery-legacy-ws-compatibility.patch
 0573-access-macos-confirm-reap-and-validate-dev-reality.patch
 0574-access-macos-align-dev-share-grammar.patch
+0575-access-macos-canonicalize-dial-hosts-and-preserve-native-validation.patch

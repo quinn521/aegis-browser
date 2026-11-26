@@ -10,17 +10,16 @@
 namespace aegis::access {
 namespace {
 
-std::string EscapeNativeQueryValue(std::string_view value) {
+std::string EscapeNativeQueryValue(std::string_view value,
+                                   bool escape_nested_uri = false) {
   // The share decoder splits on '&' and '#' and decodes '%' exactly once.
-  // Escape URI delimiters in field data so they cannot look like a second
-  // share. Preserve other printable bytes to stay within the share budget.
   constexpr char kHex[] = "0123456789ABCDEF";
   std::string result;
   result.reserve(value.size());
   for (; !value.empty(); value.remove_prefix(1)) {
     const auto byte = static_cast<unsigned char>(value.front());
     if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
-        byte == '%' || value.starts_with("://")) {
+        byte == '%' || (escape_nested_uri && value.starts_with("://"))) {
       result.push_back('%');
       result.push_back(kHex[byte >> 4]);
       result.push_back(kHex[byte & 15]);
@@ -41,7 +40,8 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
   const bool legacy_ws = ws && ws->restored_from_v2;
   const bool fresh_dev =
       validation == AccessTestNodeNativeValidation::kFreshDevImport;
-  if (legacy_ws && fresh_dev) {
+  if ((legacy_ws && fresh_dev) ||
+      node.spider_x.size() > aegis_access::kMaxAccessTestNodeShareBytes) {
     return std::nullopt;
   }
   auto mode = fresh_dev ? Mode::kAllowExtendedVless : Mode::kRealityOnly;
@@ -79,11 +79,11 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
     share +=
         "&type=tcp&security=reality&flow=xtls-rprx-vision&pbk=" +
         EscapeNativeQueryValue(node.public_key) +
-        "&sid=" + EscapeNativeQueryValue(node.short_id) +
-        "&spx=" + EscapeNativeQueryValue(node.spider_x) +
+        "&sid=" + EscapeNativeQueryValue(node.short_id) + "&spx=" +
+        EscapeNativeQueryValue(node.spider_x, /*escape_nested_uri=*/fresh_dev) +
         (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
   }
-  auto parsed = aegis_access::ParseAccessTestNodeShare(share, mode);
+  auto parsed = aegis_access::ReparseAccessTestNodeNativeShare(share, mode);
   if (legacy_ws && parsed.node && parsed.node->web_socket_tls) {
     parsed.node->web_socket_tls->restored_from_v2 = true;
   }

@@ -26,6 +26,12 @@ struct AccessTestNodeQrResult {
   std::optional<aegis_access::AccessTestNode> node;
 };
 
+// Shared by trusted macOS text import and QR decoding so both use Foundation
+// for IDNA conversion of DEV dial hostnames.
+aegis_access::AccessTestNodeParseResult ParseAccessTestNodeShareMac(
+    std::string_view share,
+    aegis_access::AccessTestNodeImportMode mode);
+
 // Worker-only local decoding of bytes from an explicitly selected image.
 // The result owns only a validated native draft and never the input image or
 // the decoded URI. Callers must check admission before reading the file.

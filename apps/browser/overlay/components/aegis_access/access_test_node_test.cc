@@ -29,7 +29,12 @@ using aegis_access::test::kSyntheticTcpTlsVisionInvalidDialAddressShare;
 using aegis_access::test::kSyntheticTcpTlsVisionShare;
 using aegis_access::test::kSyntheticTcpTlsVisionSlashShare;
 using aegis_access::test::kSyntheticTestNodeShare;
+using aegis_access::test::kSyntheticWebSocketTlsDoubleEncodedDialHostShare;
+using aegis_access::test::kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare;
+using aegis_access::test::kSyntheticWebSocketTlsEscapedDialHostShare;
 using aegis_access::test::kSyntheticWebSocketTlsFingerprintAliasShare;
+using aegis_access::test::kSyntheticWebSocketTlsIdnaDialHostShare;
+using aegis_access::test::kSyntheticWebSocketTlsInvalidUtf8DialHostShare;
 using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
 using aegis_access::test::kSyntheticWebSocketTlsShare;
 using aegis_access::test::kSyntheticWebSocketTlsSlashShare;
@@ -237,6 +242,64 @@ int main() {
            .node);
   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
          result.node);
+  std::string at_share_limit =
+      ReplaceIn(WithoutFragment(kSyntheticTestNodeShare), "&type=tcp", "");
+  at_share_limit += "&spx=/strict";
+  assert(at_share_limit.size() < aegis_access::kMaxAccessTestNodeShareBytes);
+  at_share_limit.append(
+      aegis_access::kMaxAccessTestNodeShareBytes - at_share_limit.size(), 'x');
+  const auto at_limit = ParseAccessTestNodeShare(at_share_limit, kExtended);
+  assert(at_limit.node);
+  const std::string reconstructed =
+      ReplaceIn(at_share_limit, "?flow=", "?type=tcp&flow=");
+  assert(ParseAccessTestNodeShare(reconstructed, kExtended).error == kInvalid);
+  assert(
+      aegis_access::ReparseAccessTestNodeNativeShare(reconstructed, kExtended)
+          .node == at_limit.node);
+  const auto escaped_host = ParseAccessTestNodeShare(
+      kSyntheticWebSocketTlsEscapedDialHostShare, kExtended);
+  assert(escaped_host.node && escaped_host.node->address == "route.example.");
+  assert(escaped_host.node->web_socket_tls &&
+         escaped_host.node->web_socket_tls->path == "/upgrade?tag=%E9");
+  assert(!ParseAccessTestNodeShare(kSyntheticWebSocketTlsEscapedDialHostShare,
+                                   kDev)
+              .node);
+  assert(!ParseAccessTestNodeShare(kSyntheticWebSocketTlsIdnaDialHostShare,
+                                   kExtended)
+              .node);
+  const auto idna = ParseAccessTestNodeShare(
+      kSyntheticWebSocketTlsIdnaDialHostShare, kExtended,
+      [](std::string_view decoded) -> std::optional<std::string> {
+        assert(decoded ==
+               "b\xC3\xBC"
+               "cher.example");
+        return "xn--bcher-kva.example";
+      });
+  assert(idna.node && idna.node->address == "xn--bcher-kva.example");
+  assert(idna.node->web_socket_tls &&
+         idna.node->web_socket_tls->host == "ws.example.com.:8443" &&
+         idna.node->web_socket_tls->path ==
+             "/upgrade?next=%68ttps://assets.example/");
+  assert(!ParseAccessTestNodeShare(
+              kSyntheticWebSocketTlsIdnaDialHostShare, kExtended,
+              [](std::string_view) -> std::optional<std::string> {
+                return "route.example:443";
+              })
+              .node);
+  for (const auto share : {kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare,
+                           kSyntheticWebSocketTlsDoubleEncodedDialHostShare,
+                           kSyntheticWebSocketTlsInvalidUtf8DialHostShare}) {
+    const auto rejected = ParseAccessTestNodeShare(share, kExtended);
+    assert(rejected.error == kInvalid && !rejected.node);
+  }
+  for (const auto* encoded :
+       {"%3A", "%2F", "%5C", "%23", "%3F", "%5B", "%5D", "%00", "%20", "%ZZ"}) {
+    assert(ParseAccessTestNodeShare(
+               ReplaceIn(kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare,
+                         "%40", encoded),
+               kExtended)
+               .error == kInvalid);
+  }
   const auto missing_vision = ParseAccessTestNodeShare(
       kSyntheticTcpRealityVisionMissingFlowShare, kExtended);
   assert(missing_vision.error == kUnsupported && !missing_vision.node);

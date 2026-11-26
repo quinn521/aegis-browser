@@ -156,6 +156,33 @@ inline constexpr std::string_view kSyntheticGrpcRealityFingerprintAliasShare =
     "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
     "#synthetic-grpc";
 
+inline constexpr std::string_view kSyntheticWebSocketTlsEscapedDialHostShare =
+    "vless://00000000-0000-4000-8000-000000000002@r%6Fute.example.:8443"
+    "?type=ws&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
+    "&path=%2Fupgrade%3Ftag%3D%25E9";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsIdnaDialHostShare =
+    "vless://00000000-0000-4000-8000-000000000002@b%C3%BCcher.example:8443"
+    "?type=ws&security=tls&host=ws.example.com.%3A8443&fp=chrome"
+    "&sni=cert.example.com&path=%2Fupgrade%3Fnext%3D%2568ttps://"
+    "assets.example/";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare =
+        "vless://"
+        "00000000-0000-4000-8000-000000000002@route%40other.example:8443"
+        "?type=ws&security=tls&sni=cert.example.com";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsDoubleEncodedDialHostShare =
+        "vless://00000000-0000-4000-8000-000000000002@r%256Fute.example.:8443"
+        "?type=ws&security=tls&sni=cert.example.com";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsInvalidUtf8DialHostShare =
+        "vless://00000000-0000-4000-8000-000000000002@b%C3cher.example:8443"
+        "?type=ws&security=tls&sni=cert.example.com";
+
 }  // namespace aegis_access::test
 
 #endif  // COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_

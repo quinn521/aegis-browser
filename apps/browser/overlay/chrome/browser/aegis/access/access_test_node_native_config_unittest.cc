@@ -241,6 +241,61 @@ TEST(AccessTestNodeNativeConfigTest,
             node);
 }
 
+TEST(AccessTestNodeNativeConfigTest, StoredV1SpiderXAtShareLimitRevalidates) {
+  const auto node = Node();
+  std::string share = "vless://" + node.user_id + "@" + node.address +
+                      ":443?sni=" + node.server_name +
+                      "&type=tcp&security=reality&flow=xtls-rprx-vision&pbk=" +
+                      node.public_key + "&sid=" + node.short_id +
+                      "&spx=/legacy?next=https://assets.example/";
+  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
+  ASSERT_LT(share.size(), kMax);
+  share.append(kMax - share.size(), 'x');
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(share);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(*parsed.node), parsed.node);
+  EXPECT_TRUE(
+      BuildAccessTestNodeCoreConfiguration(*parsed.node, {}, Transport::kHttp));
+}
+
+TEST(AccessTestNodeNativeConfigTest, StrictWebSocketAtShareLimitRevalidates) {
+  std::string share =
+      "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
+      "?sni=cert.example.com&type=ws&security=tls"
+      "&path=/ws?next=https://assets.example/";
+  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
+  while (share.size() + 3 <= kMax) {
+    share += "%26";
+  }
+  share.append(kMax - share.size(), 'q');
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(
+                *parsed.node, AccessTestNodeNativeValidation::kFreshDevImport),
+            parsed.node);
+  EXPECT_TRUE(
+      BuildAccessTestNodeCoreConfiguration(*parsed.node, {}, Transport::kHttp));
+}
+
+TEST(AccessTestNodeNativeConfigTest, DevRealityCanonicalShareCanGrowPastLimit) {
+  const auto node = Node();
+  std::string share =
+      "vless://" + node.user_id + "@" + node.address +
+      ":443?sni=" + node.server_name +
+      "&security=reality&flow=xtls-rprx-vision&pbk=" + node.public_key +
+      "&sid=" + node.short_id + "&spx=/strict?next=https%3A//assets.example/";
+  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
+  ASSERT_LT(share.size(), kMax);
+  share.append(kMax - share.size(), 'x');
+  const auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);
+  ASSERT_TRUE(parsed.node);
+  EXPECT_EQ(ValidateAccessTestNodeNative(
+                *parsed.node, AccessTestNodeNativeValidation::kFreshDevImport),
+            parsed.node);
+  share.push_back('x');
+  EXPECT_FALSE(aegis_access::ParseAccessTestNodeShare(share, kExtended).node);
+}
+
 TEST(AccessTestNodeNativeConfigTest,
      RejectsExtendedModelsWithInvalidDialAddress) {
   for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,

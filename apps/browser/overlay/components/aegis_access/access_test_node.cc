@@ -120,6 +120,27 @@ bool IsAddress(std::string_view text) {
   return IsDnsName(text);
 }
 
+std::optional<std::string> CanonicalizeDialHost(
+    std::string_view address,
+    AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
+  auto decoded = Unescape(address);
+  if (!decoded || !std::ranges::all_of(*decoded, [](unsigned char c) {
+        return c >= 0x80 || IsAlphanumeric(c) || c == '-' || c == '.';
+      })) {
+    return std::nullopt;
+  }
+  if (std::ranges::none_of(*decoded,
+                           [](unsigned char c) { return c >= 0x80; })) {
+    return decoded;
+  }
+  if (!canonicalize_idna) {
+    return std::nullopt;
+  }
+  auto canonical = canonicalize_idna(*decoded);
+  return canonical && IsDnsName(*canonical) ? std::move(canonical)
+                                            : std::nullopt;
+}
+
 bool IsExtendedServerName(std::string_view name,
                           bool allows_root_label = false) {
   if (allows_root_label && name.ends_with('.')) {
@@ -451,17 +472,17 @@ std::string ValueOr(const Query& query,
   return it == query.end() ? std::string(fallback) : it->second;
 }
 
-}  // namespace
-
-AccessTestNodeParseResult ParseAccessTestNodeShare(
+AccessTestNodeParseResult ParseShare(
     std::string_view share,
-    AccessTestNodeImportMode mode) {
+    AccessTestNodeImportMode mode,
+    size_t max_share_bytes,
+    AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
   constexpr AccessTestNodeError kInvalid = AccessTestNodeError::kInvalidShare;
   constexpr AccessTestNodeError kUnsupported =
       AccessTestNodeError::kUnsupportedOutbound;
   constexpr std::string_view kWhitespace = " \t\r\n";
   constexpr std::string_view kScheme = "vless://";
-  if (share.size() > kMaxAccessTestNodeShareBytes ||
+  if (share.size() > max_share_bytes ||
       share.find_first_not_of(kWhitespace) == std::string_view::npos) {
     return {kInvalid, std::nullopt};
   }
@@ -499,7 +520,15 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
     return {kInvalid, std::nullopt};
   }
   const auto user_id = authority.substr(0, at);
-  const auto address = authority.substr(at + 1, colon - at - 1);
+  auto address = authority.substr(at + 1, colon - at - 1);
+  std::optional<std::string> decoded_host;
+  if (extended && !address.starts_with('[')) {
+    decoded_host = CanonicalizeDialHost(address, canonicalize_idna);
+    if (!decoded_host) {
+      return {kInvalid, std::nullopt};
+    }
+    address = *decoded_host;
+  }
   const auto port_text = authority.substr(colon + 1);
   uint16_t port = 0;
   const auto* port_end = std::to_address(port_text.end());
@@ -660,6 +689,26 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
   std::ranges::transform(node.short_id, node.short_id.begin(), LowerAscii);
   node.advertises_x25519_mlkem768 = query->contains("support-x25519mlkem768");
   return {AccessTestNodeError::kNone, std::move(node)};
+}
+
+}  // namespace
+
+AccessTestNodeParseResult ParseAccessTestNodeShare(
+    std::string_view share,
+    AccessTestNodeImportMode mode,
+    AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
+  return ParseShare(share, mode, kMaxAccessTestNodeShareBytes,
+                    canonicalize_idna);
+}
+
+AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
+    std::string_view share,
+    AccessTestNodeImportMode mode) {
+  // Percent encoding uses at most three bytes per input byte. Allow room for
+  // canonical defaults and a dial hostname normalized to an ASCII A-label.
+  constexpr size_t kMaxNativeShareBytes =
+      3 * kMaxAccessTestNodeShareBytes + 512;
+  return ParseShare(share, mode, kMaxNativeShareBytes, nullptr);
 }
 
 }  // namespace aegis_access

@@ -177,7 +177,7 @@ class AccessOptionsWorker {
   TestNodePreviewResult Text(std::string editor, std::string share) {
     if (vault_.CloseEditor(editor) != AccessTestNodeVaultStatus::kOk)
       return {TestNodePreviewStatus::kSecureStorageUnavailable};
-    auto parsed = aegis_access::ParseAccessTestNodeShare(share, import_mode_);
+    auto parsed = ParseAccessTestNodeShareMac(share, import_mode_);
     switch (parsed.error) {
       case aegis_access::AccessTestNodeError::kNone:
         return Stage(editor, *parsed.node);

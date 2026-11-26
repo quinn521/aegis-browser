@@ -8,6 +8,7 @@
 #include <cassert>
 #include <iostream>
 #include <string>
+#include <utility>
 
 #include "components/aegis_access/access_test_node_test_fixture.h"
 
@@ -15,6 +16,7 @@ namespace {
 
 using aegis::access::AccessTestNodeQrStatus;
 using aegis::access::DecodeAccessTestNodeQrImage;
+using aegis::access::ParseAccessTestNodeShareMac;
 using aegis_access::AccessTestNodeImportMode;
 
 CIImage* MakeCode(std::string_view payload) {
@@ -86,7 +88,7 @@ int main() {
                               kSyntheticWebSocketTlsQueryShare,
                               kSyntheticTcpTlsVisionShare,
                               kSyntheticGrpcRealityShare}) {
-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
+      const auto text = ParseAccessTestNodeShareMac(vector, extended);
       const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
       assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
       assert(qr.node == text.node);
@@ -99,14 +101,16 @@ int main() {
                               kSyntheticTcpTlsVisionShare}) {
       std::string unverified(vector);
       unverified.insert(unverified.find('#'), "&allowInsecure=1");
-      const auto text =
-          aegis_access::ParseAccessTestNodeShare(unverified, extended);
+      const auto text = ParseAccessTestNodeShareMac(unverified, extended);
       const auto qr = Decode(DrawCodes(MakeCode(unverified)), extended);
       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
       assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
     }
     for (const auto vector :
          {kSyntheticWebSocketTlsUnknownFingerprintShare,
+          kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare,
+          kSyntheticWebSocketTlsDoubleEncodedDialHostShare,
+          kSyntheticWebSocketTlsInvalidUtf8DialHostShare,
           kSyntheticTcpRealityVisionConcatenatedShare,
           kSyntheticTcpRealityVisionInvalidFingerprintShare,
           kSyntheticTcpRealityVisionInvalidPublicKeyShare,
@@ -114,17 +118,26 @@ int main() {
           kSyntheticTcpRealityVisionUnsafeSpiderXShare,
           kSyntheticTcpTlsVisionInvalidDialAddressShare,
           kSyntheticGrpcRealityInvalidDialAddressShare}) {
-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
+      const auto text = ParseAccessTestNodeShareMac(vector, extended);
       assert(text.error == aegis_access::AccessTestNodeError::kInvalidShare);
       ExpectStatus(DrawCodes(MakeCode(vector)),
                    AccessTestNodeQrStatus::kInvalidShare, extended);
+    }
+    for (const auto& [vector, expected_host] :
+         {std::pair{kSyntheticWebSocketTlsEscapedDialHostShare, "route.example."},
+          std::pair{kSyntheticWebSocketTlsIdnaDialHostShare,
+                    "xn--bcher-kva.example"}}) {
+      const auto text = ParseAccessTestNodeShareMac(vector, extended);
+      const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
+      assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
+      assert(text.node->address == expected_host && qr.node == text.node);
     }
     for (const auto vector :
          {kSyntheticTcpRealityVisionSlashAndAliasesShare,
           kSyntheticWebSocketTlsSlashShare,
           kSyntheticTcpTlsVisionSlashShare,
           kSyntheticGrpcRealitySlashShare}) {
-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
+      const auto text = ParseAccessTestNodeShareMac(vector, extended);
       const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
       assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
       assert(text.node == qr.node);
@@ -134,7 +147,7 @@ int main() {
           kSyntheticWebSocketTlsFingerprintAliasShare,
           kSyntheticTcpTlsVisionFingerprintAliasShare,
           kSyntheticGrpcRealityFingerprintAliasShare}) {
-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
+      const auto text = ParseAccessTestNodeShareMac(vector, extended);
       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
       ExpectStatus(DrawCodes(MakeCode(vector)),
                    AccessTestNodeQrStatus::kUnsupportedOutbound, extended);
