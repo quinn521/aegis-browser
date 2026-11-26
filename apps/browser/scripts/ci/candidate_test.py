@@ -303,10 +303,16 @@ class CandidateTests(unittest.TestCase):
                 (source / 'internal.gni').write_text(
                     'aegis_android_internal_access_options = true\n'
                     'aegis_android_access_product_channel = "alpha"\n')
+                (source / 'effective-args.json').write_text(json.dumps([
+                    {'name': 'aegis_android_internal_access_options',
+                     'current': {'value': 'true'}, 'default': {'value': 'false'}},
+                    {'name': 'aegis_android_access_product_channel',
+                     'current': {'value': '"alpha"'}, 'default': {'value': '"unknown"'}},
+                ]))
                 gn.write_text('#!/bin/sh\n'
                               'if [ "$1" = gen ]; then exit 0; fi\n'
-                              '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] &&\n'
-                              "grep -Fxq 'import(\"//internal.gni\")' \"$2/args.gn\" && cat internal.gni\n")
+                              '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] && [ "$5" = --json ] &&\n'
+                              "grep -Fxq 'import(\"//internal.gni\")' \"$2/args.gn\" && cat effective-args.json\n")
                 ninja.write_text('#!/bin/sh\ntouch ninja-invoked\nexit 19\n')
                 for tool in (gn, ninja):
                     tool.chmod(0o755)

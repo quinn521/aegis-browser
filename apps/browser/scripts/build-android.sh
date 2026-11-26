@@ -101,6 +101,7 @@ if [[ -n "$bundle_profile" ]]; then
     fi
   fi
   args="$(printf '%s\n%s' "$args" 'debuggable_apks = false')"
+  args="$(gn format --stdin <<< "$args")"
   gn gen "$OUT" --args="$args"
   aegis_android_verify_gn_args "$OUT" default
   autoninja -C "$OUT" chrome_public_bundle
@@ -114,17 +115,17 @@ if [[ -n "$internal_profile" ]]; then
     echo "内部 Access Options 构建只使用固定的实际输出目录：$OUT" >&2
     exit 1
   fi
-  internal_args="$(mktemp "${TMPDIR:-/tmp}/aegis-android-internal-args.XXXXXX")"
-  trap 'rm -f "$internal_args"' EXIT
-  aegis_android_gn_args "$ARGS_FILE" "internal-$internal_profile" > "$internal_args"
-  if [[ -f "$OUT/build.ninja" ]] && ! aegis_android_gn_args_match "$internal_args" "$OUT/args.gn"; then
+  internal_args="$(aegis_android_gn_args "$ARGS_FILE" "internal-$internal_profile")"
+  ensure_depot_tools_on_path
+  cd "$SRC"
+  internal_args="$(gn format --stdin <<< "$internal_args")"
+  if [[ -f "$OUT/build.ninja" ]] &&
+      ! aegis_android_gn_args_match <(printf '%s\n' "$internal_args") "$OUT/args.gn"; then
     echo "已有内部 Android 构建参数与当前配置不同；请先核对并重新生成，禁止沿用旧构建图。" >&2
     exit 1
   fi
-  ensure_depot_tools_on_path
-  cd "$SRC"
   echo "Generating $OUT with internal $internal_profile Access Options…"
-  gn gen "$OUT" --args="$(cat "$internal_args")"
+  gn gen "$OUT" --args="$internal_args"
   aegis_android_verify_gn_args "$OUT" "internal-$internal_profile"
   autoninja -C "$OUT" chrome_public_apk aegis_access_options_test_apk
   echo "Internal APK: $OUT/apks/ChromePublic.apk"
@@ -135,14 +136,15 @@ if [[ "$OUT" != "$SRC/out/AegisAndroid" || -L "$SRC/out" || -L "$OUT" ]]; then
   echo "Android 只使用固定的实际输出目录：$SRC/out/AegisAndroid" >&2
   exit 1
 fi
+ensure_depot_tools_on_path
+cd "$SRC"
+# GN formats args.gn as it writes it. Use that same form for the graph and cache check.
+default_args="$(gn format --stdin <<< "$default_args")"
 if [[ -f "$OUT/build.ninja" ]] &&
     ! aegis_android_gn_args_match <(printf '%s\n' "$default_args") "$OUT/args.gn"; then
   echo "已有 Android 构建参数与当前配置不同；请先核对并重新生成，禁止沿用旧构建图。" >&2
   exit 1
 fi
-ensure_depot_tools_on_path
-
-cd "$SRC"
 # Re-evaluate imports and their environment before the effective profile check.
 # Equivalent args.gn text alone cannot identify the configuration in build.ninja.
 echo "Generating $OUT with aegis-android.gn…"

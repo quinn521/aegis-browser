@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BROWSER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ARGS_FILE="$BROWSER_DIR/args/aegis-android.gn"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/aegis-android-build-profile.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -22,6 +21,29 @@ has_line() {
 count_matches() {
   grep -c "$2" <<< "$1" || true
 }
+
+assert_assignment() {
+  local tokens
+  tokens="$(aegis_android_gn_scan "" <<< "$1")"
+  awk -v name="$2" -v value="$3" '
+    prior_name == name && prior == "=" && $0 == value { found++ }
+    { prior_name = prior; prior = $0 }
+    END { exit found != 1 }
+  ' <<< "$tokens" || fail "GN 参数缺少唯一赋值：$2 = $3"
+}
+
+product_args="$BROWSER_DIR/args/aegis-android.gn"
+production_default="$(aegis_android_gn_args "$product_args" default)"
+[[ "$production_default" == "$(cat "$product_args")" ]] || fail "default 配置改动了产品模板"
+assert_assignment "$production_default" android_channel '"default"'
+assert_assignment "$production_default" chrome_public_manifest_package '"com.gcsa.aegis"'
+assert_assignment "$production_default" target_cpu '"arm64"'
+production_alpha="$(aegis_android_gn_args "$product_args" internal-alpha)"
+assert_assignment "$production_alpha" android_channel '"canary"'
+
+ARGS_FILE="$TEST_ROOT/base.gn"
+printf '%s\n' 'android_channel = "default"' 'chrome_public_manifest_package = "com.gcsa.aegis"' \
+  'target_cpu = "arm64"' > "$ARGS_FILE"
 
 default_args="$(aegis_android_gn_args "$ARGS_FILE" default)"
 [[ "$default_args" == "$(cat "$ARGS_FILE")" ]] || fail "default 配置改动了基础参数"
@@ -150,8 +172,6 @@ check_default_build_rejects_enabled_args
   unset OUT_DIR
   cp "$BROWSER_DIR/CHROMIUM_VERSION" "$fixture/"
   printf 'target_os = ["android"]\n' > "$CHROMIUM_ROOT/.gclient"
-  printf '%s\n' 'aegis_android_internal_access_options = true' \
-    'aegis_android_access_product_channel = "alpha"' > "$CHROMIUM_ROOT/src/internal.gni"
   { cat "$commented_base"; echo 'import("//internal.gni")'; } > "$fixture/args/aegis-android.gn"
   cp "$fixture/args/aegis-android.gn" "$fixture_out/args.gn"
 
@@ -162,29 +182,64 @@ check_default_build_rejects_enabled_args
       *) return 1 ;;
     esac
   }
-  python3() { :; }
+  python3() {
+    if [[ "$1" == */verify-build-source.py ]]; then return 0; fi
+    command python3 "$@"
+  }
+  format_fixture_gn() {
+    # Model GN moving these independent, adjacent imports into canonical order.
+    awk '
+      /^import\("\/\/a\.gni"\)$/ { first = $0; next }
+      /^import\("\/\/z\.gni"\)$/ { last = $0; next }
+      { print }
+      END {
+        if (first != "") print first
+        if (last != "") print last
+      }
+    '
+  }
+  gn_fixture_arg() {
+    printf '{"name":"%s","default":{"value":"%s"}}' "$1" "$2"
+  }
   gn() {
     case "$1" in
+      format)
+        [[ "$2" == --stdin ]] || return 1
+        format_fixture_gn
+        ;;
       gen)
         mkdir -p "$2"
-        printf '%s\n' "${3#--args=}" > "$2/args.gn"
+        format_fixture_gn <<< "${3#--args=}" > "$2/args.gn"
         printf '%s\n' generated-profile > "$2/build.ninja"
         ;;
       args)
-        [[ "$3" == --list && "$4" == --short ]] || return 1
+        [[ "$3" == --list && "$4" == --short && "$5" == --json ]] || return 1
+        local enabled=false product='\"unknown\"' channel='\"default\"' package='\"com.gcsa.aegis\"'
         if grep -Fxq 'import("//internal.gni")' "$2/args.gn"; then
-          cat "$CHROMIUM_ROOT/src/internal.gni"
-        elif grep -Fxq 'aegis_android_internal_access_options = true' "$2/args.gn"; then
-          grep -E '^(aegis_android_.*|android_channel) =' "$2/args.gn"
-          if grep -Fxq 'chrome_public_manifest_package += ".internal"' "$2/args.gn"; then
-            printf '%s\n' 'chrome_public_manifest_package = "com.gcsa.aegis.internal"'
-          else
-            grep '^chrome_public_manifest_package =' "$2/args.gn"
+          enabled=true product='\"alpha\"'
+          if [[ "${GN_PROFILE_DIAGNOSTICS:-}" == 1 ]]; then
+            printf '%s\n' 'aegis_android_internal_access_options = false' \
+              'aegis_android_access_product_channel = "unknown"'
           fi
-        else
-          printf '%s\n' 'aegis_android_internal_access_options = false' \
-            'aegis_android_access_product_channel = "unknown"'
+        elif grep -Fxq 'aegis_android_internal_access_options = true' "$2/args.gn"; then
+          enabled=true product='\"alpha\"' channel='\"canary\"'
+          if grep -Fxq 'chrome_public_manifest_package += ".internal"' "$2/args.gn"; then
+            package='\"com.gcsa.aegis.internal\"'
+          fi
         fi
+        printf '['
+        if [[ "${GN_PROFILE_DUPLICATE:-}" == 1 ]]; then
+          gn_fixture_arg aegis_android_internal_access_options false
+          printf ','
+        fi
+        gn_fixture_arg aegis_android_internal_access_options "$enabled"
+        printf ','
+        gn_fixture_arg aegis_android_access_product_channel "$product"
+        printf ','
+        gn_fixture_arg android_channel "$channel"
+        printf ','
+        gn_fixture_arg chrome_public_manifest_package "$package"
+        printf ']\n'
         ;;
       *) return 1 ;;
     esac
@@ -194,7 +249,7 @@ check_default_build_rejects_enabled_args
     cp "$2/build.ninja" "$CHROMIUM_ROOT/ninja-graph"
     return 1
   }
-  export -f uname python3 gn autoninja
+  export -f uname python3 format_fixture_gn gn_fixture_arg gn autoninja
 
   check_build_rejects_args() {
     local expected="$1" output
@@ -220,6 +275,8 @@ check_default_build_rejects_enabled_args
   GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
     OUT_DIR="$CHROMIUM_ROOT/src/out/AegisAndroidDelivery-42-1" \
     check_build_rejects_args "$default_error" --app-bundle alpha
+  GN_PROFILE_DIAGNOSTICS=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
+  GN_PROFILE_DUPLICATE=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
 
   { cat "$ARGS_FILE"; echo 'chrome_public_manifest_package += ".internal"'; } > "$fixture/args/aegis-android.gn"
   package_error='生效 GN 参数必须包含：chrome_public_manifest_package = "com.gcsa.aegis"'
@@ -257,6 +314,17 @@ check_default_build_rejects_enabled_args
     fail "模拟 autoninja 应以失败状态结束"
   fi
   grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "内部 APK 使用了旧构建图"
+
+  # A second build accepts the canonical cache written by the first generation.
+  { cat "$ARGS_FILE"; printf '%s\n' 'import("//z.gni")' 'import("//a.gni")'; } > "$fixture/args/aegis-android.gn"
+  format_fixture_gn < "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
+  for attempt in 1 2; do
+    rm "$CHROMIUM_ROOT/ninja-invoked"
+    if bash "$fixture/scripts/build-android.sh" > /dev/null 2>&1; then
+      fail "模拟 autoninja 应以失败状态结束"
+    fi
+    [[ -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "第 $attempt 次构建拒绝了 GN 的规范化缓存"
+  done
 )
 
 no_channel="$TEST_ROOT/no-channel.gn"

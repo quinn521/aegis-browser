@@ -106,7 +106,7 @@ aegis_android_gn_args() {
 
 aegis_android_verify_gn_args() {
   local out_dir="$1" profile="$2" gn_bin="${3:-gn}"
-  local effective_args enabled product channel setting
+  local effective_args enabled product channel
   local -a expected_args
   case "$profile" in
     default) enabled=false product=unknown ;;
@@ -124,16 +124,40 @@ aegis_android_verify_gn_args() {
       'chrome_public_manifest_package = "com.gcsa.aegis"'
     )
   fi
-  if ! effective_args="$("$gn_bin" args "$out_dir" --list --short)"; then
+  if ! effective_args="$("$gn_bin" args "$out_dir" --list --short --json)"; then
     echo "无法读取 Android $profile 构建的生效 GN 参数。" >&2
     return 1
   fi
-  for setting in "${expected_args[@]}"; do
-    if ! grep -Fxq "$setting" <<< "$effective_args"; then
-      printf 'Android %s 构建的生效 GN 参数必须包含：%s\n' "$profile" "$setting" >&2
-      return 1
-    fi
-  done
+  python3 -c '
+import json
+import sys
+
+def unique_keys(pairs):
+    record = dict(pairs)
+    if len(record) != len(pairs):
+        raise ValueError("duplicate JSON key")
+    return record
+
+try:
+    records = json.load(sys.stdin, object_pairs_hook=unique_keys)
+    if not isinstance(records, list):
+        raise ValueError("expected an argument list")
+    effective = {}
+    for record in records:
+        name = record["name"]
+        value = record.get("current", record["default"])["value"]
+        if not isinstance(name, str) or not isinstance(value, str) or name in effective:
+            raise ValueError("invalid or duplicate argument")
+        effective[name] = value
+except (KeyError, TypeError, ValueError):
+    sys.exit("Android 生效 GN 参数的 JSON 输出无效。")
+
+profile = sys.argv[1]
+for setting in sys.argv[2:]:
+    name, expected = setting.split(" = ", 1)
+    if effective.get(name) != expected:
+        sys.exit(f"Android {profile} 构建的生效 GN 参数必须包含：{setting}")
+  ' "$profile" "${expected_args[@]}" <<< "$effective_args"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
