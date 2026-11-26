@@ -1,4 +1,4 @@
-From 47421d0b221922073a0e9e0d69227abe894e23b4 Mon Sep 17 00:00:00 2001
+From a47c3a21a82fac05e5c3179e70469301f8218495 Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Wed, 25 Nov 2026 20:40:41 +0800
 Subject: [PATCH] fix(android): bind Access Options editor to a menu grant in
@@ -10,15 +10,28 @@ bound to the receiver, tab contents, primary main frame and window, so revoked
 or restored receivers cannot obtain a new editor through a direct native call.
 Run the instrumentation by default in an internal-only APK that carries the
 product identity and product template resources.
+
+The regression skips the first run experience and recreates the real browser
+Activity, so the restored receiver is the one Android rebuilds from saved
+state rather than a dialog shown by the test.
+
+The test library depends only on test support targets rather than
+:chrome_test_java_helper, so the dedicated APK carries no other runnable suite.
+
+The menu grant follows the existing trust boundary: configuration files,
+Intents, deep links and Java-supplied channel values never grant privileges,
+while browser-process code is trusted. It keeps revoked, restored or reused
+receivers from obtaining an editor; it does not defend against same-process
+callers.
 ---
  chrome/android/BUILD.gn                       |  18 +++
- .../settings/AegisAccessOptionsFragment.java  |  45 +++++++-
- chrome/android/javatests/BUILD.gn             |  13 ++-
- .../AegisAccessOptionsFragmentTest.java       |  38 +++++--
+ .../settings/AegisAccessOptionsFragment.java  |  47 +++++++-
+ chrome/android/javatests/BUILD.gn             |  33 +++++-
+ .../AegisAccessOptionsFragmentTest.java       |  58 +++++++--
  chrome/browser/android/BUILD.gn               |   7 +-
  .../browser/android/aegis_access_options.gni  |  10 ++
- .../android/aegis_access_options_bridge.cc    | 105 +++++++++++++++++-
- 7 files changed, 214 insertions(+), 22 deletions(-)
+ .../android/aegis_access_options_bridge.cc    | 110 +++++++++++++++++-
+ 7 files changed, 261 insertions(+), 22 deletions(-)
  create mode 100644 chrome/browser/android/aegis_access_options.gni
 
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
@@ -58,7 +71,7 @@ index 1381581d046097dd04335801822e15fa54abe461..b8da99b73d37ea25925a1f0ef483d5cd
      # //chrome/android/javatests/src/org/chromium/chrome/browser/vr/README.md
      chrome_public_test_apk_tmpl("chrome_public_test_vr_apk") {
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
-index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fbc98011de 100644
+index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..6fcf2ea99de87d935f1988000537cf311ed841ed 100644
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
 @@ -23,6 +23,7 @@ import org.chromium.chrome.browser.ChromeTabbedActivity;
@@ -77,7 +90,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fb
      private String mEditor = "";
      private boolean mRevoked;
  
-@@ -51,16 +53,22 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -51,16 +53,24 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
          if (contents == null || !canOffer(contents)) return;
  
          var fragment = new AegisAccessOptionsFragment();
@@ -86,6 +99,8 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fb
 -
 +        // This menu action is the only source of an editor. Its authorization binds
 +        // the unattached receiver to this tab and is spent when the dialog is created.
++        // Browser-process code is inside the trust boundary; the grant guards against
++        // revoked, restored or reused receivers, not against same-process callers.
 +        if (!AegisAccessOptionsFragmentJni.get().authorize(contents, fragment)) return;
 +        fragment.mPendingContents = contents;
          MonotonicObservableSupplier<TabModel> models =
@@ -105,7 +120,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fb
      }
  
      /** Retains a presentation hint in Activity state, without persisting an editor. */
-@@ -88,8 +96,21 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -88,8 +98,21 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
                  && AegisAccessOptionsFragmentJni.get().canRead(mEditor, this);
      }
  
@@ -127,7 +142,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fb
          boolean canRead = !mRevoked && canReadEditor();
          return new AlertDialog.Builder(requireContext())
                  .setTitle(R.string.aegis_access_options_title)
-@@ -114,6 +135,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -114,6 +137,7 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
      }
  
      private void closeEditor() {
@@ -135,7 +150,7 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fb
          MonotonicObservableSupplier<TabModel> models = mModels;
          if (models != null) {
              mModels = null;
-@@ -134,10 +156,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+@@ -134,10 +158,23 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
          }
      }
  
@@ -160,29 +175,49 @@ index 6c87c210ff23eaf6deac560a7a4a2a94576a41d2..a2bb3138e9eb67f0fdc9bf80b90ac0fb
          String open(
                  @JniType("content::WebContents*") WebContents contents,
 diff --git a/chrome/android/javatests/BUILD.gn b/chrome/android/javatests/BUILD.gn
-index cc94c9b075c9b426ae405305437e819d1d1b11eb..971de0171c419fe717c65f2e0b4a72740d2887a5 100644
+index cc94c9b075c9b426ae405305437e819d1d1b11eb..386df515b4b5b2698f83ede3588393aa5151ecf3 100644
 --- a/chrome/android/javatests/BUILD.gn
 +++ b/chrome/android/javatests/BUILD.gn
-@@ -1316,6 +1316,18 @@ android_library("chrome_test_java_org.chromium.chrome.browser.search_engines") {
+@@ -1316,6 +1316,38 @@ android_library("chrome_test_java_org.chromium.chrome.browser.search_engines") {
    deps = [ ":chrome_test_java_helper" ]
  }
  
 +# Runs only in //chrome/android:aegis_access_options_test_apk, which carries the
 +# admitted product identity. chrome_public_test_apk cannot admit it.
++# Depends only on test support libraries, not :chrome_test_java_helper, so the
++# APK carries no suite other than this one.
 +android_library("aegis_access_options_test_java") {
++  testonly = true
 +  resources_package = "org.chromium.chrome"
 +
 +  sources = [
 +    "src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java",
 +  ]
 +
-+  deps = [ ":chrome_test_java_helper" ]
++  deps = [
++    "//base:base_java",
++    "//base:base_java_test_support",
++    "//base:tasks_java",
++    "//chrome/android:chrome_app_java_resources",
++    "//chrome/android:chrome_java",
++    "//chrome/browser/flags:java",
++    "//chrome/browser/tab:java",
++    "//chrome/browser/ui/android/strings:ui_strings_grd",
++    "//chrome/test/android:chrome_java_integration_test_support",
++    "//content/public/android:content_java",
++    "//content/public/test/android:content_java_test_support",
++    "//net/android:net_java_test_support",
++    "//third_party/androidx:androidx_appcompat_appcompat_java",
++    "//third_party/androidx:androidx_fragment_fragment_java",
++    "//third_party/androidx:androidx_test_runner_java",
++    "//third_party/junit",
++  ]
 +}
 +
  android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
    resources_package = "org.chromium.chrome"
  
-@@ -1323,7 +1335,6 @@ android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
+@@ -1323,7 +1355,6 @@ android_library("chrome_test_java_org.chromium.chrome.browser.settings") {
      "src/org/chromium/chrome/browser/settings/MainSettingsFragmentTest.java",
      "src/org/chromium/chrome/browser/settings/MultiColumnSettingsTest.java",
      "src/org/chromium/chrome/browser/settings/SettingsActivityTest.java",
@@ -191,7 +226,7 @@ index cc94c9b075c9b426ae405305437e819d1d1b11eb..971de0171c419fe717c65f2e0b4a7274
      "src/org/chromium/chrome/browser/settings/SettingsPageRenderTest.java",
      "src/org/chromium/chrome/browser/settings/SettingsPageSigninTest.java",
 diff --git a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
-index b697c1e9da5b2da2692bcefd3a00264014ea3a16..4d78f47b156b23ba61a1fd800720bc377a7d838d 100644
+index b697c1e9da5b2da2692bcefd3a00264014ea3a16..6c18df4b13d7eeac8a98abd83ada87b092159265 100644
 --- a/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 +++ b/chrome/android/javatests/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragmentTest.java
 @@ -2,6 +2,7 @@
@@ -202,13 +237,17 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..4d78f47b156b23ba61a1fd800720bc37
  import static org.junit.Assert.assertTrue;
  
  import android.widget.TextView;
-@@ -14,14 +15,15 @@ import org.junit.runner.RunWith;
+@@ -13,16 +14,21 @@ import org.junit.Test;
+ import org.junit.runner.RunWith;
  
  import org.chromium.base.ThreadUtils;
++import org.chromium.base.test.util.ApplicationTestUtils;
++import org.chromium.base.test.util.CommandLineFlags;
  import org.chromium.base.test.util.CriteriaHelper;
 -import org.chromium.base.test.util.Manual;
  import org.chromium.chrome.R;
 +import org.chromium.chrome.browser.ChromeTabbedActivity;
++import org.chromium.chrome.browser.flags.ChromeSwitches;
  import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
  import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
  import org.chromium.content_public.browser.WebContents;
@@ -217,9 +256,11 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..4d78f47b156b23ba61a1fd800720bc37
  
 +/** Runs only in AegisAccessOptionsTest.apk, built by an internal DEV or Alpha profile. */
  @RunWith(ChromeJUnit4ClassRunner.class)
++@CommandLineFlags.Add({ChromeSwitches.DISABLE_FIRST_RUN_EXPERIENCE})
  public class AegisAccessOptionsFragmentTest {
      @Rule public ChromeTabbedActivityTestRule mActivityRule = new ChromeTabbedActivityTestRule();
-@@ -30,7 +32,6 @@ public class AegisAccessOptionsFragmentTest {
+ 
+@@ -30,7 +36,6 @@ public class AegisAccessOptionsFragmentTest {
  
      @Test
      @MediumTest
@@ -227,7 +268,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..4d78f47b156b23ba61a1fd800720bc37
      public void testPrimaryDocumentReplacementRevokesVisibleEditor() throws Exception {
          mActivityRule.startMainActivityWithURL(
                  mServerRule.getServer().getURL("/chrome/test/data/android/test.html"));
-@@ -47,11 +48,7 @@ public class AegisAccessOptionsFragmentTest {
+@@ -47,11 +52,7 @@ public class AegisAccessOptionsFragmentTest {
                                              /* fromMenu= */ true,
                                              null,
                                              null));
@@ -240,7 +281,7 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..4d78f47b156b23ba61a1fd800720bc37
                          });
          assertTrue(ThreadUtils.runOnUiThreadBlocking(editor::canReadEditor));
          CriteriaHelper.pollUiThread(
-@@ -68,6 +65,33 @@ public class AegisAccessOptionsFragmentTest {
+@@ -68,6 +69,49 @@ public class AegisAccessOptionsFragmentTest {
                          !editor.canReadEditor()
                                  && hasMessage(editor, R.string.aegis_access_options_unavailable),
                  "The same editor must reject native reads and show unavailable.");
@@ -250,27 +291,43 @@ index b697c1e9da5b2da2692bcefd3a00264014ea3a16..4d78f47b156b23ba61a1fd800720bc37
 +                ThreadUtils.runOnUiThreadBlocking(
 +                        () -> editor.issuesEditorWithoutMenuForTesting(contents)));
 +
++        ChromeTabbedActivity recreated = ApplicationTestUtils.recreateActivity(activity);
++        CriteriaHelper.pollUiThread(
++                () -> {
++                    AegisAccessOptionsFragment candidate = findEditorOrNull(recreated);
++                    return candidate != null
++                            && candidate != editor
++                            && recreated.getActivityTab() != null
++                            && recreated.getActivityTab().getWebContents() != null
++                            && hasMessage(candidate, R.string.aegis_access_options_unavailable);
++                },
++                "The recreated window must restore only the unavailable state.");
 +        AegisAccessOptionsFragment restored =
++                ThreadUtils.runOnUiThreadBlocking(() -> findEditor(recreated));
++        WebContents restoredContents =
 +                ThreadUtils.runOnUiThreadBlocking(
-+                        () -> {
-+                            editor.dismissNow();
-+                            assertTrue(
-+                                    AegisAccessOptionsFragment.showUnavailable(
-+                                            activity.getSupportFragmentManager()));
-+                            return findEditor(activity);
-+                        });
++                        () -> recreated.getActivityTab().getWebContents());
++        assertFalse(
++                "A restored receiver must not read an editor.",
++                ThreadUtils.runOnUiThreadBlocking(restored::canReadEditor));
 +        assertFalse(
 +                "A restored unavailable receiver must not obtain an editor.",
 +                ThreadUtils.runOnUiThreadBlocking(
-+                        () -> restored.issuesEditorWithoutMenuForTesting(contents)));
++                        () -> restored.issuesEditorWithoutMenuForTesting(restoredContents)));
 +    }
 +
 +    private static AegisAccessOptionsFragment findEditor(ChromeTabbedActivity activity) {
++        AegisAccessOptionsFragment editor = findEditorOrNull(activity);
++        if (editor == null) throw new AssertionError("Access Options editor is not shown.");
++        return editor;
++    }
++
++    private static AegisAccessOptionsFragment findEditorOrNull(ChromeTabbedActivity activity) {
 +        return activity.getSupportFragmentManager().getFragments().stream()
 +                .filter(AegisAccessOptionsFragment.class::isInstance)
 +                .map(AegisAccessOptionsFragment.class::cast)
 +                .findFirst()
-+                .orElseThrow();
++                .orElse(null);
      }
  
      private static boolean hasMessage(AegisAccessOptionsFragment editor, int expected) {
@@ -323,7 +380,7 @@ index 0000000000000000000000000000000000000000..afca81297e2d4892caaf33b2d149bce9
 +  aegis_android_internal_access_options = false
 +}
 diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
-index 12b85bb6e231cc784e30209d02446bb4958fe444..37b31444702ece4162d908d738a6c41bc8c98050 100644
+index 12b85bb6e231cc784e30209d02446bb4958fe444..90c289ef27586a245db30e2ed815a4a6588099ec 100644
 --- a/chrome/browser/android/aegis_access_options_bridge.cc
 +++ b/chrome/browser/android/aegis_access_options_bridge.cc
 @@ -3,7 +3,9 @@
@@ -418,11 +475,16 @@ index 12b85bb6e231cc784e30209d02446bb4958fe444..37b31444702ece4162d908d738a6c41b
    }
  
   private:
-@@ -154,15 +209,57 @@ static bool JNI_AegisAccessOptionsFragment_CanOffer(
+@@ -154,15 +209,62 @@ static bool JNI_AegisAccessOptionsFragment_CanOffer(
    return CanUseAndroidOptions(AccessOptionsOperation::kPage) && GetEligibleWindow(contents);
  }
  
 -static std::string JNI_AegisAccessOptionsFragment_Open(
++// Trust boundary: as in the Android SDD, configuration files, Intents, deep
++// links and Java-supplied channel values never grant privileges. Code running
++// in the browser process is trusted and is not an adversary here; the menu
++// grant prevents revoked, restored or reused receivers from obtaining an
++// editor, not same-process code from calling this entry point.
 +static bool JNI_AegisAccessOptionsFragment_Authorize(
      JNIEnv* env,
      content::WebContents* contents,
