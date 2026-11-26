@@ -1,27 +1,52 @@
-From 31210052637a61af2af21528383272acdfa3b430 Mon Sep 17 00:00:00 2001
+From 7b22ef638d0a89d4edc1eedac12342f94f83c4af Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Thu, 26 Nov 2026 11:16:42 +0800
 Subject: [PATCH] Add opt-in macOS Aegis owned-core listener contract
 
 ---
- internal/aegisowned/owned_darwin.go         | 141 ++++++++++++++++++++
- internal/aegisowned/owned_default.go        |  26 ++++
- main/aegis_owned.go                         |  88 ++++++++++++
+ internal/aegisowned/launch.go               |  17 +++
+ internal/aegisowned/owned_darwin.go         | 137 ++++++++++++++++++++
+ internal/aegisowned/owned_default.go        |  23 ++++
+ main/aegis_owned.go                         |  88 +++++++++++++
  main/run.go                                 |  42 +++++-
  transport/internet/browser_dialer/dialer.go |   6 +-
  transport/internet/tcp/hub.go               |  11 +-
  transport/internet/tcp_hub.go               |   3 +-
- 7 files changed, 305 insertions(+), 12 deletions(-)
+ 8 files changed, 315 insertions(+), 12 deletions(-)
+ create mode 100644 internal/aegisowned/launch.go
  create mode 100644 internal/aegisowned/owned_darwin.go
  create mode 100644 internal/aegisowned/owned_default.go
  create mode 100644 main/aegis_owned.go
 
+diff --git a/internal/aegisowned/launch.go b/internal/aegisowned/launch.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f03393e1c7c5de5486d79da73c5cac04b5c13861
+--- /dev/null
++++ b/internal/aegisowned/launch.go
+@@ -0,0 +1,17 @@
++package aegisowned
++
++import "os"
++
++const (
++	parentEnv = "AEGIS_OWNED_PARENT_PID"
++	leaseEnv  = "AEGIS_OWNED_LISTENER_LEASE_FD"
++)
++
++var requested = func() bool {
++	_, parent := os.LookupEnv(parentEnv)
++	_, lease := os.LookupEnv(leaseEnv)
++	return parent || lease
++}()
++
++// Requested reports launch intent even before the parent and lease are validated.
++func Requested() bool { return requested }
 diff --git a/internal/aegisowned/owned_darwin.go b/internal/aegisowned/owned_darwin.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..628524c46159347cb5983a4897a2cfe6cbaca722
+index 0000000000000000000000000000000000000000..98be6f2ffe11992c02c87c3b03c7e46d82c7b9a2
 --- /dev/null
 +++ b/internal/aegisowned/owned_darwin.go
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,137 @@
 +//go:build darwin && aegis_owned
 +
 +// Package aegisowned implements the local macOS Aegis parent/listener contract.
@@ -39,10 +64,8 @@ index 0000000000000000000000000000000000000000..628524c46159347cb5983a4897a2cfe6
 +)
 +
 +const (
-+	parentEnv = "AEGIS_OWNED_PARENT_PID"
-+	leaseEnv  = "AEGIS_OWNED_LISTENER_LEASE_FD"
-+	leaseFD   = 3
-+	loopback  = "127.0.0.1"
++	leaseFD  = 3
++	loopback = "127.0.0.1"
 +)
 +
 +var (
@@ -56,13 +79,11 @@ index 0000000000000000000000000000000000000000..628524c46159347cb5983a4897a2cfe6
 +
 +// Start must run before configuration loading and starting any workers.
 +func Start() error {
-+	parentText, hasParent := os.LookupEnv(parentEnv)
-+	leaseText, hasLease := os.LookupEnv(leaseEnv)
-+	if !hasParent && !hasLease {
++	if !Requested() {
 +		return nil
 +	}
-+	parent, err := strconv.Atoi(parentText)
-+	if err != nil || parent <= 1 || parent != os.Getppid() || leaseText != "3" {
++	parent, err := strconv.Atoi(os.Getenv(parentEnv))
++	if err != nil || parent <= 1 || parent != os.Getppid() || os.Getenv(leaseEnv) != "3" {
 +		return fmt.Errorf("invalid Aegis parent identity or lease descriptor")
 +	}
 +	peer, err := unix.Getpeername(leaseFD)
@@ -165,10 +186,10 @@ index 0000000000000000000000000000000000000000..628524c46159347cb5983a4897a2cfe6
 +}
 diff --git a/internal/aegisowned/owned_default.go b/internal/aegisowned/owned_default.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..001d8d8486b57138bfca61ede3561b2bf217543f
+index 0000000000000000000000000000000000000000..73da6c41fbced34b4a70510e0998aba2b86d3542
 --- /dev/null
 +++ b/internal/aegisowned/owned_default.go
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,23 @@
 +//go:build !darwin || !aegis_owned
 +
 +package aegisowned
@@ -177,16 +198,13 @@ index 0000000000000000000000000000000000000000..001d8d8486b57138bfca61ede3561b2b
 +	"context"
 +	"fmt"
 +	"net"
-+	"os"
 +)
 +
 +func Enabled() bool { return false }
 +func Ready() bool   { return false }
 +
 +func Start() error {
-+	_, parent := os.LookupEnv("AEGIS_OWNED_PARENT_PID")
-+	_, lease := os.LookupEnv("AEGIS_OWNED_LISTENER_LEASE_FD")
-+	if parent || lease {
++	if Requested() {
 +		return fmt.Errorf("Aegis owned mode is unavailable in this build")
 +	}
 +	return nil
@@ -382,7 +400,7 @@ index 6ca9afbc5085f72f6b4145b417d0b85c0ffc7876..81f3a068fff3110d7a52e8c61b1519be
 +	return c, nil
 +}
 diff --git a/transport/internet/browser_dialer/dialer.go b/transport/internet/browser_dialer/dialer.go
-index ee3828020b23afd777cd7a9e71fe2fa4e1dcb180..02b42c7a140062d5a3afef22c73dd3a9f9aeefba 100644
+index ee3828020b23afd777cd7a9e71fe2fa4e1dcb180..f533392227851621a9644305bf362b0d1a100c41 100644
 --- a/transport/internet/browser_dialer/dialer.go
 +++ b/transport/internet/browser_dialer/dialer.go
 @@ -14,6 +14,7 @@ import (
@@ -399,7 +417,7 @@ index ee3828020b23afd777cd7a9e71fe2fa4e1dcb180..02b42c7a140062d5a3afef22c73dd3a9
  func Reload() {
 -	addr := platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
 +	addr := ""
-+	if !aegisowned.Enabled() {
++	if !aegisowned.Requested() {
 +		addr = platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
 +	}
  	mu.Lock()
