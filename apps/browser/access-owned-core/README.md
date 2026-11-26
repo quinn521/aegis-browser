@@ -10,6 +10,8 @@ Xray-core uses MPL-2.0. The repository carries the
 The patch adds the macOS parent-exit watcher, exclusive loopback listener, and
 listener FD handoff used by Access. It enables those behaviors when the
 `aegis_owned` Go build tag and the browser's launch contract are both present.
+Owned startup reads one JSON config from the browser over stdin. It rejects
+additional app services and keeps the upstream browser dialer disabled.
 
 ## Prepare a DEV test fixture
 

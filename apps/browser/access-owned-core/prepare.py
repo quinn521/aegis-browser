@@ -40,7 +40,7 @@ def prepare(output, local_source):
     build = lock["build"]
     go_env = dict(os.environ, GOTOOLCHAIN=go_version, GOENV="off", GOFLAGS="",
                   GOEXPERIMENT="", GOWORK="off", GOOS=build["goos"], GOARCH=build["goarch"],
-                  GOARM64="v8.0", CGO_ENABLED="0")
+                  GOARM64="v8.0", GOFIPS140=build["gofips140"], CGO_ENABLED="0")
     go_env.pop("GOROOT", None)
     version = read_command(["go", "env", "GOVERSION"], env=go_env)
     require(version == go_version, f"Expected {go_version}, got {version}")

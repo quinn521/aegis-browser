@@ -10,10 +10,10 @@
   "patches": [
     {
       "path": "patches/0001-aegis-owned-listener-macos.patch",
-      "sha256": "9b20c59d4b23b618a65370e42ecfb4b986736f64b1fb34f700c3d8ea4cecdc2d"
+      "sha256": "774692f3985f253706f23ce58cf120fab7810a36af905762fd4cc56bd8080b08"
     }
   ],
-  "patchedTree": "3a36c8bfffbb41ae7b39372d2008d11ac05e7e01",
+  "patchedTree": "da4edd76e5af6d32ebdcc0dcf70adb3df036a617",
   "goModules": {
     "go.mod": "05b5ec4430acb5898c9c95e3886a41b4399a4e05d605165833498432baa4ade9",
     "go.sum": "d36f2d9ff1786fd06aa382b718375a4d50336d4d50ebcb4573110a4c1eae25fc"
@@ -25,10 +25,11 @@
     "goos": "darwin",
     "goarch": "arm64",
     "tags": "aegis_owned",
-    "ldflags": "-X github.com/xtls/xray-core/core.build=676eaf6-aegis-owned -s -w -buildid="
+    "ldflags": "-X github.com/xtls/xray-core/core.build=676eaf6-aegis-owned -s -w -buildid=",
+    "gofips140": "off"
   },
   "artifact": {
-    "sha256": "133fe042e11a14dfd2cb208a7efdb9e6ba16de3d45cef9844ceb464cebe196c2",
-    "bytes": 29902370
+    "sha256": "365c655c99114c3d2a7cc128233ac283f621963c102290b730f846ee9f2595dc",
+    "bytes": 29902450
   }
 }

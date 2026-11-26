@@ -1,16 +1,17 @@
-From 2e5e88941aa65c455a757faa5b4e3d7885fdfec9 Mon Sep 17 00:00:00 2001
+From 31210052637a61af2af21528383272acdfa3b430 Mon Sep 17 00:00:00 2001
 From: GCSA Aegis <aegis@gcsa.local>
 Date: Thu, 26 Nov 2026 11:16:42 +0800
 Subject: [PATCH] Add opt-in macOS Aegis owned-core listener contract
 
 ---
- internal/aegisowned/owned_darwin.go  | 141 +++++++++++++++++++++++++++
- internal/aegisowned/owned_default.go |  26 +++++
- main/aegis_owned.go                  |  48 +++++++++
- main/run.go                          |  25 ++++-
- transport/internet/tcp/hub.go        |  11 ++-
- transport/internet/tcp_hub.go        |   3 +-
- 6 files changed, 247 insertions(+), 7 deletions(-)
+ internal/aegisowned/owned_darwin.go         | 141 ++++++++++++++++++++
+ internal/aegisowned/owned_default.go        |  26 ++++
+ main/aegis_owned.go                         |  88 ++++++++++++
+ main/run.go                                 |  42 +++++-
+ transport/internet/browser_dialer/dialer.go |   6 +-
+ transport/internet/tcp/hub.go               |  11 +-
+ transport/internet/tcp_hub.go               |   3 +-
+ 7 files changed, 305 insertions(+), 12 deletions(-)
  create mode 100644 internal/aegisowned/owned_darwin.go
  create mode 100644 internal/aegisowned/owned_default.go
  create mode 100644 main/aegis_owned.go
@@ -196,20 +197,60 @@ index 0000000000000000000000000000000000000000..001d8d8486b57138bfca61ede3561b2b
 +}
 diff --git a/main/aegis_owned.go b/main/aegis_owned.go
 new file mode 100644
-index 0000000000000000000000000000000000000000..2156ee092feaa27ba912ca12ce4bd7bd80af2072
+index 0000000000000000000000000000000000000000..de651c88e496dcf00f5baec16495f3fa596f205c
 --- /dev/null
 +++ b/main/aegis_owned.go
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,88 @@
 +package main
 +
 +import (
++	"encoding/json"
 +	"fmt"
++	"io"
++	"os"
 +
 +	"github.com/xtls/xray-core/app/proxyman"
 +	"github.com/xtls/xray-core/core"
++	"github.com/xtls/xray-core/infra/conf"
 +	xhttp "github.com/xtls/xray-core/proxy/http"
 +	"github.com/xtls/xray-core/proxy/socks"
 +)
++
++// Accept only the JSON document that the browser writes on stdin.
++func loadAegisOwnedConfig() (*core.Config, error) {
++	if len(configFiles) != 1 || configFiles[0] != "stdin:" || configDir != "" ||
++		(*format != "auto" && *format != "json") {
++		return nil, fmt.Errorf("Aegis owned mode requires one explicit JSON stdin config")
++	}
++	const maxConfigBytes = 8192
++	input := &io.LimitedReader{R: os.Stdin, N: maxConfigBytes + 1}
++	decoder := json.NewDecoder(input)
++	decoder.DisallowUnknownFields()
++	var spec struct {
++		Log       *conf.LogConfig             `json:"log"`
++		Inbounds  []conf.InboundDetourConfig  `json:"inbounds"`
++		Outbounds []conf.OutboundDetourConfig `json:"outbounds"`
++	}
++	if err := decoder.Decode(&spec); err != nil {
++		return nil, fmt.Errorf("invalid Aegis owned config: %w", err)
++	}
++	if decoder.Decode(new(json.RawMessage)) != io.EOF || input.N == 0 {
++		return nil, fmt.Errorf("Aegis owned mode requires one bounded JSON document")
++	}
++	if len(spec.Outbounds) != 1 {
++		return nil, fmt.Errorf("Aegis owned mode requires one selected outbound")
++	}
++	c, err := (&conf.Config{
++		LogConfig: spec.Log, InboundConfigs: spec.Inbounds, OutboundConfigs: spec.Outbounds,
++	}).Build()
++	if err != nil {
++		return nil, err
++	}
++	if err := validateAegisOwnedInbound(c); err != nil {
++		return nil, err
++	}
++	return c, nil
++}
 +
 +func validateAegisOwnedInbound(config *core.Config) error {
 +	if config == nil || len(config.Inbound) != 1 || config.Inbound[0] == nil ||
@@ -249,7 +290,7 @@ index 0000000000000000000000000000000000000000..2156ee092feaa27ba912ca12ce4bd7bd
 +	return fmt.Errorf("Aegis owned mode requires no-auth HTTP or TCP-only no-auth SOCKS5")
 +}
 diff --git a/main/run.go b/main/run.go
-index 6ca9afbc5085f72f6b4145b417d0b85c0ffc7876..cd1c55e43d5d871b95238c1e3634ff863db02b1c 100644
+index 6ca9afbc5085f72f6b4145b417d0b85c0ffc7876..81f3a068fff3110d7a52e8c61b1519be0b093b69 100644
 --- a/main/run.go
 +++ b/main/run.go
 @@ -19,6 +19,7 @@ import (
@@ -260,18 +301,23 @@ index 6ca9afbc5085f72f6b4145b417d0b85c0ffc7876..cd1c55e43d5d871b95238c1e3634ff86
  	"github.com/xtls/xray-core/main/commands/base"
  )
  
-@@ -80,6 +81,10 @@ func executeRun(cmd *base.Command, args []string) {
- 	}
+@@ -73,7 +74,15 @@ var (
+ )
  
- 	printVersion()
+ func executeRun(cmd *base.Command, args []string) {
 +	if err := aegisowned.Start(); err != nil {
 +		fmt.Println("Failed to start:", err)
 +		os.Exit(23)
 +	}
- 	server, err := startXray()
- 	if err != nil {
- 		fmt.Println("Failed to start:", err)
-@@ -92,21 +97,30 @@ func executeRun(cmd *base.Command, args []string) {
+ 	if *dump {
++		if aegisowned.Enabled() {
++			fmt.Println("Failed to start: Aegis owned mode does not dump configuration")
++			os.Exit(23)
++		}
+ 		clog.ReplaceWithSeverityLogger(clog.Severity_Warning)
+ 		errCode := dumpConfig()
+ 		os.Exit(errCode)
+@@ -92,21 +101,30 @@ func executeRun(cmd *base.Command, args []string) {
  		os.Exit(0)
  	}
  
@@ -305,18 +351,60 @@ index 6ca9afbc5085f72f6b4145b417d0b85c0ffc7876..cd1c55e43d5d871b95238c1e3634ff86
  }
  
  func dumpConfig() int {
-@@ -226,6 +240,11 @@ func startXray() (core.Server, error) {
+@@ -220,11 +238,9 @@ func startXray() (core.Server, error) {
+ 	// 	return nil, errors.New("failed to configure Lua privileged authorization").Base(err)
+ 	// }
+ 
+-	configFiles := getConfigFilePath(true)
+-
+-	c, err := core.LoadConfig(getConfigFormat(), configFiles)
++	c, err := loadXrayConfig()
  	if err != nil {
- 		return nil, errors.New("failed to load config files: [", configFiles.String(), "]").Base(err)
+-		return nil, errors.New("failed to load config files: [", configFiles.String(), "]").Base(err)
++		return nil, err
  	}
-+	if aegisowned.Enabled() {
-+		if err := validateAegisOwnedInbound(c); err != nil {
-+			return nil, err
-+		}
-+	}
  
  	server, err := core.New(c)
- 	if err != nil {
+@@ -234,3 +250,15 @@ func startXray() (core.Server, error) {
+ 
+ 	return server, nil
+ }
++
++func loadXrayConfig() (*core.Config, error) {
++	if aegisowned.Enabled() {
++		return loadAegisOwnedConfig()
++	}
++	files := getConfigFilePath(true)
++	c, err := core.LoadConfig(getConfigFormat(), files)
++	if err != nil {
++		return nil, errors.New("failed to load config files: [", files.String(), "]").Base(err)
++	}
++	return c, nil
++}
+diff --git a/transport/internet/browser_dialer/dialer.go b/transport/internet/browser_dialer/dialer.go
+index ee3828020b23afd777cd7a9e71fe2fa4e1dcb180..02b42c7a140062d5a3afef22c73dd3a9f9aeefba 100644
+--- a/transport/internet/browser_dialer/dialer.go
++++ b/transport/internet/browser_dialer/dialer.go
+@@ -14,6 +14,7 @@ import (
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/platform"
+ 	"github.com/xtls/xray-core/common/uuid"
++	"github.com/xtls/xray-core/internal/aegisowned"
+ )
+ 
+ //go:embed dialer.html
+@@ -44,7 +45,10 @@ var upgrader = &websocket.Upgrader{
+ 
+ // Used by external projects when using xray as a go module
+ func Reload() {
+-	addr := platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
++	addr := ""
++	if !aegisowned.Enabled() {
++		addr = platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
++	}
+ 	mu.Lock()
+ 	defer mu.Unlock()
+ 
 diff --git a/transport/internet/tcp/hub.go b/transport/internet/tcp/hub.go
 index 92eb6e63f411b2cf30976e45257b9df4feaccae3..8b0ff3698e073363d2c59e78c8b8eeaf073b6060 100644
 --- a/transport/internet/tcp/hub.go
