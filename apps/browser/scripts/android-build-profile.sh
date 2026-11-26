@@ -15,8 +15,8 @@ aegis_android_gn_args() {
   local args_file="$1"
   local profile="$2"
   local args channel product
-  args="$(cat "$args_file")"
-  if grep -Eq '^[[:space:]]*aegis_android_(internal_access_options|access_product_channel)[[:space:]]*=' <<< "$args"; then
+  args="$(cat "$args_file")" || return 1
+  if grep -Eq '(^|[^[:alnum:]_])aegis_android_(internal_access_options|access_product_channel)([^[:alnum:]_]|$)' <<< "$args"; then
     echo "Android 基础参数不得开启内部 Access Options。" >&2
     return 1
   fi
@@ -43,4 +43,35 @@ aegis_android_gn_args() {
   printf '%s\n%s\n%s\n' "$args" \
     "aegis_android_access_product_channel = \"$product\"" \
     'aegis_android_internal_access_options = true'
+}
+
+aegis_android_verify_gn_args() {
+  local out_dir="$1" profile="$2" effective_args enabled product channel setting
+  local -a expected_args
+  case "$profile" in
+    default) enabled=false product=unknown ;;
+    internal-alpha) enabled=true product=alpha channel=canary ;;
+    internal-debug) enabled=true product=debug channel=dev ;;
+    *) return 1 ;;
+  esac
+  expected_args=(
+    "aegis_android_internal_access_options = $enabled"
+    "aegis_android_access_product_channel = \"$product\""
+  )
+  if [[ "$enabled" == true ]]; then
+    expected_args+=(
+      "android_channel = \"$channel\""
+      'chrome_public_manifest_package = "com.gcsa.aegis"'
+    )
+  fi
+  if ! effective_args="$(gn args "$out_dir" --list --short)"; then
+    echo "无法读取 Android $profile 构建的生效 GN 参数。" >&2
+    return 1
+  fi
+  for setting in "${expected_args[@]}"; do
+    if ! grep -Fxq "$setting" <<< "$effective_args"; then
+      printf 'Android %s 构建的生效 GN 参数必须包含：%s\n' "$profile" "$setting" >&2
+      return 1
+    fi
+  done
 }

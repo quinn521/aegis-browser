@@ -1,20 +1,30 @@
-From 139ff64b8a264ccb41da1d7b6ed215d450a5e0e6 Mon Sep 17 00:00:00 2001
+From fa49b3fa99f19a7209a757a702e0924f1f8d327a Mon Sep 17 00:00:00 2001
 From: Aegis Development <development@example.invalid>
 Date: Mon, 23 Nov 2026 18:32:53 +0800
 Subject: [PATCH] fix(android): revoke Access Options on primary document
  replacement
 
+DevTools Page.setDocumentContent replaces the primary document through
+Document::SetContent and the parameterless Document::open(). That path emits
+neither DidOpenDocumentInputStream nor DidCommitDocumentReplacement. Notify
+the browser from the explicit open so the existing editor is revoked. Ordinary
+DOM edits do not reopen the document and stay readable.
 ---
- .../chrome/browser/ChromeTabbedActivity.java  |  4 ++++
- .../settings/AegisAccessOptionsFragment.java  | 22 +++++++++++++++++
+ .../chrome/browser/ChromeTabbedActivity.java  |  4 +
+ .../settings/AegisAccessOptionsFragment.java  | 22 +++++
  .../android/aegis_access_options_bridge.cc    |  1 +
- .../render_frame_host_delegate.h              |  3 +++
- .../renderer_host/render_frame_host_impl.cc   |  1 +
- .../browser/web_contents/web_contents_impl.cc |  8 +++++++
+ .../render_frame_host_delegate.h              |  3 +
+ .../renderer_host/render_frame_host_impl.cc   | 10 +++
+ .../renderer_host/render_frame_host_impl.h    |  1 +
+ .../browser/web_contents/web_contents_impl.cc |  8 ++
  .../browser/web_contents/web_contents_impl.h  |  1 +
- .../web_contents_impl_browsertest.cc          | 24 +++++++++++++++++++
- .../public/browser/web_contents_observer.h    |  4 ++++
- 9 files changed, 68 insertions(+)
+ .../web_contents_impl_browsertest.cc          | 81 +++++++++++++++++++
+ .../public/browser/web_contents_observer.h    |  5 ++
+ .../blink/public/mojom/frame/frame.mojom      |  6 ++
+ .../renderer/core/loader/frame_loader.cc      |  8 ++
+ .../core/testing/fake_local_frame_host.cc     |  2 +
+ .../core/testing/fake_local_frame_host.h      |  1 +
+ 14 files changed, 153 insertions(+)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 index 1074503a4c4956c565857e00294a6cc3179d57c0..ab7d55f791cdd07e2e396446202635b5426da142 100644
@@ -79,7 +89,7 @@ index cd83a8afd39c9db726b115c61d23c650c48b15ce..ce854333a2e79595cfdee1550cb16936
      public Dialog onCreateDialog(@Nullable Bundle state) {
          boolean canRead =
 diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
-index f97335d3d2c756a0fd15c1b1437218c7e7394b8c..12b85bb6e231cc784e30209d02446bb4958fe444 100644
+index e4d3838ab90e4b29cef61142561cb8793e1249dc..2821ed59c90ebfd7f99306eec8fe7ffefcf6cf51 100644
 --- a/chrome/browser/android/aegis_access_options_bridge.cc
 +++ b/chrome/browser/android/aegis_access_options_bridge.cc
 @@ -105,6 +105,7 @@ class EditorSession final : public content::WebContentsObserver {
@@ -88,8 +98,8 @@ index f97335d3d2c756a0fd15c1b1437218c7e7394b8c..12b85bb6e231cc784e30209d02446bb4
    void PrimaryPageChanged(content::Page&) override { Revoke(); }
 +  void PrimaryMainFrameDocumentReplaced() override { Revoke(); }
    void DidFinishNavigation(content::NavigationHandle* navigation) override {
-     if (navigation->HasCommitted() && navigation->IsInPrimaryMainFrame()) {
-       Revoke();
+     // Hash changes and history.pushState keep the authorized document.
+     if (navigation->HasCommitted() && navigation->IsInPrimaryMainFrame() &&
 diff --git a/content/browser/renderer_host/render_frame_host_delegate.h b/content/browser/renderer_host/render_frame_host_delegate.h
 index d30f1f5e08c5f66a0c1d585c526f946eb06fa979..2840160e5316dce12363687417155ede355f951c 100644
 --- a/content/browser/renderer_host/render_frame_host_delegate.h
@@ -105,7 +115,7 @@ index d30f1f5e08c5f66a0c1d585c526f946eb06fa979..2840160e5316dce12363687417155ede
    virtual void DidChangeName(RenderFrameHostImpl* render_frame_host,
                               const std::string& name) {}
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
-index c0d35e8d4bb8a6b67b74be3ce4735b608672d8c4..6056170f38a0f712e99f62679191bf58e8db3aa5 100644
+index c0d35e8d4bb8a6b67b74be3ce4735b608672d8c4..7bce36826ad55cfff344f7134eb606090a0abf7f 100644
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
 @@ -6942,6 +6942,7 @@ void RenderFrameHostImpl::DidCommitDocumentReplacement() {
@@ -116,6 +126,34 @@ index c0d35e8d4bb8a6b67b74be3ce4735b608672d8c4..6056170f38a0f712e99f62679191bf58
  }
  
  RenderWidgetHostImpl* RenderFrameHostImpl::GetRenderWidgetHost() {
+@@ -9961,6 +9962,15 @@ bool RenderFrameHostImpl::GetSuddenTerminationDisablerState(
+   }
+ }
+ 
++void RenderFrameHostImpl::DidExplicitlyOpenDocument() {
++  // The Document object is unchanged, so document-scoped user data stays.
++  // Observers still drop handles bound to the replaced contents.
++  if (!owner_) {
++    return;
++  }
++  delegate_->DidReplaceDocument(this);
++}
++
+ void RenderFrameHostImpl::DidDispatchDOMContentLoadedEvent() {
+   document_associated_data_->MarkDomContentLoaded();
+ 
+diff --git a/content/browser/renderer_host/render_frame_host_impl.h b/content/browser/renderer_host/render_frame_host_impl.h
+index 4ad7d383bd00b957ebafbd782f4fb0ccbf6c6a2b..14f8550eef0b30225648f19a828002c03fdc6c0d 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.h
++++ b/content/browser/renderer_host/render_frame_host_impl.h
+@@ -2421,6 +2421,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
+   void ForwardResourceTimingToParent(
+       blink::mojom::ResourceTimingInfoPtr timing) override;
+   void DidDispatchDOMContentLoadedEvent() override;
++  void DidExplicitlyOpenDocument() override;
+   void RunModalAlertDialog(const std::u16string& alert_message,
+                            bool disable_third_party_subframe_suppresion,
+                            RunModalAlertDialogCallback callback) override;
 diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
 index a2638c29d409ebe008a9c3487aa6dfb093c36500..2def4d196ec40e8949df6751203fc8e3b48f82d1 100644
 --- a/content/browser/web_contents/web_contents_impl.cc
@@ -148,34 +186,98 @@ index 928d746f122ef71ab26f31881aabb55c5fa72307..6dd8087516d4cafcf77bd20993c78e0b
                       const std::string& name) override;
    void DidReceiveUserActivation(
 diff --git a/content/browser/web_contents/web_contents_impl_browsertest.cc b/content/browser/web_contents/web_contents_impl_browsertest.cc
-index 23ae692aa98f39882d5e3186dc4b148c8cca5537..213c5a1f9cb5dcd84beeaf21c0a699001026eab0 100644
+index 23ae692aa98f39882d5e3186dc4b148c8cca5537..8c6f0a6e210e1c81e050d53f3a6d60a359acb4a9 100644
 --- a/content/browser/web_contents/web_contents_impl_browsertest.cc
 +++ b/content/browser/web_contents/web_contents_impl_browsertest.cc
-@@ -201,6 +201,30 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
+@@ -108,6 +108,7 @@
+ #include "content/public/test/prerender_test_util.h"
+ #include "content/public/test/resource_load_observer.h"
+ #include "content/public/test/test_content_browser_client.h"
++#include "content/public/test/test_devtools_protocol_client.h"
+ #include "content/public/test/test_navigation_observer.h"
+ #include "content/public/test/test_utils.h"
+ #include "content/public/test/text_input_test_utils.h"
+@@ -201,6 +202,86 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
    base::test::ScopedFeatureList scoped_feature_list_;
  };
  
++class PrimaryDocumentReplacementObserver : public WebContentsObserver {
++ public:
++  explicit PrimaryDocumentReplacementObserver(WebContents* contents)
++      : WebContentsObserver(contents) {}
++  void PrimaryMainFrameDocumentReplaced() override { run_loop_.Quit(); }
++  void Wait() { run_loop_.Run(); }
++
++ private:
++  base::RunLoop run_loop_;
++};
++
++class PrimaryDocumentReplacementCounter : public WebContentsObserver {
++ public:
++  explicit PrimaryDocumentReplacementCounter(WebContents* contents)
++      : WebContentsObserver(contents) {}
++  void PrimaryMainFrameDocumentReplaced() override { ++count_; }
++  int count() const { return count_; }
++
++ private:
++  int count_ = 0;
++};
++
 +IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
 +                       NotifiesPrimaryDocumentReplacement) {
 +  ASSERT_TRUE(embedded_test_server()->Start());
 +  ASSERT_TRUE(
 +      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
 +
-+  class ReplacementObserver : public WebContentsObserver {
-+   public:
-+    explicit ReplacementObserver(WebContents* contents)
-+        : WebContentsObserver(contents) {}
-+    void PrimaryMainFrameDocumentReplaced() override { run_loop_.Quit(); }
-+    void Wait() { run_loop_.Run(); }
-+
-+   private:
-+    base::RunLoop run_loop_;
-+  };
-+
-+  ReplacementObserver observer(shell()->web_contents());
++  PrimaryDocumentReplacementObserver observer(shell()->web_contents());
 +  ExecuteScriptAsync(shell()->web_contents(),
 +                     "location.href = 'javascript:\"replacement\"';");
 +  observer.Wait();
++  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
++}
++
++IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
++                       NotifiesPrimaryDocumentInputStreamReopened) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(
++      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++
++  PrimaryDocumentReplacementCounter counter(shell()->web_contents());
++  ASSERT_TRUE(ExecJs(shell(),
++                     "document.open(); document.write('replacement');"
++                     "document.close();"));
++  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, counter.count());
++  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
++}
++
++IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
++                       DevToolsSetDocumentContentReplacesPrimaryDocument) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(
++      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++
++  PrimaryDocumentReplacementCounter counter(shell()->web_contents());
++  ASSERT_TRUE(ExecJs(shell(), "document.body.textContent = 'edited';"));
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ("edited", EvalJs(shell(), "document.body.textContent"));
++  EXPECT_EQ(0, counter.count());
++
++  TestDevToolsProtocolClient client;
++  client.AttachToWebContents(shell()->web_contents());
++  const base::DictValue* tree = client.SendCommandSync("Page.getFrameTree");
++  ASSERT_TRUE(tree);
++  const std::string* frame_id = tree->FindStringByDottedPath("frameTree.frame.id");
++  ASSERT_TRUE(frame_id);
++  base::DictValue params;
++  params.Set("frameId", *frame_id);
++  params.Set("html", "<html><body>replacement</body></html>");
++  ASSERT_TRUE(client.SendCommandSync("Page.setDocumentContent", std::move(params)));
++  client.DetachProtocolClient();
++  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
++  base::RunLoop().RunUntilIdle();
++  EXPECT_EQ(1, counter.count());
 +  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
 +}
 +
@@ -183,17 +285,79 @@ index 23ae692aa98f39882d5e3186dc4b148c8cca5537..213c5a1f9cb5dcd84beeaf21c0a69900
  // wait for it to complete.  This allows us to observe DidStopLoading while
  // a pending entry is present.
 diff --git a/content/public/browser/web_contents_observer.h b/content/public/browser/web_contents_observer.h
-index 4a7e6555fd1e9af16c35b365f33df8185b84b81e..3737cc1ed06a244727f6aa4b0a767db7f93e8b13 100644
+index 4a7e6555fd1e9af16c35b365f33df8185b84b81e..af273dc05fb95974de1c932bff2de412bb76b570 100644
 --- a/content/public/browser/web_contents_observer.h
 +++ b/content/public/browser/web_contents_observer.h
-@@ -186,6 +186,10 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
+@@ -186,6 +186,11 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
    // DidFinishNavigation is recommended).
    virtual void PrimaryPageChanged(Page& page) {}
  
-+  // The renderer replaced the primary main frame's document without a
-+  // NavigationHandle, such as a javascript: URL returning a string.
++  // The renderer replaced the primary main frame's document contents without
++  // a NavigationHandle, for example via a javascript: URL returning a string,
++  // document.open(), or DevTools setDocumentContent.
 +  virtual void PrimaryMainFrameDocumentReplaced() {}
 +
    // This method is invoked when the primary page of a WebContents is about to
    // be deactivated. This happens when the primary page is being replaced by
    // another page (due to a commit of a navigation). Note that this will not be
+diff --git a/third_party/blink/public/mojom/frame/frame.mojom b/third_party/blink/public/mojom/frame/frame.mojom
+index 3c4d724903f522ac5bb1478f9528cbb774d2f808..2f51dc6dd78563b6346f105d22d2050d867694e2 100644
+--- a/third_party/blink/public/mojom/frame/frame.mojom
++++ b/third_party/blink/public/mojom/frame/frame.mojom
+@@ -493,6 +493,12 @@ interface LocalFrameHost {
+   // for the document in this frame.
+   DidDispatchDOMContentLoadedEvent();
+ 
++  // The renderer reopened this document in place, without a navigation commit
++  // and without the URL update performed by document.open(). Document::SetContent,
++  // including DevTools Page.setDocumentContent, takes this path. Ordinary DOM
++  // mutations do not.
++  DidExplicitlyOpenDocument();
++
+   // A request to run a JavaScript dialog displaying |alert_message|.
+   [Sync]
+   RunModalAlertDialog(mojo_base.mojom.String16 alert_message,
+diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
+index 286d40b0ddf879efc1a95676db27f5ad1551cca7..b68e4adead325932895f3aa0e3ddd5ff6cfc2e38 100644
+--- a/third_party/blink/renderer/core/loader/frame_loader.cc
++++ b/third_party/blink/renderer/core/loader/frame_loader.cc
+@@ -449,6 +449,14 @@ void FrameLoader::DispatchUnloadEventAndFillOldDocumentInfoIfNeeded(
+ }
+ 
+ void FrameLoader::DidExplicitOpen() {
++  // Parameterless Document::open(), including Document::SetContent, reopens
++  // the document without DidOpenDocumentInputStream or a replacement commit.
++  // DevTools Page.setDocumentContent uses that path. Subframes cannot own the
++  // editor, so they do not send the IPC; the browser still ignores anything
++  // that is not the primary main frame.
++  if (frame_->IsOutermostMainFrame()) {
++    frame_->GetLocalFrameHostRemote().DidExplicitlyOpenDocument();
++  }
+   probe::DidOpenDocument(frame_.Get(), GetDocumentLoader());
+   if (initial_empty_document_status_ ==
+       InitialEmptyDocumentStatus::kInitialOrSynchronousAboutBlank) {
+diff --git a/third_party/blink/renderer/core/testing/fake_local_frame_host.cc b/third_party/blink/renderer/core/testing/fake_local_frame_host.cc
+index a34c5f3ba49afd247d5dd427a190b7c64d48fd41..73a07c80bfe7afe4ae60ed42fdb177cdaf7533d4 100644
+--- a/third_party/blink/renderer/core/testing/fake_local_frame_host.cc
++++ b/third_party/blink/renderer/core/testing/fake_local_frame_host.cc
+@@ -123,6 +123,8 @@ void FakeLocalFrameHost::ForwardResourceTimingToParent(
+ 
+ void FakeLocalFrameHost::DidDispatchDOMContentLoadedEvent() {}
+ 
++void FakeLocalFrameHost::DidExplicitlyOpenDocument() {}
++
+ void FakeLocalFrameHost::RunModalAlertDialog(
+     const String& alert_message,
+     bool disable_third_party_subframe_suppresion,
+diff --git a/third_party/blink/renderer/core/testing/fake_local_frame_host.h b/third_party/blink/renderer/core/testing/fake_local_frame_host.h
+index 8ad2e8846becb3b992d77e83997c3ef1ac0a8180..edf918c738a0e2d3ca8ef8f559d3ae8012b9d0af 100644
+--- a/third_party/blink/renderer/core/testing/fake_local_frame_host.h
++++ b/third_party/blink/renderer/core/testing/fake_local_frame_host.h
+@@ -98,6 +98,7 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
+   void ForwardResourceTimingToParent(
+       mojom::blink::ResourceTimingInfoPtr timing) override;
+   void DidDispatchDOMContentLoadedEvent() override;
++  void DidExplicitlyOpenDocument() override;
+   void RunModalAlertDialog(const String& alert_message,
+                            bool disable_third_party_subframe_suppresion,
+                            RunModalAlertDialogCallback callback) override;

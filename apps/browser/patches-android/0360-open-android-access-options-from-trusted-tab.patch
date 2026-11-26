@@ -468,7 +468,9 @@ index 0000000000000000000000000000000000000000..f97335d3d2c756a0fd15c1b1437218c7
 + private:
 +  void PrimaryPageChanged(content::Page&) override { Revoke(); }
 +  void DidFinishNavigation(content::NavigationHandle* navigation) override {
-+    if (navigation->HasCommitted() && navigation->IsInPrimaryMainFrame()) {
++    // Hash changes and history.pushState keep the authorized document.
++    if (navigation->HasCommitted() && navigation->IsInPrimaryMainFrame() &&
++        !navigation->IsSameDocument()) {
 +      Revoke();
 +    }
 +  }

@@ -21,6 +21,10 @@ if [[ "$#" -ne 0 ]]; then
   fi
 fi
 
+if [[ -z "$internal_profile" ]]; then
+  default_args="$(aegis_android_gn_args "$ARGS_FILE" default)"
+fi
+
 need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-80}"
 
 fail_host() {
@@ -88,9 +92,9 @@ if [[ -n "$bundle_profile" ]]; then
   mkdir -p out
   mkdir "$OUT"
   printf '%s\n%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$OUT/.aegis-producer"
-  args="$(cat "$ARGS_FILE")"
+  args="$default_args"
   if [[ "$bundle_profile" == release ]]; then
-    args="$(sed -E 's/^symbol_level = [0-9]+$/symbol_level = 1/' "$ARGS_FILE")"
+    args="$(sed -E 's/^symbol_level = [0-9]+$/symbol_level = 1/' <<< "$args")"
     if ! grep -qx 'symbol_level = 1' <<< "$args"; then
       echo "Android Release requires effective native symbol generation." >&2
       exit 1
@@ -98,6 +102,7 @@ if [[ -n "$bundle_profile" ]]; then
   fi
   args="$(printf '%s\n%s' "$args" 'debuggable_apks = false')"
   gn gen "$OUT" --args="$args"
+  aegis_android_verify_gn_args "$OUT" default
   autoninja -C "$OUT" chrome_public_bundle
   python3 "$ROOT_DIR/scripts/verify-build-source.py" --source "$SRC" --platform android
   exit 0
@@ -122,6 +127,7 @@ if [[ -n "$internal_profile" ]]; then
     echo "Generating $OUT with internal $internal_profile Access Options…"
     gn gen "$OUT" --args="$(cat "$internal_args")"
   fi
+  aegis_android_verify_gn_args "$OUT" "internal-$internal_profile"
   autoninja -C "$OUT" chrome_public_apk aegis_access_options_test_apk
   echo "Internal APK: $OUT/apks/ChromePublic.apk"
   echo "Instrumentation APK: $OUT/apks/AegisAccessOptionsTest.apk"
@@ -131,7 +137,8 @@ if [[ "$OUT" != "$SRC/out/AegisAndroid" || -L "$SRC/out" || -L "$OUT" ]]; then
   echo "Android 只使用固定的实际输出目录：$SRC/out/AegisAndroid" >&2
   exit 1
 fi
-if [[ -f "$OUT/build.ninja" ]] && ! gn_args_match "$ARGS_FILE" "$OUT/args.gn"; then
+if [[ -f "$OUT/build.ninja" ]] &&
+    ! gn_args_match <(printf '%s\n' "$default_args") "$OUT/args.gn"; then
   echo "已有 Android 构建参数与当前配置不同；请先核对并重新生成，禁止沿用旧构建图。" >&2
   exit 1
 fi
@@ -140,8 +147,9 @@ ensure_depot_tools_on_path
 cd "$SRC"
 if [[ ! -f "$OUT/build.ninja" ]]; then
   echo "Generating $OUT with aegis-android.gn…"
-  gn gen "$OUT" --args="$(cat "$ARGS_FILE")"
+  gn gen "$OUT" --args="$default_args"
 fi
+aegis_android_verify_gn_args "$OUT" default
 
 echo "Building chrome_public_apk at $OUT…"
 autoninja -C "$OUT" chrome_public_apk
