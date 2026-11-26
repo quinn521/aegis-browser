@@ -17,6 +17,7 @@ using aegis_access::test::kSyntheticTcpTlsVisionShare;
 using aegis_access::test::kSyntheticTestNodeShare;
 using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
 using aegis_access::test::kSyntheticWebSocketTlsShare;
+using aegis_access::test::kSyntheticWebSocketTlsUnknownFingerprintShare;
 
 std::string ReplaceIn(std::string_view input,
                       std::string_view old_value,
@@ -151,6 +152,7 @@ int main() {
   ExpectRejection(Replace("headerType=none", "headerType=http"), kUnsupported);
   ExpectRejection(kSyntheticWebSocketTlsShare, kUnsupported);
   constexpr auto kDev = AccessTestNodeImportMode::kAllowWebSocketTls;
+  constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
   const auto ws = ParseAccessTestNodeShare(kSyntheticWebSocketTlsShare, kDev);
   assert(ws.node && ws.node->web_socket_tls && ws.node->port == 8443);
   assert(ws.node->web_socket_tls->host == "edge.example.test");
@@ -158,7 +160,7 @@ int main() {
   assert(ws.node->server_name == "tls.example.test");
   assert(ws.node->public_key.empty() && ws.node->short_id.empty());
   const auto ws_query_alpn =
-      ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kDev);
+      ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended);
   assert(ws_query_alpn.node && ws_query_alpn.node->web_socket_tls);
   assert(ws_query_alpn.node->web_socket_tls->path ==
          "/ws?token=%74est-value&opaque=%E9");
@@ -177,7 +179,45 @@ int main() {
   injected_path.replace(injected_path.find("%2Ftest"), 7, "%2Ftest%0d%0a");
   assert(ParseAccessTestNodeShare(injected_path, kDev).error == kInvalid);
 
-  constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
+  const auto unknown_ws_fingerprint = ParseAccessTestNodeShare(
+      kSyntheticWebSocketTlsUnknownFingerprintShare, kExtended);
+  assert(unknown_ws_fingerprint.error == kInvalid &&
+         !unknown_ws_fingerprint.node);
+  assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsUnknownFingerprintShare,
+                                  kDev)
+             .node);
+  const auto legacy_path = ReplaceIn(ws_query, "%2Ftest", "%2F%2Fpath");
+  const auto legacy_share = ReplaceIn(
+      ReplaceIn(ReplaceIn(legacy_path, "host=edge.example.test", "host=Edge."),
+                "sni=tls.example.test", "sni=Localhost"),
+      "fp=chrome", "fp=Legacy_FP-1");
+  const auto legacy = ParseAccessTestNodeShare(legacy_share, kDev);
+  assert(legacy.node && legacy.node->web_socket_tls &&
+         legacy.node->web_socket_tls->path == "//path");
+  assert(legacy.node->server_name == "Localhost" &&
+         legacy.node->web_socket_tls->host == "Edge." &&
+         legacy.node->fingerprint == "Legacy_FP-1");
+  assert(!ParseAccessTestNodeShare(legacy_path, kExtended).node);
+  for (const auto* name :
+       {"", "chrome", "firefox", "safari", "ios", "android", "edge"}) {
+    const auto supported = ParseAccessTestNodeShare(
+        ReplaceIn(ws_query, "fp=chrome", std::string("fp=") + name), kExtended);
+    assert(supported.node && supported.node->fingerprint == name);
+  }
+  assert(!ParseAccessTestNodeShare(
+              ReplaceIn(ws_query, "fp=chrome", "fp=Chrome"), kExtended)
+              .node);
+  for (const auto* host : {"edge", "123.123", "edge.example.test:0"}) {
+    assert(
+        !ParseAccessTestNodeShare(ReplaceIn(ws_query, "host=edge.example.test",
+                                            std::string("host=") + host),
+                                  kExtended)
+             .node);
+  }
+  assert(
+      !ParseAccessTestNodeShare(
+           ReplaceIn(ws_query, "sni=tls.example.test", "sni=single"), kExtended)
+           .node);
   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
          result.node);
   assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended)

@@ -98,7 +98,8 @@ StoreResult<StoredOperation> ReadOperation(sql::Database& database,
   return {StoreStatus::kValid,
       StoredOperation{AccessOptionsOperationReceipt{operation_id,
           static_cast<uint64_t>(expected), static_cast<uint64_t>(committed),
-          static_cast<uint64_t>(version), row.ColumnString(3)}, std::move(*profile)}, {}};
+          static_cast<uint64_t>(version), row.ColumnString(3), false,
+          profile->configuration.secret_reference}, std::move(*profile)}, {}};
 }
 
 AccessTestProfileSaveResult SaveError(StoreStatus status, const char* detail,
@@ -506,7 +507,8 @@ AccessTestProfileSaveResult AccessOptionsStore::GetTestProfileOperation(
     const auto& profile = *current.value->test_profile;
     receipt = AccessOptionsOperationReceipt{operation_id, profile.committed_revision - 1,
         profile.committed_revision, profile.version,
-        ProfileFingerprint(profile.committed_revision - 1, profile.configuration), true};
+        ProfileFingerprint(profile.committed_revision - 1, profile.configuration),
+        true, profile.configuration.secret_reference};
   }
   if (!receipt)
     return {StoreStatus::kMissing, AccessOptionsCommitOutcome::kUnknown, std::nullopt,
@@ -610,7 +612,7 @@ AccessTestProfileSaveResult AccessOptionsStore::SaveTestProfile(
     return SaveError(StoreStatus::kIoError, "injected_reply_lost", AccessOptionsCommitOutcome::kUnknown);
   return {StoreStatus::kValid, AccessOptionsCommitOutcome::kCommitted,
       AccessOptionsOperationReceipt{operation_id, expected_revision, expected_revision + 1,
-                                    version, fingerprint},
+                                    version, fingerprint, false, draft.secret_reference},
       AccessOptionsSnapshot{expected_revision + 1, std::move(configuration), kVersion,
                             std::move(stored)}, {}};
 }

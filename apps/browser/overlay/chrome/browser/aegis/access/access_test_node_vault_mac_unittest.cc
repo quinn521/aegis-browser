@@ -124,7 +124,7 @@ TEST(AccessTestNodeVaultMacTest,
   }
 }
 
-TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketRecordWithoutAlpn) {
+TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketUsingV2Grammar) {
   auto rows = std::make_shared<Rows>();
   const std::string scope(64, 'a');
   AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
@@ -134,13 +134,21 @@ TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketRecordWithoutAlpn) {
                      saved.id),
       R"({"schemaVersion":2,"address":"192.0.2.8","port":8443,)"
       R"("userId":"550e8400-e29b-41d4-a716-446655440000",)"
-      R"("serverName":"tls.example.test","fingerprint":"chrome",)"
-      R"("wsHost":"edge.example.test","wsPath":"/test"})");
+      R"("serverName":"Localhost","fingerprint":"Legacy_FP-1",)"
+      R"("wsHost":"Edge.","wsPath":"//path"})");
   const auto restored = dev.Read(saved);
   ASSERT_TRUE(restored && restored->web_socket_tls);
-  EXPECT_EQ(restored->web_socket_tls->host, "edge.example.test");
-  EXPECT_EQ(restored->web_socket_tls->path, "/test");
+  EXPECT_EQ(restored->server_name, "Localhost");
+  EXPECT_EQ(restored->fingerprint, "Legacy_FP-1");
+  EXPECT_EQ(restored->web_socket_tls->host, "Edge.");
+  EXPECT_EQ(restored->web_socket_tls->path, "//path");
   EXPECT_TRUE(restored->web_socket_tls->alpn.empty());
+  EXPECT_TRUE(restored->web_socket_tls->restored_from_v2);
+  EXPECT_EQ(dev.Stage(Id(), *restored).status, Status::kInvalidNode);
+  auto invalid_import = *restored;
+  invalid_import.web_socket_tls->restored_from_v2 = false;
+  EXPECT_EQ(dev.Stage(Id(), invalid_import).status, Status::kInvalidNode);
+  EXPECT_EQ(rows->values.size(), 1u);
 }
 
 TEST(AccessTestNodeVaultMacTest, RejectsMixedAndUnknownExtendedRecordShapes) {

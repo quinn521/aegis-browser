@@ -1085,14 +1085,10 @@ void AegisUIHandler::OnAccessTestNodeSaved(
             std::to_string(result.snapshot->revision)));
     return;
   } else {
-    // An operation query never prepares a listener. Its receipt and current
-    // row can still prove that this editor's exact native draft was consumed.
+    // An operation query never prepares a listener. The receipt identifies the
+    // draft consumed by that operation even after another editor saves.
     if (editor.empty() && access_test_node_draft_ && result.operation &&
-        result.snapshot->test_profile &&
-        result.snapshot->test_profile->operation_id ==
-            result.operation->operation_id &&
-        result.snapshot->test_profile->configuration.secret_reference ==
-            access_test_node_draft_->id) {
+        result.operation->secret_reference == access_test_node_draft_->id) {
       access_test_node_draft_.reset();
     }
     response.Set("state", "saved");

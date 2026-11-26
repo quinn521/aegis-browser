@@ -34,19 +34,21 @@ std::string EscapeNativeQueryValue(std::string_view value) {
 
 std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
     const aegis_access::AccessTestNode& node) {
+  using Mode = aegis_access::AccessTestNodeImportMode;
+  const auto& ws = node.web_socket_tls;
+  const bool legacy_ws = ws && ws->restored_from_v2;
   const std::string address = node.address.find(':') == std::string::npos
       ? node.address : "[" + node.address + "]";
   auto share = "vless://" + node.user_id + "@" + address + ":" +
                base::NumberToString(node.port) +
                "?sni=" + EscapeNativeQueryValue(node.server_name);
-  const std::string_view default_fingerprint =
-      node.web_socket_tls ? "" : "chrome";
+  const std::string_view default_fingerprint = ws && !legacy_ws ? "" : "chrome";
   if (node.fingerprint != default_fingerprint) {
     share += "&fp=" + EscapeNativeQueryValue(node.fingerprint);
   }
-  if (const auto& ws = node.web_socket_tls) {
+  if (ws) {
     share += "&type=ws&security=tls";
-    if (ws->host != node.server_name) {
+    if (legacy_ws || ws->host != node.server_name) {
       share += "&host=" + EscapeNativeQueryValue(ws->host);
     }
     if (ws->path != "/") {
@@ -71,7 +73,10 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
         (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
   }
   auto parsed = aegis_access::ParseAccessTestNodeShare(
-      share, aegis_access::AccessTestNodeImportMode::kAllowExtendedVless);
+      share, legacy_ws ? Mode::kAllowWebSocketTls : Mode::kAllowExtendedVless);
+  if (legacy_ws && parsed.node && parsed.node->web_socket_tls) {
+    parsed.node->web_socket_tls->restored_from_v2 = true;
+  }
   return parsed.node == node ? std::move(parsed.node) : std::nullopt;
 }
 
@@ -106,11 +111,15 @@ std::optional<std::string> BuildAccessTestNodeCoreConfiguration(
     transport.Set("fingerprint", node.fingerprint);
   }
   base::DictValue stream;
-  if (node.web_socket_tls || node.tcp_tls_vision) {
+  const auto& ws = node.web_socket_tls;
+  if (ws || node.tcp_tls_vision) {
     transport.Set("allowInsecure", false);
-    transport.Set("useSystemCA", true);
+    // Version-2 records use their original trust-root selection.
+    if (!ws || !ws->restored_from_v2) {
+      transport.Set("useSystemCA", true);
+    }
     stream.Set("security", "tls");
-    if (const auto& ws = node.web_socket_tls) {
+    if (ws) {
       if (!ws->alpn.empty()) {
         transport.Set("alpn", base::ListValue().Append(ws->alpn));
       }

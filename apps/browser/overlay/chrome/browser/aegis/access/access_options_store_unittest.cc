@@ -119,9 +119,24 @@ TEST(AccessOptionsProfileStoreTest, LostCommitReplyQueriesSameOperationAfterReop
   const auto queried = reopened.GetTestProfileOperation(operation);
   ASSERT_EQ(queried.status, StoreStatus::kValid);
   EXPECT_EQ(queried.outcome, AccessOptionsCommitOutcome::kCommitted);
+  ASSERT_TRUE(queried.operation);
   EXPECT_EQ(queried.operation->committed_revision, 1u);
+  EXPECT_EQ(queried.operation->secret_reference,
+            SyntheticDraft().secret_reference);
   EXPECT_EQ(reopened.SaveTestProfile(0, operation, SyntheticDraft()).status, StoreStatus::kValid);
   EXPECT_EQ(reopened.Read().value->revision, 1u);
+  auto replacement = SyntheticDraft();
+  replacement.secret_reference = NewOperation();
+  ASSERT_EQ(reopened.SaveTestProfile(1, NewOperation(), replacement).status,
+            StoreStatus::kValid);
+  const auto historical = reopened.GetTestProfileOperation(operation);
+  ASSERT_EQ(historical.outcome, AccessOptionsCommitOutcome::kCommitted);
+  ASSERT_TRUE(historical.operation);
+  ASSERT_TRUE(historical.snapshot && historical.snapshot->test_profile);
+  EXPECT_EQ(historical.operation->secret_reference,
+            SyntheticDraft().secret_reference);
+  EXPECT_EQ(historical.snapshot->test_profile->configuration.secret_reference,
+            replacement.secret_reference);
 }
 
 TEST(AccessOptionsProfileStoreTest, GenericWritesCannotForgeReplaceOrDeleteTypedProfile) {
@@ -218,6 +233,8 @@ TEST(AccessOptionsProfileStoreTest, CurrentMetadataResolvesPrunedJournalWithoutR
   const auto current = reopened.GetTestProfileOperation(operation);
   ASSERT_EQ(current.status, StoreStatus::kValid);
   EXPECT_TRUE(current.operation->recovered_from_snapshot);
+  EXPECT_EQ(current.operation->secret_reference,
+            SyntheticDraft().secret_reference);
   EXPECT_EQ(reopened.SaveTestProfile(0, operation, SyntheticDraft()).status, StoreStatus::kValid);
   EXPECT_EQ(reopened.Read().value->revision, 1u);
 }

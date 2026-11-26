@@ -41,6 +41,8 @@ struct AccessOptionsOperationReceipt {
   uint64_t profile_version = 0;
   std::string payload_fingerprint;
   bool recovered_from_snapshot = false;
+  // Opaque native draft reference for this operation, even after a later save.
+  std::string secret_reference;
 };
 struct AccessTestProfileSaveResult {
   StoreStatus status = StoreStatus::kIoError;

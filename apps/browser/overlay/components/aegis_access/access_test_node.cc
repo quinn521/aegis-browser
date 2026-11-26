@@ -120,6 +120,26 @@ bool IsAddress(std::string_view text) {
   return IsDnsName(text);
 }
 
+bool IsExtendedServerName(std::string_view name,
+                          bool allows_root_label = false) {
+  if (allows_root_label && name.ends_with('.')) {
+    name.remove_suffix(1);
+  }
+  const auto dot = name.rfind('.');
+  return IsDnsName(name) && dot != std::string_view::npos &&
+         std::ranges::any_of(name.substr(dot + 1), [](char c) {
+           return LowerAscii(c) >= 'a' && LowerAscii(c) <= 'z';
+         });
+}
+
+bool IsExtendedAddress(std::string_view address) {
+  if (address.starts_with('[') && address.ends_with(']')) {
+    return IsIpAddress(address.substr(1, address.size() - 2), AF_INET6);
+  }
+  return IsExtendedServerName(address, /*allows_root_label=*/true) ||
+         IsIpAddress(address, AF_INET);
+}
+
 bool IsHttpAuthority(std::string_view authority) {
   auto host_end = authority.find(':');
   if (authority.starts_with('[')) {
@@ -129,8 +149,7 @@ bool IsHttpAuthority(std::string_view authority) {
     }
     host_end = close + 1;
   }
-  const auto host = authority.substr(0, host_end);
-  if (!IsDnsName(host) && !IsAddress(host)) {
+  if (!IsExtendedAddress(authority.substr(0, host_end))) {
     return false;
   }
   if (host_end == std::string_view::npos || host_end == authority.size()) {
@@ -146,19 +165,18 @@ bool IsHttpAuthority(std::string_view authority) {
   return parsed.ec == std::errc() && parsed.ptr == end && port != 0;
 }
 
-bool IsExtendedServerName(std::string_view name) {
-  const auto dot = name.rfind('.');
-  return IsDnsName(name) && dot != std::string_view::npos &&
-         std::ranges::any_of(name.substr(dot + 1), [](char c) {
-           return LowerAscii(c) >= 'a' && LowerAscii(c) <= 'z';
-         });
-}
-
 bool IsFingerprint(std::string_view name) {
   return !name.empty() && name.size() <= 32 &&
          std::ranges::all_of(name, [](char c) {
            return IsAlphanumeric(c) || c == '-' || c == '_';
          });
+}
+
+bool IsWebSocketFingerprint(std::string_view name) {
+  // AccessVLESSWebSocketTLSParameters in the pinned iOS source.
+  constexpr std::string_view kNames[]{"",    "chrome",  "firefox", "safari",
+                                      "ios", "android", "edge"};
+  return std::ranges::find(kNames, name) != std::end(kNames);
 }
 
 bool IsExtendedFingerprint(std::string_view name) {
@@ -279,6 +297,15 @@ bool ContainsNonWebScheme(std::string_view text) {
     }
   }
   return false;
+}
+
+bool IsLegacyWebSocketPath(std::string_view path) {
+  return path.starts_with('/') && path.size() <= 1024 &&
+         std::ranges::all_of(path, [](char c) {
+           return IsAlphanumeric(c) ||
+                  std::string_view("/-._~!$'()*+,;=:@").find(c) !=
+                      std::string_view::npos;
+         });
 }
 
 bool IsWebSocketRequestTarget(std::string_view path) {
@@ -454,7 +481,7 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
   const bool tcp_tls =
       extended && type == "tcp" && security == "tls" && query->contains("type");
   const bool grpc = extended && type == "grpc" && security == "reality";
-  if ((ws || tcp_tls || grpc) &&
+  if (((ws && extended) || tcp_tls || grpc) &&
       fragment.find("://") != std::string_view::npos) {
     return {kInvalid, std::nullopt};
   }
@@ -471,16 +498,23 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
         "alpn", "encryption", "fp", "host", "path", "security", "sni", "type"};
     auto alpn = ValueOr(*query, "alpn");
     if (!HasOnlyKeys(*query, kWebSocketKeys) ||
-        (!alpn.empty() && alpn != "http/1.1")) {
+        (!alpn.empty() && (!extended || alpn != "http/1.1"))) {
       return {kUnsupported, std::nullopt};
     }
     const std::string_view default_host =
         extended ? std::string_view(node.server_name) : std::string_view();
     auto request_host = ValueOr(*query, "host", default_host);
     auto path = ValueOr(*query, "path", "/");
-    if (!IsDnsName(node.server_name) || !IsHttpAuthority(request_host) ||
-        !IsWebSocketRequestTarget(path) ||
-        (!node.fingerprint.empty() && !IsFingerprint(node.fingerprint))) {
+    const bool valid = extended ? IsExtendedAddress(address) &&
+                                      IsExtendedServerName(node.server_name) &&
+                                      IsHttpAuthority(request_host) &&
+                                      IsWebSocketRequestTarget(path) &&
+                                      IsWebSocketFingerprint(node.fingerprint)
+                                : IsDnsName(node.server_name) &&
+                                      IsDnsName(request_host) &&
+                                      IsLegacyWebSocketPath(path) &&
+                                      IsFingerprint(node.fingerprint);
+    if (!valid) {
       return {kInvalid, std::nullopt};
     }
     node.web_socket_tls = AccessTestNodeWebSocketTls{

@@ -185,6 +185,11 @@ bool RequiresDevChannel(const Node& node) {
 }
 
 std::optional<std::string> Encode(const Node& node) {
+  // Compatibility applies to restored references. Staging always writes a
+  // fresh record that must satisfy the current import grammar.
+  if (node.web_socket_tls && node.web_socket_tls->restored_from_v2) {
+    return std::nullopt;
+  }
   if (!ValidateAccessTestNodeNative(node)) return std::nullopt;
   auto value = base::DictValue()
       .Set("address", node.address).Set("port", node.port)
@@ -239,8 +244,8 @@ std::optional<Node> Decode(std::string_view encoded,
     const auto* host = value->FindString("wsHost");
     const auto* path = value->FindString("wsPath");
     if (!host || !path) return std::nullopt;
-    node.web_socket_tls =
-        aegis_access::AccessTestNodeWebSocketTls{*host, *path};
+    node.web_socket_tls = aegis_access::AccessTestNodeWebSocketTls{
+        *host, *path, {}, /*restored_from_v2=*/true};
     return ValidateAccessTestNodeNative(node);
   }
   if (version == 3 && allows_extended_vless) {

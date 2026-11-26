@@ -159,6 +159,41 @@ TEST(AccessTestNodeNativeConfigTest, WebSocketKeepsExplicitAlpnAndWireQuery) {
   EXPECT_EQ(encoded->find("vless://"), std::string::npos);
 }
 
+TEST(AccessTestNodeNativeConfigTest, RestoredV2WebSocketKeepsLegacyConfig) {
+  auto parsed = aegis_access::ParseAccessTestNodeShare(
+      aegis_access::test::kSyntheticWebSocketTlsShare, kExtended);
+  ASSERT_TRUE(parsed.node && parsed.node->web_socket_tls);
+  auto& node = *parsed.node;
+  node.server_name = "Localhost";
+  node.fingerprint = "Legacy_FP-1";
+  node.web_socket_tls->host = "Edge.";
+  node.web_socket_tls->path = "//path";
+  EXPECT_FALSE(
+      BuildAccessTestNodeCoreConfiguration(node, {}, Transport::kHttp));
+  node.web_socket_tls->restored_from_v2 = true;
+  const auto encoded =
+      BuildAccessTestNodeCoreConfiguration(node, {}, Transport::kHttp);
+  ASSERT_TRUE(encoded);
+  const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(root);
+  const auto* outbounds = root->FindList("outbounds");
+  ASSERT_TRUE(outbounds);
+  ASSERT_EQ(outbounds->size(), 1u);
+  const auto& outbound = outbounds->front().GetDict();
+  const auto* tls = outbound.FindDictByDottedPath("streamSettings.tlsSettings");
+  ASSERT_TRUE(tls && tls->FindString("serverName") &&
+              tls->FindString("fingerprint"));
+  EXPECT_EQ(*tls->FindString("serverName"), "Localhost");
+  EXPECT_EQ(*tls->FindString("fingerprint"), "Legacy_FP-1");
+  EXPECT_EQ(tls->FindBool("allowInsecure"), false);
+  EXPECT_FALSE(tls->contains("alpn"));
+  EXPECT_FALSE(tls->contains("useSystemCA"));
+  const auto* ws = outbound.FindDictByDottedPath("streamSettings.wsSettings");
+  ASSERT_TRUE(ws && ws->FindString("host") && ws->FindString("path"));
+  EXPECT_EQ(*ws->FindString("host"), "Edge.");
+  EXPECT_EQ(*ws->FindString("path"), "//path");
+}
+
 TEST(AccessTestNodeNativeConfigTest, WebSocketRevalidatesLongRequestTarget) {
   const std::string path = "/ws" + std::string(2045, '/');
   const auto parsed = aegis_access::ParseAccessTestNodeShare(

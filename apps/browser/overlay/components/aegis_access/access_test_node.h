@@ -20,6 +20,7 @@ enum class AccessTestNodeError {
 
 enum class AccessTestNodeImportMode {
   kRealityOnly,
+  // The pre-v3 WebSocket grammar. New imports use kAllowExtendedVless.
   kAllowWebSocketTls,
   kAllowExtendedVless,
 };
@@ -28,6 +29,8 @@ struct AccessTestNodeWebSocketTls {
   std::string host;
   std::string path;
   std::string alpn = {};
+  // Set only when decoding a version-2 Keychain record.
+  bool restored_from_v2 = false;
 
   bool operator==(const AccessTestNodeWebSocketTls&) const = default;
 };

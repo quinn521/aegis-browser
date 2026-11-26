@@ -33,6 +33,12 @@ inline constexpr std::string_view kSyntheticWebSocketTlsQueryShare =
     "&path=%2Fws%3Ftoken%3D%2574est-value%26opaque%3D%25E9"
     "&encryption=none&alpn=http%2F1.1#synthetic-ws";
 
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsUnknownFingerprintShare =
+        "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
+        "?type=ws&security=tls&host=ws.example.com&fp=synthetic_unknown"
+        "&sni=cert.example.com&path=%2Fws&encryption=none";
+
 inline constexpr std::string_view kSyntheticTcpTlsVisionShare =
     "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443"
     "?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none"

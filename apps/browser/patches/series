@@ -569,3 +569,4 @@
 0569-access-test-profile-activation-requires-deactivation.patch
 0570-access-reap-zombie-owned-child.patch
 0571-access-macos-recovery-shutdown-vless-import.patch
+0572-access-macos-recovery-legacy-ws-compatibility.patch

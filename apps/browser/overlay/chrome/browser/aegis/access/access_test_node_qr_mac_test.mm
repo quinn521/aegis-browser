@@ -60,8 +60,11 @@ aegis::access::AccessTestNodeQrResult Decode(
       mode);
 }
 
-void ExpectStatus(NSData* image, AccessTestNodeQrStatus status) {
-  auto result = Decode(image);
+void ExpectStatus(
+    NSData* image,
+    AccessTestNodeQrStatus status,
+    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly) {
+  auto result = Decode(image, mode);
   assert(result.status == status);
   assert(!result.node);
 }
@@ -102,6 +105,8 @@ int main() {
       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
       assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
     }
+    ExpectStatus(DrawCodes(MakeCode(kSyntheticWebSocketTlsUnknownFingerprintShare)),
+                 AccessTestNodeQrStatus::kInvalidShare, extended);
     std::string exporter_share(share);
     exporter_share.insert(exporter_share.find('#'), "&pcks=");
     const auto scanned_exporter = Decode(DrawCodes(MakeCode(exporter_share)));
