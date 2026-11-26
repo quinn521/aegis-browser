@@ -10,16 +10,38 @@ aegis_android_internal_out_name() {
   esac
 }
 
+# 每行输出一个 GN token。忽略注释和分隔空白，保留语句顺序和字符串原值。
+aegis_android_gn_tokens() {
+  LC_ALL=C awk '
+    {
+      line = $0
+      while (1) {
+        sub(/^[[:space:]]+/, "", line)
+        if (line == "" || line ~ /^#/) break
+        match(line, /^("([^"\\]|\\.)*"|[[:alpha:]_][[:alnum:]_]*|-?[0-9]+|[-+=!<>&|][=|&]|.)/)
+        print substr(line, 1, RLENGTH)
+        line = substr(line, RLENGTH + 1)
+      }
+    }
+  ' "$@"
+}
+
+aegis_android_gn_args_match() {
+  local expected actual
+  expected="$(aegis_android_gn_tokens "$1")" || return 1
+  actual="$(aegis_android_gn_tokens "$2")" || return 1
+  [[ "$expected" == "$actual" ]]
+}
+
 # 用法：aegis_android_gn_args <args-file> default|internal-alpha|internal-debug
 aegis_android_gn_args() {
   local args_file="$1"
   local profile="$2"
-  local args code channel product
+  local args tokens channel product
+  local default_channel_pattern='^android_channel = "default"([[:blank:]]*(#.*)?)$'
   args="$(cat "$args_file")" || return 1
-  # 只在校验时去掉注释。双引号字符串可包含 #，也可用反斜杠转义引号。
-  code="$(sed -E -e 's/^(([^"#]|"([^"\\]|\\.)*")*)#.*/\1/' -e 's/[[:blank:]]*$//' <<< "$args")" ||
-    return 1
-  if grep -Eq '(^|[^[:alnum:]_])aegis_android_(internal_access_options|access_product_channel)([^[:alnum:]_]|$)' <<< "$code"; then
+  tokens="$(aegis_android_gn_tokens <<< "$args")" || return 1
+  if grep -Exq 'aegis_android_(internal_access_options|access_product_channel)' <<< "$tokens"; then
     echo "Android 基础参数不得开启内部 Access Options。" >&2
     return 1
   fi
@@ -35,14 +57,14 @@ aegis_android_gn_args() {
       return 1
       ;;
   esac
-  if [[ "$(grep -Fxc 'android_channel = "default"' <<< "$code")" != 1 ||
-        "$(grep -c '^[[:space:]]*android_channel[[:space:]]*=' <<< "$code")" != 1 ||
-        "$(grep -Fxc 'chrome_public_manifest_package = "com.gcsa.aegis"' <<< "$code")" != 1 ||
-        "$(grep -c '^[[:space:]]*chrome_public_manifest_package[[:space:]]*=' <<< "$code")" != 1 ]]; then
+  if [[ "$(grep -Ec "$default_channel_pattern" <<< "$args")" != 1 ||
+        "$(grep -c '^[[:space:]]*android_channel[[:space:]]*=' <<< "$args")" != 1 ||
+        "$(grep -Ec '^chrome_public_manifest_package = "com[.]gcsa[.]aegis"[[:blank:]]*(#.*)?$' <<< "$args")" != 1 ||
+        "$(grep -c '^[[:space:]]*chrome_public_manifest_package[[:space:]]*=' <<< "$args")" != 1 ]]; then
     echo "Android 基础参数必须只有一个 default 渠道与 com.gcsa.aegis 包名。" >&2
     return 1
   fi
-  args="$(sed -E "s/^(android_channel = )\"default\"([[:blank:]]*(#.*)?)\$/\1\"$channel\"\2/" <<< "$args")" ||
+  args="$(sed -E "s/$default_channel_pattern/android_channel = \"$channel\"\1/" <<< "$args")" ||
     return 1
   printf '%s\n%s\n%s\n' "$args" \
     "aegis_android_access_product_channel = \"$product\"" \

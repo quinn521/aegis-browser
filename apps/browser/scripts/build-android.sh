@@ -117,7 +117,7 @@ if [[ -n "$internal_profile" ]]; then
   internal_args="$(mktemp "${TMPDIR:-/tmp}/aegis-android-internal-args.XXXXXX")"
   trap 'rm -f "$internal_args"' EXIT
   aegis_android_gn_args "$ARGS_FILE" "internal-$internal_profile" > "$internal_args"
-  if [[ -f "$OUT/build.ninja" ]] && ! gn_args_match "$internal_args" "$OUT/args.gn"; then
+  if [[ -f "$OUT/build.ninja" ]] && ! aegis_android_gn_args_match "$internal_args" "$OUT/args.gn"; then
     echo "已有内部 Android 构建参数与当前配置不同；请先核对并重新生成，禁止沿用旧构建图。" >&2
     exit 1
   fi
@@ -138,7 +138,7 @@ if [[ "$OUT" != "$SRC/out/AegisAndroid" || -L "$SRC/out" || -L "$OUT" ]]; then
   exit 1
 fi
 if [[ -f "$OUT/build.ninja" ]] &&
-    ! gn_args_match <(printf '%s\n' "$default_args") "$OUT/args.gn"; then
+    ! aegis_android_gn_args_match <(printf '%s\n' "$default_args") "$OUT/args.gn"; then
   echo "已有 Android 构建参数与当前配置不同；请先核对并重新生成，禁止沿用旧构建图。" >&2
   exit 1
 fi

@@ -33,10 +33,11 @@ commented_base="$TEST_ROOT/commented.gn"
     "$ARGS_FILE"
   printf '%s\n' \
     '  # aegis_android_internal_access_options = true' \
-    'assert(true, "escaped quote: \" and hash: #") # aegis_android_access_product_channel'
+    'assert(true, "escaped quote: \" and hash: #") # aegis_android_access_product_channel' \
+    'assert(true, "aegis_android_internal_access_options and aegis_android_access_product_channel")'
 } > "$commented_base"
 default_with_comments="$(aegis_android_gn_args "$commented_base" default)" ||
-  fail "default 配置拒绝了只在注释里出现的内部参数"
+  fail "default 配置拒绝了只在注释或字符串里出现的内部参数"
 [[ "$default_with_comments" == "$(cat "$commented_base")" ]] ||
   fail "default 配置改动了含注释的基础参数"
 for profile in alpha debug; do
@@ -45,7 +46,7 @@ for profile in alpha debug; do
     debug) channel=dev ;;
   esac
   internal_with_comments="$(aegis_android_gn_args "$commented_base" "internal-$profile")" ||
-    fail "$profile 配置拒绝了只在注释里出现的内部参数"
+    fail "$profile 配置拒绝了只在注释或字符串里出现的内部参数"
   grep -Fxq "android_channel = \"$channel\"  # aegis_android_access_product_channel = \"debug\"" \
     <<< "$internal_with_comments" || fail "$profile 未改写频道或保留行末注释"
   grep -Fxq "aegis_android_access_product_channel = \"$profile\"" \
@@ -167,15 +168,15 @@ check_default_build_rejects_enabled_args
   }
   export -f uname python3 gn autoninja
 
-  check_build_rejects_invalid_effective_args() {
+  check_build_rejects_args() {
     local expected="$1" output
     shift
     if output="$(bash "$fixture/scripts/build-android.sh" "$@" 2>&1)"; then
-      fail "build-android.sh 接受了由 GN 导入启用的内部配置"
+      fail "build-android.sh 接受了不合规的 GN 参数"
     fi
     [[ "$output" == *"$expected"* ]] ||
-      fail "未在生效参数校验处失败：$output"
-    [[ ! -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "生效参数不合规时调用了 autoninja"
+      fail "GN 参数校验应报告 $expected，实际输出：$output"
+    [[ ! -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "参数不合规时调用了 autoninja"
   }
 
   clean_out="$CHROMIUM_ROOT/src/out/no-import"
@@ -185,17 +186,38 @@ check_default_build_rejects_enabled_args
   aegis_android_gn_args "$ARGS_FILE" internal-alpha > "$clean_out/args.gn"
   aegis_android_verify_gn_args "$clean_out" internal-alpha
   default_error='生效 GN 参数必须包含：aegis_android_internal_access_options = false'
-  check_build_rejects_invalid_effective_args "$default_error"
+  check_build_rejects_args "$default_error"
   rm "$fixture_out/build.ninja"
-  check_build_rejects_invalid_effective_args "$default_error"
+  check_build_rejects_args "$default_error"
   GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
     OUT_DIR="$CHROMIUM_ROOT/src/out/AegisAndroidDelivery-42-1" \
-    check_build_rejects_invalid_effective_args "$default_error" --app-bundle alpha
+    check_build_rejects_args "$default_error" --app-bundle alpha
 
   { cat "$ARGS_FILE"; echo 'chrome_public_manifest_package += ".internal"'; } > "$fixture/args/aegis-android.gn"
   package_error='生效 GN 参数必须包含：chrome_public_manifest_package = "com.gcsa.aegis"'
-  check_build_rejects_invalid_effective_args "$package_error" --internal-access-options alpha
-  check_build_rejects_invalid_effective_args "$package_error" --internal-access-options alpha
+  check_build_rejects_args "$package_error" --internal-access-options alpha
+  check_build_rejects_args "$package_error" --internal-access-options alpha
+
+  { cat "$ARGS_FILE"; printf '%s\n' 'android_override_version_name += " test version"'; } \
+    > "$fixture/args/aegis-android.gn"
+  internal_out="$CHROMIUM_ROOT/src/out/AegisAndroidInternalAlpha"
+  aegis_android_gn_args "$fixture/args/aegis-android.gn" internal-alpha |
+    sed 's/" test version"/"testversion"/' > "$internal_out/args.gn"
+  check_build_rejects_args \
+    '已有内部 Android 构建参数与当前配置不同' --internal-access-options alpha
+
+  { cat "$ARGS_FILE"; printf '%s\n' 'android_override_version_name += " # expected"'; } \
+    > "$fixture/args/aegis-android.gn"
+  sed 's/ # expected"/ # stale"/' "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
+  check_build_rejects_args '已有 Android 构建参数与当前配置不同'
+
+  # Comment and spacing changes outside literals must still allow cache reuse.
+  sed 's/^android_channel = "default"$/android_channel="default" # cached comment/' \
+    "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
+  if bash "$fixture/scripts/build-android.sh" > /dev/null 2>&1; then
+    fail "模拟 autoninja 应以失败状态结束"
+  fi
+  [[ -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "只改注释和排版时未复用构建图"
 )
 
 no_channel="$TEST_ROOT/no-channel.gn"
