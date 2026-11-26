@@ -40,7 +40,8 @@ class AccessPrivateContextClient
                   base::OnceCallback<void(bool)> completion);
   void SetDisconnectHandler(base::OnceCallback<void(bool)> handler);
   void SetRetirementHandler(base::OnceClosure handler);
-  void CheckConnected(base::OnceCallback<void(bool)> completion);
+  void CheckConnected(base::TimeTicks deadline,
+                      base::OnceCallback<void(bool)> completion);
   void PublishSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
                        base::OnceCallback<void(bool)> completion);
   // Encodes the whole validated Browser policy and all registered groups.

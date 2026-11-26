@@ -1,6 +1,7 @@
 // Copyright 2026 GCSA
 #include "chrome/browser/aegis/access/access_private_context_client.h"
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 #include <type_traits>
@@ -25,7 +26,8 @@ constexpr auto kPrivateContextSetupTimeout = base::Seconds(30);
 template <typename Reply>
 base::OnceCallback<void(Reply)> BoundFactorySetupReply(
     base::OnceCallback<void(Reply)> completion,
-    base::OnceClosure* reject = nullptr) {
+    base::OnceClosure* reject = nullptr,
+    base::TimeTicks deadline = {}) {
   struct PendingReply {
     void Finish(Reply reply) {
       if (!completion) return;
@@ -46,9 +48,13 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
     if (auto pending = weak.lock()) pending->Finish(std::remove_cvref_t<Reply>{});
   };
   if (reject) *reject = base::BindOnce(fail, std::weak_ptr(pending));
-  if (BUILDFLAG(IS_MAC)) {
-    pending->deadline = base::TimeTicks::Now() + kPrivateContextSetupTimeout;
-    pending->timer.Start(FROM_HERE, kPrivateContextSetupTimeout,
+  const auto now = base::TimeTicks::Now();
+  if (deadline.is_null() && BUILDFLAG(IS_MAC)) {
+    deadline = now + kPrivateContextSetupTimeout;
+  }
+  if (!deadline.is_null()) {
+    pending->deadline = deadline;
+    pending->timer.Start(FROM_HERE, std::max(deadline - now, base::TimeDelta()),
                          base::BindOnce(fail, std::weak_ptr(pending)));
   }
   return base::BindOnce(
@@ -181,7 +187,7 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
             }
             std::move(completion).Run(accepted);
           }, weak_factory_.GetWeakPtr(), operation, std::move(completion)),
-          &reject_initialize_);
+          &reject_initialize_, bind_deadline_);
   context->BindAegisAccessContext(
       std::move(receiver), lifetime_.BindNewPipeAndPassRemote(),
       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
@@ -189,13 +195,13 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
 }
 
 void AccessPrivateContextClient::CheckConnected(
-    base::OnceCallback<void(bool)> completion) {
+    base::TimeTicks deadline, base::OnceCallback<void(bool)> completion) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!is_connected()) {
+  if (!is_connected() || base::TimeTicks::Now() >= deadline) {
     std::move(completion).Run(false);
     return;
   }
-  auto reply = BoundFactorySetupReply(std::move(completion));
+  auto reply = BoundFactorySetupReply(std::move(completion), nullptr, deadline);
   context_.QueryVersion(base::BindOnce(
       [](base::OnceCallback<void(bool)> reply, uint32_t) {
         std::move(reply).Run(true);

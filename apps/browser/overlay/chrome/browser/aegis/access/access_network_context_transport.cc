@@ -685,7 +685,8 @@ void AccessNetworkContextTransport::BindPrivateContext(
 void AccessNetworkContextTransport::AdmitPrivateContext(
     aegis_access::OwnershipKey owner, PrivateContext client,
     base::OnceCallback<void(PrivateContext)> completion) {
-  if (!OwnsConfiguredPartition(owner) || !client->is_connected()) {
+  if (!OwnsConfiguredPartition(owner) || !client->is_connected() ||
+      base::TimeTicks::Now() >= client->bind_deadline()) {
     std::move(completion).Run(nullptr);
     return;
   }
@@ -702,7 +703,9 @@ void AccessNetworkContextTransport::AdmitPrivateContext(
   // being erased, so complete the bind in a later task.
   const auto& previous_client = previous->second.client;
   const auto previous_control = previous_client->control_id();
-  previous_client->CheckConnected(base::BindPostTaskToCurrentDefault(base::BindOnce(
+  const auto deadline = client->bind_deadline();
+  previous_client->CheckConnected(
+      deadline, base::BindPostTaskToCurrentDefault(base::BindOnce(
       [](base::WeakPtr<AccessNetworkContextTransport> self,
          aegis_access::OwnershipKey owner, PrivateContext client,
          base::UnguessableToken previous_control,
@@ -840,7 +843,11 @@ void AccessNetworkContextTransport::OnPrivateContextDisconnected(
     return;
   }
   ForgetPrivateControl(owner, incarnation);
-  if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
+  if (HasReadyPrivateContext(owner)) {
+    SettlePrivatePublication(state, true);
+  } else if (state.private_contexts.empty()) {
+    SettleTestListenerRetirements(state, true);
+  }
 }
 
 void AccessNetworkContextTransport::ForgetPrivateControl(

@@ -384,10 +384,18 @@ class ProductAckContext final : public network::TestNetworkContext,
       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
       mojo::PendingRemote<network::mojom::AegisAccessContextLifetime> lifetime,
       BindAegisAccessContextCallback callback) override {
-    receivers_.Add(this, std::move(receiver));
+    if (stall_control) {
+      stalled_control_ = std::move(receiver);
+    } else {
+      receivers_.Add(this, std::move(receiver));
+    }
     lifetimes_.Add(std::move(lifetime));
-    std::move(callback).Run(network::mojom::AegisAccessContextIdentity::New(
-        incarnation, process_id));
+    held_bind_reply_ = std::move(callback);
+    if (!hold_bind_reply) ReplyToBind();
+  }
+  void ReplyToBind() {
+    std::move(held_bind_reply_).Run(
+        network::mojom::AegisAccessContextIdentity::New(incarnation, process_id));
   }
   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
                        InstallSnapshotCallback callback) override {
@@ -445,6 +453,8 @@ class ProductAckContext final : public network::TestNetworkContext,
     std::move(callback).Run(true);
   }
   bool hold_next = false;
+  bool stall_control = false;
+  bool hold_bind_reply = false;
   std::string hold_next_registration;
   std::string incarnation = "product-test-context";
   uint64_t process_id = base::GetCurrentProcId();
@@ -462,6 +472,8 @@ class ProductAckContext final : public network::TestNetworkContext,
   }
 
  private:
+  BindAegisAccessContextCallback held_bind_reply_;
+  mojo::PendingReceiver<network::mojom::AegisAccessContext> stalled_control_;
   network::mojom::AegisAccessSnapshotAckPtr held_ack_;
   InstallSnapshotCallback held_reply_;
   mojo::ReceiverSet<network::mojom::AegisAccessContext> receivers_;
@@ -470,6 +482,11 @@ class ProductAckContext final : public network::TestNetworkContext,
 
 class AccessSiteProxyProductTest : public testing::Test {
  protected:
+  using TimeSource = base::test::TaskEnvironment::TimeSource;
+  explicit AccessSiteProxyProductTest(
+      TimeSource time_source = TimeSource::SYSTEM_TIME)
+      : environment_(time_source) {}
+
   void SetUp() override {
 #if !BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
     const auto* command = base::CommandLine::ForCurrentProcess();
@@ -1549,6 +1566,35 @@ TEST_F(AccessSavedTestProfileProductTest,
   EXPECT_FALSE(bound.Get());
 }
 
+class AccessPrivateContextRebindDeadlineTest : public AccessSiteProxyProductTest {
+ public:
+  AccessPrivateContextRebindDeadlineTest()
+      : AccessSiteProxyProductTest(TimeSource::MOCK_TIME) {}
+};
+
+TEST_F(AccessPrivateContextRebindDeadlineTest,
+       LateBindReplyDoesNotRestartSetupDeadline) {
+  ProductAckContext old_context;
+  old_context.incarnation = "unresponsive-old-control";
+  old_context.stall_control = true;
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> initial;
+  transport_->BindPrivateContext(owner_, &old_context, initial.GetCallback());
+  ASSERT_TRUE(initial.Get());
+
+  ProductAckContext replacement;
+  replacement.incarnation = old_context.incarnation;
+  replacement.hold_bind_reply = true;
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> rebound;
+  transport_->BindPrivateContext(owner_, &replacement, rebound.GetCallback());
+  environment_.FastForwardBy(base::Seconds(29));
+  replacement.ReplyToBind();
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(rebound.IsReady());
+  environment_.FastForwardBy(base::Seconds(1));
+  ASSERT_TRUE(rebound.IsReady());
+  EXPECT_FALSE(rebound.Get());
+}
+
 TEST_F(AccessSavedTestProfileProductTest,
        RebindBeforeOldDisconnectIsDispatchedUsesNewControl) {
   base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> first;
@@ -1583,6 +1629,39 @@ TEST_F(AccessSavedTestProfileProductTest,
   }));
   base::test::TestFuture<bool> revoked;
   options->RevokeTestNodeProfile(revoked.GetCallback());
+  EXPECT_TRUE(revoked.Get());
+  EXPECT_EQ(options->test_profile_runtime_state(),
+            AccessTestProfileRuntimeState::kIdle);
+}
+
+TEST_F(AccessSavedTestProfileProductTest,
+       LastControlDisconnectSettlesRetirementWhenItNeverHeldListener) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  base::test::TestFuture<bool> restored;
+  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+  ASSERT_TRUE(restored.Get());
+  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+
+  ProductAckContext unconsumed;
+  unconsumed.incarnation = "context-without-listener";
+  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+  transport_->BindPrivateContext(owner_, &unconsumed, bound.GetCallback());
+  ASSERT_TRUE(bound.Get());
+
+  context_.hold_next = unconsumed.hold_next = true;
+  base::test::TestFuture<bool> revoked;
+  options->RevokeTestNodeProfile(revoked.GetCallback());
+  ASSERT_TRUE(base::test::RunUntil([&] {
+    return context_.has_reply() && unconsumed.has_reply();
+  }));
+  EXPECT_TRUE(unconsumed.held_ack().registrations.empty());
+  context_.DisconnectRetiredContext();
+  environment_.RunUntilIdle();
+  EXPECT_FALSE(revoked.IsReady());
+
+  unconsumed.Disconnect();
+  environment_.RunUntilIdle();
+  ASSERT_TRUE(revoked.IsReady());
   EXPECT_TRUE(revoked.Get());
   EXPECT_EQ(options->test_profile_runtime_state(),
             AccessTestProfileRuntimeState::kIdle);
