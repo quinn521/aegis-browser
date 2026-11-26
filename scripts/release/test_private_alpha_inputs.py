@@ -119,6 +119,20 @@ class PrivateAlphaInputsTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn(UID, result.stdout + result.stderr)
 
+    def test_hook_rejects_mixed_tls_labels_that_hide_the_fragment_delimiter(self):
+        source = self.root / 'input'
+        source.touch(mode=0o600)
+        target = self.root / NODES
+        payload = encode(dict(add='relay.invalid', port=443, id=UID, net='ws', tls='tls'))
+        for uri in (f'vmess://{payload}',
+                    f'trojan://{UID}@relay.invalid:443',
+                    f'hy2://{UID}@relay.invalid:443'):
+            with self.subTest(scheme=uri.partition(':')[0]):
+                source.write_text(json.dumps([*LIST, uri + '#́Example']))
+                result = self.hook('alpha', source, target)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(target.exists())
+
     def test_hook_uses_utf8_limit_and_refuses_unsafe_input(self):
         source = self.root / 'input'
         target = self.root / NODES

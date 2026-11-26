@@ -261,6 +261,8 @@ def bandwidth(value):
 def validate_additional_tls(uri, scheme):
     wire, _, label = uri.partition('#')
     if (len(uri.encode('utf-8')) > MAX_URI_BYTES or not wire.isascii() or '://' in label
+            # Match the Swift parser's Character boundary at the fragment delimiter.
+            or (label and not label_start(label[0]))
             or any(c.isspace() or control(c) or c == chr(92) for c in uri) or BAD_ESCAPE.search(wire)):
         raise ValueError('Invalid TLS share')
     if scheme == 'vmess':
