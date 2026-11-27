@@ -117,6 +117,6 @@ with tempfile.TemporaryDirectory(prefix="aegis-blocked-cn-private-") as temp_dir
         summary["recoveredCounts"] = recovered
         (base / "run-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         print(json.dumps(summary), flush=True)
-        raise SystemExit(exit_code)
+        raise SystemExit(exit_code or int(any(count is None for count in recovered.values())))
     finally:
         transient.unlink(missing_ok=True)

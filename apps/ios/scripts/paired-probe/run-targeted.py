@@ -158,6 +158,7 @@ with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
                 summary["resourceChecks"] = value.get("resources")
         (out/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
         print(json.dumps(summary),flush=True)
-        raise SystemExit(code)
+        raise SystemExit(code or int(any(summary.get(name) in ("not recovered", "redaction rejected result")
+                                        for name in ("tls", "webkit"))))
     finally:
         transient.unlink(missing_ok=True)

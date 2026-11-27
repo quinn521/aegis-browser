@@ -119,6 +119,25 @@ def index(rows):
     return found
 
 
+def registered_apex(host, rules):
+    # The corpus stores normalized ASCII hostnames. Mirror RegisteredDomain.of's PSL rule selection.
+    labels = host.split(".")
+    if all(label.isdecimal() for label in labels):
+        return True
+    suffix_length = 1
+    for index in range(len(labels)):
+        suffix = ".".join(labels[index:])
+        remaining = len(labels) - index
+        if "!" + suffix in rules:
+            suffix_length = remaining - 1
+            break
+        if suffix in rules:
+            suffix_length = max(suffix_length, remaining)
+        if index and "*." + suffix in rules:
+            suffix_length = max(suffix_length, remaining + 1)
+    return len(labels) == suffix_length + 1
+
+
 corpus = json.loads(fixture.read_text())
 pairs = read("pairs.json")
 www = read("www-pairs.json")
@@ -154,8 +173,18 @@ with failures.open("w", newline="", encoding="utf-8-sig") as handle:
                              any(fake_range(tx.get("remoteAddress", "")) for tx in row["transactions"]),
                              error_text(row), redirects])
 
+suffix_list = fixture.parents[2] / "AegisPolicyKit/Resources/public_suffix_list.dat"
+rules = {line.strip().encode("idna").decode("ascii").lower() for line in suffix_list.read_text().splitlines()
+         if line.strip() and not line.startswith("//")}
+expected_www = {"www." + host for host, pair in primary.items()
+                if pair["target"]["k"] == "domain" and registered_apex(host, rules)
+                and "www." + host not in manifest and not (usable(pair["direct"]) and usable(pair["proxy"]))}
+checkpoints = {"pairs.json": pairs, "www-pairs.json": www, "canaries.json": canaries, "egress.json": egress}
+recovered = summary.get("recoveredCounts", {})
 complete = (
     len(primary) == len(manifest)
+    and all((base / name).is_file() and recovered.get(name) == len(rows) for name, rows in checkpoints.items())
+    and set(followup) == expected_www
     and len(canaries) == 7
     and sum(diagnosis(row) == "2xx" for row in canaries) >= 4
     and all(
@@ -330,3 +359,4 @@ if pairs:
 lines += ["", "逐请求失败及路径未核实条目见同目录 `paired-failures.csv`。"]
 (base / "paired-review.zh-CN.md").write_text("\n".join(lines) + "\n")
 print(f"complete={complete} primary={len(primary)}/{len(manifest)} www={len(followup)}")
+raise SystemExit(0 if complete else 1)
