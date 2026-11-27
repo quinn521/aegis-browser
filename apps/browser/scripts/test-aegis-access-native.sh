@@ -163,8 +163,11 @@ fi
   -o "$TEST_ROOT/access_options_capability_test"
 "$TEST_ROOT/access_options_capability_test"
 
+python3 "$BROWSER_DIR/access-cmake/generate_share_link_vectors.py" \
+  "$PROJECT_ROOT/fixtures/access/share-links" "$TEST_ROOT/share_link_vectors.inc"
+
 "$CXX_BIN" -std=c++20 -Wall -Wextra -Werror -pedantic \
-  -I"$BROWSER_DIR/overlay" \
+  -I"$BROWSER_DIR/overlay" -I"$TEST_ROOT" \
   "$COMPONENT_DIR/access_test_node.cc" \
   "$COMPONENT_DIR/access_test_node_test.cc" \
   -o "$TEST_ROOT/access_test_node_test"
@@ -173,7 +176,7 @@ fi
 if [[ "$(uname -s)" == Darwin ]]; then
   ACCESS_DIR="$BROWSER_DIR/overlay/chrome/browser/aegis/access"
   "$CXX_BIN" -std=c++20 -Wall -Wextra -Werror -fobjc-arc \
-    -I"$BROWSER_DIR/overlay" \
+    -I"$BROWSER_DIR/overlay" -I"$TEST_ROOT" \
     "$COMPONENT_DIR/access_test_node.cc" \
     "$ACCESS_DIR/access_test_node_qr_mac.mm" \
     "$ACCESS_DIR/access_test_node_qr_mac_test.mm" \

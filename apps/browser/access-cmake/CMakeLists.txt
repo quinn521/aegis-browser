@@ -25,7 +25,10 @@ foreach(index RANGE "${last_module}")
   endforeach()
 endforeach()
 
-add_library(aegis_access_core STATIC ${core_sources})
+add_library(aegis_access_core STATIC ${core_sources} "${component}/access_test_node.cc")
+if(WIN32)
+  target_link_libraries(aegis_access_core PRIVATE ws2_32)
+endif()
 target_include_directories(aegis_access_core PUBLIC "${overlay}")
 
 include(CTest)
@@ -71,4 +74,23 @@ if(BUILD_TESTING)
     add_test(NAME aegis_access_contract COMMAND aegis_access_native_test)
   endif()
   set_tests_properties(aegis_access_contract PROPERTIES TIMEOUT 210)
+
+  if(NOT ANDROID)
+    set(share_link_fixtures "${CMAKE_CURRENT_SOURCE_DIR}/../../../fixtures/access/share-links")
+    file(GLOB share_link_inputs CONFIGURE_DEPENDS "${share_link_fixtures}/*.json")
+    set(share_link_generator "${CMAKE_CURRENT_SOURCE_DIR}/generate_share_link_vectors.py")
+    set(share_link_vectors "${CMAKE_CURRENT_BINARY_DIR}/share_link_vectors.inc")
+    add_custom_command(
+      OUTPUT "${share_link_vectors}"
+      COMMAND Python3::Interpreter "${share_link_generator}"
+              "${share_link_fixtures}" "${share_link_vectors}"
+      DEPENDS "${share_link_generator}" ${share_link_inputs}
+      VERBATIM
+    )
+    add_executable(aegis_access_share_link_test
+                   "${component}/access_test_node_test.cc" "${share_link_vectors}")
+    target_include_directories(aegis_access_share_link_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(aegis_access_share_link_test PRIVATE aegis_access_core)
+    add_test(NAME aegis_access_share_links COMMAND aegis_access_share_link_test)
+  endif()
 endif()

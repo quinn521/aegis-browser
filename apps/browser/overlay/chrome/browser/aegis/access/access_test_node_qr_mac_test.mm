@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "components/aegis_access/access_test_node_test_fixture.h"
+#include "share_link_vectors.inc"
 
 namespace {
 
@@ -83,6 +84,19 @@ int main() {
     assert(scanned.node == typed.node);
     using namespace aegis_access::test;
     constexpr auto extended = AccessTestNodeImportMode::kAllowExtendedVless;
+    for (const auto& vector : kSharedShareLinks) {
+      const auto text = ParseAccessTestNodeShareMac(vector.share, extended);
+      const auto qr = Decode(DrawCodes(MakeCode(vector.share)), extended);
+      assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
+      assert(qr.node == text.node);
+    }
+    for (const auto& vector : kRejectedSharedShareLinks) {
+      const auto text = ParseAccessTestNodeShareMac(vector.share, extended);
+      const auto qr = Decode(DrawCodes(MakeCode(vector.share)), extended);
+      assert(!text.node && !qr.node);
+      assert(qr.status == AccessTestNodeQrStatus::kInvalidShare ||
+             qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound);
+    }
     for (const auto vector : {kSyntheticPinnedRealityVisionShare,
                               kSyntheticWebSocketTlsShare,
                               kSyntheticWebSocketTlsQueryShare,

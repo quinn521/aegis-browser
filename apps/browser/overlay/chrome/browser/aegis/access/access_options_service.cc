@@ -463,7 +463,7 @@ void AccessOptionsService::PreviewTestNodeText(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   const auto generation = StartTestNodePreview(editor, callback);
   if (!generation) return;
-  if (share.size() > aegis_access::kMaxAccessTestNodeShareBytes) {
+  if (share.size() > aegis_access::kMaxExtendedAccessTestNodeShareBytes) {
     worker_.AsyncCall(&AccessOptionsWorker::Reject)
         .WithArgs(editor, TestNodePreviewStatus::kInvalidShare)
         .Then(base::BindOnce(&AccessOptionsService::OnTestNodePreview,

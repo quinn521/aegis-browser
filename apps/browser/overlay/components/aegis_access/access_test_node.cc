@@ -697,8 +697,11 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
     std::string_view share,
     AccessTestNodeImportMode mode,
     AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
-  return ParseShare(share, mode, kMaxAccessTestNodeShareBytes,
-                    canonicalize_idna);
+  const size_t max_share_bytes =
+      mode == AccessTestNodeImportMode::kAllowExtendedVless
+          ? kMaxExtendedAccessTestNodeShareBytes
+          : kMaxAccessTestNodeShareBytes;
+  return ParseShare(share, mode, max_share_bytes, canonicalize_idna);
 }
 
 AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
@@ -707,7 +710,7 @@ AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
   // Percent encoding uses at most three bytes per input byte. Allow room for
   // canonical defaults and a dial hostname normalized to an ASCII A-label.
   constexpr size_t kMaxNativeShareBytes =
-      3 * kMaxAccessTestNodeShareBytes + 512;
+      3 * kMaxExtendedAccessTestNodeShareBytes + 512;
   return ParseShare(share, mode, kMaxNativeShareBytes, nullptr);
 }
 
