@@ -48,11 +48,18 @@ jobs:
         run: |
           : "${GH_TOKEN:?Configure AEGIS_FORK_AUTOMATION_TOKEN with Contents and Pull requests write access}"
           branch="feat/ios-geosite-refresh-$TAG"
-          existing=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+          existing_number=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
             -f base=develop -f "head=$GITHUB_REPOSITORY_OWNER:$branch" -f state=all \
-            --jq '.[0].html_url // empty')
-          if [[ -n "$existing" ]]; then
-            printf 'GeoSite %s already has a pull request at %s\n' "$TAG" "$existing"
+            --jq '.[0].number // empty')
+          if [[ -n "$existing_number" ]]; then
+            existing=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$existing_number")
+            existing_url=$(jq -er .html_url <<< "$existing")
+            if ! jq -e '.state == "open" or .merged == true' <<< "$existing" >/dev/null; then
+              printf 'GeoSite %s has a closed, unmerged pull request. Reopen %s to continue.\n' \
+                "$TAG" "$existing_url" >&2
+              exit 1
+            fi
+            printf 'GeoSite %s already has a pull request at %s\n' "$TAG" "$existing_url"
             exit 0
           fi
           title="fix(ios): refresh bundled GeoSite to $TAG"
@@ -73,10 +80,9 @@ jobs:
               printf 'Existing refresh branch %s is not based on develop history\n' "$branch" >&2
               exit 1
             fi
-            local_changes=$(git diff-tree --no-commit-id --no-renames --no-abbrev -r HEAD^ HEAD)
-            remote_changes=$(git diff-tree --no-commit-id --no-renames --no-abbrev -r "$parent" "$remote_head")
-            if [[ "$local_changes" != "$remote_changes" ]]; then
-              printf 'Existing refresh branch %s has different changes\n' "$branch" >&2
+            expected_tree=$(git rev-parse 'HEAD^{tree}')
+            if ! merged_tree=$(git merge-tree --write-tree HEAD^ "$remote_head") || [[ "$merged_tree" != "$expected_tree" ]]; then
+              printf 'Existing refresh branch %s would not produce the verified tree\n' "$branch" >&2
               exit 1
             fi
           else
