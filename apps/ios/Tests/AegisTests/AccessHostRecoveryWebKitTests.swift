@@ -4654,15 +4654,17 @@ extension AccessHostRecoveryWebKitTests {
 
         let assetsOnly = environment["AEGIS_DIRECTED_ASSETS_ONLY"] == "1"
         let searchOnly = environment["AEGIS_DIRECTED_SEARCH_ONLY"] == "1"
-        let repositoryQuery = "site:github.com/gcsagroup/aegis-browser Aegis Browser"
-        let searchTargets = try ["Aegis Browser", repositoryQuery].map { query in
-            var parts = URLComponents()
-            parts.scheme = "https"
-            parts.host = "www.google.com.hk"
-            parts.path = "/search"
-            parts.queryItems = [URLQueryItem(name: "q", value: query)]
-            return try XCTUnwrap(parts.url).absoluteString
-        }
+        let generalQuery = "Aegis Browser"
+        let repositoryQuery = "Aegis Browser site:github.com/gcsagroup/aegis-browser"
+        var google = preferenceValues
+        google.searchEngine = .google
+        var hongKong = preferenceValues
+        hongKong.searchEngine = .custom
+        hongKong.customSearch = "https://www.google.com.hk/search?q={searchTerms}"
+        let originalSearch = try XCTUnwrap(BrowserPreferences.searchURL(generalQuery, values: hongKong)).absoluteString
+        let addressBarSearch = try XCTUnwrap(BrowserPreferences.searchURL(generalQuery, values: google)).absoluteString
+        let repositorySearch = try XCTUnwrap(BrowserPreferences.searchURL(repositoryQuery, values: hongKong)).absoluteString
+        let searchTargets = [originalSearch, addressBarSearch, repositorySearch]
         let scenarios: [(String, AccessOverseasSelection, [String])] = searchOnly ? [
             ("all", .init(enabled: true, mode: .all), searchTargets),
         ] : assetsOnly ? [
@@ -4687,7 +4689,17 @@ extension AccessHostRecoveryWebKitTests {
                 let observer = DirectedWebKitObserver(tab: tab)
                 observer.observe(tab.webView)
                 NSLog("AEGIS-DIRECTED-PAGE %@ %@ begin", mode, url.host ?? "?")
-                tab.loadFromAddressBar(url)
+                let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
+                var searchEntry: String?
+                if searchOnly, address != originalSearch {
+                    let builtIn = address == addressBarSearch
+                    try preferences.save(builtIn ? google : hongKong)
+                    browser.navigate(address: try XCTUnwrap(query))
+                    searchEntry = builtIn ? "google-address-bar" : "custom-hk-address-bar"
+                } else {
+                    tab.loadFromAddressBar(url)
+                    if searchOnly { searchEntry = "hk-search-url" }
+                }
                 let deadline = Date().addingTimeInterval(28)
                 var settledAt: Date?
                 while Date() < deadline {
@@ -4706,7 +4718,6 @@ extension AccessHostRecoveryWebKitTests {
                 let snapshot = coordinator.snapshot(for: tab)
                 let proxyCount = view.configuration.websiteDataStore.proxyConfigurations.count
                 let stillLoading = tab.isLoading
-                let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
                 var document: [String: Any] = [:]
                 if observer.finishedPublicPage,
                    let value = try? await view.callAsyncJavaScript(DirectedWebKitObserver.resourceSnapshot,
@@ -4725,9 +4736,11 @@ extension AccessHostRecoveryWebKitTests {
                 var clickEvents: [[String: Any]] = []
                 let searchContent = document["searchContent"] as? [String: Any]
                 let visibleResults = searchContent?["visibleExternalLinks"] as? Int ?? 0
-                let searchPage = "https://www.google.com.hk/search"
-                let searchPageReady = !stillLoading && committed == searchPage && committed == displayURL
-                    && DirectedWebKitObserver.finishedSuccessfulNavigation(to: searchPage, events: observer.events, requireProxy: true)
+                let landedOnSearch = committed.map { landing in
+                    ["https://www.google.com.hk/search", "https://www.google.com/search"].contains(landing)
+                        && DirectedWebKitObserver.finishedSuccessfulNavigation(to: landing, events: observer.events, requireProxy: true)
+                } ?? false
+                let searchPageReady = !stillLoading && landedOnSearch && committed == displayURL
                     && searchContent?["queryPreserved"] as? Bool == true
                     && searchContent?["visibleSearchField"] as? Bool == true
                 let visitsBeforeClick = Set(history.history.map(\.id))
@@ -4765,6 +4778,7 @@ extension AccessHostRecoveryWebKitTests {
                     "storeProxyCount": proxyCount,
                     "overseasGrant": String(describing: snapshot.overseasGrant),
                     "stillLoading": stillLoading,
+                    "searchEntry": (searchEntry as Any?) ?? NSNull(),
                     "searchClickLink": (clickedLink as Any?) ?? NSNull(),
                     "searchClickTarget": (clickedLink?["repository"] as Any?) ?? NSNull(),
                     "searchClickCommitted": (committedDestination as Any?) ?? NSNull(),
@@ -4929,7 +4943,8 @@ private final class DirectedWebKitObserver: NSObject, WKNavigationDelegate {
     };
     const resultRegion = document.querySelector('#rso') || document.querySelector('#search');
     const region = resultRegion || document.querySelector('#main, main, [role=main]') || document.body;
-    const googleSearch = location.origin === 'https://www.google.com.hk' && location.pathname === '/search';
+    const googleSearch = ['https://www.google.com.hk', 'https://www.google.com'].includes(location.origin)
+      && location.pathname === '/search';
     const results = [];
     const seen = new Set();
     for (const anchor of region.querySelectorAll('a[href]')) {
