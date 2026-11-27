@@ -259,34 +259,59 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
   ASSERT_TRUE(options);
   using Failure = AccessOptionsStore::SaveFailurePointForTesting;
   options->SetSaveFailureForTesting(Failure::kAfterCommit);
+  const auto operation = base::Uuid::GenerateRandomV4().AsLowercaseString();
 
+  ASSERT_EQ("saved", content::EvalJs(contents, content::JsReplace(R"JS(
+    (async () => {
+      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
+      const initial = await send('readAccessOptions');
+      const preview = await send('previewAccessTestNode', 'text', $1);
+      if (preview.state !== 'preview') return preview.state;
+      const apply = await send('applyAccessTestNode', initial.revision, $2,
+          'socks5', 'random', '');
+      if (apply.state !== 'uncertain') return apply.state;
+      return (await send('queryAccessTestNodeApply', $2)).state;
+    })()
+  )JS", aegis_access::test::kSyntheticTestNodeShare, operation)));
+
+  options->SetSaveFailureForTesting(Failure::kNone);
+  EXPECT_EQ("2,http", content::EvalJs(contents, R"JS(
+    (async () => {
+      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
+      const recovered = await send('readAccessOptions');
+      const prefs = await send('applyAccessTestNodePreferences', recovered.revision,
+          crypto.randomUUID(), 'http', 'random', '');
+      if (prefs.state !== 'prepared' && prefs.state !== 'savedUnavailable') {
+        return 'preferences:' + prefs.state;
+      }
+      const committed = await send('readAccessOptions');
+      if (committed.revision !== prefs.revision) return 'revisionMismatch';
+      return [committed.revision, committed.testProfile?.protocol].join(',');
+    })()
+  )JS"));
+  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> read;
+  options->Read(read.GetCallback());
+  ASSERT_EQ(read.Get().status, StoreStatus::kValid);
+  ASSERT_TRUE(read.Get().value && read.Get().value->test_profile);
+  EXPECT_EQ(read.Get().value->revision, 2u);
+  EXPECT_EQ(read.Get().value->test_profile->committed_revision,
+            read.Get().value->revision);
+  EXPECT_EQ(read.Get().value->test_profile->configuration.inbound.protocol,
+            aegis_access::AccessInboundProtocolPreference::kHttp);
+
+  // A receipt for the previous node Apply cannot clear a newly staged draft.
   EXPECT_EQ("saved,preview,preserved", content::EvalJs(contents, content::JsReplace(R"JS(
     (async () => {
       const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
-      const share = $1;
-      const initial = await send('readAccessOptions');
-      const preview = await send('previewAccessTestNode', 'text', share);
-      if (preview.state !== 'preview') return preview.state;
-      const operation = crypto.randomUUID();
-      const apply = await send('applyAccessTestNode', initial.revision, operation,
-          'socks5', 'random', '');
-      if (apply.state !== 'uncertain') return apply.state;
-      const recovered = await send('queryAccessTestNodeApply', operation);
-      if (recovered.state !== 'saved') return recovered.state;
-      const preferencesOperation = crypto.randomUUID();
-      const prefs = await send('applyAccessTestNodePreferences', recovered.revision,
-          preferencesOperation, 'http', 'random', '');
-      if (prefs.state !== 'uncertain') return 'preferences:' + prefs.state;
-      const prefsRecovered = await send('queryAccessTestNodeApply', preferencesOperation);
-      if (prefsRecovered.state !== 'saved') return 'preferences:' + prefsRecovered.state;
-      const fresh = await send('previewAccessTestNode', 'text', share);
-      const confirmed = await send('queryAccessTestNodeApply', preferencesOperation);
-      const pending = await send('applyAccessTestNodePreferences', confirmed.revision,
+      const committed = await send('readAccessOptions');
+      const fresh = await send('previewAccessTestNode', 'text', $1);
+      const confirmed = await send('queryAccessTestNodeApply', $2);
+      const pending = await send('applyAccessTestNodePreferences', committed.revision,
           crypto.randomUUID(), 'socks5', 'random', '');
       return [confirmed.state, fresh.state,
         pending.state === 'previewPending' ? 'preserved' : pending.state].join(',');
     })()
-  )JS", aegis_access::test::kSyntheticTestNodeShare)));
+  )JS", aegis_access::test::kSyntheticTestNodeShare, operation)));
 }
 
 IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
@@ -342,6 +367,105 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
       return [recovered.state, next.state].join(',');
     })()
   )JS", operation)));
+}
+
+
+IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+                       StaleWindowPreservesListenerDraftAfterConflict) {
+  if (!CanUseAccessOptionsForCurrentBuild(
+          aegis_access::AccessOptionsOperation::kWrite)) {
+    GTEST_SKIP() << "The test requires an admitted internal build";
+  }
+  const GURL url("chrome://aegis/access-options");
+  auto* first = ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(first);
+  ASSERT_EQ("1", content::EvalJs(first, content::JsReplace(R"JS(
+    (async () => {
+      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
+      const initial = await send('readAccessOptions');
+      const preview = await send('previewAccessTestNode', 'text', $1);
+      if (preview.state !== 'preview') return preview.state;
+      const applied = await send('applyAccessTestNode', initial.revision,
+          crypto.randomUUID(), 'socks5', 'random', '');
+      return applied.revision ?? applied.state;
+    })()
+  )JS", aegis_access::test::kSyntheticTestNodeShare)));
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("about:blank")));
+  first = ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(first);
+  auto* second_browser = CreateBrowser(browser()->GetProfile());
+  ASSERT_NE(second_browser, browser());
+  auto* second = ui_test_utils::NavigateToURL(second_browser, url);
+  ASSERT_TRUE(second);
+
+  constexpr char kEditPreferences[] = R"JS(
+    (async () => {
+      const get = id => document.getElementById(id);
+      const fields = get('test-node-fields');
+      if (fields.disabled) {
+        await new Promise(resolve => {
+          const observer = new MutationObserver(() => {
+            if (fields.disabled) return;
+            observer.disconnect();
+            resolve();
+          });
+          observer.observe(fields, {attributes: true, attributeFilter: ['disabled']});
+        });
+      }
+      const set = (id, value, event) => {
+        get(id).value = value;
+        get(id).dispatchEvent(new Event(event, {bubbles: true}));
+      };
+      set('inbound-protocol', $1, 'change');
+      set('inbound-port-mode', 'fixed', 'change');
+      set('inbound-port', $2, 'input');
+      return !get('apply-node').disabled && get('saved-revision').textContent;
+    })()
+  )JS";
+  ASSERT_EQ("1", content::EvalJs(first, content::JsReplace(
+      kEditPreferences, "http", "41071")));
+  ASSERT_EQ("1", content::EvalJs(second, content::JsReplace(
+      kEditPreferences, "socks5", "10806")));
+
+  constexpr char kApplyPreferences[] = R"JS(
+    (async () => {
+      const get = id => document.getElementById(id);
+      const fields = get('test-node-fields');
+      const completed = new Promise(resolve => {
+        const observer = new MutationObserver(() => {
+          if (fields.disabled) return;
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(fields, {attributes: true, attributeFilter: ['disabled']});
+      });
+      get('apply-node').click();
+      await completed;
+      const status = get('node-status');
+      const conflict = !get('review-revision').hidden &&
+          status.textContent.startsWith('Another window saved changes.');
+      return [get('saved-revision').textContent, get('draft-state').textContent,
+          get('inbound-protocol').value, get('inbound-port-mode').value,
+          get('inbound-port').value, status.dataset.error, conflict].join(',');
+    })()
+  )JS";
+  EXPECT_EQ("2,Saved preferences,http,fixed,41071,false,false",
+            content::EvalJs(first, kApplyPreferences));
+  EXPECT_EQ("1,Unsaved draft,socks5,fixed,10806,true,true",
+            content::EvalJs(second, kApplyPreferences));
+
+  CloseBrowserSynchronously(second_browser);
+  auto* reopened = ui_test_utils::NavigateToURL(
+      CreateBrowser(browser()->GetProfile()), url);
+  ASSERT_TRUE(reopened);
+  EXPECT_EQ("2,http,fixed,41071", content::EvalJs(reopened, R"JS(
+    (async () => {
+      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
+      const saved = await send('readAccessOptions');
+      const {protocol, portMode, requestedPort} = saved.testProfile;
+      return [saved.revision, protocol, portMode, requestedPort].join(',');
+    })()
+  )JS"));
 }
 
 IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,

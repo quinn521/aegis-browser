@@ -12,6 +12,9 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
 #include "base/json/json_writer.h"
+#include "base/no_destructor.h"
+#include "base/process/process_handle.h"
+#include "base/synchronization/lock.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task/execution_fence.h"
@@ -32,8 +35,23 @@ namespace {
 std::atomic_bool block_retirement{false};
 std::atomic<pid_t> retirement_pid{0};
 std::atomic<uint16_t> retirement_port{0};
+struct RetiringExecutable {
+  base::Lock lock;
+  base::FilePath path GUARDED_BY(lock);
+};
+
+RetiringExecutable& GetRetiringExecutable() {
+  static base::NoDestructor<RetiringExecutable> executable;
+  return *executable;
+}
+
 AccessOwnedChildRetirementMac RetirementFault(const AccessOwnedChildMac& child, uint32_t wait) {
   retirement_pid.store(child.pid());
+  {
+    auto& executable = GetRetiringExecutable();
+    base::AutoLock lock(executable.lock);
+    executable.path = base::GetProcessExecutablePath(child.pid());
+  }
   if (const auto inspected = InspectAccessOwnedListenerMac(child); inspected.proof)
     retirement_port.store(inspected.proof->port);
   return block_retirement.load() ? AccessOwnedChildRetirementMac::kDeadlineExceeded
@@ -289,6 +307,14 @@ TEST_F(AccessInternalCoreManagerMacTest,
       stopped));
   base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
   EXPECT_TRUE(stopped->TimedWait(base::Seconds(5)));
+  base::FilePath staged_executable;
+  {
+    auto& executable = GetRetiringExecutable();
+    base::AutoLock lock(executable.lock);
+    staged_executable = executable.path;
+  }
+  ASSERT_EQ(staged_executable.BaseName().value(), "xray");
+  EXPECT_FALSE(base::PathExists(staged_executable.DirName()));
   EXPECT_TRUE(LoopbackPortHeld(port));
   EXPECT_TRUE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
 }

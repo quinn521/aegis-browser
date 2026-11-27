@@ -1041,6 +1041,10 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     credentials_.reset();
     authenticated_ = false;
 #if BUILDFLAG(IS_MAC)
+    // Once the child is reaped, its private staging directory has no
+    // consumers. The published listener and Vault reference still have them.
+    const bool stage_deleted =
+        !IsInternal() || !directory_.IsValid() || directory_.Delete();
     if (IsInternal() && network_lease_pending_ && !consumers_revoked) {
       // The child is reaped; only the published address remains held.
       return false;
@@ -1053,7 +1057,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
     if (IsInternal()) {
       port_ = 0;
       registration_.clear();
-      if (directory_.IsValid() && !directory_.Delete()) return false;
+      if (!stage_deleted) return false;
       if (release_reference) runtime_reference_lease_.reset();
     } else {
       const bool deleted = directory_.Delete();
