@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+from xctestrun import aegis_test_target
 import re
 import subprocess
 import tempfile
@@ -36,11 +37,7 @@ if any(parse_qs(urlsplit(uri).query).get(key) != value for key, value in expecte
 
 with template.open("rb") as handle:
     descriptor = plistlib.load(handle)
-target = descriptor.get("AegisTests")
-if target is None:
-    configs = descriptor.get("TestConfigurations", [])
-    targets = [t for config in configs for t in config["TestTargets"] if t.get("BlueprintName") == "AegisTests"]
-    target, = targets
+target = aegis_test_target(descriptor)
 target.setdefault("EnvironmentVariables", {})["AEGIS_BLOCKED_CN_NODE_URI"] = uri
 target["EnvironmentVariables"]["AEGIS_PAIRED_RUN"] = run
 target["DefaultTestExecutionTimeAllowance"] = 14_400

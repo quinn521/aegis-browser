@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+from xctestrun import aegis_test_target
 import re
 import subprocess
 import sys
@@ -49,7 +50,7 @@ uri=matches[0]
 parsed=urlsplit(uri)
 needles=[part.encode() for part in (uri,parsed.username,*parse_qs(parsed.query).get("pbk",[])) if part]
 descriptor=plistlib.loads(template.read_bytes())
-target=descriptor["AegisTests"]
+target = aegis_test_target(descriptor)
 target.setdefault("EnvironmentVariables",{}).update({
     "AEGIS_BLOCKED_CN_NODE_URI":uri,
     "AEGIS_DIRECTED_PROBE":"1",
