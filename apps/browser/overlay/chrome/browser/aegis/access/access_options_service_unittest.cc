@@ -257,7 +257,9 @@ TEST(AccessOptionsServiceTest, DevLongShareFitsCoreBeforeItIsStaged) {
   ASSERT_EQ(saved.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
   EXPECT_EQ(state->stored.load(), 1u);
 
-  share.append(aegis_access::kMaxExtendedAccessTestNodeShareBytes - share.size(), 'x');
+  // This share fits the Vault record. The fixed SOCKS5 configuration exceeds
+  // the pinned Xray stdin budget, so preflight must reject it before staging.
+  share.append(7900 - share.size(), 'x');
   base::test::TestFuture<TestNodePreviewResult> oversized;
   options->PreviewTestNodeText(*editor, share, oversized.GetCallback());
   EXPECT_EQ(oversized.Get().status, TestNodePreviewStatus::kInvalidShare);

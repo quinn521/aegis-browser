@@ -592,3 +592,4 @@
 0592-access-check-recovered-apply-publication.patch
 0593-access-validate-shares-with-common-fixtures.patch
 0594-access-check-dev-config-before-staging.patch
+0595-access-isolate-xray-config-budget-regression.patch
