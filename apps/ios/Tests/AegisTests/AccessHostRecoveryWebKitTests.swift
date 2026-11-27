@@ -4604,6 +4604,18 @@ extension AccessHostRecoveryWebKitTests {
         let remaining = try await view.callAsyncJavaScript(DirectedWebKitObserver.clickSearchResult,
             arguments: [:], contentWorld: .page) as? [String: String]
         XCTAssertNil(remaining)
+        _ = try await view.evaluateJavaScript("""
+            document.querySelector('#rso').insertAdjacentHTML('beforeend',
+              '<a id="file" href="/goto?url=opaque-5">https://github.com<div role="heading">aegis-browser/README.md at main</div></a>')
+            """)
+        let fallback = try await view.callAsyncJavaScript(DirectedWebKitObserver.clickSearchResult,
+            arguments: [:], contentWorld: .page) as? [String: String]
+        XCTAssertEqual(fallback?["repository"], root)
+        XCTAssertEqual(fallback?["kind"], "repository-page")
+        XCTAssertTrue(DirectedWebKitObserver.matchesRepositoryLanding(root + "/blob/main/README.md",
+                                                                     repository: root, kind: "repository-page"))
+        XCTAssertFalse(DirectedWebKitObserver.matchesRepositoryLanding(root + "-other/blob/main/README.md",
+                                                                      repository: root, kind: "repository-page"))
     }
 
     func testPhoneDirectedGoogleWebKit() async throws {
@@ -4773,9 +4785,10 @@ extension AccessHostRecoveryWebKitTests {
                         attach(destination.webView, to: window)
                         clickEvents = destination === tab ? Array(observer.events.dropFirst(clickStart)) : childObserver?.events ?? []
                         let finalURL = DirectedWebKitObserver.safe(destination.liveCommittedDocumentURL)
-                        if finalURL == expected, !destination.isLoading, destination.loadingError == nil,
-                           DirectedWebKitObserver.finishedSuccessfulNavigation(to: expected, events: clickEvents),
-                           history.history.contains(where: { $0.url == expected && !visitsBeforeClick.contains($0.id) }) {
+                        if let finalURL, DirectedWebKitObserver.matchesRepositoryLanding(finalURL, repository: expected, kind: link["kind"]),
+                           !destination.isLoading, destination.loadingError == nil,
+                           DirectedWebKitObserver.finishedSuccessfulNavigation(to: finalURL, events: clickEvents, requireProxy: true),
+                           history.history.contains(where: { $0.url == finalURL && !visitsBeforeClick.contains($0.id) }) {
                             committedDestination = finalURL
                             break
                         }
@@ -4852,6 +4865,12 @@ private final class DirectedWebKitObserver: NSObject, WKNavigationDelegate {
               let response = trace[..<commit].last(where: { $0["event"] as? String == "response" }),
               let status = response["status"] as? Int, (200..<300).contains(status) else { return false }
         return !requireProxy || (response["proxyCount"] as? Int ?? 0) > 0
+    }
+
+    static func matchesRepositoryLanding(_ url: String, repository: String, kind: String?) -> Bool {
+        if url == repository { return true }
+        guard kind == "repository-page" else { return false }
+        return ["/blob/", "/tree/"].contains { url.hasPrefix(repository + $0) && url.count > repository.count + $0.count }
     }
 
     private func record(_ event: String, view: WKWebView, url: URL? = nil, detail: [String: Any] = [:]) {
@@ -4991,28 +5010,40 @@ private final class DirectedWebKitObserver: NSObject, WKNavigationDelegate {
       if (seen.has(key)) continue;
       seen.add(key);
       let repository = null;
+      let kind = null;
       if (target.origin === 'https://github.com') {
+        const lowerTitle = title.toLowerCase();
+        const destinationPath = target.pathname.toLowerCase();
         for (const owner of ['gcsagroup', 'quinn521']) {
           const path = '/' + owner + '/aegis-browser';
-          const namedRoot = [owner + '/aegis-browser', 'aegis-browser - ' + owner].includes(title.toLowerCase());
-          if (fromCitation ? namedRoot : target.pathname.toLowerCase() === path) {
-            repository = fromCitation ? target.origin + path : target.origin + target.pathname;
+          const namedRoot = [owner + '/aegis-browser', 'aegis-browser - ' + owner].includes(lowerTitle);
+          const namedPage = /^aegis-browser\/.+ at \S+/.test(lowerTitle)
+            && (lowerTitle.endsWith(' - ' + owner) || (owner === 'gcsagroup' && !lowerTitle.includes(' - ')));
+          const linkedPage = ['/blob/', '/tree/'].some(prefix => destinationPath.startsWith(path + prefix));
+          if (fromCitation ? namedRoot : destinationPath === path) {
+            repository = target.origin + (fromCitation ? path : target.pathname);
+            kind = 'repository-root';
+            break;
+          }
+          if (fromCitation ? namedPage : linkedPage) {
+            repository = target.origin + path;
+            kind = 'repository-page';
             break;
           }
         }
       }
-      results.push({anchor, title, host: target.hostname, link: href.origin + href.pathname, repository});
+      results.push({anchor, title, host: target.hostname, link: href.origin + href.pathname, repository, kind});
     }
     """#
 
     static let clickSearchResult = searchResultLinks + """
 
-    const result = results.find(r => r.repository);
+    const result = results.find(r => r.kind === 'repository-root') || results.find(r => r.kind === 'repository-page');
     if (!result) return null;
-    const {anchor, title, link, repository} = result;
+    const {anchor, title, link, repository, kind} = result;
     anchor.scrollIntoView({block: 'center'});
     anchor.click();
-    return {title, link, repository};
+    return {title, link, repository, kind};
     """
 
     static let searchSnapshot = searchResultLinks + """
