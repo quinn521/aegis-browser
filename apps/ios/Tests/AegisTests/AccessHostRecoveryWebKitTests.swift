@@ -4645,7 +4645,10 @@ extension AccessHostRecoveryWebKitTests {
                 }
                 let view = tab.webView
                 let committed = DirectedWebKitObserver.safe(tab.liveCommittedDocumentURL)
+                let displayURL = DirectedWebKitObserver.safe(view.url)
                 let snapshot = coordinator.snapshot(for: tab)
+                let proxyCount = view.configuration.websiteDataStore.proxyConfigurations.count
+                let stillLoading = tab.isLoading
                 var document: [String: Any] = [:]
                 if observer.finishedPublicPage,
                    let value = try? await view.evaluateJavaScript(DirectedWebKitObserver.resourceSnapshot) as? [String: Any] {
@@ -4658,17 +4661,54 @@ extension AccessHostRecoveryWebKitTests {
                         }
                     }
                 }
+                var clickedDestination: String?
+                var committedDestination: String?
+                let searchContent = document["searchContent"] as? [String: Any]
+                let visibleResults = searchContent?["visibleExternalLinks"] as? Int ?? 0
+                let searchResponse = observer.events.contains { event in
+                    guard event["event"] as? String == "response",
+                          event["url"] as? String == "https://www.google.com.hk/search",
+                          let status = event["status"] as? Int,
+                          let proxies = event["proxyCount"] as? Int else { return false }
+                    return (200..<300).contains(status) && proxies > 0
+                }
+                let searchPageReady = !stillLoading && searchResponse
+                    && searchContent?["queryPreserved"] as? Bool == true
+                    && searchContent?["visibleSearchField"] as? Bool == true
+                if searchOnly, searchPageReady, visibleResults > 0,
+                   let clicked = try? await view.callAsyncJavaScript(DirectedWebKitObserver.clickSearchResult,
+                       arguments: [:], contentWorld: .page) as? String {
+                    clickedDestination = clicked
+                    let clickDeadline = Date().addingTimeInterval(12)
+                    while Date() < clickDeadline {
+                        if let destination = browser.activeTab, !destination.isLoading,
+                           DirectedWebKitObserver.safe(destination.liveCommittedDocumentURL) == clicked {
+                            committedDestination = clicked
+                            break
+                        }
+                        try await Task.sleep(for: .milliseconds(50))
+                    }
+                }
                 observations.append([
                     "mode": mode, "target": address, "events": observer.events, "document": document,
                     "committed": (committed as Any?) ?? NSNull(),
-                    "displayURL": (DirectedWebKitObserver.safe(view.url) as Any?) ?? NSNull(),
-                    "storeProxyCount": view.configuration.websiteDataStore.proxyConfigurations.count,
+                    "displayURL": (displayURL as Any?) ?? NSNull(),
+                    "storeProxyCount": proxyCount,
                     "overseasGrant": String(describing: snapshot.overseasGrant),
-                    "stillLoading": tab.isLoading,
+                    "stillLoading": stillLoading,
+                    "searchClickTarget": (clickedDestination as Any?) ?? NSNull(),
+                    "searchClickCommitted": (committedDestination as Any?) ?? NSNull(),
                 ])
                 let bytes = try JSONSerialization.data(withJSONObject: observations, options: [.sortedKeys])
                 try bytes.write(to: output, options: .atomic)
                 NSLog("AEGIS-DIRECTED-PAGE %@ %@ end", mode, url.host ?? "?")
+                if searchOnly {
+                    XCTAssertTrue(searchPageReady, "Search must finish over the selected proxy and preserve the query")
+                    XCTAssertGreaterThan(visibleResults, 0, "Search must show visible external results")
+                    if searchPageReady && visibleResults > 0 {
+                        XCTAssertNotNil(committedDestination, "A visible Aegis repository result must open")
+                    }
+                }
                 if tab.isLoading { view.stopLoading() }
             }
         }
@@ -4792,6 +4832,27 @@ private final class DirectedWebKitObserver: NSObject, WKNavigationDelegate {
       });
     }
     return {event: 'no-script'};
+    """
+
+    static let clickSearchResult = """
+    const region = document.querySelector('#search, #rso, #main, main, [role=main]') || document.body;
+    for (const anchor of region.querySelectorAll('a[href]')) {
+      if (!anchor.getClientRects().length || !anchor.textContent.trim()
+          || getComputedStyle(anchor).visibility !== 'visible') continue;
+      try {
+        const href = new URL(anchor.href, location.href);
+        if (href.origin !== location.origin && href.origin !== 'https://github.com') continue;
+        const destination = href.origin === location.origin && href.pathname === '/url'
+          ? new URL(href.searchParams.get('q') || href.searchParams.get('url') || '') : href;
+        const path = destination.pathname.toLowerCase();
+        if (destination.origin !== 'https://github.com'
+            || !['/gcsagroup/aegis-browser', '/quinn521/aegis-browser'].includes(path)
+            || destination.username || destination.password) continue;
+        setTimeout(() => anchor.click(), 0);
+        return destination.origin + destination.pathname;
+      } catch (_) {}
+    }
+    return null;
     """
 
     static let resourceSnapshot = """
