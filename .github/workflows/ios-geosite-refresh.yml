@@ -47,7 +47,7 @@ jobs:
           TAG: ${{ steps.refresh.outputs.tag }}
         run: |
           : "${GH_TOKEN:?Configure AEGIS_FORK_AUTOMATION_TOKEN with Contents and Pull requests write access}"
-          branch="automation/ios-geosite-$TAG"
+          branch="feat/ios-geosite-refresh-$TAG"
           existing=$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
             -f base=develop -f "head=$GITHUB_REPOSITORY_OWNER:$branch" -f state=all \
             --jq '.[0].html_url // empty')
