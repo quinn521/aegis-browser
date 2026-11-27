@@ -62,11 +62,23 @@ jobs:
           ref="refs/heads/$branch"
           remote=$(git ls-remote --heads origin "$ref")
           if [[ -n "$remote" ]]; then
-            git fetch --no-tags origin "$ref"
-            git diff --quiet HEAD FETCH_HEAD || {
-              printf 'Existing refresh branch %s has different content\n' "$branch" >&2
+            remote_head="refs/remotes/origin/$branch"
+            fetch_args=(--no-tags)
+            if [[ "$(git rev-parse --is-shallow-repository)" == true ]]; then
+              fetch_args+=(--unshallow)
+            fi
+            git fetch "${fetch_args[@]}" origin refs/heads/develop "$ref:$remote_head"
+            parent=$(git show -s --format=%P "$remote_head")
+            if [[ ! "$parent" =~ ^[0-9a-f]{40}$ ]] || ! git merge-base --is-ancestor "$parent" HEAD^; then
+              printf 'Existing refresh branch %s is not based on develop history\n' "$branch" >&2
               exit 1
-            }
+            fi
+            local_changes=$(git diff-tree --no-commit-id --no-renames --no-abbrev -r HEAD^ HEAD)
+            remote_changes=$(git diff-tree --no-commit-id --no-renames --no-abbrev -r "$parent" "$remote_head")
+            if [[ "$local_changes" != "$remote_changes" ]]; then
+              printf 'Existing refresh branch %s has different changes\n' "$branch" >&2
+              exit 1
+            fi
           else
             git push origin "HEAD:$ref"
           fi
