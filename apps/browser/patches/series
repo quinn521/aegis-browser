@@ -589,3 +589,4 @@
 0589-access-use-safe-hex-encoding-for-native-query.patch
 0590-access-test-retirement-proof-before-fresh-registration.patch
 0591-access-clean-reaped-core-staging-and-verify-apply.patch
+0592-access-check-recovered-apply-publication.patch

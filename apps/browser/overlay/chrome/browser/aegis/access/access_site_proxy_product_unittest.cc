@@ -1052,6 +1052,59 @@ class AccessSavedTestProfileProductTest : public AccessSiteProxyProductTest {
   std::string previous_registration_;
 };
 
+TEST_F(AccessSavedTestProfileProductTest,
+       PreferencesAfterRecoveredApplyPublishTheCommittedRevision) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+  ASSERT_TRUE(options);
+  const auto editor = options->BeginTestNodeEditor();
+  ASSERT_TRUE(editor);
+  base::test::TestFuture<TestNodePreviewResult> preview;
+  options->PreviewTestNodeText(*editor, aegis_access::test::kSyntheticTestNodeShare,
+                               preview.GetCallback());
+  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
+
+  using Failure = AccessOptionsStore::SaveFailurePointForTesting;
+  options->SetSaveFailureForTesting(Failure::kAfterCommit);
+  const auto operation = base::Uuid::GenerateRandomV4().AsLowercaseString();
+  base::test::TestFuture<AccessTestProfileSaveResult> uncertain;
+  options->SaveTestNodeProfile(
+      *editor, options_before_.revision, operation, "Synthetic",
+      options_before_.test_profile->configuration.inbound, uncertain.GetCallback());
+  ASSERT_EQ(uncertain.Get().outcome, AccessOptionsCommitOutcome::kUnknown);
+  base::test::TestFuture<AccessTestProfileSaveResult> recovered;
+  options->QueryTestNodeProfileOperation(operation, recovered.GetCallback());
+  ASSERT_EQ(recovered.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
+  ASSERT_TRUE(recovered.Get().snapshot);
+  const uint64_t recovered_revision = recovered.Get().snapshot->revision;
+  ASSERT_EQ(recovered_revision, options_before_.revision + 1);
+
+  options->SetSaveFailureForTesting(Failure::kNone);
+  base::test::TestFuture<AccessTestProfileSaveResult> updated;
+  auto preferences = options_before_.test_profile->configuration.inbound;
+  preferences.protocol = aegis_access::AccessInboundProtocolPreference::kHttp;
+  options->SaveTestNodePreferences(
+      *editor, recovered_revision, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+      preferences, updated.GetCallback());
+  ASSERT_EQ(updated.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
+  ASSERT_TRUE(updated.Get().snapshot && updated.Get().snapshot->test_profile);
+  options->EndTestNodeEditor(*editor);
+
+  options_before_ = *updated.Get().snapshot;
+  const auto& committed = *options_before_.test_profile;
+  ASSERT_EQ(options_before_.revision, recovered_revision + 1);
+  ASSERT_EQ(committed.committed_revision, options_before_.revision);
+  group_ = "internal-test-profile:" + committed.configuration.id + ":" +
+           base::NumberToString(committed.version);
+  ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+  ASSERT_NO_FATAL_FAILURE(PublishInitialTestProfile(options));
+  EXPECT_EQ(options->test_profile_runtime().profile_version, committed.version);
+  EXPECT_EQ(options->test_profile_runtime().transport,
+            aegis_access::RegisteredProxyTransport::kHttp);
+  EXPECT_TRUE(options->TestNodeRevocationTokenAtRevision(recovered_revision).empty());
+  EXPECT_FALSE(
+      options->TestNodeRevocationTokenAtRevision(committed.committed_revision).empty());
+}
+
 TEST_F(AccessSavedTestProfileProductTest, PersistedBindingWaitsForExactAckAfterRestart) {
   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
   const auto before = coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
