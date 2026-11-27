@@ -24,8 +24,9 @@ def bundled_test_uri(target, products):
         raise ValueError("Expected Aegis.app inside the XCTest products")
     info = plistlib.loads((app / "Info.plist").read_bytes())
     channel = info.get("AegisAccessReleaseChannel")
+    bundle_id = info.get("CFBundleIdentifier")
     if (channel not in ("dev", "alpha") or info.get("AegisReleaseProfile") != channel
-            or info.get("CFBundleIdentifier") not in ("com.gcsa.aegis", "com.gcsa.aegis.alpha.internal")):
+            or bundle_id not in ("com.gcsa.aegis", "com.gcsa.aegis.alpha.internal")):
         raise ValueError("Expected a Dev or Alpha app test host")
     with (app / "AegisAlphaTestNodes.json").open("rb") as file:
         raw = file.read(131_501)
@@ -40,7 +41,7 @@ def bundled_test_uri(target, products):
             or any(query.get(k) != [v] for k, v in (
                 ("security", "reality"), ("type", "tcp"), ("flow", "xtls-rprx-vision")))):
         raise ValueError("Expected a VLESS Reality Vision test node")
-    return channel, routes[0]
+    return channel, bundle_id, routes[0]
 
 
 out = Path(os.environ['AEGIS_PROBE_OUTPUT']).resolve()
@@ -76,9 +77,10 @@ elif webkit_only:
     selectors=selectors[1:]
 descriptor = plistlib.loads(template.read_bytes())
 target = aegis_test_target(descriptor)
+host_bundle_id = "com.gcsa.aegis"
 if use_bundled_node:
     try:
-        bundled_channel, uri = bundled_test_uri(target, products)
+        bundled_channel, host_bundle_id, uri = bundled_test_uri(target, products)
     except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
         raise SystemExit("Bundled probe requires a signed Dev or Alpha app with one Reality Vision node") from None
 else:
@@ -185,7 +187,7 @@ with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
         for name in (("tls",) if tls_only else (("webkit",) if webkit_only else ("webkit","tls"))):
             staged=temp/f"{name}.json"
             result=subprocess.run(["xcrun","devicectl","--timeout","20","device","copy","from","--device",device,
-                "--domain-type","appDataContainer","--domain-identifier","com.gcsa.aegis",
+                "--domain-type","appDataContainer","--domain-identifier",host_bundle_id,
                 "--source",f"/Library/Caches/{comparison_result or (run_id + '-directed-' + name + '.json')}",
                 "--destination",str(staged)],capture_output=True)
             if result.returncode:
