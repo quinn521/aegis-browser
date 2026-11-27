@@ -6,7 +6,25 @@ import UIKit
 import WebKit
 import XCTest
 import AegisPolicyKit
+@testable import Aegis
 @testable import AccessKit
+
+@MainActor
+enum DirectedProbeNode {
+    static func load(_ environment: [String: String]) throws -> AccessInternalTestNode {
+        if environment["AEGIS_DIRECTED_BUNDLED_ALPHA_NODE"] == "1" {
+            let routes = AccessAlphaNodeCatalogue.product().routes
+            guard environment["AEGIS_BLOCKED_CN_NODE_URI"] == nil,
+                  routes.count == 1, let node = routes.first, node.profileKey == .vlessRawReality else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            return node
+        }
+        let uri = try XCTUnwrap(environment["AEGIS_BLOCKED_CN_NODE_URI"], "Missing directed probe node")
+        do { return try AccessInternalTestNode.parseSingleShareURI(uri) }
+        catch { throw CocoaError(.fileReadCorruptFile) }
+    }
+}
 
 /// Live Reality Vision path through the linked embedded core.
 ///
@@ -270,10 +288,8 @@ final class AccessEmbeddedCoreLiveTests: XCTestCase {
         guard environment["AEGIS_DIRECTED_PROBE"] == "1" else { throw XCTSkip("Directed device probe") }
         let run = try XCTUnwrap(environment["AEGIS_DIRECTED_RUN"].flatMap(UUID.init(uuidString:)))
         let comparisonResult = environment["AEGIS_COMPARISON_RESULT_NAME"]
-        let uri = try XCTUnwrap(environment["AEGIS_BLOCKED_CN_NODE_URI"])
-        let node: AccessInternalTestNode
-        do { node = try AccessInternalTestNode.parseSingleShareURI(uri) }
-        catch { XCTFail("Could not import directed test node"); return }
+        let bundledAlphaNode = environment["AEGIS_DIRECTED_BUNDLED_ALPHA_NODE"] == "1"
+        let node = try DirectedProbeNode.load(environment)
 
         struct Leg: Encodable {
             let target: BlockedCNTarget
@@ -314,6 +330,7 @@ final class AccessEmbeddedCoreLiveTests: XCTestCase {
         }
 
         if comparisonResult != nil {
+            let uri = try XCTUnwrap(environment["AEGIS_BLOCKED_CN_NODE_URI"])
             let endpoint = try XCTUnwrap(URLComponents(string: uri))
             let address = try XCTUnwrap(endpoint.host)
             let port = try XCTUnwrap(endpoint.port.flatMap { UInt16(exactly: $0) }.flatMap(NWEndpoint.Port.init(rawValue:)))
@@ -360,7 +377,10 @@ final class AccessEmbeddedCoreLiveTests: XCTestCase {
         output.egress = directEgress + proxyEgress
         let expectedProxyCountry = environment["AEGIS_COMPARISON_PROXY_COUNTRY"] ?? "US"
         guard directEgress.contains(where: { $0.status == 200 && $0.country == "CN" && !$0.proxyObserved }),
-              proxyEgress.contains(where: { $0.status == 200 && $0.country == expectedProxyCountry && $0.proxyObserved }) else {
+              proxyEgress.contains(where: {
+                  $0.status == 200 && $0.proxyObserved
+                      && (bundledAlphaNode ? $0.country != nil : $0.country == expectedProxyCountry)
+              }) else {
             try save("egress-control-failed")
             XCTFail("Directed device egress control failed")
             return

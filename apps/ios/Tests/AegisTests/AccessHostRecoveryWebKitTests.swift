@@ -4609,10 +4609,7 @@ extension AccessHostRecoveryWebKitTests {
     func testPhoneDirectedGoogleWebKit() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard environment["AEGIS_DIRECTED_PROBE"] == "1" else { throw XCTSkip("Directed device probe") }
-        let uri = try XCTUnwrap(environment["AEGIS_BLOCKED_CN_NODE_URI"])
-        let node: AccessInternalTestNode
-        do { node = try AccessInternalTestNode.parseSingleShareURI(uri) }
-        catch { XCTFail("Could not import directed test node"); return }
+        let node = try DirectedProbeNode.load(environment)
         let channel = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String)
         XCTAssertEqual(channel, "alpha")
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "AegisAccessInternalOptions") as? String, "NO")
@@ -4661,21 +4658,36 @@ extension AccessHostRecoveryWebKitTests {
         var hongKong = preferenceValues
         hongKong.searchEngine = .custom
         hongKong.customSearch = "https://www.google.com.hk/search?q={searchTerms}"
-        let originalSearch = try XCTUnwrap(BrowserPreferences.searchURL(generalQuery, values: hongKong)).absoluteString
-        let addressBarSearch = try XCTUnwrap(BrowserPreferences.searchURL(generalQuery, values: google)).absoluteString
-        let repositorySearch = try XCTUnwrap(BrowserPreferences.searchURL(repositoryQuery, values: hongKong)).absoluteString
-        let searchTargets = [originalSearch, addressBarSearch, repositorySearch]
-        let scenarios: [(String, AccessOverseasSelection, [String])] = searchOnly ? [
+        enum Entry: String {
+            case homepage = "configured-google-homepage"
+            case direct = "hk-search-url"
+            case google = "google-address-bar"
+            case custom = "custom-hk-address-bar"
+        }
+        var homepage = preferenceValues
+        homepage.homepage = "https://www.google.com/"
+        try preferences.save(homepage)
+        let hkHomepage = "https://www.google.com.hk/"
+        let hkSearch = "https://www.google.com.hk/search"
+        typealias Target = (address: String, entry: Entry?)
+        func controls(_ addresses: [String]) -> [Target] { addresses.map { ($0, nil) } }
+        let searchTargets: [Target] = [
+            (preferences.homeURL.absoluteString, .homepage),
+            (try XCTUnwrap(BrowserPreferences.searchURL(generalQuery, values: hongKong)).absoluteString, .direct),
+            (try XCTUnwrap(BrowserPreferences.searchURL(generalQuery, values: google)).absoluteString, .google),
+            (try XCTUnwrap(BrowserPreferences.searchURL(repositoryQuery, values: hongKong)).absoluteString, .custom),
+        ]
+        let scenarios: [(String, AccessOverseasSelection, [Target])] = searchOnly ? [
             ("all", .init(enabled: true, mode: .all), searchTargets),
         ] : assetsOnly ? [
             ("categories", .init(enabled: true, categories: [.web, .development]),
-             ["https://github.com/octocat/Hello-World"]),
-            ("all", .init(enabled: true, mode: .all), ["https://www.google.com.hk/"]),
+             controls(["https://github.com/octocat/Hello-World"])),
+            ("all", .init(enabled: true, mode: .all), controls([hkHomepage])),
         ] : [
             ("categories", .init(enabled: true, categories: [.web, .development]),
-             ["https://www.google.com/", "https://github.com/octocat/Hello-World"]),
+             controls(["https://www.google.com/", "https://github.com/octocat/Hello-World"])),
             ("all", .init(enabled: true, mode: .all),
-             ["https://www.google.com/", "https://google.com/", "https://www.google.com.hk/"]),
+             controls(["https://www.google.com/", "https://google.com/", hkHomepage])),
         ]
         let cache = try XCTUnwrap(FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first)
         let run = try XCTUnwrap(environment["AEGIS_DIRECTED_RUN"].flatMap(UUID.init(uuidString:)))
@@ -4684,21 +4696,20 @@ extension AccessHostRecoveryWebKitTests {
         for (mode, selection, targets) in scenarios {
             let approval = try await coordinator.overseasConfirmation(selection, for: browser)
             try await coordinator.confirmOverseas(approval, for: browser) { true }
-            for address in targets {
+            for (address, entry) in targets {
                 let url = try XCTUnwrap(URL(string: address))
                 let observer = DirectedWebKitObserver(tab: tab)
                 observer.observe(tab.webView)
                 NSLog("AEGIS-DIRECTED-PAGE %@ %@ begin", mode, url.host ?? "?")
                 let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
-                var searchEntry: String?
-                if searchOnly, address != originalSearch {
-                    let builtIn = address == addressBarSearch
-                    try preferences.save(builtIn ? google : hongKong)
+                switch entry {
+                case .homepage:
+                    tab.load(preferences.homeURL)
+                case .google, .custom:
+                    try preferences.save(entry == .google ? google : hongKong)
                     browser.navigate(address: try XCTUnwrap(query))
-                    searchEntry = builtIn ? "google-address-bar" : "custom-hk-address-bar"
-                } else {
+                case .direct, nil:
                     tab.loadFromAddressBar(url)
-                    if searchOnly { searchEntry = "hk-search-url" }
                 }
                 let deadline = Date().addingTimeInterval(28)
                 var settledAt: Date?
@@ -4737,7 +4748,7 @@ extension AccessHostRecoveryWebKitTests {
                 let searchContent = document["searchContent"] as? [String: Any]
                 let visibleResults = searchContent?["visibleExternalLinks"] as? Int ?? 0
                 let landedOnSearch = committed.map { landing in
-                    ["https://www.google.com.hk/search", "https://www.google.com/search"].contains(landing)
+                    landing == hkSearch
                         && DirectedWebKitObserver.finishedSuccessfulNavigation(to: landing, events: observer.events, requireProxy: true)
                 } ?? false
                 let searchPageReady = !stillLoading && landedOnSearch && committed == displayURL
@@ -4745,7 +4756,7 @@ extension AccessHostRecoveryWebKitTests {
                     && searchContent?["visibleSearchField"] as? Bool == true
                 let visitsBeforeClick = Set(history.history.map(\.id))
                 let clickStart = observer.events.count
-                if searchOnly, query == repositoryQuery, searchPageReady, visibleResults > 0,
+                if entry == .custom, searchPageReady, visibleResults > 0,
                    let link = try? await view.callAsyncJavaScript(DirectedWebKitObserver.clickSearchResult,
                        arguments: [:], contentWorld: .page) as? [String: String],
                    let expected = link["repository"] {
@@ -4778,7 +4789,7 @@ extension AccessHostRecoveryWebKitTests {
                     "storeProxyCount": proxyCount,
                     "overseasGrant": String(describing: snapshot.overseasGrant),
                     "stillLoading": stillLoading,
-                    "searchEntry": (searchEntry as Any?) ?? NSNull(),
+                    "searchEntry": (entry?.rawValue as Any?) ?? NSNull(),
                     "searchClickLink": (clickedLink as Any?) ?? NSNull(),
                     "searchClickTarget": (clickedLink?["repository"] as Any?) ?? NSNull(),
                     "searchClickCommitted": (committedDestination as Any?) ?? NSNull(),
@@ -4787,10 +4798,16 @@ extension AccessHostRecoveryWebKitTests {
                 let bytes = try JSONSerialization.data(withJSONObject: observations, options: [.sortedKeys])
                 try bytes.write(to: output, options: .atomic)
                 NSLog("AEGIS-DIRECTED-PAGE %@ %@ end", mode, url.host ?? "?")
-                if searchOnly {
+                if entry == .homepage {
+                    XCTAssertEqual(committed, hkHomepage)
+                    XCTAssertFalse(stillLoading)
+                    XCTAssertTrue(DirectedWebKitObserver.finishedSuccessfulNavigation(to: hkHomepage, events: observer.events, requireProxy: true))
+                } else if entry != nil {
+                    XCTAssertEqual(url.host, "www.google.com.hk")
+                    XCTAssertFalse(observer.events.contains { ($0["url"] as? String)?.hasPrefix("https://www.google.cn/") == true })
                     XCTAssertTrue(searchPageReady, "Search must finish over the selected proxy and preserve the query")
                     XCTAssertGreaterThan(visibleResults, 0, "Search must show visible external results")
-                    if query == repositoryQuery, searchPageReady && visibleResults > 0 {
+                    if entry == .custom, searchPageReady && visibleResults > 0 {
                         XCTAssertNotNil(clickedLink, "The scoped search must contain a visible Aegis repository result")
                         XCTAssertNotNil(committedDestination, "The clicked repository must return 2xx and finish navigating")
                     }
