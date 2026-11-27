@@ -19,7 +19,9 @@
 
 ## 受支持的构建环境
 
-Android APK 在上游 `aegis-android-linux-arm64` runner 构建。QEMU 执行候选固定的 Linux x86-64 工具链，目标 ABI 为 `arm64-v8a`。原生 x86-64 Linux 可作为备用构建机。独立 Linux 源码目录需要满足以下条件。
+S1 开发前期，Android APK 在上游 `aegis-android-linux-arm64` runner 构建。QEMU 执行候选固定的 Linux x86-64 工具链，目标 ABI 为 `arm64-v8a`。这是过渡构建路径，产出的 APK 可直接进入设备验收。后期用原生 x86-64 Linux 试编同一候选，核对产物和设备结果后切换默认构建机。[runner 迁移](https://github.com/quinn521/aegis-browser/issues/383)
+
+独立 Linux 源码目录需要满足以下条件。
 
 - 至少 200 GB 可用磁盘空间；
 - 足够完成 Chromium 构建的内存；

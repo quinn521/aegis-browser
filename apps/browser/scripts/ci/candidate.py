@@ -250,7 +250,11 @@ def build(name, evidence):
         features, feature_hash = contract.load(BROWSER, enforce_history=True)
         result.update(productCommit=product_commit, featureContractSha256=feature_hash)
         _, host, arch, args_name, out_name = PLATFORMS[name]
-        if platform.system() != host or platform.machine().lower() not in arch:
+        host_arch = platform.machine().lower()
+        if name == 'android':
+            result.update(hostArchitecture=host_arch, runnerName=os.environ.get('RUNNER_NAME'),
+                          runnerArchitecture=os.environ.get('RUNNER_ARCH'))
+        if platform.system() != host or host_arch not in arch:
             raise ValueError(f'{name} 构建机系统或架构不匹配')
         src = Path(config['sourceRoot']).resolve(strict=True)
         if not (src / 'BUILD.gn').is_file() or not (src.parent / '.gclient').is_file():

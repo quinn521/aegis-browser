@@ -81,7 +81,7 @@ HTTP(S) 下载仍由 Chromium `DownloadItem` 执行。Metalink、Torrent 和 Mag
 
 non-component macOS Release build-tree 是发布资格的输入，不是发布结果。完整的诊断补丁覆盖不会使其成为 RC。正式发布还需两套补丁序列对应的干净已提交 root 身份和可信构建证据、受影响的原生与运行测试、产品身份、签名、公证、打包、安装验收和已通过的发布门禁。
 
-S1 APK 可在 `aegis-android-linux-arm64` 上使用 QEMU 构建。当前源码的制品、真机验收、Android 页面摘要行为与 Play 合规仍待验证。
+开发前期，S1 APK 可在 `aegis-android-linux-arm64` 上使用 QEMU 构建。当前源码的制品、真机验收、Android 页面摘要行为与 Play 合规仍待验证。
 
 ## 开发内部参考
 

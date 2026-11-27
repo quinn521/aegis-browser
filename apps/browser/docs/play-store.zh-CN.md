@@ -43,7 +43,7 @@ GN 中的 application ID 只证明配置存在，不能证明最终 APK/AAB 身�
 
 ## 上架门禁
 
-1. 在干净的 Android 源码目录构建 Release APK/AAB。上游 `aegis-android-linux-arm64` runner 通过 QEMU 执行固定的 Linux x86-64 工具链。
+1. 在干净的 Android 源码目录构建 Release APK/AAB。过渡期间在上游 ARM64 runner 通过 QEMU 执行固定的 Linux x86-64 工具链，后期切换到已验证的原生 x86-64 主机。
 2. 由经过验证的 Android 清单绑定根仓库 commit、Chromium commit、Android 与 V8 两套补丁序列身份、GN 参数、包身份和产物哈希。
 3. 通过 First Run、普通浏览、`chrome://aegis`、核心保护、生命周期、存储、升级和网络行为的真机测试。
 4. 替换默认 Chromium 图标，并审查所有名称、截图、描述和受限品牌素材。

@@ -153,7 +153,7 @@ Windows 介面驗收使用共享的 [驗收腳本](./scripts/windows-agent-ui-ac
 
 ## Android
 
-Android 使用 `ci-pins/android.json` 中的獨立基線。`aegis-android-linux-arm64` runner 透過 QEMU 執行固定的 Linux x86-64 工具鏈建置 APK。驗收需要逐一核對套件身分並記錄 arm64 實機結果。
+Android 使用 `ci-pins/android.json` 中的獨立基線。開發前期，`aegis-android-linux-arm64` runner 透過 QEMU 執行固定的 Linux x86-64 工具鏈建置 APK。驗收需要逐一核對套件身分並記錄 arm64 實機結果。
 
 請參閱 [Android 建置與驗收狀態](./docs/android.zh-TW.md) 和 [Play Store 準備草案](./docs/play-store.zh-TW.md)。以下是建置入口，本身不構成驗收證據：
 

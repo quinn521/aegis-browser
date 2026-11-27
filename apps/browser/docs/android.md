@@ -25,7 +25,9 @@ Android remains **No-Go** until a current-source build and device acceptance are
 
 ## Supported build environment
 
-Build Android APKs on the upstream `aegis-android-linux-arm64` runner. QEMU executes the Linux x86-64 tools pinned for the candidate, which target Android `arm64-v8a`. Native x86-64 Linux is an optional build host. Prepare a dedicated Linux checkout with the following resources.
+During S1 development, build Android APKs on the upstream `aegis-android-linux-arm64` runner. QEMU executes the Linux x86-64 tools pinned for the candidate, which target Android `arm64-v8a`. This is the interim build path and its APKs qualify for device acceptance. Move the default to native x86-64 Linux after a native build of the same candidate passes the package and device checks. [Runner migration](https://github.com/quinn521/aegis-browser/issues/383)
+
+Prepare a dedicated Linux checkout with the following resources.
 
 - at least 200 GB of available disk space;
 - enough memory for a Chromium build;

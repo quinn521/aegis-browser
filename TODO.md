@@ -55,9 +55,10 @@
 
 ### Android [#210](https://github.com/gcsagroup/aegis-browser/issues/210) · S1 运行验收
 
-- [ ] 在上游 `aegis-android-linux-arm64` 用 QEMU 执行固定的 Linux x86-64 工具链，从同一验收提交构建默认和内部 Alpha 的 `arm64-v8a` 产品 APK，以及专用 `AegisAccessOptionsTest.apk`。记录源码 SHA、Chromium pin、runner 与工具链版本、构建 profile、应用 ID、版本、ABI 和每个 APK 的 SHA-256。原生 x86-64 Linux 可作为备用构建机。
+- [ ] 在上游 `aegis-android-linux-arm64` 用 QEMU 执行固定的 Linux x86-64 工具链，从同一验收提交构建默认和内部 Alpha 的 `arm64-v8a` 产品 APK，以及专用 `AegisAccessOptionsTest.apk`。记录源码 SHA、Chromium pin、runner 与工具链版本、构建 profile、应用 ID、版本、ABI 和每个 APK 的 SHA-256。这是开发前期的过渡路径，本轮 APK 验收可以在该 runner 完成。
 - [ ] 在专用 arm64 测试机运行 `AegisAccessOptionsTest.apk` instrumentation，保存设备型号、系统和逐用例结果。该 APK 会替换设备上同包名的产品 APK。
 - [ ] 用对应产品 APK 在 arm64 真机核对 A210-01/02 的 S1 范围，包括渠道准入、普通／无痕与窗口作用域，以及旧会话撤销。完整 A210-01/02 的导入、激活与 Profile 绑定证据随相应功能补齐。实测通过后将可核验结果回填 #210。
+- [ ] 后期切至原生 x86-64 Linux。先用同一候选核对三份 APK 的包身份、ABI、GN profile、各自 SHA-256 和设备回执，再切换默认构建机。[fork #383](https://github.com/quinn521/aegis-browser/issues/383)
 
 ## Build System — CMake
 

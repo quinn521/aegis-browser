@@ -46,7 +46,9 @@ Mac 大规格机器公布存储仍为 14 GB，完整 Mac 构建暂沿用现有�
 | Windows x64 | `self-hosted`, `Windows`, `X64`, `aegis-upstream` | `src/out/AegisRelease` | `mini_installer.exe`，非正式签名发行包 |
 | Android ARM64 | `self-hosted`, `Linux`, `ARM64`, `aegis-upstream`, `aegis-android-linux-arm64` | `src/out/AegisAndroid` | `ChromePublic.apk`，非 Play 发布 |
 
-三台专用机器需预装 Python 3.12+、Git、对应 Chromium 工具链和系统依赖。Android runner 通过 QEMU 执行候选固定的 Linux x86-64 工具链。原生 x86-64 Linux 也可直接运行构建脚本。三平台候选作业构建默认产品 APK，S1 的内部 Alpha 和专用测试 APK 使用显式构建配置。设备验收在专用 arm64 设备上进行。[Android 构建说明](../apps/browser/docs/android.zh-CN.md)
+三台专用机器需预装 Python 3.12+、Git、对应 Chromium 工具链和系统依赖。Android runner 通过 QEMU 执行候选固定的 Linux x86-64 工具链。开发前期用这条 QEMU 路径构建和验收，后期切到原生 x86-64 Linux。三平台候选作业构建默认产品 APK，S1 的内部 Alpha 和专用测试 APK 使用显式构建配置。设备验收在专用 arm64 设备上进行。[Android 构建说明](../apps/browser/docs/android.zh-CN.md)
+
+在已准备好独立源码和 `AEGIS_CI_CONFIG` 的原生 x64 专用机上试编时，在三平台候选手动工作流勾选 `android_native_x64`。试编与对应设备验收通过后，将仓库变量 `AEGIS_ANDROID_CANDIDATE_NATIVE_X64` 设为 `true`，后续候选默认使用原生 x64。清除该变量可恢复 ARM64 默认路由。fork 的 GitHub-hosted x64 Larger Runner 需要先验证临时机器的依赖准备、存储和制品交接。Play 使用自己的交付配置。[迁移工单](https://github.com/quinn521/aegis-browser/issues/383)
 
 Mac 桌面、Windows UI 验收需要可交互的测试会话。不要将允许任意外部 PR 执行代码的通用 runner 用作这里的构建机。
 

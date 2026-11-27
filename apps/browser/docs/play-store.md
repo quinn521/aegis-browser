@@ -43,7 +43,7 @@ The final Data Safety form must be based on the same APK/AAB, version configurat
 
 ## Publication gates
 
-1. Build the Release APK/AAB from a clean Android checkout. The upstream `aegis-android-linux-arm64` runner runs the pinned Linux x86-64 toolchain under QEMU.
+1. Build the Release APK/AAB from a clean Android checkout. Use the pinned Linux x86-64 toolchain on the upstream ARM64 runner under QEMU during the transition, then on a qualified native x86-64 host.
 2. Bind the repository commit, Chromium commit, the Android and V8 patch-series identities, GN arguments, package identity, and artifact hashes in a verified Android manifest.
 3. Pass device tests for First Run, normal browsing, `chrome://aegis`, core protections, lifecycle, storage, upgrades, and network behavior.
 4. Replace default Chromium icons and audit all names, screenshots, descriptions, and restricted brand assets.

@@ -22,6 +22,13 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(set(routes), set(ci.PLATFORMS))
         self.assertEqual(set(json.loads(routes['android'])),
                          {'self-hosted', 'Linux', 'ARM64', 'aegis-upstream', 'aegis-android-linux-arm64'})
+        self.assertRegex(workflow, r"android_native_x64:\n[^\n]*\n\s+type: boolean\n\s+default: false")
+        android_route = workflow.split('- platform: android\n', 1)[1].split('    steps:', 1)[0]
+        native_labels = re.search(r"native_x64_labels: '([^']+)'", android_route)
+        self.assertEqual(set(json.loads(native_labels[1])), {'self-hosted', 'Linux', 'X64', 'aegis-upstream'})
+        self.assertIn("fromJSON(matrix.platform == 'android' && (inputs.android_native_x64 || "
+                      "vars.AEGIS_ANDROID_CANDIDATE_NATIVE_X64 == 'true') && matrix.native_x64_labels || matrix.labels)",
+                      ' '.join(android_route.split()))
         label_architectures = {'X64': {'amd64', 'x86_64'},
                                'ARM64': {'arm64', 'aarch64'}}
         for platform, route in routes.items():
@@ -325,7 +332,9 @@ class CandidateTests(unittest.TestCase):
                 config.write_text(json.dumps({'sourceRoot': str(source)}))
                 commit = '1' * 40
                 pin = {'commit': commit, 'version': '158.0.8127.92'}
-                with (patch.dict(ci.os.environ, {'AEGIS_CI_CONFIG': str(config), 'GITHUB_SHA': commit}),
+                runner_arch = 'ARM64' if host_arch == 'aarch64' else 'X64'
+                with (patch.dict(ci.os.environ, {'AEGIS_CI_CONFIG': str(config), 'GITHUB_SHA': commit,
+                                                 'RUNNER_NAME': 'test-android', 'RUNNER_ARCH': runner_arch}),
                       patch.object(ci, 'BROWSER', browser), patch.object(ci, 'product_status', return_value=''),
                       patch.object(ci, 'git', return_value=commit),
                       patch.object(ci.contract, 'load', return_value=({'features': []}, 'contract')),
@@ -342,7 +351,11 @@ class CandidateTests(unittest.TestCase):
                 self.assertFalse((source / 'ninja-invoked').exists())
                 self.assertIn(diagnostic, (evidence / log).read_text())
                 self.assertEqual((evidence / 'gn.log').exists(), log == 'gn-profile.log')
-                self.assertEqual(json.loads((evidence / 'result.json').read_text())['status'], 'failed')
+                result = json.loads((evidence / 'result.json').read_text())
+                self.assertEqual(result['status'], 'failed')
+                self.assertEqual(result['hostArchitecture'], host_arch)
+                self.assertEqual(result['runnerArchitecture'], runner_arch)
+                self.assertEqual(result['runnerName'], 'test-android')
 
     def test_summary_keeps_missing_installation_explicit(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(ci.os.environ, {}, clear=True):

@@ -168,7 +168,7 @@ Before any desktop publication, the same candidate must have:
 
 ## Android
 
-Android uses its own pin in `ci-pins/android.json`. The `aegis-android-linux-arm64` runner builds the APKs with the pinned Linux x86-64 toolchain under QEMU. Acceptance requires the exact APK identities and results from physical arm64 devices.
+Android uses its own pin in `ci-pins/android.json`. During development, the `aegis-android-linux-arm64` runner builds the APKs with the pinned Linux x86-64 toolchain under QEMU. Acceptance requires the exact APK identities and results from physical arm64 devices.
 
 See [Android build and acceptance status](./docs/android.md) and [Play Store readiness draft](./docs/play-store.md). These commands are build entry points, not acceptance evidence by themselves:
 
