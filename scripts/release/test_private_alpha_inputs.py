@@ -88,16 +88,18 @@ class PrivateAlphaInputsTests(unittest.TestCase):
         source.write_bytes(json.dumps(LIST, ensure_ascii=False).encode())
         source.chmod(0o600)
         target = self.root / NODES
-        result = self.hook('alpha', source, target)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(target.read_bytes()), LIST)
+        for channel in ('dev', 'alpha'):
+            result = self.hook(channel, source, target)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(target.read_bytes()), LIST)
         for channel in ('alpha', 'dev', 'beta', 'release'):
             target.write_text('stale')
             self.assertEqual(self.hook(channel, '/dev/null', target).returncode, 0)
             self.assertFalse(target.exists())
-        target.write_text('stale')
-        self.assertNotEqual(self.hook('beta', source, target).returncode, 0)
-        self.assertFalse(target.exists())
+        for channel in ('beta', 'release'):
+            target.write_text('stale')
+            self.assertNotEqual(self.hook(channel, source, target).returncode, 0)
+            self.assertFalse(target.exists())
 
     def test_stage_admits_mixed_tls_routes_and_rejects_cross_account_password(self):
         def vmess(network, cipher='auto'):

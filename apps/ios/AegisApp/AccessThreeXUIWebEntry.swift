@@ -3,7 +3,7 @@ import Combine
 import CryptoKit
 import Foundation
 
-/// A private Alpha package may provide a bounded list of preconfigured test
+/// A private Dev or Alpha package may provide a bounded list of preconfigured test
 /// routes. The UI receives only ordinal and protocol; URI data stays here.
 @MainActor
 final class AccessAlphaNodeCatalogue: ObservableObject {
@@ -45,7 +45,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
     }
 
     private static func allowsPackagedNodes(channel: String?, profile: String?, bundleID: String?) -> Bool {
-        channel == "alpha" && profile == "alpha"
+        (channel == "dev" || channel == "alpha") && profile == channel
             && ["com.gcsa.aegis", "com.gcsa.aegis.alpha.internal"].contains(bundleID ?? "")
     }
 

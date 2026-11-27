@@ -4622,9 +4622,14 @@ extension AccessHostRecoveryWebKitTests {
         let environment = ProcessInfo.processInfo.environment
         guard environment["AEGIS_DIRECTED_PROBE"] == "1" else { throw XCTSkip("Directed device probe") }
         let node = try DirectedProbeNode.load(environment)
-        let channel = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String)
-        XCTAssertEqual(channel, "alpha")
-        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "AegisAccessInternalOptions") as? String, "NO")
+        let channelName = Bundle.main.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String
+        let channel = try XCTUnwrap(channelName.flatMap(AccessReleaseChannel.init(rawValue:)))
+        guard channel == .alpha || (channel == .dev && environment[DirectedProbeNode.bundledEnvironmentKey] == "1") else {
+            return XCTFail("Directed WebKit requires Alpha or a bundled Dev test node")
+        }
+        if channel == .alpha {
+            XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "AegisAccessInternalOptions") as? String, "NO")
+        }
         let ats = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "NSAppTransportSecurity") as? [String: Any])
         XCTAssertEqual(ats["NSAllowsArbitraryLoadsInWebContent"] as? Bool, true)
 
@@ -4641,7 +4646,7 @@ extension AccessHostRecoveryWebKitTests {
                 else { finish() }
             }, transport: .http
         )
-        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .alpha, alphaWebsiteAcceleration: true,
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: channel, alphaWebsiteAcceleration: true,
                                                       geoSiteCache: geoSite)
         owner = coordinator
         let suite = "directed-search-" + UUID().uuidString

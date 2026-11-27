@@ -11,8 +11,10 @@ import AegisPolicyKit
 
 @MainActor
 enum DirectedProbeNode {
+    static let bundledEnvironmentKey = "AEGIS_DIRECTED_BUNDLED_TEST_NODE"
+
     static func load(_ environment: [String: String]) throws -> AccessInternalTestNode {
-        if environment["AEGIS_DIRECTED_BUNDLED_ALPHA_NODE"] == "1" {
+        if environment[bundledEnvironmentKey] == "1" {
             let routes = AccessAlphaNodeCatalogue.product().routes
             guard environment["AEGIS_BLOCKED_CN_NODE_URI"] == nil,
                   routes.count == 1, let node = routes.first, node.profileKey == .vlessRawReality else {
@@ -288,7 +290,7 @@ final class AccessEmbeddedCoreLiveTests: XCTestCase {
         guard environment["AEGIS_DIRECTED_PROBE"] == "1" else { throw XCTSkip("Directed device probe") }
         let run = try XCTUnwrap(environment["AEGIS_DIRECTED_RUN"].flatMap(UUID.init(uuidString:)))
         let comparisonResult = environment["AEGIS_COMPARISON_RESULT_NAME"]
-        let bundledAlphaNode = environment["AEGIS_DIRECTED_BUNDLED_ALPHA_NODE"] == "1"
+        let bundledNode = environment[DirectedProbeNode.bundledEnvironmentKey] == "1"
         let node = try DirectedProbeNode.load(environment)
 
         struct Leg: Encodable {
@@ -379,7 +381,7 @@ final class AccessEmbeddedCoreLiveTests: XCTestCase {
         guard directEgress.contains(where: { $0.status == 200 && $0.country == "CN" && !$0.proxyObserved }),
               proxyEgress.contains(where: {
                   $0.status == 200 && $0.proxyObserved
-                      && (bundledAlphaNode ? $0.country != nil : $0.country == expectedProxyCountry)
+                      && (bundledNode ? $0.country != nil : $0.country == expectedProxyCountry)
               }) else {
             try save("egress-control-failed")
             XCTFail("Directed device egress control failed")

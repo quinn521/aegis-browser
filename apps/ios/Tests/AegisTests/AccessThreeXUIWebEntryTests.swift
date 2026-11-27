@@ -25,7 +25,11 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertEqual(alphaCatalogue(data: data, defaults: defaults).selectedIndex, 1)
         let changed = try JSONEncoder().encode([alphaWSNode(address: "different.example")])
         XCTAssertEqual(alphaCatalogue(data: changed, defaults: defaults).selectedIndex, 0)
-        for channel in ["dev", "beta", "release"] {
+        let dev = AccessAlphaNodeCatalogue(channel: "dev", profile: "dev", bundleID: "com.gcsa.aegis",
+                                           data: data, defaults: defaults)
+        XCTAssertTrue(dev.isConfigured)
+        XCTAssertEqual(dev.entries, nodes.entries)
+        for channel in ["beta", "release"] {
             let other = AccessAlphaNodeCatalogue(channel: channel, profile: channel, bundleID: "com.gcsa.aegis",
                                                  data: data, defaults: defaults)
             XCTAssertFalse(other.isConfigured)
@@ -35,6 +39,9 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
                                                    data: data, defaults: defaults)
         XCTAssertFalse(wrongProfile.isConfigured)
         XCTAssertTrue(wrongProfile.entries.isEmpty)
+        let crossProfile = AccessAlphaNodeCatalogue(channel: "dev", profile: "alpha", bundleID: "com.gcsa.aegis",
+                                                    data: data, defaults: defaults)
+        XCTAssertFalse(crossProfile.isConfigured)
         let wrongApp = AccessAlphaNodeCatalogue(channel: "alpha", profile: "alpha", bundleID: "com.gcsa.aegis.safari",
                                                data: data, defaults: defaults)
         XCTAssertFalse(wrongApp.isConfigured)
