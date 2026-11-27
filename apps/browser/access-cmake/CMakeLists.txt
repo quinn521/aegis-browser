@@ -27,6 +27,7 @@ endforeach()
 
 add_library(aegis_access_core STATIC ${core_sources} "${component}/access_test_node.cc")
 if(WIN32)
+  target_compile_definitions(aegis_access_core PRIVATE NOMINMAX)
   target_link_libraries(aegis_access_core PRIVATE ws2_32)
 endif()
 target_include_directories(aegis_access_core PUBLIC "${overlay}")

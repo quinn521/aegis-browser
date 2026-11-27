@@ -39,7 +39,8 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
   const bool fresh_dev =
       validation == AccessTestNodeNativeValidation::kFreshDevImport;
   if ((legacy_ws && fresh_dev) ||
-      node.spider_x.size() > aegis_access::kMaxAccessTestNodeShareBytes) {
+      node.spider_x.size() >
+          aegis_access::kMaxExtendedAccessTestNodeShareBytes) {
     return std::nullopt;
   }
   auto mode = fresh_dev ? Mode::kAllowExtendedVless : Mode::kRealityOnly;

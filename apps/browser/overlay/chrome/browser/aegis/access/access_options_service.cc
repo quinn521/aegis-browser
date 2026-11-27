@@ -239,6 +239,9 @@ class AccessOptionsWorker {
   TestNodePreviewResult Stage(const std::string& editor,
                               const aegis_access::AccessTestNode& node) {
     auto staged = vault_.Stage(editor, node);
+    if (staged.status == AccessTestNodeVaultStatus::kInvalidNode) {
+      return {TestNodePreviewStatus::kInvalidShare};
+    }
     if (staged.status != AccessTestNodeVaultStatus::kOk) {
       return {staged.status == AccessTestNodeVaultStatus::kLimitReached
                   ? TestNodePreviewStatus::kBusy

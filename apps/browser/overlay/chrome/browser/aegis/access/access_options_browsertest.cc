@@ -284,6 +284,10 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
       if (prefs.state !== 'prepared' && prefs.state !== 'savedUnavailable') {
         return 'preferences:' + prefs.state;
       }
+      if (prefs.state === 'prepared') {
+        const revoked = await send('revokeAccessTestNode', prefs.revision, prefs.revokeToken);
+        if (revoked.state !== 'revoked') return 'revoke:' + revoked.state;
+      }
       const committed = await send('readAccessOptions');
       if (committed.revision !== prefs.revision) return 'revisionMismatch';
       return [committed.revision, committed.testProfile?.protocol].join(',');
@@ -300,7 +304,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
             aegis_access::AccessInboundProtocolPreference::kHttp);
 
   // A receipt for the previous node Apply cannot clear a newly staged draft.
-  EXPECT_EQ("saved,preview,preserved", content::EvalJs(contents, content::JsReplace(R"JS(
+  EXPECT_EQ("saved,preview,previewPending,3", content::EvalJs(contents, content::JsReplace(R"JS(
     (async () => {
       const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
       const committed = await send('readAccessOptions');
@@ -308,8 +312,13 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
       const confirmed = await send('queryAccessTestNodeApply', $2);
       const pending = await send('applyAccessTestNodePreferences', committed.revision,
           crypto.randomUUID(), 'socks5', 'random', '');
-      return [confirmed.state, fresh.state,
-        pending.state === 'previewPending' ? 'preserved' : pending.state].join(',');
+      const replacement = await send('applyAccessTestNode', committed.revision,
+          crypto.randomUUID(), 'socks5', 'random', '');
+      if (replacement.state !== 'prepared' && replacement.state !== 'savedUnavailable') {
+        return 'replacement:' + replacement.state;
+      }
+      const stored = await send('readAccessOptions');
+      return [confirmed.state, fresh.state, pending.state, stored.revision].join(',');
     })()
   )JS", aegis_access::test::kSyntheticTestNodeShare, operation)));
 }
@@ -387,6 +396,10 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
       if (preview.state !== 'preview') return preview.state;
       const applied = await send('applyAccessTestNode', initial.revision,
           crypto.randomUUID(), 'socks5', 'random', '');
+      if (applied.state === 'prepared') {
+        const revoked = await send('revokeAccessTestNode', applied.revision, applied.revokeToken);
+        if (revoked.state !== 'revoked') return 'revoke:' + revoked.state;
+      }
       return applied.revision ?? applied.state;
     })()
   )JS", aegis_access::test::kSyntheticTestNodeShare)));
