@@ -8,7 +8,7 @@
 
 ## 当前证据边界
 
-- Android 使用正式 Stable `155.0.8059.39`，桌面使用 `155.0.8059.40`。Android 保留独立的 `ci-pins/android.json` 与 `patches-android/` 输入。
+- Android 的当前内核版本和提交见 `ci-pins/android.json`，补丁输入见 `patches-android/`。
 - 预留 application ID 为 `com.gcsa.aegis`；预留不证明已经形成有效包或 Play 身份。
 - 2026-10-09 源码候选为 Ver 2.2 (144)，versionCode `2002000144`，含276个Chromium补丁与3个V8补丁。完整Chromium重放通过，与已验证桌面源码仅有官方 `chrome/VERSION` 差异；共享Agent修复和桌面手势的平台限制均保留，不会在Android开启桌面手势。APK构建、签名、包身份及真机验收仍待完成。
 - 当前没有绑定身份的 APK 或 AAB。即使存在 `$HOME/Desktop/GCSA-aegis.apk` 之类的历史文件，也不能映射到当前源码，更不是 RC。
@@ -19,52 +19,40 @@
 
 ## 受支持的构建环境
 
-Chromium Android client 不能直接在 macOS 或 Windows 上构建。本项目需要独立、受支持的 **x86-64 Linux** checkout，并满足：
+Android APK 在上游 `aegis-android-linux-arm64` runner 构建。QEMU 执行候选固定的 Linux x86-64 工具链，目标 ABI 为 `arm64-v8a`。原生 x86-64 Linux 可作为备用构建机。独立 Linux 源码目录需要满足以下条件。
 
 - 至少 200 GB 可用磁盘空间；
 - 足够完成 Chromium 构建的内存；
 - 精确固定的 Chromium 基线与补丁输入；以及
 - 不把现有 macOS checkout 复用为 Android 构建树。
 
-历史 ARM64 Linux 和 QEMU 实验不属于当前可复现构建门禁。
+## 构建 S1 的三个 APK
 
-## 未来构建入口
-
-以下命令会拉取或同步网络内容。只能在获准的 Linux 环境中执行，并先固定精确源码身份。
+在 runner 上将 `CHROMIUM_ROOT` 指向已准备好的 Android 源码目录，其中包含 `src/` 和 `.gclient`。按 `apps/browser/ci-pins/android.json` 同步依赖并应用其 Android 与 V8 补丁序列，然后在产品仓库执行以下命令。
 
 ```bash
-export PATH="$HOME/depot_tools:$PATH"
+set -e
+export CHROMIUM_ROOT="${CHROMIUM_ROOT:?Set the dedicated Android checkout path}"
+export AEGIS_ANDROID_ALLOW_ARM64_HOST=1
+bash apps/browser/scripts/build-android.sh
+bash apps/browser/scripts/build-android.sh --internal-access-options alpha
 
-pnpm --filter @gcsa-aegis/browser fetch
-bash apps/browser/scripts/enable-android-gclient.sh
-pnpm --filter @gcsa-aegis/browser apply-patches
-pnpm --filter @gcsa-aegis/browser sync
-pnpm --filter @gcsa-aegis/browser build:android
-pnpm --filter @gcsa-aegis/browser package:android
+out="$CHROMIUM_ROOT/src/out"
+sha256sum "$out/AegisAndroid/apks/ChromePublic.apk" \
+  "$out/AegisAndroidInternalAlpha/apks/ChromePublic.apk" \
+  "$out/AegisAndroidInternalAlpha/apks/AegisAccessOptionsTest.apk"
 ```
 
-预期候选路径如下，但它们**当前不是已验收输出**：
+普通 APK 和 App Bundle 关闭 Access Options。内部 Alpha 配置同时构建产品 APK 和专用测试 APK。内部 DEV 使用 `bash apps/browser/scripts/build-android.sh --internal-access-options debug`。
 
-- `$CHROMIUM_ROOT/src/out/AegisAndroid/apks/ChromePublic.apk`
-- `apps/browser/dist/GCSA-aegis.apk`
-- application ID：`com.gcsa.aegis`
-- 启动器名称：`GCSA-aegis`
+默认产品用 `pnpm --filter @gcsa-aegis/browser package:android` 生成侧载包 `apps/browser/dist/GCSA-aegis.apk`，启动器名称为 `GCSA-aegis`。内部配置使用 `out/AegisAndroidInternalAlpha` 或 `out/AegisAndroidInternalDebug`。
 
-开展商店工作前，还必须定义并验证 AAB 路径和 Play 签名身份。
-
-普通 APK 与 App Bundle 构建保持关闭 Android Access Options。需要它的内部 DEV 与 Alpha 构建使用显式配置，并设定一致的 Chromium 渠道：
-
-```bash
-bash apps/browser/scripts/build-android.sh --internal-access-options alpha   # canary + alpha
-bash apps/browser/scripts/build-android.sh --internal-access-options debug   # dev + debug
-```
-
-它们只写入 `out/AegisAndroidInternalAlpha` 或 `out/AegisAndroidInternalDebug`，不进入 `package:android` 路径，并同时构建 `AegisAccessOptionsTest.apk`。该 instrumentation APK 使用 `com.gcsa.aegis` 身份，会替换已安装的产品包，只能在专用设备上运行。
+`AegisAccessOptionsTest.apk` 会替换已安装的 `com.gcsa.aegis`，因此在专用设备运行 instrumentation。随后用对应产品 APK 在 arm64 真机验证 A210-01/02，每份结果记录设备、系统与 APK 摘要。
 
 ## 验收条件
 
-1. 在干净的x86-64 Linux源码目录，从固定基线精确重放当前276个Chromium补丁与3个V8补丁。
-2. 构建成功，并由清单绑定根仓库 commit、Chromium commit、两套补丁序列身份、GN 参数和 APK/AAB SHA-256。
+1. 按 Android pin 和对应补丁目录中的两套序列核对完整源码树及产品版本。
+2. 三份 APK 逐包记录仓库提交、内核 pin、补丁树、runner 与工具链版本、GN profile、应用 ID、版本、ABI 和 SHA-256。
 3. 验证最终包名、版本、启动器名称、图标、权限、原生库和签名结构。
 4. 在专用实机保留旧版资料，以原包名和签名安装升级包，核对资料兼容、正常网页、`chrome://aegis`与核心保护。首次安装另用隔离设备验证，不通过卸载旧版规避升级兼容问题。
 5. 在真机验证页面采集、文档绑定、脱敏、确认、导航失效和结果处理。
@@ -73,7 +61,7 @@ bash apps/browser/scripts/build-android.sh --internal-access-options debug   # d
 
 ## Play Store 边界
 
-参见 [Play Store 准备情况](./play-store.zh-CN.md)。项目当前没有生产 upload key、Play Console 应用、已上传产物或获批的 Data Safety 声明。
+Play 交付使用独立的 AAB 工作流。恢复 CD 后用 `0.8.0` 验证 `internal`，开发结束后用 `1.0.0` 发布到 `production`。签名、上传和安装各自记录实际回执。[Android CD 工单](https://github.com/gcsagroup/aegis-browser/issues/276) · [Play Store 准备情况](./play-store.zh-CN.md)
 
 ## 刻意不做
 

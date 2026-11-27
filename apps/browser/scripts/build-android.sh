@@ -33,7 +33,7 @@ fail_host() {
 
 Chromium $VERSION_PIN 写明：Building the Android client on Windows or Mac is not supported.
 
-这台 Mac 可以当工作机，编译需要使用现有受支持的 x86-64 Linux 环境。
+请在 aegis-android-linux-arm64 上通过 QEMU 运行固定版本的 Linux x86-64 工具链，或使用原生 x86-64 Linux。
 磁盘建议至少空余 ${need_gb}GB（Android 依赖 + out/AegisAndroid）。
 
 下一步见 apps/browser/docs/android.md
@@ -47,16 +47,21 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   fail_host
 fi
 
-host_arch="$(uname -m)"
-if [[ "$host_arch" != x86_64 ]]; then
-  if [[ "$host_arch" == aarch64 && "${AEGIS_ANDROID_ALLOW_ARM64_HOST:-}" == "1" ]]; then
-    echo "Experimental Linux ARM64 host; pinned x86-64 tools require working emulation." >&2
-  elif [[ -z "$bundle_profile" || ! "$host_arch" =~ ^(aarch64|arm64)$ || "${AEGIS_ANDROID_EXPERIMENTAL_ARM64:-}" != true ]]; then
-    echo "Android 构建宿主必须为 x86-64 Linux；不自动改用旧版 QEMU 构建路径。" >&2
-    echo "本地 ARM64（如 colima）需显式设置 AEGIS_ANDROID_ALLOW_ARM64_HOST=1。" >&2
+case "$(uname -m)" in
+  x86_64) ;;
+  aarch64|arm64)
+    if [[ "${AEGIS_ANDROID_ALLOW_ARM64_HOST:-}" != 1 &&
+          ( -z "$bundle_profile" || "${AEGIS_ANDROID_EXPERIMENTAL_ARM64:-}" != true ) ]]; then
+      echo "Linux ARM64 APK builds require QEMU and AEGIS_ANDROID_ALLOW_ARM64_HOST=1." >&2
+      exit 2
+    fi
+    echo "Linux ARM64 build host using the pinned Linux x86-64 toolchain via QEMU." >&2
+    ;;
+  *)
+    echo "Android builds require Linux ARM64 with QEMU or native x86-64 Linux." >&2
     exit 2
-  fi
-fi
+    ;;
+esac
 
 free_gb="$(df -Pk "$CHROMIUM_ROOT" 2>/dev/null | awk 'NR==2 {print int($4/1024/1024)}')"
 if [[ -n "$free_gb" && "$free_gb" -lt "$need_gb" ]]; then

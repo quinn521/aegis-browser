@@ -169,7 +169,7 @@ check_default_build_rejects_enabled_args
   export CHROMIUM_ROOT="$fixture/chromium"
   export DEPOT_TOOLS_DIR="$fixture/no-depot-tools"
   export AEGIS_ANDROID_MIN_FREE_GB=0
-  unset OUT_DIR
+  unset OUT_DIR AEGIS_TEST_UNAME_MACHINE AEGIS_ANDROID_ALLOW_ARM64_HOST AEGIS_ANDROID_EXPERIMENTAL_ARM64
   cp "$BROWSER_DIR/CHROMIUM_VERSION" "$fixture/"
   printf 'target_os = ["android"]\n' > "$CHROMIUM_ROOT/.gclient"
   { cat "$commented_base"; echo 'import("//internal.gni")'; } > "$fixture/args/aegis-android.gn"
@@ -178,7 +178,7 @@ check_default_build_rejects_enabled_args
   uname() {
     case "$1" in
       -s) printf '%s\n' Linux ;;
-      -m) printf '%s\n' x86_64 ;;
+      -m) printf '%s\n' "${AEGIS_TEST_UNAME_MACHINE:-x86_64}" ;;
       *) return 1 ;;
     esac
   }
@@ -250,6 +250,7 @@ check_default_build_rejects_enabled_args
   autoninja() {
     touch "$CHROMIUM_ROOT/ninja-invoked"
     cp "$2/build.ninja" "$CHROMIUM_ROOT/ninja-graph"
+    printf '%s\n' "${@:3}" > "$CHROMIUM_ROOT/ninja-targets"
     return 1
   }
   export -f uname python3 format_fixture_gn gn_fixture_arg gn autoninja
@@ -272,10 +273,15 @@ check_default_build_rejects_enabled_args
   aegis_android_gn_args "$ARGS_FILE" internal-alpha > "$clean_out/args.gn"
   aegis_android_verify_gn_args "$clean_out" internal-alpha
   default_error='生效 GN 参数必须包含：aegis_android_internal_access_options = false'
+  AEGIS_TEST_UNAME_MACHINE=aarch64 AEGIS_ANDROID_EXPERIMENTAL_ARM64=true \
+    check_build_rejects_args 'AEGIS_ANDROID_ALLOW_ARM64_HOST=1'
+  AEGIS_TEST_UNAME_MACHINE=armv7l AEGIS_ANDROID_ALLOW_ARM64_HOST=1 \
+    check_build_rejects_args 'require Linux ARM64 with QEMU or native x86-64 Linux'
   check_build_rejects_args "$default_error"
   rm "$fixture_out/build.ninja"
   check_build_rejects_args "$default_error"
-  GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
+  AEGIS_TEST_UNAME_MACHINE=aarch64 AEGIS_ANDROID_EXPERIMENTAL_ARM64=true \
+    GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
     OUT_DIR="$CHROMIUM_ROOT/src/out/AegisAndroidDelivery-42-1" \
     check_build_rejects_args "$default_error" --app-bundle alpha
   GN_PROFILE_DIAGNOSTICS=1 check_build_rejects_args "$default_error"
@@ -305,19 +311,24 @@ check_default_build_rejects_enabled_args
   sed 's/^android_channel = "default"$/android_channel="default" # cached comment/' \
     "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
   printf '%s\n' stale-internal-profile > "$fixture_out/build.ninja"
-  if bash "$fixture/scripts/build-android.sh" > /dev/null 2>&1; then
+  if AEGIS_TEST_UNAME_MACHINE=aarch64 AEGIS_ANDROID_ALLOW_ARM64_HOST=1 \
+      bash "$fixture/scripts/build-android.sh" > /dev/null 2>&1; then
     fail "模拟 autoninja 应以失败状态结束"
   fi
   [[ -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "只改注释和排版时没有进入构建"
   grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "普通 APK 使用了旧构建图"
+  [[ "$(cat "$CHROMIUM_ROOT/ninja-targets")" == chrome_public_apk ]] || fail "ARM64 默认 APK 构建目标错误"
 
   rm "$CHROMIUM_ROOT/ninja-graph"
   aegis_android_gn_args "$fixture/args/aegis-android.gn" internal-alpha > "$internal_out/args.gn"
   printf '%s\n' stale-default-profile > "$internal_out/build.ninja"
-  if bash "$fixture/scripts/build-android.sh" --internal-access-options alpha > /dev/null 2>&1; then
+  if AEGIS_TEST_UNAME_MACHINE=arm64 AEGIS_ANDROID_ALLOW_ARM64_HOST=1 \
+      bash "$fixture/scripts/build-android.sh" --internal-access-options alpha > /dev/null 2>&1; then
     fail "模拟 autoninja 应以失败状态结束"
   fi
   grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "内部 APK 使用了旧构建图"
+  [[ "$(cat "$CHROMIUM_ROOT/ninja-targets")" == $'chrome_public_apk\naegis_access_options_test_apk' ]] ||
+    fail "ARM64 内部 Alpha 构建缺少产品 APK 或专用测试 APK"
 
   # A second build accepts the canonical cache written by the first generation.
   { cat "$ARGS_FILE"; printf '%s\n' 'import("//z.gni")' 'import("//a.gni")'; } > "$fixture/args/aegis-android.gn"

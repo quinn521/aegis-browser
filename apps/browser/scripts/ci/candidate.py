@@ -21,7 +21,7 @@ BROWSER = ROOT / 'apps/browser'
 PLATFORMS = {
     'mac': ('Mac', 'Darwin', {'arm64'}, 'aegis-release.gn', 'AegisRelease'),
     'windows': ('Windows', 'Windows', {'amd64', 'x86_64'}, 'aegis-windows.gn', 'AegisRelease'),
-    'android': ('Android', 'Linux', {'amd64', 'x86_64'}, 'aegis-android.gn', 'AegisAndroid'),
+    'android': ('Android', 'Linux', {'aarch64', 'arm64', 'amd64', 'x86_64'}, 'aegis-android.gn', 'AegisAndroid'),
 }
 REQUIRED_CHECKS = {'native_tests', 'browser_smoke', 'actor_permissions', 'v8_security_regressions'}
 

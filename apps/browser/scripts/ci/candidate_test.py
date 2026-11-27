@@ -20,6 +20,8 @@ class CandidateTests(unittest.TestCase):
         workflow = (ci.ROOT / '.github/workflows/chromium-candidate.yml').read_text()
         routes = dict(re.findall(r"- platform: (\w+)\s+labels: '([^']+)'", workflow))
         self.assertEqual(set(routes), set(ci.PLATFORMS))
+        self.assertEqual(set(json.loads(routes['android'])),
+                         {'self-hosted', 'Linux', 'ARM64', 'aegis-upstream', 'aegis-android-linux-arm64'})
         label_architectures = {'X64': {'amd64', 'x86_64'},
                                'ARM64': {'arm64', 'aarch64'}}
         for platform, route in routes.items():
@@ -281,12 +283,12 @@ class CandidateTests(unittest.TestCase):
     @unittest.skipIf(ci.os.name == 'nt', 'Android 候选使用 Linux 工具')
     def test_android_candidate_rejects_unsupported_profiles_before_ninja(self):
         cases = (
-            ('import("//internal.gni")\n', 'gn-profile.log', 'aegis_android_internal_access_options = false'),
-            ('aegis_android_internal_access_options = false\n', 'gn-profile-template.log',
+            ('aarch64', 'import("//internal.gni")\n', 'gn-profile.log', 'aegis_android_internal_access_options = false'),
+            ('x86_64', 'aegis_android_internal_access_options = false\n', 'gn-profile-template.log',
              'Android 基础参数不得开启内部 Access Options'),
         )
-        for template, log, diagnostic in cases:
-            with self.subTest(log=log), tempfile.TemporaryDirectory() as directory:
+        for host_arch, template, log, diagnostic in cases:
+            with self.subTest(host=host_arch, log=log), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 source, browser, evidence = root / 'source', root / 'browser', root / 'evidence'
                 gn = source / 'buildtools/linux64/gn'
@@ -329,7 +331,7 @@ class CandidateTests(unittest.TestCase):
                       patch.object(ci.contract, 'load', return_value=({'features': []}, 'contract')),
                       patch.object(ci.contract, 'validate_version', return_value=('2.0.0.1', 1)),
                       patch.object(ci.platform, 'system', return_value='Linux'),
-                      patch.object(ci.platform, 'machine', return_value='x86_64'),
+                      patch.object(ci.platform, 'machine', return_value=host_arch),
                       patch.object(ci, 'candidate_pin', return_value=(pin, browser / 'patches')),
                       patch.object(ci.shutil, 'disk_usage') as usage,
                       patch.object(ci, 'apply_if_base'), patch.object(ci, 'verify_tree', return_value='tree')):

@@ -44,9 +44,11 @@ Mac 大规格机器公布存储仍为 14 GB，完整 Mac 构建暂沿用现有�
 | --- | --- | --- | --- |
 | Mac ARM64 | `self-hosted`, `macOS`, `ARM64`, `aegis-upstream` | `src/out/AegisRelease` | ad-hoc 签名 App 的 ZIP |
 | Windows x64 | `self-hosted`, `Windows`, `X64`, `aegis-upstream` | `src/out/AegisRelease` | `mini_installer.exe`，非正式签名发行包 |
-| Android ARM64 | `self-hosted`, `Linux`, `X64`, `aegis-upstream` | `src/out/AegisAndroid` | `ChromePublic.apk`，非 Play 发布 |
+| Android ARM64 | `self-hosted`, `Linux`, `ARM64`, `aegis-upstream`, `aegis-android-linux-arm64` | `src/out/AegisAndroid` | `ChromePublic.apk`，非 Play 发布 |
 
-三台专用机器需预装 Python 3.12+、Git、对应 Chromium 工具链和系统依赖。Android 编译必须使用 Linux x64；实际验收另需连接专用 ARM64 测试设备。Mac 桌面、Windows UI 验收需要可交互的测试会话。不要将允许任意外部 PR 执行代码的通用 runner 用作这里的构建机。
+三台专用机器需预装 Python 3.12+、Git、对应 Chromium 工具链和系统依赖。Android runner 通过 QEMU 执行候选固定的 Linux x86-64 工具链。原生 x86-64 Linux 也可直接运行构建脚本。三平台候选作业构建默认产品 APK，S1 的内部 Alpha 和专用测试 APK 使用显式构建配置。设备验收在专用 arm64 设备上进行。[Android 构建说明](../apps/browser/docs/android.zh-CN.md)
+
+Mac 桌面、Windows UI 验收需要可交互的测试会话。不要将允许任意外部 PR 执行代码的通用 runner 用作这里的构建机。
 
 首次机器准备：在独立候选目录检出该平台官方 Chromium 基线，同步其 DEPS、V8、工具链和项目额外依赖（包括平台需要的 libtorrent/Boost）；不要借用正在编译的目录。脚本会应用项目补丁；已有适配后的源码也可以使用，但必须与本次候选完整补丁树一致。依赖的首次安装和机器注册尚未由此脚本自动完成。
 
@@ -150,6 +152,6 @@ Windows 使用相应 Windows 路径，Android 使用 Linux 路径。`minFreeGiB`
 
 正式发行资格文件同样保存顶层`featureContractSha256`，并在每个平台记录相同摘要和该平台全部`featureChecks`。发布预检、准备及公开阶段都会核验；功能清单变化后，旧验收不能复用。源码有任何变化时，产品提交及源码树绑定也要求更新验收。新增功能须提交功能ID、测试入口、实际日志及平台适用说明，升级执行器对比上次已验证基线，补齐回归后再发布。
 
-现有签名身份、仓库写权限、Windows安全阻断解除、Linux x64构建机与Android原签名/设备属于外部条件。应使用真实回读接入；开发证书、临时签名、ARM仿真或runner在线状态都不能代替正式发行资格。
+现有签名身份、仓库写权限、Windows安全阻断解除、Android工具链、原签名与设备属于外部条件。应使用真实回读接入；开发证书、临时签名、ARM仿真或runner在线状态都不能代替正式发行资格。
 
 功能清单的最近两次已提交版本会比较稳定ID和平台范围，自动流程拒绝删除旧行为。公开Release前还要求远端默认分支与本次被测产品提交完全一致；默认分支新增功能或任何提交后，应重新集成和验证，而非发布旧候选覆盖最新功能。

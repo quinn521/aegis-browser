@@ -25,52 +25,40 @@ Android remains **No-Go** until a current-source build and device acceptance are
 
 ## Supported build environment
 
-Chromium Android clients cannot be built directly on macOS or Windows. This project requires a separate, supported **x86-64 Linux** checkout with:
+Build Android APKs on the upstream `aegis-android-linux-arm64` runner. QEMU executes the Linux x86-64 tools pinned for the candidate, which target Android `arm64-v8a`. Native x86-64 Linux is an optional build host. Prepare a dedicated Linux checkout with the following resources.
 
 - at least 200 GB of available disk space;
 - enough memory for a Chromium build;
 - the pinned Chromium base and exact patch inputs; and
 - no reuse of the macOS checkout as an Android build tree.
 
-Historical ARM64 Linux and QEMU experiments are not the current reproducible build gate.
+## Build the S1 APKs
 
-## Future build entry point
-
-The following commands fetch or synchronize network content. Run them only in an approved Linux environment and only after the exact source identity is fixed.
+On the runner, set `CHROMIUM_ROOT` to its prepared Android checkout containing `src/` and `.gclient`. Sync the dependencies for `apps/browser/ci-pins/android.json` and apply its Android and V8 series before running the commands below from the product repository.
 
 ```bash
-export PATH="$HOME/depot_tools:$PATH"
+set -e
+export CHROMIUM_ROOT="${CHROMIUM_ROOT:?Set the dedicated Android checkout path}"
+export AEGIS_ANDROID_ALLOW_ARM64_HOST=1
+bash apps/browser/scripts/build-android.sh
+bash apps/browser/scripts/build-android.sh --internal-access-options alpha
 
-pnpm --filter @gcsa-aegis/browser fetch
-bash apps/browser/scripts/enable-android-gclient.sh
-pnpm --filter @gcsa-aegis/browser apply-patches
-pnpm --filter @gcsa-aegis/browser sync
-pnpm --filter @gcsa-aegis/browser build:android
-pnpm --filter @gcsa-aegis/browser package:android
+out="$CHROMIUM_ROOT/src/out"
+sha256sum "$out/AegisAndroid/apks/ChromePublic.apk" \
+  "$out/AegisAndroidInternalAlpha/apks/ChromePublic.apk" \
+  "$out/AegisAndroidInternalAlpha/apks/AegisAccessOptionsTest.apk"
 ```
 
-Expected candidate paths, which **do not currently exist as accepted outputs**, are:
+Ordinary APK and App Bundle builds keep Access Options disabled. The internal Alpha profile builds both its product APK and its instrumentation APK. For internal DEV use `bash apps/browser/scripts/build-android.sh --internal-access-options debug`.
 
-- `$CHROMIUM_ROOT/src/out/AegisAndroid/apks/ChromePublic.apk`
-- `apps/browser/dist/GCSA-aegis.apk`
-- application ID: `com.gcsa.aegis`
-- launcher name: `GCSA-aegis`
+For sideloading the default product, `pnpm --filter @gcsa-aegis/browser package:android` writes `apps/browser/dist/GCSA-aegis.apk` (launcher `GCSA-aegis`). The internal profiles use `out/AegisAndroidInternalAlpha` or `out/AegisAndroidInternalDebug`.
 
-An AAB path and Play signing identity must be defined and verified before store work.
-
-Ordinary APK and App Bundle builds keep Android Access Options disabled. Internal DEV and Alpha builds that need it use an explicit profile with a matching Chromium channel:
-
-```bash
-bash apps/browser/scripts/build-android.sh --internal-access-options alpha   # canary + alpha
-bash apps/browser/scripts/build-android.sh --internal-access-options debug   # dev + debug
-```
-
-They write only to `out/AegisAndroidInternalAlpha` or `out/AegisAndroidInternalDebug`, never to the `package:android` path, and also build `AegisAccessOptionsTest.apk`. That instrumentation APK carries the `com.gcsa.aegis` identity and replaces the installed product package, so run it only on a dedicated device.
+Run `AegisAccessOptionsTest.apk` on a dedicated device because it replaces the installed `com.gcsa.aegis` package. Verify A210-01/02 on physical arm64 hardware using the corresponding product APK and record the device, OS and artifact digest with each result.
 
 ## Acceptance criteria
 
-1. In a clean x86-64 Linux checkout, replay all 276 Chromium patches and 3 V8 patches from the independent Android pin, then verify the complete source tree and product version.
-2. Build successfully and create a manifest that binds the repository commit, Chromium commit, both patch-series identities, GN arguments, and APK/AAB SHA-256.
+1. Verify the complete source trees against the Android pin and both series listed in its patch directory, then check the product version.
+2. Record the repository commit, Android pin, patch trees, runner and toolchain versions, GN profile, package ID, version, ABI and SHA-256 for each of the three APKs.
 3. Verify final package ID, version, launcher name, icons, permissions, native libraries, and signing structure.
 4. 在专用实机保留旧版资料，以原包名和签名安装升级包，核对资料兼容、正常网页、`chrome://aegis`与核心保护。首次安装另用隔离设备验证，不通过卸载旧版规避升级兼容问题。
 5. Verify page capture, document binding, redaction, confirmation, navigation invalidation, and result handling on device.
@@ -79,7 +67,7 @@ They write only to `out/AegisAndroidInternalAlpha` or `out/AegisAndroidInternalD
 
 ## Play Store boundary
 
-See [Play Store readiness](./play-store.md). The project currently has no production upload key, Play Console application, uploaded artifact, or approved Data Safety declaration.
+Play delivery uses its own AAB workflow. Validate `0.8.0` on `internal` when CD resumes. After development, release `1.0.0` on `production`. Signing, upload and installation each need their own receipt. [Android CD tracking](https://github.com/gcsagroup/aegis-browser/issues/276) · [Play Store readiness](./play-store.md)
 
 ## Deliberately out of scope
 
