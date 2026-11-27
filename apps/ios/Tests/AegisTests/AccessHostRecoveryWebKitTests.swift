@@ -4595,7 +4595,15 @@ extension AccessHostRecoveryWebKitTests {
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .alpha, alphaWebsiteAcceleration: true,
                                                       geoSiteCache: geoSite)
         owner = coordinator
-        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let suite = "directed-search-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
+        var preferenceValues = preferences.values
+        preferenceValues.saveHistory = true
+        try preferences.save(preferenceValues)
+        let history = BrowserDataStore(persistenceURL: nil)
+        let browser = BrowserSession(dataStore: history, preferences: preferences, hostCoordinator: coordinator)
         defer { browser.closeWindow() }
         browser.setWindowForeground(true)
         let tab = try XCTUnwrap(browser.activeTab)
@@ -4675,6 +4683,7 @@ extension AccessHostRecoveryWebKitTests {
                 let searchPageReady = !stillLoading && searchResponse
                     && searchContent?["queryPreserved"] as? Bool == true
                     && searchContent?["visibleSearchField"] as? Bool == true
+                let visitsBeforeClick = Set(history.history.map(\.id))
                 if searchOnly, searchPageReady, visibleResults > 0,
                    let clicked = try? await view.callAsyncJavaScript(DirectedWebKitObserver.clickSearchResult,
                        arguments: [:], contentWorld: .page) as? String {
@@ -4682,7 +4691,9 @@ extension AccessHostRecoveryWebKitTests {
                     let clickDeadline = Date().addingTimeInterval(12)
                     while Date() < clickDeadline {
                         if let destination = browser.activeTab, !destination.isLoading,
-                           DirectedWebKitObserver.safe(destination.liveCommittedDocumentURL) == clicked {
+                           destination.loadingError == nil,
+                           DirectedWebKitObserver.safe(destination.liveCommittedDocumentURL) == clicked,
+                           history.history.contains(where: { $0.url == clicked && !visitsBeforeClick.contains($0.id) }) {
                             committedDestination = clicked
                             break
                         }
