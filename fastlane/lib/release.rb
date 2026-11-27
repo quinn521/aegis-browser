@@ -371,10 +371,13 @@ module AegisRelease
                          archive_path: File.join(work, 'Aegis.xcarchive'), derived_data_path: File.join(work, 'DerivedData'),
                          buildlog_path: File.join(work, 'logs'), export_method: 'app-store',
                          skip_profile_detection: true, disable_package_automatic_updates: true,
-                         xcargs: "MARKETING_VERSION=#{request.version} CURRENT_PROJECT_VERSION=#{request.build} AEGIS_FIREBASE_CHANNEL=#{request.profile} AEGIS_ACCESS_RELEASE_CHANNEL=#{request.profile} #{@private_beta_xcargs}",
+                         xcargs: ["MARKETING_VERSION=#{request.version} CURRENT_PROJECT_VERSION=#{request.build}",
+                                  "AEGIS_FIREBASE_CHANNEL=#{request.profile} AEGIS_ACCESS_RELEASE_CHANNEL=#{request.profile}",
+                                  geosite_policy_xcode_arguments.shelljoin, @private_beta_xcargs].reject { |argument| argument.to_s.empty? }.join(' '),
                          export_options: { method: 'app-store-connect', teamID: team, signingStyle: 'manual',
                                            provisioningProfiles: profiles, manageAppVersionAndBuildNumber: false,
                                            testFlightInternalTestingOnly: internal_testing_only })
+      verify_bundled_geosite(work)
       ipa = File.join(request.directory, name)
       run('python3', firebase_script, 'verify-ipa', *firebase_args, '--artifact', ipa)
       run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build, request.profile)
@@ -387,6 +390,17 @@ module AegisRelease
       [paths, { 'signing' => 'app-store-export', 'signingMode' => 'manual', 'appleTeamId' => team, 'certificateSha1' => certificate.upcase,
                 'provisioningProfiles' => profiles, 'testflight' => 'not_uploaded', 'deviceAcceptance' => 'not_verified',
                 'testFlightInternalTestingOnly' => internal_testing_only }]
+    end
+
+    def verify_bundled_geosite(work)
+      run('python3', '-B', File.join(request.root, 'scripts/release/verify-geosite-release.py'), '--app',
+          File.join(work, 'Aegis.xcarchive/Products/Applications/Aegis.app'))
+    end
+
+    def geosite_policy_xcode_arguments
+      %w[AEGIS_GEOSITE_POLICY_URL AEGIS_GEOSITE_POLICY_PUBLIC_KEY].filter_map do |key|
+        "#{key}=#{ENV[key]}" unless ENV[key].to_s.empty?
+      end
     end
 
     def stage_ios_package(work, firebase_script, firebase_args)
@@ -496,7 +510,6 @@ module AegisRelease
       receipt = Receipt.verify(request, expected_digest)
       preflight_upload
       if request.destination == 'github-draft'
-        AegisRelease.require!(!receipt.fetch('details')['privateBetaTestNode'], 'Private Beta is only delivered to TestFlight')
         result = Draft.new(request, receipt, expected_digest, admission: method(:preflight_upload)).upload
         AegisRelease.write_new(File.join(request.directory, 'github-upload-result.json'), result)
       else
@@ -692,6 +705,9 @@ module AegisRelease
 
     def upload
       Receipt.verify(@request, @expected_digest)
+      AegisRelease.command('python3', File.expand_path('../../scripts/release/artifact-transport.py', __dir__),
+                           'assert-public', '--directory', @request.directory,
+                           '--manifest-sha256', @expected_digest, cwd: @request.root)
       sha = @receipt.fetch('source').fetch('sha')
       tag = URI.encode_www_form_component(@request.tag)
       AegisRelease.require!(api("commits/#{tag}")['sha'] == sha, 'Existing upstream candidate tag must resolve to the exact package commit')

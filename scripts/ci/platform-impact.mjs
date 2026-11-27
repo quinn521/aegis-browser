@@ -114,6 +114,7 @@ const iosReleaseInputs = new Set([
   'scripts/release/local-ios-signing.py',
   'scripts/release/prepare-ios-access-core.sh',
   'scripts/release/prepare-ios-package-core.sh',
+  'scripts/release/private_alpha_inputs.py',
   'scripts/release/private-beta-inputs.py',
   'scripts/release/product_artifacts.py',
   'scripts/release/product_delivery.py',
@@ -127,6 +128,7 @@ const iosReleaseInputs = new Set([
   'scripts/release/test_hosted_signing.py',
   'scripts/release/test_local_ios_signing.py',
   'scripts/release/test_native_signing_session.py',
+  'scripts/release/test_private_alpha_inputs.py',
   'scripts/release/test_private_beta_inputs.py',
   'scripts/release/test_product_artifacts.py',
   'scripts/release/test_product_delivery.py',
@@ -212,6 +214,8 @@ const iosReleaseContracts = new Set([
   'scripts/release/verify-ios-dsyms.py',
   'scripts/release/test_verify_ios_dsyms.py',
   'scripts/release/test_verify_signed_ios.py',
+  'scripts/release/verify-geosite-release.py',
+  'scripts/release/verify-bundled-geosite.swift',
 ]);
 // Match the top-level Ruby tests discovered by ios-release-validation.yml.
 const iosFastlaneTest = /^fastlane\/tests\/(?!\.)[^/]*_test\.rb$/u;

@@ -14,7 +14,7 @@ final class AccessGeoSiteAdmissionTests: XCTestCase {
         XCTAssertEqual(Vector.sha(database), "6704ff3c753be85d7b438e3d70b72e3097dc44bd99c764a4af3cddf6f59704e1")
         let result = try Vector.admit(database)
         XCTAssertEqual(result.categoryCount, 3)
-        XCTAssertEqual(result.catalogue.groups, AccessGeoSiteCatalogue.bundled.groups)
+        XCTAssertEqual(result.catalogue.groups, AccessGeoSiteCatalogue.originalConsentGroups)
         XCTAssertEqual(result.receipt.database.sha256, Vector.sha(database))
         XCTAssertEqual(result.suffixListSHA256, "ba7d836c0ea57a8bcf9f1fcb868066a7554bed029b441ecc6204ad8494a32612")
     }
@@ -156,7 +156,7 @@ final class AccessGeoSiteAdmissionTests: XCTestCase {
         }
         for index in 0..<6 {
             let input = try Vector.release(data) { metadata in
-                var assets = metadata["assets"] as! [[String: Any]]
+                var assets = try XCTUnwrap(metadata["assets"] as? [[String: Any]], "Expected release asset dictionaries")
                 switch index {
                 case 0: assets.append(assets[0])
                 case 1: assets[0]["digest"] = nil
@@ -183,10 +183,10 @@ final class AccessGeoSiteFullFrozenAdmissionTests: XCTestCase {
                                                          now: AccessGeoSiteTestVector.now)
         XCTAssertEqual(candidate.categoryCount, 1572)
         XCTAssertEqual(candidate.receipt.releaseID, 453302649)
-        XCTAssertEqual(candidate.receipt.tag, AccessGeoSiteCatalogue.bundled.tag)
-        XCTAssertEqual(candidate.receipt.database.sha256, AccessGeoSiteCatalogue.bundled.rawSHA256)
+        XCTAssertEqual(candidate.receipt.tag, AccessGeoSiteTestVector.frozenTag)
+        XCTAssertEqual(candidate.receipt.database.sha256, AccessGeoSiteTestVector.frozenSHA256)
         XCTAssertEqual(candidate.receipt.checksum.sha256, "9d153aa5f78ff022a85726e42522ea00776e87b30e4c2519c8e04dbd795893e6")
-        XCTAssertEqual(candidate.catalogue.groups, AccessGeoSiteCatalogue.bundled.groups)
+        XCTAssertEqual(candidate.catalogue.groups, AccessGeoSiteCatalogue.originalConsentGroups)
         let combined = try AccessGeoSiteAdmission.admit(metadata: metadata, database: database, checksum: checksum,
             now: AccessGeoSiteTestVector.now, includeOverseas: true)
         XCTAssertEqual(combined.catalogue, candidate.catalogue)
@@ -292,6 +292,92 @@ final class AccessGeoSiteFullFrozenAdmissionTests: XCTestCase {
 
 final class AccessOverseasAdmissionTests: XCTestCase {
     private typealias Vector = AccessGeoSiteTestVector
+
+    func testMixedIntersectionSealsAndRecoversBothSourceExceptionSets() throws {
+        let choice = AccessOverseasSelection(enabled: true, mode: .all)
+        let shared = [Vector.rule(2, "example.com")]
+        let prior = try AccessOverseasCacheSnapshot(overseasCandidate(shared + [Vector.rule(2, "example.org")],
+            excluding: (0..<512).map { Vector.rule(2, "old-\($0).example.com") })).approving(choice)
+        let offered = try AccessOverseasCacheSnapshot(overseasCandidate(shared + [Vector.rule(2, "example.net")],
+            excluding: (0..<512).map { Vector.rule(3, "new-\($0).example.com") }, newer: true))
+        let intersection = try XCTUnwrap(offered.narrowed(to: choice, retaining: prior))
+
+        let recovered = try roundTrip(intersection, approved: choice)
+        XCTAssertEqual(recovered.exclusions.count, 1_024)
+        XCTAssertTrue(recovered.matches(try url("safe.example.com")))
+        XCTAssertTrue(recovered.matches(try url("child.new-511.example.com")))
+        for host in ["child.old-511.example.com", "new-511.example.com", "example.org", "example.net"] {
+            XCTAssertFalse(recovered.matches(try url(host)), host)
+        }
+    }
+
+    func testChainedIntersectionKeepsProvableCoverageWhenExceptionsOverflow() throws {
+        let rules = [Vector.rule(2, "example.com"), Vector.rule(2, "safe.example.com"),
+                     Vector.rule(2, "example.org"), Vector.rule(3, "keep.example.com")]
+        func policy(_ prefix: String) throws -> AccessOverseasCatalogue.Policy {
+            let exclusions = (0..<512).map { Vector.rule(2, "\(prefix)-\($0).example.com") }
+            let candidate = try overseasCandidate(rules, excluding: exclusions)
+            return try XCTUnwrap(candidate.overseas).policy(for: .all)
+        }
+        let first = try policy("a")
+        let second = try policy("b")
+        let third = try policy("c")
+        let prior = try XCTUnwrap(first.intersection(with: second))
+        let intersection = try XCTUnwrap(third.intersection(with: prior))
+
+        XCTAssertEqual(intersection, prior.intersection(with: third))
+        for host in ["example.com", "keep.example.com", "child.safe.example.com", "child.example.org"] {
+            XCTAssertTrue(intersection.matches(try url(host)), host)
+        }
+        for host in ["a-511.example.com", "b-511.example.com", "c-511.example.com", "child.keep.example.com"] {
+            XCTAssertFalse(intersection.matches(try url(host)), host)
+        }
+    }
+
+    func testMixedIntersectionKeepsProvableCoverageWhenSnapshotBytesOverflow() throws {
+        let choice = AccessOverseasSelection(enabled: true, mode: .all)
+        let label = String(repeating: "a", count: 63)
+        let longPrefix = [label, label, label, String(repeating: "b", count: 44)].joined(separator: ".")
+        func hosts(under domain: String) -> [Data] {
+            (1_000...9_189).map { Vector.rule(3, "\(longPrefix).\($0).\(domain)") }
+        }
+        let shared = [Vector.rule(3, "keep.example.org")]
+        let prior = try AccessOverseasCacheSnapshot(overseasCandidate(
+            [Vector.rule(2, "example.com")] + shared + hosts(under: "example.net"))).approving(choice)
+        let offered = try AccessOverseasCacheSnapshot(overseasCandidate(
+            [Vector.rule(2, "example.net")] + shared + hosts(under: "example.com"), newer: true))
+        let intersection = try XCTUnwrap(offered.narrowed(to: choice, retaining: prior))
+
+        let recovered = try roundTrip(intersection, approved: choice)
+        XCTAssertGreaterThan(recovered.rules.count, 8_192)
+        XCTAssertLessThan(recovered.rules.count, 16_381)
+        XCTAssertTrue(recovered.matches(try url("keep.example.org")))
+        XCTAssertFalse(recovered.matches(try url("unlisted.example.net")))
+    }
+
+    private func overseasCandidate(_ rules: [Data], excluding exclusions: [Data] = [], newer: Bool = false) throws
+        -> AccessGeoSiteAdmission.Candidate {
+        let database = Vector.group("GFWLIST-CN", rules: rules) + Vector.group("GFWLIST-CN-EXCLUDE", rules: exclusions)
+        return try Vector.admit(database, newer: newer, includeOverseas: true)
+    }
+
+    private func roundTrip(_ snapshot: AccessOverseasCacheSnapshot, approved: AccessOverseasSelection) throws
+        -> AccessOverseasCatalogue.Policy {
+        let owner = UUID()
+        let storage = AccessGeoSiteStorage(directory: FileManager.default.temporaryDirectory.appendingPathComponent(owner.uuidString),
+                                          service: "aegis.geosite.test." + owner.uuidString)
+        defer { try? FileManager.default.removeItem(at: storage.directory) }
+        let reference = try snapshot.seal(owner: owner, storage: storage)
+        XCTAssertLessThan(reference.length, 4 * 1024 * 1024)
+        let recovered = try AccessOverseasCacheSnapshot.recover(reference, owner: owner, approved: approved,
+                                                              storage: storage, now: Vector.now)
+        XCTAssertEqual(recovered.policy, snapshot.policy)
+        return recovered.policy
+    }
+
+    private func url(_ host: String) throws -> URL {
+        try XCTUnwrap(URL(string: "https://\(host)/"))
+    }
 
     func testExactCategoryDeltaOnlyReportsNewlyReachableHosts() throws {
         let mother = Vector.group("GFWLIST-CN", rules: [Vector.rule(2, "google.com"), Vector.rule(3, "chatgpt.com")])
@@ -550,8 +636,22 @@ final class AccessOverseasAdmissionTests: XCTestCase {
 
 enum AccessGeoSiteTestVector {
     static let now = Date(timeIntervalSince1970: 1_795_219_200)
+    static let frozenTag = "20261120235103"
+    static let frozenSHA256 = "6fb761384d0141a9bd7dc3c18caf74b70516018ca91e3c36af11afefb543dcf9"
 
     static func frozenOfficialAssets() async throws -> (metadata: Data, database: Data, checksum: Data) {
+#if !targetEnvironment(simulator)
+        if let metadataURL = Bundle(for: AccessGeoSiteAdmissionTests.self).url(
+            forResource: "metadata", withExtension: "json", subdirectory: "Fixtures/PhysicalGeoSite"
+        ) {
+            let directory = metadataURL.deletingLastPathComponent()
+            let database = try Data(contentsOf: directory.appendingPathComponent("geosite.dat"))
+            XCTAssertEqual(database.count, 7_750_066)
+            XCTAssertEqual(sha(database), frozenSHA256)
+            return (try Data(contentsOf: metadataURL), database,
+                    try Data(contentsOf: directory.appendingPathComponent("geosite.dat.sha256sum")))
+        }
+#endif
         guard let value = ProcessInfo.processInfo.environment["AEGIS_GEOSITE_VECTOR"] else {
             throw XCTSkip("Run this test with the geosite-official-data fixture")
         }
@@ -567,7 +667,7 @@ enum AccessGeoSiteTestVector {
         let database = try await fetch("geosite.dat")
         let checksum = try await fetch("geosite.dat.sha256sum")
         XCTAssertEqual(database.count, 7_750_066)
-        XCTAssertEqual(sha(database), AccessGeoSiteCatalogue.bundled.rawSHA256)
+        XCTAssertEqual(sha(database), frozenSHA256)
         return (metadata, database, checksum)
     }
 
@@ -607,7 +707,7 @@ enum AccessGeoSiteTestVector {
     }
 
     static func release(_ database: Data, newer: Bool = false, checksum: Data? = nil,
-                        mutate: (inout [String: Any]) -> Void = { _ in }) throws -> (metadata: Data, checksum: Data) {
+                        mutate: (inout [String: Any]) throws -> Void = { _ in }) throws -> (metadata: Data, checksum: Data) {
         let tag = newer ? "20261120235104" : "20261120235103"
         let id = newer ? 453302650 : 453302649
         let pair = checksum ?? Data("\(sha(database))  geosite.dat\n".utf8)
@@ -623,7 +723,7 @@ enum AccessGeoSiteTestVector {
             "url": "\(api)/\(id)", "html_url": "\(web)/tag/\(tag)",
             "assets": [asset("geosite.dat", id: 773779405, body: database), asset("geosite.dat.sha256sum", id: 773779518, body: pair)]
         ]
-        mutate(&json)
+        try mutate(&json)
         return (try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys]), pair)
     }
 

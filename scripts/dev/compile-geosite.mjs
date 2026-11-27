@@ -36,13 +36,13 @@ const DLC = {
 };
 const XTLS = {
   project: 'XTLS/Xray-rules-dat',
-  version: '20261120235103',
+  version: '20261126014317',
   commit: 'd74acca73490cb57a937674ce8a8709d2a3021ba',
   tagCommit: '0f8082e3b11bbe8ee65f26de86cbd2e0d510c983',
   file: 'geosite.dat',
-  bytes: 7_750_066,
-  sha256: '6fb761384d0141a9bd7dc3c18caf74b70516018ca91e3c36af11afefb543dcf9',
-  url: 'https://github.com/XTLS/Xray-rules-dat/releases/download/20261120235103/geosite.dat',
+  bytes: 7_734_731,
+  sha256: '35f58454ed79be85285a333716e3016727d536ef872c53e13c60e411d43b7dd7',
+  url: 'https://github.com/XTLS/Xray-rules-dat/releases/download/20261126014317/geosite.dat',
   sourceUrl: 'https://github.com/XTLS/Xray-rules-dat/blob/d74acca73490cb57a937674ce8a8709d2a3021ba/README.md',
   license: 'MIT',
   licenseScope: 'Inherited V2Fly data',
@@ -65,7 +65,7 @@ const PSL = {
 const DEBIAN_SHA256 = 'd865d67c829d0f13bf508e152ef402d5d9634227ed12a8b49434d231baf5a643';
 const DLC_GROUPS = new Map([['DEBIAN', DEBIAN_SHA256]]);
 const XTLS_GROUPS = new Map([
-  ['DEBIAN', DEBIAN_SHA256],
+  ['DEBIAN', '06c514bb68567fdf422969927719a7e6c19442509cb2c69eb43cb02efbc83aeb'],
   ['DOUBAN', '62cfcbf5e006744783206139a2cbb6a3dffb05dbc366f1784a193e887e038619'],
   ['MEITUAN', '7f23061fb1a46f4150077aa56c369188cfda5bb49bd99649264c5bfb7bf8efa9'],
 ]);
@@ -161,7 +161,9 @@ function dnsName(input) {
   if (!input || /[\s\p{Cc}%:/\\@[\]?#]/u.test(input)) return '';
   const ascii = domainToASCII(input).replace(/\.$/, '');
   if (!ascii || ascii.length > 253 || isIP(ascii)) return '';
-  return ascii.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ? ascii : '';
+  const validLabels = ascii.split('.').every((label) => label.length > 0 && label.length <= 63 &&
+    !label.startsWith('-') && !label.endsWith('-') && !/[^a-z0-9-]/u.test(label));
+  return validLabels ? ascii : '';
 }
 
 function isLocal(name) {
@@ -311,6 +313,7 @@ function sha256(data) {
 }
 
 function readExactFile(path, size, label, flags = 0) {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Read the selected regular file through a size-checked descriptor.
   const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | flags);
   try {
     const info = fstatSync(fd, {bigint: true});
@@ -338,6 +341,7 @@ function readPinned(path, pin, label) {
 }
 
 function checkOutput(path, namedPath, inputs) {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Inspect the resolved destination without following a final symlink.
   const destination = lstatSync(path, {bigint: true, throwIfNoEntry: false});
   if (destination && !destination.isFile()) {
     throw new Error('Output destination must be a regular file. Use a fresh --output path.');
@@ -347,8 +351,9 @@ function checkOutput(path, namedPath, inputs) {
   if (inputs.some((input) => {
     if (namedPath === input.namedPath || canonicalPath === input.canonicalPath || sameFile(input.info)) return true;
     // A parent symlink can retarget the raw input name after the pinned read.
-    return canonicalPath === realpathSync.native(input.namedPath) ||
-      sameFile(statSync(input.namedPath, {bigint: true}));
+    if (canonicalPath === realpathSync.native(input.namedPath)) return true;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Compare inode identity against the original input name after resolution.
+    return sameFile(statSync(input.namedPath, {bigint: true}));
   })) {
     throw new Error('Output must be separate from the pinned input files');
   }
@@ -366,6 +371,7 @@ function checkExistingCatalogue(path, expected, existing) {
       throw new Error(conflict, {cause: error});
     }
     const {data, info} = opened;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Recheck the opened catalogue's identity without following links.
     const current = lstatSync(path, {bigint: true, throwIfNoEntry: false});
     const sameContentVersion = (other) => other?.dev === info.dev && other.ino === info.ino &&
       other.size === info.size && other.mtimeNs === info.mtimeNs;
@@ -404,9 +410,13 @@ function readMacOutputDirectory(path) {
   const diagnostic = 'Choose a trusted output directory with a read-only macOS ACL: ' + path;
   if (header !== '!#acl 1') throw new Error(diagnostic);
   for (const record of records) {
-    const entry = record.match(/:(allow|deny)(?:,[a-z_]+)*:([a-z_,]*)$/u);
-    if (!entry || (entry[1] === 'allow' && entry[2] &&
-        entry[2].split(',').some((right) => !READ_ONLY_ACL_RIGHTS.has(right)))) {
+    const fields = record.split(':');
+    if (fields.length < 3) throw new Error(diagnostic);
+    const [disposition, ...flags] = fields.at(-2).split(',');
+    const rights = fields.at(-1);
+    if ((disposition !== 'allow' && disposition !== 'deny') ||
+        flags.some((flag) => !/^[a-z_]+$/u.test(flag)) || /[^a-z_,]/u.test(rights) ||
+        (disposition === 'allow' && rights && rights.split(',').some((right) => !READ_ONLY_ACL_RIGHTS.has(right)))) {
       throw new Error(diagnostic);
     }
   }
@@ -417,6 +427,7 @@ function requireTrustedOutputDirectory(path, uid) {
   if (uid === undefined) throw new Error('Publishing requires POSIX directory permissions');
   const parent = dirname(path);
   if (parent !== path) requireTrustedOutputDirectory(parent, uid);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Inspect each resolved parent for ownership and permissions.
   const info = process.platform === 'darwin' ? readMacOutputDirectory(path) : lstatSync(path);
   const directory = (info.mode & constants.S_IFMT) === constants.S_IFDIR;
   const trustedOwner = info.uid === uid || info.uid === 0;
@@ -444,8 +455,10 @@ function writeAtomically(path, data, inputs) {
   const staging = mkdtempSync(join(directory, '.geosite-'));
   const temporary = join(staging, 'catalogue');
   try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Open a fixed filename exclusively inside the owner-only staging directory.
     const fd = openSync(temporary, 'wx', 0o644);
     try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Write through the exclusive staging descriptor.
       writeFileSync(fd, data);
       fsyncSync(fd);
     } finally {
@@ -454,6 +467,7 @@ function writeAtomically(path, data, inputs) {
     checkOutput(destination, path, inputs);
     // The filesystem creates the destination only if its name is still free.
     try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Publish the staged file without replacing an existing destination.
       linkSync(temporary, destination);
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
@@ -461,6 +475,7 @@ function writeAtomically(path, data, inputs) {
     }
   } finally {
     rmSync(temporary, {force: true});
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Remove only the empty directory created for this invocation.
     rmdirSync(staging);
   }
 }
@@ -479,10 +494,10 @@ function main() {
   });
   const {dat, dlc, psl, group, output, verify, help} = values;
   if (help) {
-    console.log('Usage: node scripts/dev/compile-geosite.mjs --dat <geosite.dat> --psl <effective_tld_names.dat>');
-    console.log('       --group <DEBIAN|DOUBAN|MEITUAN> --output <catalogue.json> [--verify]');
-    console.log('Use raw XTLS/Xray-rules-dat standard geosite.dat 20261120235103 and the Chromium 155.0.8059.80 ICANN+PRIVATE PSL.');
-    console.log('Historical DEBIAN reproduction uses --dlc <dlc.dat> (V2Fly 20261121064510) in place of --dat.');
+    console.log('Usage: node scripts/dev/compile-geosite.mjs --dat geosite.dat --psl effective_tld_names.dat');
+    console.log('       --group DEBIAN|DOUBAN|MEITUAN --output catalogue.json [--verify]');
+    console.log('Use raw XTLS/Xray-rules-dat standard geosite.dat ' + XTLS.version + ' and the Chromium 155.0.8059.80 ICANN+PRIVATE PSL.');
+    console.log('Historical DEBIAN reproduction uses --dlc dlc.dat (V2Fly 20261121064510) in place of --dat.');
     console.log('Inputs are verified offline. --verify compares the complete catalogue byte for byte.');
     return;
   }

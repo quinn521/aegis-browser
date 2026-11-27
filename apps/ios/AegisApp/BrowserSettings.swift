@@ -64,7 +64,7 @@ struct BrowserSettingsView: View {
                     NavigationLink("搜索、主页与浏览方式") { BrowserGeneralSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("general-browser-settings")
                     if let tab = browser.activeTab, hostStores.offersWebsiteAcceleration(for: tab) {
-                        NavigationLink("国内加速") {
+                        NavigationLink("网站加速") {
                             if let current = browser.activeTab { DomesticAccelerationSettingsView(tab: current) }
                         }
                         .accessibilityIdentifier("domestic-acceleration-link")
@@ -146,11 +146,12 @@ struct BrowserSettingsView: View {
 }
 
 
-// 功能名称与桌面一致，使用 iOS 的导航、触控尺寸和动态字号。
+// 「访问中国大陆网站」与「海外加速」相互独立；使用 iOS 的导航、触控尺寸和动态字号。
 private struct DomesticAccelerationSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @ObservedObject var tab: BrowserTab
+    @State private var refreshSaveFailed = false
 
     var body: some View {
         Form {
@@ -161,12 +162,8 @@ private struct DomesticAccelerationSettingsView: View {
                     if let categories = hostStores.websiteCategories(for: tab) {
                         WebsiteCategoriesLink(tab: tab, selected: categories.selected)
                     }
-                    if hostStores.geoSiteCache != nil, hostStores.websiteAccelerationMode == .smart {
-                        NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
-                            .accessibilityIdentifier("overseas-acceleration-link")
-                    }
                 } header: {
-                    Text("网站加速")
+                    Text("访问中国大陆网站")
                         .accessibilityIdentifier("website-acceleration-section")
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
@@ -198,6 +195,37 @@ private struct DomesticAccelerationSettingsView: View {
                         }
                     }
                 }
+                if hostStores.geoSiteCache != nil {
+                    Section {
+                        SettingsPicker("规则更新周期", selection: Binding(
+                            get: { hostStores.geoSiteRefreshDays },
+                            set: { days in
+                                do {
+                                    try hostStores.setGeoSiteRefreshDays(days, for: tab)
+                                    refreshSaveFailed = false
+                                } catch {
+                                    refreshSaveFailed = true
+                                }
+                            }), value: refreshIntervalLabel(hostStores.geoSiteRefreshDays)) {
+                            ForEach(AccessGeoSiteRefreshPolicy.supportedDays, id: \.self) { days in
+                                Text(LocalizedStringKey(refreshIntervalLabel(days))).tag(days)
+                            }
+                        }
+                        .accessibilityLabel("规则更新周期")
+                        .accessibilityValue(LocalizedStringKey(refreshIntervalLabel(hostStores.geoSiteRefreshDays)))
+                        .accessibilityIdentifier("geosite-refresh-interval")
+                    } footer: {
+                        if refreshSaveFailed { Text("设置未保存，请重试。") }
+                        if hostStores.geoSiteRefreshDays == 7 { Text("为保证规则有效，可能会提前更新。") }
+                    }
+                    Section {
+                        NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
+                            .accessibilityIdentifier("overseas-acceleration-link")
+                    } header: {
+                        Text("访问海外网站")
+                            .accessibilityIdentifier("overseas-acceleration-section")
+                    }
+                }
                 if let host = hostStores.websiteAccelerationHost(for: tab) {
                     Section {
                         LabeledContent("当前网站", value: host.rawValue)
@@ -222,7 +250,15 @@ private struct DomesticAccelerationSettingsView: View {
                 }
             }
         }
-        .localizedNavigationTitle("国内加速")
+        .localizedNavigationTitle("网站加速")
+    }
+
+    private func refreshIntervalLabel(_ days: Int) -> String {
+        switch days {
+        case 1: "每天"
+        case 7: "每 7 天"
+        default: "每 3 天"
+        }
     }
 
     private func modeButton(_ mode: AccessWebsiteAccelerationMode, title: LocalizedStringKey, id: String) -> some View {

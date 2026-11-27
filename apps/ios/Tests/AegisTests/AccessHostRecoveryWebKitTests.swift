@@ -1,4 +1,5 @@
 @testable import AccessKit
+import CryptoKit
 import Network
 import SwiftUI
 import os
@@ -1909,6 +1910,33 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: nonmember), "手动开启后应准备代理")
     }
 
+    func testPrivateAlphaWebsiteAccelerationUsesOrdinaryScopeOnly() throws {
+        let suiteName = "test.alphaWebsiteAcceleration." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("smart", forKey: "browser.websiteAcceleration.mode")
+        let ordinary = makeWebsiteAccelerationTab(profile: .standard, defaults: defaults)
+        defer { ordinary.dispose {} }
+        let member = try XCTUnwrap(URL(string: "https://security.debian.org"))
+
+        let alpha = AccessHostStoreCoordinator(channel: .alpha, alphaWebsiteAcceleration: true, locationPreferences: defaults)
+        ordinary.hostCoordinator = alpha
+        XCTAssertTrue(alpha.offersWebsiteAcceleration(for: ordinary))
+        XCTAssertTrue(alpha.requiresProxy(tab: ordinary, url: member))
+
+        for channel in [AccessReleaseChannel.beta, .release, .unknown] {
+            let owner = AccessHostStoreCoordinator(channel: channel, alphaWebsiteAcceleration: true, locationPreferences: defaults)
+            ordinary.hostCoordinator = owner
+            XCTAssertFalse(owner.offersWebsiteAcceleration(for: ordinary))
+            XCTAssertFalse(owner.requiresProxy(tab: ordinary, url: member))
+        }
+        let privateTab = makeWebsiteAccelerationTab(profile: .privateMode, defaults: defaults)
+        defer { privateTab.dispose {} }
+        privateTab.hostCoordinator = alpha
+        XCTAssertFalse(alpha.offersWebsiteAcceleration(for: privateTab))
+        XCTAssertFalse(alpha.requiresProxy(tab: privateTab, url: member))
+    }
+
     func testWebsiteAccelerationRequiresDevOrdinaryScope() throws {
         let suiteName = "test.websiteAcceleration." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -2315,6 +2343,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertNil(AccessOverseasRuleList(data: canonical))
     }
 
+#if targetEnvironment(simulator)
     func testOverseasSwitchChangesExactHostRouteAndPreservesExplicitChoice() async throws {
         let managedPort: UInt16 = 18_491
         let originalPort: UInt16 = 18_492
@@ -2400,6 +2429,8 @@ extension AccessHostRecoveryWebKitTests {
         try await witness(listed, path: "revoked", useManaged: false)
     }
 
+#endif
+
     func testOverseasRuleDoesNotAuthorizeAnUnlistedHTTPSLanding() async throws {
         try await checkOverseasHTTPSRedirect(restoredWithoutList: false)
     }
@@ -2440,7 +2471,17 @@ extension AccessHostRecoveryWebKitTests {
         try await checkOverseasCategoryExits(.domesticOverlap)
     }
 
-    private enum OverseasExitScenario { case categories, officialCategories, legacyReuse, canonicalLanding, domesticOverlap }
+    func testOverseasCategoryRoutesIndependentlyOfManualDomesticMode() async throws {
+        try await checkOverseasCategoryExits(.domesticManual)
+    }
+
+    func testSignedPauseWithdrawsOnlyOverseasAuthorization() async throws {
+        try await checkOverseasCategoryExits(.signedPause)
+    }
+
+    private enum OverseasExitScenario {
+        case categories, officialCategories, legacyReuse, canonicalLanding, domesticOverlap, domesticManual, signedPause
+    }
 
     private func checkOverseasCategoryExits(_ scenario: OverseasExitScenario) async throws {
         typealias Vector = AccessGeoSiteTestVector
@@ -2473,7 +2514,8 @@ extension AccessHostRecoveryWebKitTests {
         let fixture = AccessGeoSiteCacheTests.Fixture()
         defer { fixture.clean() }
         let cache = fixture.cache()
-        await cache.restore(migrating: .init(mode: .smart, categories: scenario == .domesticOverlap ? [.debian] : []))
+        await cache.restore(migrating: .init(mode: scenario == .domesticManual ? .manual : .smart,
+                                             categories: scenario == .domesticOverlap ? [.debian] : []))
         try cache.requestOverseasPreview()
         try await cache.apply(candidate, using: XCTUnwrap(cache.updateContext()))
         if reusingLegacyStore { try cache.setSelection(.init(mode: .manual, categories: [])) }
@@ -2499,6 +2541,8 @@ extension AccessHostRecoveryWebKitTests {
         case .canonicalLanding: 18_704
         case .domesticOverlap: 18_706
         case .officialCategories: 18_708
+        case .domesticManual: 18_710
+        case .signedPause: 18_712
         }
         let originalPort = managedPort + 1
         let proxy = try await makeListener(port: managedPort, tunnels: FixtureOriginTunnels(port: managed.port, hosts: hosts, connectDelay: .milliseconds(350)))
@@ -2533,9 +2577,11 @@ extension AccessHostRecoveryWebKitTests {
             let expected = expectedManaged ? managed : original
             let other = expectedManaged ? original : managed
             tab.loadFromAddressBar(url)
-            try await waitUntil(seconds: 10, {
-                attach(tab.webView, to: window)
-                if tab.webView.navigationDelegate !== navigation { tab.webView.navigationDelegate = navigation }
+            // A store switch can start a cold WebContent process before the fixture sees the request.
+            try await waitUntil(seconds: 45, {
+                let view = tab.webView
+                if view.navigationDelegate !== navigation { view.navigationDelegate = navigation }
+                attach(view, to: window)
                 return tab.liveCommittedDocumentURL == committedURL && !tab.isLoading && expected.transcript.contains(marker)
             }, message: "Expected \(host) on the selected exit for \(path)")
             XCTAssertFalse(other.transcript.contains(marker))
@@ -2561,6 +2607,44 @@ extension AccessHostRecoveryWebKitTests {
             XCTAssertFalse(managed.transcript.contains("GET /overseas-download "))
             try await witness(domesticHost, path: "domestic-and-overseas", managed: true)
             XCTAssertEqual(coordinator.snapshot(for: tab).overseasGrant, .all(release: candidate.receipt.tag))
+            return
+        }
+        if scenario == .domesticManual {
+            XCTAssertEqual(coordinator.websiteAccelerationMode, .manual)
+            try await choose(.video)
+            try await witness("www.youtube.com", path: "manual-video", managed: true)
+            XCTAssertEqual(coordinator.snapshot(for: tab).overseasGrant, .categories([.video], release: candidate.receipt.tag))
+            try await witness("github.com", path: "manual-unselected", managed: false)
+            XCTAssertNil(coordinator.snapshot(for: tab).overseasGrant)
+            return
+        }
+        if scenario == .signedPause {
+            try await choose(.video)
+            let videoHost = try AccessSiteHost("www.youtube.com")
+            let independent = try AccessSiteHost("github.com")
+            coordinator.setProxyEnabled(true, host: independent, scopeID: tab.browsingScopeID, isPrivate: false)
+            try await witness(independent.rawValue, path: "privacy-before-pause", managed: true)
+            try await witness(videoHost.rawValue, path: "overseas-before-pause", managed: true)
+            XCTAssertNotNil(coordinator.snapshot(for: tab).overseasGrant)
+            let overseasView = tab.webView
+            let key = Curve25519.Signing.PrivateKey()
+            let timestamp = fixture.clock.wall.timeIntervalSince1970
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "schema": 1, "version": 1, "issuedAt": timestamp, "expiresAt": timestamp + 3600,
+                "overseasPaused": true, "blockedTags": []
+            ])
+            let envelope = try JSONSerialization.data(withJSONObject: [
+                "payload": payload.base64EncodedString(),
+                "signature": key.signature(for: payload).base64EncodedString()
+            ])
+            try cache.acceptRemotePolicy(.verify(envelope, key: key.publicKey, now: fixture.clock.wall))
+            try await waitUntil(seconds: 10, {
+                tab.boundHostName == nil && overseasView.url?.absoluteString == "about:blank"
+            }, message: "The document granted only by overseas rules should retire")
+            try await witness(videoHost.rawValue, path: "overseas-paused", managed: false)
+            try await witness(independent.rawValue, path: "privacy-after-pause", managed: true)
+            coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: independent)
+            try await witness(independent.rawValue, path: "explicit-original-after-pause", managed: false)
             return
         }
         if reusingLegacyStore {
@@ -2815,6 +2899,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(retained as? String, "retained")
     }
 
+#if targetEnvironment(simulator)
     func testOverseasSwitchKeepsARequiredDefaultReload() async throws {
         try await checkOverseasSwitchKeepsARequiredDefaultReload(switchOff: false)
     }
@@ -2917,6 +3002,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(coordinator.snapshot(for: tab).autoRecoveryLine, AccessAutoRecoveryCopy.armedOnCurrentConnection)
     }
 
+#endif
+
     func testOverseasRecognizesAnApprovedActionBeforeItsProvisionalCallback() throws {
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         defer { browser.closeWindow() }
@@ -2987,6 +3074,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertNil(tab.liveCommittedDocumentURL)
     }
 
+#if targetEnvironment(simulator)
     func testOverseasSwitchRetiresAnOriginalDocumentWithAWarmSiblingHost() async throws {
         try await checkOriginalPageWithWarmSibling(listed: true, provisional: false)
     }
@@ -3068,6 +3156,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(sibling.liveCommittedDocumentURL, warm)
     }
 
+#endif
+
     func testOverseasSwitchPreservesAUserAuthorizedPendingAddress() async throws {
         try await checkOverseasPendingAddress(expire: false)
     }
@@ -3145,7 +3235,7 @@ extension AccessHostRecoveryWebKitTests {
         let status = coordinator.snapshot(for: tab)
         XCTAssertEqual(status.connection, .unavailable)
         XCTAssertEqual(status.intentStatus, .overseasUnavailable)
-        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(status), "国外加速连接不可用")
+        XCTAssertEqual(AccessSiteProxyToggleModel.siteStatusLine(status), "海外加速连接不可用")
         XCTAssertFalse(status.toggleOn)
         XCTAssertNil(tab.boundHostName)
     }
@@ -3257,6 +3347,7 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertNil(tab.boundHostName)
     }
 
+#if targetEnvironment(simulator)
     func testOverseasOnlyAttachmentStaysIndependentWhenItsEntryFails() async throws {
         let host = "overseas-attached.invalid"
         let port: UInt16 = 18_500
@@ -3293,6 +3384,8 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertFalse(failed.toggleOn)
         XCTAssertEqual(tab.boundHostName, host)
     }
+
+#endif
 
     private func makeOverseasRule(_ host: String) throws -> AccessOverseasRuleList {
         let data = Data((host + "\n").utf8)

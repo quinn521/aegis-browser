@@ -15,6 +15,7 @@
 		046436D9AF085D3C39F114C8 /* AccessHTTPConnectParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 096C8DFA33A5AD5DB6D04746 /* AccessHTTPConnectParser.swift */; };
 		04CD02F5EC0A8B8F90BA0D9A /* AccessHTTPSRealityPathError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618996D7018F409B5626616B /* AccessHTTPSRealityPathError.swift */; };
 		05AD75D2412CE71A3BB0F97A /* AccessHTTPInboundError.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF7892BBAE7D320760FE43EC /* AccessHTTPInboundError.swift */; };
+		05D9C6CE7A21EE8150A4FE26 /* AccessOutboundNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8315EF54BE5E3BCC9937209 /* AccessOutboundNode.swift */; };
 		06761E707DF8597113D9B1F0 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ADD584AC8E373E04154C51B /* AppLocalization.swift */; };
 		06E673E000E8E427903D2A25 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ADD584AC8E373E04154C51B /* AppLocalization.swift */; };
 		0735FD08845EDC5A564894BF /* RemoteDiagnosticsControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 371AA99E2C992DA2574009F0 /* RemoteDiagnosticsControllerTests.swift */; };
@@ -117,6 +118,7 @@
 		523A56C0A3B4E4FF72486DA1 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = 929074D962010764650D38AB /* manifest.json */; };
 		5386C9FFA46386CDD3DA6605 /* BrowserPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C58207434408BE928293A2A /* BrowserPreferences.swift */; };
 		539C51B600BB47FB430D7611 /* WebExtensionRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D2695453C0647BA59FA6AE /* WebExtensionRuntime.swift */; };
+		53CABBCC67C7704F45EC63C9 /* share-links in Resources */ = {isa = PBXBuildFile; fileRef = 7A8E3C19332C64370766F3F8 /* share-links */; };
 		5417E789F7D0BC2213D0615A /* ShareInboxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0BDB1071C646F6F85D5065 /* ShareInboxTests.swift */; };
 		54DF2914F31AD10FACA39479 /* AccessHTTPSInboundTLSProviding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D21D9714182E32AD3DD6145 /* AccessHTTPSInboundTLSProviding.swift */; };
 		55591D819D0F0C8168CF6E15 /* AccessSOCKS5InboundTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B37CB05CFEEE3DDD4C405D4 /* AccessSOCKS5InboundTests.swift */; };
@@ -265,6 +267,7 @@
 		AD97567B8E7543950D161E4E /* AccessDevAllowBlockPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F14ADD5234E18C200708DDDF /* AccessDevAllowBlockPanel.swift */; };
 		B0087639BCB7AC25A15DD724 /* AgentContractGoldenVectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A05892A05273F09242B610B /* AgentContractGoldenVectorTests.swift */; };
 		B0262F3A0FBD60EDB6535CD6 /* AccessCredentialSlot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F006BFE2B07CD4D4A457D66A /* AccessCredentialSlot.swift */; };
+		B04DC37E45B6D2CE771C1872 /* AccessOutboundConfigRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D036042B180D550BF61D17A /* AccessOutboundConfigRegistry.swift */; };
 		B0931A14F3C52E489F17754C /* AccessSiteSessionController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9350B3178A4248A9134F85E0 /* AccessSiteSessionController.swift */; };
 		B0DCB989B140B3DCC1BC3012 /* AccessRegistrationLeaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F0BCDC77998B8308A198EE5 /* AccessRegistrationLeaseTests.swift */; };
 		B1117F796F8FFA728BADAB2D /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83743D91211FEF8F59981CDF /* SafariWebExtensionHandler.swift */; };
@@ -345,6 +348,7 @@
 		DD19DB9D8CF7A2C438969A1F /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = B824D75517B9EE3123E3662F /* FirebaseRemoteConfig */; };
 		DDA3BF9401C5C12C090969FA /* DownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C858D58A229965BC2F366778 /* DownloadManager.swift */; };
 		DF598CA022A902F136AC9975 /* ReadingLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A1AF984EFBC41C80C433CB8 /* ReadingLibrary.swift */; };
+		E127684DCAE648950360BB1E /* AccessOutboundNodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A41285AC2D6134F4121E6DE /* AccessOutboundNodeTests.swift */; };
 		E145646358CA36FE3F5C50BC /* AccessHostRoutingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3299797CAEBA995C451E1395 /* AccessHostRoutingPolicy.swift */; };
 		E256F4D2434D064A82A9D95C /* SafariDocumentNavigationIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DFF9E368B4B4F0B40EA90FE /* SafariDocumentNavigationIdentityTests.swift */; };
 		E276D84CF8AB03F782142476 /* AccessHTTPTunnelBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B5283BBC70FEEE9BFA976ED /* AccessHTTPTunnelBridgeTests.swift */; };
@@ -403,6 +407,11 @@
 		E177F2E434D17AE05D898DF2 /* AccessTestNodeViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D41ABAFC3BD71A202D11BC /* AccessTestNodeViews.swift */; };
 		E8B84191174402DB083F8AFA /* AccessTestNodeEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B50A15B5EA6602740DA3945 /* AccessTestNodeEditor.swift */; };
 		FE428CCFC1490FE96988057C /* AccessTestNode.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = E1BC3C9EC5D9A8F5CF6FF41A /* AccessTestNode.xcstrings */; };
+		4A389D4139D42AC8D04138CD /* geosite-checksum.txt in Resources */ = {isa = PBXBuildFile; fileRef = 978604706160E054955E0C7F /* geosite-checksum.txt */; };
+		61E042C91B37546D4ED53D23 /* geosite-release.json in Resources */ = {isa = PBXBuildFile; fileRef = AA4670E5ABEEC5C806085AC4 /* geosite-release.json */; };
+		BE5C75CE41EF475F6DD5E6A5 /* geosite.dat in Resources */ = {isa = PBXBuildFile; fileRef = 0B573B5F04627941E93531B9 /* geosite.dat */; };
+		12E677EB13BE096EC976AED4 /* AccessGeoSiteRemotePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3B488D9A29BC4FC61090644 /* AccessGeoSiteRemotePolicy.swift */; };
+		4E754DC4A77FBD7F1E9C07A6 /* AccessGeoSiteRemotePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05DCB2246099F247A2E33916 /* AccessGeoSiteRemotePolicyTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -660,6 +669,7 @@
 		4743AD9529043E1BCF8F3188 /* zh-Hant */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hant"; path = "zh-Hant.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		48DE227C3194C654AFA7B2DD /* PolicyModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PolicyModels.swift; sourceTree = "<group>"; };
 		4A05892A05273F09242B610B /* AgentContractGoldenVectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentContractGoldenVectorTests.swift; sourceTree = "<group>"; };
+		4A41285AC2D6134F4121E6DE /* AccessOutboundNodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessOutboundNodeTests.swift; sourceTree = "<group>"; };
 		4BDF84C8F7C79618785F9D2C /* ReadingTranslation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingTranslation.swift; sourceTree = "<group>"; };
 		4BE04B8A5D71FBA64BB9EDC4 /* AccessRealityVisionOutboundConfigError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessRealityVisionOutboundConfigError.swift; sourceTree = "<group>"; };
 		4BED1A1355A1EB0F9884D002 /* SafariWebExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = SafariWebExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -738,6 +748,7 @@
 		78FC77B17D5BA1E1312B5704 /* TrackingProtection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingProtection.swift; sourceTree = "<group>"; };
 		795BEBE2720FB095AF6002BF /* BrowserKeyboardCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserKeyboardCommands.swift; sourceTree = "<group>"; };
 		79B8057C45E31C106CCBD50F /* icon-256.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon-256.png"; sourceTree = "<group>"; };
+		7A8E3C19332C64370766F3F8 /* share-links */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "share-links"; path = "../../fixtures/access/share-links"; sourceTree = SOURCE_ROOT; };
 		7C91529E9D1C3457DD010A42 /* BookmarkTransactionJournalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarkTransactionJournalTests.swift; sourceTree = "<group>"; };
 		7DA26E91B481872DFF7904C7 /* ContentFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentFilterTests.swift; sourceTree = "<group>"; };
 		7DB5814166DC8C9277D85215 /* icon-128.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon-128.png"; sourceTree = "<group>"; };
@@ -796,6 +807,7 @@
 		9B33FBBDDBB9B30F8B2D04D4 /* AccessBrowsingBucket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessBrowsingBucket.swift; sourceTree = "<group>"; };
 		9BCE2D43B44108274CD01AA6 /* BrowserAddressField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAddressField.swift; sourceTree = "<group>"; };
 		9C803F99BFCEF9620B7B294D /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		9D036042B180D550BF61D17A /* AccessOutboundConfigRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessOutboundConfigRegistry.swift; sourceTree = "<group>"; };
 		9FBABA36F4D98A942FD63987 /* ContentFilterCompiler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentFilterCompiler.swift; sourceTree = "<group>"; };
 		9FF75434476653116BC005C2 /* ThirdPartyNoticesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThirdPartyNoticesView.swift; sourceTree = "<group>"; };
 		A037E6CD5E2D7B1BABB4CD96 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = ko; path = ko.lproj/InfoPlist.strings; sourceTree = "<group>"; };
@@ -836,6 +848,7 @@
 		B52979D54FA15FCCECDDEE26 /* th */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = th; path = th.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		B5DFA8B92557D78E2EFD667C /* WebsiteEnhancementsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebsiteEnhancementsView.swift; sourceTree = "<group>"; };
 		B6ACB6005A464DF3215AFD90 /* fr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = fr; path = fr.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		B8315EF54BE5E3BCC9937209 /* AccessOutboundNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessOutboundNode.swift; sourceTree = "<group>"; };
 		B953D0FA16C857B4161F1341 /* BrowserSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserSettings.swift; sourceTree = "<group>"; };
 		76A792F6A78C93F8C8101F62 /* OverseasAccelerationSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverseasAccelerationSettingsView.swift; sourceTree = "<group>"; };
 		B97844B59A1122231CA84A1B /* read-only.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "read-only.js"; sourceTree = "<group>"; };
@@ -963,6 +976,11 @@
 		6AE929429093DF4E1A99CCE2 /* AccessCampaignBudgetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessCampaignBudgetTests.swift; sourceTree = "<group>"; };
 		726F6C2DE67B2577C793481D /* AccessTestNodeEditorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessTestNodeEditorTests.swift; sourceTree = "<group>"; };
 		E1BC3C9EC5D9A8F5CF6FF41A /* AccessTestNode.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = AccessTestNode.xcstrings; sourceTree = "<group>"; };
+		978604706160E054955E0C7F /* geosite-checksum.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "geosite-checksum.txt"; sourceTree = "<group>"; };
+		AA4670E5ABEEC5C806085AC4 /* geosite-release.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "geosite-release.json"; sourceTree = "<group>"; };
+		0B573B5F04627941E93531B9 /* geosite.dat */ = {isa = PBXFileReference; path = geosite.dat; sourceTree = "<group>"; };
+		B3B488D9A29BC4FC61090644 /* AccessGeoSiteRemotePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteRemotePolicy.swift; sourceTree = "<group>"; };
+		05DCB2246099F247A2E33916 /* AccessGeoSiteRemotePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessGeoSiteRemotePolicyTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1141,6 +1159,7 @@
 				312850823718580735F43C85 /* AccessGeoSiteAdmissionTests.swift */,
 				4957F47D9F5EAA2BFCB08D5F /* AccessGeoSiteCacheTests.swift */,
 				01C1A6CE3C985BE392417071 /* AccessGeoSiteUpdateTransportTests.swift */,
+				05DCB2246099F247A2E33916 /* AccessGeoSiteRemotePolicyTests.swift */,
 				11407544FE931A82D1CAB39E /* AccessGeoSiteSelectionTests.swift */,
 				AFC664B288C30F20D35AADCA /* AccessHostRecoveryWebKitTests.swift */,
 				02D5318F98B98D709C5312B7 /* AccessHostSelectiveProxyCapabilityTests.swift */,
@@ -1409,6 +1428,8 @@
 				C669CC4428605B9AB83C2A36 /* AccessMutexGate.swift */,
 				680E0746E69F8E18145002C0 /* AccessNavigationRetryPolicy.swift */,
 				92FAB338F236ADE0AABCC284 /* AccessNWListenerBootstrap.swift */,
+				9D036042B180D550BF61D17A /* AccessOutboundConfigRegistry.swift */,
+				B8315EF54BE5E3BCC9937209 /* AccessOutboundNode.swift */,
 				B98D531DE803E5B9336A16DB /* AccessOutboundProfile.swift */,
 				6C63D3537FCB41D2B181C6C2 /* AccessOwner.swift */,
 				808A060A6053052517EBCBBB /* AccessPreparationClock.swift */,
@@ -1505,6 +1526,7 @@
 				E4E753C9707F5AD92D22CFCC /* AccessHTTPSRealityPathTests.swift */,
 				5B5283BBC70FEEE9BFA976ED /* AccessHTTPTunnelBridgeTests.swift */,
 				608CC527CAE02B8D5EE49494 /* AccessLocalV2RayConfigTests.swift */,
+				4A41285AC2D6134F4121E6DE /* AccessOutboundNodeTests.swift */,
 				93C45B3E4E73A2C7355B6DF1 /* AccessProxyConfigurationApplicatorTests.swift */,
 				E004CFDF2925E94F891A3D8F /* AccessProxyEntryPublisherTests.swift */,
 				B338799C9579F208547F5AC5 /* AccessRealityProbeTests.swift */,
@@ -1536,6 +1558,8 @@
 				884B39628C0654FC1D223CF0 /* AccessGeoSiteCache.swift */,
 				0E73AA0415908BA35EBC4068 /* AccessOverseasCacheSnapshot.swift */,
 				DAE0CA05715F3CBE5D0B9326 /* AccessGeoSiteUpdateTransport.swift */,
+				B3B488D9A29BC4FC61090644 /* AccessGeoSiteRemotePolicy.swift */,
+				949E85B34F34393213F40478 /* GeoSite */,
 				E40AA63717545D841D62E3FD /* AccessHostStoreCoordinator.swift */,
 				848462AF10B5714544903958 /* AccessProxyCapabilityPresentation.swift */,
 				2A3D7253C7215FF069464853 /* AccessSiteProxySessionStore.swift */,
@@ -1646,6 +1670,7 @@
 			isa = PBXGroup;
 			children = (
 				C1007077C6F4B017DC7EE5E3 /* Fixtures */,
+				7A8E3C19332C64370766F3F8 /* share-links */,
 				C115E751BCC2D63FADEE1B51 /* AccessKitTests */,
 				3E290F3990C330CC3F94E4C6 /* AegisPolicyKitTests */,
 				4D618B5CFF324A152FFFD5FC /* AegisTests */,
@@ -1661,6 +1686,16 @@
 				131519A5AB470B3D0670586A /* public_suffix_list.dat */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		949E85B34F34393213F40478 /* GeoSite */ = {
+			isa = PBXGroup;
+			children = (
+				978604706160E054955E0C7F /* geosite-checksum.txt */,
+				AA4670E5ABEEC5C806085AC4 /* geosite-release.json */,
+				0B573B5F04627941E93531B9 /* geosite.dat */,
+			);
+			path = GeoSite;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1703,6 +1738,7 @@
 				7CFE6D1BEF3420D6A2B7DEAC /* Embed Frameworks */,
 				88E0E51356BCB02DEAE9823E /* Select private Access subscription */,
 				0395122202CBAF2CEEEAFD00 /* Select private Access test node */,
+				EE6E539B4A7B28415156DA02 /* Select private Alpha test nodes */,
 				410C3AD95B8493D80F8C5CB5 /* Select Aegis Firebase registration */,
 			);
 			buildRules = (
@@ -1927,6 +1963,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				29739518D29D84A07EAD73CE /* Fixtures in Resources */,
+				53CABBCC67C7704F45EC63C9 /* share-links in Resources */,
 				B703193C14D69F055D433BA8 /* agent-contract-v1.vectors.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1958,6 +1995,9 @@
 				FE428CCFC1490FE96988057C /* AccessTestNode.xcstrings in Resources */,
 				C97391F838CD807B58557C14 /* PrivacyInfo.xcprivacy in Resources */,
 				48C622C40381439576402C2A /* ThirdPartyNotices.txt in Resources */,
+				4A389D4139D42AC8D04138CD /* geosite-checksum.txt in Resources */,
+				61E042C91B37546D4ED53D23 /* geosite-release.json in Resources */,
+				BE5C75CE41EF475F6DD5E6A5 /* geosite.dat in Resources */,
 				34CAF16DE691E1CC97FEA976 /* _locales in Resources */,
 				58DBFB099C3AEB133708A0FD /* background.js in Resources */,
 				F25783995C98BE8888736CA2 /* icon-128.png in Resources */,
@@ -2148,6 +2188,28 @@
 			shellPath = /bin/sh;
 			shellScript = "/usr/bin/python3 -B \"${SRCROOT}/../../scripts/release/ios_embedded_core.py\" install --root \"${SRCROOT}/../..\" --source-lock \"${SRCROOT}/EmbeddedCore/embedded-core-lock.json\" --products \"${AEGIS_EMBEDDED_CORE_PRODUCTS}\" --bundle \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\n";
 		};
+		EE6E539B4A7B28415156DA02 /* Select private Alpha test nodes */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/private_alpha_nodes.py",
+				"$(AEGIS_PRIVATE_ALPHA_NODES_FILE)",
+			);
+			name = "Select private Alpha test nodes";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisAlphaTestNodes.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 -B \"${SRCROOT}/scripts/private_alpha_nodes.py\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -2265,6 +2327,7 @@
 				CF40698120DE47BCA6C9C7C3 /* AccessGeoSiteCache.swift in Sources */,
 				503DF5E6426186EEF75FCB2C /* AccessOverseasCacheSnapshot.swift in Sources */,
 				1E28A7D21BD347D1E4758CD4 /* AccessGeoSiteUpdateTransport.swift in Sources */,
+				12E677EB13BE096EC976AED4 /* AccessGeoSiteRemotePolicy.swift in Sources */,
 				F7ADDDE71FC0B0F0615BADD9 /* AccessHostStoreCoordinator.swift in Sources */,
 				60B3F5A46ED48E0EEE59FDEC /* AccessProxyCapabilityPresentation.swift in Sources */,
 				A5A1195ADA40E0F62926A870 /* AccessSiteProxySessionStore.swift in Sources */,
@@ -2349,6 +2412,7 @@
 				D3E812CDF18D6E59014C5AE4 /* AccessGeoSiteAdmissionTests.swift in Sources */,
 				E44C81770C4E6E49CF5AAF0F /* AccessGeoSiteCacheTests.swift in Sources */,
 				F7941A2A40B34C362D948844 /* AccessGeoSiteUpdateTransportTests.swift in Sources */,
+				4E754DC4A77FBD7F1E9C07A6 /* AccessGeoSiteRemotePolicyTests.swift in Sources */,
 				EEA6F079B54F71682D31FEC4 /* AccessGeoSiteSelectionTests.swift in Sources */,
 				6EBBC2FDFD05EB0CB7E7895A /* AccessHTTPConnectTests.swift in Sources */,
 				3D59E66EA76B0E1A0061BAB8 /* AccessHTTPInboundListenerTests.swift in Sources */,
@@ -2362,6 +2426,7 @@
 				45E7821732A974C5741FEAE6 /* AccessHostWebKitRouteTests.swift in Sources */,
 				F05A2CEFBE9A0B15D2A67D68 /* AccessLocalV2RayConfigTests.swift in Sources */,
 				B5FC7E9D04726219BC07D764 /* AccessNavigationRecoveryTests.swift in Sources */,
+				E127684DCAE648950360BB1E /* AccessOutboundNodeTests.swift in Sources */,
 				03A791AF264E6A386C454D69 /* AccessProxyCapabilityPresentationTests.swift in Sources */,
 				FE256921A683DF536BE4314D /* AccessProxyConfigurationApplicatorTests.swift in Sources */,
 				F235863B5CFF74F221E0753B /* AccessProxyEntryPublisherTests.swift in Sources */,
@@ -2480,6 +2545,8 @@
 				180B90BB6A48239F7984C179 /* AccessMutexGate.swift in Sources */,
 				A0EB91E5AB717F87D0165DB6 /* AccessNWListenerBootstrap.swift in Sources */,
 				1E55E575E2CA3FB23858A789 /* AccessNavigationRetryPolicy.swift in Sources */,
+				B04DC37E45B6D2CE771C1872 /* AccessOutboundConfigRegistry.swift in Sources */,
+				05D9C6CE7A21EE8150A4FE26 /* AccessOutboundNode.swift in Sources */,
 				098347746D915F47A09BBA28 /* AccessOutboundProfile.swift in Sources */,
 				BB1B674A3EBC8D523FE8AB20 /* AccessOwner.swift in Sources */,
 				724BC6E4E399FB6DF07585F0 /* AccessPreparationClock.swift in Sources */,
@@ -2767,6 +2834,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				AEGIS_FIREBASE_CHANNEL = dev;
+				AEGIS_PRIVATE_ALPHA_NODES_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_NODE_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE = /dev/null;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -3025,6 +3093,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				AEGIS_FIREBASE_CHANNEL = disabled;
+				AEGIS_PRIVATE_ALPHA_NODES_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_NODE_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE = /dev/null;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
