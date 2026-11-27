@@ -33,7 +33,12 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         }
         let wrongProfile = AccessAlphaNodeCatalogue(channel: "alpha", profile: "beta", bundleID: "com.gcsa.aegis",
                                                    data: data, defaults: defaults)
+        XCTAssertFalse(wrongProfile.isConfigured)
         XCTAssertTrue(wrongProfile.entries.isEmpty)
+        let wrongApp = AccessAlphaNodeCatalogue(channel: "alpha", profile: "alpha", bundleID: "com.gcsa.aegis.safari",
+                                               data: data, defaults: defaults)
+        XCTAssertFalse(wrongApp.isConfigured)
+        XCTAssertTrue(wrongApp.routes.isEmpty)
         let invalid = alphaCatalogue(data: Data("not json".utf8), defaults: defaults)
         XCTAssertTrue(invalid.isConfigured)
         XCTAssertTrue(invalid.entries.isEmpty)
