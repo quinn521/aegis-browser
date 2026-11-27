@@ -154,7 +154,7 @@ class PrivateAlphaInputsTests(unittest.TestCase):
             with self.subTest(case=type(nodes).__name__, count=len(nodes)):
                 source.write_text(json.dumps(nodes))
                 result = self.hook('alpha', source, target)
-                self.assertIn('private Alpha', result.stderr)
+                self.assertIn('Cannot package the private node list', result.stderr)
                 self.assertNotIn(UID, result.stderr + result.stdout)
                 self.assertFalse(target.exists())
         source.write_text(json.dumps(LIST))
