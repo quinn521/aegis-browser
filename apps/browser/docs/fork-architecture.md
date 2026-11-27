@@ -81,7 +81,7 @@ Video extraction, media conversion, FFmpeg, and a bundled download extension are
 
 The non-component macOS Release build-tree is an input to release qualification, not the result. Full diagnostic patch coverage does not make it an RC. Publication additionally requires a clean committed root identity and trusted build evidence for both patch series, affected native and runtime tests, product identity, signing, notarization, packaging, install acceptance, and a passed release gate.
 
-Android wiring exists in source, but there is no current-source APK or AAB. A supported x86-64 Linux build, device acceptance, Android page-summary behavior, and Play compliance remain open gates.
+The S1 APKs can be built on `aegis-android-linux-arm64` with QEMU. Current-source artifacts, physical-device acceptance, Android page-summary behavior and Play compliance still need verification.
 
 ## Development-internal references
 

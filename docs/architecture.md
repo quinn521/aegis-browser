@@ -59,7 +59,7 @@ Node-only AST analysis, bounded behavior/provenance functions, local federated s
 - Remote summary text is bounded and redacted, but a complete Chromium egress, telemetry, update, crash-reporting, and error-path audit is still pending.
 - The iOS page assistant supports confirmed requests to user-configured models with bounded, redacted page content. Models return text and cannot invoke browser action tools. Synthetic-model tests do not establish external service quality. Safari access is read-only and gesture/lease-bound; the Share inbox is URL-only, bounded, expiring, and single-consumption.
 - Local or Simulator signing and structural checks are not equivalent to product identity, distribution signing, notarization, provisioning, Archive, TestFlight, or installed-device acceptance.
-- Chromium Android remains blocked on a qualified x86-64 Linux build, a current-source package, and real-device acceptance.
+- Android accepts APKs built on `aegis-android-linux-arm64` using QEMU. The current candidate still needs traceable packages and physical-device results.
 - iOS real-device validation is `NOT_RUN`; default-browser entitlement is `PENDING`; formal signing, Archive, TestFlight, and App Store delivery are `NOT_RUN`.
 
 ## Release status

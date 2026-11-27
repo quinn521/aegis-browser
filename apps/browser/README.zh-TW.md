@@ -153,11 +153,12 @@ Windows 介面驗收使用共享的 [驗收腳本](./scripts/windows-agent-ui-ac
 
 ## Android
 
-Android 與桌面共用固定 Chromium 基線，並從乾淨的 x86-64 Linux checkout 建置。只有完成 APK 精確身分和實機執行記錄後才可接受該建置；macOS 和 Windows 不能作為 Chromium Android 建置主機。
+Android 使用 `ci-pins/android.json` 中的獨立基線。`aegis-android-linux-arm64` runner 透過 QEMU 執行固定的 Linux x86-64 工具鏈建置 APK。驗收需要逐一核對套件身分並記錄 arm64 實機結果。
 
 請參閱 [Android 建置與驗收狀態](./docs/android.zh-TW.md) 和 [Play Store 準備草案](./docs/play-store.zh-TW.md)。以下是建置入口，本身不構成驗收證據：
 
 ```bash
+export AEGIS_ANDROID_ALLOW_ARM64_HOST=1
 pnpm --filter @gcsa-aegis/browser build:android
 pnpm --filter @gcsa-aegis/browser package:android
 ```

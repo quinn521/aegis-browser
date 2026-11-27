@@ -125,9 +125,9 @@ Windows 使用相应 Windows 路径，Android 使用 Linux 路径。`minFreeGiB`
 ## 管理员首次注册操作
 
 1. 用组织所有者或仓库管理员账号打开仓库 `Settings → Actions → Runners → New self-hosted runner`。这是 GitHub 仓库权限，不是要求把所有构建进程以系统管理员运行。
-2. 按机器选择系统与架构：Mac 选 macOS/ARM64，Windows 选 Windows/x64，Android 构建机选 Linux/x64。Android 手机通过 ADB 接入 Linux 构建机，不注册为 runner。
+2. 按机器选择系统与架构：Mac 选 macOS/ARM64，Windows 选 Windows/x64，Android 构建机选 Linux/ARM64。Android 手机通过 ADB 接入 Linux 构建机，不注册为 runner。
 3. 在对应机器的独立 runner 目录，依次执行页面生成的 Download 和 Configure 命令。注册令牌一小时有效，直接在目标机器使用，不提交到仓库或粘贴到讨论中。
-4. runner 名称分别填写 `aegis-mac-arm64`、`aegis-windows-x64`、`aegis-android-linux-x64`；额外标签填写 `aegis-upstream`，保留自动生成的系统和架构标签。工作目录可使用默认 `_work`，不要填写现有 Chromium 源码目录。
+4. runner 名称分别填写 `aegis-mac-arm64`、`aegis-windows-x64`、`aegis-android-linux-arm64`。三台机器均添加 `aegis-upstream` 标签，Android 还要添加 `aegis-android-linux-arm64` 标签。保留 runner 自动生成的系统和架构标签。工作目录可使用默认 `_work`，不要填写现有 Chromium 源码目录。
 5. 首次验证在已登录的测试用户会话启动：Mac/Linux 执行 `./run.sh`，Windows 执行 `./run.cmd`。Windows 桌面 UI 验收先不要选择作为系统服务运行。
 6. 终端显示 `Listening for Jobs`，GitHub 页面显示 `Idle`，表示注册连接成功。记录机器名称及状态，随后由项目维护者配置独立源码、工具链、`AEGIS_CI_CONFIG` 和真实验收程序。注册成功不等于编译环境已经就绪。
 7. 三平台环境验收完成后再设置 `AEGIS_BUILD_RUNNERS_READY=true`；首次注册时不要提前启用。

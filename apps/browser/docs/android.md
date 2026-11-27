@@ -58,7 +58,7 @@ Run `AegisAccessOptionsTest.apk` on a dedicated device because it replaces the i
 ## Acceptance criteria
 
 1. Verify the complete source trees against the Android pin and both series listed in its patch directory, then check the product version.
-2. Record the repository commit, Android pin, patch trees, runner and toolchain versions, GN profile, package ID, version, ABI and SHA-256 for each of the three APKs.
+2. Record the repository commit, Android pin, patch trees, runner architecture, QEMU and compiler versions, GN profile, package ID, version, ABI and SHA-256 for each of the three APKs.
 3. Verify final package ID, version, launcher name, icons, permissions, native libraries, and signing structure.
 4. 在专用实机保留旧版资料，以原包名和签名安装升级包，核对资料兼容、正常网页、`chrome://aegis`与核心保护。首次安装另用隔离设备验证，不通过卸载旧版规避升级兼容问题。
 5. Verify page capture, document binding, redaction, confirmation, navigation invalidation, and result handling on device.
