@@ -19,6 +19,10 @@ import time
 POLL_INTERVAL = 0.05
 TERM_GRACE = 0.5
 CENSUS_TIMEOUT = 2
+CENSUS_START_ATTEMPTS = 3
+# Budget a scan to find separate workers, two to confirm exit, and time to poll
+# and signal between scans.
+SESSION_CONFIRM_TIMEOUT = 3 * CENSUS_TIMEOUT + 0.5
 
 
 def archive_environment():
@@ -137,7 +141,7 @@ def stop_and_reap(pid, signal_worker):
     # Keep the leader unreaped to reserve both the primary PGID and session ID.
     primary_problem = signal_primary_group(pid, signal.SIGTERM)
     escalate_at = time.monotonic() + TERM_GRACE
-    confirm_by = escalate_at + CENSUS_TIMEOUT
+    confirm_by = escalate_at + SESSION_CONFIRM_TIMEOUT
     sent_helper_term = False
     empty = False
     problem = None
@@ -155,7 +159,7 @@ def stop_and_reap(pid, signal_worker):
         boundary = confirm_by if force else escalate_at
         try:
             # A slow ps must leave time for the primary group's escalation.
-            workers = session_workers(pid, boundary - now)
+            workers = session_workers(pid, min(CENSUS_TIMEOUT, boundary - now))
         except (OSError, subprocess.SubprocessError) as error:
             problem = error
             empty = False
@@ -281,7 +285,15 @@ def run_stage(command, environment, cancelled, signal_worker):
         raise OSError(errno.EINVAL, "archive stage executable must be absolute")
     # Verify process enumeration is available before starting anything that
     # might leave a helper in a second process group.
-    process_states()
+    for attempt in range(CENSUS_START_ATTEMPTS):
+        try:
+            process_states()
+            break
+        except subprocess.TimeoutExpired:
+            if cancelled():
+                return None
+            if attempt == CENSUS_START_ATTEMPTS - 1:
+                raise
     if cancelled():
         return None
     # Transport configuration can change between fetches. Discard child output
