@@ -185,8 +185,8 @@ objects). The first route must match the anchor. This input supplies the two bou
 resources as well as the catalogue. The signed IPA has exactly one catalogue in
 the main app. The store gate verifies it again before loading ASC credentials.
 The subscription must publish the default route's address, port, client ID,
-server name, REALITY public key, and short ID. When 3X-UI varies the client
-fingerprint and spider path in its export, the app dials with the signed values.
+and REALITY public key. When 3X-UI varies the server name, short ID, client
+fingerprint or spider path in its export, the app dials with the signed values.
 
 需要在内测 Beta 中切换线路时，在签名环境提供 `AEGIS_IOS_BETA_CATALOGUE_BASE64`。
 第一项使用绑定的 3X-UI 订阅额度。同一身份的线路继续由该订阅逐条授权。

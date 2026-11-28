@@ -271,11 +271,11 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         if node.isWireIdentical(to: signed) { return true }
         guard let anchor = privateBetaAnchor, signed.isWireIdentical(to: .realityVision(anchor)),
               case .realityVision(let live) = node else { return false }
-        // 3X-UI may choose a new fingerprint and spider path on every export.
-        // This checks the signed relay's entitlement; dialing still uses the signed options.
-        return live.port == anchor.port && live.userID == anchor.userID && live.shortID == anchor.shortID
+        // 3X-UI can select a different SNI, short ID, fingerprint and spider path on each export.
+        // This binds the current entitlement to the signed client and relay key at the signed
+        // endpoint. The publisher still dials with the entire signed route.
+        return live.port == anchor.port && live.userID == anchor.userID
             && live.address.utf8.elementsEqual(anchor.address.utf8)
-            && live.serverName.utf8.elementsEqual(anchor.serverName.utf8)
             && live.publicKey.utf8.elementsEqual(anchor.publicKey.utf8)
     }
 

@@ -2488,7 +2488,14 @@ extension AccessHostRecoveryWebKitTests {
             usage = subscription
             subscription.setActive(true)
             await subscription.refresh()?.value
-            XCTAssertTrue(subscription.isAlphaRouteSelectable(0))
+            if !subscription.isAlphaRouteSelectable(0) {
+                await subscription.refresh()?.value
+            }
+            guard subscription.isAlphaRouteSelectable(0) else {
+                subscription.setActive(false)
+                XCTFail("The bundled default requires its current subscription route and allowance")
+                return
+            }
             let embedded = try AccessGoEmbeddedCore(isolated: true)
             core = embedded
             weak var owner: AccessHostStoreCoordinator?
@@ -2514,7 +2521,7 @@ extension AccessHostRecoveryWebKitTests {
         try await waitUntil(seconds: 15, {
             tab.liveCommittedDocumentURL?.absoluteString == "aegis://start" && !tab.isLoading
         }, message: "The initial browser document must settle before public navigation")
-        var receipts = ["mode\trequested site\tcommitted host\ttitle\tvisible text characters\tstill loading\tconnected via"]
+        var receipts = ["mode\trequested site\tcommitted host\ttitle\tvisible text characters\tstill loading\tconnected via\tattempt\tresult"]
         defer {
             let attachment = XCTAttachment(string: receipts.joined(separator: "\n"))
             attachment.name = "Public site smoke receipts"
@@ -2524,38 +2531,48 @@ extension AccessHostRecoveryWebKitTests {
 
         func visit(_ site: RegionalSmokeSite, mode: String, managed: Bool = false) async throws {
             let target = try XCTUnwrap(URL(string: "https://\(site.host)/"))
-            let previousDocument = tab.liveCommittedDocumentSequence
-            tab.loadFromAddressBar(target)
             let domain = site.host.dropFirst(4)
-            let deadline = ContinuousClock.now + .seconds(35)
-            var host = ""
-            var title = ""
-            var visibleCharacters = 0
-            var homepageReady = false
-            while ContinuousClock.now < deadline, tab.loadingError == nil {
-                attach(tab.webView, to: window)
-                if tab.liveCommittedDocumentSequence != previousDocument {
-                    host = tab.liveCommittedDocumentURL?.host ?? ""
-                    title = tab.webView.title ?? ""
-                    if (host == domain || host.hasSuffix("." + domain)), title.localizedCaseInsensitiveContains(site.pageTitle) {
-                        visibleCharacters = (try? await tab.webView.evaluateJavaScript("document.body?.innerText.trim().length ?? 0")) as? Int ?? 0
-                        if visibleCharacters > 10 {
-                            homepageReady = true
-                            break
+            let maxAttempts = usesBetaCatalogue ? 2 : 1
+            for attempt in 1...maxAttempts {
+                let previousDocument = tab.liveCommittedDocumentSequence
+                tab.loadFromAddressBar(target)
+                let deadline = ContinuousClock.now + .seconds(35)
+                var host = ""
+                var title = ""
+                var visibleCharacters = 0
+                var homepageReady = false
+                while ContinuousClock.now < deadline, tab.loadingError == nil {
+                    attach(tab.webView, to: window)
+                    if tab.liveCommittedDocumentSequence != previousDocument {
+                        host = tab.liveCommittedDocumentURL?.host ?? ""
+                        title = tab.webView.title ?? ""
+                        if (host == domain || host.hasSuffix("." + domain)), title.localizedCaseInsensitiveContains(site.pageTitle) {
+                            visibleCharacters = (try? await tab.webView.evaluateJavaScript("document.body?.innerText.trim().length ?? 0")) as? Int ?? 0
+                            if visibleCharacters > 10 {
+                                homepageReady = true
+                                break
+                            }
                         }
                     }
+                    try await Task.sleep(for: .milliseconds(200))
                 }
-                try await Task.sleep(for: .milliseconds(200))
+                let stillLoading = tab.isLoading
+                let usesManagedStore = tab.websiteDataStore !== tab.originalWebsiteDataStore
+                let loadError = tab.loadingError
+                let ready = homepageReady && loadError == nil
+                let mayRetry = loadError == nil || tab.loadingErrorAllowsProxyRetry
+                receipts.append([mode, site.host, host, title, String(visibleCharacters), String(stillLoading),
+                                 usesManagedStore ? "managed" : "original", String(attempt),
+                                 ready ? "ready" : loadError ?? "timed out"].joined(separator: "\t"))
+                if stillLoading { tab.webView.stopLoading() }
+                XCTAssertEqual(usesManagedStore, managed, site.host)
+                if managed { XCTAssertTrue(usage?.permitsExistingConnection == true, site.host) }
+                if ready { return }
+                if attempt == maxAttempts || !mayRetry || usesManagedStore != managed {
+                    XCTFail("\(site.host) did not show its homepage in \(mode): \(loadError ?? "timed out")")
+                    return
+                }
             }
-            let stillLoading = tab.isLoading
-            let usesManagedStore = tab.websiteDataStore !== tab.originalWebsiteDataStore
-            receipts.append([mode, site.host, host, title, String(visibleCharacters), String(stillLoading),
-                             usesManagedStore ? "managed" : "original"].joined(separator: "\t"))
-            XCTAssertTrue(homepageReady && tab.loadingError == nil,
-                          "\(site.host) did not show its homepage in \(mode): \(tab.loadingError ?? "timed out")")
-            XCTAssertEqual(usesManagedStore, managed, site.host)
-            if managed { XCTAssertTrue(usage?.permitsExistingConnection == true, site.host) }
-            if stillLoading { tab.webView.stopLoading() }
         }
 
         if usesBetaCatalogue {

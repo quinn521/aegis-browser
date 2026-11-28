@@ -164,6 +164,8 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
             data: nil, privateBetaData: data, internalTesting: true, defaults: defaults)
         guard case .realityVision(let anchor) = try XCTUnwrap(catalogue.routes.first) else { return XCTFail("Missing anchor") }
         let rotated = signedURI.replacingOccurrences(of: "fp=chrome&spx=%2Fsigned", with: "fp=firefox&spx=%2Flive")
+            .replacingOccurrences(of: "sni=first.example", with: "sni=cover.example")
+            .replacingOccurrences(of: "sid=abcd", with: "sid=abce")
         let rotatedAlternate = rotated.replacingOccurrences(of: "first.example", with: "alternate.example")
         let published = Mutex(try [rotated, rotatedAlternate].map(AccessInternalTestNode.parseSingleShareURI))
         let fixture = ThreeXUIEntryFixture(userID: userID)
@@ -193,13 +195,14 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         let outbound = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first)
         let stream = try XCTUnwrap(outbound["streamSettings"] as? [String: Any])
         let reality = try XCTUnwrap(stream["realitySettings"] as? [String: Any])
+        XCTAssertEqual(reality["serverName"] as? String, "first.example")
+        XCTAssertEqual(reality["shortId"] as? String, "abcd")
         XCTAssertEqual(reality["fingerprint"] as? String, "chrome")
         XCTAssertEqual(reality["spiderX"] as? String, "/signed")
         XCTAssertTrue(publisher.validateReady(ready))
 
         for (original, replacement) in [("first.example:443", "first.example:444"), ("@first.example", "@other.example"),
-             ("sni=first.example", "sni=other.example"), ("pbk=A", "pbk=B"), ("sid=abcd", "sid=abce"),
-             (userID, "550e8400-e29b-41d4-a716-446655440001")] {
+             ("pbk=A", "pbk=B"), (userID, "550e8400-e29b-41d4-a716-446655440001")] {
             let changed = try AccessInternalTestNode.parseSingleShareURI(rotated.replacingOccurrences(of: original, with: replacement))
             published.withLock { $0 = [changed] }
             await usage.refresh()?.value
