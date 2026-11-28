@@ -18,6 +18,10 @@ import urllib.request
 import zipfile
 
 QUOTA_TIMEOUT_SECONDS = 20
+MAX_SECRET_LENGTH = 48 * 1024
+IOS_SCRIPTS = Path(__file__).resolve().parents[2] / 'apps/ios/scripts'
+sys.path.insert(0, str(IOS_SCRIPTS))
+import private_beta_nodes as catalogue
 
 
 def run_live_quota(configuration):
@@ -46,7 +50,7 @@ def invalid_constant(_value):
 
 
 def module(name):
-    path = Path(__file__).resolve().parents[2] / 'apps/ios/scripts' / (name + '.py')
+    path = IOS_SCRIPTS / (name + '.py')
     spec = importlib.util.spec_from_file_location(name, path)
     value = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(value)
@@ -56,12 +60,28 @@ def module(name):
 def stage(directory, environment):
     if directory.is_symlink() or not directory.is_dir() or directory.stat().st_mode & 0o077:
         raise ValueError('Private directory required')
-    for key, filename in (('AEGIS_IOS_TEST_NODE_BASE64', 'node.vless'),
-                          ('AEGIS_IOS_TEST_SUBSCRIPTION_BASE64', 'subscription.json')):
-        encoded = environment.get(key, '')
-        if not encoded or len(encoded) > 11000:
+    def decode(key, maximum):
+        value = environment.get(key, '')
+        if not 0 < len(value) <= maximum:
             raise ValueError('Missing or oversized private input')
-        raw = base64.b64decode(encoded, validate=True)
+        return base64.b64decode(value, validate=True)
+
+    if environment.get('AEGIS_IOS_BETA_CATALOGUE_BASE64'):
+        bundle = json.loads(decode('AEGIS_IOS_BETA_CATALOGUE_BASE64', MAX_SECRET_LENGTH),
+                            object_pairs_hook=unique_object, parse_constant=invalid_constant)
+        if (not isinstance(bundle, dict) or bundle.keys() != {'anchor', 'subscription', 'routes'}
+                or not isinstance(bundle['anchor'], str) or not isinstance(bundle['subscription'], dict)):
+            raise ValueError('Invalid private Beta catalogue input')
+        node = bundle['anchor'].encode('utf-8')
+        subscription = json.dumps(bundle['subscription'], ensure_ascii=False).encode('utf-8')
+        routes = catalogue.canonicalize(json.dumps(bundle['routes'], ensure_ascii=False).encode('utf-8'), bundle['anchor'])
+        catalogue_input = directory / 'catalogue.json'
+        with os.fdopen(os.open(catalogue_input, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
+            stream.write(routes)
+    else:
+        node = decode('AEGIS_IOS_TEST_NODE_BASE64', 11000)
+        subscription = decode('AEGIS_IOS_TEST_SUBSCRIPTION_BASE64', 11000)
+    for filename, raw in (('node.vless', node), ('subscription.json', subscription)):
         if not raw or len(raw) > 8192:
             raise ValueError('Invalid private input size')
         with os.fdopen(os.open(directory / filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
@@ -140,11 +160,28 @@ def verify(directory, ipa, live_quota=False):
                 raise ValueError('Oversized private resource')
             if archive.read(root + member) != (directory / expected).read_bytes():
                 raise ValueError('Private Beta resource mismatch')
+        expected_catalogue = directory / 'catalogue.json'
+        routes = read_catalogue(archive, root, required=expected_catalogue.exists())
+        if routes is not None and routes != expected_catalogue.read_bytes():
+            raise ValueError('Private Beta catalogue resource mismatch')
         if live_quota:
             run_live_quota(json.loads(archive.read(root + 'AegisPrivateTestSubscription.json')))
 
 
-def verify_live_ipa(ipa):
+def read_catalogue(archive, root, required):
+    member = root + catalogue.RESOURCE
+    matches = [name for name in archive.namelist()
+               if name.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1].casefold() == catalogue.RESOURCE.casefold()]
+    if matches != ([member] if required else []):
+        raise ValueError('Unexpected private Beta catalogue placement')
+    if not required:
+        return None
+    if archive.getinfo(member).file_size > catalogue.MAX_RESOURCE_BYTES:
+        raise ValueError('Oversized private Beta catalogue')
+    return archive.read(member)
+
+
+def verify_live_ipa(ipa, requires_catalogue=False):
     root = 'Payload/Aegis.app/'
     with zipfile.ZipFile(ipa) as archive:
         names = archive.namelist()
@@ -162,6 +199,9 @@ def verify_live_ipa(ipa):
         configuration = json.loads(resources[1])
         if configuration['nodeSHA256'] != hashlib.sha256(resources[0]).hexdigest():
             raise ValueError('Quota binding differs from the packaged node')
+        routes = read_catalogue(archive, root, required=requires_catalogue)
+        if routes is not None and catalogue.canonicalize(routes, resources[0].decode('utf-8')) != routes:
+            raise ValueError('Invalid packaged private Beta catalogue')
     run_live_quota(configuration)
 
 
@@ -171,6 +211,7 @@ if __name__ == '__main__':
     parser.add_argument('--directory', type=Path)
     parser.add_argument('--ipa', type=Path)
     parser.add_argument('--live-quota', action='store_true')
+    parser.add_argument('--require-catalogue', action='store_true')
     args = parser.parse_args()
     try:
         if args.operation in ('stage', 'verify') and args.directory is None:
@@ -186,11 +227,11 @@ if __name__ == '__main__':
             if args.ipa is None:
                 raise ValueError('IPA required')
             if args.operation == 'verify-live':
-                verify_live_ipa(args.ipa)
+                verify_live_ipa(args.ipa, requires_catalogue=args.require_catalogue)
             else:
                 verify(args.directory, args.ipa, live_quota=args.live_quota)
             if args.live_quota or args.operation == 'verify-live':
                 print('Private Beta IPA resources and live quota verified.')
-    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile,
+    except (OSError, ValueError, KeyError, TypeError, RecursionError, zipfile.BadZipFile,
             urllib.error.URLError, http.client.HTTPException):
         sys.exit('Private Beta input validation failed; no private values are logged.')

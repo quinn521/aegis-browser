@@ -177,6 +177,21 @@ IPA hashes and live quota again before uploading to TestFlight for internal test
 Only that store job receives ASC upload credentials. Actions retains a redacted receipt. If the result is uncertain, query
 **Status** with the original version and build before scheduling another attempt.
 
+To include the internal Beta connection picker, supply `AEGIS_IOS_BETA_CATALOGUE_BASE64`
+in the same protected signing Environment. It encodes a JSON object with `anchor`
+(the VLESS TCP/REALITY share), `subscription` (its quota descriptor), and `routes`
+(an ordered list of up to 16 `{ "source": "3x-ui" | "downloads", "uri": "…" }`
+objects). The first route must match the anchor. This input supplies the two bound
+resources as well as the catalogue. The signed IPA has exactly one catalogue in
+the main app. The store gate verifies it again before loading ASC credentials.
+The subscription must publish the default route's address, port, client ID,
+and REALITY public key. When 3X-UI varies the server name, short ID, client
+fingerprint or spider path in its export, the app dials with the signed values.
+
+需要在内测 Beta 中切换线路时，在签名环境提供 `AEGIS_IOS_BETA_CATALOGUE_BASE64`。
+第一项使用绑定的 3X-UI 订阅额度。同一身份的线路继续由该订阅逐条授权。
+其他签入的测试身份由测试者手动选择，流量管理显示 `--`。普通 Beta 仍沿用原有开关条件。
+
 内置共享测试节点并查询 3X-UI 实际额度时，选择 **Package and upload**、**Beta**、
 **manual** 和 **Private Beta: yes**。两项输入只存入上游的
 `aegis-ios-signing` 环境。签名作业检查 IPA 中的两份资源，清除签名材料，将包保留在

@@ -161,7 +161,7 @@ def verify(ipa, version, build, profile, team, certificate_sha1, profiles, sourc
         structure = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(structure)
         alpha = {} if private_alpha_directory is None else {'private_alpha_directory': private_alpha_directory}
-        structure.verify(ipa, version, build, profile, **alpha)
+        structure.verify(ipa, version, build, profile, private_beta=private_beta, **alpha)
         with tempfile.TemporaryDirectory(prefix="aegis-ios-verification-") as temporary:
             root = Path(temporary)
             archive.extractall(root)

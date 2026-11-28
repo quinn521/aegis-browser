@@ -1842,6 +1842,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["AEGIS_REAL_SITE_SWITCH_SMOKE"] == "1" else {
             throw XCTSkip("Requires an explicitly enabled real-node UI run")
         }
+        guard #available(iOS 27, *) else { throw XCTSkip("Requires the WebKit location protection callback") }
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
@@ -1859,7 +1860,8 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             action?.coordinate.tap()
             _ = try waitForContent(app, site: site)
             var route = readRoute(app)
-            if route["local_entry_ready"] as? Bool != true {
+            let protected = route["connection_ui"] as? String == "已隐藏 IP 位置并阻止网页定位"
+            if !protected {
                 let change = enableVisibleSiteRecovery(app, site: site, prefix: "site-switch-\(site.id)")
                 XCTAssertEqual(change["performed"] as? Bool, true)
                 _ = try waitForContent(app, site: site)
@@ -2115,7 +2117,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         // the visible action again; a vanished banner is not a successful tap.
         retry = recoveryButton(app)
         if let retry {
-            let pending = retry.label == "隐藏位置并打开"
+            let pending = retry.label == "加速打开"
             let exposedTarget = ux["target"] as? String ?? "NOT_EXPOSED"
             let observedAddress = ux["observed_address"] as? String ?? "UNREADABLE"
             receipt["recovery_target"] = exposedTarget
@@ -2196,13 +2198,13 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         }
     }
 
-    private let recoveryLabels = ["隐藏位置并打开", "隐藏位置并重试"]
+    private let recoveryLabels = ["加速打开", "加速重试"]
 
     private func isRecoveryAction(identifier: String, label: String) -> Bool {
         recoveryLabels.contains(label) || (identifier == "page-load-proxy-retry" && label == "重试")
     }
 
-    func testProtectedRetryIsRecognizedWhileOrdinaryRetryIsExcluded() {
+    func testLocalFailureOnlyOffersOriginalRetry() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
@@ -2213,15 +2215,10 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
         field.typeText("http://127.0.0.1:64999/missing\n")
         XCTAssertTrue(app.buttons["重试"].waitForExistence(timeout: 15))
         XCTAssertNil(recoveryButton(app), "An ordinary retry must not be a proxy action")
-        app.buttons["address-location-privacy"].tap()
-        let protectedRetry = app.buttons["page-load-proxy-retry"]
-        XCTAssertTrue(protectedRetry.waitForExistence(timeout: 12))
-        XCTAssertEqual(protectedRetry.label, "重试")
-        let action = recoveryButton(app)
-        XCTAssertNotNil(action)
-        XCTAssertEqual(action?.label, "重试")
-        action?.coordinate.tap()
-        XCTAssertTrue(protectedRetry.waitForExistence(timeout: 12))
+        let privacy = app.buttons["address-location-privacy"]
+        XCTAssertTrue(privacy.exists)
+        XCTAssertFalse(privacy.isEnabled)
+        XCTAssertFalse(app.buttons["page-load-proxy-retry"].exists)
     }
 
     private struct ObservedRecoveryAction {
@@ -2429,7 +2426,7 @@ final class AegisRealWebsiteSmokeTests: XCTestCase {
             if done.exists, done.isHittable { done.tap() }
             return ["result": "ROUTE_HOST_UNAVAILABLE", "menu_closed": !done.exists]
         }
-        let route = app.staticTexts["access-site-proxy-connection"]
+        let route = app.staticTexts["access-site-service-status"]
         let routeText = route.exists ? route.label : ""
         var result: [String: Any] = ["result": "OBSERVED", "host": routeHost.label.lowercased(),
                                    "local_entry_ready": ["服务连接已就绪", "自动重试已连接"].contains(routeText),

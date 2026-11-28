@@ -25,6 +25,50 @@ QUOTA = json.dumps({'subscriptionInfoURL': 'https://example.invalid/sub/test?for
 
 
 class PrivateBetaTests(unittest.TestCase):
+    def test_catalogue_requires_exact_first_node_and_one_copy_in_internal_beta(self):
+        anchor = ('vless://550e8400-e29b-41d4-a716-446655440000@first.example:443?'
+                  'security=reality&type=tcp&flow=xtls-rprx-vision&sni=first.example'
+                  '&sid=abcd&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+        alternate = 'trojan://550e8400-e29b-41d4-a716-446655440001@second.example:443?sni=second.example'
+        routes = [{'source': '3x-ui', 'uri': anchor}, {'source': 'downloads', 'uri': alternate}]
+
+        def environment(rows):
+            payload = json.dumps({'anchor': anchor, 'subscription': json.loads(QUOTA), 'routes': rows})
+            return {'AEGIS_IOS_BETA_CATALOGUE_BASE64': base64.b64encode(payload.encode()).decode()}
+
+        for invalid in (routes[::-1], routes + routes, [dict(routes[0], uri=anchor.replace('first.example', 'other.example'))]):
+            with tempfile.TemporaryDirectory() as temp, self.assertRaises(ValueError):
+                beta.stage(Path(temp), environment(invalid))
+
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            beta.stage(directory, environment(routes))
+            self.assertEqual(json.loads((directory / 'catalogue.json').read_text()), routes)
+            ipa = directory / 'test.ipa'
+            for case in ('valid', 'missing', 'changed', 'extra'):
+                with zipfile.ZipFile(ipa, 'w') as archive:
+                    root = 'Payload/Aegis.app/'
+                    archive.writestr(root + 'Info.plist', plistlib.dumps({
+                        'AegisAccessReleaseChannel': 'beta', 'AegisReleaseProfile': 'beta', 'TFInternalTestingOnly': True}))
+                    archive.writestr(root + 'AegisPrivateTestNode.vless', (directory / 'expected-node').read_bytes())
+                    archive.writestr(root + 'AegisPrivateTestSubscription.json', (directory / 'expected-subscription').read_bytes())
+                    if case != 'missing':
+                        data = (directory / 'catalogue.json').read_bytes()
+                        archive.writestr(root + beta.catalogue.RESOURCE, data + b' ' if case == 'changed' else data)
+                    if case == 'extra':
+                        archive.writestr(root + 'PlugIns/Aegis.appex/' + beta.catalogue.RESOURCE, data)
+                with patch.object(beta, 'run_live_quota') as quota, self.subTest(case=case):
+                    if case == 'valid':
+                        beta.verify(directory, ipa)
+                        beta.verify_live_ipa(ipa, requires_catalogue=True)
+                        quota.assert_called_once()
+                    else:
+                        with self.assertRaises(ValueError):
+                            beta.verify(directory, ipa)
+                        with self.assertRaises(ValueError):
+                            beta.verify_live_ipa(ipa, requires_catalogue=True)
+                        quota.assert_not_called()
+
     def quota_response(self, value=None):
         response = MagicMock()
         response.__enter__.return_value = response

@@ -12,7 +12,7 @@ import third_party_notices as notices
 APP_ID = "com.gcsa.aegis"
 
 
-def verify(path, version, build, release_profile=None, *, private_alpha_directory=None):
+def verify(path, version, build, release_profile=None, *, private_alpha_directory=None, private_beta=False):
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         roots = [n for n in names if n.startswith("Payload/") and n.endswith(".app/Info.plist") and n.count("/") == 2]
@@ -31,6 +31,13 @@ def verify(path, version, build, release_profile=None, *, private_alpha_director
         elif any(name.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1].casefold()
                  == "aegisalphatestnodes.json" for name in names):
             raise ValueError("Private Alpha resource is forbidden in the standard IPA verifier")
+        beta_resource = 'AegisPrivateBetaTestNodes.json'
+        beta_members = [name for name in names if name.replace('\\', '/').rstrip('/').rsplit('/', 1)[-1].casefold()
+                        == beta_resource.casefold()]
+        if beta_members and (not private_beta or release_profile != 'beta' or beta_members != [root + beta_resource]
+                             or main_info.get('TFInternalTestingOnly') is not True
+                             or main_info.get('AegisAccessReleaseChannel') != 'beta'):
+            raise ValueError('Private Beta catalogue requires the internal Beta main app')
         if (main_info.get("AegisAccessReleaseChannel") not in ("dev", "alpha", "beta")
                 or main_info.get("AegisReleaseProfile") not in ("dev", "alpha", "beta")):
             if any(name.rsplit('/', 1)[-1] in ("AegisPrivateTestNode.vless", "AegisPrivateTestSubscription.json") for name in names):
@@ -71,10 +78,11 @@ if __name__ == "__main__":
     parser.add_argument("build")
     parser.add_argument("release_profile", nargs="?")
     parser.add_argument("--private-alpha-directory", type=Path)
+    parser.add_argument("--private-beta", action="store_true")
     args = parser.parse_args()
     try:
         verify(args.path, args.version, args.build, args.release_profile,
-               private_alpha_directory=args.private_alpha_directory)
+               private_alpha_directory=args.private_alpha_directory, private_beta=args.private_beta)
         print("IPA application and extension identities verified")
     except (ValueError, KeyError, OSError, zipfile.BadZipFile) as error:
         if args.private_alpha_directory is not None:

@@ -97,6 +97,7 @@ public struct BrowserPendingAddressNavigation: Equatable, Sendable {
 
 @MainActor
 public protocol BrowserHostStoreCoordinating: AnyObject {
+    func requiresLocationPrivacy(tab: BrowserTab, host: String) -> Bool
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool
     func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool
@@ -116,6 +117,7 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
 }
 
 public extension BrowserHostStoreCoordinating {
+    func requiresLocationPrivacy(tab: BrowserTab, host: String) -> Bool { false }
     func setGeoSiteForeground(window: UUID, eligible: Bool) {}
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool { false }
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { false }
@@ -313,6 +315,13 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     /// Set only after the recovery navigation commits while this attempt is a proxy retry.
     @Published public private(set) var proxyRecoveryCommitted = false
     internal private(set) var recoveryLoadCount = 0
+    public var activeRecoveryOperationID: UUID? { attempt.recoveryOperationID }
+    private var oneShotPolicyURL: URL?
+    private var evaluatingMainFramePolicy = false
+    public func authorizesOneShotRequest(to url: URL) -> Bool {
+        guard attempt.isOneShotRecovery, attempt.recoveryOperationID != nil else { return false }
+        return evaluatingMainFramePolicy ? oneShotPolicyURL == url : attempt.url == url
+    }
     var currentAttemptIDForTests: String { attempt.navigationID }
     var currentNavigationForTests: WKNavigation? { pendingNavigation }
     var heldProxyRequestForTests: URLRequest? { pendingProxyRequest }
@@ -344,6 +353,25 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             securityLists[category] = try await securityRuleStore.list(category: category)
         }
     }
+    public static var supportsSiteLocationPrivacy: Bool {
+#if compiler(>=6.4)
+        if #available(iOS 27, *) { return true }
+#endif
+        return false
+    }
+
+    private weak var protectedRealm: WKWebView?
+    public var hasCommittedLocationProtection: Bool {
+        liveCommittedDocumentURL != nil && loadedWebView != nil && loadedWebView === protectedRealm
+    }
+
+#if compiler(>=6.4)
+    @available(iOS 27, *)
+    public func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin,
+                        initiatedByFrame frame: WKFrameInfo, decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
+        decisionHandler(isDisposed || webView !== loadedWebView || webView === protectedRealm ? .deny : .prompt)
+    }
+#endif
     private var loadedWebView: WKWebView?
     public private(set) var isDisposed = false
     private var closedPlaceholder: BrowserContentWebView?
@@ -366,7 +394,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             configuration.userContentController = WKUserContentController()
             installContentHooks()
         }
+        let protectLocation = boundHostName.map { hostCoordinator?.requiresLocationPrivacy(tab: self, host: $0) == true } == true
+        if protectLocation {
+            configuration.defaultWebpagePreferences.isLockdownModeEnabled = true
+        }
         let view = BrowserContentWebView(frame: .zero, configuration: configuration)
+        protectedRealm = protectLocation ? view : nil
         view.navigationDelegate = self; view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
         view.isInspectable = inspectionEnabled
@@ -1190,7 +1223,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     public func retryFailedNavigation(
         _ request: URLRequest,
         expectedNavigationID: String,
-        recoveryOperationID: UUID
+        recoveryOperationID: UUID,
+        oneShot: Bool = false
     ) -> Bool {
         guard !isDisposed, lastMainFrameFailure?.navigationID == expectedNavigationID else { return false }
         guard request.url != nil else { return false }
@@ -1201,6 +1235,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         attempt.url = request.url ?? attempt.url
         attempt.failureID = lastMainFrameFailure?.failureID
         attempt.recoveryOperationID = recoveryOperationID
+        attempt.isOneShotRecovery = oneShot
         loadingErrorPresentation = nil
         loadingErrorAllowsProxyRetry = false
         recoveryLoadCount += 1
@@ -1348,7 +1383,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         loadGeneration = UUID(); loadTask?.cancel()
         if !keepTerminalDelegate { loadedWebView?.stopLoading() }
         if !keepTerminalDelegate { loadedWebView?.navigationDelegate = nil }
-        loadedWebView?.uiDelegate = nil
+        if !keepTerminalDelegate { loadedWebView?.uiDelegate = nil }
         loadedWebView?.removeFromSuperview()
         titleObservation = nil
         loadedWebView = nil; pendingNavigation = nil
@@ -1605,6 +1640,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         }
         let localOrInternal = ["aegis", "about"].contains(requestURL.scheme ?? "") ||
             (requestURL.scheme == "http" && ["127.0.0.1", "localhost", "[::1]", "::1"].contains(requestURL.host ?? ""))
+        if navigationAction.targetFrame?.isMainFrame != false, !allowsNavigationFromLocationProtectedView(webView, to: requestURL) {
+            if navigationAction.targetFrame != nil, isLoading {
+                loadingErrorAllowsProxyRetry = false
+                loadingErrorPresentation = .resource("位置保护已阻止跨网站跳转。")
+                isLoading = false
+            }
+            finish(.cancel)
+            return
+        }
         if localOrInternal { webPreferences.preferredHTTPSNavigationPolicy = .keepAsRequested }
         // `targetFrame == nil` is a new window / `_blank`, not this tab's main frame.
         if navigationAction.targetFrame == nil {
@@ -1629,6 +1673,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if temporaryPermission?.url != requestURL { temporaryPermission = nil }
         let site = preferences.site(for: requestURL)
         activeHardenedSecurity = inheritedHardenedSecurity || (site.hardenedSecurity ?? preferences.values.hardenedSecurity ?? false)
+        if webView === protectedRealm {
+            // Lockdown disables WebRTC and WebTransport, including in subframes.
+            webPreferences.isLockdownModeEnabled = true
+        }
         PageProtection.applySystem(webPreferences, hardened: activeHardenedSecurity)
         // 本机服务没有公网 HTTPS 身份；明确保留用户输入的本机 HTTP。
         // 失败页重放保持原来的 http，避免升级成 TLS 后隧道里不再是那次请求。
@@ -1652,6 +1700,29 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             finish(.cancel)
             return
         }
+        let method = navigationAction.request.httpMethod ?? "GET"
+        // WebKit can present a redirect from a write as a GET.
+        let redirectFromUnsafe = navigationAction.navigationType == .other && pendingNavigation != nil
+            && committedRequest.map(isLatestAttempt) != true
+            && (!["GET", "HEAD"].contains(attempt.method) || attempt.hasReplayableBody)
+        let safeToReplay = Self.canReplayForRoute(navigationAction.request) && !redirectFromUnsafe
+        let oneShotAction = attempt.isOneShotRecovery && attempt.recoveryOperationID != nil && safeToReplay
+            && Self.safeProxyURL(requestURL) && boundHostName.map { $0 == Self.routingHost(of: requestURL) } == true
+        // WebKit can ask for policy before delivering the redirect callback. With
+        // no committed page in this view, a started provisional load is the source.
+        let confirmsOneShotRedirect = oneShotAction && (
+            navigationState.hasConfirmedRedirectPolicy(to: requestURL, type: navigationAction.navigationType)
+                || (navigationAction.navigationType == .other && committedDocumentView !== webView
+                    && navigationState.programmaticPolicyNavigationID == nil
+                    && pendingNavigation.flatMap(navigationState.recorded(for:)).map(isLatestAttempt) == true)
+        )
+        let acknowledgesOneShot = oneShotAction && navigationAction.navigationType == .other
+            && navigationState.programmaticPolicyNavigationID == attempt.navigationID && attempt.url == requestURL
+        let previousRecoveryPolicy = (evaluatingMainFramePolicy, oneShotPolicyURL)
+        evaluatingMainFramePolicy = true
+        oneShotPolicyURL = confirmsOneShotRedirect || acknowledgesOneShot ? requestURL : nil
+        defer { (evaluatingMainFramePolicy, oneShotPolicyURL) = previousRecoveryPolicy }
+        let continuesRecovery = attempt.recoveryOperationID != nil && (!attempt.isOneShotRecovery || oneShotPolicyURL != nil)
         let previousLanding = (proxyLandingParent, proxyLandingTarget)
         if decision.kind != .blocked, navigationAction.navigationType == .other,
            boundHostName != nil, let parent = proxyLandingParent ?? boundHostName, let target = Self.routingHost(of: requestURL),
@@ -1670,14 +1741,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             finish(.cancel)
             return
         }
-        let method = navigationAction.request.httpMethod ?? "GET"
         let hostMismatch = requestedURL.map { Self.routingHost(of: $0) != Self.routingHost(of: requestURL) } ?? false
-        // WebKit can present a redirect from a write as a GET. Do not move it
-        // across stores while the original write is still in flight.
-        let redirectFromUnsafe = navigationAction.navigationType == .other && pendingNavigation != nil
-            && committedRequest.map(isLatestAttempt) != true
-            && (!["GET", "HEAD"].contains(attempt.method) || attempt.hasReplayableBody)
-        let safeToReplay = Self.canReplayForRoute(navigationAction.request) && !redirectFromUnsafe
         if !safeToReplay,
            hostCoordinator?.wouldSwitchStore(tab: self, url: requestURL) == true {
             (proxyLandingParent, proxyLandingTarget) = previousLanding
@@ -1727,7 +1791,15 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             var request = navigationAction.request
             request.url = URL(string: decision.effectiveURL) ?? requestURL
             request.httpMethod = method
-            commitPreservingMethod(request, continuesAttempt: attempt.recoveryOperationID != nil)
+            commitPreservingMethod(request, continuesAttempt: continuesRecovery)
+            return
+        }
+        if let host = Self.routingHost(of: requestURL),
+           hostCoordinator?.requiresLocationPrivacy(tab: self, host: host) == true, webView !== protectedRealm {
+            loadingErrorAllowsProxyRetry = false
+            loadingErrorPresentation = .resource("位置保护不可用")
+            isLoading = false
+            finish(.cancel)
             return
         }
         if decision.kind != .blocked, ["http", "https"].contains(requestURL.scheme ?? ""), (contentRuleList == nil || securityLists.count < 2) {
@@ -1747,7 +1819,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             contentRulesNavigationURL = requestURL
             // This action has not reached the network. Keep every exposed
             // request field; a URL-only load would invent a different GET.
-            commitPreservingMethod(request, continuesAttempt: attempt.recoveryOperationID != nil)
+            commitPreservingMethod(request, continuesAttempt: continuesRecovery)
             return
         }
         realignedNavigationURL = nil
@@ -1756,7 +1828,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         switch decision.kind {
         case .allow:
             if navigationAction.shouldPerformDownload {
-                onDownload?(requestURL)
+                if webView !== protectedRealm { onDownload?(requestURL) }
                 finish(.cancel)
                 return
             }
@@ -1767,7 +1839,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             let method = navigationAction.request.httpMethod ?? "GET"
             // Server redirects update identity in `didReceiveServerRedirect`.
             // `.other` also covers script-driven jumps, which must mint a fresh attempt.
-            let continuesExisting = Self.continuesExistingMainFrameNavigation(navigationAction)
+            let continuesExisting = confirmsOneShotRedirect || Self.continuesExistingMainFrameNavigation(navigationAction)
             adoptMainFrameNavigation(
                 url: requestURL,
                 method: method,
@@ -2046,9 +2118,10 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     public func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                         decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        guard webView === loadedWebView, !isDisposed else { decisionHandler(.cancel); return }
         if navigationResponse.isForMainFrame, !navigationResponse.canShowMIMEType,
            let url = navigationResponse.response.url {
-            onDownload?(url)
+            if webView !== protectedRealm { onDownload?(url) }
             decisionHandler(.cancel)
         } else { decisionHandler(.allow) }
     }
@@ -2057,6 +2130,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
                         for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard webView === loadedWebView, !isDisposed, isActive,
               navigationAction.targetFrame == nil, let url = navigationAction.request.url else { return nil }
+        guard allowsNavigationFromLocationProtectedView(webView, to: url) else { return nil }
         guard navigationAction.navigationType == .linkActivated || preferences.values.allowPopups else { return nil }
         var request = navigationAction.request
         let decision = navigationDecision(url, method: request.httpMethod ?? "GET")
@@ -2074,6 +2148,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             loadingErrorPresentation = .resource("无法在切换连接时保留这次提交，请返回后重新提交。")
             return nil
         }
+    }
+
+    private func allowsNavigationFromLocationProtectedView(_ webView: WKWebView, to url: URL) -> Bool {
+        guard webView === protectedRealm else { return true }
+        guard let host = Self.routingHost(of: url) else { return false }
+        return host == boundHostName || hostCoordinator?.requiresLocationPrivacy(tab: self, host: host) == true
     }
 
     private func cancelJavaScriptDialog() {

@@ -3,6 +3,7 @@ import SwiftUI
 struct AccessSubscriptionUsageView: View {
     @ObservedObject var session: AccessSubscriptionUsageSession
     let usesAlphaNodeSelection: Bool
+    let showsUnavailableAmount: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.locale) private var locale
     @State private var visibilityID = UUID()
@@ -27,7 +28,9 @@ struct AccessSubscriptionUsageView: View {
         Section {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 VStack(alignment: .leading, spacing: 8) {
-                    if let usage = session.snapshot {
+                    if showsUnavailableAmount && (session.unavailable || session.snapshot == nil) {
+                        AccessUnavailableUsage()
+                    } else if let usage = session.snapshot {
                         if !usage.enabled { Text("服务已停用") }
                         if usage.remainingBytes == 0 { Text("服务端报告：额度已耗尽") }
                         AccessUsageSummaryView(usedBytes: String(usage.usedBytes), quotaBytes: String(usage.totalByte))
@@ -86,5 +89,19 @@ struct AccessSubscriptionUsageView: View {
         .accessibilityLabel(Text(verbatim: AegisLocalization.string(label)))
         .accessibilityValue(AccessAccountUsagePresentation.accessibleBytes(String(bytes), locale: locale))
         .accessibilityIdentifier("access-usage-" + id)
+    }
+}
+
+struct AccessUnavailableUsage: View {
+    var body: some View {
+        LabeledContent("总用量") { value }.accessibilityIdentifier("access-usage-used")
+        LabeledContent("总额度") { value }.accessibilityIdentifier("access-usage-quota")
+        LabeledContent("剩余") { value }.accessibilityIdentifier("access-usage-remaining")
+        LabeledContent("上传") { value }.accessibilityIdentifier("access-usage-uploaded")
+        LabeledContent("下载") { value }.accessibilityIdentifier("access-usage-downloaded")
+    }
+
+    private var value: some View {
+        Text(verbatim: "--").foregroundStyle(.secondary).accessibilityLabel(Text("暂不可用"))
     }
 }
