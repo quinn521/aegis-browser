@@ -222,7 +222,7 @@ with ExitStack() as stack:
     def test_private_upload_requires_a_credential_free_quota_preflight_for_the_same_manifest(self):
         digest = 'c' * 64
         env = dict(RELEASE_MANIFEST_SHA256=digest, RELEASE_STAGE='upload')
-        manifest = dict(assets=[dict(name='fixture.ipa')])
+        manifest = dict(assets=[dict(name='fixture.ipa')], details={})
         with (patch.dict(os.environ, env, clear=True), patch.object(action, 'require_private_beta_upload'),
               patch.object(action, 'private_beta_manifest', return_value=manifest),
               patch.object(action, 'source', return_value=('a'*40, 'b'*40)),
@@ -239,10 +239,17 @@ with ExitStack() as stack:
             with patch.object(action, 'run', side_effect=ValueError('quota unavailable')), self.assertRaises(ValueError):
                 action.private_beta_preflight()
             output.assert_not_called()
-            action.private_beta_preflight()
-            self.assertIn('verify-live', run.call_args.args)
-            self.assertEqual(run.call_args.kwargs, {'environment': {}})
-            output.assert_called_once_with('manifest_sha256', digest)
+            for has_catalogue in (False, True):
+                with self.subTest(has_catalogue=has_catalogue):
+                    if has_catalogue:
+                        manifest['details']['privateBetaTestCatalogue'] = True
+                    run.reset_mock()
+                    output.reset_mock()
+                    action.private_beta_preflight()
+                    self.assertIn('verify-live', run.call_args.args)
+                    self.assertEqual('--require-catalogue' in run.call_args.args, has_catalogue)
+                    self.assertEqual(run.call_args.kwargs, {'environment': {}})
+                    output.assert_called_once_with('manifest_sha256', digest)
             with patch.dict(os.environ, {'AEGIS_PRIVATE_BETA_VERIFIED_MANIFEST_SHA256': 'd'*64}), self.assertRaises(ValueError):
                 action.private_beta_upload()
             with patch.dict(os.environ, {'AEGIS_PRIVATE_BETA_VERIFIED_MANIFEST_SHA256': digest}):

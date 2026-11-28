@@ -120,6 +120,18 @@ targets:
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisAlphaTestNodes.json
         basedOnDependencyAnalysis: false
+      - name: Select private Beta test nodes
+        script: |
+          /usr/bin/python3 -B "${SRCROOT}/scripts/private_beta_nodes.py"
+        inputFiles:
+          - $(SRCROOT)/scripts/private_beta_nodes.py
+          - $(SRCROOT)/scripts/private_alpha_nodes.py
+          - $(AEGIS_PRIVATE_BETA_NODES_FILE)
+          - $(AEGIS_PRIVATE_TEST_NODE_FILE)
+          - $(AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE)
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisPrivateBetaTestNodes.json
+        basedOnDependencyAnalysis: false
       - name: Select Aegis Firebase registration
         script: |
           /usr/bin/python3 -B "${SRCROOT}/scripts/firebase_config.py" install \
@@ -142,6 +154,7 @@ targets:
           AEGIS_FIREBASE_CHANNEL: disabled
       base:
         AEGIS_PRIVATE_ALPHA_NODES_FILE: /dev/null
+        AEGIS_PRIVATE_BETA_NODES_FILE: /dev/null
         AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE: /dev/null
         AEGIS_PRIVATE_TEST_NODE_FILE: /dev/null
         OTHER_LDFLAGS: "$(inherited) -ObjC -lresolv"

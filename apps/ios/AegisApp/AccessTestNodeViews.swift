@@ -36,7 +36,7 @@ private struct AccessTestNodeProfilesView: View {
             NavigationLink {
                 AccessUsagePage(isPrivate: isPrivate)
             } label: {
-                Text("隐藏地理位置服务")
+                Text("流量管理")
             }
         }
         .navigationTitle(Text("Access 连接设置", tableName: "AccessTestNode"))

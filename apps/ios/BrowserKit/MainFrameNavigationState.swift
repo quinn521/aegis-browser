@@ -13,6 +13,7 @@ final class MainFrameNavigationState {
         var allowSequence: UInt64
         var failureID: UUID?
         var recoveryOperationID: UUID?
+        var isOneShotRecovery = false
         var policyType: WKNavigationType?
 
         func acceptsRedirectPolicy(_ type: WKNavigationType?) -> Bool {
@@ -78,6 +79,11 @@ final class MainFrameNavigationState {
     }
     func clearRedirectConfirmation() { confirmedRedirectPolicy = nil }
 
+    func hasConfirmedRedirectPolicy(to url: URL, type: WKNavigationType?) -> Bool {
+        current.acceptsRedirectPolicy(type) && confirmedRedirectPolicy?.navigationID == current.navigationID
+            && confirmedRedirectPolicy?.url == url
+    }
+
     /// Update a continuing app load without adding a second allow slot.
     func continueLoad(url: URL, method: String, unsafeReplay: Bool) {
         current.url = url; current.method = method
@@ -89,8 +95,7 @@ final class MainFrameNavigationState {
     /// Returns true only for a confirmed chain continuation or an acknowledgment
     /// of the app-issued request. Other policy actions must begin a fresh attempt.
     func adoptPolicy(url: URL, method: String, continues: Bool, unsafeReplay: Bool, policyType: WKNavigationType?) -> Bool {
-        let confirmed = current.acceptsRedirectPolicy(policyType)
-            && confirmedRedirectPolicy?.navigationID == current.navigationID && confirmedRedirectPolicy?.url == url
+        let confirmed = hasConfirmedRedirectPolicy(to: url, type: policyType)
         if continues || confirmed {
             confirmedRedirectPolicy = nil
             func redirected(_ previous: Attempt) -> Attempt {
