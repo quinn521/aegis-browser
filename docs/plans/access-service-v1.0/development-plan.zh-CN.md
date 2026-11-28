@@ -128,7 +128,7 @@
 
 | 目标 | 具体完成条件 | 关键验证与交付物 |
 | --- | --- | --- |
-| 两入站与两出站 | HTTP/SOCKS5 × REALITY/Vision、WS+TLS 兼容的四组合逐一具备鉴权、TLS、上传/下载、ws/wss 和故障记录 | 每个组合绑定 Xray/配置/部署；兼容出站遵守 allowedEgressProfiles，不宣称抗识别保证 |
+| 两入站与出站组合 | HTTP/SOCKS5 × REALITY/Vision、WS/TLS 保留四个基线组合。每个申请在该渠道启用的新增出站按 A89 分别验证两种入站 | 逐组合记录登记、上游鉴权、TLS、上传/下载、ws/wss 和故障，绑定 Xray、配置及部署。托管出站遵守 `allowedEgressProfiles` |
 | 完整上下文与入口 | 普通/OTR/Guest、StoragePartition、导航、iframe、Worker/SharedWorker/Service Worker、WebSocket、缓存、BFCache/prerender、preconnect 和适用预取均有归属与策略结论 | 明确支持或按规范受限的路径；未知归属不得自动扩大授权，受约束流量不静默直连 |
 | 完整规则/采集/终止 | 精确域名、scheme/port、优先级、批量/单项 ALLOW/BLOCK、撤销、失效、六种策略转换及诊断背压全覆盖 | 当前文档/失败导航的可信目标、跨代次竞争和按流终止回归；limited 覆盖不会解除安全策略 |
 | 四渠道能力与数据隔离 | DEV/Alpha 有声明的调试能力，Beta/Release 只保留其简洁能力；原生接口、Profile/凭据及服务 realm 按渠道隔离 | 伪造 URL/Pref/启动参数不能开启调试；未知渠道拒绝，订阅来源和秘密处理符合合同 |
@@ -199,7 +199,7 @@ W0–W6 是本计划的工作包，不改变冻结 P0–P8 和 G0–G3 的定义
 | W2 Vision 计量可行性 | P0 的早期风险实验；支持后续 P3c/P3d | 与 W0/W1 并行；绑定受控 Linux 服务端、固定 Xray/配置/内核、权威计数点、集中账本与预算原型。资源未就绪就记录 BLOCKED | 长连接未结束时计量、额度耗尽截断、崩溃/重启/失联恢复和 splice 对照；先冻结误差预算再测量；不把 Stats API 轮询当数据面额度执行 |
 | W3 最小纵向闭环 | P1/P2/P3/P5/P6 子集 | W0/W1/W2 各自证据满足前置条件；单执行节点、有限预置测试账户；接可信网站开关、真实身份/节点代次、持久化和 UI 状态 | 同一浏览器产物：网站开启 → HTTP→REALITY → 故障不直连 → Network Service 重启恢复 → 两 Profile 不串用；候选提交失败/取消/旧 ACK 不误报、不重放 |
 | W4 受控 Alpha | P3a/P3b/P3c/P3d/P4/P5/P6 的 G1 范围 | 在 W3 上补安装访客/账户、签名配置/续期/撤销、自动保持/切换、三策略/两动作、真实账本/限速公平、渠道原生能力隔离 | 按原规范逐项判断 G0 后再判断 G1；真实切换用两个受控执行实例验证，单节点故障拒绝不冒充切换；限定容量、用户、网络与未覆盖项 |
-| W5 完整功能候选 | P1–P7 完整面 | 在 W1 登记隔离原型基础上完成 SOCKS5 全矩阵、WS+TLS 兼容出站、OTR/Guest、完整采集/终止与 WebSocket/preconnect/BFCache/prerender/通用 prefetch/SW update 等适用矩阵 | 原 G2 的全部适用 A/PF 项通过；两个逻辑节点 fixture 不替代实际多节点拓扑验收；不得把 frame prefetch helper 扩大为全部预取支持 |
+| W5 完整功能候选 | P1–P7 完整面 | 在 W1 登记隔离原型基础上完成 A89 四个基线组合（含 WS/TLS 兼容）。新增出站按规范第 7 节分批验收。同时完成 OTR/Guest、完整采集/终止与 WebSocket/preconnect/BFCache/prerender/通用 prefetch/SW update 等适用矩阵 | 原 G2 的全部适用 A/PF 项通过。申请启用的出站有对应的平台、渠道与入站组合回执；两个逻辑节点 fixture 不替代实际多节点拓扑验收；不得把 frame prefetch helper 扩大为全部预取支持 |
 | W6 可分发候选 | P8 | 在 G2 精确产物上完成四渠道、Mac 支持矩阵、签名公证、Helper/Xray 完整性、安装升级回滚和故障/性能回归 | 原 G3 的最终包、部署、规模与回滚证据；发布动作另按项目授权 |
 
 W2 提前的是架构可行性实验，不宣布依赖完整 P3a 的生产 P3c 已完成。W3 是工程验证里程碑，缺少完整调试、权益、切换或 P0 其他要求时不叫 G1，也不能自动判 G0。G0 的原有代理组合、BLOCK 在途/缓存、HTTP/SOCKS 两种无认证入站验证、渠道/身份、资源及 Vision 风险等条件全部保留。
