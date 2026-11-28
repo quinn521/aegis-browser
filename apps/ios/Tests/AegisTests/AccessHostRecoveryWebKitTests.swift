@@ -2353,7 +2353,7 @@ extension AccessHostRecoveryWebKitTests {
         .init(host: "www.douban.com", region: .mainland, category: "DOUBAN", pageTitle: "豆瓣", selectedInCategoryMode: true),
         .init(host: "www.meituan.com", region: .mainland, category: "MEITUAN", pageTitle: "美团", selectedInCategoryMode: false),
         .init(host: "www.youtube.com", region: .outsideMainland, category: "VIDEO", pageTitle: "YouTube", selectedInCategoryMode: true),
-        .init(host: "www.google.com.hk", region: .outsideMainland, category: "WEB", pageTitle: "Google", selectedInCategoryMode: false)
+        .init(host: "www.google.com", region: .outsideMainland, category: "WEB", pageTitle: "Google", selectedInCategoryMode: false)
     ]
 
     func testRegionalAutomaticChoosesCrossRegionExits() async throws {
@@ -2538,10 +2538,11 @@ extension AccessHostRecoveryWebKitTests {
         }
 
         func visit(_ site: RegionalSmokeSite, mode: String, managed: Bool = false) async throws {
-            let configuredHomepage = site.host == "www.google.com.hk"
+            let configuredHomepage = site.host == "www.google.com"
             let target = try configuredHomepage ? preferences.homeURL : XCTUnwrap(URL(string: "https://\(site.host)/"))
-            XCTAssertEqual(target.host, site.host)
-            let domain = site.host.dropFirst(4)
+            let requestedHost = try XCTUnwrap(target.host)
+            XCTAssertEqual(requestedHost, configuredHomepage ? "www.google.com.hk" : site.host)
+            let domain = requestedHost.dropFirst(4)
             let maxAttempts = usesBetaCatalogue ? 2 : 1
             for attempt in 1...maxAttempts {
                 let previousDocument = tab.liveCommittedDocumentSequence
@@ -2572,7 +2573,7 @@ extension AccessHostRecoveryWebKitTests {
                 let loadError = tab.loadingError
                 let ready = homepageReady && loadError == nil
                 let mayRetry = loadError == nil || tab.loadingErrorAllowsProxyRetry
-                receipts.append([mode, site.host, host, title, String(visibleCharacters), String(stillLoading),
+                receipts.append([mode, requestedHost, host, title, String(visibleCharacters), String(stillLoading),
                                  usesManagedStore ? "managed" : "original", String(attempt),
                                  ready ? "ready" : loadError ?? "timed out"].joined(separator: "\t"))
                 if stillLoading { tab.webView.stopLoading() }
