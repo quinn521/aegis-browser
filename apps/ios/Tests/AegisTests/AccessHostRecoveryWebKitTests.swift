@@ -2353,7 +2353,7 @@ extension AccessHostRecoveryWebKitTests {
         .init(host: "www.douban.com", region: .mainland, category: "DOUBAN", pageTitle: "豆瓣", selectedInCategoryMode: true),
         .init(host: "www.meituan.com", region: .mainland, category: "MEITUAN", pageTitle: "美团", selectedInCategoryMode: false),
         .init(host: "www.youtube.com", region: .outsideMainland, category: "VIDEO", pageTitle: "YouTube", selectedInCategoryMode: true),
-        .init(host: "www.google.com", region: .outsideMainland, category: "WEB", pageTitle: "Google", selectedInCategoryMode: false)
+        .init(host: "www.google.com.hk", region: .outsideMainland, category: "WEB", pageTitle: "Google", selectedInCategoryMode: false)
     ]
 
     func testRegionalAutomaticChoosesCrossRegionExits() async throws {
@@ -2511,7 +2511,15 @@ extension AccessHostRecoveryWebKitTests {
             coordinator = AccessHostStoreCoordinator(channel: .dev, geoSiteCache: cache)
         }
         defer { usage?.setActive(false) }
-        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        let suite = "regional-public-home-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = BrowserPreferences(defaults: defaults)
+        var settings = preferences.values
+        settings.homepage = "https://www.google.com/"
+        try preferences.save(settings)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), preferences: preferences,
+                                     hostCoordinator: coordinator)
         defer { browser.closeWindow() }
         browser.setWindowForeground(true)
         let tab = try XCTUnwrap(browser.activeTab)
@@ -2530,12 +2538,15 @@ extension AccessHostRecoveryWebKitTests {
         }
 
         func visit(_ site: RegionalSmokeSite, mode: String, managed: Bool = false) async throws {
-            let target = try XCTUnwrap(URL(string: "https://\(site.host)/"))
+            let configuredHomepage = site.host == "www.google.com.hk"
+            let target = try configuredHomepage ? preferences.homeURL : XCTUnwrap(URL(string: "https://\(site.host)/"))
+            XCTAssertEqual(target.host, site.host)
             let domain = site.host.dropFirst(4)
             let maxAttempts = usesBetaCatalogue ? 2 : 1
             for attempt in 1...maxAttempts {
                 let previousDocument = tab.liveCommittedDocumentSequence
-                tab.loadFromAddressBar(target)
+                if configuredHomepage { tab.load(target) }
+                else { tab.loadFromAddressBar(target) }
                 let deadline = ContinuousClock.now + .seconds(35)
                 var host = ""
                 var title = ""
