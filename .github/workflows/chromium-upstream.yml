@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   monitor:
-    if: github.event_name != 'schedule' || github.repository == 'gcsagroup/aegis-browser'
+    if: (github.event_name != 'schedule' || github.repository == 'gcsagroup/aegis-browser') && (github.repository != 'quinn521/aegis-browser' || github.event_name == 'workflow_dispatch' || github.base_ref == 'develop' || (github.event_name == 'push' && github.ref == 'refs/heads/develop'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

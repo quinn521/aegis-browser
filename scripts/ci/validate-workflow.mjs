@@ -26,6 +26,9 @@ function array(value) {
   return Array.isArray(value) ? value : value == null ? [] : [value];
 }
 
+const forkCiRoute = "github.repository != 'quinn521/aegis-browser' || github.event_name == 'workflow_dispatch' || github.base_ref == 'develop' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')";
+const forkPrRoute = "github.repository != 'quinn521/aegis-browser' || github.base_ref == 'develop'";
+
 function validateSyncMergeMethod(workflow) {
   const expected = {
     name: 'Sync PR Merge Method',
@@ -38,7 +41,7 @@ function validateSyncMergeMethod(workflow) {
     jobs: {
       'enforce-merge-method': {
         name: 'enforce-sync-merge-method',
-        if: '${{ github.event.pull_request.head.repo.id == github.event.repository.id }}',
+        if: '${{ (github.event.pull_request.head.repo.id == github.event.repository.id) && (' + forkPrRoute + ') }}',
         'runs-on': 'ubuntu-24.04',
         'timeout-minutes': 5,
         steps: [
@@ -95,7 +98,7 @@ try {
   const readyCondition = '${{ ' + ready + ' }}';
   const androidCoverageCondition = "${{ needs.impact.outputs.run == 'true' && (" + ready + ') }}';
   const summaryCondition = '${{ always() && (' + ready + ') }}';
-  const summaryName = '${{ (' + ready + ") && 'quality-gate' || 'quality-deferred-draft-or-missing-metadata' }}";
+  const summaryName = '${{ (' + forkCiRoute + ') && (' + ready + ") && 'quality-gate' || 'quality-deferred-draft-or-missing-metadata' }}";
   const integrationBranches = ['develop', 'main'];
   const automaticEvents = ['pull_request', 'push'];
   const prTypes = ['opened', 'reopened', 'synchronize', 'ready_for_review', 'converted_to_draft'].sort();
@@ -135,7 +138,12 @@ try {
                   : androidCoverage ? androidCoverageCondition
                     : otherCoverage ? id === 'lane-result' ? "${{ always() && inputs.lane != '' }}" : coverageCallCondition
                       : readyCondition;
-      if (job.if !== expectedCondition) {
+      const routesFork = id === 'impact' || id === 'quality-summary' ||
+        automatic === cppWorkflow || otherCoverage;
+      const admitted = routesFork
+        ? '${{ (' + expectedCondition.slice(4, -3) + ') && (' + forkCiRoute + ') }}'
+        : expectedCondition;
+      if (job.if !== admitted) {
         fail(`${label}/${id} must require explicit Ready PR metadata, preserve non-PR execution and summary always()`);
       }
     }
@@ -214,8 +222,8 @@ try {
   if (prTitleJob?.name !== 'normalize-pr-title' || prTitleJob?.['runs-on'] !== 'ubuntu-24.04' || prTitleJob?.['timeout-minutes'] !== 5) {
     fail('PR title job identity, runner, or timeout changed');
   }
-  if (prTitleJob?.permissions || 'continue-on-error' in (prTitleJob ?? {}) || 'if' in (prTitleJob ?? {})) {
-    fail('PR title job may not override permissions, suppress failures, or be conditional');
+  if (prTitleJob?.permissions || 'continue-on-error' in (prTitleJob ?? {}) || prTitleJob?.if !== '${{ ' + forkPrRoute + ' }}') {
+    fail('PR title job may not override permissions, suppress failures, or change fork PR routing');
   }
   const prTitleSteps = array(prTitleJob?.steps);
   if (prTitleSteps.length !== 2 || prTitleSteps.some((step) => 'continue-on-error' in step || 'run' in step)) {
