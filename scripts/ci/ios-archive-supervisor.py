@@ -18,7 +18,10 @@ import time
 
 POLL_INTERVAL = 0.05
 TERM_GRACE = 0.5
-CENSUS_TIMEOUT = 2
+CENSUS_TIMEOUT = 4
+# Escalation may need to find a separate-group helper, signal it, and then
+# observe two empty snapshots. Keep the whole stop within the runner's grace.
+STOP_CONFIRM_TIMEOUT = 6
 
 
 def archive_environment():
@@ -137,7 +140,7 @@ def stop_and_reap(pid, signal_worker):
     # Keep the leader unreaped to reserve both the primary PGID and session ID.
     primary_problem = signal_primary_group(pid, signal.SIGTERM)
     escalate_at = time.monotonic() + TERM_GRACE
-    confirm_by = escalate_at + CENSUS_TIMEOUT
+    confirm_by = escalate_at + STOP_CONFIRM_TIMEOUT
     sent_helper_term = False
     empty = False
     problem = None
@@ -155,7 +158,7 @@ def stop_and_reap(pid, signal_worker):
         boundary = confirm_by if force else escalate_at
         try:
             # A slow ps must leave time for the primary group's escalation.
-            workers = session_workers(pid, boundary - now)
+            workers = session_workers(pid, min(CENSUS_TIMEOUT, boundary - now))
         except (OSError, subprocess.SubprocessError) as error:
             problem = error
             empty = False

@@ -36,13 +36,13 @@ const DLC = {
 };
 const XTLS = {
   project: 'XTLS/Xray-rules-dat',
-  version: '20261127013728',
+  version: '20261128011702',
   commit: '71449413dd268821143695c5bf3720545f392e63',
   tagCommit: '0f8082e3b11bbe8ee65f26de86cbd2e0d510c983',
   file: 'geosite.dat',
-  bytes: 7_735_216,
-  sha256: '919a4b32cc9e6619e5bc17831cd388f89df77d9bf9817dab98b489d479162047',
-  url: 'https://github.com/XTLS/Xray-rules-dat/releases/download/20261127013728/geosite.dat',
+  bytes: 7_734_685,
+  sha256: 'ff32ecaf4a8c1d010fe89e1228fdd77f5f4d8e540ee0160b853cb13d6c2423a2',
+  url: 'https://github.com/XTLS/Xray-rules-dat/releases/download/20261128011702/geosite.dat',
   sourceUrl: 'https://github.com/XTLS/Xray-rules-dat/blob/71449413dd268821143695c5bf3720545f392e63/README.md',
   license: 'MIT',
   licenseScope: 'Inherited V2Fly data',

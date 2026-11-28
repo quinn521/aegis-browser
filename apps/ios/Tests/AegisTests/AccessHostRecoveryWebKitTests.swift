@@ -193,6 +193,75 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
 
     }
 
+    func testAppleSessionRestoreWaitsForColdGeoSiteBeforeSendingHTTPS() async throws {
+        let opener = AnsweringOpener(finishAfterRecording: true)
+        let port: UInt16 = 18_433
+        let listener = try await makeListener(port: port, tunnels: opener)
+        try await listener.start()
+        defer { try? listener.stop() }
+        let fixture = AccessGeoSiteCacheTests.Fixture()
+        defer { fixture.clean() }
+        let cache = fixture.cache()
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: port), channel: .alpha,
+            alphaWebsiteAcceleration: true, defaultLocationPrivacy: true, geoSiteCache: cache)
+        let saved = SavedBrowserTab(id: UUID(), url: URL(string: "https://www.apple.com/legal/"), groupID: nil)
+        let windows = BrowserWindowStore()
+        let windowID = UUID()
+        try windows.save(.init(id: windowID, tabs: [saved], activeTabID: saved.id))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), windowID: windowID,
+            windowStore: windows, hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        XCTAssertEqual(cache.status, .loading)
+        XCTAssertTrue(tab.isWaitingForRoutePolicy)
+        XCTAssertEqual(tab.addressBarURL, saved.url)
+        XCTAssertNil(tab.loadingError)
+        XCTAssertTrue(opener.authorities.isEmpty)
+        let attempt = tab.currentAttemptIDForTests
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        try await waitUntil(seconds: 15, {
+            self.attach(tab.webView, to: window)
+            return opener.authorities.contains("www.apple.com:443")
+        }, message: "The first restored request must reach the managed HTTPS listener without a reload")
+        XCTAssertEqual(cache.status, .ready)
+        XCTAssertEqual(tab.currentAttemptIDForTests, attempt)
+        XCTAssertEqual(tab.boundHostName, "www.apple.com")
+        XCTAssertFalse(tab.isWaitingForRoutePolicy)
+    }
+
+    func testGoogleHongKongBareHostDoesNotFallBackToHTTPWhenTLSFails() async throws {
+        let (tls, _) = try fixtureTLSIdentity()
+        let origin = OriginReceipt(port: 0, body: "<title>Google Hong Kong HTTPS</title>", tls: tls)
+        try await origin.start()
+        defer { origin.stop() }
+        let opener = FixtureOriginTunnels(port: origin.port, hosts: ["www.google.com.hk"])
+        let port: UInt16 = 18_434
+        let listener = try await makeListener(port: port, tunnels: opener)
+        try await listener.start()
+        defer { try? listener.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: port), defaultLocationPrivacy: true)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        browser.navigate(address: "www.google.com.hk")
+        let resolvedURL = try XCTUnwrap(URL(string: "https://www.google.com.hk/"))
+        try await waitUntil(seconds: 15, {
+            self.attach(tab.webView, to: window)
+            return opener.authorities.contains("www.google.com.hk:443")
+        })
+        XCTAssertEqual(tab.webView.configuration.defaultWebpagePreferences.preferredHTTPSNavigationPolicy, .errorOnFailure)
+        try await waitUntil(seconds: 15, { !tab.webView.isLoading },
+            message: "WebKit must finish the untrusted TLS request")
+        XCTAssertFalse(origin.transcript.contains("GET / "), "Untrusted certificates must still be rejected")
+        XCTAssertFalse(opener.authorities.contains("www.google.com.hk:80"))
+        XCTAssertNotEqual(tab.liveCommittedDocumentURL, resolvedURL)
+
+    }
+
     func testUnavailableDefaultResumesOnlyTheHeldNavigationUsingItsOriginalStore() async throws {
         let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, defaultLocationPrivacy: true)
