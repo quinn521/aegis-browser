@@ -2439,6 +2439,9 @@ extension AccessHostRecoveryWebKitTests {
         try await tab.prepareContentRulesForTests()
         let window = show(tab.webView)
         defer { window.isHidden = true }
+        try await waitUntil(seconds: 15, {
+            tab.liveCommittedDocumentURL?.absoluteString == "aegis://start" && !tab.isLoading
+        }, message: "The initial browser document must settle before public navigation")
         var receipts = ["mode\trequested site\tcommitted host\ttitle\tvisible text characters\tstill loading\tconnected via"]
         defer {
             let attachment = XCTAttachment(string: receipts.joined(separator: "\n"))
