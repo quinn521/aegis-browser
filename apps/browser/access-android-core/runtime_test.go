@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
@@ -19,6 +20,11 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 		`{"outbounds":[{"protocol":"vless"}],"inbounds":[]}`,
 		`{"outbounds":[{"protocol":"vless"}],"log":{"access":"/tmp/configured-path"}}`,
 		`{"outbounds":[{"protocol":"vless","ProxySettings":{"tag":"backup"}}]}`,
+		`{"outbounds":[{"protocol":"trojan","settings":{"servers":[null]}}]}`,
+		`{"outbounds":[{"protocol":"vmess","settings":{"vnext":[null]}}]}`,
+		`{"outbounds":[{"protocol":"vless","settings":{"vnext":[null]}}]}`,
+		`{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":9,"users":[null]}]}}]}`,
+		`{"outbounds":[{"protocol":"hysteria","settings":{"address":null,"port":9,"version":2}}]}`,
 		strings.Repeat(" ", maxTransfer+1),
 	} {
 		if _, err := proxyConfig([]byte(raw)); err != errConfig {
@@ -26,8 +32,13 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 		}
 	}
 
-	for _, protocol := range []string{"vless", "vmess", "trojan", "hysteria"} {
-		raw := `{"outbounds":[{"protocol":"` + protocol + `","tag":"owned","settings":{}}]}`
+	for protocol, settings := range map[string]string{
+		"vless":    `{"vnext":[{"address":"127.0.0.1","port":9,"users":[{"id":"fixture"}]}]}`,
+		"vmess":    `{"address":"127.0.0.1","port":9,"id":"fixture","security":"auto"}`,
+		"trojan":   `{"address":"127.0.0.1","port":9,"password":"fixture"}`,
+		"hysteria": `{"address":"127.0.0.1","port":9,"version":2}`,
+	} {
+		raw := `{"outbounds":[{"protocol":"` + protocol + `","tag":"owned","settings":` + settings + `}]}`
 		config, err := proxyConfig([]byte(raw))
 		if err != nil {
 			t.Fatalf("prepare %s: %v", protocol, err)
@@ -105,5 +116,67 @@ func TestConcurrentStartAndDestroyCannotLeaveCoreRunning(t *testing.T) {
 	calls.Wait()
 	if instance.runtime.IsRunning() || registry.lookup(id) != nil {
 		t.Fatal("destroy returned with an active core")
+	}
+}
+
+type blockingReadRuntime struct {
+	streamRuntime
+	entered chan struct{}
+	closed  chan struct{}
+	stop    sync.Once
+}
+
+func (r *blockingReadRuntime) Dial(string, int) (int64, error) { return 1, nil }
+
+func (r *blockingReadRuntime) Read(int64, int) ([]byte, error) {
+	r.entered <- struct{}{}
+	<-r.closed
+	return nil, errStream
+}
+
+func (r *blockingReadRuntime) CloseStream(int64) {
+	r.stop.Do(func() { close(r.closed) })
+}
+
+func TestReadsOnOneStreamAreSerializedAndCloseInterrupts(t *testing.T) {
+	runtime := &blockingReadRuntime{entered: make(chan struct{}, 2), closed: make(chan struct{})}
+	instance := &coreInstance{runtime: runtime}
+	stream, err := instance.dial("127.0.0.1", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runtime.CloseStream(stream) })
+	readFinished := make(chan error, 2)
+	read := func() {
+		_, err := instance.read(stream, 1)
+		readFinished <- err
+	}
+	go read()
+	select {
+	case <-runtime.entered:
+	case <-time.After(time.Second):
+		t.Fatal("first read never reached the core")
+	}
+	secondStarted := make(chan struct{})
+	go func() {
+		close(secondStarted)
+		read()
+	}()
+	<-secondStarted
+	select {
+	case <-runtime.entered:
+		t.Fatal("second read entered while the first read was blocked")
+	case <-time.After(20 * time.Millisecond):
+	}
+	go instance.closeStream(stream)
+	for range 2 {
+		select {
+		case err := <-readFinished:
+			if err != errStream {
+				t.Errorf("read after close returned %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("close did not interrupt pending reads")
+		}
 	}
 }

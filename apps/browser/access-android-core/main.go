@@ -84,7 +84,7 @@ func AegisAndroidCoreDial(id C.uint64_t, host *C.char, length C.int, port C.uint
 	if instance == nil {
 		return C.AEGIS_ANDROID_CORE_UNAVAILABLE
 	}
-	stream, err := instance.runtime.Dial(string(destination), int(port))
+	stream, err := instance.dial(string(destination), int(port))
 	if err != nil {
 		return C.AEGIS_ANDROID_CORE_ERROR
 	}
@@ -103,7 +103,7 @@ func AegisAndroidCoreRead(id C.uint64_t, stream C.int64_t, output *C.char, capac
 	if instance == nil {
 		return C.AEGIS_ANDROID_CORE_UNAVAILABLE
 	}
-	data, err := instance.runtime.Read(int64(stream), int(capacity))
+	data, err := instance.read(int64(stream), int(capacity))
 	if err != nil {
 		return C.AEGIS_ANDROID_CORE_ERROR
 	}
@@ -122,7 +122,7 @@ func AegisAndroidCoreWrite(id C.uint64_t, stream C.int64_t, input *C.char, size 
 	if instance == nil {
 		return C.AEGIS_ANDROID_CORE_UNAVAILABLE
 	}
-	if err := instance.runtime.Write(int64(stream), C.GoBytes(unsafe.Pointer(input), size)); err != nil {
+	if err := instance.write(int64(stream), C.GoBytes(unsafe.Pointer(input), size)); err != nil {
 		return C.AEGIS_ANDROID_CORE_ERROR
 	}
 	return C.AEGIS_ANDROID_CORE_OK
@@ -140,7 +140,7 @@ func AegisAndroidCoreCloseStream(id C.uint64_t, stream C.int64_t) C.int {
 	if instance == nil {
 		return C.AEGIS_ANDROID_CORE_UNAVAILABLE
 	}
-	instance.runtime.CloseStream(int64(stream))
+	instance.closeStream(int64(stream))
 	return C.AEGIS_ANDROID_CORE_OK
 }
 
