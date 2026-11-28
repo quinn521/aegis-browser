@@ -242,6 +242,8 @@ const needsIosCompile = path => sharedIosProductInput(path)
   || (iosArchiveInputs.has(path) && !path.startsWith('scripts/release/test_'))
   || path === '.github/workflows/ios-release-validation.yml';
 const selectsAndroid = path => path.startsWith('apps/browser/patches-android/')
+  || path.startsWith('apps/browser/access-android-core/')
+  || path.startsWith('apps/ios/EmbeddedCore/bridge/')
   || path === 'apps/browser/ci-pins/android.json'
   || path === 'apps/browser/args/aegis-android.gn'
   || path === 'apps/browser/args/android-delivery-version.json'

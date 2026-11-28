@@ -369,6 +369,10 @@ test('paths select platforms and commit types select stage depth', () => {
     const route = ({ios, android, macos, windows, linux, integrate, deep}) => ({ios, android, macos, windows, linux, integrate, deep});
     const iosRoute = {ios: true, android: false, macos: false, windows: false, linux: false, integrate: true, deep: true};
     const androidRoute = {...iosRoute, ios: false, android: true};
+    const androidCore = pr(() => save('apps/browser/access-android-core/main.go', 'bridge'), 'feat(android): add native Access ABI');
+    assert.deepEqual(route(androidCore), androidRoute);
+    const sharedAccessCore = pr(() => save('apps/ios/EmbeddedCore/bridge/bridge.go', 'bridge'), 'fix(access): update shared embedded core');
+    assert.deepEqual(route(sharedAccessCore), {...iosRoute, android: true});
     const sharedSetup = pr(() => save(commonScript, 'updated'), 'fix: repair browser setup');
     assert.deepEqual(route(sharedSetup), {...androidRoute, macos: true, linux: true});
     const sharedSetupWithIos = pr(() => {

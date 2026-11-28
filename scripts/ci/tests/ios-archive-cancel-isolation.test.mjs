@@ -3,6 +3,7 @@ import {execFileSync, spawn, spawnSync} from 'node:child_process';
 import {copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
+import {performance} from 'node:perf_hooks';
 import test from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
 
@@ -30,8 +31,14 @@ function running(pid) {
   return !state.stdout.trim().startsWith('Z');
 }
 
-async function waitFor(predicate, label) {
-  for (let index = 0; index < 160; index += 1) {
+// Reaching verification can include three stage preflights and two preceding
+// cleanup passes. Cancellation still has a separate budget after readiness.
+const startupAllowanceMs = 36_000;
+const cleanupAllowanceMs = 8_000;
+
+async function waitFor(predicate, label, timeoutMs = cleanupAllowanceMs) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
     if (predicate()) return;
     await delay(50);
   }
@@ -115,8 +122,12 @@ exit 0
   return {source, python, env, wrapper: join(source, archiveScript)};
 }
 
-for (const [signal, exitCode, proxy] of [['SIGTERM', 143], ['SIGINT', 130], [null, 65], ['SIGTERM', 143, authenticatedProxy]]) {
-  test(`archive ${signal ?? 'compiler failure'} stops owned descendants before wrapper exit${proxy ? ' with a proxy' : ''}`, async () => {
+for (const [signal, exitCode, proxy, slowCensus] of [
+  ['SIGTERM', 143], ['SIGINT', 130], [null, 65], ['SIGTERM', 143, authenticatedProxy],
+  ['SIGTERM', 143, undefined, true],
+]) {
+  const condition = slowCensus ? ' after slow census retries' : proxy ? ' with a proxy' : '';
+  test(`archive ${signal ?? 'compiler failure'} stops owned descendants before wrapper exit${condition}`, async () => {
     const root = mkdtempSync(join(realpathSync(tmpdir()), 'ios-archive-cancel-|'));
     const {source, python, env, wrapper} = prepareFixture(root);
 
@@ -128,15 +139,17 @@ for (const [signal, exitCode, proxy] of [['SIGTERM', 143], ['SIGINT', 130], [nul
 import os, pathlib, sys, time
 with open(sys.argv[1], "rb") as log:
     pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))
-    for _ in range(200):
+    for _ in range(500):
         log.read()
         time.sleep(0.1)
 `, log, loggerReady], {
       stdio: 'ignore',
     });
+    const started = performance.now();
     const child = spawn('bash', [wrapper], {
       cwd: source,
-      env: {...env, ARCHIVE_TEST_FAIL: signal ? '0' : '1', ...(proxy ? {HTTPS_PROXY: proxy} : {})},
+      env: {...env, ARCHIVE_TEST_FAIL: signal ? '0' : '1', ...(proxy ? {HTTPS_PROXY: proxy} : {}),
+        ...(slowCensus ? {ARCHIVE_TEST_SLOW_CENSUS: '1'} : {})},
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -151,8 +164,10 @@ with open(sys.argv[1], "rb") as log:
     const roles = ['compiler', 'helper', 'grandchild'];
     const ready = () => [loggerReady, ...roles.map(role => join(root, role))].every(path => existsSync(path));
     try {
-      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(withheld)), 'process markers and status notice');
+      await waitFor(() => nextCheckoutStarted || (ready() && stdout.includes(withheld)),
+        'process markers and status notice', startupAllowanceMs);
       assert(ready(), diagnostic);
+      if (slowCensus) assert(performance.now() - started > cleanupAllowanceMs, 'fixture must outlast the cleanup budget');
       const [[compilerPid, supervisorPid, group, session], [helperPid, compilerParent, helperGroup, helperSession],
         [grandchildPid, helperParent, grandchildGroup, grandchildSession]] = roles.map(role =>
         JSON.parse(readFileSync(join(root, role), 'utf8')));
@@ -513,7 +528,7 @@ fi
       let stderr = '';
       child.stderr.on('data', data => { stderr += data; });
       t.after(() => { if (child.exitCode === null) child.kill('SIGTERM'); });
-      await waitFor(() => existsSync(ready) || child.exitCode !== null, 'file-backed diagnostic');
+      await waitFor(() => existsSync(ready) || child.exitCode !== null, 'file-backed diagnostic', startupAllowanceMs);
       assert(existsSync(ready), stderr);
       const scratch = readFileSync(ready, 'utf8').trim();
       assert.equal(readFileSync(join(scratch, 'Aegis.xcresult/diagnostics'), 'utf8').trim(), authenticatedProxy);
@@ -598,7 +613,7 @@ time.sleep(15)
   child.stderr.on('data', data => { diagnostic += data; });
   try {
     // Leave stdout unread until the supervisor has exited.
-    await waitFor(() => existsSync(ready) || child.exitCode !== null, 'compiler flood');
+    await waitFor(() => existsSync(ready) || child.exitCode !== null, 'compiler flood', startupAllowanceMs);
     assert(existsSync(ready), diagnostic);
     assert.equal(child.kill('SIGTERM'), true);
     await waitFor(() => child.exitCode !== null, 'cancellation with stdout blocked');
@@ -684,7 +699,7 @@ for (const [phase, selector] of [
     child.stderr.on('data', data => { diagnostic += data; });
     try {
       const markers = ['stage-worker', 'stage-helper'].map(role => join(root, role));
-      await waitFor(() => markers.every(existsSync) || child.exitCode !== null, `${phase} process markers`);
+      await waitFor(() => markers.every(existsSync) || child.exitCode !== null, `${phase} process markers`, startupAllowanceMs);
       assert(markers.every(existsSync), diagnostic);
       const [[worker, parent, group, session], [helper, helperParent, helperGroup, helperSession]] =
         markers.map(path => JSON.parse(readFileSync(path, 'utf8')));
@@ -713,6 +728,39 @@ for (const [phase, selector] of [
   });
 }
 
+test('stage startup retries a transient process census timeout before spawning', () => {
+  execFileSync('python3', ['-B', '-c', String.raw`
+import importlib.util, os, subprocess, sys
+from unittest.mock import Mock, patch
+
+spec = importlib.util.spec_from_file_location("supervisor", sys.argv[1])
+supervisor = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(supervisor)
+
+timeout = subprocess.TimeoutExpired("ps fixture", 2)
+for outcome in ("ready", "cancelled", "unavailable"):
+    census = Mock(side_effect=[timeout, []] if outcome == "ready" else timeout)
+    spawn = Mock(return_value=101)
+    with patch.multiple(supervisor, process_states=census, wait_until_exit=Mock(), stop_and_reap=Mock(return_value=0)), \
+         patch.object(os, "posix_spawn", spawn):
+        cancelled = lambda: outcome == "cancelled" and census.call_count > 0
+        if outcome == "unavailable":
+            try:
+                supervisor.run_stage(["/bin/bash"], {}, cancelled, Mock())
+            except subprocess.TimeoutExpired:
+                pass
+            else:
+                raise AssertionError("stage ran without a successful process census")
+            assert census.call_count == 3
+        else:
+            status = supervisor.run_stage(["/bin/bash"], {}, cancelled, Mock())
+            assert status == (0 if outcome == "ready" else None)
+        assert spawn.call_count == (1 if outcome == "ready" else 0)
+        if outcome != "unavailable":
+            assert census.call_count == (2 if outcome == "ready" else 1)
+`, supervisorScript], {encoding: 'utf8'});
+});
+
 test('cleanup escalates the reserved group during census failure and requires helper confirmation', () => {
   execFileSync('python3', ['-B', '-c', String.raw`
 import importlib.util, os, signal, subprocess, sys
@@ -722,7 +770,7 @@ spec = importlib.util.spec_from_file_location("supervisor", sys.argv[1])
 supervisor = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(supervisor)
 
-for failure in (None, "census", "identity"):
+for scenario in ("normal", "slow-census", "census", "identity"):
     now = 0
     calls = []
     signaled = False
@@ -733,16 +781,22 @@ for failure in (None, "census", "identity"):
 
     def census(session, timeout):
         calls.append(("census", now))
-        if now < supervisor.TERM_GRACE or failure == "census":
+        if now < supervisor.TERM_GRACE or scenario == "census":
             sleep(timeout)
             raise subprocess.TimeoutExpired("ps fixture", timeout)
+        if scenario == "slow-census":
+            scan_time = supervisor.CENSUS_TIMEOUT - 0.02
+            if timeout < scan_time:
+                sleep(timeout)
+                raise subprocess.TimeoutExpired("ps fixture", timeout)
+            sleep(scan_time)
         return [] if signaled else [202]
 
     def signal_worker(pid, session, signum):
         global signaled
         assert (pid, session, signum) == (202, 101, signal.SIGKILL)
         calls.append(("helper", now))
-        if failure == "identity":
+        if scenario == "identity":
             raise PermissionError("fixture denied identity")
         signaled = True
 
@@ -754,13 +808,13 @@ for failure in (None, "census", "identity"):
         try:
             assert supervisor.stop_and_reap(101, signal_worker) == 0
         except OSError as error:
-            assert failure and "could not confirm" in str(error), error
-            if failure == "identity":
+            assert scenario in ("census", "identity") and "could not confirm" in str(error), error
+            if scenario == "identity":
                 assert "fixture denied identity" in str(error)
         else:
-            assert failure is None
+            assert scenario in ("normal", "slow-census")
     assert calls[:3] == [(signal.SIGTERM, 0), ("census", 0), (signal.SIGKILL, supervisor.TERM_GRACE)], calls[:3]
-    if failure is None:
+    if scenario in ("normal", "slow-census"):
         assert signaled and sum(event == "census" for event, _ in calls) == 4, calls
     waitpid.assert_called_once_with(101, os.WNOHANG)
 `, supervisorScript], {encoding: 'utf8'});

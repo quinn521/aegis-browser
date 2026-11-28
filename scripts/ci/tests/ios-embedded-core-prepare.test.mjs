@@ -361,7 +361,8 @@ function assertPrivate({job, trace, foreignTemp, globalPair, globalToolBytes}, s
   }
   assert.deepEqual(sinks, [], 'tool diagnostics escaped the supervisor');
   assert(!existsSync(trace), 'Git tracing created a diagnostic file');
-  assert(!readdirSync(dirname(job)).some(name => name.startsWith('.aegis-ios-scratch-')), 'private setup scratch survived');
+  const scratchSurvived = readdirSync(dirname(job)).some(name => name.startsWith('.aegis-ios-scratch-'));
+  assert(!scratchSurvived, `private setup scratch survived\n${stderr}`);
   assert.deepEqual(readdirSync(foreignTemp), ['sentinel']);
   assert.equal(readFileSync(join(foreignTemp, 'sentinel'), 'utf8'), 'other job temp\n');
   for (const path of globalPair) assert.deepEqual(readFileSync(path), globalToolBytes);
