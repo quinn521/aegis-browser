@@ -62,6 +62,35 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 
 var testConfig = []byte(`{"outbounds":[{"tag":"fixture","protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":9,"users":[{"id":"12345678-1234-1234-1234-123456789abc","encryption":"none"}]}]}}]}`)
 
+func TestStartRequiresAccessTransportFields(t *testing.T) {
+	withTLS := func(settings string) []byte {
+		base := strings.TrimSuffix(string(testConfig), "}]}")
+		return []byte(base + `,"streamSettings":{"network":"ws","security":"tls","tlsSettings":` +
+			settings + `,"wsSettings":{"host":"node.example","path":"/test?key=value"}}}]}`)
+	}
+	var registry coreRegistry
+	id := registry.create()
+	instance := registry.lookup(id)
+	t.Cleanup(func() { registry.close(id) })
+	for _, settings := range []string{
+		`{"certificates":[null]}`,
+		`{"Certificates":[]}`,
+		`{"allowInsecure":true}`,
+		`null`,
+	} {
+		if status := instance.start(withTLS(settings)); status != statusInvalid {
+			t.Errorf("TLS settings %s returned status %d", settings, status)
+		}
+	}
+	if instance.runtime.IsRunning() {
+		t.Fatal("rejected TLS settings left the core running")
+	}
+	config := withTLS(`{"serverName":"node.example","useSystemCA":true,"alpn":["http/1.1"]}`)
+	if status := instance.start(config); status != statusOK {
+		t.Fatalf("starting WS/TLS with system CAs and a query path returned %d", status)
+	}
+}
+
 func TestRegistryRetiresOnlyTheSelectedRuntime(t *testing.T) {
 	var registry coreRegistry
 	firstID, secondID := registry.create(), registry.create()

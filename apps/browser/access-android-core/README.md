@@ -18,3 +18,5 @@ GOOS=android GOARCH=arm64 CGO_ENABLED=1 \
 ```
 
 The build generates a C header alongside the shared library. Use its status enum to distinguish invalid inputs, retired handles and core errors. The native caller owns its buffers and must run blocking calls off the UI thread.
+
+The Android module uses `anet` v0.0.2 to keep interface enumeration independent of Go's private IPv6 zone caches. At startup it selects address-based enumeration on Android 11 and later, where Android restricts app access to interface link information. The Access ABI handles TCP destinations without IPv6 interface zones.

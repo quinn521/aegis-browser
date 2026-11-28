@@ -2,7 +2,10 @@ module aegis.browser/android/accesscore
 
 go 1.27.3
 
-require aegis.browser/ios/embeddedcore v0.0.0
+require (
+	aegis.browser/ios/embeddedcore v0.0.0
+	github.com/wlynxg/anet v0.0.5
+)
 
 require (
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e // indirect
@@ -31,7 +34,6 @@ require (
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
-	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/xtls/reality v0.0.0-20261108101329-4bb46b2afd8b // indirect
 	github.com/xtls/xray-core v1.260327.1-0.20261109052709-676eaf66f8f0 // indirect
 	github.com/yuin/gopher-lua v1.1.2 // indirect
@@ -55,3 +57,7 @@ require (
 )
 
 replace aegis.browser/ios/embeddedcore => ../../ios/EmbeddedCore/bridge
+
+// Keep interface enumeration on Android without linking to private Go IPv6
+// zone caches. Access uses unscoped unicast destinations.
+replace github.com/wlynxg/anet => github.com/wlynxg/anet v0.0.2

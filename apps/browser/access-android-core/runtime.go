@@ -4,6 +4,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,9 @@ func proxyConfig(raw []byte) ([]byte, error) {
 	if !validSettings(protocol, outbound["settings"]) {
 		return nil, errConfig
 	}
+	if stream, present := outbound["streamSettings"]; present && !validStreamSettings(stream) {
+		return nil, errConfig
+	}
 
 	canonicalOutbounds, err := json.Marshal(outbounds)
 	if err != nil {
@@ -55,6 +59,75 @@ func proxyConfig(raw []byte) ([]byte, error) {
 	document["outbounds"] = canonicalOutbounds
 	document["log"] = json.RawMessage(`{"loglevel":"none","access":"none","error":"none"}`)
 	return json.Marshal(document)
+}
+
+// Only pass transport fields emitted by the Access configuration generators.
+// Xray's general TLS configuration accepts certificate files and assumes
+// certificate array entries are non-nil.
+func validStreamSettings(raw json.RawMessage) bool {
+	var stream map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &stream); err != nil || stream == nil {
+		return false
+	}
+	for key, value := range stream {
+		switch key {
+		case "network":
+			if !oneOf(value, "tcp", "ws", "grpc", "httpupgrade", "hysteria") {
+				return false
+			}
+		case "security":
+			if !oneOf(value, "tls", "reality") {
+				return false
+			}
+		case "tlsSettings":
+			if !hasOnlyFields(value, "serverName", "useSystemCA", "fingerprint", "alpn") {
+				return false
+			}
+		case "realitySettings":
+			if !hasOnlyFields(value, "serverName", "fingerprint", "publicKey", "shortId", "spiderX") {
+				return false
+			}
+		case "wsSettings", "httpupgradeSettings":
+			if !hasOnlyFields(value, "host", "path") {
+				return false
+			}
+		case "grpcSettings":
+			if !hasOnlyFields(value, "serviceName") {
+				return false
+			}
+		case "hysteriaSettings":
+			if !hasOnlyFields(value, "version", "auth") {
+				return false
+			}
+		case "finalmask":
+			var mask map[string]json.RawMessage
+			if json.Unmarshal(value, &mask) != nil || len(mask) != 1 ||
+				!hasOnlyFields(mask["quicParams"], "congestion", "brutalUp", "brutalDown") {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func hasOnlyFields(raw json.RawMessage, allowed ...string) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return false
+	}
+	for key := range object {
+		if !slices.Contains(allowed, key) {
+			return false
+		}
+	}
+	return true
+}
+
+func oneOf(raw json.RawMessage, allowed ...string) bool {
+	var value string
+	return json.Unmarshal(raw, &value) == nil && slices.Contains(allowed, value)
 }
 
 // Accept the endpoint shapes produced by the shared Access configuration
