@@ -25,6 +25,8 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 		`{"outbounds":[{"protocol":"vmess","settings":{"vnext":[null]}}]}`,
 		`{"outbounds":[{"protocol":"vless","settings":{"vnext":[null]}}]}`,
 		`{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":9,"users":[null]}]}}]}`,
+		`{"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":9,"users":[
+			{"id":"fixture","encryption":"none","testpre":1}]}]}}]}`,
 		`{"outbounds":[{"protocol":"hysteria","settings":{"address":null,"port":9,"version":2}}]}`,
 		strings.Repeat(" ", maxTransfer+1),
 	} {
@@ -34,7 +36,7 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 	}
 
 	for protocol, settings := range map[string]string{
-		"vless":    `{"vnext":[{"address":"127.0.0.1","port":9,"users":[{"id":"fixture"}]}]}`,
+		"vless":    `{"vnext":[{"address":"127.0.0.1","port":9,"users":[{"id":"fixture","encryption":"none"}]}]}`,
 		"vmess":    `{"address":"127.0.0.1","port":9,"id":"fixture","security":"auto"}`,
 		"trojan":   `{"address":"127.0.0.1","port":9,"password":"fixture"}`,
 		"hysteria": `{"address":"127.0.0.1","port":9,"version":2}`,

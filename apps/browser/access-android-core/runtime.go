@@ -213,7 +213,7 @@ func validSettings(protocol string, raw json.RawMessage) bool {
 		endpoint := endpoints[0]
 		var users []map[string]json.RawMessage
 		return len(endpoint) == 3 && validEndpoint(endpoint) &&
-			json.Unmarshal(endpoint["users"], &users) == nil && len(users) == 1 && users[0] != nil
+			json.Unmarshal(endpoint["users"], &users) == nil && len(users) == 1 && validVLESSUser(users[0])
 	case "vmess":
 		return len(settings) == 4 && validEndpoint(settings) &&
 			nonemptyString(settings["id"]) && nonemptyString(settings["security"])
@@ -225,6 +225,17 @@ func validSettings(protocol string, raw json.RawMessage) bool {
 			json.Unmarshal(settings["version"], &version) == nil && version == 2
 	}
 	return false
+}
+
+// The generated user does not configure Xray's background preconnect workers.
+func validVLESSUser(user map[string]json.RawMessage) bool {
+	if !nonemptyString(user["id"]) || !oneOf(user["encryption"], "none") {
+		return false
+	}
+	if flow, present := user["flow"]; present {
+		return len(user) == 3 && oneOf(flow, "xtls-rprx-vision")
+	}
+	return len(user) == 2
 }
 
 func validEndpoint(fields map[string]json.RawMessage) bool {
