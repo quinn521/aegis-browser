@@ -98,6 +98,29 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertNil(nodes.selectedIndex)
     }
 
+    func testExternalBetaShowsQuotaOnEveryKnownRouteWithoutSubscription() throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let rows: [[String: Any]] = [
+            ["uri": alphaWSNode(address: "one.example"), "quotaBytes": 1000],
+            ["uri": alphaWSNode(address: "two.example")],
+            ["uri": alphaWSNode(address: "three.example"), "quotaBytes": 2000],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: rows)
+        func catalogue(_ channel: String, internalTesting: Bool = false) -> AccessAlphaNodeCatalogue {
+            .init(channel: channel, profile: channel, bundleID: "com.gcsa.aegis", data: nil,
+                  externalBetaData: data, internalTesting: internalTesting, defaults: defaults)
+        }
+        let nodes = catalogue("beta")
+        XCTAssertTrue(nodes.isExternalBeta)
+        XCTAssertEqual(nodes.entries.map(\.quotaBytes), [1000, nil, 2000])
+        XCTAssertFalse(nodes.entries.contains(where: \.usesSubscription))
+        nodes.select(2)
+        XCTAssertEqual(nodes.selectedEntry?.quotaBytes, 2000)
+        XCTAssertFalse(catalogue("release").isConfigured)
+        XCTAssertFalse(catalogue("beta", internalTesting: true).isConfigured)
+    }
+
     func testPrivateBetaCatalogueRequiresInternalAudienceAndKeepsDefaultQuotaBound() async throws {
         let (defaults, suite) = try isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

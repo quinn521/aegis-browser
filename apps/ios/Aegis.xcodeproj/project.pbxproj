@@ -2128,12 +2128,15 @@
 				"$(AEGIS_PRIVATE_BETA_NODES_FILE)",
 				"$(AEGIS_PRIVATE_TEST_NODE_FILE)",
 				"$(AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE)",
+				"$(SRCROOT)/scripts/external_beta_nodes.py",
+				"$(AEGIS_EXTERNAL_BETA_NODES_FILE)",
 			);
 			name = "Select private Beta test nodes";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisPrivateBetaTestNodes.json",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisExternalBetaNodes.json",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -2862,6 +2865,7 @@
 				AEGIS_FIREBASE_CHANNEL = dev;
 				AEGIS_PRIVATE_ALPHA_NODES_FILE = /dev/null;
 				AEGIS_PRIVATE_BETA_NODES_FILE = /dev/null;
+				AEGIS_EXTERNAL_BETA_NODES_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_NODE_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE = /dev/null;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -3122,6 +3126,7 @@
 				AEGIS_FIREBASE_CHANNEL = disabled;
 				AEGIS_PRIVATE_ALPHA_NODES_FILE = /dev/null;
 				AEGIS_PRIVATE_BETA_NODES_FILE = /dev/null;
+				AEGIS_EXTERNAL_BETA_NODES_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_NODE_FILE = /dev/null;
 				AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE = /dev/null;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;

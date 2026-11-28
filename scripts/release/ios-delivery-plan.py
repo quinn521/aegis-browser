@@ -14,7 +14,7 @@ spec.loader.exec_module(receipt)
 STAGE_INPUTS = {'operation', 'product', 'version', 'source', 'groups', 'stage_input'}
 FIELDS = {'operation', 'profile', 'version', 'build', 'destination', 'tag', 'package_run_id',
           'upload_run_id', 'source_attempt', 'manifest_sha256', 'groups', 'stage_input', 'signing_mode',
-          'archive_signing', 'package_entrypoint', 'private_alpha', 'private_beta'}
+          'archive_signing', 'package_entrypoint', 'private_alpha', 'private_beta', 'external_beta'}
 ARCHIVE_SIGNING = {'development', 'ad-hoc', 'unsigned'}
 
 
@@ -73,7 +73,9 @@ def normalize(event, ref, inputs, mode='simple', source_sha=None):
     signing_mode = inputs.get('signing_mode') or 'cloud'
     archive_signing = inputs.get('archive_signing') or 'development'
     private_beta = inputs.get('private_beta') or 'no'
-    require(private_beta in {'no', 'yes'}, 'Invalid private Beta selection')
+    require(private_beta in {'no', 'yes', 'external'}, 'Invalid private Beta selection')
+    require(private_beta != 'external' or (mode == 'simple' and ref == 'refs/heads/main'),
+            'External Beta catalogue requires Simple on main')
     require(private_beta == 'no' or (operation == 'package-upload' and signing_mode == 'manual'
             and receipt.canonical(inputs.get('product') or 'auto', receipt.PRODUCT_LABELS) == 'beta'),
             'Private Beta requires Beta, manual signing, and Package and upload')
@@ -130,7 +132,8 @@ def normalize(event, ref, inputs, mode='simple', source_sha=None):
     values['archive_signing'] = archive_signing if new_package and signing_mode == 'cloud' else ''
     values['package_entrypoint'] = entrypoint
     values['private_alpha'] = 'true' if private_alpha == 'yes' else 'false'
-    values['private_beta'] = 'true' if private_beta == 'yes' else 'false'
+    values['private_beta'] = 'true' if private_beta != 'no' else 'false'
+    values['external_beta'] = 'true' if private_beta == 'external' else 'false'
     if package_upload:
         values.update(operation='package-upload', destination='testflight')
     return values

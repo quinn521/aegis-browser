@@ -25,6 +25,25 @@ QUOTA = json.dumps({'subscriptionInfoURL': 'https://example.invalid/sub/test?for
 
 
 class PrivateBetaTests(unittest.TestCase):
+    def test_external_catalogue_keeps_each_known_quota_and_rejects_subscription_fields(self):
+        node = 'trojan://550e8400-e29b-41d4-a716-446655440001@first.example:443?sni=first.example'
+        rows = [{'uri': node + '#private-label'}, {'uri': node.replace('first', 'second'), 'quotaBytes': 4321}]
+        external = beta.external_beta_nodes
+        raw = external.canonicalize(json.dumps(rows).encode())
+        self.assertEqual(json.loads(raw), [{'uri': node}, rows[1]])
+        for key in ('allowedTestClient', 'subscriptionInfoURL'):
+            with self.assertRaises(ValueError):
+                external.canonicalize(json.dumps([dict(rows[0], **{key: 'private'})]).encode())
+        with io.BytesIO() as file, zipfile.ZipFile(file, 'w') as archive:
+            root = 'Payload/Aegis.app/'
+            archive.writestr(root + external.RESOURCE, raw)
+            self.assertEqual(external.verify_archive(archive, root, True), raw)
+            with self.assertRaises(ValueError):
+                external.verify_archive(archive, root, False)
+            archive.writestr(root + 'PlugIns/Share.appex/AegisPrivateTestSubscription.json', QUOTA)
+            with self.assertRaises(ValueError):
+                external.verify_archive(archive, root, True)
+
     def test_catalogue_requires_exact_first_node_and_one_copy_in_internal_beta(self):
         anchor = ('vless://550e8400-e29b-41d4-a716-446655440000@first.example:443?'
                   'security=reality&type=tcp&flow=xtls-rprx-vision&sni=first.example'

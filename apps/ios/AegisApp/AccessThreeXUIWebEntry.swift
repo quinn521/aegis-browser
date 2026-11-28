@@ -14,6 +14,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
     private struct PackagedRoute: Decodable {
         let source: Source?
         let uri: String
+        var quotaBytes: Int64? = nil
     }
 
     struct Entry: Identifiable, Equatable {
@@ -21,6 +22,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         let protocolName: String
         let source: Source?
         let usesSubscription: Bool
+        var quotaBytes: Int64? = nil
         /// Routes may share a protocol; the nonsecret ordinal tells them apart without exposing the relay.
         var displayName: String { "\(id + 1) · \(protocolName)" }
     }
@@ -31,6 +33,8 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
 
     let isConfigured: Bool
     let isPrivateBeta: Bool
+    let isExternalBeta: Bool
+    var isBetaCatalogue: Bool { isPrivateBeta || isExternalBeta }
     @Published private(set) var entries: [Entry] = []
     @Published private(set) var selectedIndex: Int?
     private let defaults: UserDefaults
@@ -50,13 +54,17 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         let bundleID = bundle.bundleIdentifier
         let internalTesting = bundle.object(forInfoDictionaryKey: "TFInternalTestingOnly") as? Bool == true
         let beta = allowsBetaNodes(channel: channel, profile: profile, bundleID: bundleID, internalTesting: internalTesting)
+        let external = !internalTesting && channel == "beta" && profile == "beta" && bundleID == "com.gcsa.aegis"
+        let externalData = external ? bundle.url(forResource: "AegisExternalBetaNodes", withExtension: "json").map {
+            (try? Data(contentsOf: $0, options: .mappedIfSafe)) ?? Data()
+        } : nil
         let resourceName = beta ? "AegisPrivateBetaTestNodes" : "AegisAlphaTestNodes"
         let isEligible = beta || allowsPackagedNodes(channel: channel, profile: profile, bundleID: bundleID)
         let resource = isEligible ? bundle.url(forResource: resourceName, withExtension: "json") : nil
         // A present but unreadable resource remains configured and fails closed.
         let data = resource.map { (try? Data(contentsOf: $0, options: .mappedIfSafe)) ?? Data() }
         return .init(channel: channel, profile: profile, bundleID: bundleID, data: beta ? nil : data,
-                     privateBetaData: beta ? data : nil, internalTesting: internalTesting, defaults: defaults)
+                     privateBetaData: beta ? data : nil, externalBetaData: externalData, internalTesting: internalTesting, defaults: defaults)
     }
 
     private static func allowsPackagedNodes(channel: String?, profile: String?, bundleID: String?) -> Bool {
@@ -68,18 +76,23 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         channel == "beta" && profile == "beta" && bundleID == "com.gcsa.aegis" && internalTesting
     }
 
-    init(channel: String?, profile: String?, bundleID: String?, data: Data?, privateBetaData: Data? = nil,
+    init(channel: String?, profile: String?, bundleID: String?, data: Data?, privateBetaData: Data? = nil, externalBetaData: Data? = nil,
          internalTesting: Bool = false, defaults: UserDefaults) {
         self.defaults = defaults
         isPrivateBeta = Self.allowsBetaNodes(channel: channel, profile: profile, bundleID: bundleID,
                                            internalTesting: internalTesting) && privateBetaData != nil
+        isExternalBeta = !internalTesting && channel == "beta" && profile == "beta" && bundleID == "com.gcsa.aegis" && externalBetaData != nil
         let alphaData = Self.allowsPackagedNodes(channel: channel, profile: profile, bundleID: bundleID) ? data : nil
-        let resource = isPrivateBeta ? privateBetaData : alphaData
+        let resource = isExternalBeta ? externalBetaData : (isPrivateBeta ? privateBetaData : alphaData)
         isConfigured = resource != nil
         guard let resource, resource.count <= 131_500 else { return }
         let decoder = JSONDecoder()
         let inputs: [PackagedRoute]
-        if isPrivateBeta {
+        if isExternalBeta {
+            guard let routes = try? decoder.decode([PackagedRoute].self, from: resource),
+                  routes.allSatisfy({ $0.source == nil && ($0.quotaBytes ?? 1) > 0 }) else { return }
+            inputs = routes
+        } else if isPrivateBeta {
             guard let routes = try? decoder.decode([PackagedRoute].self, from: resource),
                   routes.first?.source == .panel, routes.allSatisfy({ $0.source != nil }) else { return }
             inputs = routes
@@ -104,11 +117,11 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
                 subscriptionIdentity = user
             }
             // Only a distinct signed test identity can run independently of the default subscription.
-            let usesSubscription = user == subscriptionIdentity
-            guard isPrivateBeta || usesSubscription else { return }
+            let usesSubscription = !isExternalBeta && user == subscriptionIdentity
+            guard isBetaCatalogue || usesSubscription else { return }
             loaded.append(node)
             displayed.append(Entry(id: index, protocolName: node.protocolDisplayName, source: input.source,
-                                   usesSubscription: usesSubscription))
+                                   usesSubscription: usesSubscription, quotaBytes: isExternalBeta ? input.quotaBytes : nil))
         }
         fingerprint = SHA256.hash(data: resource).map { String(format: "%02x", $0) }.joined()
         candidates = loaded
@@ -173,7 +186,7 @@ enum AccessThreeXUIWebEntry {
         verifiedCore: (any AccessEmbeddedCoreControlling)? = nil,
         retireDocuments: @escaping @MainActor (String, @escaping @MainActor () -> Void) -> Void
     ) -> any AccessProxyEntryPublishing {
-        guard usage.isSelected, usage.managesConnections else { return AccessFailClosedProxyEntryPublisher() }
+        guard alphaNodes?.isExternalBeta == true || (usage.isSelected && usage.managesConnections) else { return AccessFailClosedProxyEntryPublisher() }
         if let alphaNodes, alphaNodes.isConfigured {
             guard alphaNodes.enablesWebsiteAcceleration,
                   let core = verifiedCore ?? (try? AccessGoEmbeddedCore()) else {

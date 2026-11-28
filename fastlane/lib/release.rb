@@ -321,10 +321,14 @@ module AegisRelease
     def package_ios(archive_args = nil)
       # Consume private values before any build subprocess receives its environment.
       enabled = ENV.delete('AEGIS_IOS_BETA_TEST_NODE_ENABLED').to_s
+      external = ENV.delete('AEGIS_IOS_EXTERNAL_BETA') == 'true'
+      external_nodes = ENV.delete('AEGIS_IOS_EXTERNAL_BETA_NODES_BASE64').to_s
       secrets = %w[AEGIS_IOS_TEST_NODE_BASE64 AEGIS_IOS_TEST_SUBSCRIPTION_BASE64 AEGIS_IOS_BETA_CATALOGUE_BASE64].to_h do |key|
         [key, ENV.delete(key).to_s]
       end
       AegisRelease.require!(%w[true false].include?(enabled) || enabled.empty?, 'Invalid private Beta input switch')
+      AegisRelease.require!(external ? (enabled == 'true' && secrets.values.all?(&:empty?) && !external_nodes.empty?) : external_nodes.empty?,
+                            'External Beta requires only its dedicated node input')
       unless enabled == 'true'
         AegisRelease.require!(secrets.values.all?(&:empty?), 'Private Beta inputs require explicit opt-in')
         return package_ios_impl(archive_args)
@@ -335,6 +339,14 @@ module AegisRelease
       FileUtils.mkdir_p(request.directory)
       Dir.mktmpdir('private-beta-', request.directory) do |private_dir|
         helper = File.join(request.root, 'scripts/release/private-beta-inputs.py')
+        if external
+          run('python3', helper, 'stage-external', '--directory', private_dir, env: { 'AEGIS_IOS_EXTERNAL_BETA_NODES_BASE64' => external_nodes })
+          @external_beta = true
+          @private_beta_xcargs = ['AEGIS_EXTERNAL_BETA_NODES_FILE=' + File.join(private_dir, 'nodes.json')].shelljoin
+          paths, details = package_ios_impl(archive_args)
+          run('python3', helper, 'verify-external', '--directory', private_dir, '--ipa', paths.first)
+          return [paths, details.merge('privateBetaTestNode' => true, 'externalBetaNodes' => true)]
+        end
         run('python3', helper, 'stage', '--directory', private_dir, env: secrets)
         catalogue = File.join(private_dir, 'catalogue.json')
         has_catalogue = File.file?(catalogue)
@@ -348,6 +360,7 @@ module AegisRelease
                               'privateBetaTestCatalogue' => has_catalogue)]
       ensure
         @private_beta_xcargs = nil
+        @external_beta = false
       end
     end
 
@@ -368,7 +381,7 @@ module AegisRelease
       end
       name = "Aegis-#{request.profile}-#{request.version}-#{request.build}-ios.ipa"
       private_beta = !@private_beta_xcargs.nil?
-      internal_testing_only = request.profile == 'alpha' || private_beta
+      internal_testing_only = request.profile == 'alpha' || (private_beta && !@external_beta)
       admit_source!
       @fastlane.build_app(project: project, scheme: 'Aegis-Release', configuration: 'Release', clean: true,
                          destination: 'generic/platform=iOS', output_directory: request.directory, output_name: name,
@@ -384,7 +397,7 @@ module AegisRelease
       verify_bundled_geosite(work)
       ipa = File.join(request.directory, name)
       run('python3', firebase_script, 'verify-ipa', *firebase_args, '--artifact', ipa)
-      audience_args = private_beta ? ['--private-beta'] : []
+      audience_args = private_beta ? [@external_beta ? '--external-beta' : '--private-beta'] : []
       run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build,
           request.profile, *audience_args)
       certificate = required('AEGIS_IOS_CERT_SHA1')
@@ -521,7 +534,7 @@ module AegisRelease
         asset = receipt.fetch('assets').find { |a| a['name'].end_with?('.ipa') }
         path = File.join(request.directory, asset.fetch('name'))
         details = receipt.fetch('details')
-        audience = details['privateBetaTestNode'] == true ? ['--private-beta'] : []
+        audience = details['privateBetaTestNode'] == true ? [details['externalBetaNodes'] ? '--external-beta' : '--private-beta'] : []
         run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), path, request.version, request.build,
             request.profile, *audience)
         verification_args = ['--team', details.fetch('appleTeamId'), '--source-root', request.root]

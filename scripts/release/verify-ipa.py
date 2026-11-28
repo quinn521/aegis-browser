@@ -9,10 +9,13 @@ from safari_manifest import verify as verify_safari_manifest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "licenses"))
 import third_party_notices as notices
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apps/ios/scripts"))
+import external_beta_nodes
+
 APP_ID = "com.gcsa.aegis"
 
 
-def verify(path, version, build, release_profile=None, *, private_alpha_directory=None, private_beta=False):
+def verify(path, version, build, release_profile=None, *, private_alpha_directory=None, private_beta=False, external_beta=False):
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         roots = [n for n in names if n.startswith("Payload/") and n.endswith(".app/Info.plist") and n.count("/") == 2]
@@ -22,6 +25,11 @@ def verify(path, version, build, release_profile=None, *, private_alpha_director
         if archive.getinfo(root + "Info.plist").file_size > 1024 * 1024:
             raise ValueError("Unexpectedly large Info.plist")
         main_info = plistlib.loads(archive.read(root + "Info.plist"))
+        if external_beta and (private_beta or private_alpha_directory is not None or release_profile != 'beta'
+                              or main_info.get('AegisAccessReleaseChannel') != 'beta'
+                              or main_info.get('TFInternalTestingOnly', False) is not False):
+            raise ValueError('External Beta nodes require an externally signed Beta main app')
+        external_beta_nodes.verify_archive(archive, root, external_beta)
         if private_alpha_directory is not None:
             from private_alpha_inputs import verify_resources
 
@@ -79,10 +87,11 @@ if __name__ == "__main__":
     parser.add_argument("release_profile", nargs="?")
     parser.add_argument("--private-alpha-directory", type=Path)
     parser.add_argument("--private-beta", action="store_true")
+    parser.add_argument("--external-beta", action="store_true")
     args = parser.parse_args()
     try:
         verify(args.path, args.version, args.build, args.release_profile,
-               private_alpha_directory=args.private_alpha_directory, private_beta=args.private_beta)
+               private_alpha_directory=args.private_alpha_directory, private_beta=args.private_beta, external_beta=args.external_beta)
         print("IPA application and extension identities verified")
     except (ValueError, KeyError, OSError, zipfile.BadZipFile) as error:
         if args.private_alpha_directory is not None:

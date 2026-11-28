@@ -58,9 +58,9 @@ struct AccessUsagePage: View {
                         }
                     }
                 }
-                if alphaNodes.isPrivateBeta, alphaNodes.selectedEntry?.usesSubscription != true {
+                if alphaNodes.isBetaCatalogue, alphaNodes.selectedEntry?.usesSubscription != true {
                     Section("流量管理") {
-                        AccessUnavailableUsage()
+                        AccessUnavailableUsage(quotaBytes: alphaNodes.selectedEntry?.quotaBytes)
                     }
                 } else {
                     AccessSubscriptionUsageView(session: subscription, usesAlphaNodeSelection: alphaNodes.isConfigured,

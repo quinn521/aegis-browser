@@ -134,7 +134,9 @@ def validate_central_entitlements(signed, requested, identifier, team, profile_e
 
 
 def verify(ipa, version, build, profile, team, certificate_sha1, profiles, source_root, *,
-           cloud_poc=False, private_beta=False, strict_entitlements=False, private_alpha_directory=None):
+           cloud_poc=False, private_beta=False, strict_entitlements=False, private_alpha_directory=None, external_beta=False):
+    if external_beta and (profile != 'beta' or cloud_poc or private_beta or private_alpha_directory is not None):
+        raise ValueError('External Beta nodes require manual external Beta signing')
     if private_beta and (profile != 'beta' or cloud_poc):
         raise ValueError('Private Beta verification requires the manual Beta profile')
     if private_alpha_directory is not None and (profile != 'alpha' or cloud_poc or private_beta):
@@ -161,6 +163,8 @@ def verify(ipa, version, build, profile, team, certificate_sha1, profiles, sourc
         structure = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(structure)
         alpha = {} if private_alpha_directory is None else {'private_alpha_directory': private_alpha_directory}
+        if external_beta:
+            alpha["external_beta"] = True
         structure.verify(ipa, version, build, profile, private_beta=private_beta, **alpha)
         with tempfile.TemporaryDirectory(prefix="aegis-ios-verification-") as temporary:
             root = Path(temporary)
@@ -241,6 +245,7 @@ def main():
     parser.add_argument("--source-root", required=True)
     parser.add_argument("--private-beta", action="store_true")
     parser.add_argument("--private-alpha-directory", type=Path)
+    parser.add_argument("--external-beta", action="store_true")
     options = parser.parse_args()
     try:
         if options.signing_mode == 'manual' and (not options.certificate_sha1 or not options.profiles_json):
@@ -250,7 +255,7 @@ def main():
         result = verify(options.ipa, options.version, options.build, options.profile, options.team,
                         options.certificate_sha1, json.loads(options.profiles_json) if options.profiles_json else None,
                         options.source_root, cloud_poc=options.signing_mode == 'cloud', private_beta=options.private_beta,
-                        private_alpha_directory=options.private_alpha_directory)
+                        private_alpha_directory=options.private_alpha_directory, external_beta=options.external_beta)
         if options.signing_mode == 'cloud':
             expected = json.loads(options.expected_verification.read_text())
             if any(result[key] != expected[key] for key in ['ipaSha256', 'version', 'build', 'profile', 'bundles']):

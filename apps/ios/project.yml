@@ -129,8 +129,11 @@ targets:
           - $(AEGIS_PRIVATE_BETA_NODES_FILE)
           - $(AEGIS_PRIVATE_TEST_NODE_FILE)
           - $(AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE)
+          - $(SRCROOT)/scripts/external_beta_nodes.py
+          - $(AEGIS_EXTERNAL_BETA_NODES_FILE)
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisPrivateBetaTestNodes.json
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/AegisExternalBetaNodes.json
         basedOnDependencyAnalysis: false
       - name: Select Aegis Firebase registration
         script: |
@@ -155,6 +158,7 @@ targets:
       base:
         AEGIS_PRIVATE_ALPHA_NODES_FILE: /dev/null
         AEGIS_PRIVATE_BETA_NODES_FILE: /dev/null
+        AEGIS_EXTERNAL_BETA_NODES_FILE: /dev/null
         AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE: /dev/null
         AEGIS_PRIVATE_TEST_NODE_FILE: /dev/null
         OTHER_LDFLAGS: "$(inherited) -ObjC -lresolv"

@@ -121,7 +121,7 @@ struct AegisApp: App {
         }
         let channel = AccessProductChannel.resolve()
         let alphaAcceleration = alphaNodes.enablesWebsiteAcceleration
-        let betaAcceleration = alphaNodes.isPrivateBeta && alphaAcceleration
+        let betaAcceleration = alphaNodes.isBetaCatalogue && alphaAcceleration
         let regionalAcceleration = channel == .dev || (channel == .alpha && alphaAcceleration) || betaAcceleration
         let geoSiteCache = regionalAcceleration ? Self.makeGeoSiteCache(isUITest: isTest) : nil
 #if DEBUG && targetEnvironment(simulator)

@@ -22,6 +22,7 @@ MAX_SECRET_LENGTH = 48 * 1024
 IOS_SCRIPTS = Path(__file__).resolve().parents[2] / 'apps/ios/scripts'
 sys.path.insert(0, str(IOS_SCRIPTS))
 import private_beta_nodes as catalogue
+import external_beta_nodes
 
 
 def run_live_quota(configuration):
@@ -207,7 +208,7 @@ def verify_live_ipa(ipa, requires_catalogue=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('operation', choices=('stage', 'verify', 'quota', 'verify-live'))
+    parser.add_argument('operation', choices=('stage', 'verify', 'quota', 'verify-live', 'stage-external', 'verify-external'))
     parser.add_argument('--directory', type=Path)
     parser.add_argument('--ipa', type=Path)
     parser.add_argument('--live-quota', action='store_true')
@@ -216,7 +217,17 @@ if __name__ == '__main__':
     try:
         if args.operation in ('stage', 'verify') and args.directory is None:
             raise ValueError('Directory required')
-        if args.operation == 'quota':
+        if args.operation == 'stage-external':
+            raw = base64.b64decode(os.environ['AEGIS_IOS_EXTERNAL_BETA_NODES_BASE64'], validate=True)
+            canonical = external_beta_nodes.canonicalize(raw)
+            with os.fdopen(os.open(args.directory / 'nodes.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as out:
+                out.write(canonical)
+        elif args.operation == 'verify-external':
+            with zipfile.ZipFile(args.ipa) as archive:
+                data = external_beta_nodes.verify_archive(archive, 'Payload/Aegis.app/', True)
+            if args.directory and data != (args.directory / 'nodes.json').read_bytes():
+                raise ValueError('External Beta node catalogue differs from signing input')
+        elif args.operation == 'quota':
             raw = sys.stdin.buffer.read(8193)
             if len(raw) > 8192:
                 raise ValueError('Oversized quota configuration')

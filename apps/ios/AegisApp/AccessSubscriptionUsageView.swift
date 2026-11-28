@@ -93,9 +93,17 @@ struct AccessSubscriptionUsageView: View {
 }
 
 struct AccessUnavailableUsage: View {
+    var quotaBytes: Int64? = nil
+
     var body: some View {
         LabeledContent("总用量") { value }.accessibilityIdentifier("access-usage-used")
-        LabeledContent("总额度") { value }.accessibilityIdentifier("access-usage-quota")
+        LabeledContent("总额度") {
+            if let quotaBytes {
+                Text(verbatim: ByteCountFormatter.string(fromByteCount: quotaBytes, countStyle: .decimal))
+            } else {
+                value
+            }
+        }.accessibilityIdentifier("access-usage-quota")
         LabeledContent("剩余") { value }.accessibilityIdentifier("access-usage-remaining")
         LabeledContent("上传") { value }.accessibilityIdentifier("access-usage-uploaded")
         LabeledContent("下载") { value }.accessibilityIdentifier("access-usage-downloaded")

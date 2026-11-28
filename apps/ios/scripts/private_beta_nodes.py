@@ -53,6 +53,16 @@ def install(channel, source, anchor, subscription, output):
 
 if __name__ == '__main__':
     try:
+        external = os.environ.get('SCRIPT_INPUT_FILE_6', '/dev/null')
+        external_output = os.environ.get('SCRIPT_OUTPUT_FILE_1')
+        if external_output:
+            Path(external_output).unlink(missing_ok=True)
+        if external != '/dev/null':
+            import external_beta_nodes
+            if (not external_output or os.environ.get('AEGIS_ACCESS_RELEASE_CHANNEL') != 'beta'
+                    or any(os.environ[f'SCRIPT_INPUT_FILE_{index}'] != '/dev/null' for index in (2, 3, 4))):
+                raise ValueError('Invalid external Beta configuration')
+            Path(external_output).write_bytes(external_beta_nodes.canonicalize(read_private(external, MAX_RESOURCE_BYTES)))
         install(os.environ.get('AEGIS_ACCESS_RELEASE_CHANNEL'), os.environ['SCRIPT_INPUT_FILE_2'],
                 os.environ['SCRIPT_INPUT_FILE_3'], os.environ['SCRIPT_INPUT_FILE_4'],
                 Path(os.environ['SCRIPT_OUTPUT_FILE_0']))

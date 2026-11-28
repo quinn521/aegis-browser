@@ -111,6 +111,13 @@ def require_private_beta_upload():
         raise ValueError('Private Beta requires a first-attempt manual Package and upload to TestFlight')
 
 
+def protected_beta_audience_matches(details):
+    if os.environ.get('AEGIS_IOS_EXTERNAL_BETA') == 'true':
+        return details.get('externalBetaNodes') is True and details.get('testFlightInternalTestingOnly') is False
+    return (not details.get('externalBetaNodes') and details.get('privateBetaQuota') is True
+            and details.get('testFlightInternalTestingOnly') is True)
+
+
 def private_beta_manifest(digest, root=None):
     root = directory() if root is None else root
     sha, tree = source()
@@ -121,8 +128,7 @@ def private_beta_manifest(digest, root=None):
             or manifest.get('repository') != durable.REPOSITORY or manifest.get('platform') != 'ios'
             or any(manifest.get(k) != os.environ['RELEASE_'+k.upper()] for k in ('profile', 'version', 'build'))
             or manifest['details'].get('privateBetaTestNode') is not True
-            or manifest['details'].get('privateBetaQuota') is not True
-            or manifest['details'].get('testFlightInternalTestingOnly') is not True):
+            or not protected_beta_audience_matches(manifest['details'])):
         raise ValueError('Private Beta manifest identity differs')
     return manifest
 
@@ -276,7 +282,8 @@ def private_beta_preflight():
         raise ValueError('Private Beta can only run the Apple upload stage')
     ipa = next(asset['name'] for asset in manifest['assets'] if asset['name'].endswith('.ipa'))
     catalogue = ['--require-catalogue'] if manifest['details'].get('privateBetaTestCatalogue') is True else []
-    run(sys.executable, Path(__file__).with_name('private-beta-inputs.py'), 'verify-live',
+    operation = 'verify-external' if manifest['details'].get('externalBetaNodes') else 'verify-live'
+    run(sys.executable, Path(__file__).with_name('private-beta-inputs.py'), operation,
         '--ipa', directory() / ipa, *catalogue, environment={})
     output('manifest_sha256', digest)
 
