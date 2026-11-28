@@ -590,3 +590,8 @@
 0590-access-test-retirement-proof-before-fresh-registration.patch
 0591-access-clean-reaped-core-staging-and-verify-apply.patch
 0592-access-check-recovered-apply-publication.patch
+0593-access-validate-shares-with-common-fixtures.patch
+0594-access-check-dev-config-before-staging.patch
+0595-access-isolate-xray-config-budget-regression.patch
+0596-access-check-all-shared-vless-profile-vectors.patch
+0597-access-verify-dev-share-cap.patch

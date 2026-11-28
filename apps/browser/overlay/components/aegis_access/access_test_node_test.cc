@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "components/aegis_access/access_test_node_test_fixture.h"
+#include "share_link_vectors.inc"
 
 namespace {
 
@@ -175,6 +176,30 @@ int main() {
   ExpectRejection(kSyntheticWebSocketTlsShare, kUnsupported);
   constexpr auto kDev = AccessTestNodeImportMode::kAllowWebSocketTls;
   constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
+  for (const auto& [profile, share] : aegis_access::test::kSharedShareLinks) {
+    const auto parsed = ParseAccessTestNodeShare(share, kExtended);
+    const bool expected_ws = profile == "vless.ws.tls";
+    const bool expected_tcp_tls = profile == "vless.raw.tls";
+    const bool expected_grpc = profile == "vless.grpc.reality";
+    if (!parsed.node ||
+        (profile != "vless.raw.reality" && !expected_ws && !expected_tcp_tls &&
+         !expected_grpc) ||
+        parsed.node->web_socket_tls.has_value() != expected_ws ||
+        parsed.node->tcp_tls_vision != expected_tcp_tls ||
+        parsed.node->grpc_reality_service_name.has_value() != expected_grpc) {
+      std::cerr << "Shared fixture did not produce its expected profile: "
+                << profile << '\n';
+      return 1;
+    }
+  }
+  for (const auto& [profile, share] :
+       aegis_access::test::kRejectedSharedShareLinks) {
+    if (ParseAccessTestNodeShare(share, kExtended).node) {
+      std::cerr << "Shared fixture admitted a forbidden query: "
+                << profile << '\n';
+      return 1;
+    }
+  }
   const auto ws = ParseAccessTestNodeShare(kSyntheticWebSocketTlsShare, kDev);
   assert(ws.node && ws.node->web_socket_tls && ws.node->port == 8443);
   assert(ws.node->web_socket_tls->host == "edge.example.test");
@@ -245,11 +270,12 @@ int main() {
   std::string at_share_limit =
       ReplaceIn(WithoutFragment(kSyntheticTestNodeShare), "&type=tcp", "");
   at_share_limit += "&spx=/strict";
-  assert(at_share_limit.size() < aegis_access::kMaxAccessTestNodeShareBytes);
+  assert(at_share_limit.size() < aegis_access::kMaxExtendedAccessTestNodeShareBytes);
   at_share_limit.append(
-      aegis_access::kMaxAccessTestNodeShareBytes - at_share_limit.size(), 'x');
+      aegis_access::kMaxExtendedAccessTestNodeShareBytes - at_share_limit.size(), 'x');
   const auto at_limit = ParseAccessTestNodeShare(at_share_limit, kExtended);
   assert(at_limit.node);
+  assert(!ParseAccessTestNodeShare(at_share_limit).node);
   const std::string reconstructed =
       ReplaceIn(at_share_limit, "?flow=", "?type=tcp&flow=");
   assert(ParseAccessTestNodeShare(reconstructed, kExtended).error == kInvalid);

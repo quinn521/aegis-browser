@@ -1,0 +1,167 @@
+From de70fe9697b99d35043fea6acc4ed05b0cad7171 Mon Sep 17 00:00:00 2001
+From: Aegis desktop verification <aegis@gcsa.local>
+Date: Fri, 27 Nov 2026 12:55:04 +0800
+Subject: [PATCH] test(access): verify macOS share imports with common fixtures
+
+---
+ .../aegis/access/access_options_service.cc    |  2 +-
+ .../access/access_test_node_qr_mac_test.mm    | 14 ++++++++++
+ .../browser/resources/aegis/access_options.ts |  1 +
+ components/aegis_access/access_test_node.cc   |  9 ++++---
+ components/aegis_access/access_test_node.h    |  1 +
+ .../aegis_access/access_test_node_test.cc     | 26 +++++++++++++++++--
+ 6 files changed, 47 insertions(+), 6 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index eaf45b7f5e4279a5ed1560b872a14bc718f8aee9..0495d828e98a7b51d5ee97394bc9d418c4607367 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -463,7 +463,7 @@ void AccessOptionsService::PreviewTestNodeText(
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   const auto generation = StartTestNodePreview(editor, callback);
+   if (!generation) return;
+-  if (share.size() > aegis_access::kMaxAccessTestNodeShareBytes) {
++  if (share.size() > aegis_access::kMaxExtendedAccessTestNodeShareBytes) {
+     worker_.AsyncCall(&AccessOptionsWorker::Reject)
+         .WithArgs(editor, TestNodePreviewStatus::kInvalidShare)
+         .Then(base::BindOnce(&AccessOptionsService::OnTestNodePreview,
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+index 23c4fad30b76f6ae06cf9c1ec3c12431bd78495f..6e446d954acd9e545c331dbd657f81ed8e0c9896 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+@@ -11,6 +11,7 @@
+ #include <utility>
+ 
+ #include "components/aegis_access/access_test_node_test_fixture.h"
++#include "share_link_vectors.inc"
+ 
+ namespace {
+ 
+@@ -83,6 +84,19 @@ int main() {
+     assert(scanned.node == typed.node);
+     using namespace aegis_access::test;
+     constexpr auto extended = AccessTestNodeImportMode::kAllowExtendedVless;
++    for (const auto& vector : kSharedShareLinks) {
++      const auto text = ParseAccessTestNodeShareMac(vector.share, extended);
++      const auto qr = Decode(DrawCodes(MakeCode(vector.share)), extended);
++      assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
++      assert(qr.node == text.node);
++    }
++    for (const auto& vector : kRejectedSharedShareLinks) {
++      const auto text = ParseAccessTestNodeShareMac(vector.share, extended);
++      const auto qr = Decode(DrawCodes(MakeCode(vector.share)), extended);
++      assert(!text.node && !qr.node);
++      assert(qr.status == AccessTestNodeQrStatus::kInvalidShare ||
++             qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound);
++    }
+     for (const auto vector : {kSyntheticPinnedRealityVisionShare,
+                               kSyntheticWebSocketTlsShare,
+                               kSyntheticWebSocketTlsQueryShare,
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..37cf116e981d4452b08ae8df0a6f861217c2bdc5 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -535,6 +535,7 @@ void sendWithPromise<{
+   canActivateAutomatically = canActivate && result.testAutoProtocol === true;
+   canImportExtendedVless = result.testExtendedVless === true;
+   if (canImportExtendedVless) {
++    link.maxLength = 8192;
+     document.querySelector('#share-label')!.textContent = 'Node share link';
+     document.querySelector('#share-hint')!.textContent =
+         'Paste one VLESS link or choose its QR image. Supported modes are ' +
+diff --git a/components/aegis_access/access_test_node.cc b/components/aegis_access/access_test_node.cc
+index 8c67793f67743fd97e9ef8f77553fe20a6fde05c..beb08c2cc5ca5ed5ab7288cbd8b4d3f9d1e71406 100644
+--- a/components/aegis_access/access_test_node.cc
++++ b/components/aegis_access/access_test_node.cc
+@@ -697,8 +697,11 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+     std::string_view share,
+     AccessTestNodeImportMode mode,
+     AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
+-  return ParseShare(share, mode, kMaxAccessTestNodeShareBytes,
+-                    canonicalize_idna);
++  const size_t max_share_bytes =
++      mode == AccessTestNodeImportMode::kAllowExtendedVless
++          ? kMaxExtendedAccessTestNodeShareBytes
++          : kMaxAccessTestNodeShareBytes;
++  return ParseShare(share, mode, max_share_bytes, canonicalize_idna);
+ }
+ 
+ AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
+@@ -707,7 +710,7 @@ AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
+   // Percent encoding uses at most three bytes per input byte. Allow room for
+   // canonical defaults and a dial hostname normalized to an ASCII A-label.
+   constexpr size_t kMaxNativeShareBytes =
+-      3 * kMaxAccessTestNodeShareBytes + 512;
++      3 * kMaxExtendedAccessTestNodeShareBytes + 512;
+   return ParseShare(share, mode, kMaxNativeShareBytes, nullptr);
+ }
+ 
+diff --git a/components/aegis_access/access_test_node.h b/components/aegis_access/access_test_node.h
+index 7dc6598ea28a14fc261f4f6dbfab7872ab223d85..98bbc1b22b645439e2356c7b1dda811c33aea55b 100644
+--- a/components/aegis_access/access_test_node.h
++++ b/components/aegis_access/access_test_node.h
+@@ -11,6 +11,7 @@
+ namespace aegis_access {
+ 
+ inline constexpr size_t kMaxAccessTestNodeShareBytes = 4096;
++inline constexpr size_t kMaxExtendedAccessTestNodeShareBytes = 8192;
+ 
+ enum class AccessTestNodeError {
+   kNone,
+diff --git a/components/aegis_access/access_test_node_test.cc b/components/aegis_access/access_test_node_test.cc
+index 062990c1ed4eec266d630417f5c8cfd8b3af8237..c88957c11a8247b3a2574962dbc9239a50155a4a 100644
+--- a/components/aegis_access/access_test_node_test.cc
++++ b/components/aegis_access/access_test_node_test.cc
+@@ -7,6 +7,7 @@
+ #include <utility>
+ 
+ #include "components/aegis_access/access_test_node_test_fixture.h"
++#include "share_link_vectors.inc"
+ 
+ namespace {
+ 
+@@ -175,6 +176,26 @@ int main() {
+   ExpectRejection(kSyntheticWebSocketTlsShare, kUnsupported);
+   constexpr auto kDev = AccessTestNodeImportMode::kAllowWebSocketTls;
+   constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
++  for (const auto& [profile, share] : aegis_access::test::kSharedShareLinks) {
++    const auto parsed = ParseAccessTestNodeShare(share, kExtended);
++    const bool expected_ws = profile == "vless.ws.tls";
++    if (!parsed.node ||
++        (profile != "vless.raw.reality" && !expected_ws) ||
++        parsed.node->web_socket_tls.has_value() != expected_ws ||
++        parsed.node->tcp_tls_vision || parsed.node->grpc_reality_service_name) {
++      std::cerr << "Shared fixture did not produce its expected profile: "
++                << profile << '\n';
++      return 1;
++    }
++  }
++  for (const auto& [profile, share] :
++       aegis_access::test::kRejectedSharedShareLinks) {
++    if (ParseAccessTestNodeShare(share, kExtended).node) {
++      std::cerr << "Shared fixture admitted a forbidden query: "
++                << profile << '\n';
++      return 1;
++    }
++  }
+   const auto ws = ParseAccessTestNodeShare(kSyntheticWebSocketTlsShare, kDev);
+   assert(ws.node && ws.node->web_socket_tls && ws.node->port == 8443);
+   assert(ws.node->web_socket_tls->host == "edge.example.test");
+@@ -245,11 +266,12 @@ int main() {
+   std::string at_share_limit =
+       ReplaceIn(WithoutFragment(kSyntheticTestNodeShare), "&type=tcp", "");
+   at_share_limit += "&spx=/strict";
+-  assert(at_share_limit.size() < aegis_access::kMaxAccessTestNodeShareBytes);
++  assert(at_share_limit.size() < aegis_access::kMaxExtendedAccessTestNodeShareBytes);
+   at_share_limit.append(
+-      aegis_access::kMaxAccessTestNodeShareBytes - at_share_limit.size(), 'x');
++      aegis_access::kMaxExtendedAccessTestNodeShareBytes - at_share_limit.size(), 'x');
+   const auto at_limit = ParseAccessTestNodeShare(at_share_limit, kExtended);
+   assert(at_limit.node);
++  assert(!ParseAccessTestNodeShare(at_share_limit).node);
+   const std::string reconstructed =
+       ReplaceIn(at_share_limit, "?flow=", "?type=tcp&flow=");
+   assert(ParseAccessTestNodeShare(reconstructed, kExtended).error == kInvalid);
+-- 
+2.54.0 (Apple Git-157)
+

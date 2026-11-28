@@ -284,7 +284,7 @@ TEST(AccessTestNodeNativeConfigTest, DevRealityCanonicalShareCanGrowPastLimit) {
       ":443?sni=" + node.server_name +
       "&security=reality&flow=xtls-rprx-vision&pbk=" + node.public_key +
       "&sid=" + node.short_id + "&spx=/strict?next=https%3A//assets.example/";
-  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
+  constexpr auto kMax = aegis_access::kMaxExtendedAccessTestNodeShareBytes;
   ASSERT_LT(share.size(), kMax);
   share.append(kMax - share.size(), 'x');
   const auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);

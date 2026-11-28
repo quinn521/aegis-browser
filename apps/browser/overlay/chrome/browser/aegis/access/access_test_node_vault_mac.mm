@@ -363,6 +363,17 @@ AccessTestNodeVaultStageResult AccessTestNodeVaultMac::Stage(
                               : AccessTestNodeNativeValidation::kStored;
   const auto encoded = Encode(node, validation);
   if (!encoded) return {Status::kInvalidNode, std::nullopt};
+  // A DEV preview must also fit the pinned core's stdin contract. A fixed
+  // SOCKS5 port produces the largest supported loopback inbound.
+  if (allows_extended_vless_ &&
+      !BuildAccessTestNodeCoreConfiguration(
+          node,
+          {aegis_access::AccessInboundProtocolPreference::kSocks5,
+           aegis_access::AccessInboundPortMode::kInternalFixed,
+           aegis_access::kAccessInternalFixedSocks5Port},
+          aegis_access::RegisteredProxyTransport::kSocks5)) {
+    return {Status::kInvalidNode, std::nullopt};
+  }
   auto id = base::Uuid::GenerateRandomV4().AsLowercaseString();
   const auto status = backend_->Add(service_, id, *encoded);
   if (status != Status::kOk) return {status, std::nullopt};

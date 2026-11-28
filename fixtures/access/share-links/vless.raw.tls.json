@@ -1,0 +1,5 @@
+{
+  "profileKey": "vless.raw.tls",
+  "share": "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none&host=metadata.example&security=tls&sni=tls.example&type=tcp#synthetic-tcp",
+  "rejectedQuerySuffixes": ["&allowInsecure=0", "&flow=", "&headerType=http", "&unknown=1"]
+}

@@ -225,6 +225,54 @@ TEST(AccessOptionsServiceTest, RuntimeReservationBlocksProfileUpdateUntilConfirm
   EXPECT_EQ(retried.Get().snapshot->test_profile->configuration.name, "TEST02");
 }
 
+TEST(AccessOptionsServiceTest, DevLongShareFitsCoreBeforeItIsStaged) {
+  content::BrowserTaskEnvironment environment;
+  const auto identity = AccessBuildIdentityForCurrentBuild();
+  if (identity.product != aegis_access::AccessProductChannel::kDebug ||
+      !CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kWrite)) {
+    GTEST_SKIP() << "Requires an admitted DEV build";
+  }
+  base::ScopedTempDir dir;
+  ASSERT_TRUE(dir.CreateUniqueTempDir());
+  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
+  network::mojom::NetworkContextParams params;
+  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
+  auto state = std::make_shared<SyntheticVaultState>();
+  auto options = AccessOptionsService::CreateForTesting(
+      profile.get(), std::make_unique<SyntheticVaultBackend>(state));
+  const auto editor = options->BeginTestNodeEditor();
+  ASSERT_TRUE(editor);
+
+  auto share = std::string(kSyntheticShare.substr(0, kSyntheticShare.find('#')));
+  share += "&spx=/long/";
+  share.append(5500 - share.size(), 'x');
+  base::test::TestFuture<TestNodePreviewResult> staged;
+  options->PreviewTestNodeText(*editor, share, staged.GetCallback());
+  ASSERT_EQ(staged.Get().status, TestNodePreviewStatus::kPreview);
+  ASSERT_TRUE(staged.Get().reference);
+  const auto reference = staged.Get().reference->id;
+  base::test::TestFuture<AccessTestProfileSaveResult> saved;
+  options->SaveTestNodeProfile(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
+                               "Synthetic", {}, saved.GetCallback());
+  ASSERT_EQ(saved.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
+  EXPECT_EQ(state->stored.load(), 1u);
+
+  // This share fits the Vault record. The fixed SOCKS5 configuration exceeds
+  // the pinned Xray stdin budget, so preflight must reject it before staging.
+  share.append(7900 - share.size(), 'x');
+  base::test::TestFuture<TestNodePreviewResult> oversized;
+  options->PreviewTestNodeText(*editor, share, oversized.GetCallback());
+  EXPECT_EQ(oversized.Get().status, TestNodePreviewStatus::kInvalidShare);
+  EXPECT_FALSE(oversized.Get().reference);
+  EXPECT_EQ(state->stored.load(), 1u);
+  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> read;
+  options->Read(read.GetCallback());
+  ASSERT_EQ(read.Get().status, StoreStatus::kValid);
+  ASSERT_TRUE(read.Get().value && read.Get().value->test_profile);
+  EXPECT_EQ(read.Get().value->revision, 1u);
+  EXPECT_EQ(read.Get().value->test_profile->configuration.secret_reference, reference);
+}
+
 TEST(AccessOptionsServiceTest, PreferencesOnlySaveReusesCommittedReferenceBehindFences) {
   content::BrowserTaskEnvironment environment;
   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))

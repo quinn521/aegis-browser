@@ -535,6 +535,7 @@ void sendWithPromise<{
   canActivateAutomatically = canActivate && result.testAutoProtocol === true;
   canImportExtendedVless = result.testExtendedVless === true;
   if (canImportExtendedVless) {
+    link.maxLength = 8192;
     document.querySelector('#share-label')!.textContent = 'Node share link';
     document.querySelector('#share-hint')!.textContent =
         'Paste one VLESS link or choose its QR image. Supported modes are ' +

@@ -1,0 +1,23 @@
+From 1d26cd2d3a7e74d6253551e39f977a04d91a2aa9 Mon Sep 17 00:00:00 2001
+From: Aegis verification <aegis@gcsa.local>
+Date: Sat, 28 Nov 2026 20:45:51 +0800
+Subject: [PATCH] test(access): use the extended DEV share limit
+
+Track gcsagroup/aegis-browser#252.
+---
+ .../aegis/access/access_test_node_native_config_unittest.cc     | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+index f4d4f3064df43efc058ea6cb9125105bc10823fd..795b888f3132c570b480ed2b91269ee04454956a 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+@@ -284,7 +284,7 @@ TEST(AccessTestNodeNativeConfigTest, DevRealityCanonicalShareCanGrowPastLimit) {
+       ":443?sni=" + node.server_name +
+       "&security=reality&flow=xtls-rprx-vision&pbk=" + node.public_key +
+       "&sid=" + node.short_id + "&spx=/strict?next=https%3A//assets.example/";
+-  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
++  constexpr auto kMax = aegis_access::kMaxExtendedAccessTestNodeShareBytes;
+   ASSERT_LT(share.size(), kMax);
+   share.append(kMax - share.size(), 'x');
+   const auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);

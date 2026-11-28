@@ -173,6 +173,7 @@ test('DEV text and QR previews display only the fixed transport labels', {timeou
     enabled: true, private: false, testApply: true, testExtendedVless: true,
   });
   await tick();
+  assert.equal(page.input.maxLength, 8192);
   assert.match(page.document.querySelector('#share-hint').textContent, /WebSocket\/TLS/);
   page.previewText('private-synthetic-share');
   page.previews[0].resolve({state: 'preview', protocol: 'VLESS · WebSocket · TLS'});

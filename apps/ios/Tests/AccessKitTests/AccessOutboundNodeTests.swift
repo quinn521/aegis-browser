@@ -81,6 +81,23 @@ final class AccessOutboundNodeTests: XCTestCase {
         }
     }
 
+    func testSharedShareLinksAdmitTCPVisionAndGRPCReality() throws {
+        let profiles: [AccessOutboundProfileKey] = [.vlessRawTls, .vlessGrpcReality]
+        for profile in profiles {
+            let fixture = try fixtureJSON(named: profile.rawValue)
+            XCTAssertEqual(fixture["profileKey"] as? String, profile.rawValue)
+            let share = try XCTUnwrap(fixture["share"] as? String)
+            XCTAssertEqual(try AccessOutboundNode.parseSingleShareURI(share).profileKey, profile)
+
+            let base = String(share.prefix(while: { $0 != "#" }))
+            let rejected = try XCTUnwrap(fixture["rejectedQuerySuffixes"] as? [String])
+            XCTAssertFalse(rejected.isEmpty)
+            for suffix in rejected {
+                XCTAssertThrowsError(try AccessOutboundNode.parseSingleShareURI(base + suffix), profile.rawValue)
+            }
+        }
+    }
+
     func testEnabledLoggingConfigMatchesFixtureWithLogSinkAndGeneration() throws {
         let path = "/private/var/mobile/aegis-diagnostics/fifo"
         for fixture in try fixtures() {
@@ -278,11 +295,15 @@ final class AccessOutboundNodeTests: XCTestCase {
         let embeddedConfig: [String: Any]
     }
 
-    private func fixtures() throws -> [Fixture] {
+    private func fixtureJSON(named name: String) throws -> [String: Any] {
         let bundle = Bundle(for: Self.self)
-        return try ["vless.raw.reality", "vless.ws.tls"].map { name in
-            let url = try XCTUnwrap(bundle.url(forResource: name, withExtension: "json", subdirectory: "share-links"))
-            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let url = try XCTUnwrap(bundle.url(forResource: name, withExtension: "json", subdirectory: "share-links"))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    }
+
+    private func fixtures() throws -> [Fixture] {
+        try ["vless.raw.reality", "vless.ws.tls"].map { name in
+            let root = try fixtureJSON(named: name)
             return Fixture(profileKey: try XCTUnwrap(root["profileKey"] as? String),
                            aliases: try XCTUnwrap(root["aliases"] as? [String]),
                            legacyOutboundTag: try XCTUnwrap(root["legacyOutboundTag"] as? String),

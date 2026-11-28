@@ -11,6 +11,7 @@
 namespace aegis_access {
 
 inline constexpr size_t kMaxAccessTestNodeShareBytes = 4096;
+inline constexpr size_t kMaxExtendedAccessTestNodeShareBytes = 8192;
 
 enum class AccessTestNodeError {
   kNone,

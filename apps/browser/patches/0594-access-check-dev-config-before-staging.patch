@@ -1,0 +1,175 @@
+From b1b421ead05835aa3938f630d3746ac40d6ba4b5 Mon Sep 17 00:00:00 2001
+From: Aegis desktop verification <aegis@gcsa.local>
+Date: Fri, 27 Nov 2026 13:05:58 +0800
+Subject: [PATCH] fix(access): admit DEV nodes only when their core
+ configuration fits
+
+---
+ .../access/access_options_browsertest.cc      | 19 ++++++--
+ .../aegis/access/access_options_service.cc    |  3 ++
+ .../access/access_options_service_unittest.cc | 46 +++++++++++++++++++
+ .../access/access_test_node_native_config.cc  |  3 +-
+ .../access/access_test_node_vault_mac.mm      | 11 +++++
+ 5 files changed, 78 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
+index e4622e45e8eac3e3b753654ebeced4fbd3063a39..a3a8baf93a0882847358474ceee312285426e9f7 100644
+--- a/chrome/browser/aegis/access/access_options_browsertest.cc
++++ b/chrome/browser/aegis/access/access_options_browsertest.cc
+@@ -284,6 +284,10 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+       if (prefs.state !== 'prepared' && prefs.state !== 'savedUnavailable') {
+         return 'preferences:' + prefs.state;
+       }
++      if (prefs.state === 'prepared') {
++        const revoked = await send('revokeAccessTestNode', prefs.revision, prefs.revokeToken);
++        if (revoked.state !== 'revoked') return 'revoke:' + revoked.state;
++      }
+       const committed = await send('readAccessOptions');
+       if (committed.revision !== prefs.revision) return 'revisionMismatch';
+       return [committed.revision, committed.testProfile?.protocol].join(',');
+@@ -300,7 +304,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+             aegis_access::AccessInboundProtocolPreference::kHttp);
+ 
+   // A receipt for the previous node Apply cannot clear a newly staged draft.
+-  EXPECT_EQ("saved,preview,preserved", content::EvalJs(contents, content::JsReplace(R"JS(
++  EXPECT_EQ("saved,preview,previewPending,3", content::EvalJs(contents, content::JsReplace(R"JS(
+     (async () => {
+       const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
+       const committed = await send('readAccessOptions');
+@@ -308,8 +312,13 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+       const confirmed = await send('queryAccessTestNodeApply', $2);
+       const pending = await send('applyAccessTestNodePreferences', committed.revision,
+           crypto.randomUUID(), 'socks5', 'random', '');
+-      return [confirmed.state, fresh.state,
+-        pending.state === 'previewPending' ? 'preserved' : pending.state].join(',');
++      const replacement = await send('applyAccessTestNode', committed.revision,
++          crypto.randomUUID(), 'socks5', 'random', '');
++      if (replacement.state !== 'prepared' && replacement.state !== 'savedUnavailable') {
++        return 'replacement:' + replacement.state;
++      }
++      const stored = await send('readAccessOptions');
++      return [confirmed.state, fresh.state, pending.state, stored.revision].join(',');
+     })()
+   )JS", aegis_access::test::kSyntheticTestNodeShare, operation)));
+ }
+@@ -387,6 +396,10 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+       if (preview.state !== 'preview') return preview.state;
+       const applied = await send('applyAccessTestNode', initial.revision,
+           crypto.randomUUID(), 'socks5', 'random', '');
++      if (applied.state === 'prepared') {
++        const revoked = await send('revokeAccessTestNode', applied.revision, applied.revokeToken);
++        if (revoked.state !== 'revoked') return 'revoke:' + revoked.state;
++      }
+       return applied.revision ?? applied.state;
+     })()
+   )JS", aegis_access::test::kSyntheticTestNodeShare)));
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index 0495d828e98a7b51d5ee97394bc9d418c4607367..7bbdaa464f264bd74b5c8633626d8a90f8c96fe0 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -239,6 +239,9 @@ class AccessOptionsWorker {
+   TestNodePreviewResult Stage(const std::string& editor,
+                               const aegis_access::AccessTestNode& node) {
+     auto staged = vault_.Stage(editor, node);
++    if (staged.status == AccessTestNodeVaultStatus::kInvalidNode) {
++      return {TestNodePreviewStatus::kInvalidShare};
++    }
+     if (staged.status != AccessTestNodeVaultStatus::kOk) {
+       return {staged.status == AccessTestNodeVaultStatus::kLimitReached
+                   ? TestNodePreviewStatus::kBusy
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+index c29e873777c7cf1ef8af21c8a62e6dbea9217cb7..393975f8ee8373e7a72673b7b00167ca8eeefb83 100644
+--- a/chrome/browser/aegis/access/access_options_service_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -225,6 +225,52 @@ TEST(AccessOptionsServiceTest, RuntimeReservationBlocksProfileUpdateUntilConfirm
+   EXPECT_EQ(retried.Get().snapshot->test_profile->configuration.name, "TEST02");
+ }
+ 
++TEST(AccessOptionsServiceTest, DevLongShareFitsCoreBeforeItIsStaged) {
++  content::BrowserTaskEnvironment environment;
++  const auto identity = AccessBuildIdentityForCurrentBuild();
++  if (identity.product != aegis_access::AccessProductChannel::kDebug ||
++      !CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kWrite)) {
++    GTEST_SKIP() << "Requires an admitted DEV build";
++  }
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
++  network::mojom::NetworkContextParams params;
++  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
++  auto state = std::make_shared<SyntheticVaultState>();
++  auto options = AccessOptionsService::CreateForTesting(
++      profile.get(), std::make_unique<SyntheticVaultBackend>(state));
++  const auto editor = options->BeginTestNodeEditor();
++  ASSERT_TRUE(editor);
++
++  auto share = std::string(kSyntheticShare.substr(0, kSyntheticShare.find('#')));
++  share += "&spx=/long/";
++  share.append(5500 - share.size(), 'x');
++  base::test::TestFuture<TestNodePreviewResult> staged;
++  options->PreviewTestNodeText(*editor, share, staged.GetCallback());
++  ASSERT_EQ(staged.Get().status, TestNodePreviewStatus::kPreview);
++  ASSERT_TRUE(staged.Get().reference);
++  const auto reference = staged.Get().reference->id;
++  base::test::TestFuture<AccessTestProfileSaveResult> saved;
++  options->SaveTestNodeProfile(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++                               "Synthetic", {}, saved.GetCallback());
++  ASSERT_EQ(saved.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
++  EXPECT_EQ(state->stored.load(), 1u);
++
++  share.append(aegis_access::kMaxExtendedAccessTestNodeShareBytes - share.size(), 'x');
++  base::test::TestFuture<TestNodePreviewResult> oversized;
++  options->PreviewTestNodeText(*editor, share, oversized.GetCallback());
++  EXPECT_EQ(oversized.Get().status, TestNodePreviewStatus::kInvalidShare);
++  EXPECT_FALSE(oversized.Get().reference);
++  EXPECT_EQ(state->stored.load(), 1u);
++  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> read;
++  options->Read(read.GetCallback());
++  ASSERT_EQ(read.Get().status, StoreStatus::kValid);
++  ASSERT_TRUE(read.Get().value && read.Get().value->test_profile);
++  EXPECT_EQ(read.Get().value->revision, 1u);
++  EXPECT_EQ(read.Get().value->test_profile->configuration.secret_reference, reference);
++}
++
+ TEST(AccessOptionsServiceTest, PreferencesOnlySaveReusesCommittedReferenceBehindFences) {
+   content::BrowserTaskEnvironment environment;
+   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.cc b/chrome/browser/aegis/access/access_test_node_native_config.cc
+index c5cfe526d6b2aefd91b8de9b16564892703d0eb6..b7fe53a3c3676511f7614c7bb474e71861077e29 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config.cc
+@@ -39,7 +39,8 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+   const bool fresh_dev =
+       validation == AccessTestNodeNativeValidation::kFreshDevImport;
+   if ((legacy_ws && fresh_dev) ||
+-      node.spider_x.size() > aegis_access::kMaxAccessTestNodeShareBytes) {
++      node.spider_x.size() >
++          aegis_access::kMaxExtendedAccessTestNodeShareBytes) {
+     return std::nullopt;
+   }
+   auto mode = fresh_dev ? Mode::kAllowExtendedVless : Mode::kRealityOnly;
+diff --git a/chrome/browser/aegis/access/access_test_node_vault_mac.mm b/chrome/browser/aegis/access/access_test_node_vault_mac.mm
+index 6f2dc95dfaaa301680cde542abfcc05d3bd07b2f..d8bd3f201d372f0fae4612b1a2d6c7ba0d508bc7 100644
+--- a/chrome/browser/aegis/access/access_test_node_vault_mac.mm
++++ b/chrome/browser/aegis/access/access_test_node_vault_mac.mm
+@@ -363,6 +363,17 @@ bool RequiresDevChannel(const Node& node) {
+                               : AccessTestNodeNativeValidation::kStored;
+   const auto encoded = Encode(node, validation);
+   if (!encoded) return {Status::kInvalidNode, std::nullopt};
++  // A DEV preview must also fit the pinned core's stdin contract. A fixed
++  // SOCKS5 port produces the largest supported loopback inbound.
++  if (allows_extended_vless_ &&
++      !BuildAccessTestNodeCoreConfiguration(
++          node,
++          {aegis_access::AccessInboundProtocolPreference::kSocks5,
++           aegis_access::AccessInboundPortMode::kInternalFixed,
++           aegis_access::kAccessInternalFixedSocks5Port},
++          aegis_access::RegisteredProxyTransport::kSocks5)) {
++    return {Status::kInvalidNode, std::nullopt};
++  }
+   auto id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+   const auto status = backend_->Add(service_, id, *encoded);
+   if (status != Status::kOk) return {status, std::nullopt};
+-- 
+2.54.0 (Apple Git-157)
+
