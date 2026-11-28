@@ -28,38 +28,44 @@ interface ApplyResult extends Connection {
   reason?: string;
 }
 
+function requiredElement<T extends Element>(selector: string, root: ParentNode = document): T {
+  const element = root.querySelector<T>(selector);
+  if (!element) throw new Error('Missing Access Options element ' + selector);
+  return element;
+}
+
 const maxImageBytes = 16 * 1024 * 1024;
-const form = document.querySelector<HTMLFormElement>('#test-node-form')!;
-const fields = document.querySelector<HTMLFieldSetElement>('#test-node-fields')!;
-const link = document.querySelector<HTMLInputElement>('#node-share')!;
-const image = document.querySelector<HTMLInputElement>('#node-image')!;
-const status = document.querySelector<HTMLParagraphElement>('#node-status')!;
-const discard = document.querySelector<HTMLButtonElement>('#discard-preview')!;
-const apply = document.querySelector<HTMLButtonElement>('#apply-node')!;
-const revoke = document.querySelector<HTMLButtonElement>('#revoke-node')!;
-const refresh = document.querySelector<HTMLButtonElement>('#refresh-connection')!;
-const review = document.querySelector<HTMLButtonElement>('#review-revision')!;
-const checkApply = document.querySelector<HTMLButtonElement>('#check-apply-result')!;
-const availability = document.querySelector<HTMLElement>('#apply-availability')!;
-const nodePreview = document.querySelector<HTMLElement>('#node-preview')!;
+const form = requiredElement<HTMLFormElement>('#test-node-form');
+const fields = requiredElement<HTMLFieldSetElement>('#test-node-fields');
+const link = requiredElement<HTMLInputElement>('#node-share');
+const image = requiredElement<HTMLInputElement>('#node-image');
+const status = requiredElement<HTMLParagraphElement>('#node-status');
+const discard = requiredElement<HTMLButtonElement>('#discard-preview');
+const apply = requiredElement<HTMLButtonElement>('#apply-node');
+const revoke = requiredElement<HTMLButtonElement>('#revoke-node');
+const refresh = requiredElement<HTMLButtonElement>('#refresh-connection');
+const review = requiredElement<HTMLButtonElement>('#review-revision');
+const checkApply = requiredElement<HTMLButtonElement>('#check-apply-result');
+const availability = requiredElement<HTMLElement>('#apply-availability');
+const nodePreview = requiredElement<HTMLElement>('#node-preview');
 const previewProtocol =
-    document.querySelector<HTMLElement>('#node-preview-protocol')!;
+    requiredElement<HTMLElement>('#node-preview-protocol');
 const realityProtocol = 'VLESS · TCP · REALITY · Vision';
 const extendedProtocols = new Set([
   'VLESS · WebSocket · TLS',
   'VLESS · TCP · TLS · Vision',
   'VLESS · gRPC · REALITY',
 ]);
-const draftState = document.querySelector<HTMLElement>('#draft-state')!;
-const protocol = document.querySelector<HTMLSelectElement>('#inbound-protocol')!;
-const portMode = document.querySelector<HTMLSelectElement>('#inbound-port-mode')!;
-const port = document.querySelector<HTMLInputElement>('#inbound-port')!;
-const fixedPortField = document.querySelector<HTMLElement>('#fixed-port-field')!;
-const portError = document.querySelector<HTMLElement>('#port-error')!;
-const portHint = document.querySelector<HTMLElement>('#port-hint')!;
-const fixedPortOption = portMode.querySelector<HTMLOptionElement>(
-    'option[value="fixed"]')!;
-const messages: Record<string, string> = {
+const draftState = requiredElement<HTMLElement>('#draft-state');
+const protocol = requiredElement<HTMLSelectElement>('#inbound-protocol');
+const portMode = requiredElement<HTMLSelectElement>('#inbound-port-mode');
+const port = requiredElement<HTMLInputElement>('#inbound-port');
+const fixedPortField = requiredElement<HTMLElement>('#fixed-port-field');
+const portError = requiredElement<HTMLElement>('#port-error');
+const portHint = requiredElement<HTMLElement>('#port-hint');
+const fixedPortOption = requiredElement<HTMLOptionElement>(
+    'option[value="fixed"]', portMode);
+const messages = {
   preview: 'Preview ready · not applied.',
   notAdmitted: 'Test node preview is unavailable for this build or profile.',
   invalidShare: 'Enter one complete 3X-UI node link.',
@@ -71,7 +77,8 @@ const messages: Record<string, string> = {
   busy: 'Wait for the previous preview to finish, then try again.',
   secureStorageUnavailable: 'Secure storage is unavailable. Unlock the keychain and try again.',
 };
-const extendedImportMessages: Record<string, string> = {
+const messagesByState: Readonly<Partial<Record<string, string>>> = messages;
+const extendedImportMessages: Partial<Record<string, string>> = {
   invalidShare: 'Enter one complete node share link.',
   unsupportedOutbound:
       'Use a supported VLESS node with TLS or REALITY.',
@@ -136,6 +143,7 @@ function syncActions() {
 
 function showConnection(connection: Connection) {
   lastConnection = connection;
+  const unavailable = 'Connection status unavailable';
   const states: Record<string, string> = {
     active: 'Active on a protected site',
     prepared: 'Listener prepared',
@@ -144,24 +152,24 @@ function showConnection(connection: Connection) {
     inactive: 'No active connection',
     revoking: 'Revoking connection…',
     uncertain: 'Retirement could not be confirmed',
-    unavailable: 'Connection status unavailable',
+    unavailable,
   };
-  const connectionState = document.querySelector<HTMLElement>('#connection-state')!;
+  const connectionState = requiredElement<HTMLElement>('#connection-state');
   connectionState.dataset['state'] = connection.state;
-  connectionState.textContent = states[connection.state] ?? states['unavailable']!;
-  document.querySelector('#connection-hint')!.textContent =
+  connectionState.textContent = states[connection.state] ?? unavailable;
+  requiredElement('#connection-hint').textContent =
       connection.state === 'prepared' ?
           'Open a website’s toolbar and choose Protect site with Test Profile.' :
           'Sites that require protection stay blocked if the listener is unavailable.';
-  document.querySelector('#connection-profile')!.textContent = saved ? 'Test node' : '—';
-  document.querySelector('#connection-protocol')!.textContent = connection.protocol ?? '—';
-  document.querySelector('#connection-address')!.textContent = connection.port ?
+  requiredElement('#connection-profile').textContent = saved ? 'Test node' : '—';
+  requiredElement('#connection-protocol').textContent = connection.protocol ?? '—';
+  requiredElement('#connection-address').textContent = connection.port ?
       '127.0.0.1:' + connection.port : '—';
   syncActions();
 }
 
 function showSavedRevision() {
-  document.querySelector('#saved-revision')!.textContent = revision ?? 'Not loaded';
+  requiredElement('#saved-revision').textContent = revision ?? 'Not loaded';
 }
 
 function restorePreferences() {
@@ -199,10 +207,8 @@ function cancel() {
   chrome.send('cancelAccessTestNodePreview');
 }
 
-async function preview(source: 'text'|'image', data: string, request: number) {
-  try {
-    const result = await sendWithPromise<Preview>(
-        'previewAccessTestNode', source, data);
+function preview(source: 'text'|'image', data: string, request: number) {
+  return sendWithPromise<Preview>('previewAccessTestNode', source, data).then(result => {
     if (request !== generation) {
       return;
     }
@@ -218,12 +224,13 @@ async function preview(source: 'text'|'image', data: string, request: number) {
     const importMessage = canImportExtendedVless ?
         extendedImportMessages[result.state] : undefined;
     status.textContent =
-        importMessage ?? messages[result.state] ?? 'Preview unavailable.';
-  } catch {
+        importMessage ?? messagesByState[result.state] ?? 'Preview unavailable.';
+  }).catch(() => {
     if (request === generation) {
       status.textContent = 'Preview unavailable.';
+      status.dataset['error'] = 'true';
     }
-  }
+  });
 }
 
 form.addEventListener('submit', event => {
@@ -260,7 +267,7 @@ image.addEventListener('change', () => {
   discard.disabled = false;
   draftState.textContent = 'Unsaved draft';
   if (selected.size === 0 || selected.size > maxImageBytes) {
-    status.textContent = messages['invalidImage']!;
+    status.textContent = messages.invalidImage;
     return;
   }
   const request = generation;
@@ -274,7 +281,7 @@ image.addEventListener('change', () => {
     reader = null;
     const encoded = current.result;
     if (typeof encoded !== 'string' || !encoded.includes(',')) {
-      status.textContent = messages['invalidImage']!;
+      status.textContent = messages.invalidImage;
       return;
     }
     void preview('image', encoded.slice(encoded.indexOf(',') + 1), request);
@@ -282,7 +289,16 @@ image.addEventListener('change', () => {
   current.readAsDataURL(selected);
 });
 
-discard.addEventListener('click', async () => {
+function onActionClick(button: HTMLButtonElement, action: () => Promise<void>) {
+  button.addEventListener('click', () => {
+    void action().catch(() => {
+      status.dataset['error'] = 'true';
+      status.textContent = 'Access Options is unavailable.';
+    });
+  });
+}
+
+onActionClick(discard, async () => {
   cancel();
   hasDraft = false;
   nodeDraft = false;
@@ -300,16 +316,10 @@ discard.addEventListener('click', async () => {
     if (request !== generation) {
       return;
     }
-    const cleared = result.state === 'canceled';
-    const edited = hasDraft;
-    status.textContent = messages[result.state] ?? 'Discard unavailable.';
-    status.dataset['error'] = String(!cleared);
-    discard.disabled = cleared && !edited;
-    hasDraft = edited || !cleared;
-    if (cleared && canApply && !edited) await reloadCommitted(request);
+    if (finishDiscard(result)) await reloadCommitted(request);
   } catch {
     if (request === generation) {
-      status.textContent = messages['secureStorageUnavailable']!;
+      status.textContent = messages.secureStorageUnavailable;
       status.dataset['error'] = 'true';
       discard.disabled = false;
       hasDraft = true;
@@ -317,9 +327,18 @@ discard.addEventListener('click', async () => {
   }
 });
 
-async function reloadCommitted(request: number) {
-  try {
-    const latest = await sendWithPromise<OptionsState>('readAccessOptions');
+function finishDiscard(result: Preview): boolean {
+  const cleared = result.state === 'canceled';
+  const edited = hasDraft;
+  status.textContent = messagesByState[result.state] ?? 'Discard unavailable.';
+  status.dataset['error'] = String(!cleared);
+  discard.disabled = cleared && !edited;
+  hasDraft = edited || !cleared;
+  return cleared && canApply && !edited;
+}
+
+function reloadCommitted(request: number) {
+  return sendWithPromise<OptionsState>('readAccessOptions').then(latest => {
     if (request !== generation || hasDraft) return;
     if (latest.state !== 'ready' || !latest.revision) throw new Error('Options unavailable');
     pendingApplyRecovery = latest.pendingApplyRecovery === true;
@@ -329,12 +348,12 @@ async function reloadCommitted(request: number) {
     restorePreferences();
     draftState.textContent = saved ? 'Saved preferences' : 'No changes saved';
     showConnection(latest.connection ?? {state: 'inactive'});
-  } catch {
+  }).catch(() => {
     if (request === generation) {
       status.textContent = 'Saved settings are unavailable. Try again.';
       status.dataset['error'] = 'true';
     }
-  }
+  });
 }
 
 function refreshListenerFields() {
@@ -425,7 +444,7 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
   }
 }
 
-apply.addEventListener('click', async () => {
+onActionClick(apply, async () => {
   if (apply.disabled || !revision) return;
   const message = previewReady ? 'applyAccessTestNode' : 'applyAccessTestNodePreferences';
   const operation = crypto.randomUUID();
@@ -447,7 +466,7 @@ apply.addEventListener('click', async () => {
   }
 });
 
-checkApply.addEventListener('click', async () => {
+onActionClick(checkApply, async () => {
   if (!uncertainOperation || working) return;
   const operation = uncertainOperation;
   working = true;
@@ -464,7 +483,7 @@ checkApply.addEventListener('click', async () => {
   }
 });
 
-review.addEventListener('click', async () => {
+onActionClick(review, async () => {
   if (working) return;
   try {
     await readOptions(false, true);
@@ -482,10 +501,12 @@ review.addEventListener('click', async () => {
 
 refresh.addEventListener('click', () => {
   if (refresh.disabled) return;
-  void readOptions(false).catch(() => showConnection({state: 'unavailable'}));
+  void readOptions(false).catch(() => {
+    showConnection({state: 'unavailable'});
+  });
 });
 
-revoke.addEventListener('click', async () => {
+onActionClick(revoke, async () => {
   const {revision: connectionRevision, revokeToken} = lastConnection;
   if (revoke.disabled || !connectionRevision || !revokeToken) return;
   working = true;
@@ -527,7 +548,7 @@ void sendWithPromise<{
 }>(
     'getAccessOptionsCapabilities').then(async result => {
   if (!result.enabled || result.private) {
-    status.textContent = messages['notAdmitted']!;
+    status.textContent = messages.notAdmitted;
     return;
   }
   canApply = result.testApply === true;
@@ -535,8 +556,8 @@ void sendWithPromise<{
   canActivateAutomatically = canActivate && result.testAutoProtocol === true;
   canImportExtendedVless = result.testExtendedVless === true;
   if (canImportExtendedVless) {
-    document.querySelector('#share-label')!.textContent = 'Node share link';
-    document.querySelector('#share-hint')!.textContent =
+    requiredElement('#share-label').textContent = 'Node share link';
+    requiredElement('#share-hint').textContent =
         'Paste one VLESS link or choose its QR image. Supported modes are ' +
         'TCP/REALITY/Vision, WebSocket/TLS, TCP/TLS/Vision and gRPC/REALITY.';
   }

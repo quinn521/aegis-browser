@@ -7,9 +7,11 @@ import os
 from pathlib import Path
 import select
 import socket
-import subprocess
+import subprocess  # nosec B404 - launches the digest-verified fixture with fixed arguments.
 import sys
 import time
+
+from prepare import verify_digest
 
 
 WRAPPER = """
@@ -53,7 +55,8 @@ def stop(child):
 def check_stock_dialer(binary):
     port = dialer_port()
     env = {"XRAY_BROWSER_DIALER": f"127.0.0.1:{port}"}
-    with subprocess.Popen([binary, "run", "-config", "stdin:"], env=env,
+    # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+    with subprocess.Popen([binary, "run", "-config", "stdin:"], env=env, shell=False,  # nosec B603
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
         try:
             deadline = time.monotonic() + 10
@@ -72,7 +75,8 @@ def check_owned_dialer(binary):
     receiver, sender = socket.socketpair()
     with receiver, sender:
         receiver.settimeout(10)
-        with subprocess.Popen([sys.executable, "-c", WRAPPER, str(sender.fileno()), binary],
+        # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+        with subprocess.Popen([sys.executable, "-I", "-B", "-c", WRAPPER, str(sender.fileno()), binary],  # nosec B603
                               env=env, pass_fds=(sender.fileno(),), stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
             sender.close()
@@ -107,6 +111,8 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         sys.exit("Usage: python3 test_startup.py /absolute/path/to/xray")
     executable = Path(sys.argv[1]).resolve(strict=True)
+    lock = json.loads(Path(__file__).with_name("owned-core-lock.json").read_text())
+    verify_digest(executable, lock["artifact"]["sha256"])
     check_owned_dialer(executable)
     check_stock_dialer(executable)
     print("PASS owned startup and marker-free dialer behavior")

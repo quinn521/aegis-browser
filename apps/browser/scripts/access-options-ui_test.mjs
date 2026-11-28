@@ -3,15 +3,15 @@ import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import test from 'node:test';
 import vm from 'node:vm';
-import {fileURLToPath} from 'node:url';
 
 const requireWorkspace = createRequire(new URL('../../../package.json', import.meta.url));
 const {JSDOM} = requireWorkspace('jsdom');
 const ts = requireWorkspace('typescript');
-const resources = fileURLToPath(new URL('../overlay/chrome/browser/resources/aegis/', import.meta.url));
-const page = readFileSync(resources + 'access_options.html', 'utf8');
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed fixture relative to this module
+const page = readFileSync(new URL('../overlay/chrome/browser/resources/aegis/access_options.html', import.meta.url), 'utf8');
 const {outputText} = ts.transpileModule(
-    readFileSync(resources + 'access_options.ts', 'utf8'), {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed fixture relative to this module
+    readFileSync(new URL('../overlay/chrome/browser/resources/aegis/access_options.ts', import.meta.url), 'utf8'), {
       compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS},
     });
 const tick = () => new Promise(resolve => setImmediate(resolve));

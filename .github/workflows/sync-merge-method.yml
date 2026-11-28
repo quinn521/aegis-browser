@@ -16,7 +16,7 @@ concurrency:
 jobs:
   enforce-merge-method:
     name: enforce-sync-merge-method
-    if: "${{ github.event.pull_request.head.repo.id == github.event.repository.id }}"
+    if: "${{ (github.event.pull_request.head.repo.id == github.event.repository.id) && (github.repository != 'quinn521/aegis-browser' || github.base_ref == 'develop') }}"
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
