@@ -769,7 +769,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
                 operations.values.contains { $0.tabID == tabID && $0.state == .preparing && $0.addressNavigation == pending }
             } == true
             let interrupted = tab.isLoading && (invalidatedTabs.contains(tabID)
-                || (required != wasRequired.contains(tab.instanceID) && !keepsProtectedHold))
+                || (required != wasRequired.contains(tab.instanceID) && !keepsProtectedHold && !tab.isWaitingForRoutePolicy))
             let retireOriginal = originalNavigations[tab.instanceID]?.contains {
                 mandatoryWebsitePolicyBlocksOriginal(tab: tab, url: $0)
             } == true
@@ -1187,6 +1187,11 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         _ = beginPrepare(for: tab, key: key, failure: nil, trigger: optional ? .automatic : .userRetry,
                          addressNavigation: pending, routePreparation: preparation)
         return true
+    }
+
+    func pendingRoutePolicyLoad(tab: BrowserTab, url: URL) -> Task<Void, Never>? {
+        guard geoSiteCache?.status == .loading, isMainFrameRouteIndeterminate(tab: tab, url: url) else { return nil }
+        return geoSiteRestoreTask
     }
 
     func attachment(tab: BrowserTab, host: AccessSiteHost) -> AccessProxyAttachment {
@@ -1816,7 +1821,8 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     func pendingAddressProxyState(tab: BrowserTab, pending: BrowserPendingAddressNavigation) -> PendingAddressProxyState {
-        switch pendingAddressProxyAction(tab: tab, pending: pending) {
+        if tab.isWaitingForRoutePolicy, tab.matchesPendingAddressNavigation(pending) { return .preparing }
+        return switch pendingAddressProxyAction(tab: tab, pending: pending) {
         case .prepare: .available
         case .reuse: .preparing
         case nil: .unavailable
@@ -1850,7 +1856,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
     }
 
     private func pendingAddressProxyAction(tab: BrowserTab, pending: BrowserPendingAddressNavigation) -> PendingAddressProxyAction? {
-        guard tab.hostCoordinator === self, tab.matchesPendingAddressNavigation(pending),
+        guard tab.hostCoordinator === self, !tab.isWaitingForRoutePolicy, tab.matchesPendingAddressNavigation(pending),
               let host = Self.httpHost(pending.url) else { return nil }
         let key = AccessHostStoreKey(scopeID: tab.browsingScopeID, host: host, isPrivate: tab.profile.isPrivate)
         let tabID = tab.instanceID.uuidString
