@@ -289,8 +289,12 @@ module AegisRelease
       end
       run('python3', File.join(request.root, 'scripts/release/safari_manifest.py'), File.join(request.root, 'apps/ios/SharedWebExtension'))
       if ENV['GITHUB_ACTIONS'] == 'true'
-        run('python3', File.join(request.root, 'scripts/release/ios-durable.py'), 'export-start',
-            '--version', request.version, '--build', request.build, '--profile', request.profile)
+        if ENV['AEGIS_IOS_EXTERNAL_BETA'] == 'true'
+          run('python3', File.join(request.root, 'scripts/release/ios-action.py'), 'external-beta-export-start')
+        else
+          run('python3', File.join(request.root, 'scripts/release/ios-durable.py'), 'export-start',
+              '--version', request.version, '--build', request.build, '--profile', request.profile)
+        end
       end
       FileUtils.mkdir_p(File.dirname(request.directory))
       Dir.mkdir(request.directory, 0o700)

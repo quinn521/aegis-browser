@@ -12,8 +12,8 @@ PRIVATE_RESOURCES = {'AegisPrivateTestNode.vless', 'AegisPrivateTestSubscription
 def connection_uri(uri):
     _, route = validated_route(uri)
     clean = uri.partition('#')[0]
-    if clean.startswith('vmess://'):
-        payload = clean.removeprefix('vmess://')
+    scheme, payload = clean.split('://', 1)
+    if scheme.lower() == 'vmess':
         data = json.loads(base64.b64decode(payload + '=' * (-len(payload) % 4), altchars=b'-_', validate=True),
                           object_pairs_hook=distinct_json_fields)
         data.pop('ps', None)

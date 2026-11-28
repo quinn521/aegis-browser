@@ -25,6 +25,16 @@ QUOTA = json.dumps({'subscriptionInfoURL': 'https://example.invalid/sub/test?for
 
 
 class PrivateBetaTests(unittest.TestCase):
+    def test_vmess_label_is_removed_for_every_scheme_case(self):
+        settings = dict(add='node.example', port='443', net='ws', tls='tls',
+                        id='550e8400-e29b-41d4-a716-446655440001', ps='private label')
+        payload = base64.b64encode(json.dumps(settings).encode()).decode()
+        for scheme in ('vmess', 'VMESS', 'vMeSs'):
+            raw = beta.external_beta_nodes.canonicalize(json.dumps([{'uri': scheme + '://' + payload}]).encode())
+            uri = json.loads(raw)[0]['uri']
+            self.assertTrue(uri.startswith('vmess://'))
+            self.assertEqual(json.loads(base64.b64decode(uri[8:])), {k: v for k, v in settings.items() if k != 'ps'})
+
     def test_external_catalogue_keeps_each_known_quota_and_rejects_subscription_fields(self):
         node = 'trojan://550e8400-e29b-41d4-a716-446655440001@first.example:443?sni=first.example'
         rows = [{'uri': node + '#private-label'}, {'uri': node.replace('first', 'second'), 'quotaBytes': 4321}]

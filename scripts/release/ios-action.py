@@ -490,6 +490,33 @@ def private_beta_stopped_before_upload(record, job, attempt):
     return all(store.read(kind, allocation) is None for kind in ('upload-start', 'upload-result'))
 
 
+def external_beta_export_start():
+    require_private_beta_upload()
+    if os.environ.get('AEGIS_IOS_EXTERNAL_BETA') != 'true':
+        raise ValueError('External Beta export is not enabled')
+    store = durable.records()
+    key = durable.key(os.environ['RELEASE_VERSION'], os.environ['RELEASE_BUILD'])
+    payload = dict(source=durable.source(), profile='beta', run_id=os.environ['GITHUB_RUN_ID'], attempt='1')
+    original = store.read('export-start', key)
+    if original is not None:
+        prior_id = int(original['run_id'])
+        record = api(f'actions/runs/{prior_id}')
+        if (prior_id == int(payload['run_id']) or original['profile'] != 'beta' or original['attempt'] != '1'
+                or record['id'] != prior_id or record['status'] != 'completed' or record['run_attempt'] != 1
+                or record['head_sha'] != original['source']['sha'] or store.read('package', key) is not None):
+            raise ValueError('Original export allocation cannot be reused')
+        jobs = durable.jobs(store.api, prior_id, 1)
+        matching = [job for job in jobs if job['name'] == 'private-beta-store' and job['run_id'] == prior_id
+                    and job['head_sha'] == record['head_sha'] and job['run_attempt'] == 1]
+        if len(matching) != 1 or not private_beta_stopped_before_upload(record, matching[0], 1):
+            raise ValueError('Prior private Beta export has no confirmed pre-upload failure')
+        check_new_upload_runs()
+        payload['originalExport'] = original
+        # Exactly one atomic replacement reservation per original allocation, across runs and source changes.
+        key = hashlib.sha256(('external-beta-replacement:' + key).encode()).hexdigest()
+    store.create('export-start', key, payload)
+
+
 def unstarted_store_run(row):
     """Require proof that Apple transport never started in any prior attempt."""
     record = api(f'actions/runs/{row["id"]}')
@@ -637,7 +664,7 @@ def stage():
 if __name__ == '__main__':
     {'package': package, 'export': export, 'import': import_package, 'stage': stage, 'receipt': receipt,
      'check-new-upload': check_new_upload_runs, 'private-beta-upload': private_beta_upload,
-     'private-beta-preflight': private_beta_preflight,
+     'external-beta-export-start': external_beta_export_start, 'private-beta-preflight': private_beta_preflight,
      'require-private-beta-preflight': require_private_beta_preflight,
      'cleanup-private-beta-restore': cleanup_private_beta_restore,
      'private-beta-evidence': private_beta_evidence, 'cleanup-private-beta': cleanup_private_beta,

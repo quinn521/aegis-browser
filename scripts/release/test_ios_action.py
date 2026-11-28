@@ -506,6 +506,39 @@ with ExitStack() as stack:
                 store.read.side_effect = lambda kind, key: {} if kind == intent else None
                 self.assertFalse(action.private_beta_stopped_before_upload(record, job, 1))
 
+    def test_external_beta_replaces_one_existing_export_after_proven_no_start(self):
+        env = dict(AEGIS_IOS_EXTERNAL_BETA='true', GITHUB_REPOSITORY=action.durable.REPOSITORY,
+                   GITHUB_RUN_ID='12', GITHUB_RUN_ATTEMPT='1', RELEASE_RUN_ID='ios-gh-12-1',
+                   RELEASE_OPERATION='package-upload', RELEASE_DESTINATION='testflight',
+                   RELEASE_PROFILE='beta', RELEASE_SIGNING_MODE='manual', RELEASE_VERSION='1.1.0', RELEASE_BUILD='30')
+        key = action.durable.key('1.1.0', '30')
+        original = dict(source={'sha': 'a'*40, 'tree': 'b'*40}, profile='beta', run_id='10', attempt='1')
+        entries = {('export-start', key): original}
+        record = dict(id=10, status='completed', run_attempt=1, head_sha='a'*40)
+        job = dict(run_id=10, run_attempt=1, head_sha='a'*40, name='private-beta-store')
+
+        def create(kind, coordinate, payload):
+            if (kind, coordinate) in entries:
+                raise ValueError('Already allocated')
+            entries[kind, coordinate] = payload
+
+        with patch.dict(os.environ, env, clear=True), patch.object(action, 'api', return_value=record), \
+                patch.object(action.durable, 'source', return_value={'sha': 'c'*40, 'tree': 'd'*40}), \
+                patch.object(action.durable, 'jobs', return_value=[job]), patch.object(action.durable, 'records') as factory, \
+                patch.object(action, 'private_beta_stopped_before_upload', return_value=False) as proof, \
+                patch.object(action, 'check_new_upload_runs') as inventory:
+            factory.return_value.read.side_effect = lambda kind, coordinate: entries.get((kind, coordinate))
+            factory.return_value.create.side_effect = create
+            with self.assertRaises(ValueError):
+                action.external_beta_export_start()
+            proof.return_value = True
+            action.external_beta_export_start()
+            inventory.assert_called_once()
+            self.assertEqual(entries['export-start', key], original)
+            self.assertEqual(len(entries), 2)
+            with self.assertRaises(ValueError), patch.dict(os.environ, GITHUB_RUN_ID='13', RELEASE_RUN_ID='ios-gh-13-1'):
+                action.external_beta_export_start()
+
     def test_cancelled_upload_with_no_steps_is_unstarted(self):
         row = dict(id=10, run_attempt=1, head_sha='b'*40, path='.github/workflows/ios-delivery.yml', status='completed', conclusion='cancelled')
         job = dict(name='upload-new', status='completed', conclusion='cancelled', steps=[], run_id=10, run_attempt=1, head_sha='b'*40)
