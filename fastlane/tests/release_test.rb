@@ -112,7 +112,8 @@ class ReleaseTest < ReleaseFixture
   end
 
   def test_private_beta_inputs_are_opt_in_manual_only_and_scrubbed_before_build
-    keys = %w[AEGIS_IOS_BETA_TEST_NODE_ENABLED AEGIS_IOS_TEST_NODE_BASE64 AEGIS_IOS_TEST_SUBSCRIPTION_BASE64]
+    keys = %w[AEGIS_IOS_BETA_TEST_NODE_ENABLED AEGIS_IOS_TEST_NODE_BASE64 AEGIS_IOS_TEST_SUBSCRIPTION_BASE64
+              AEGIS_IOS_BETA_CATALOGUE_BASE64]
     previous = keys.to_h { |key| [key, ENV[key]] }
     [%w[release manual], %w[alpha manual], %w[beta cloud]].each do |profile, mode|
       keys.each { |key| ENV[key] = key.end_with?('ENABLED') ? 'true' : 'private-fixture' }
@@ -123,6 +124,8 @@ class ReleaseTest < ReleaseFixture
     end
     [false, true].each do |fail_verification|
       keys.each { |key| ENV[key] = key.end_with?('ENABLED') ? 'true' : 'private-fixture' }
+      has_catalogue = !fail_verification
+      ENV.delete('AEGIS_IOS_BETA_CATALOGUE_BASE64') unless has_catalogue
       req = request(profile: 'beta', signing_mode: 'manual', destination: 'testflight')
       flow = AegisRelease::Pipeline.new(req, Object.new)
       checks = self
@@ -133,14 +136,23 @@ class ReleaseTest < ReleaseFixture
         private_path = args[args.index('--directory') + 1]
         checks.assert(File.directory?(private_path))
         checks.refute(args.join.include?('private-fixture'))
-        checks.assert_equal(args[2] == 'stage' ? 2 : 0, env.size)
+        if args[2] == 'stage'
+          checks.assert_equal keys.drop(1).sort, env.keys.sort
+          if has_catalogue
+            checks.assert_equal 'private-fixture', env.fetch('AEGIS_IOS_BETA_CATALOGUE_BASE64')
+            File.write(File.join(private_path, 'catalogue.json'), 'fixture')
+          end
+        else
+          checks.assert_empty env
+        end
         checks.assert_includes(args, '--live-quota') if args[2] == 'verify'
         raise AegisRelease::Error, 'verification failed' if fail_verification && args[2] == 'verify'
       end
       flow.define_singleton_method(:package_ios_impl) do |_|
         keys.each { |key| checks.refute ENV.key?(key) }
         settings = Shellwords.split(@private_beta_xcargs)
-        checks.assert_equal 2, settings.size
+        checks.assert_equal(has_catalogue ? 3 : 2, settings.size)
+        checks.assert(settings.any? { |arg| arg.start_with?('AEGIS_PRIVATE_BETA_NODES_FILE=') } == has_catalogue)
         checks.assert(settings.all? { |arg| arg.include?(private_path) })
         [['fixture.ipa'], {}]
       end
@@ -149,6 +161,7 @@ class ReleaseTest < ReleaseFixture
       else
         _paths, details = flow.package_ios
         assert_equal true, details.fetch('privateBetaTestNode')
+        assert_equal true, details.fetch('privateBetaTestCatalogue')
       end
       assert_equal %w[stage verify], calls
       refute File.exist?(private_path)

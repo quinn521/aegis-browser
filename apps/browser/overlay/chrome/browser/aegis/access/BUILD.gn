@@ -145,8 +145,10 @@ if (is_win) {
 source_set("access_local_core_manager") {
   sources = [ "access_local_core_manager.h" ]
   public_deps = [ ":access_core_log" ]
+  public_deps += [ "//components/aegis_access:aegis_access" ]
   if (is_mac) {
     sources += [ "access_local_core_manager.cc" ]
+    public_deps += [ ":access_internal_test_core_mac" ]
   } else if (is_win) {
     sources += [
       "access_local_core_manager.cc",
@@ -188,9 +190,13 @@ test("access_local_core_unavailable_unittests") {
     "//base",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
+    "//components/aegis_access:aegis_access",
     "//net",
     "//testing/gtest",
   ]
+  if (is_mac) {
+    deps += [ ":access_internal_test_core_mac" ]
+  }
 }
 
 test("access_local_core_manager_unittests") {
@@ -198,7 +204,9 @@ test("access_local_core_manager_unittests") {
     sources = [
       "access_core_log_disk_unittest.cc",
       "access_core_log_unittest.cc",
+      "access_internal_core_manager_mac_unittest.cc",
       "access_local_core_manager_unittest.cc",
+      "//components/aegis_access/access_test_node_test_fixture.h",
     ]
   } else if (is_win) {
     sources = [
@@ -391,6 +399,7 @@ source_set("access_network_context_transport") {
   public_deps = [
     ":access_private_context_client",
     "//components/aegis_access:policy_publication_ack_tracker",
+    "//content/public/browser",
   ]
   deps = [
     "//base",
@@ -614,7 +623,10 @@ source_set("access_site_proxy_bubble") {
     ]
   }
   if (is_mac) {
-    deps += [ "//third_party/blink/public/mojom:android_mojo_bindings" ]
+    deps += [
+      ":access_options_service",
+      "//third_party/blink/public/mojom:android_mojo_bindings",
+    ]
   }
   if (is_win) {
     sources += [
@@ -693,6 +705,10 @@ test("access_service_coordinator_unittests") {
     "//services/network/public/mojom",
     "//testing/gtest",
   ]
+  if (is_mac) {
+    sources += [ "//components/aegis_access/access_test_node_test_fixture.h" ]
+    deps += [ ":access_options_service" ]
+  }
   data_deps = [ "//content/shell:pak" ]
 }
 
@@ -776,6 +792,18 @@ test("access_network_context_transport_unittests") {
     "//testing/gtest",
     "//url",
   ]
+  if (is_mac) {
+    deps += [
+      ":access_build_channel",
+      ":access_proxying_url_loader_factory",
+      ":access_service_coordinator",
+      "//chrome/browser/net:impl",
+      "//components/prefs",
+      "//components/proxy_config",
+      "//mojo/public/cpp/system",
+      "//services/network/public/cpp",
+    ]
+  }
 }
 
 test("access_rule_store_unittests") {
@@ -815,6 +843,7 @@ source_set("access_private_context_client") {
   public_deps = [
     "//base",
     "//components/aegis_access",
+    "//components/aegis_access:access_prepared_listener",
     "//mojo/public/cpp/bindings",
     "//net",
     "//services/network/public/mojom",
@@ -844,8 +873,18 @@ test("access_async_rule_store_unittests") {
 }
 
 source_set("access_options_store") {
-  sources = [ "access_options_store.cc", "access_options_store.h" ]
-  public_deps = [ ":access_rule_store", "//components/aegis_access:access_options_capability" ]
+  sources = [
+    "access_options_store.cc",
+    "access_options_store.h",
+    "access_test_profile_config.cc",
+    "access_test_profile_config.h",
+  ]
+  public_deps = [
+    ":access_rule_store",
+    "//components/aegis_access:access_options_capability",
+    "//components/aegis_access:access_inbound_preferences",
+  ]
+  deps = [ "//crypto" ]
 }
 test("access_options_store_unittests") {
   sources = [ "access_options_store_unittest.cc" ]
@@ -853,15 +892,119 @@ test("access_options_store_unittests") {
            "//base/test:test_support", "//testing/gtest" ]
 }
 
+source_set("access_test_node_native_config") {
+  sources = [ "access_test_node_native_config.cc", "access_test_node_native_config.h" ]
+  public_deps = [
+    "//components/aegis_access:access_inbound_preferences",
+    "//components/aegis_access:access_test_node",
+    "//components/aegis_access:aegis_access",
+  ]
+  deps = [ "//base" ]
+}
+
+test("access_test_node_native_config_unittests") {
+  sources = [
+    "access_test_node_native_config_unittest.cc",
+    "//components/aegis_access/access_test_node_test_fixture.h",
+  ]
+  deps = [ ":access_test_node_native_config", "//base/test:run_all_unittests",
+           "//testing/gtest" ]
+}
+
+if (is_mac) {
+  source_set("access_owned_listener_mac") {
+    sources = [ "access_owned_listener_mac.cc", "access_owned_listener_mac.h" ]
+    public_deps = [ "//base" ]
+  }
+  test("access_owned_listener_mac_unittests") {
+    sources = [ "access_owned_listener_mac_unittest.cc" ]
+    deps = [ ":access_owned_listener_mac", "//base/test:run_all_unittests",
+             "//base/test:test_support", "//testing/gtest" ]
+  }
+
+  source_set("access_test_node_vault_mac") {
+    sources = [
+      "access_test_node_vault_mac.h",
+      "access_test_node_vault_mac.mm",
+    ]
+    public_deps = [
+      "//base",
+      "//components/aegis_access:access_test_node",
+    ]
+    deps = [
+      ":access_test_node_native_config",
+      "//crypto",
+    ]
+    frameworks = [
+      "Foundation.framework",
+      "LocalAuthentication.framework",
+      "Security.framework",
+    ]
+  }
+
+  source_set("access_internal_test_core_mac") {
+    sources = [ "access_internal_test_core_mac.cc", "access_internal_test_core_mac.h" ]
+    public_deps = [
+      ":access_owned_listener_mac",
+      ":access_test_node_vault_mac",
+      "//components/aegis_access:access_inbound_preferences",
+      "//components/aegis_access:access_options_capability",
+      "//components/aegis_access:aegis_access",
+      "//url",
+    ]
+    deps = [ ":access_test_node_native_config", "//crypto", "//third_party/boringssl" ]
+  }
+  test("access_internal_test_core_mac_unittests") {
+    sources = [
+      "access_internal_test_core_mac_unittest.cc",
+      "//components/aegis_access/access_test_node_test_fixture.h",
+    ]
+    deps = [ ":access_internal_test_core_mac", "//base/test:run_all_unittests",
+             "//base/test:test_support", "//testing/gtest", "//crypto" ]
+  }
+
+  test("access_test_node_vault_mac_unittests") {
+    sources = [
+      "access_test_node_vault_mac_unittest.cc",
+      "//components/aegis_access/access_test_node_test_fixture.h",
+    ]
+    deps = [
+      ":access_test_node_vault_mac",
+      "//base/test:run_all_unittests",
+      "//testing/gtest",
+    ]
+  }
+
+  source_set("access_test_node_qr_mac") {
+    sources = [
+      "access_test_node_qr_mac.h",
+      "access_test_node_qr_mac.mm",
+    ]
+    frameworks = [
+      "Foundation.framework",
+      "ImageIO.framework",
+      "Vision.framework",
+    ]
+    public_deps = [ "//components/aegis_access:access_test_node" ]
+  }
+}
+
 source_set("access_options_service") {
   sources = [ "access_options_service.cc", "access_options_service.h" ]
   public_deps = [ ":access_options_store" ]
   deps = [ ":access_build_channel", ":access_service_coordinator", "//chrome/browser/aegis:profile_support",
            "//chrome/browser/profiles:profile", "//content/public/browser" ]
+  if (is_mac) {
+    deps += [ ":access_test_node_qr_mac", "//crypto" ]
+    public_deps += [ ":access_test_node_vault_mac", ":access_local_core_manager" ]
+  }
 }
 
 test("access_options_service_unittests") {
-  sources = [ "access_options_service_unittest.cc" ]
+  sources = [
+    "access_options_service_unittest.cc",
+    "//components/aegis_access/access_test_node_test_fixture.h",
+  ]
   deps = [ ":access_options_service", ":access_service_coordinator",
            ":access_build_channel", "//chrome/test:test_support_unit",
            "//base/test:test_support", "//chrome/test:test_support",

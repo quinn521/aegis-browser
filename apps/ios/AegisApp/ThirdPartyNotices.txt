@@ -339,7 +339,7 @@ GeoSite standard data — sources and licenses
 Source file: scripts/licenses/geosite/xtls-gpl-3.0.txt
 
 The unmodified standard geosite.dat is shipped in the iOS app. It provides the domestic and overseas rule inputs.
-Distribution: https://github.com/XTLS/Xray-rules-dat/releases/tag/20261127013728
+Distribution: https://github.com/XTLS/Xray-rules-dat/releases/tag/20261128011702
 Encoding, conversion scripts, and input inventory: https://github.com/XTLS/Xray-rules-dat/tree/71449413dd268821143695c5bf3720545f392e63
 The GeoSite tools have their own MIT terms. The data comes from the following sources.
 V2Fly Domain List Community — MIT — https://github.com/v2fly/domain-list-community
@@ -351,7 +351,7 @@ Iran sanctioned domains — https://github.com/armanlife/iran-sanctioned-domains
 RunetFreedom domains — https://github.com/runetfreedom/russia-domains-list
 Antifilter.Download community list — https://community.antifilter.download/list/domains.lst
 
-XTLS project license — GPL-3.0 — https://github.com/XTLS/Xray-rules-dat/blob/20261127013728/LICENSE
+XTLS project license — GPL-3.0 — https://github.com/XTLS/Xray-rules-dat/blob/20261128011702/LICENSE
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007

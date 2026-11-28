@@ -229,19 +229,20 @@ struct PrivateTerminal : public std::enable_shared_from_this<PrivateTerminal> {
   mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver;
   network::mojom::URLLoaderFactoryParamsPtr params;
   std::shared_ptr<AccessPrivateContextClient> context;
-  bool context_done = false;
   bool restoration_done = false;
   bool document_done = false;
   bool failed = false;
   base::OnceCallback<void(std::shared_ptr<PrivateTerminal>)> on_ready;
+  void Reject() {
+    failed = true;
+    receiver.reset();
+    params.reset();
+    context.reset();
+    on_ready.Reset();
+  }
   void MaybeReady() {
-    if (!context_done || !restoration_done || !document_done || !on_ready) return;
-    if (failed || !context) {
-      receiver.reset();
-      params.reset();
-      on_ready.Reset();
+    if (failed || !context || !restoration_done || !document_done || !on_ready)
       return;
-    }
     std::move(on_ready).Run(shared_from_this());
   }
 };
@@ -432,22 +433,30 @@ class BrowserContextData : public base::SupportsUserData::Data {
     auto* transport = AccessNetworkContextTransport::Get(profile_);
     auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile_);
     if (!transport || !coordinator) {
-      terminal->failed = terminal->context_done = terminal->restoration_done = true;
-      terminal->MaybeReady();
+      terminal->Reject();
       return;
     }
     // The raw Context is used now, never retained across a deferred commit.
     transport->BindPrivateContext(owner, context, base::BindOnce(
         [](std::shared_ptr<PrivateTerminal> terminal,
            std::shared_ptr<AccessPrivateContextClient> context) {
+          if (terminal->failed) return;
+          if (!context) {
+            terminal->Reject();
+            return;
+          }
           terminal->context = std::move(context);
-          terminal->context_done = true;
           terminal->MaybeReady();
         }, terminal));
+    if (terminal->failed) return;
     coordinator->InitializeForProfile(owner, base::BindOnce(
         [](std::shared_ptr<PrivateTerminal> terminal, bool restored) {
+          if (terminal->failed) return;
+          if (!restored) {
+            terminal->Reject();
+            return;
+          }
           terminal->restoration_done = true;
-          terminal->failed |= !restored;
           terminal->MaybeReady();
         }, terminal));
   }
@@ -459,9 +468,10 @@ class BrowserContextData : public base::SupportsUserData::Data {
     auto pending = std::move(it->second);
     pending_documents_.erase(it);
     auto terminal = pending->TakeTerminal();
+    if (terminal->failed) return;
     auto* frame = document ? document->AsRenderFrameHostIfValid() : nullptr;
     if (!frame || !frame->GetPage().IsPrimary() || frame->GetBrowserContext() != profile_) {
-      terminal->receiver.reset();
+      terminal->Reject();
       return;
     }
     if (metadata && (metadata->attribution_kind != aegis_access::RequestAttributionKind::kDocument ||
@@ -485,7 +495,10 @@ class BrowserContextData : public base::SupportsUserData::Data {
     const auto common = runtime ? runtime->CaptureCommonGenerationTupleOnUiThread(owner)
                                 : std::nullopt;
     if (!transport || !policy || !common ||
-        (document && !document->AsRenderFrameHostIfValid())) return;
+        (document && !document->AsRenderFrameHostIfValid())) {
+      terminal->Reject();
+      return;
+    }
     transport->PublishPrivatePolicy(*policy, *common, base::BindOnce(
         &BrowserContextData::OnTerminalPolicyReady, weak_factory_.GetWeakPtr(),
         frame_id, navigation_id, process, partition, owner,
@@ -497,7 +510,10 @@ class BrowserContextData : public base::SupportsUserData::Data {
       std::optional<aegis_access::BrowserOwnedRequestMetadata> metadata,
       std::optional<content::WeakDocumentPtr> document,
       std::shared_ptr<PrivateTerminal> terminal, bool accepted) {
-    if (!accepted || (document && !document->AsRenderFrameHostIfValid())) return;
+    if (!accepted || (document && !document->AsRenderFrameHostIfValid())) {
+      terminal->Reject();
+      return;
+    }
     auto binding = network::mojom::AegisAccessFactoryBinding::New();
     binding->owner = terminal->context->owner_for_binding();
     binding->attribution = network::mojom::AegisAccessAttribution::kProfileOnly;
@@ -526,7 +542,11 @@ class BrowserContextData : public base::SupportsUserData::Data {
                std::shared_ptr<PrivateTerminal> terminal,
                mojo::PendingRemote<network::mojom::AegisAccessURLLoaderFactory> target,
                bool created) {
-              if (!self || !created) return;
+              if (!self || !created ||
+                  (document && !document->AsRenderFrameHostIfValid())) {
+                terminal->Reject();
+                return;
+              }
               auto proxy = std::make_unique<AccessProxyingURLLoaderFactory>(
                   self->profile_, frame_id, navigation_id, process, partition, owner,
                   std::move(metadata), std::move(terminal->receiver),
@@ -716,6 +736,26 @@ AccessProxyingURLLoaderFactory::AccessProxyingURLLoaderFactory(
 AccessProxyingURLLoaderFactory::~AccessProxyingURLLoaderFactory() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 }
+
+#if BUILDFLAG(IS_MAC)
+// static
+void AccessProxyingURLLoaderFactory::BindPrivateFactoryForTesting(
+    Profile* profile,
+    const aegis_access::OwnershipKey& owner,
+    network::URLLoaderFactoryBuilder& factory_builder) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  // The fixture exercises factory setup and disconnect without dispatching
+  // requests that would resolve the process ID to a live renderer.
+  constexpr int kSyntheticRenderProcessId = 1;
+  BrowserContextData::StartProxying(
+      profile, content::FrameTreeNodeId(), std::nullopt,
+      kSyntheticRenderProcessId, /*profile_only_storage_partition=*/nullptr,
+      {.request_id = base::Uuid::GenerateRandomV4().AsLowercaseString(),
+       .owner = owner,
+       .attribution_kind = aegis_access::RequestAttributionKind::kProfileOnly},
+      factory_builder);
+}
+#endif
 
 // static
 void AccessProxyingURLLoaderFactory::MaybeProxyDocumentSubresource(
@@ -1130,10 +1170,15 @@ std::optional<std::string> AccessProxyingURLLoaderFactory::SelectedLocalCoreGrou
   const auto request = aegis_access::CanonicalizeBrowserOwnedRequest(*metadata.metadata, target);
   if (!policy || !request.context) return std::nullopt;
   const auto match = aegis_access::EvaluateAccessPolicy(*request.context, *policy);
-  if (ClassifyPolicyMatch(match) != MatchedPolicyDisposition::kProxy ||
-      match.effective_proxy_group_id != AccessSiteProxyBubbleController::LocalProxyGroup(factory_owner_))
+  if (ClassifyPolicyMatch(match) != MatchedPolicyDisposition::kProxy)
     return std::nullopt;
-  return match.effective_proxy_group_id;
+  const auto& group = match.effective_proxy_group_id;
+  if (group == AccessSiteProxyBubbleController::LocalProxyGroup(factory_owner_))
+    return group;
+#if BUILDFLAG(IS_MAC)
+  if (AccessSiteProxyBubbleController::IsTestProfileProxyGroup(group)) return group;
+#endif
+  return std::nullopt;
 }
 
 void AccessProxyingURLLoaderFactory::OnRequestCoreReady(
@@ -1362,7 +1407,7 @@ void AccessProxyingURLLoaderFactory::Clone(
   proxy_receivers_.Add(this, std::move(loader_receiver));
 }
 
-void AccessProxyingURLLoaderFactory::StartTargetRequest(
+std::string AccessProxyingURLLoaderFactory::StartTargetRequest(
     mojo::PendingReceiver<network::mojom::URLLoader> loader_receiver,
     int32_t request_id,
     uint32_t options,
@@ -1375,8 +1420,9 @@ void AccessProxyingURLLoaderFactory::StartTargetRequest(
     auto envelope = BuildEnvelope(ownership, request.url, request.method, 0);
     if (!envelope) {
       BlockRequest(std::move(loader_receiver), std::move(client), net::ERR_BLOCKED_BY_CLIENT);
-      return;
+      return {};
     }
+    auto registration_id = envelope->registration_id;
     auto routed_request = network::mojom::AegisAccessRoutedRequest::New();
     routed_request->request = request;
     routed_request->envelope = std::move(envelope);
@@ -1384,11 +1430,27 @@ void AccessProxyingURLLoaderFactory::StartTargetRequest(
         std::move(control), request_id, options,
         std::move(routed_request),
         std::move(client), traffic_annotation);
-    return;
+    return registration_id;
   }
   ForwardNative(std::move(loader_receiver), request_id, options, request,
                 std::move(client), traffic_annotation);
+  return {};
 }
+
+#if BUILDFLAG(IS_MAC)
+void AccessProxyingURLLoaderFactory::OnPreparedListenerAuthFault(
+    const aegis_access::RequestOwnershipRecord& ownership,
+    const std::string& registration_id) {
+  if (!private_context_ || ownership.owner != factory_owner_ ||
+      registration_id.empty()) {
+    return;
+  }
+  if (auto* controller = AccessSiteProxyBubbleController::Get(profile_)) {
+    controller->OnTestProfileListenerAuthFault(
+        ownership.owner, ownership.generations, registration_id);
+  }
+}
+#endif
 
 network::mojom::AegisAccessRequestEnvelopePtr AccessProxyingURLLoaderFactory::BuildEnvelope(
     const aegis_access::RequestOwnershipRecord& ownership, const GURL& target,

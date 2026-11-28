@@ -1,4 +1,5 @@
 // Copyright 2026 GCSA
+#include "components/aegis_access/access_prepared_listener_test_fixture.h"
 #include <atomic>
 #include "base/functional/bind.h"
 #include "base/test/bind.h"
@@ -45,9 +46,15 @@ class AccessNetworkURLLoaderTest : public testing::Test {
     net_context_.reset();
   }
   std::unique_ptr<net::test_server::HttpResponse> ProxyResponse(
-      const net::test_server::HttpRequest&) {
+      const net::test_server::HttpRequest& request) {
     ++proxy_hits_;
     auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+    if (request.headers.contains("Proxy-Authorization")) ++proxy_auth_headers_;
+    if (challenge_proxy_) {
+      response->set_code(net::HTTP_PROXY_AUTHENTICATION_REQUIRED);
+      response->AddCustomHeader("Proxy-Authenticate", "Basic realm=\"proxy\"");
+      return response;
+    }
     response->set_code(net::HTTP_NO_CONTENT);
     return response;
   }
@@ -75,6 +82,7 @@ class AccessNetworkURLLoaderTest : public testing::Test {
       snapshot.routes["group"] = net::AccessProxyRoute::Create(key,
           net::ProxyChain(net::ProxyServer::FromSchemeHostAndPort(
               net::ProxyServer::SCHEME_HTTP, "127.0.0.1", proxy_.port())));
+      snapshot.listener_bindings["group"] = aegis_access::test::SyntheticPreparedListenerBinding();
     }
     ASSERT_TRUE(registry_.Install(1, std::move(snapshot)));
   }
@@ -105,6 +113,8 @@ class AccessNetworkURLLoaderTest : public testing::Test {
       base::test::TaskEnvironment::MainThreadType::IO};
   net::EmbeddedTestServer proxy_, origin_;
   std::atomic<int> proxy_hits_{0}, origin_hits_{0};
+  std::atomic<int> proxy_auth_headers_{0};
+  std::atomic<bool> challenge_proxy_{false};
   OwnershipKey owner_{ChannelNamespace::kDev, "profile", "partition"};
   GenerationTuple common_{1, 1, 0, 1, 1};
   AccessRouteRegistry registry_{owner_, "incarnation"};
@@ -146,6 +156,20 @@ TEST_F(AccessNetworkURLLoaderTest, ManagedRequestUsesPrivateRoute) {
   client_.RunUntilComplete();
   EXPECT_EQ(client_.completion_status().error_code, net::OK);
   EXPECT_EQ(proxy_hits_, 1);
+  EXPECT_EQ(origin_hits_, 0);
+}
+TEST_F(AccessNetworkURLLoaderTest, NoAuthForwardChallengeRevokesListenerBeforeAnotherSend) {
+  Install(true);
+  challenge_proxy_ = true;
+  const auto url = origin_.GetURL("/final");
+  auto state = State(url, true);
+  ASSERT_TRUE(state);
+  Start(url, state);
+  client_.RunUntilComplete();
+  EXPECT_EQ(client_.completion_status().error_code, net::ERR_PROXY_AUTH_UNSUPPORTED);
+  EXPECT_FALSE(State(url, true));
+  EXPECT_EQ(proxy_hits_, 1);
+  EXPECT_EQ(proxy_auth_headers_, 0);
   EXPECT_EQ(origin_hits_, 0);
 }
 TEST_F(AccessNetworkURLLoaderTest, RestoringBeforeStartSendsNothing) {

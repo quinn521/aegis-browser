@@ -30,6 +30,8 @@ class AccessRequestRouteState : public base::RefCounted<AccessRequestRouteState>
   uint32_t hop() const { return hop_; }
   // Cache policy only; BeginSend still validates authority at dispatch.
   bool uses_managed_route() const { return !expected_.registration_id.empty(); }
+  base::CallbackListSubscription ObserveRegistrationRevocation(base::RepeatingClosure callback);
+  bool InvalidateCurrentListener();
 
  private:
   friend class base::RefCounted<AccessRequestRouteState>;
@@ -37,8 +39,12 @@ class AccessRequestRouteState : public base::RefCounted<AccessRequestRouteState>
       aegis_access::BrowserOwnedRequestMetadata metadata, GURL target,
       std::string method, AccessRouteRegistry::Expectation expected);
   ~AccessRequestRouteState();
+  bool IsCurrentRestorationEpoch() const;
+  void UpdateRegistryRevocationSubscription();
+  void OnRegistrationRevoked();
 
   base::WeakPtr<AccessRouteRegistry> registry_;
+  const uint64_t restoration_epoch_;
   const aegis_access::BrowserOwnedRequestMetadata metadata_;
   GURL target_;
   std::string method_;
@@ -50,6 +56,10 @@ class AccessRequestRouteState : public base::RefCounted<AccessRequestRouteState>
     std::string method;
   };
   std::optional<PendingRedirect> pending_redirect_;
+  std::optional<net::AccessRouteIsolationKey> current_route_key_;
+  bool listener_revoked_ = false;
+  std::shared_ptr<base::RepeatingClosureList> revocation_observers_;
+  std::optional<base::CallbackListSubscription> registry_revocation_subscription_;
   SEQUENCE_CHECKER(sequence_checker_);
 };
 }  // namespace network

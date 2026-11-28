@@ -98,6 +98,120 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertNil(nodes.selectedIndex)
     }
 
+    func testPrivateBetaCatalogueRequiresInternalAudienceAndKeepsDefaultQuotaBound() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaultURI = "vless://\(userID)@first.example:443?security=reality&type=tcp&flow=xtls-rprx-vision"
+            + "&sni=first.example&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=abcd"
+        let alternateURI = alphaWSNode(address: "alternate.example").replacingOccurrences(of: userID,
+            with: "550e8400-e29b-41d4-a716-446655440001")
+        let data = try JSONEncoder().encode([
+            ["source": "3x-ui", "uri": defaultURI],
+            ["source": "downloads", "uri": alternateURI],
+            ["source": "downloads", "uri": alphaWSNode(address: "not-published.example")],
+        ])
+        func catalogue(channel: String = "beta", internalTesting: Bool = true) -> AccessAlphaNodeCatalogue {
+            .init(channel: channel, profile: channel, bundleID: "com.gcsa.aegis", data: nil,
+                  privateBetaData: data, internalTesting: internalTesting, defaults: defaults)
+        }
+        for channel in ["release", "dev", "alpha"] {
+            XCTAssertFalse(catalogue(channel: channel).isConfigured)
+        }
+        XCTAssertFalse(catalogue(internalTesting: false).isConfigured)
+
+        let nodes = catalogue()
+        XCTAssertTrue(nodes.isPrivateBeta)
+        XCTAssertEqual(nodes.selectedIndex, 0)
+        XCTAssertEqual(nodes.entries.map(\.usesSubscription), [true, false, true])
+        XCTAssertEqual(nodes.entries.map(\.source), [.panel, .downloads, .downloads])
+        let fixture = ThreeXUIEntryFixture(userID: userID, mode: .unavailable)
+        let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+            nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
+            alphaRoutes: nodes.routes, fetch: { config in try await fixture.usage(config) })
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
+        let expectedSelection = [false, true, false]
+        XCTAssertEqual(nodes.entries.map { nodes.canSelect($0, subscription: usage) }, expectedSelection)
+        do {
+            _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5)))
+            XCTFail("The internal Beta default requires its live quota")
+        } catch { }
+        XCTAssertNil(core.startedConfiguration)
+        nodes.select(1)
+        let operation = UUID()
+        defer { publisher.cancel(operationID: operation) }
+        let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
+        XCTAssertTrue(publisher.validateReady(ready))
+        XCTAssertFalse(usage.permitsExistingConnection)
+        XCTAssertNotNil(core.startedConfiguration)
+        nodes.select(0)
+        XCTAssertFalse(publisher.validateReady(ready))
+    }
+
+    func testPrivateBetaDefaultKeepsSignedRealityOptionsWhenSubscriptionRotatesThem() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let signedURI = "vless://\(userID)@first.example:443?type=tcp&security=reality&flow=xtls-rprx-vision"
+            + "&sni=first.example&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=abcd&fp=chrome&spx=%2Fsigned"
+        let alternateURI = signedURI.replacingOccurrences(of: "first.example", with: "alternate.example")
+        let data = try JSONEncoder().encode([
+            ["source": "3x-ui", "uri": signedURI],
+            ["source": "3x-ui", "uri": alternateURI],
+        ])
+        let catalogue = AccessAlphaNodeCatalogue(channel: "beta", profile: "beta", bundleID: "com.gcsa.aegis",
+            data: nil, privateBetaData: data, internalTesting: true, defaults: defaults)
+        guard case .realityVision(let anchor) = try XCTUnwrap(catalogue.routes.first) else { return XCTFail("Missing anchor") }
+        let rotated = signedURI.replacingOccurrences(of: "fp=chrome&spx=%2Fsigned", with: "fp=firefox&spx=%2Flive")
+            .replacingOccurrences(of: "sni=first.example", with: "sni=cover.example")
+            .replacingOccurrences(of: "sid=abcd", with: "sid=abce")
+        let rotatedAlternate = rotated.replacingOccurrences(of: "first.example", with: "alternate.example")
+        let published = Mutex(try [rotated, rotatedAlternate].map(AccessInternalTestNode.parseSingleShareURI))
+        let fixture = ThreeXUIEntryFixture(userID: userID)
+        func session(anchor: AccessRealityVisionParameters?) -> AccessSubscriptionUsageSession {
+            AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+                nodeUserID: userID, fetchAlphaNodes: { _, _ in published.withLock { $0 } }, alphaRoutes: catalogue.routes,
+                privateBetaAnchor: anchor, fetch: { config in try await fixture.usage(config) })
+        }
+
+        let strict = session(anchor: nil)
+        strict.setActive(true)
+        await strict.refresh()?.value
+        XCTAssertTrue(strict.availableAlphaRouteIDs.isEmpty)
+        strict.setActive(false)
+
+        let usage = session(anchor: anchor)
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        await usage.refresh()?.value
+        XCTAssertEqual(usage.availableAlphaRouteIDs, [0])
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: catalogue)
+        let operationID = UUID()
+        defer { publisher.cancel(operationID: operationID) }
+        let ready = try await publisher.prepare(.init(operationID: operationID, deadline: .seconds(5)))
+        let config = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(core.startedConfiguration)) as? [String: Any])
+        let outbound = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first)
+        let stream = try XCTUnwrap(outbound["streamSettings"] as? [String: Any])
+        let reality = try XCTUnwrap(stream["realitySettings"] as? [String: Any])
+        XCTAssertEqual(reality["serverName"] as? String, "first.example")
+        XCTAssertEqual(reality["shortId"] as? String, "abcd")
+        XCTAssertEqual(reality["fingerprint"] as? String, "chrome")
+        XCTAssertEqual(reality["spiderX"] as? String, "/signed")
+        XCTAssertTrue(publisher.validateReady(ready))
+
+        for (original, replacement) in [("first.example:443", "first.example:444"), ("@first.example", "@other.example"),
+             ("pbk=A", "pbk=B"), (userID, "550e8400-e29b-41d4-a716-446655440001")] {
+            let changed = try AccessInternalTestNode.parseSingleShareURI(rotated.replacingOccurrences(of: original, with: replacement))
+            published.withLock { $0 = [changed] }
+            await usage.refresh()?.value
+            XCTAssertTrue(usage.availableAlphaRouteIDs.isEmpty, original)
+            XCTAssertFalse(usage.permitsExistingConnection)
+        }
+        XCTAssertFalse(publisher.validateReady(ready))
+    }
+
     func testAlphaSelectionRoutesProductOnlyAfterQuotaAndRevokesOnChange() async throws {
         let (defaults, suite) = try isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

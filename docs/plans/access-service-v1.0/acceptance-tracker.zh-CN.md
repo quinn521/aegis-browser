@@ -158,7 +158,7 @@ Content 6 项包含 `PrefetchBrowserTestBase.HttpMhtmlSubframePrefetchKeepsRestr
 | A86 | 同步到秒、重置到分钟、跨年/时区变化、倒计时不足一分钟 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
 | A87 | 升级数据库/密钥命名空间、旧版本回退、规则库损坏 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
 | A88 | 内核资产损坏/替换、未知版本、不同架构与更新失败 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
-| A89 | HTTP/SOCKS5 × REALITY/WS+TLS 的完整链路及真实部署关系 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
+| A89 | HTTP/SOCKS5 × 出站组合的完整链路及真实部署关系。保留 REALITY/Vision 与 WS/TLS 四个基线组合，新增准入按平台、渠道、入站和具体出站分别取证 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
 | A90 | 最终候选头、干净补丁重放、四渠道产物、全新安装/升级/回滚及发布门禁 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
 | A91 | DIRECT/PROXY/REJECT 的全部六种有向转换与重复操作 | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |
 | A92 | 离线、无内核、欠额、退出身份时执行 BLOCK | UNVERIFIED | NOT_MAPPED | NOT_RUN | NOT_EVALUATED | 待盘点 | — |

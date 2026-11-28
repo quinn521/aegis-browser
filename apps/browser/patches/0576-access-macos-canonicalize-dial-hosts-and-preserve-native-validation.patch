@@ -1,0 +1,556 @@
+From dc293a89d0ae4ba322002ebc258d158ba76de4e7 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 08:55:31 +0800
+Subject: [PATCH] fix(access): canonicalize DEV dial hosts and preserve native
+ validation budgets
+
+---
+ .../aegis/access/access_options_service.cc    |  2 +-
+ .../access/access_test_node_native_config.cc  | 16 ++---
+ ...access_test_node_native_config_unittest.cc | 55 ++++++++++++++++
+ .../aegis/access/access_test_node_qr_mac.h    |  6 ++
+ .../aegis/access/access_test_node_qr_mac.mm   | 30 ++++++++-
+ .../access/access_test_node_qr_mac_test.mm    | 25 ++++++--
+ components/aegis_access/access_test_node.cc   | 61 ++++++++++++++++--
+ components/aegis_access/access_test_node.h    | 14 ++++-
+ .../aegis_access/access_test_node_test.cc     | 63 +++++++++++++++++++
+ .../access_test_node_test_fixture.h           | 27 ++++++++
+ 10 files changed, 276 insertions(+), 23 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index e215c876226e00d91f02e33f5db4855a45f1027c..48c4c84f2f3806c6d45913a53df00ecfcbba42f8 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -177,7 +177,7 @@ class AccessOptionsWorker {
+   TestNodePreviewResult Text(std::string editor, std::string share) {
+     if (vault_.CloseEditor(editor) != AccessTestNodeVaultStatus::kOk)
+       return {TestNodePreviewStatus::kSecureStorageUnavailable};
+-    auto parsed = aegis_access::ParseAccessTestNodeShare(share, import_mode_);
++    auto parsed = ParseAccessTestNodeShareMac(share, import_mode_);
+     switch (parsed.error) {
+       case aegis_access::AccessTestNodeError::kNone:
+         return Stage(editor, *parsed.node);
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.cc b/chrome/browser/aegis/access/access_test_node_native_config.cc
+index dbb0e9413db89832544251bc2f6c58378bb997bc..65db4bda9f6d99d36bee8367fcc938cc38b50ab8 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config.cc
+@@ -10,17 +10,16 @@
+ namespace aegis::access {
+ namespace {
+ 
+-std::string EscapeNativeQueryValue(std::string_view value) {
++std::string EscapeNativeQueryValue(std::string_view value,
++                                   bool escape_nested_uri = false) {
+   // The share decoder splits on '&' and '#' and decodes '%' exactly once.
+-  // Escape URI delimiters in field data so they cannot look like a second
+-  // share. Preserve other printable bytes to stay within the share budget.
+   constexpr char kHex[] = "0123456789ABCDEF";
+   std::string result;
+   result.reserve(value.size());
+   for (; !value.empty(); value.remove_prefix(1)) {
+     const auto byte = static_cast<unsigned char>(value.front());
+     if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
+-        byte == '%' || value.starts_with("://")) {
++        byte == '%' || (escape_nested_uri && value.starts_with("://"))) {
+       result.push_back('%');
+       result.push_back(kHex[byte >> 4]);
+       result.push_back(kHex[byte & 15]);
+@@ -41,7 +40,8 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+   const bool legacy_ws = ws && ws->restored_from_v2;
+   const bool fresh_dev =
+       validation == AccessTestNodeNativeValidation::kFreshDevImport;
+-  if (legacy_ws && fresh_dev) {
++  if ((legacy_ws && fresh_dev) ||
++      node.spider_x.size() > aegis_access::kMaxAccessTestNodeShareBytes) {
+     return std::nullopt;
+   }
+   auto mode = fresh_dev ? Mode::kAllowExtendedVless : Mode::kRealityOnly;
+@@ -79,11 +79,11 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+     share +=
+         "&type=tcp&security=reality&flow=xtls-rprx-vision&pbk=" +
+         EscapeNativeQueryValue(node.public_key) +
+-        "&sid=" + EscapeNativeQueryValue(node.short_id) +
+-        "&spx=" + EscapeNativeQueryValue(node.spider_x) +
++        "&sid=" + EscapeNativeQueryValue(node.short_id) + "&spx=" +
++        EscapeNativeQueryValue(node.spider_x, /*escape_nested_uri=*/fresh_dev) +
+         (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
+   }
+-  auto parsed = aegis_access::ParseAccessTestNodeShare(share, mode);
++  auto parsed = aegis_access::ReparseAccessTestNodeNativeShare(share, mode);
+   if (legacy_ws && parsed.node && parsed.node->web_socket_tls) {
+     parsed.node->web_socket_tls->restored_from_v2 = true;
+   }
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+index 8fc2978eb7e9223b9ab99dfb033d17c85f3f0c6c..f4d4f3064df43efc058ea6cb9125105bc10823fd 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+@@ -241,6 +241,61 @@ TEST(AccessTestNodeNativeConfigTest,
+             node);
+ }
+ 
++TEST(AccessTestNodeNativeConfigTest, StoredV1SpiderXAtShareLimitRevalidates) {
++  const auto node = Node();
++  std::string share = "vless://" + node.user_id + "@" + node.address +
++                      ":443?sni=" + node.server_name +
++                      "&type=tcp&security=reality&flow=xtls-rprx-vision&pbk=" +
++                      node.public_key + "&sid=" + node.short_id +
++                      "&spx=/legacy?next=https://assets.example/";
++  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
++  ASSERT_LT(share.size(), kMax);
++  share.append(kMax - share.size(), 'x');
++  const auto parsed = aegis_access::ParseAccessTestNodeShare(share);
++  ASSERT_TRUE(parsed.node);
++  EXPECT_EQ(ValidateAccessTestNodeNative(*parsed.node), parsed.node);
++  EXPECT_TRUE(
++      BuildAccessTestNodeCoreConfiguration(*parsed.node, {}, Transport::kHttp));
++}
++
++TEST(AccessTestNodeNativeConfigTest, StrictWebSocketAtShareLimitRevalidates) {
++  std::string share =
++      "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
++      "?sni=cert.example.com&type=ws&security=tls"
++      "&path=/ws?next=https://assets.example/";
++  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
++  while (share.size() + 3 <= kMax) {
++    share += "%26";
++  }
++  share.append(kMax - share.size(), 'q');
++  const auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);
++  ASSERT_TRUE(parsed.node);
++  EXPECT_EQ(ValidateAccessTestNodeNative(
++                *parsed.node, AccessTestNodeNativeValidation::kFreshDevImport),
++            parsed.node);
++  EXPECT_TRUE(
++      BuildAccessTestNodeCoreConfiguration(*parsed.node, {}, Transport::kHttp));
++}
++
++TEST(AccessTestNodeNativeConfigTest, DevRealityCanonicalShareCanGrowPastLimit) {
++  const auto node = Node();
++  std::string share =
++      "vless://" + node.user_id + "@" + node.address +
++      ":443?sni=" + node.server_name +
++      "&security=reality&flow=xtls-rprx-vision&pbk=" + node.public_key +
++      "&sid=" + node.short_id + "&spx=/strict?next=https%3A//assets.example/";
++  constexpr auto kMax = aegis_access::kMaxAccessTestNodeShareBytes;
++  ASSERT_LT(share.size(), kMax);
++  share.append(kMax - share.size(), 'x');
++  const auto parsed = aegis_access::ParseAccessTestNodeShare(share, kExtended);
++  ASSERT_TRUE(parsed.node);
++  EXPECT_EQ(ValidateAccessTestNodeNative(
++                *parsed.node, AccessTestNodeNativeValidation::kFreshDevImport),
++            parsed.node);
++  share.push_back('x');
++  EXPECT_FALSE(aegis_access::ParseAccessTestNodeShare(share, kExtended).node);
++}
++
+ TEST(AccessTestNodeNativeConfigTest,
+      RejectsExtendedModelsWithInvalidDialAddress) {
+   for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac.h b/chrome/browser/aegis/access/access_test_node_qr_mac.h
+index e168b9023509766c48baa8cd7a78210f9f285aee..91da222fd2227892c45345fa1a9ae05fee43078e 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac.h
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac.h
+@@ -26,6 +26,12 @@ struct AccessTestNodeQrResult {
+   std::optional<aegis_access::AccessTestNode> node;
+ };
+ 
++// Shared by trusted macOS text import and QR decoding so both use Foundation
++// for IDNA conversion of DEV dial hostnames.
++aegis_access::AccessTestNodeParseResult ParseAccessTestNodeShareMac(
++    std::string_view share,
++    aegis_access::AccessTestNodeImportMode mode);
++
+ // Worker-only local decoding of bytes from an explicitly selected image.
+ // The result owns only a validated native draft and never the input image or
+ // the decoded URI. Callers must check admission before reading the file.
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac.mm b/chrome/browser/aegis/access/access_test_node_qr_mac.mm
+index 52dc19b1c4f29b64e58d13e2e24d644848bdab25..411e3f4991987a3a7795b6dd0baa3814bdbdf6a7 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac.mm
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac.mm
+@@ -11,6 +11,27 @@
+ namespace aegis::access {
+ namespace {
+ 
++std::optional<std::string> CanonicalizeIdnaHost(std::string_view decoded_host) {
++  @autoreleasepool {
++    NSString* hostname = [[NSString alloc] initWithBytes:decoded_host.data()
++                                                  length:decoded_host.size()
++                                                encoding:NSUTF8StringEncoding];
++    if (!hostname) {
++      return std::nullopt;
++    }
++    NSURLComponents* components = [[NSURLComponents alloc] init];
++    components.scheme = @"https";
++    components.host = hostname;
++    NSString* canonical = components.URL.host;
++    const char* utf8 = canonical.UTF8String;
++    if (!utf8) {
++      return std::nullopt;
++    }
++    return std::string(
++        utf8, [canonical lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
++  }
++}
++
+ bool IsSupportedImage(NSData* image) {
+   CGImageSourceRef source =
+       CGImageSourceCreateWithData((__bridge CFDataRef)image, nullptr);
+@@ -37,6 +58,13 @@ bool IsSupportedImage(NSData* image) {
+ 
+ }  // namespace
+ 
++aegis_access::AccessTestNodeParseResult ParseAccessTestNodeShareMac(
++    std::string_view share,
++    aegis_access::AccessTestNodeImportMode mode) {
++  return aegis_access::ParseAccessTestNodeShare(share, mode,
++                                                CanonicalizeIdnaHost);
++}
++
+ AccessTestNodeQrResult DecodeAccessTestNodeQrImage(
+     std::string_view image, aegis_access::AccessTestNodeImportMode mode) {
+   using Status = AccessTestNodeQrStatus;
+@@ -69,7 +97,7 @@ AccessTestNodeQrResult DecodeAccessTestNodeQrImage(
+     if (!utf8) {
+       return {Status::kInvalidShare, std::nullopt};
+     }
+-    auto result = aegis_access::ParseAccessTestNodeShare(
++    auto result = ParseAccessTestNodeShareMac(
+         std::string_view(
+             utf8, [payload lengthOfBytesUsingEncoding:NSUTF8StringEncoding]),
+         mode);
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+index d096e2cfda1d3d2cb9016eea1b1918ce6e8a6907..23c4fad30b76f6ae06cf9c1ec3c12431bd78495f 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+@@ -8,6 +8,7 @@
+ #include <cassert>
+ #include <iostream>
+ #include <string>
++#include <utility>
+ 
+ #include "components/aegis_access/access_test_node_test_fixture.h"
+ 
+@@ -15,6 +16,7 @@
+ 
+ using aegis::access::AccessTestNodeQrStatus;
+ using aegis::access::DecodeAccessTestNodeQrImage;
++using aegis::access::ParseAccessTestNodeShareMac;
+ using aegis_access::AccessTestNodeImportMode;
+ 
+ CIImage* MakeCode(std::string_view payload) {
+@@ -86,7 +88,7 @@ int main() {
+                               kSyntheticWebSocketTlsQueryShare,
+                               kSyntheticTcpTlsVisionShare,
+                               kSyntheticGrpcRealityShare}) {
+-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      const auto text = ParseAccessTestNodeShareMac(vector, extended);
+       const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
+       assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
+       assert(qr.node == text.node);
+@@ -99,14 +101,16 @@ int main() {
+                               kSyntheticTcpTlsVisionShare}) {
+       std::string unverified(vector);
+       unverified.insert(unverified.find('#'), "&allowInsecure=1");
+-      const auto text =
+-          aegis_access::ParseAccessTestNodeShare(unverified, extended);
++      const auto text = ParseAccessTestNodeShareMac(unverified, extended);
+       const auto qr = Decode(DrawCodes(MakeCode(unverified)), extended);
+       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
+       assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
+     }
+     for (const auto vector :
+          {kSyntheticWebSocketTlsUnknownFingerprintShare,
++          kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare,
++          kSyntheticWebSocketTlsDoubleEncodedDialHostShare,
++          kSyntheticWebSocketTlsInvalidUtf8DialHostShare,
+           kSyntheticTcpRealityVisionConcatenatedShare,
+           kSyntheticTcpRealityVisionInvalidFingerprintShare,
+           kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+@@ -114,17 +118,26 @@ int main() {
+           kSyntheticTcpRealityVisionUnsafeSpiderXShare,
+           kSyntheticTcpTlsVisionInvalidDialAddressShare,
+           kSyntheticGrpcRealityInvalidDialAddressShare}) {
+-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      const auto text = ParseAccessTestNodeShareMac(vector, extended);
+       assert(text.error == aegis_access::AccessTestNodeError::kInvalidShare);
+       ExpectStatus(DrawCodes(MakeCode(vector)),
+                    AccessTestNodeQrStatus::kInvalidShare, extended);
+     }
++    for (const auto& [vector, expected_host] :
++         {std::pair{kSyntheticWebSocketTlsEscapedDialHostShare, "route.example."},
++          std::pair{kSyntheticWebSocketTlsIdnaDialHostShare,
++                    "xn--bcher-kva.example"}}) {
++      const auto text = ParseAccessTestNodeShareMac(vector, extended);
++      const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
++      assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
++      assert(text.node->address == expected_host && qr.node == text.node);
++    }
+     for (const auto vector :
+          {kSyntheticTcpRealityVisionSlashAndAliasesShare,
+           kSyntheticWebSocketTlsSlashShare,
+           kSyntheticTcpTlsVisionSlashShare,
+           kSyntheticGrpcRealitySlashShare}) {
+-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      const auto text = ParseAccessTestNodeShareMac(vector, extended);
+       const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
+       assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
+       assert(text.node == qr.node);
+@@ -134,7 +147,7 @@ int main() {
+           kSyntheticWebSocketTlsFingerprintAliasShare,
+           kSyntheticTcpTlsVisionFingerprintAliasShare,
+           kSyntheticGrpcRealityFingerprintAliasShare}) {
+-      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      const auto text = ParseAccessTestNodeShareMac(vector, extended);
+       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
+       ExpectStatus(DrawCodes(MakeCode(vector)),
+                    AccessTestNodeQrStatus::kUnsupportedOutbound, extended);
+diff --git a/components/aegis_access/access_test_node.cc b/components/aegis_access/access_test_node.cc
+index 23e599c74a937a4437b822c729aea364e4878b16..8c67793f67743fd97e9ef8f77553fe20a6fde05c 100644
+--- a/components/aegis_access/access_test_node.cc
++++ b/components/aegis_access/access_test_node.cc
+@@ -120,6 +120,27 @@ bool IsAddress(std::string_view text) {
+   return IsDnsName(text);
+ }
+ 
++std::optional<std::string> CanonicalizeDialHost(
++    std::string_view address,
++    AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
++  auto decoded = Unescape(address);
++  if (!decoded || !std::ranges::all_of(*decoded, [](unsigned char c) {
++        return c >= 0x80 || IsAlphanumeric(c) || c == '-' || c == '.';
++      })) {
++    return std::nullopt;
++  }
++  if (std::ranges::none_of(*decoded,
++                           [](unsigned char c) { return c >= 0x80; })) {
++    return decoded;
++  }
++  if (!canonicalize_idna) {
++    return std::nullopt;
++  }
++  auto canonical = canonicalize_idna(*decoded);
++  return canonical && IsDnsName(*canonical) ? std::move(canonical)
++                                            : std::nullopt;
++}
++
+ bool IsExtendedServerName(std::string_view name,
+                           bool allows_root_label = false) {
+   if (allows_root_label && name.ends_with('.')) {
+@@ -451,17 +472,17 @@ std::string ValueOr(const Query& query,
+   return it == query.end() ? std::string(fallback) : it->second;
+ }
+ 
+-}  // namespace
+-
+-AccessTestNodeParseResult ParseAccessTestNodeShare(
++AccessTestNodeParseResult ParseShare(
+     std::string_view share,
+-    AccessTestNodeImportMode mode) {
++    AccessTestNodeImportMode mode,
++    size_t max_share_bytes,
++    AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
+   constexpr AccessTestNodeError kInvalid = AccessTestNodeError::kInvalidShare;
+   constexpr AccessTestNodeError kUnsupported =
+       AccessTestNodeError::kUnsupportedOutbound;
+   constexpr std::string_view kWhitespace = " \t\r\n";
+   constexpr std::string_view kScheme = "vless://";
+-  if (share.size() > kMaxAccessTestNodeShareBytes ||
++  if (share.size() > max_share_bytes ||
+       share.find_first_not_of(kWhitespace) == std::string_view::npos) {
+     return {kInvalid, std::nullopt};
+   }
+@@ -499,7 +520,15 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+     return {kInvalid, std::nullopt};
+   }
+   const auto user_id = authority.substr(0, at);
+-  const auto address = authority.substr(at + 1, colon - at - 1);
++  auto address = authority.substr(at + 1, colon - at - 1);
++  std::optional<std::string> decoded_host;
++  if (extended && !address.starts_with('[')) {
++    decoded_host = CanonicalizeDialHost(address, canonicalize_idna);
++    if (!decoded_host) {
++      return {kInvalid, std::nullopt};
++    }
++    address = *decoded_host;
++  }
+   const auto port_text = authority.substr(colon + 1);
+   uint16_t port = 0;
+   const auto* port_end = std::to_address(port_text.end());
+@@ -662,4 +691,24 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+   return {AccessTestNodeError::kNone, std::move(node)};
+ }
+ 
++}  // namespace
++
++AccessTestNodeParseResult ParseAccessTestNodeShare(
++    std::string_view share,
++    AccessTestNodeImportMode mode,
++    AccessTestNodeIdnaCanonicalizer canonicalize_idna) {
++  return ParseShare(share, mode, kMaxAccessTestNodeShareBytes,
++                    canonicalize_idna);
++}
++
++AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
++    std::string_view share,
++    AccessTestNodeImportMode mode) {
++  // Percent encoding uses at most three bytes per input byte. Allow room for
++  // canonical defaults and a dial hostname normalized to an ASCII A-label.
++  constexpr size_t kMaxNativeShareBytes =
++      3 * kMaxAccessTestNodeShareBytes + 512;
++  return ParseShare(share, mode, kMaxNativeShareBytes, nullptr);
++}
++
+ }  // namespace aegis_access
+diff --git a/components/aegis_access/access_test_node.h b/components/aegis_access/access_test_node.h
+index dba3af7b61455e3c87ff03da6db579535a1798f6..7dc6598ea28a14fc261f4f6dbfab7872ab223d85 100644
+--- a/components/aegis_access/access_test_node.h
++++ b/components/aegis_access/access_test_node.h
+@@ -62,12 +62,24 @@ struct AccessTestNodeParseResult {
+   std::optional<AccessTestNode> node;
+ };
+ 
++// Platform IDNA conversion for a once-decoded, non-ASCII dial hostname.
++using AccessTestNodeIdnaCanonicalizer =
++    std::optional<std::string> (*)(std::string_view decoded_host);
++
+ // Accepts one VLESS/TCP/REALITY/Vision share by default. Admitted macOS DEV
+ // import may also select WS/TLS, TCP/TLS/Vision, or gRPC/REALITY explicitly.
+ // The fragment is never retained.
+ AccessTestNodeParseResult ParseAccessTestNodeShare(
+     std::string_view share,
+-    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly);
++    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly,
++    AccessTestNodeIdnaCanonicalizer canonicalize_idna = nullptr);
++
++// For a share reconstructed from a native model. Escaping and explicit
++// defaults can grow it past the external input limit. Importers must use
++// ParseAccessTestNodeShare to enforce that limit before parsing user input.
++AccessTestNodeParseResult ReparseAccessTestNodeNativeShare(
++    std::string_view share,
++    AccessTestNodeImportMode mode);
+ 
+ }  // namespace aegis_access
+ 
+diff --git a/components/aegis_access/access_test_node_test.cc b/components/aegis_access/access_test_node_test.cc
+index 59c54842bf0257ae7ba54e6eaa614ec24886a087..062990c1ed4eec266d630417f5c8cfd8b3af8237 100644
+--- a/components/aegis_access/access_test_node_test.cc
++++ b/components/aegis_access/access_test_node_test.cc
+@@ -29,7 +29,12 @@ using aegis_access::test::kSyntheticTcpTlsVisionInvalidDialAddressShare;
+ using aegis_access::test::kSyntheticTcpTlsVisionShare;
+ using aegis_access::test::kSyntheticTcpTlsVisionSlashShare;
+ using aegis_access::test::kSyntheticTestNodeShare;
++using aegis_access::test::kSyntheticWebSocketTlsDoubleEncodedDialHostShare;
++using aegis_access::test::kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare;
++using aegis_access::test::kSyntheticWebSocketTlsEscapedDialHostShare;
+ using aegis_access::test::kSyntheticWebSocketTlsFingerprintAliasShare;
++using aegis_access::test::kSyntheticWebSocketTlsIdnaDialHostShare;
++using aegis_access::test::kSyntheticWebSocketTlsInvalidUtf8DialHostShare;
+ using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
+ using aegis_access::test::kSyntheticWebSocketTlsShare;
+ using aegis_access::test::kSyntheticWebSocketTlsSlashShare;
+@@ -237,6 +242,64 @@ int main() {
+            .node);
+   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
+          result.node);
++  std::string at_share_limit =
++      ReplaceIn(WithoutFragment(kSyntheticTestNodeShare), "&type=tcp", "");
++  at_share_limit += "&spx=/strict";
++  assert(at_share_limit.size() < aegis_access::kMaxAccessTestNodeShareBytes);
++  at_share_limit.append(
++      aegis_access::kMaxAccessTestNodeShareBytes - at_share_limit.size(), 'x');
++  const auto at_limit = ParseAccessTestNodeShare(at_share_limit, kExtended);
++  assert(at_limit.node);
++  const std::string reconstructed =
++      ReplaceIn(at_share_limit, "?flow=", "?type=tcp&flow=");
++  assert(ParseAccessTestNodeShare(reconstructed, kExtended).error == kInvalid);
++  assert(
++      aegis_access::ReparseAccessTestNodeNativeShare(reconstructed, kExtended)
++          .node == at_limit.node);
++  const auto escaped_host = ParseAccessTestNodeShare(
++      kSyntheticWebSocketTlsEscapedDialHostShare, kExtended);
++  assert(escaped_host.node && escaped_host.node->address == "route.example.");
++  assert(escaped_host.node->web_socket_tls &&
++         escaped_host.node->web_socket_tls->path == "/upgrade?tag=%E9");
++  assert(!ParseAccessTestNodeShare(kSyntheticWebSocketTlsEscapedDialHostShare,
++                                   kDev)
++              .node);
++  assert(!ParseAccessTestNodeShare(kSyntheticWebSocketTlsIdnaDialHostShare,
++                                   kExtended)
++              .node);
++  const auto idna = ParseAccessTestNodeShare(
++      kSyntheticWebSocketTlsIdnaDialHostShare, kExtended,
++      [](std::string_view decoded) -> std::optional<std::string> {
++        assert(decoded ==
++               "b\xC3\xBC"
++               "cher.example");
++        return "xn--bcher-kva.example";
++      });
++  assert(idna.node && idna.node->address == "xn--bcher-kva.example");
++  assert(idna.node->web_socket_tls &&
++         idna.node->web_socket_tls->host == "ws.example.com.:8443" &&
++         idna.node->web_socket_tls->path ==
++             "/upgrade?next=%68ttps://assets.example/");
++  assert(!ParseAccessTestNodeShare(
++              kSyntheticWebSocketTlsIdnaDialHostShare, kExtended,
++              [](std::string_view) -> std::optional<std::string> {
++                return "route.example:443";
++              })
++              .node);
++  for (const auto share : {kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare,
++                           kSyntheticWebSocketTlsDoubleEncodedDialHostShare,
++                           kSyntheticWebSocketTlsInvalidUtf8DialHostShare}) {
++    const auto rejected = ParseAccessTestNodeShare(share, kExtended);
++    assert(rejected.error == kInvalid && !rejected.node);
++  }
++  for (const auto* encoded :
++       {"%3A", "%2F", "%5C", "%23", "%3F", "%5B", "%5D", "%00", "%20", "%ZZ"}) {
++    assert(ParseAccessTestNodeShare(
++               ReplaceIn(kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare,
++                         "%40", encoded),
++               kExtended)
++               .error == kInvalid);
++  }
+   const auto missing_vision = ParseAccessTestNodeShare(
+       kSyntheticTcpRealityVisionMissingFlowShare, kExtended);
+   assert(missing_vision.error == kUnsupported && !missing_vision.node);
+diff --git a/components/aegis_access/access_test_node_test_fixture.h b/components/aegis_access/access_test_node_test_fixture.h
+index 5bd3c13a206ac3d542eec745dc2a1aea360d6701..99b26ba0b1e69cbc090cf58269eebbabb73b7215 100644
+--- a/components/aegis_access/access_test_node_test_fixture.h
++++ b/components/aegis_access/access_test_node_test_fixture.h
+@@ -156,6 +156,33 @@ inline constexpr std::string_view kSyntheticGrpcRealityFingerprintAliasShare =
+     "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
+     "#synthetic-grpc";
+ 
++inline constexpr std::string_view kSyntheticWebSocketTlsEscapedDialHostShare =
++    "vless://00000000-0000-4000-8000-000000000002@r%6Fute.example.:8443"
++    "?type=ws&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
++    "&path=%2Fupgrade%3Ftag%3D%25E9";
++
++inline constexpr std::string_view kSyntheticWebSocketTlsIdnaDialHostShare =
++    "vless://00000000-0000-4000-8000-000000000002@b%C3%BCcher.example:8443"
++    "?type=ws&security=tls&host=ws.example.com.%3A8443&fp=chrome"
++    "&sni=cert.example.com&path=%2Fupgrade%3Fnext%3D%2568ttps://"
++    "assets.example/";
++
++inline constexpr std::string_view
++    kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare =
++        "vless://"
++        "00000000-0000-4000-8000-000000000002@route%40other.example:8443"
++        "?type=ws&security=tls&sni=cert.example.com";
++
++inline constexpr std::string_view
++    kSyntheticWebSocketTlsDoubleEncodedDialHostShare =
++        "vless://00000000-0000-4000-8000-000000000002@r%256Fute.example.:8443"
++        "?type=ws&security=tls&sni=cert.example.com";
++
++inline constexpr std::string_view
++    kSyntheticWebSocketTlsInvalidUtf8DialHostShare =
++        "vless://00000000-0000-4000-8000-000000000002@b%C3cher.example:8443"
++        "?type=ws&security=tls&sni=cert.example.com";
++
+ }  // namespace aegis_access::test
+ 
+ #endif  // COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_
+-- 
+2.54.0 (Apple Git-157)
+

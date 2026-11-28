@@ -386,6 +386,9 @@ source_set("impl") {
     "//ui/native_theme",
     "//ui/views/controls/webview",
   ]
+  if (is_mac) {
+    deps += [ "//chrome/browser/aegis/access:access_build_channel" ]
+  }
 
   if (use_aura) {
     deps += [ "//ui/aura" ]

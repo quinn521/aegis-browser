@@ -8,6 +8,7 @@
 #include <utility>
 #include "base/task/thread_pool.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
 #include "chrome/browser/aegis/access/access_identity_generation_source.h"
 #include "chrome/browser/aegis/access/access_published_request_runtime.h"
 #include "chrome/browser/aegis/access/access_proxy_selection_generation_source.h"
@@ -29,6 +30,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #if BUILDFLAG(IS_MAC)
+#include "chrome/browser/aegis/access/access_options_service.h"
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #else
 #include "chrome/browser/aegis/access/access_log_export_win.h"
@@ -43,6 +45,93 @@ namespace {
 
 const void* const kAccessSiteProxyBubbleControllerKey =
     &kAccessSiteProxyBubbleControllerKey;
+#if BUILDFLAG(IS_MAC)
+constexpr std::string_view kTestProfileGroupPrefix = "internal-test-profile:";
+constexpr base::TimeDelta kTestProfilePublicationTimeout = base::Seconds(30);
+
+const char* TestProfileSwitchCompletionMessage(
+    AccessMutationTransactionStatus status) {
+  switch (status) {
+    case AccessMutationTransactionStatus::kNetworkPublicationFailed:
+      return "The browser could not confirm the network policy for the test "
+             "Profile switch.";
+    case AccessMutationTransactionStatus::kCommitFailed:
+      return "The test Profile switch could not be saved.";
+    case AccessMutationTransactionStatus::kCommitted:
+    case AccessMutationTransactionStatus::kCommittedUnavailable:
+      return "The test Profile switch was saved. Its original connection "
+             "could not be confirmed.";
+    default:
+      return "The test Profile switch failed.";
+  }
+}
+
+std::string TestProfileGroup(const AccessLocalCoreReady& ready) {
+  return std::string(kTestProfileGroupPrefix) + ready.profile_id + ":" +
+         base::NumberToString(ready.profile_version);
+}
+
+std::optional<std::pair<std::string_view, uint64_t>> ParseTestProfileGroup(
+    std::string_view group) {
+  if (!group.starts_with(kTestProfileGroupPrefix)) return std::nullopt;
+  group.remove_prefix(kTestProfileGroupPrefix.size());
+  const auto separator = group.find(':');
+  if (separator == std::string_view::npos) return std::nullopt;
+  const auto id = group.substr(0, separator);
+  const auto version = ParseAccessOptionsRevision(group.substr(separator + 1));
+  if (!base::Uuid::ParseLowercase(id).is_valid() || !version || *version == 0) {
+    return std::nullopt;
+  }
+  return std::pair(id, *version);
+}
+
+const StoredSiteGroup* FindCommittedBubbleSite(
+    const StoredPolicySnapshot& committed,
+    const AccessSiteHost& host,
+    bool website_context) {
+  const std::string toggle_id =
+      (website_context ? "bubble-site:" : "bubble:") + host.value;
+  const auto site =
+      std::ranges::find_if(committed.site_groups, [&](const auto& row) {
+        return row.group.owner == committed.owner &&
+               row.group.website_context == website_context &&
+               row.group.canonical_host == host.value &&
+               row.group.site_toggle_id == toggle_id;
+      });
+  return site == committed.site_groups.end() ? nullptr : &*site;
+}
+
+const StoredSiteGroup* FindCommittedBubbleSite(
+    const StoredPolicySnapshot& committed,
+    const AccessSiteHost& host) {
+  if (const auto* site = FindCommittedBubbleSite(committed, host, true)) {
+    return site;
+  }
+  return FindCommittedBubbleSite(committed, host, false);
+}
+
+std::optional<aegis_access::GenerationTuple> CaptureCommittedPolicy(
+    Profile* profile,
+    const StoredPolicySnapshot& committed) {
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile);
+  if (!runtime) return std::nullopt;
+  const auto common =
+      runtime->CaptureCommonGenerationTupleOnUiThread(committed.owner);
+  const auto* published = runtime->GetPublishedPolicySnapshot(committed.owner);
+  if (!common || !published || published->owner != committed.owner ||
+      published->policy_generation != common->policy_generation ||
+      published->policy_generation < committed.policy_generation) {
+    return std::nullopt;
+  }
+  // Rollback can publish the committed rules at a newer runtime generation.
+  const auto adapted = AccessRuleStore::AdaptMatcherSnapshot(committed);
+  if (adapted.status != StoreStatus::kValid || !adapted.value ||
+      published->rules != adapted.value->rules) {
+    return std::nullopt;
+  }
+  return common;
+}
+#endif
 
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 const void* const kLogHistoryKey = &kLogHistoryKey;
@@ -169,7 +258,8 @@ AccessSiteProxyBubbleController::SnapshotForCommittedUrl(
     const GURL& committed_url) const {
   const auto host = ResolveTrustedNavigationHost(committed_url);
   const auto website = host.host ? CanonicalWebsiteHost(*host.host).host : std::nullopt;
-  const auto key = website && website_hosts_.contains(*website) ? website : host.host;
+  const bool website_context = website && website_hosts_.contains(*website);
+  const auto key = website_context ? website : host.host;
   auto found = key ? host_states_.find(*key) : host_states_.end();
   if (publication_in_flight_ && website) {
     const auto pending = host_states_.find(*website);
@@ -177,7 +267,62 @@ AccessSiteProxyBubbleController::SnapshotForCommittedUrl(
         pending->second.connection == AccessSiteConnectionState::kConnecting) found = pending;
   }
   HostState state = found == host_states_.end() ? HostState() : found->second;
-  if (state.connection == AccessSiteConnectionState::kReady) {
+  const auto state_host =
+      found == host_states_.end() ? key : std::make_optional(found->first);
+  if (busy_toggle_notice_ && busy_toggle_notice_->revision == state_revision_ &&
+      state_host == busy_toggle_notice_->host && !state.runtime_fault) {
+    state.failure_reason = AccessSiteProxySessionErrorReadableMessage(
+        AccessSiteProxySessionError::kBusy);
+  }
+  bool verify_legacy_core = state.connection == AccessSiteConnectionState::kReady;
+#if BUILDFLAG(IS_MAC)
+  const bool allowed = key && intent_store_.Get(*key) == AccessSiteIntent::kAllow;
+  const auto manual = key ? test_profile_sites_.find(*key) : test_profile_sites_.end();
+  if (manual != test_profile_sites_.end() && allowed &&
+      !(publication_in_flight_ && state.connection == AccessSiteConnectionState::kConnecting)) {
+    verify_legacy_core = false;
+    auto* transport = AccessNetworkContextTransport::Get(profile_);
+    const auto owner = transport
+        ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+        : std::nullopt;
+    const auto common = owner ? CaptureTestProfilePolicy(*owner, manual->second)
+                              : std::nullopt;
+    if (common && IsActiveTestProfileGroup(*owner, manual->second, *common)) {
+      state.connection = AccessSiteConnectionState::kReady;
+      state.failure_reason.clear();
+    } else if (common && saved_test_profile_restore_ &&
+               saved_test_profile_restore_->owner == *owner &&
+               saved_test_profile_restore_->group == manual->second &&
+               saved_test_profile_restore_->common == *common) {
+      state.connection = AccessSiteConnectionState::kConnecting;
+      state.failure_reason.clear();
+    } else if (state.connection != AccessSiteConnectionState::kUnavailable) {
+      state.connection = AccessSiteConnectionState::kUnavailable;
+      state.failure_reason = state.operation_failure_reason.empty()
+                                 ? "The selected test Profile is unavailable."
+                                 : "";
+    }
+  }
+  const bool recheck_legacy = allowed && manual == test_profile_sites_.end() &&
+      state.recheck_committed_legacy &&
+      state.connection == AccessSiteConnectionState::kUnavailable &&
+      !publication_in_flight_ && !restoring_core_;
+  if (verify_legacy_core || recheck_legacy) {
+    if (allowed && HasAcknowledgedCommittedLegacySite(*key, website_context)) {
+      if (recheck_legacy) {
+        state.connection = AccessSiteConnectionState::kReady;
+        state.failure_reason.clear();
+      }
+    } else if (verify_legacy_core) {
+      state.connection = AccessSiteConnectionState::kUnavailable;
+      if (state.failure_reason.empty()) {
+        state.failure_reason =
+            "Proxy connection is unavailable. Reload to reconnect.";
+      }
+    }
+  }
+#else
+  if (verify_legacy_core) {
     auto* transport = AccessNetworkContextTransport::Get(profile_);
     const auto owner = transport ? transport->OwnerForPartition(
         AccessChannelForCurrentBuild(), {}) : std::nullopt;
@@ -189,10 +334,13 @@ AccessSiteProxyBubbleController::SnapshotForCommittedUrl(
       state.failure_reason = "Proxy connection is unavailable. Reload to reconnect.";
     }
   }
+#endif
   AccessSiteIntentStore presentation;
   if (host.host && key) presentation.Set(*host.host, intent_store_.Get(*key));
-  return BuildSiteProxyBubbleSnapshot(committed_url, presentation,
-                                      state.connection, state.failure_reason);
+  return BuildSiteProxyBubbleSnapshot(
+      committed_url, presentation, state.connection,
+      state.failure_reason.empty() ? state.operation_failure_reason
+                                   : state.failure_reason);
 }
 
 bool AccessSiteProxyBubbleController::ApplyHostProxyToggle(
@@ -283,24 +431,21 @@ bool AccessSiteProxyBubbleController::RequestHostProxySession(
     retry_url_ = GURL();
   }
   if (publication_in_flight_ || (enabled && restoring_core_)) {
-    host_states_[host].failure_reason = AccessSiteProxySessionErrorReadableMessage(
-        AccessSiteProxySessionError::kBusy);
+    busy_toggle_notice_ = BusyToggleNotice{host, state_revision_};
     return false;
   }
 
   if (!enabled) {
     // DIRECT publication does not need a live proxy endpoint. Keep the
     // committed choice until the local transaction actually succeeds.
-    host_states_[host].connection = AccessSiteConnectionState::kConnecting;
-    host_states_[host].failure_reason.clear();
+    host_states_[host] = {AccessSiteConnectionState::kConnecting, {}};
     BeginDisablePublication(host, std::move(on_ready));
     if (superseded_retry) std::move(superseded_retry).Run(false);
     if (superseded_queue) std::move(superseded_queue).Run(false);
     return true;
   }
 
-  host_states_[host].connection = AccessSiteConnectionState::kConnecting;
-  host_states_[host].failure_reason.clear();
+  host_states_[host] = {AccessSiteConnectionState::kConnecting, {}};
 
   publication_in_flight_ = true;
   on_enabled_ = std::move(on_ready);
@@ -323,6 +468,18 @@ void AccessSiteProxyBubbleController::RequestFailedNavigationProxy(
     std::move(completion).Run(false);
     return;
   }
+#if BUILDFLAG(IS_MAC)
+  if (!ResolveAccessLocalCoreInput()) {
+    // Without the legacy node input, only a site already bound to a manual
+    // Test Profile may retry. Its exact route is checked after restoration.
+    const auto website = CanonicalWebsiteHost(*host.host);
+    if (!website.host || (!test_profile_sites_.contains(*website.host) &&
+                          !HasCommittedTestProfileSite(&*website.host))) {
+      std::move(completion).Run(false);
+      return;
+    }
+  }
+#endif
   retry_url_ = original_url;
   retry_completion_ = std::move(completion);
   if (!RequestHostProxySession(*host.host, true) && retry_completion_) {
@@ -332,7 +489,11 @@ void AccessSiteProxyBubbleController::RequestFailedNavigationProxy(
 }
 base::RepeatingCallback<void(const GURL&, base::OnceCallback<void(bool)>)>
 AccessSiteProxyBubbleController::GetFailedNavigationRetryHandler() {
-  if (!ResolveAccessLocalCoreInput()) return {};
+  bool admitted = ResolveAccessLocalCoreInput().has_value();
+#if BUILDFLAG(IS_MAC)
+  admitted = admitted || HasManualTestProfileRetryBinding();
+#endif
+  if (!admitted) return {};
   return base::BindRepeating(
       &AccessSiteProxyBubbleController::RequestFailedNavigationProxy,
       weak_factory_.GetWeakPtr());
@@ -361,6 +522,15 @@ void AccessSiteProxyBubbleController::RestoreSavedIntents(OwnershipKey owner,
               ? AccessSiteIntent::kAllow : AccessSiteIntent::kOff);
       host_states_.try_emplace(*host.host);
       if (group.group.website_context) website_hosts_.insert(*host.host);
+#if BUILDFLAG(IS_MAC)
+      const auto& policy = group.members.front().policy;
+      if (policy.mode == AccessMode::kProxy &&
+          IsTestProfileProxyGroup(policy.proxy_group_id)) {
+        test_profile_sites_.insert_or_assign(*host.host, policy.proxy_group_id);
+      } else {
+        test_profile_sites_.erase(*host.host);
+      }
+#endif
     }
   }
   ++state_revision_;
@@ -383,8 +553,11 @@ void AccessSiteProxyBubbleController::FailCorePreparation(
   publication_in_flight_ = false;
   local_core_ready_ = false;
   ++state_revision_;
-  host_states_[host].connection = AccessSiteConnectionState::kUnavailable;
-  host_states_[host].failure_reason = std::move(error);
+  auto& state = host_states_[host];
+  if (!state.runtime_fault) {
+    state.connection = AccessSiteConnectionState::kUnavailable;
+    state.failure_reason = std::move(error);
+  }
   FinishNavigationPreparation(false);
 }
 void AccessSiteProxyBubbleController::PrepareLocalCore(const AccessSiteHost& host) {
@@ -414,6 +587,25 @@ void AccessSiteProxyBubbleController::OnProfileRestoredForCore(
     return;
   }
   RestoreSavedIntents(owner, true);
+#if BUILDFLAG(IS_MAC)
+  const auto test_profile = test_profile_sites_.find(host);
+  if (test_profile != test_profile_sites_.end()) {
+    const auto common = CaptureTestProfilePolicy(owner, test_profile->second);
+    if (!common || !IsActiveTestProfileGroup(owner, test_profile->second, *common)) {
+      publication_in_flight_ = false;
+      ++state_revision_;
+      host_states_[host] = {AccessSiteConnectionState::kUnavailable,
+                            "The selected test Profile is unavailable."};
+      FinishNavigationPreparation(false);
+      return;
+    }
+    publication_in_flight_ = false;
+    ++state_revision_;
+    host_states_[host] = {AccessSiteConnectionState::kReady, {}};
+    FinishNavigationPreparation(true);
+    return;
+  }
+#endif
   CreateLocalCore();
   if (!local_core_) {
     FailCorePreparation(host, "The authorized proxy configuration is unavailable.");
@@ -450,6 +642,617 @@ std::string AccessSiteProxyBubbleController::LocalProxyGroup(
   return owner.channel == ChannelNamespace::kAlpha ? "alpha-authorized-test-node"
                                                   : "dev-authorized-local-node";
 }
+#if BUILDFLAG(IS_MAC)
+bool AccessSiteProxyBubbleController::IsTestProfileProxyGroup(
+    std::string_view group) {
+  return ParseTestProfileGroup(group).has_value();
+}
+
+bool AccessSiteProxyBubbleController::HasPreparedTestNode() const {
+  if (profile_->IsOffTheRecord() || publication_in_flight_ || restoring_core_ ||
+      saved_test_profile_restore_)
+    return false;
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  return options && options->PreparedTestNode().has_value();
+}
+
+bool AccessSiteProxyBubbleController::HasManualTestProfileRetryBinding() const {
+  // The handler also suppresses Chromium auto-reload, so admit it only when a
+  // manual binding actually exists, never for every DEV error page.
+  if (profile_->IsOffTheRecord() || !CanResolveAccessInternalTestCoreInput())
+    return false;
+  if (!test_profile_sites_.empty()) return true;
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (options && options->test_profile_runtime().ready) return true;
+  return HasCommittedTestProfileSite(nullptr);
+}
+
+bool AccessSiteProxyBubbleController::HasCommittedTestProfileSite(
+    const AccessSiteHost* host) const {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  const auto owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  auto* coordinator = owner ? AccessServiceCoordinator::Get(profile_) : nullptr;
+  if (!coordinator) return false;
+  const auto snapshot = coordinator->ReadCommittedSnapshot(owner->storage_partition_token);
+  if (!snapshot.value || snapshot.value->owner != *owner) return false;
+  const auto selects_test_profile = [](const StoredSiteGroup& site) {
+    return !site.members.empty() &&
+           site.members.front().policy.mode == AccessMode::kProxy &&
+           IsTestProfileProxyGroup(site.members.front().policy.proxy_group_id);
+  };
+  if (host) {
+    const auto* site = FindCommittedBubbleSite(*snapshot.value, *host);
+    return site && selects_test_profile(*site);
+  }
+  return std::ranges::any_of(snapshot.value->site_groups, selects_test_profile);
+}
+
+std::optional<AccessLocalCoreReady>
+AccessSiteProxyBubbleController::AcknowledgedTestProfileListener() const {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (!options) return std::nullopt;
+  auto active = options->test_profile_runtime();
+  if (!active.ready) return std::nullopt;
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  const auto owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  const auto group = TestProfileGroup(active);
+  const auto common = owner ? CaptureTestProfilePolicy(*owner, group) : std::nullopt;
+  if (!common || !transport->HasAcknowledgedTestListener(
+                     *owner, *common, group, active.registration_id)) {
+    return std::nullopt;
+  }
+  return active;
+}
+
+bool AccessSiteProxyBubbleController::CanSelectTestProfileForSite(
+    const AccessSiteHost& requested_host) const {
+  const auto website = CanonicalWebsiteHost(requested_host);
+  if (!website.host) return false;
+  if (HasPreparedTestNode()) return true;
+  if (profile_->IsOffTheRecord() || publication_in_flight_ || restoring_core_ ||
+      saved_test_profile_restore_)
+    return false;
+  const auto active = AcknowledgedTestProfileListener();
+  if (!active) return false;
+  const auto bound = test_profile_sites_.find(*website.host);
+  return bound == test_profile_sites_.end() ||
+         bound->second != TestProfileGroup(*active);
+}
+
+bool AccessSiteProxyBubbleController::RequestTestProfileForSite(
+    const AccessSiteHost& requested_host) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  const auto website = CanonicalWebsiteHost(requested_host);
+  if (!website.host || !CanSelectTestProfileForSite(requested_host)) return false;
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  const auto prepared = options ? options->PreparedTestNode() : std::nullopt;
+  const auto active = prepared ? std::nullopt : AcknowledgedTestProfileListener();
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  const auto owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile_);
+  if ((!prepared && !active) || !owner || !transport->OwnsConfiguredPartition(*owner) ||
+      !coordinator ||
+      std::ranges::any_of(transport->AccountSites(), [&](const auto& paid) {
+        return CanonicalWebsiteHost(AccessSiteHost{paid}).host == website.host;
+      })) {
+    return false;
+  }
+  // Bind a retained fault to the original durable route at admission.
+  std::optional<bool> original_legacy_website_context;
+  const auto original =
+      coordinator->ReadCommittedSnapshot(owner->storage_partition_token);
+  if (original.status == StoreStatus::kValid && original.value &&
+      original.value->owner == *owner) {
+    const auto* site = FindCommittedBubbleSite(*original.value, *website.host);
+    if (site && !site->members.empty()) {
+      const auto& rule = site->members.front().policy;
+      if (rule.owner == *owner && rule.mode == AccessMode::kProxy &&
+          rule.proxy_group_id == LocalProxyGroup(*owner)) {
+        original_legacy_website_context = site->group.website_context;
+      }
+    }
+  }
+  publication_in_flight_ = true;
+  ++state_revision_;
+  auto& state = host_states_[*website.host];
+  state = {.connection = AccessSiteConnectionState::kConnecting,
+           .failure_reason = {},
+           .runtime_fault = original_legacy_website_context
+                                ? state.runtime_fault
+                                : std::nullopt};
+  if (!prepared) {
+    coordinator->InitializeForProfile(*owner, base::BindOnce(
+        &AccessSiteProxyBubbleController::OnActiveTestProfileSiteRestored,
+        weak_factory_.GetWeakPtr(), *website.host, *owner, active->registration_id,
+        TestProfileGroup(*active), original_legacy_website_context));
+    return true;
+  }
+  coordinator->InitializeForProfile(*owner, base::BindOnce(
+      &AccessSiteProxyBubbleController::OnTestProfileSiteRestored,
+      weak_factory_.GetWeakPtr(), *website.host, *owner, prepared->first,
+      prepared->second, original_legacy_website_context));
+  return true;
+}
+
+void AccessSiteProxyBubbleController::OnActiveTestProfileSiteRestored(
+    AccessSiteHost host, OwnershipKey owner, std::string registration_id,
+    std::string group, std::optional<bool> original_legacy_website_context,
+    bool restored) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  const auto common = restored ? CaptureTestProfilePolicy(owner, group) : std::nullopt;
+  if (!options || !common || !IsActiveTestProfileGroup(owner, group, *common) ||
+      options->test_profile_runtime().registration_id != registration_id) {
+    publication_in_flight_ = false;
+    ++state_revision_;
+    ReconcileCommittedSiteAfterTestPublication(
+        host, owner, original_legacy_website_context,
+        "The test Profile switch failed because the active listener changed.");
+    return;
+  }
+  BeginEnablePublication(host, {owner, group}, base::BindOnce(
+      [](base::WeakPtr<AccessSiteProxyBubbleController> self, AccessSiteHost host,
+         OwnershipKey owner, std::string registration_id, std::string group,
+         std::optional<bool> original_legacy_website_context,
+         AccessMutationTransactionResult result) {
+        if (!self) return;
+        self->publication_in_flight_ = false;
+        ++self->state_revision_;
+        const bool committed =
+            result.status == AccessMutationTransactionStatus::kCommitted;
+        auto* options = AccessOptionsService::GetOrCreate(self->profile_);
+        const auto common = self->CaptureTestProfilePolicy(owner, group);
+        const bool acknowledged = committed && options && common &&
+            options->test_profile_runtime().registration_id == registration_id &&
+            self->IsActiveTestProfileGroup(owner, group, *common);
+        if (acknowledged) {
+          self->AdoptWebsiteIntent(host, true);
+          self->test_profile_sites_.insert_or_assign(host, group);
+          self->host_states_[host] = {.connection = AccessSiteConnectionState::kReady};
+          return;
+        }
+        // Never revoke here: other sites keep using the same listener.
+        self->ReconcileCommittedSiteAfterTestPublication(
+            host, owner, original_legacy_website_context,
+            TestProfileSwitchCompletionMessage(result.status));
+      }, weak_factory_.GetWeakPtr(), host, owner, std::move(registration_id), group,
+      original_legacy_website_context));
+}
+
+void AccessSiteProxyBubbleController::OnTestProfileSiteRestored(
+    AccessSiteHost host, OwnershipKey owner, uint64_t revision,
+    AccessLocalCoreReady ready,
+    std::optional<bool> original_legacy_website_context, bool restored) {
+  auto fail = [&](std::string message) {
+    publication_in_flight_ = false;
+    ++state_revision_;
+    ReconcileCommittedSiteAfterTestPublication(
+        host, owner, original_legacy_website_context, std::move(message));
+  };
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_);
+  auto* coordinator = AccessServiceCoordinator::Get(profile_);
+  const auto common = runtime
+      ? runtime->CaptureCommonGenerationTupleOnUiThread(owner)
+      : std::nullopt;
+  if (!restored || !options || !transport || !coordinator || !common ||
+      !coordinator->CanDispatch(owner) ||
+      !transport->HasCurrentPrivatePolicy(owner, *common)) {
+    fail("The test Profile switch failed because the website policy could not "
+         "be confirmed.");
+    return;
+  }
+  const auto prepared = options->PreparedTestNode();
+  if (!prepared || prepared->first != revision ||
+      prepared->second.registration_id != ready.registration_id) {
+    fail("The test Profile switch failed because the prepared listener changed.");
+    return;
+  }
+  auto attempt = base::MakeRefCounted<TestProfilePublicationAttempt>();
+  if (!RegisterTestProfileForPublication(*options, owner, *common, revision,
+                                         ready, attempt)) {
+    fail("The test Profile switch failed because the listener could not be "
+         "registered.");
+    return;
+  }
+
+  BeginEnablePublication(host, {owner, TestProfileGroup(ready)}, base::BindOnce(
+      [](base::WeakPtr<AccessSiteProxyBubbleController> self,
+         base::WeakPtr<AccessOptionsService> options, AccessSiteHost host,
+         OwnershipKey owner, uint64_t revision, AccessLocalCoreReady ready,
+         std::optional<bool> original_legacy_website_context,
+         scoped_refptr<TestProfilePublicationAttempt> attempt,
+         AccessMutationTransactionResult result) {
+        if (!self) return;
+        const auto status = result.status;
+        const bool committed =
+            status == AccessMutationTransactionStatus::kCommitted;
+        self->publication_in_flight_ = false;
+        ++self->state_revision_;
+        const bool matched = options &&
+            options->CompleteTestNodePublication(revision, ready, committed);
+        if (!matched) {
+          // The transaction belongs to this site even if its runtime is gone.
+          // Only the exact original registration may be completed or revoked.
+          self->ReconcileCommittedSiteAfterTestPublication(
+              host, owner, original_legacy_website_context,
+              attempt->explicitly_revoked()
+                  ? ""
+                  : TestProfileSwitchCompletionMessage(status));
+          return;
+        }
+        if (committed ||
+            status == AccessMutationTransactionStatus::kCommittedUnavailable) {
+          self->AdoptWebsiteIntent(host, true);
+          self->test_profile_sites_.insert_or_assign(host, TestProfileGroup(ready));
+          self->host_states_[host] = {
+              .connection = committed ? AccessSiteConnectionState::kReady
+                                      : AccessSiteConnectionState::kUnavailable,
+              .operation_failure_reason =
+                  committed ? "" : TestProfileSwitchCompletionMessage(status)};
+        } else {
+          self->ReconcileCommittedSiteAfterTestPublication(
+              host, owner, original_legacy_website_context,
+              TestProfileSwitchCompletionMessage(status));
+        }
+        if (!committed) options->RevokeTestNodeProfile(base::DoNothing());
+      }, weak_factory_.GetWeakPtr(), options->GetWeakPtr(), host, owner,
+      revision, ready, original_legacy_website_context, std::move(attempt)));
+}
+
+void AccessSiteProxyBubbleController::ReconcileCommittedSiteAfterTestPublication(
+    const AccessSiteHost& host,
+    const OwnershipKey& owner,
+    std::optional<bool> original_legacy_website_context,
+    std::string failure_reason) {
+  auto* coordinator = AccessServiceCoordinator::Get(profile_);
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  auto& state = host_states_[host];
+  const auto committed =
+      coordinator && transport && transport->OwnsConfiguredPartition(owner)
+          ? coordinator->ReadCommittedSnapshot(owner.storage_partition_token)
+          : StoreResult<StoredPolicySnapshot>{.status = StoreStatus::kMissing};
+  if (committed.status != StoreStatus::kValid || !committed.value ||
+      committed.value->owner != owner) {
+    if (failure_reason.empty() &&
+        intent_store_.Get(host) == AccessSiteIntent::kAllow) {
+      failure_reason = "The current website policy is unavailable.";
+    }
+    state = failure_reason.empty()
+        ? HostState{}
+        : HostState{AccessSiteConnectionState::kUnavailable,
+                    std::move(failure_reason)};
+    return;
+  }
+  const auto* site = FindCommittedBubbleSite(*committed.value, host);
+  if (site && site->group.website_context) {
+    website_hosts_.insert(host);
+  } else {
+    website_hosts_.erase(host);
+  }
+  const auto* rule = site && !site->members.empty()
+      ? &site->members.front().policy : nullptr;
+  const bool allowed = rule && rule->owner == owner && rule->mode == AccessMode::kProxy;
+  intent_store_.Set(host, allowed ? AccessSiteIntent::kAllow : AccessSiteIntent::kOff);
+  test_profile_sites_.erase(host);
+  if (!allowed) {
+    state = failure_reason.empty()
+        ? HostState{}
+        : HostState{AccessSiteConnectionState::kUnavailable,
+                    std::move(failure_reason)};
+    return;
+  }
+
+  const auto& group = rule->proxy_group_id;
+  const bool test_profile = IsTestProfileProxyGroup(group);
+  if (test_profile) test_profile_sites_.insert_or_assign(host, group);
+  const bool legacy = group == LocalProxyGroup(owner);
+  if (legacy && state.runtime_fault &&
+      original_legacy_website_context == site->group.website_context) {
+    // The original route still owns the fault. An install ACK only confirms
+    // the policy, so it cannot clear the host fault.
+    state = HostState::FromRuntimeFault(*state.runtime_fault);
+    return;
+  }
+  const auto common = coordinator->CanDispatch(owner)
+      ? CaptureCommittedPolicy(profile_, *committed.value) : std::nullopt;
+  const bool acknowledged = common &&
+      (test_profile
+           ? IsActiveTestProfileGroup(owner, group, *common)
+           : legacy && local_core_ready_ &&
+                 core_owner_ == owner && transport->HasAcknowledgedLegacyProxy(
+                     owner, *common, group, core_registration_));
+  state = {.connection = acknowledged ? AccessSiteConnectionState::kReady
+                                      : AccessSiteConnectionState::kUnavailable,
+           .failure_reason = {},
+           .recheck_committed_legacy = legacy && !acknowledged,
+           .operation_failure_reason = std::move(failure_reason)};
+  if (!acknowledged && state.operation_failure_reason.empty()) {
+    state.failure_reason = test_profile
+        ? "The selected test Profile is unavailable."
+        : "Proxy connection is unavailable. Reload to reconnect.";
+  }
+}
+
+bool AccessSiteProxyBubbleController::HasAcknowledgedCommittedLegacySite(
+    const AccessSiteHost& host,
+    bool website_context) const {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  const auto owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  auto* coordinator = AccessServiceCoordinator::Get(profile_);
+  if (!owner || !local_core_ready_ || core_owner_ != owner ||
+      !transport->OwnsConfiguredPartition(*owner) ||
+      !coordinator || !coordinator->CanDispatch(*owner)) {
+    return false;
+  }
+  const auto committed =
+      coordinator->ReadCommittedSnapshot(owner->storage_partition_token);
+  if (committed.status != StoreStatus::kValid || !committed.value ||
+      committed.value->owner != *owner) {
+    return false;
+  }
+  const auto* site =
+      FindCommittedBubbleSite(*committed.value, host, website_context);
+  const auto* rule = site && !site->members.empty()
+      ? &site->members.front().policy : nullptr;
+  const std::string group = LocalProxyGroup(*owner);
+  if (!rule || rule->owner != *owner || rule->mode != AccessMode::kProxy ||
+      rule->proxy_group_id != group) {
+    return false;
+  }
+  const auto common = CaptureCommittedPolicy(profile_, *committed.value);
+  return common && transport->HasAcknowledgedLegacyProxy(
+                       *owner, *common, group, core_registration_);
+}
+
+bool AccessSiteProxyBubbleController::RegisterTestProfileForPublication(
+    AccessOptionsService& options, const OwnershipKey& owner,
+    const aegis_access::GenerationTuple& common, uint64_t revision,
+    const AccessLocalCoreReady& ready,
+    scoped_refptr<TestProfilePublicationAttempt> attempt) {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  if (!transport) return false;
+  if (!test_profile_revoker_installed_) {
+    test_profile_revoker_installed_ = options.SetTestNodeConsumerRevoker(
+        base::BindRepeating(&AccessSiteProxyBubbleController::RetireTestProfileConsumer,
+                           weak_factory_.GetWeakPtr()));
+    if (!test_profile_revoker_installed_) return false;
+    transport->SetTestListenerLostCallback(base::BindRepeating(
+        &AccessSiteProxyBubbleController::OnTestProfileListenerLost,
+        weak_factory_.GetWeakPtr()));
+  }
+  const std::string group = TestProfileGroup(ready);
+  auto* selections = AccessProxySelectionGenerationSource::GetOrCreate(profile_);
+  const auto* old = selections->binding_for_group(group);
+  const auto selected = selections->CommitSelection(
+      {group, ready.registration_id, "test-listener:" + ready.registration_id,
+       "test-authorization:" + base::NumberToString(ready.authorization_generation),
+       old ? old->binding_revision + 1 : 1});
+  auto generations = common;
+  generations.selection_generation = selected.generation;
+  const aegis_access::AccessPreparedListenerBinding binding{
+      aegis_access::kAccessNoAuthListenerWireVersion, ready.profile_id,
+      ready.profile_version, ready.authorization_generation,
+      ready.listener_socket_generation};
+  if (selected.status !=
+          aegis_access::ProxySelectionGenerationCommitStatus::kCommitted ||
+      !transport->RegisterPreparedProxy(
+          {{ready.registration_id, group, owner, generations, ready.transport,
+            "127.0.0.1", ready.port}, std::nullopt, binding})) {
+    return false;
+  }
+  if (!options.BeginTestNodePublication(revision, ready, std::move(attempt))) {
+    transport->ForgetPreparedProxy(owner, group, ready.registration_id);
+    return false;
+  }
+  return true;
+}
+
+void AccessSiteProxyBubbleController::RetireTestProfileConsumer(
+    AccessLocalCoreReady ready, base::OnceCallback<void(bool)> completion) {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_);
+  const auto owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  const auto* policy = runtime && owner ? runtime->GetPublishedPolicySnapshot(*owner) : nullptr;
+  const auto common = runtime && owner
+      ? runtime->CaptureCommonGenerationTupleOnUiThread(*owner)
+      : std::nullopt;
+  if (!policy || !common || ready.registration_id.empty()) {
+    std::move(completion).Run(false);
+    return;
+  }
+  transport->RetirePreparedTestListener(*policy, *common,
+      TestProfileGroup(ready), ready.registration_id,
+      std::move(completion));
+}
+
+std::optional<aegis_access::GenerationTuple>
+AccessSiteProxyBubbleController::CaptureTestProfilePolicy(
+    const OwnershipKey& owner, const std::string& group) const {
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  auto* coordinator = AccessServiceCoordinator::Get(profile_);
+  auto* runtime = AccessPublishedRequestRuntime::Get(profile_);
+  const auto expected_owner = transport
+      ? transport->OwnerForPartition(AccessChannelForCurrentBuild(), {})
+      : std::nullopt;
+  if (!profile_->IsRegularProfile() || !expected_owner || *expected_owner != owner ||
+      !transport->OwnsConfiguredPartition(owner) || !runtime ||
+      !coordinator || !coordinator->CanDispatch(owner)) {
+    return std::nullopt;
+  }
+  const auto* policy = runtime->GetPublishedPolicySnapshot(owner);
+  if (!policy || policy->owner != owner ||
+      !std::ranges::any_of(policy->rules, [&](const auto& rule) {
+        return rule.mode == AccessMode::kProxy && rule.proxy_group_id == group;
+      })) {
+    return std::nullopt;
+  }
+  return runtime->CaptureCommonGenerationTupleOnUiThread(owner);
+}
+
+bool AccessSiteProxyBubbleController::IsActiveTestProfileGroup(
+    const OwnershipKey& owner, const std::string& group,
+    const aegis_access::GenerationTuple& common) const {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (!options) return false;
+  const auto active = options->test_profile_runtime();
+  return active.ready && TestProfileGroup(active) == group &&
+      AccessNetworkContextTransport::Get(profile_)->HasAcknowledgedTestListener(
+          owner, common, group, active.registration_id);
+}
+
+void AccessSiteProxyBubbleController::RestoreTestProfileForRequest(
+    const OwnershipKey& owner, const std::string& group,
+    base::OnceCallback<void(bool)> completion) {
+  const auto common = CaptureTestProfilePolicy(owner, group);
+  const auto binding = ParseTestProfileGroup(group);
+  if (!common || !binding) {
+    std::move(completion).Run(false);
+    return;
+  }
+  if (IsActiveTestProfileGroup(owner, group, *common)) {
+    std::move(completion).Run(true);
+    return;
+  }
+  if (saved_test_profile_restore_) {
+    auto& pending = *saved_test_profile_restore_;
+    if (pending.owner == owner && pending.group == group && pending.common == *common) {
+      pending.waiters.push_back(std::move(completion));
+    } else {
+      std::move(completion).Run(false);
+    }
+    return;
+  }
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (!options || !options->CanRestoreSavedTestNodeProfile()) {
+    std::move(completion).Run(false);
+    return;
+  }
+  saved_test_profile_restore_.emplace(SavedTestProfileRestore{owner, group, *common, {}, {}});
+  saved_test_profile_restore_->waiters.push_back(std::move(completion));
+  ++state_revision_;
+  options->PrepareSavedTestNodeProfile(std::string(binding->first), binding->second,
+      base::BindOnce(&AccessSiteProxyBubbleController::OnSavedTestProfilePrepared,
+          weak_factory_.GetWeakPtr(), ++saved_test_profile_attempt_));
+}
+
+void AccessSiteProxyBubbleController::OnSavedTestProfilePrepared(
+    uint64_t attempt, AccessLocalCoreReady ready) {
+  if (!saved_test_profile_restore_ || attempt != saved_test_profile_attempt_) return;
+  auto& restore = *saved_test_profile_restore_;
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  const auto prepared = options ? options->PreparedTestNode() : std::nullopt;
+  if (!ready.ready || !prepared ||
+      prepared->second.registration_id != ready.registration_id) {
+    FinishSavedTestProfileRestore(false);
+    return;
+  }
+  const uint64_t revision = prepared->first;
+  if (TestProfileGroup(ready) != restore.group ||
+      CaptureTestProfilePolicy(restore.owner, restore.group) != restore.common ||
+      !RegisterTestProfileForPublication(*options, restore.owner, restore.common,
+                                         revision, ready)) {
+    options->RevokePreparedTestNodeIfCurrent(revision, ready);
+    FinishSavedTestProfileRestore(false);
+    return;
+  }
+
+  restore.publication_deadline = saved_test_profile_publication_clock_->NowTicks() +
+                                 kTestProfilePublicationTimeout;
+  saved_test_profile_publication_timer_.Start(FROM_HERE, kTestProfilePublicationTimeout,
+      base::BindOnce(&AccessSiteProxyBubbleController::OnSavedTestProfilePublished,
+          weak_factory_.GetWeakPtr(), attempt, revision, ready, false));
+  const auto* policy = AccessPublishedRequestRuntime::Get(profile_)
+      ->GetPublishedPolicySnapshot(restore.owner);
+  AccessNetworkContextTransport::Get(profile_)->PublishPrivatePolicy(
+      *policy, restore.common,
+      base::BindOnce(&AccessSiteProxyBubbleController::OnSavedTestProfilePublished,
+          weak_factory_.GetWeakPtr(), attempt, revision, std::move(ready)));
+}
+
+void AccessSiteProxyBubbleController::OnSavedTestProfilePublished(
+    uint64_t attempt, uint64_t revision, AccessLocalCoreReady ready, bool acknowledged) {
+  if (!saved_test_profile_restore_ || attempt != saved_test_profile_attempt_) return;
+  const auto& restore = *saved_test_profile_restore_;
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  const bool current = acknowledged &&
+      saved_test_profile_publication_clock_->NowTicks() < restore.publication_deadline &&
+      CaptureTestProfilePolicy(restore.owner, restore.group) == restore.common &&
+      AccessNetworkContextTransport::Get(profile_)->HasAcknowledgedTestListener(
+          restore.owner, restore.common, restore.group, ready.registration_id);
+  const bool matched = options &&
+      options->CompleteTestNodePublication(revision, ready, current);
+  if (matched && !current) {
+    options->RevokeTestNodeProfile(base::DoNothing());
+  } else if (options && !matched) {
+    options->RevokePreparedTestNodeIfCurrent(revision, ready);
+  }
+  FinishSavedTestProfileRestore(matched && current);
+}
+
+void AccessSiteProxyBubbleController::FinishSavedTestProfileRestore(bool ready) {
+  saved_test_profile_publication_timer_.Stop();
+  auto callbacks = std::move(saved_test_profile_restore_->waiters);
+  saved_test_profile_restore_.reset();
+  ++state_revision_;
+  for (auto& callback : callbacks) std::move(callback).Run(ready);
+}
+
+void AccessSiteProxyBubbleController::OnTestProfileListenerAuthFault(
+    const OwnershipKey& owner, const aegis_access::GenerationTuple& observed,
+    const std::string& registration_id) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  auto* transport = AccessNetworkContextTransport::Get(profile_);
+  if (!options || !transport || registration_id.empty()) return;
+  const auto current = options->test_profile_runtime();
+  if (current.registration_id != registration_id || !current.no_local_auth ||
+      current.transport != aegis_access::RegisteredProxyTransport::kHttp) return;
+  const auto group = TestProfileGroup(current);
+  const auto endpoint = transport->PreparedProxyForGroup(owner, group);
+  if (!endpoint || endpoint->registration_id != registration_id) return;
+  auto expected = endpoint->generations;
+  expected.policy_generation = observed.policy_generation;
+  if (expected != observed) return;
+  for (const auto& [host, selection] : test_profile_sites_) {
+    if (selection == group) {
+      host_states_[host] = {AccessSiteConnectionState::kUnavailable,
+                            "The local listener unexpectedly requested authentication."};
+    }
+  }
+  ++state_revision_;
+  options->RevokeTestNodeProfile(base::DoNothing());
+}
+
+void AccessSiteProxyBubbleController::OnTestProfileListenerLost(
+    const OwnershipKey& owner, const std::string& group,
+    const std::string& registration_id) {
+  auto* options = AccessOptionsService::GetOrCreate(profile_);
+  if (!options || registration_id.empty()) return;
+  const auto current = options->test_profile_runtime();
+  if (current.registration_id != registration_id || TestProfileGroup(current) != group)
+    return;
+  for (const auto& [host, selection] : test_profile_sites_) {
+    if (selection == group) {
+      host_states_[host] = {AccessSiteConnectionState::kUnavailable,
+                            "The network process restarted. Reconnecting the test Profile."};
+    }
+  }
+  ++state_revision_;
+  // The next protected request re-reads the saved Profile binding and starts
+  // from a new listener registration.
+  options->RevokeTestNodeProfileAfterNetworkLoss(registration_id);
+}
+#endif
 bool AccessSiteProxyBubbleController::CanViewCoreLogs() const {
   return core_logs_ != nullptr;
 }
@@ -617,8 +1420,7 @@ void AccessSiteProxyBubbleController::OnCommittedCoreVerified(
   }
   publication_in_flight_ = false;
   ++state_revision_;
-  host_states_[host].connection = AccessSiteConnectionState::kReady;
-  host_states_[host].failure_reason.clear();
+  host_states_[host] = {AccessSiteConnectionState::kReady, {}};
   local_core_ready_ = true;
   FinishNavigationPreparation(true);
 }
@@ -641,6 +1443,12 @@ bool AccessSiteProxyBubbleController::IsCurrentPreparedCore(
 void AccessSiteProxyBubbleController::EnsureLocalCoreForRequest(
     const OwnershipKey& owner, const std::string& group,
     base::OnceCallback<void(bool)> completion) {
+#if BUILDFLAG(IS_MAC)
+  if (IsTestProfileProxyGroup(group)) {
+    RestoreTestProfileForRequest(owner, group, std::move(completion));
+    return;
+  }
+#endif
   auto* transport = AccessNetworkContextTransport::Get(profile_);
   const auto expected_owner = transport ? transport->OwnerForPartition(
       AccessChannelForCurrentBuild(), {}) : std::nullopt;
@@ -676,7 +1484,11 @@ void AccessSiteProxyBubbleController::EnsureLocalCoreForRequest(
   restoring_core_ = true;
   const auto attempt = ++core_attempt_;
   for (auto& [host, state] : host_states_) {
-    if (intent_store_.Get(host) == AccessSiteIntent::kAllow) {
+#if BUILDFLAG(IS_MAC)
+    if (test_profile_sites_.contains(host)) continue;
+#endif
+    if (intent_store_.Get(host) == AccessSiteIntent::kAllow &&
+        !state.runtime_fault) {
       state.connection = AccessSiteConnectionState::kConnecting;
       state.failure_reason.clear();
     }
@@ -726,19 +1538,25 @@ void AccessSiteProxyBubbleController::OnRestoredCorePolicyReady(
 void AccessSiteProxyBubbleController::OnRestoredCoreVerified(
     OwnershipKey owner, uint64_t attempt, AccessLocalCoreReady result) {
   if (attempt != core_attempt_ || !restoring_core_) return;
-  const bool ready = IsCurrentPreparedCore(owner, result);
-  if (!ready && !result.ready) OnLocalCoreStopped(core_registration_);
-  local_core_ready_ = ready;
+  if (!result.ready) {
+    OnLocalCoreStopped(core_registration_);
+    return;
+  }
+  local_core_ready_ = IsCurrentPreparedCore(owner, result);
+  if (!local_core_ready_) {
+    FinishCoreRequests(false);
+    return;
+  }
   for (auto& [host, state] : host_states_) {
+#if BUILDFLAG(IS_MAC)
+    if (test_profile_sites_.contains(host)) continue;
+#endif
     if (intent_store_.Get(host) == AccessSiteIntent::kAllow) {
-      state.connection = ready ? AccessSiteConnectionState::kReady
-                                           : AccessSiteConnectionState::kUnavailable;
-      state.failure_reason = ready ? std::string() :
-          "The saved proxy binding is not ready.";
+      state = {AccessSiteConnectionState::kReady, {}};
     }
   }
   ++state_revision_;
-  FinishCoreRequests(ready);
+  FinishCoreRequests(true);
 }
 void AccessSiteProxyBubbleController::FinishNavigationPreparation(bool ready) {
   auto on_enabled = std::move(on_enabled_);
@@ -758,7 +1576,11 @@ void AccessSiteProxyBubbleController::FinishNavigationPreparation(bool ready) {
 void AccessSiteProxyBubbleController::FinishCoreRequests(bool ready) {
   if (restoring_core_ && !ready) {
     for (auto& [host, state] : host_states_) {
-      if (intent_store_.Get(host) == AccessSiteIntent::kAllow) {
+#if BUILDFLAG(IS_MAC)
+      if (test_profile_sites_.contains(host)) continue;
+#endif
+      if (intent_store_.Get(host) == AccessSiteIntent::kAllow &&
+          !state.runtime_fault) {
         state.connection = AccessSiteConnectionState::kUnavailable;
         state.failure_reason = "The saved proxy binding is not ready.";
       }
@@ -784,13 +1606,31 @@ void AccessSiteProxyBubbleController::OnLocalCoreStopped(std::string registratio
       transport->PublishPrivatePolicy(*policy, *common, base::BindOnce([](bool) {}));
   }
   for (auto& [host, state] : host_states_) {
-    if (intent_store_.Get(host) == AccessSiteIntent::kAllow) {
-      state.connection = AccessSiteConnectionState::kUnavailable;
-      state.failure_reason = "The local proxy has stopped.";
+#if BUILDFLAG(IS_MAC)
+    if (test_profile_sites_.contains(host)) continue;
+#endif
+    if (intent_store_.Get(host) == AccessSiteIntent::kAllow &&
+        !state.runtime_fault) {
+      state = {.connection = AccessSiteConnectionState::kUnavailable,
+               .failure_reason = "The local proxy has stopped.",
+               .recheck_committed_legacy = true};
     }
   }
   ++state_revision_;
   FinishCoreRequests(false);
+}
+
+AccessSiteProxyBubbleController::HostState
+AccessSiteProxyBubbleController::HostState::FromRuntimeFault(
+    RuntimeFault fault) {
+  const bool wait = fault == RuntimeFault::kWait;
+  return {
+      .connection = wait ? AccessSiteConnectionState::kConnecting
+                         : AccessSiteConnectionState::kUnavailable,
+      .failure_reason = AccessSiteProxySessionErrorReadableMessage(
+          AccessSiteProxySessionError::kRuntimeFault,
+          wait ? "waiting for node recovery" : "node or runtime unavailable"),
+      .runtime_fault = fault};
 }
 
 bool AccessSiteProxyBubbleController::NotifyHostProxyRuntimeFault(
@@ -812,11 +1652,8 @@ bool AccessSiteProxyBubbleController::NotifyHostProxyRuntimeFault(
   }
   // Keep allow intent and the published PROXY selection. Do not ClearProxy
   // or publish DIRECT — new requests fail or wait against the PROXY policy.
-  host_states_[host].failure_reason = AccessSiteProxySessionErrorReadableMessage(
-      AccessSiteProxySessionError::kRuntimeFault,
-      wait ? "waiting for node recovery" : "node or runtime unavailable");
-  host_states_[host].connection = wait ? AccessSiteConnectionState::kConnecting
-                           : AccessSiteConnectionState::kUnavailable;
+  host_states_[host] = HostState::FromRuntimeFault(
+      wait ? RuntimeFault::kWait : RuntimeFault::kUnavailable);
   return true;
 }
 
@@ -889,13 +1726,21 @@ AccessSiteProxyBubbleController::OpenSessionStore(
 
 void AccessSiteProxyBubbleController::BeginEnablePublication(
     const AccessSiteHost& host,
-    AccessSiteProxyLocalProxyReadyInfo ready) {
+    AccessSiteProxyLocalProxyReadyInfo ready,
+    base::OnceCallback<void(AccessMutationTransactionResult)> completion) {
+  auto fail = [&](std::string message) {
+    if (completion) {
+      std::move(completion).Run({AccessMutationTransactionStatus::kPrepareFailed});
+    } else {
+      FailCorePreparation(host, std::move(message));
+    }
+  };
   auto* coordinator = AccessServiceCoordinator::GetOrCreate(profile_);
   if (!coordinator) {
     host_states_[host].connection = AccessSiteConnectionState::kUnavailable;
     host_states_[host].failure_reason = AccessSiteProxySessionErrorReadableMessage(
         AccessSiteProxySessionError::kMissingCoordinator);
-    FailCorePreparation(host, host_states_[host].failure_reason);
+    fail(host_states_[host].failure_reason);
     return;
   }
 
@@ -906,7 +1751,7 @@ void AccessSiteProxyBubbleController::BeginEnablePublication(
       host_states_[host].connection = AccessSiteConnectionState::kUnavailable;
       host_states_[host].failure_reason = AccessSiteProxySessionErrorReadableMessage(
           AccessSiteProxySessionError::kMissingStore);
-      FailCorePreparation(host, host_states_[host].failure_reason);
+      fail(host_states_[host].failure_reason);
     return;
     }
   }
@@ -918,7 +1763,7 @@ void AccessSiteProxyBubbleController::BeginEnablePublication(
       (committed.status != StoreStatus::kValid || !committed.value)) {
     host_states_[host].connection = AccessSiteConnectionState::kUnavailable;
     host_states_[host].failure_reason = "Access rule store requires recovery.";
-    FailCorePreparation(host, host_states_[host].failure_reason);
+    fail(host_states_[host].failure_reason);
     return;
   }
   uint64_t expected_revision = 0;
@@ -943,15 +1788,18 @@ void AccessSiteProxyBubbleController::BeginEnablePublication(
                 AccessSiteIntentMutationStatus::kMissingProxyGroup
             ? AccessSiteProxySessionError::kMissingProxyGroup
             : AccessSiteProxySessionError::kPrepareFailed);
-    FailCorePreparation(host, host_states_[host].failure_reason);
+    fail(host_states_[host].failure_reason);
     return;
   }
 
   publication_in_flight_ = true;
+  if (!completion) {
+    completion = base::BindOnce(&AccessSiteProxyBubbleController::OnPublicationComplete,
+                                weak_factory_.GetWeakPtr(), host, /*enabling=*/true);
+  }
   coordinator->CommitSiteGroupMutation(
       std::move(store), std::move(*plan.mutation.request), plan.selector,
-      base::BindOnce(&AccessSiteProxyBubbleController::OnPublicationComplete,
-                     weak_factory_.GetWeakPtr(), host, /*enabling=*/true));
+      std::move(completion));
 }
 
 void AccessSiteProxyBubbleController::BeginDisablePublication(
@@ -1029,6 +1877,9 @@ void AccessSiteProxyBubbleController::OnPublicationComplete(
   if (result.status == AccessMutationTransactionStatus::kCommitted ||
       result.status == AccessMutationTransactionStatus::kCommittedUnavailable) {
     AdoptWebsiteIntent(host, enabling);
+#if BUILDFLAG(IS_MAC)
+    test_profile_sites_.erase(host);
+#endif
   }
 
   if (enabling) {

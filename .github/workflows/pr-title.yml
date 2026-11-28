@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   normalize-title:
+    if: ${{ github.repository != 'quinn521/aegis-browser' || github.base_ref == 'develop' }}
     name: normalize-pr-title
     runs-on: ubuntu-24.04
     timeout-minutes: 5

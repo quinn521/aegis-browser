@@ -1,30 +1,30 @@
 {
-  "id": 460067232,
-  "tag_name": "20261127013728",
+  "id": 461209706,
+  "tag_name": "20261128011702",
   "draft": false,
   "prerelease": false,
-  "published_at": "2026-11-27T01:38:41Z",
-  "url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/460067232",
-  "html_url": "https://github.com/XTLS/Xray-rules-dat/releases/tag/20261127013728",
-  "assets_url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/460067232/assets",
+  "published_at": "2026-11-28T01:18:08Z",
+  "url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/461209706",
+  "html_url": "https://github.com/XTLS/Xray-rules-dat/releases/tag/20261128011702",
+  "assets_url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/461209706/assets",
   "assets": [
     {
       "name": "geosite.dat",
-      "id": 798478276,
-      "size": 7735216,
+      "id": 802715391,
+      "size": 7734685,
       "state": "uploaded",
-      "digest": "sha256:919a4b32cc9e6619e5bc17831cd388f89df77d9bf9817dab98b489d479162047",
-      "url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/assets/798478276",
-      "browser_download_url": "https://github.com/XTLS/Xray-rules-dat/releases/download/20261127013728/geosite.dat"
+      "digest": "sha256:ff32ecaf4a8c1d010fe89e1228fdd77f5f4d8e540ee0160b853cb13d6c2423a2",
+      "url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/assets/802715391",
+      "browser_download_url": "https://github.com/XTLS/Xray-rules-dat/releases/download/20261128011702/geosite.dat"
     },
     {
       "name": "geosite.dat.sha256sum",
-      "id": 798478378,
+      "id": 802715571,
       "size": 78,
       "state": "uploaded",
-      "digest": "sha256:d01352372e20776c8fa45b1765231dedcaea0432e19742d4e2541f1711f88256",
-      "url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/assets/798478378",
-      "browser_download_url": "https://github.com/XTLS/Xray-rules-dat/releases/download/20261127013728/geosite.dat.sha256sum"
+      "digest": "sha256:70e2409dc1772b00fb4e43c82d17246443dff75fd577d004e22b13af010f098d",
+      "url": "https://api.github.com/repos/XTLS/Xray-rules-dat/releases/assets/802715571",
+      "browser_download_url": "https://github.com/XTLS/Xray-rules-dat/releases/download/20261128011702/geosite.dat.sha256sum"
     }
   ]
 }

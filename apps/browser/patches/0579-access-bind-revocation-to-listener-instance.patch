@@ -1,0 +1,338 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:26:28 +0800
+Subject: [PATCH] fix(access): bind Options revocation to the current listener instance
+
+---
+diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
+index b1f1b5c71759eb9e4b06a654a468d03c2b1617e2..ed78487d3b2c554fdff0d541ea614024666f5821 100644
+--- a/chrome/browser/aegis/access/access_options_browsertest.cc
++++ b/chrome/browser/aegis/access/access_options_browsertest.cc
+@@ -150,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+   constexpr char kRevoke[] = R"JS(
+     (async () => {
+       const {sendWithPromise} = await import('chrome://resources/js/cr.js');
+-      return (await sendWithPromise('revokeAccessTestNode', '1')).state;
++      return (await sendWithPromise('revokeAccessTestNode', '1', 'stale-token')).state;
+     })()
+   )JS";
+   auto* options = AccessOptionsService::GetOrCreate(browser()->GetProfile());
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index 48c4c84f2f3806c6d45913a53df00ecfcbba42f8..25081e9d870fab12193f1d2a72bb791717568912 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -740,6 +740,7 @@ void AccessOptionsService::OnTestProfileRuntimeRead(uint64_t epoch, TestProfileE
+     return;
+   }
+   test_profile_runtime_revision_ = snapshot.value->revision;
++  test_profile_revocation_token_ = base::Uuid::GenerateRandomV4().AsLowercaseString();
+   test_profile_ready_ = {};
+   test_profile_ready_.profile_id = stored.configuration.id;
+   test_profile_ready_.profile_version = stored.version;
+@@ -921,17 +922,22 @@ void AccessOptionsService::RevokeTestNodeProfile(base::OnceCallback<void(bool)>
+   }
+ }
+ 
+-bool AccessOptionsService::CanRevokeTestNodeProfileAtRevision(uint64_t revision) const {
++std::string AccessOptionsService::TestNodeRevocationTokenAtRevision(
++    uint64_t revision) const {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  return revision && revision == test_profile_runtime_revision_ &&
+-      test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
+-      test_profile_runtime_state_ != AccessTestProfileRuntimeState::kPreparing;
++  if (!revision || revision != test_profile_runtime_revision_ ||
++      test_profile_runtime_state_ == AccessTestProfileRuntimeState::kIdle ||
++      test_profile_runtime_state_ == AccessTestProfileRuntimeState::kPreparing) {
++    return {};
++  }
++  return test_profile_revocation_token_;
+ }
+ 
+ bool AccessOptionsService::RevokeTestNodeProfileAtRevision(
+-    uint64_t revision, base::OnceCallback<void(bool)> callback) {
++    uint64_t revision, std::string_view token,
++    base::OnceCallback<void(bool)> callback) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+-  if (!CanRevokeTestNodeProfileAtRevision(revision)) {
++  if (token.empty() || token != TestNodeRevocationTokenAtRevision(revision)) {
+     return false;
+   }
+   if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kPublishing &&
+@@ -964,6 +970,7 @@ void AccessOptionsService::OnTestProfileCoreRetired(uint64_t epoch, bool confirm
+     test_profile_core_.reset();
+     test_profile_ready_ = {};
+     test_profile_runtime_revision_ = 0;
++    test_profile_revocation_token_.clear();
+     test_profile_consumers_possible_ = false;
+     // Only a confirmed retirement after Network Service loss reopens the
+     // single cold restore from the persisted Profile binding.
+diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
+index 20e04e811fc1c2425c133803c8dcc73b428d48f2..df8bd91b95d2830cff976c0218b9bc0c116ef14f 100644
+--- a/chrome/browser/aegis/access/access_options_service.h
++++ b/chrome/browser/aegis/access/access_options_service.h
+@@ -136,8 +136,8 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+   bool SetTestNodeConsumerRevoker(base::RepeatingCallback<void(
+       AccessLocalCoreReady, base::OnceCallback<void(bool)>)> revoker);
+   void RevokeTestNodeProfile(base::OnceCallback<void(bool)> callback);
+-  bool CanRevokeTestNodeProfileAtRevision(uint64_t revision) const;
+-  bool RevokeTestNodeProfileAtRevision(uint64_t revision,
++  std::string TestNodeRevocationTokenAtRevision(uint64_t revision) const;
++  bool RevokeTestNodeProfileAtRevision(uint64_t revision, std::string_view token,
+       base::OnceCallback<void(bool)> callback);
+   void RevokePreparedTestNodeIfCurrent(uint64_t revision,
+                                       const AccessLocalCoreReady& ready);
+@@ -239,6 +239,7 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+   bool test_profile_network_loss_restore_ = false;
+   uint64_t test_profile_runtime_epoch_ = 0;
+   uint64_t test_profile_runtime_revision_ = 0;
++  std::string test_profile_revocation_token_;
+   uint64_t test_profile_authorization_generation_ = 0;
+   bool test_profile_consumers_possible_ = false;
+   base::RepeatingCallback<void(AccessLocalCoreReady, base::OnceCallback<void(bool)>)>
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index e63fb9b46e02068806d7508b628d0d262e97042e..174d028d273ec33e4072ea36e656954ba10473d5 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -618,8 +618,10 @@ class AccessSavedTestProfileProductTest : public AccessSiteProxyProductTest {
+     ASSERT_TRUE(committed.value && committed.value->site_groups.size() == 1u);
+ 
+     base::test::TestFuture<bool> revoked;
+-    ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+-                                                         revoked.GetCallback()));
++    ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
++        options_before_.revision,
++        options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++        revoked.GetCallback()));
+     ASSERT_TRUE(revoked.Wait()) << SavedProfileState(options);
+     ASSERT_TRUE(revoked.Get()) << SavedProfileState(options);
+ 
+@@ -774,7 +776,9 @@ class AccessSavedTestProfileProductTest : public AccessSiteProxyProductTest {
+     ASSERT_TRUE(base::test::RunUntil([&] { return context_.has_reply(); }));
+     ASSERT_NO_FATAL_FAILURE(AssertHeldTestProfileAck(options, host.value.c_str()));
+     ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
+-        options_before_.revision, base::DoNothing()));
++        options_before_.revision,
++        options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++        base::DoNothing()));
+ 
+     // Retirement can publish before rollback. Hold the install that restores
+     // this legacy registration specifically.
+@@ -859,7 +863,9 @@ class AccessSavedTestProfileProductTest : public AccessSiteProxyProductTest {
+       EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+       // A UI Revoke can join the retirement the core stop already started.
+       ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
+-          options_before_.revision, base::DoNothing()));
++          options_before_.revision,
++          options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++          base::DoNothing()));
+       EXPECT_TRUE(AccessSiteProxyProductTestPeer::IsPreparing(bubble_));
+     }
+     if (failure == SwitchFailure::kRejectedAckWithLateRollback) {
+@@ -1048,8 +1054,10 @@ TEST_F(AccessSavedTestProfileProductTest, PersistedBindingWaitsForExactAckAfterR
+   EXPECT_EQ(stored.Get().value->test_profile, options_before_.test_profile);
+ 
+   base::test::TestFuture<bool> revoked;
+-  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+-                                                       revoked.GetCallback()));
++  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
++      options_before_.revision,
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++      revoked.GetCallback()));
+   ASSERT_TRUE(revoked.Wait()) << SavedProfileState(options);
+   ASSERT_TRUE(revoked.Get());
+   ExpectBlockedWithoutRestoring();
+@@ -1230,8 +1238,10 @@ TEST_F(AccessSavedTestProfileProductTest, MissingAckTimesOutAndLateAckCannotDisp
+   EXPECT_FALSE(blocked_preparation.Get().ready);
+ 
+   base::test::TestFuture<bool> revoked;
+-  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+-                                                       revoked.GetCallback()));
++  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
++      options_before_.revision,
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++      revoked.GetCallback()));
+   EXPECT_FALSE(revoked.IsReady());
+   context_.Reply(true);
+   ASSERT_TRUE(revoked.Wait());
+@@ -1271,7 +1281,8 @@ TEST_F(AccessSavedTestProfileProductTest, NetworkChangeHidesActiveListenerButKee
+   AccessNetworkContextTransportTestPeer::AdvanceNetwork(transport_);
+   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
+   EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+-  EXPECT_TRUE(options->CanRevokeTestNodeProfileAtRevision(options_before_.revision));
++  EXPECT_FALSE(
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision).empty());
+   EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kUnavailable);
+ }
+ 
+@@ -1363,6 +1374,9 @@ TEST_F(AccessSavedTestProfileProductTest,
+   ASSERT_TRUE(restored.Get());
+   const auto active = bubble_->AcknowledgedTestProfileListener();
+   ASSERT_TRUE(active);
++  const auto stale_token =
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision);
++  ASSERT_FALSE(stale_token.empty());
+ 
+   // The Network Service restarts without a network epoch change.
+   context_.Disconnect();
+@@ -1403,6 +1417,17 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_NE(fresh->registration_id, active->registration_id);
+   EXPECT_GT(fresh->authorization_generation, active->authorization_generation);
+   EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
++  const auto fresh_token =
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision);
++  ASSERT_FALSE(fresh_token.empty());
++  EXPECT_NE(fresh_token, stale_token);
++  EXPECT_FALSE(options->RevokeTestNodeProfileAtRevision(
++      options_before_.revision, stale_token, base::DoNothing()));
++  EXPECT_TRUE(bubble_->AcknowledgedTestProfileListener());
++  base::test::TestFuture<bool> revoked;
++  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
++      options_before_.revision, fresh_token, revoked.GetCallback()));
++  EXPECT_TRUE(revoked.Get());
+ }
+ 
+ TEST_F(AccessSavedTestProfileProductTest,
+@@ -1555,9 +1580,12 @@ TEST_F(AccessSavedTestProfileProductTest, RevokingHeldExplicitPublicationSettles
+   ASSERT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kPublishing);
+   ASSERT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kConnecting);
+   base::test::TestFuture<bool> revoked;
+-  EXPECT_FALSE(options->CanRevokeTestNodeProfileAtRevision(options_before_.revision + 1));
+-  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+-                                                       revoked.GetCallback()));
++  EXPECT_TRUE(
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision + 1).empty());
++  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
++      options_before_.revision,
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++      revoked.GetCallback()));
+   context_.Reply(true);
+   ASSERT_TRUE(base::test::RunUntil([&] {
+     return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+@@ -1730,8 +1758,10 @@ TEST_F(AccessSavedTestProfileProductTest, RevokingPendingSwitchRestoresAcknowled
+   ASSERT_EQ(Snapshot("other.example").connection, AccessSiteConnectionState::kConnecting);
+   ASSERT_TRUE(context_.HoldsRegistration(options->test_profile_runtime().registration_id));
+   base::test::TestFuture<bool> revoked;
+-  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(options_before_.revision,
+-                                                       revoked.GetCallback()));
++  ASSERT_TRUE(options->RevokeTestNodeProfileAtRevision(
++      options_before_.revision,
++      options->TestNodeRevocationTokenAtRevision(options_before_.revision),
++      revoked.GetCallback()));
+   context_.Reply(true);
+   ASSERT_TRUE(base::test::RunUntil([&] {
+     return !AccessSiteProxyProductTestPeer::IsPreparing(bubble_);
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index adeb79c20a512ce82715a9182dfdc9dd563ff513..8e67e5e70bc68387399046c7e4b6b42718133a33 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -13,6 +13,7 @@ interface InboundPreferences {
+ interface Connection {
+   state: string;
+   revision?: string;
++  revokeToken?: string;
+   protocol?: string;
+   port?: number;
+ }
+@@ -111,6 +112,7 @@ function syncActions() {
+       requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden;
+   discard.disabled = !hasDraft || working || !!uncertainOperation;
+   revoke.disabled = !canApply || working || !lastConnection.revision ||
++      !lastConnection.revokeToken ||
+       !['active', 'prepared', 'publishing', 'uncertain', 'revoking', 'unavailable']
+       .includes(lastConnection.state);
+   review.hidden = !requiresReview;
+@@ -475,12 +477,13 @@ refresh.addEventListener('click', () => {
+ });
+ 
+ revoke.addEventListener('click', async () => {
+-  const connectionRevision = lastConnection.revision;
+-  if (revoke.disabled || !connectionRevision) return;
++  const {revision: connectionRevision, revokeToken} = lastConnection;
++  if (revoke.disabled || !connectionRevision || !revokeToken) return;
+   working = true;
+-  showConnection({state: 'revoking', revision: connectionRevision});
++  showConnection({state: 'revoking', revision: connectionRevision, revokeToken});
+   try {
+-    const result = await sendWithPromise<Connection>('revokeAccessTestNode', connectionRevision);
++    const result = await sendWithPromise<Connection>(
++        'revokeAccessTestNode', connectionRevision, revokeToken);
+     if (result.state === 'connectionChanged') {
+       showConnection({state: 'unavailable'});
+       await readOptions(false);
+@@ -488,11 +491,11 @@ revoke.addEventListener('click', async () => {
+       return;
+     }
+     showConnection(result.state === 'revoked' ? {state: 'inactive'} :
+-        {state: 'uncertain', revision: connectionRevision});
++        {state: 'uncertain', revision: connectionRevision, revokeToken});
+     status.textContent = result.state === 'revoked' ?
+         'Test connection revoked.' : 'Retirement is unconfirmed. Protected sites stay blocked.';
+   } catch {
+-    showConnection({state: 'uncertain', revision: connectionRevision});
++    showConnection({state: 'uncertain', revision: connectionRevision, revokeToken});
+   } finally {
+     working = false;
+     syncActions();
+diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+index ff5b07d5e8e4121c08334f08b90dfd3dfa9bc85e..8e82d8546af7696a3296c74e9aa1962834656382 100644
+--- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
++++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+@@ -757,8 +757,8 @@ void AegisUIHandler::OnAccessOptionsRead(
+       auto* options = aegis::access::AccessOptionsService::GetOrCreate(browser_profile);
+       if (options) {
+         auto* controller = aegis::access::AccessSiteProxyBubbleController::Get(browser_profile);
+-        const bool revocable = options->CanRevokeTestNodeProfileAtRevision(result.value->revision);
+-        const auto active = revocable && controller
++        const auto revoke_token = options->TestNodeRevocationTokenAtRevision(result.value->revision);
++        const auto active = !revoke_token.empty() && controller
+             ? controller->AcknowledgedTestProfileListener() : std::nullopt;
+         const auto prepared = options->PreparedTestNode();
+         const auto* listener = active ? &*active
+@@ -766,7 +766,10 @@ void AegisUIHandler::OnAccessOptionsRead(
+         using Runtime = aegis::access::AccessTestProfileRuntimeState;
+         const auto runtime = options->test_profile_runtime_state();
+         base::DictValue connection;
+-        if (revocable) connection.Set("revision", std::to_string(result.value->revision));
++        if (!revoke_token.empty()) {
++          connection.Set("revision", std::to_string(result.value->revision));
++          connection.Set("revokeToken", revoke_token);
++        }
+         connection.Set("state", active ? "active" : listener ? "prepared"
+             : runtime == Runtime::kUncertain ? "uncertain"
+             : runtime == Runtime::kRevoking ? "revoking"
+@@ -1105,9 +1108,14 @@ void AegisUIHandler::OnAccessTestNodePrepared(
+     return;
+   }
+   base::DictValue response;
+-  response.Set("revision", std::move(revision));
++  response.Set("revision", revision);
+   response.Set("state", result.ready ? "prepared" : "savedUnavailable");
+   if (result.ready) {
++    const auto revision_number = aegis::access::ParseAccessOptionsRevision(revision);
++    if (revision_number && access_test_node_service_) {
++      response.Set("revokeToken",
++          access_test_node_service_->TestNodeRevocationTokenAtRevision(*revision_number));
++    }
+     response.Set("port", static_cast<int>(result.port));
+     response.Set("protocol", result.transport == aegis_access::RegisteredProxyTransport::kSocks5
+                                  ? "SOCKS5" : "HTTP");
+@@ -1118,7 +1126,8 @@ void AegisUIHandler::OnAccessTestNodePrepared(
+ }
+ 
+ void AegisUIHandler::HandleRevokeAccessTestNode(const base::ListValue& args) {
+-  if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) return;
++  if (args.size() != 3 || !args[0].is_string() || !args[1].is_string() ||
++      !args[2].is_string()) return;
+   AllowJavascript();
+   auto* profile = Profile::FromWebUI(web_ui());
+   auto* service = IsAccessOptionsDocument() && profile && !profile->IsOffTheRecord()
+@@ -1133,7 +1142,8 @@ void AegisUIHandler::HandleRevokeAccessTestNode(const base::ListValue& args) {
+     ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "invalidRevision"));
+     return;
+   }
+-  const bool requested = service->RevokeTestNodeProfileAtRevision(*revision, base::BindOnce(
++  const bool requested = service->RevokeTestNodeProfileAtRevision(
++      *revision, args[2].GetString(), base::BindOnce(
+       [](base::WeakPtr<AegisUIHandler> self, content::WeakDocumentPtr document,
+          std::string callback_id, bool confirmed) {
+         if (self && self->IsJavascriptAllowed() && self->IsAccessOptionsDocument() &&

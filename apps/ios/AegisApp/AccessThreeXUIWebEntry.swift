@@ -3,13 +3,24 @@ import Combine
 import CryptoKit
 import Foundation
 
-/// A private Dev or Alpha package may provide a bounded list of preconfigured test
-/// routes. The UI receives only ordinal and protocol; URI data stays here.
+/// Bounded catalogue of test routes packaged for internal distribution.
 @MainActor
 final class AccessAlphaNodeCatalogue: ObservableObject {
+    enum Source: String, Decodable, Equatable {
+        case panel = "3x-ui"
+        case downloads
+    }
+
+    private struct PackagedRoute: Decodable {
+        let source: Source?
+        let uri: String
+    }
+
     struct Entry: Identifiable, Equatable {
         let id: Int
         let protocolName: String
+        let source: Source?
+        let usesSubscription: Bool
         /// Routes may share a protocol; the nonsecret ordinal tells them apart without exposing the relay.
         var displayName: String { "\(id + 1) · \(protocolName)" }
     }
@@ -19,6 +30,7 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
     static let shared = product()
 
     let isConfigured: Bool
+    let isPrivateBeta: Bool
     @Published private(set) var entries: [Entry] = []
     @Published private(set) var selectedIndex: Int?
     private let defaults: UserDefaults
@@ -30,18 +42,21 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
 
     var enablesWebsiteAcceleration: Bool { isConfigured && !entries.isEmpty }
     var routes: [AccessInternalTestNode] { candidates }
+    var selectedEntry: Entry? { selectedIndex.map { entries[$0] } }
 
     static func product(bundle: Bundle = .main, defaults: UserDefaults = .standard) -> AccessAlphaNodeCatalogue {
         let channel = bundle.object(forInfoDictionaryKey: "AegisAccessReleaseChannel") as? String
         let profile = bundle.object(forInfoDictionaryKey: "AegisReleaseProfile") as? String
         let bundleID = bundle.bundleIdentifier
-        guard allowsPackagedNodes(channel: channel, profile: profile, bundleID: bundleID) else {
-            return .init(channel: channel, profile: profile, bundleID: bundleID, data: nil, defaults: defaults)
-        }
-        let resource = bundle.url(forResource: "AegisAlphaTestNodes", withExtension: "json")
+        let internalTesting = bundle.object(forInfoDictionaryKey: "TFInternalTestingOnly") as? Bool == true
+        let beta = allowsBetaNodes(channel: channel, profile: profile, bundleID: bundleID, internalTesting: internalTesting)
+        let resourceName = beta ? "AegisPrivateBetaTestNodes" : "AegisAlphaTestNodes"
+        let isEligible = beta || allowsPackagedNodes(channel: channel, profile: profile, bundleID: bundleID)
+        let resource = isEligible ? bundle.url(forResource: resourceName, withExtension: "json") : nil
         // A present but unreadable resource remains configured and fails closed.
         let data = resource.map { (try? Data(contentsOf: $0, options: .mappedIfSafe)) ?? Data() }
-        return .init(channel: channel, profile: profile, bundleID: bundleID, data: data, defaults: defaults)
+        return .init(channel: channel, profile: profile, bundleID: bundleID, data: beta ? nil : data,
+                     privateBetaData: beta ? data : nil, internalTesting: internalTesting, defaults: defaults)
     }
 
     private static func allowsPackagedNodes(channel: String?, profile: String?, bundleID: String?) -> Bool {
@@ -49,29 +64,53 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
             && ["com.gcsa.aegis", "com.gcsa.aegis.alpha.internal"].contains(bundleID ?? "")
     }
 
-    init(channel: String?, profile: String?, bundleID: String?, data: Data?, defaults: UserDefaults) {
+    private static func allowsBetaNodes(channel: String?, profile: String?, bundleID: String?, internalTesting: Bool) -> Bool {
+        channel == "beta" && profile == "beta" && bundleID == "com.gcsa.aegis" && internalTesting
+    }
+
+    init(channel: String?, profile: String?, bundleID: String?, data: Data?, privateBetaData: Data? = nil,
+         internalTesting: Bool = false, defaults: UserDefaults) {
         self.defaults = defaults
-        isConfigured = Self.allowsPackagedNodes(channel: channel, profile: profile, bundleID: bundleID) && data != nil
-        guard isConfigured, let data, data.count <= 131_500,
-              let links = try? JSONDecoder().decode([String].self, from: data),
-              (1...16).contains(links.count) else { return }
+        isPrivateBeta = Self.allowsBetaNodes(channel: channel, profile: profile, bundleID: bundleID,
+                                           internalTesting: internalTesting) && privateBetaData != nil
+        let alphaData = Self.allowsPackagedNodes(channel: channel, profile: profile, bundleID: bundleID) ? data : nil
+        let resource = isPrivateBeta ? privateBetaData : alphaData
+        isConfigured = resource != nil
+        guard let resource, resource.count <= 131_500 else { return }
+        let decoder = JSONDecoder()
+        let inputs: [PackagedRoute]
+        if isPrivateBeta {
+            guard let routes = try? decoder.decode([PackagedRoute].self, from: resource),
+                  routes.first?.source == .panel, routes.allSatisfy({ $0.source != nil }) else { return }
+            inputs = routes
+        } else {
+            guard let links = try? decoder.decode([String].self, from: resource) else { return }
+            inputs = links.map { PackagedRoute(source: nil, uri: $0) }
+        }
+        guard (1...16).contains(inputs.count) else { return }
         var loaded: [AccessInternalTestNode] = []
-        var identities = Set<UUID>()
+        var subscriptionIdentity: UUID?
         var displayed: [Entry] = []
-        for (index, link) in links.enumerated() {
+        for (index, input) in inputs.enumerated() {
+            let link = input.uri
             guard link.utf8.count <= 8_192,
                   let node = try? AccessInternalTestNode.parseSingleShareURI(link),
                   let user = node.testSubscriptionIdentity,
                   !loaded.contains(where: { $0.isWireIdentical(to: node) }) else { return }
             if node.kind == .vless,
                Self.protocolName(URLComponents(string: link)?.queryItems ?? []) == nil { return }
+            if index == 0 {
+                guard !isPrivateBeta || node.profileKey == .vlessRawReality else { return }
+                subscriptionIdentity = user
+            }
+            // Only a distinct signed test identity can run independently of the default subscription.
+            let usesSubscription = user == subscriptionIdentity
+            guard isPrivateBeta || usesSubscription else { return }
             loaded.append(node)
-            identities.insert(user)
-            displayed.append(Entry(id: index, protocolName: node.protocolDisplayName))
+            displayed.append(Entry(id: index, protocolName: node.protocolDisplayName, source: input.source,
+                                   usesSubscription: usesSubscription))
         }
-        // One quota descriptor cannot authorize unrelated test identities.
-        guard identities.count == 1 else { return }
-        fingerprint = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        fingerprint = SHA256.hash(data: resource).map { String(format: "%02x", $0) }.joined()
         candidates = loaded
         entries = displayed
         if defaults.string(forKey: Self.fingerprintKey) == fingerprint,
@@ -105,9 +144,13 @@ final class AccessAlphaNodeCatalogue: ObservableObject {
         defaults.set(index, forKey: Self.selectionKey)
     }
 
-    fileprivate func selected() throws -> (node: AccessInternalTestNode, revision: UUID) {
+    func canSelect(_ entry: Entry, subscription: AccessSubscriptionUsageSession) -> Bool {
+        !entry.usesSubscription || subscription.isAlphaRouteSelectable(entry.id)
+    }
+
+    fileprivate func selected() throws -> (node: AccessInternalTestNode, revision: UUID, usesSubscription: Bool) {
         guard let index = selectedIndex, candidates.indices.contains(index) else { throw AccessSubscriptionQueryError.unavailable }
-        return (candidates[index], revision)
+        return (candidates[index], revision, entries[index].usesSubscription)
     }
 
     fileprivate func activate(_ expected: UUID) -> Bool {
@@ -140,12 +183,14 @@ enum AccessThreeXUIWebEntry {
                 lockData: lockData, verifiedCore: core,
                 node: {
                     let candidate = try alphaNodes.selected()
-                    try await usage.authorizeAlphaNode(candidate.node)
+                    if candidate.usesSubscription { try await usage.authorizeAlphaNode(candidate.node) }
                     try Task.checkCancellation()
                     guard alphaNodes.activate(candidate.revision) else { throw AccessSubscriptionQueryError.unavailable }
                     return candidate.node
                 },
-                connectionAllowed: { alphaNodes.isActiveSelection && usage.permitsExistingConnection },
+                connectionAllowed: {
+                    alphaNodes.isActiveSelection && (alphaNodes.selectedEntry?.usesSubscription == false || usage.permitsExistingConnection)
+                },
                 retireDocuments: retireDocuments, transport: .http
             )
             if let publisher = publisher as? AccessProxyEntryPublisher {

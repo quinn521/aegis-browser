@@ -1,0 +1,603 @@
+From 9c990803ff7b46bd403a52130d073097b5926499 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 04:13:11 +0800
+Subject: [PATCH] fix(access): separate Test Profile save from activation in
+ Options
+
+Invalidate a node preview when the share field changes, reload the committed revision after discarding a stale draft, allow listener-preference-only saves against the committed Keychain reference behind the existing revision and commit fences, and admit Apply on write permission while reporting saved-but-unavailable when activation is not admitted.
+---
+ .../aegis/access/access_options_service.cc    | 104 +++++++++++++++++-
+ .../aegis/access/access_options_service.h     |  10 ++
+ .../access/access_options_service_unittest.cc |  68 ++++++++++++
+ .../browser/resources/aegis/access_options.ts |  68 ++++++++++--
+ .../ui/webui/aegis/aegis_ui_handler.cc        |  89 ++++++++++++---
+ .../browser/ui/webui/aegis/aegis_ui_handler.h |   1 +
+ 6 files changed, 314 insertions(+), 26 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index 981fe67a00cd14ea775f7f2298c4399ea30b8bfa..cd39addc9ef163d7a2556124d126aa1191521ff5 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -78,6 +78,18 @@ class AccessOptionsWorker {
+   AccessTestProfileSaveResult Save(std::string editor, uint64_t expected_revision,
+       std::string operation_id, AccessTestProfileDraft draft,
+       std::shared_ptr<AccessOptionsCommitFence> commit_fence) {
++    return SaveDraft(std::move(editor), expected_revision, std::move(operation_id),
++                     std::move(draft), std::move(commit_fence), false);
++  }
++  AccessTestProfileSaveResult SavePreferences(uint64_t expected_revision,
++      std::string operation_id, AccessTestProfileDraft draft,
++      std::shared_ptr<AccessOptionsCommitFence> commit_fence) {
++    return SaveDraft(std::string(), expected_revision, std::move(operation_id),
++                     std::move(draft), std::move(commit_fence), true);
++  }
++  AccessTestProfileSaveResult SaveDraft(std::string editor, uint64_t expected_revision,
++      std::string operation_id, AccessTestProfileDraft draft,
++      std::shared_ptr<AccessOptionsCommitFence> commit_fence, bool committed_reference) {
+     if (unknown_save_)
+       return {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+               std::nullopt, std::nullopt, "previous_operation_uncertain"};
+@@ -104,10 +116,19 @@ class AccessOptionsWorker {
+       return {StoreStatus::kIoError, AccessOptionsCommitOutcome::kNotCommitted,
+               std::nullopt, std::nullopt, "secure_storage_unavailable"};
+     const AccessTestNodeSecretReference reference{draft.secret_reference};
+-    // Only this editor's staged, still-readable native reference can be held.
+-    if (!vault_.Read(reference) || !vault_.HoldForCommit(editor, reference, operation_id))
++    if (committed_reference) {
++      const auto& current = before.value->test_profile;
++      if (!current || current->configuration.id != draft.id ||
++          current->configuration.secret_reference != draft.secret_reference ||
++          !vault_.Read(reference))
++        return {StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
++                std::nullopt, std::nullopt, "committed_reference_unavailable"};
++    } else if (!vault_.Read(reference) ||
++               !vault_.HoldForCommit(editor, reference, operation_id)) {
++      // Only this editor's staged, still-readable native reference can be held.
+       return {StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
+               std::nullopt, std::nullopt, "draft_reference_unavailable"};
++    }
+     auto result = store_.SaveTestProfile(expected_revision, operation_id, draft, std::move(commit_fence));
+     if (result.outcome == AccessOptionsCommitOutcome::kUnknown) {
+       unknown_save_ = UnknownSave{expected_revision, operation_id, std::move(draft), *before.value};
+@@ -499,6 +520,49 @@ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
+       std::move(operation_id), std::move(name), inbound, std::move(callback)));
+ }
+ 
++void AccessOptionsService::SaveTestNodePreferences(const std::string& editor,
++    uint64_t expected_revision, std::string operation_id,
++    aegis_access::AccessInboundPreferences inbound,
++    base::OnceCallback<void(AccessTestProfileSaveResult)> callback) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  const auto found = editors_.find(editor);
++  if (!CanPreviewTestNode() || !Admitted(aegis_access::AccessOptionsOperation::kWrite) ||
++      found == editors_.end()) {
++    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
++                            std::nullopt, std::nullopt, "test_profile_not_admitted"});
++    return;
++  }
++  if (test_profile_core_ ||
++      (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
++       test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
++    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
++                            std::nullopt, std::nullopt, "profile_runtime_in_use"});
++    return;
++  }
++  if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
++    std::move(callback).Run({StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
++                            std::nullopt, std::nullopt, "operation_in_progress"});
++    return;
++  }
++  if (found->second.reference ||
++      expected_revision >= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) ||
++      !base::Uuid::ParseLowercase(operation_id).is_valid() ||
++      aegis_access::ValidateAccessInboundPreferences(inbound) !=
++          aegis_access::AccessInboundPreferenceError::kNone) {
++    std::move(callback).Run({StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
++                            std::nullopt, std::nullopt, "invalid_test_profile_draft"});
++    return;
++  }
++  found->second.saving = true;
++  test_profile_save_operation_ = operation_id;
++  test_profile_save_editor_ = editor;
++  test_profile_save_uncertain_ = false;
++  test_profile_commit_fence_ = std::make_shared<AccessOptionsCommitFence>();
++  Read(base::BindOnce(&AccessOptionsService::OnTestProfilePreferencesRead,
++      weak_factory_.GetWeakPtr(), editor, found->second.generation, expected_revision,
++      std::move(operation_id), inbound, std::move(callback)));
++}
++
+ AccessTestProfileRuntimeState AccessOptionsService::test_profile_runtime_state() const {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   return test_profile_runtime_state_;
+@@ -883,6 +947,42 @@ void AccessOptionsService::OnTestProfileSaveRead(std::string editor, uint64_t ge
+           weak_factory_.GetWeakPtr(), editor, operation_id, std::move(callback)));
+ }
+ 
++void AccessOptionsService::OnTestProfilePreferencesRead(std::string editor,
++    uint64_t generation, uint64_t expected_revision, std::string operation_id,
++    aegis_access::AccessInboundPreferences inbound,
++    base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
++    StoreResult<AccessOptionsSnapshot> snapshot) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  const auto found = editors_.find(editor);
++  if (!CanPreviewTestNode() || found == editors_.end() ||
++      found->second.generation != generation || found->second.reference) {
++    OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
++        {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
++         std::nullopt, std::nullopt, "draft_canceled_before_commit"});
++    return;
++  }
++  if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
++      snapshot.value->revision != expected_revision) {
++    OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
++        {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict : snapshot.status,
++         AccessOptionsCommitOutcome::kNotCommitted, std::nullopt, std::move(snapshot.value),
++         "configuration_revision_conflict"});
++    return;
++  }
++  if (!snapshot.value->test_profile) {
++    OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
++        {StoreStatus::kInvalidArgument, AccessOptionsCommitOutcome::kNotCommitted,
++         std::nullopt, std::move(snapshot.value), "no_saved_test_profile"});
++    return;
++  }
++  auto draft = snapshot.value->test_profile->configuration;
++  draft.inbound = inbound;
++  worker_.AsyncCall(&AccessOptionsWorker::SavePreferences)
++      .WithArgs(expected_revision, operation_id, std::move(draft), test_profile_commit_fence_)
++      .Then(base::BindOnce(&AccessOptionsService::OnTestProfileSaveComplete,
++          weak_factory_.GetWeakPtr(), editor, operation_id, std::move(callback)));
++}
++
+ void AccessOptionsService::OnTestProfileSaveComplete(std::string editor,
+     std::string operation_id, base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+     AccessTestProfileSaveResult result) {
+diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
+index 3e3f71d3f4d3fc142c5e3071e3eccd48e65b2500..a0cb510fbdcd3d6c9975ee6c5bc1a76dca5c8c20 100644
+--- a/chrome/browser/aegis/access/access_options_service.h
++++ b/chrome/browser/aegis/access/access_options_service.h
+@@ -103,6 +103,11 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+       std::string operation_id, std::string name,
+       aegis_access::AccessInboundPreferences inbound,
+       base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
++  // Saves listener preferences for the committed Profile. The native owner
++  // reuses the durable Keychain reference; no new import is staged.
++  void SaveTestNodePreferences(const std::string& editor, uint64_t expected_revision,
++      std::string operation_id, aegis_access::AccessInboundPreferences inbound,
++      base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
+   void QueryTestNodeProfileOperation(std::string operation_id,
+       base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
+   bool HasUncertainTestNodeApply() const;
+@@ -154,6 +159,11 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+   void OnTestProfileSaveComplete(std::string editor, std::string operation_id,
+       base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+       AccessTestProfileSaveResult result);
++  void OnTestProfilePreferencesRead(std::string editor, uint64_t generation,
++      uint64_t expected_revision, std::string operation_id,
++      aegis_access::AccessInboundPreferences inbound,
++      base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
++      StoreResult<AccessOptionsSnapshot> snapshot);
+   void OnTestProfileQueryRead(std::string operation_id,
+       base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+       StoreResult<AccessOptionsSnapshot> snapshot);
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+index 3be23f50719fe3e0209a674d3e8a186a0f11bd0a..224391e1ae9d59751805206e509f0b4569c85c69 100644
+--- a/chrome/browser/aegis/access/access_options_service_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -189,6 +189,74 @@ TEST(AccessOptionsServiceTest, RuntimeReservationBlocksProfileUpdateUntilConfirm
+   EXPECT_EQ(retried.Get().snapshot->test_profile->configuration.name, "TEST02");
+ }
+ 
++TEST(AccessOptionsServiceTest, PreferencesOnlySaveReusesCommittedReferenceBehindFences) {
++  content::BrowserTaskEnvironment environment;
++  if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))
++    GTEST_SKIP() << "Requires an admitted internal build";
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
++  network::mojom::NetworkContextParams params;
++  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(profile.get(), {}, &params));
++  auto state = std::make_shared<SyntheticVaultState>();
++  auto options = AccessOptionsService::CreateForTesting(profile.get(), std::make_unique<SyntheticVaultBackend>(state));
++  const auto editor = options->BeginTestNodeEditor();
++  ASSERT_TRUE(editor);
++  const aegis_access::AccessInboundPreferences http{
++      aegis_access::AccessInboundProtocolPreference::kHttp,
++      aegis_access::AccessInboundPortMode::kSystemAllocated, 0};
++  base::test::TestFuture<AccessTestProfileSaveResult> nothing_saved;
++  options->SaveTestNodePreferences(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++      http, nothing_saved.GetCallback());
++  EXPECT_EQ(nothing_saved.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(nothing_saved.Get().detail, "no_saved_test_profile");
++  base::test::TestFuture<TestNodePreviewResult> preview;
++  options->PreviewTestNodeText(*editor, kSyntheticShare, preview.GetCallback());
++  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
++  base::test::TestFuture<AccessTestProfileSaveResult> pending_import;
++  options->SaveTestNodePreferences(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++      http, pending_import.GetCallback());
++  EXPECT_EQ(pending_import.Get().detail, "invalid_test_profile_draft");
++  base::test::TestFuture<AccessTestProfileSaveResult> saved;
++  options->SaveTestNodeProfile(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++      "TEST01", {}, saved.GetCallback());
++  ASSERT_EQ(saved.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
++  ASSERT_EQ(state->rows.size(), 1u);
++  const auto committed = saved.Get().snapshot->test_profile->configuration;
++  base::test::TestFuture<AccessTestProfileSaveResult> stale;
++  options->SaveTestNodePreferences(*editor, 0, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++      http, stale.GetCallback());
++  EXPECT_EQ(stale.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(stale.Get().detail, "configuration_revision_conflict");
++  const auto service = state->rows.begin()->first.first;
++  const std::string prefix = "app.gcsa.aegis.access.test-node.v1.";
++  ASSERT_TRUE(service.starts_with(prefix));
++  const auto scoped = service.substr(prefix.size());
++  const auto separator = scoped.find('.');
++  ASSERT_NE(separator, std::string::npos);
++  auto lease = AccessTestNodeVaultMac::ReserveRuntimeReference(scoped.substr(0, separator),
++      scoped.substr(separator + 1), {committed.secret_reference});
++  ASSERT_TRUE(lease);
++  base::test::TestFuture<AccessTestProfileSaveResult> in_use;
++  options->SaveTestNodePreferences(*editor, 1, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++      http, in_use.GetCallback());
++  EXPECT_EQ(in_use.Get().detail, "profile_runtime_in_use");
++  lease.reset();
++  base::test::TestFuture<AccessTestProfileSaveResult> updated;
++  options->SaveTestNodePreferences(*editor, 1, base::Uuid::GenerateRandomV4().AsLowercaseString(),
++      http, updated.GetCallback());
++  ASSERT_EQ(updated.Get().outcome, AccessOptionsCommitOutcome::kCommitted);
++  ASSERT_TRUE(updated.Get().snapshot && updated.Get().snapshot->test_profile);
++  const auto& stored = *updated.Get().snapshot->test_profile;
++  EXPECT_EQ(updated.Get().snapshot->revision, 2u);
++  EXPECT_EQ(stored.version, 2u);
++  EXPECT_EQ(stored.configuration.id, committed.id);
++  EXPECT_EQ(stored.configuration.name, "TEST01");
++  EXPECT_EQ(stored.configuration.secret_reference, committed.secret_reference);
++  EXPECT_EQ(stored.configuration.inbound, http);
++  EXPECT_EQ(state->rows.size(), 1u);
++}
++
+ TEST(AccessOptionsServiceTest, CloseBeforeDeferredSaveCannotCommitStaleDraft) {
+   content::BrowserTaskEnvironment environment;
+   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index c93a6deffc48e4dcc6edf9891c573bb17007340e..0572d8e0378a9452c7e095b41a7d65571a253751 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -74,10 +74,12 @@ const devTextMessages: Record<string, string> = {
+ let generation = 0;
+ let reader: FileReader|null = null;
+ let canApply = false;
++let canActivate = false;
+ let canImportWebSocket = false;
+ let working = false;
+ let previewReady = false;
+ let hasDraft = false;
++let nodeDraft = false;
+ let revision: string|undefined;
+ let saved: InboundPreferences|undefined;
+ let uncertainOperation: string|undefined;
+@@ -86,8 +88,21 @@ let pendingApplyRecovery = false;
+ let applying = false;
+ let lastConnection: Connection = {state: 'unavailable'};
+ 
++function selectedPreferences(): InboundPreferences {
++  return {protocol: protocol.value, portMode: portMode.value,
++          requestedPort: portMode.value === 'fixed' ? Number(port.value) : 0};
++}
++
++function preferencesOnlyDraft() {
++  if (!saved || previewReady || nodeDraft || !hasDraft) return false;
++  const selected = selectedPreferences();
++  return selected.protocol !== saved.protocol || selected.portMode !== saved.portMode ||
++      (selected.portMode === 'fixed' && selected.requestedPort !== saved.requestedPort);
++}
++
+ function syncActions() {
+-  apply.disabled = !canApply || !previewReady || !revision || working ||
++  const preferencesOnly = preferencesOnlyDraft();
++  apply.disabled = !canApply || !(previewReady || preferencesOnly) || !revision || working ||
+       requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden;
+   discard.disabled = !hasDraft || working || !!uncertainOperation;
+   revoke.disabled = !canApply || working || !lastConnection.revision ||
+@@ -99,7 +114,10 @@ function syncActions() {
+   refresh.disabled = !canApply || working;
+   if (canApply) {
+     availability.textContent = previewReady ?
+-        'Apply saves this draft and prepares the listener.' :
++        (canActivate ? 'Apply saves this draft and prepares the listener.' :
++                       'Apply saves this draft. Connections are not available in this build.') :
++        preferencesOnly ?
++        'Apply saves these listener preferences for the saved test node.' :
+         'Preview a node to apply your draft.';
+   }
+ }
+@@ -204,12 +222,21 @@ form.addEventListener('submit', event => {
+   const input = link.value;
+   link.value = '';
+   hasDraft = true;
++  nodeDraft = true;
+   discard.disabled = false;
+   draftState.textContent = 'Unsaved draft';
+   status.textContent = 'Checking node link…';
+   void preview('text', input, generation);
+ });
+ 
++link.addEventListener('input', () => {
++  if (!previewReady) return;
++  cancel();
++  status.dataset['error'] = 'false';
++  status.textContent = 'Preview the edited link before applying.';
++  syncActions();
++});
++
+ image.addEventListener('change', () => {
+   const selected = image.files?.[0];
+   image.value = '';
+@@ -218,6 +245,7 @@ image.addEventListener('change', () => {
+   }
+   cancel();
+   hasDraft = true;
++  nodeDraft = true;
+   discard.disabled = false;
+   draftState.textContent = 'Unsaved draft';
+   if (selected.size === 0 || selected.size > maxImageBytes) {
+@@ -246,6 +274,7 @@ image.addEventListener('change', () => {
+ discard.addEventListener('click', async () => {
+   cancel();
+   hasDraft = false;
++  nodeDraft = false;
+   const request = generation;
+   link.value = '';
+   restorePreferences();
+@@ -261,10 +290,12 @@ discard.addEventListener('click', async () => {
+       return;
+     }
+     const cleared = result.state === 'canceled';
++    const edited = hasDraft;
+     status.textContent = messages[result.state] ?? 'Discard unavailable.';
+     status.dataset['error'] = String(!cleared);
+-    discard.disabled = cleared;
+-    hasDraft = !cleared;
++    discard.disabled = cleared && !edited;
++    hasDraft = edited || !cleared;
++    if (cleared && canApply && !edited) await reloadCommitted(request);
+   } catch {
+     if (request === generation) {
+       status.textContent = messages['secureStorageUnavailable']!;
+@@ -275,6 +306,26 @@ discard.addEventListener('click', async () => {
+   }
+ });
+ 
++async function reloadCommitted(request: number) {
++  try {
++    const latest = await sendWithPromise<OptionsState>('readAccessOptions');
++    if (request !== generation || hasDraft) return;
++    if (latest.state !== 'ready' || !latest.revision) throw new Error('Options unavailable');
++    pendingApplyRecovery = latest.pendingApplyRecovery === true;
++    revision = latest.revision;
++    saved = latest.testProfile;
++    showSavedRevision();
++    restorePreferences();
++    draftState.textContent = saved ? 'Saved preferences' : 'No changes saved';
++    showConnection(latest.connection ?? {state: 'inactive'});
++  } catch {
++    if (request === generation) {
++      status.textContent = 'Saved settings are unavailable. Try again.';
++      status.dataset['error'] = 'true';
++    }
++  }
++}
++
+ function refreshListenerFields() {
+   const http = protocol.value === 'http';
+   fixedPortOption.textContent = http ?
+@@ -325,12 +376,12 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
+   if (['saved', 'prepared', 'savedUnavailable'].includes(result.state)) {
+     revision = result.revision ?? revision;
+     if (applying) {
+-      saved = {protocol: protocol.value, portMode: portMode.value,
+-               requestedPort: portMode.value === 'fixed' ? Number(port.value) : 0};
++      saved = selectedPreferences();
+     }
+     showSavedRevision();
+     previewReady = false;
+     hasDraft = false;
++    nodeDraft = false;
+     nodePreview.hidden = true;
+     draftState.textContent = 'Saved preferences';
+     if (result.state === 'prepared') {
+@@ -358,13 +409,14 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
+ 
+ apply.addEventListener('click', async () => {
+   if (apply.disabled || !revision) return;
++  const message = previewReady ? 'applyAccessTestNode' : 'applyAccessTestNodePreferences';
+   const operation = crypto.randomUUID();
+   working = applying = true;
+   fields.disabled = true;
+   status.textContent = 'Applying draft…';
+   syncActions();
+   try {
+-    const result = await sendWithPromise<ApplyResult>('applyAccessTestNode',
++    const result = await sendWithPromise<ApplyResult>(message,
+         revision, operation, protocol.value, portMode.value,
+         portMode.value === 'fixed' ? port.value : '');
+     await handleApplyResult(result, operation);
+@@ -446,6 +498,7 @@ void sendWithPromise<{
+   enabled: boolean,
+   private: boolean,
+   testApply?: boolean,
++  testActivate?: boolean,
+   testWebSocketTls?: boolean,
+ }>(
+     'getAccessOptionsCapabilities').then(async result => {
+@@ -454,6 +507,7 @@ void sendWithPromise<{
+     return;
+   }
+   canApply = result.testApply === true;
++  canActivate = canApply && result.testActivate === true;
+   canImportWebSocket = result.testWebSocketTls === true;
+   if (canImportWebSocket) {
+     document.querySelector('#share-label')!.textContent = 'Node share link';
+diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+index cace0feed42b75ec6f58520a48df3830d31cb9bd..c1cab9f547ac75a90416652a877dd1867b89e9f3 100644
+--- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
++++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+@@ -415,6 +415,9 @@ void AegisUIHandler::RegisterMessages() {
+   web_ui()->RegisterMessageCallback("applyAccessTestNode",
+       base::BindRepeating(&AegisUIHandler::HandleApplyAccessTestNode,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback("applyAccessTestNodePreferences",
++      base::BindRepeating(&AegisUIHandler::HandleApplyAccessTestNodePreferences,
++                          base::Unretained(this)));
+   web_ui()->RegisterMessageCallback("queryAccessTestNodeApply",
+       base::BindRepeating(&AegisUIHandler::HandleQueryAccessTestNodeApply,
+                           base::Unretained(this)));
+@@ -657,6 +660,15 @@ void AegisUIHandler::HandleGetStatus(const base::ListValue& args) {
+ }
+ 
+ #if BUILDFLAG(IS_MAC)
++namespace {
++// Activation launches the DEV-only internal core; saving is a separate grant.
++bool CanActivateAccessTestNode() {
++  const auto identity = aegis::access::AccessBuildIdentityForCurrentBuild();
++  return identity.product == aegis_access::AccessProductChannel::kDebug &&
++      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kActivate);
++}
++}  // namespace
++
+ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& args) {
+   if (args.size() != 1 || !args[0].is_string()) return;
+   AllowJavascript();
+@@ -672,8 +684,9 @@ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& a
+           identity, aegis_access::AccessOptionsOperation::kImport));
+   result.Set("testApply", IsAccessOptionsDocument() &&
+       !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
+-      identity.product == aegis_access::AccessProductChannel::kDebug &&
+-      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kActivate));
++      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kWrite));
++  result.Set("testActivate", IsAccessOptionsDocument() &&
++      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode());
+   ResolveJavascriptCallback(args[0], result);
+ }
+ 
+@@ -932,6 +945,25 @@ void AegisUIHandler::OnAccessTestNodeDiscarded(std::string callback_id,
+                           {status});
+ }
+ 
++namespace {
++std::optional<aegis_access::AccessInboundPreferences> ParseAccessTestNodeInbound(
++    const base::ListValue& args) {
++  using Mode = aegis_access::AccessInboundPortMode;
++  const auto protocol = aegis_access::ParseAccessInboundProtocolPreference(args[3].GetString());
++  const auto mode = aegis_access::ParseAccessInboundPortMode(args[4].GetString());
++  const auto port = mode == Mode::kSystemAllocated && args[5].GetString().empty()
++      ? std::optional<uint16_t>(0)
++      : aegis_access::ParseAccessInboundFixedPort(args[5].GetString());
++  if (!port) return std::nullopt;
++  const aegis_access::AccessInboundPreferences inbound{protocol, mode, *port};
++  if (aegis_access::ValidateAccessInboundPreferences(inbound) !=
++      aegis_access::AccessInboundPreferenceError::kNone) {
++    return std::nullopt;
++  }
++  return inbound;
++}
++}  // namespace
++
+ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
+   if (args.size() != 6 ||
+       !std::ranges::all_of(args, [](const auto& value) { return value.is_string(); })) {
+@@ -943,9 +975,7 @@ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
+   };
+   auto* service = access_test_node_service_.get();
+   if (!IsAccessOptionsDocument() || !service ||
+-      aegis::access::AccessBuildIdentityForCurrentBuild().product !=
+-          aegis_access::AccessProductChannel::kDebug ||
+-      !service->Admitted(aegis_access::AccessOptionsOperation::kActivate)) {
++      !service->Admitted(aegis_access::AccessOptionsOperation::kWrite)) {
+     reject("notAdmitted");
+     return;
+   }
+@@ -954,24 +984,44 @@ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
+     return;
+   }
+   const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
+-  using Mode = aegis_access::AccessInboundPortMode;
+-  const auto protocol = aegis_access::ParseAccessInboundProtocolPreference(args[3].GetString());
+-  const auto mode = aegis_access::ParseAccessInboundPortMode(args[4].GetString());
+-  const auto port = mode == Mode::kSystemAllocated && args[5].GetString().empty()
+-      ? std::optional<uint16_t>(0)
+-      : aegis_access::ParseAccessInboundFixedPort(args[5].GetString());
+-  if (!revision || !port) {
++  const auto inbound = ParseAccessTestNodeInbound(args);
++  if (!revision || !inbound) {
+     reject("invalidPreferences");
+     return;
+   }
+-  const aegis_access::AccessInboundPreferences inbound{protocol, mode, *port};
+-  if (aegis_access::ValidateAccessInboundPreferences(inbound) !=
+-      aegis_access::AccessInboundPreferenceError::kNone) {
++  service->SaveTestNodeProfile(access_test_node_editor_, *revision, args[2].GetString(),
++      "Test node", *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
++          account_weak_factory_.GetWeakPtr(), access_options_document_,
++          args[0].GetString(), access_test_node_editor_,
++          access_test_node_preview_generation_));
++}
++
++void AegisUIHandler::HandleApplyAccessTestNodePreferences(const base::ListValue& args) {
++  if (args.size() != 6 ||
++      !std::ranges::all_of(args, [](const auto& value) { return value.is_string(); })) {
++    return;
++  }
++  AllowJavascript();
++  auto reject = [&](std::string_view state) {
++    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", state));
++  };
++  auto* service = EnsureAccessTestNodeEditor();
++  if (!service || !service->Admitted(aegis_access::AccessOptionsOperation::kWrite)) {
++    reject("notAdmitted");
++    return;
++  }
++  if (access_test_node_draft_) {
++    reject("previewPending");
++    return;
++  }
++  const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
++  const auto inbound = ParseAccessTestNodeInbound(args);
++  if (!revision || !inbound) {
+     reject("invalidPreferences");
+     return;
+   }
+-  service->SaveTestNodeProfile(access_test_node_editor_, *revision, args[2].GetString(),
+-      "Test node", inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
++  service->SaveTestNodePreferences(access_test_node_editor_, *revision, args[2].GetString(),
++      *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+           account_weak_factory_.GetWeakPtr(), access_options_document_,
+           args[0].GetString(), access_test_node_editor_,
+           access_test_node_preview_generation_));
+@@ -1009,6 +1059,11 @@ void AegisUIHandler::OnAccessTestNodeSaved(
+   if (!committed) {
+     response.Set("state", result.outcome == Outcome::kUnknown ? "uncertain" : "notSaved");
+     response.Set("reason", result.detail);
++  } else if (same_draft && access_test_node_service_ && !CanActivateAccessTestNode()) {
++    // Saving is admitted separately from launching a core in this build.
++    access_test_node_draft_.reset();
++    response.Set("state", "savedUnavailable");
++    response.Set("reason", "Connections are not available in this build.");
+   } else if (same_draft && access_test_node_service_) {
+     access_test_node_draft_.reset();
+     access_test_node_service_->PrepareTestNodeProfile(result.snapshot->revision,
+diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
+index 1c4525c73bf10e292e69920d06eb53e352dee9f8..5f823570b96b3aeffd56ffc7909d9a33f9f57e34 100644
+--- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
++++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.h
+@@ -120,6 +120,7 @@ class AegisUIHandler : public content::WebUIMessageHandler,
+   void HandleCancelAccessTestNodePreview(const base::ListValue& args);
+   void HandleDiscardAccessTestNodeDraft(const base::ListValue& args);
+   void HandleApplyAccessTestNode(const base::ListValue& args);
++  void HandleApplyAccessTestNodePreferences(const base::ListValue& args);
+   void HandleQueryAccessTestNodeApply(const base::ListValue& args);
+   void HandleRevokeAccessTestNode(const base::ListValue& args);
+   void OnAccessTestNodeSaved(content::WeakDocumentPtr document,
+-- 
+2.54.0 (Apple Git-157)
+

@@ -19,6 +19,8 @@
 
 DEV / 内部 Alpha 的“测试节点”支持文本输入和扫描节点二维码。Mac 可选择本机二维码图片，也可主动打开可用相机扫码。Browser 侧检查渠道和目标 Profile，本机解码后只更新发起窗口的草稿。没有待完成的 Apply 时，按受保护站点的规则所引用测试 Profile 的已提交版本准备和登记上游。Apply 将活跃绑定的上游从 A 改为 B 时，Browser 按该 Profile 校验通过的候选版本准备、登记并安装 B 的回环端点，期间保持派发屏障。按下文的发布条件取得精确安装 ACK 后，只有该候选版本已持久提交并在仍匹配的上下文中完成激活，且 `activeRevision` 与本次 `committedRevision` 一致、`dispatchPermitted` 为 true，才解除屏障。验收同一合成链接经文本和扫码预览一致、取消选择图片或拒绝相机后可继续输入文本、关闭窗口后迟到结果作废。Beta / Release 直接打开 WebUI、发送导入消息或恢复旧 Profile 均不能激活手动节点。托管账户联调等待服务端同事交付。[测试节点与阶段交接](app-access-options-sdd.zh-CN.md)
 
+> **已知限制（当前 Alpha，失败关闭）：** 本候选不支持在活跃绑定运行时把上游从 A 直接切到 B。Options 已有活跃 core 时，激活另一个 Profile 的请求由 Browser 控制面在比对草稿版本后直接拒绝，返回 `active_profile_switch_requires_deactivation`，界面提示“先停用当前 Profile，再激活另一个”。版本过期时仍先报 `configuration_revision_conflict`。被拒时不准备、不登记 B，不提交 B，站点规则也不改指，A 的登记、持久提交和路由保持原样。只调整当前 Profile 偏好的请求仍报 `profile_runtime_in_use`。上一段描述的完整切换顺序（保留 A → 准备并登记 B → 取得精确安装 ACK → 持久提交 B → 站点规则改指 B → 激活 → 撤销 A，任一步失败都回到 A）作为后续切片实现。复审和验收按“已知限制、失败关闭”判定，不能视为该流程已完成。
+
 WebUI 消息携带草稿版本和操作 ID，Browser 侧的 Profile 服务逐操作检查 page/read/write/import/activate 权限，并将提交结果写回当前窗口。界面不能直接创建监听或恢复旧 endpoint。受限渠道通过直接 URL、消息或导入调用也必须遵循原生能力门。一个窗口 Apply 后另一个窗口的旧版本提交须显示冲突；重新打开可读取新版本，失败提交不得显示成功。[Profile 服务](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_service.cc) · [版本化存储](../../../apps/browser/overlay/chrome/browser/aegis/access/access_options_store.cc) · [已知冲突回执问题 #195](https://github.com/gcsagroup/aegis-browser/issues/195)
 
 验收从真实工具栏和直接 WebUI 两个入口进入，使用键盘及 VoiceOver 操作。分别验证自动、固定 HTTP、固定 SOCKS、指定端口被占用、Discard、重新打开及两窗口竞争。Apply 的实际成功同时关联浏览器选路和源站标记，配置已保存但端点不可用时显示具体原因。[平台 Options 执行工单 #209](https://github.com/gcsagroup/aegis-browser/issues/209)

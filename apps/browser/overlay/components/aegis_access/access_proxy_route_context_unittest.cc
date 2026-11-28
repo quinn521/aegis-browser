@@ -86,6 +86,15 @@ TEST(AccessProxyRouteContextTest, RejectsInvalidOrUnregisteredTransportValues) {
   }
 }
 
+TEST(AccessProxyRouteContextTest, RejectsSocks1080ButPreservesHttp1080) {
+  EXPECT_FALSE(net::AccessProxyRoute::Create(
+      RouteKey(), net::ProxyChain::FromSchemeHostAndPort(
+                      net::ProxyServer::SCHEME_SOCKS5, "127.0.0.1", 1080)));
+  EXPECT_TRUE(net::AccessProxyRoute::Create(
+      RouteKey(), net::ProxyChain::FromSchemeHostAndPort(
+                      net::ProxyServer::SCHEME_HTTP, "127.0.0.1", 1080)));
+}
+
 TEST(AccessProxyRouteContextTest, ProxyCredentialsDoNotEnterNativeCache) {
   net::HttpAuthCache native(true);
   const net::AuthCredentials native_credentials(u"native", u"native-password");

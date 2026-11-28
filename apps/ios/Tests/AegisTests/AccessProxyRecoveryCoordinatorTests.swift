@@ -42,7 +42,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertEqual(shutdowns, [old.identity, replacement.identity])
     }
 
-    func testDefaultPrivacyHoldsFirstNavigationAndRemembersOnlyOrdinaryOptOuts() throws {
+    func testLegacyPrivacyHonorsPersistedOrdinaryOptOuts() throws {
         let name = "test.locationPrivacy." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
@@ -68,20 +68,34 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         coordinator.setSiteProxyEnabled(false, for: tab, displayedHost: try AccessSiteHost("old.example"), forLocationControl: true)
         XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: web))
         sitePanel.setSiteProxyEnabled(false, for: tab, displayedHost: host)
-        XCTAssertFalse(coordinator.requiresProxyPreparation(tab: tab, url: web))
-        XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: other))
+        XCTAssertTrue(coordinator.requiresProxyPreparation(tab: tab, url: web))
+        defaults.set([host.rawValue], forKey: "browser.locationPrivacy.directSites")
         let restored = AccessHostStoreCoordinator(defaultLocationPrivacy: true, locationPreferences: defaults)
         XCTAssertFalse(restored.requiresProxyPreparation(tab: tab, url: web))
+        XCTAssertTrue(restored.requiresProxyPreparation(tab: tab, url: other))
         XCTAssertFalse(restored.requiresProxyPreparation(tab: tab, url: URL(string: "http://127.0.0.1/")!))
         browser.switchProfile(to: .privateMode)
         let privateTab = try XCTUnwrap(browser.activeTab)
         XCTAssertTrue(restored.requiresProxyPreparation(tab: privateTab, url: web))
-        privateTab.hostCoordinator = restored
-        privateTab.loadFromAddressBar(other)
-        restored.setSiteProxyEnabled(false, for: privateTab, displayedHost: try AccessSiteHost("other.example"), forLocationControl: true)
-        XCTAssertFalse(restored.requiresProxyPreparation(tab: privateTab, url: other))
-        XCTAssertTrue(restored.requiresProxyPreparation(tab: tab, url: other))
-        XCTAssertFalse(defaults.dictionaryRepresentation().values.contains { String(describing: $0).contains("other.example") })
+    }
+
+    func testRestoredLocationProtectionRequiresServiceAndIsolatesPrivateBrowsing() throws {
+        let suite = "test.requiredLocation." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let url = try XCTUnwrap(URL(string: "https://location.example/"))
+        defaults.set(["location.example": "privacy"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let coordinator = AccessHostStoreCoordinator(locationPreferences: defaults)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let ordinary = try XCTUnwrap(browser.activeTab)
+        XCTAssertTrue(coordinator.requiresLocationPrivacy(tab: ordinary, host: "location.example"))
+        XCTAssertEqual(coordinator.isMainFrameRouteIndeterminate(tab: ordinary, url: url), !BrowserTab.supportsSiteLocationPrivacy)
+        XCTAssertFalse(coordinator.canSendMainFrame(tab: ordinary, url: url))
+        browser.switchProfile(to: .privateMode)
+        let privateTab = try XCTUnwrap(browser.activeTab)
+        XCTAssertFalse(coordinator.requiresLocationPrivacy(tab: privateTab, host: "location.example"))
+        XCTAssertTrue(coordinator.canSendMainFrame(tab: privateTab, url: url))
     }
 
     func testRevokingRecoveryKeepsAnotherTabsDefaultPreparation() async throws {
@@ -504,7 +518,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(first.recoveryLoadCount, 1)
         XCTAssertEqual(second.recoveryLoadCount, 0)
-        XCTAssertTrue(coordinator.snapshot(for: first).toggleOn)
+        XCTAssertFalse(coordinator.snapshot(for: first).toggleOn)
         XCTAssertFalse(coordinator.snapshot(for: second).toggleOn)
     }
 
@@ -680,7 +694,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         )
     }
 
-    func testOnlyTheClickedWindowReloadsAndTheSwitchMatchesTheButton() async throws {
+    func testOnlyTheClickedWindowReloadsAndPrivacyStaysOff() async throws {
         let coordinator = AccessHostStoreCoordinator(
             publisher: AccessProxyEntryPublisher { generation, _ in ready(generation, port: 18_088) },
             clock: AccessManualPreparationClock()
@@ -702,7 +716,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         await settle { origin.recoveryLoadCount == 1 }
         XCTAssertEqual(origin.recoveryLoadCount, 1)
         XCTAssertEqual(other.recoveryLoadCount, 0)
-        XCTAssertTrue(coordinator.snapshot(for: origin).toggleOn)
+        XCTAssertFalse(coordinator.snapshot(for: origin).toggleOn)
         XCTAssertEqual(coordinator.snapshot(for: origin).intent, coordinator.snapshot(for: other).intent)
         let replacement = left.newTab()
         left.activate(replacement.id)
@@ -721,14 +735,26 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         browser.hostCoordinator = coordinator
         let origin = try XCTUnwrap(browser.activeTab)
         let sibling = browser.newTab()
-        fail(origin, url: "https://example.invalid/origin")
+        let failedURL = try XCTUnwrap(URL(string: "https://example.invalid/origin"))
+        var head = URLRequest(url: failedURL)
+        head.httpMethod = "HEAD"
+        origin.load(head)
+        origin.webView(origin.webView, didFailProvisionalNavigation: origin.currentNavigationForTests,
+                       withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
         fail(sibling, url: "https://example.invalid/sibling")
         XCTAssertNotNil(coordinator.retryViaProxy(tab: origin))
         await settle { origin.recoveryLoadCount == 1 }
         XCTAssertEqual(origin.recoveryLoadCount, 1)
         XCTAssertEqual(sibling.recoveryLoadCount, 0)
-        XCTAssertTrue(coordinator.snapshot(for: origin).toggleOn)
-        XCTAssertTrue(coordinator.snapshot(for: sibling).toggleOn)
+        XCTAssertFalse(coordinator.snapshot(for: origin).toggleOn)
+        XCTAssertFalse(coordinator.snapshot(for: sibling).toggleOn)
+        XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: failedURL))
+        XCTAssertNotNil(origin.activeRecoveryOperationID)
+        XCTAssertTrue(coordinator.requiresProxy(tab: origin, url: failedURL))
+        origin.load(failedURL)
+        XCTAssertNil(origin.activeRecoveryOperationID)
+        XCTAssertFalse(coordinator.requiresProxy(tab: origin, url: failedURL))
+        XCTAssertTrue(origin.websiteDataStore === origin.originalWebsiteDataStore)
     }
 
     func testClosingTheOriginTabCancelsItsPreparingRecovery() async throws {
@@ -1303,7 +1329,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         browser.hostCoordinator = coordinator
         let tab = try XCTUnwrap(browser.activeTab)
         fail(tab, url: "https://shop.example/manual")
-        XCTAssertNotNil(coordinator.retryViaProxy(tab: tab))
+        coordinator.setProxyEnabled(true, for: tab)
         await settle { tab.recoveryLoadCount >= 1 && coordinator.snapshot(for: tab).toggleOn }
         XCTAssertTrue(coordinator.snapshot(for: tab).toggleOn)
         _ = coordinator.setAutoRecoveryEnabled(true, for: tab)
@@ -1318,7 +1344,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         XCTAssertNotNil(routed, "manual proxy intent must keep the host store after auto-recovery off")
     }
 
-    func testSafeFailureRetryFollowsTheWebsiteChoiceAndRetainsLocationPrivacy() throws {
+    func testSafeFailureRetryFollowsTheWebsiteChoiceWithoutGrantingLocationPrivacy() throws {
         let publisher = AccessProxyEntryPublisher { _, _ in throw AccessSiteSessionError.nodeUnavailable }
         let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev)
         let host = try AccessSiteHost("failure-route.invalid")
@@ -1335,7 +1361,7 @@ final class AccessProxyRecoveryCoordinatorTests: XCTestCase {
         coordinator.setProxyEnabled(true, host: host, scopeID: tab.browsingScopeID, isPrivate: false)
         XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .required)
         coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: host)
-        XCTAssertTrue(coordinator.snapshot(for: tab, forLocationControl: true).toggleOn)
+        XCTAssertFalse(coordinator.snapshot(for: tab, forLocationControl: true).toggleOn)
         XCTAssertEqual(coordinator.failureProxyRetry(for: tab), .unavailable)
         XCTAssertNil(coordinator.retryViaProxy(tab: tab))
         XCTAssertEqual(tab.lastMainFrameFailure, failure)

@@ -93,6 +93,7 @@ class AccessProxyingURLTrackedRequest final
   const raw_ptr<AccessProxyingURLLoaderFactory> factory_;
   const raw_ptr<AccessRequestDispatchState> dispatch_state_;
   aegis_access::RequestOwnershipRecord ownership_record_;
+  std::string dispatched_registration_id_;
   std::optional<GURL> pending_redirect_url_;
   std::string pending_redirect_method_;
   bool redirect_preparation_pending_ = false;

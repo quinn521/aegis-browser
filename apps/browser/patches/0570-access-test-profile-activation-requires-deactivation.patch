@@ -1,0 +1,184 @@
+From 5ab4725c2b7285fdb64c59d7dea4955bab5e6da5 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 10:12:19 +0800
+Subject: [PATCH] fix(access): fail closed when activating another Test Profile
+ while one runs
+
+With an active core, activating a different Test Profile first checks the Options revision and then returns active_profile_switch_requires_deactivation without registering, committing or rerouting anything. Preferences-only saves still return profile_runtime_in_use. The Options UI asks the user to deactivate the current Profile first.
+---
+ .../aegis/access/access_options_service.cc    | 21 +++++++----
+ .../aegis/access/access_options_service.h     |  5 +--
+ .../access/access_options_service_unittest.cc |  2 +-
+ .../access_site_proxy_product_unittest.cc     | 36 ++++++++++++++++++-
+ .../browser/resources/aegis/access_options.ts |  3 ++
+ 5 files changed, 57 insertions(+), 10 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index a74f23adc62d9de4105a8c3ea545f61b8120d61d..9b79e7f365d9d87e9366212b1c24765eb3875702 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -478,13 +478,13 @@ void AccessOptionsService::PreviewTestNodeQr(
+ }
+ 
+ void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
+-    uint64_t expected_revision,
++    uint64_t expected_revision, bool switches_profile,
+     base::OnceCallback<void(AccessTestProfileSaveResult)> callback) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   // A stale window must learn about the newer revision instead of being told
+   // to revoke another window's healthy listener.
+   Read(base::BindOnce(
+-      [](uint64_t expected_revision,
++      [](uint64_t expected_revision, bool switches_profile,
+          base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+          StoreResult<AccessOptionsSnapshot> snapshot) {
+         if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
+@@ -496,11 +496,17 @@ void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
+                std::move(snapshot.value), "configuration_revision_conflict"});
+           return;
+         }
++        // Alpha does not replace a running Profile in place. Fail closed: no
++        // registration, commit or site rule for the candidate is started, and
++        // the active Profile is left exactly as it was.
+         std::move(callback).Run({StoreStatus::kConflict,
+                                  AccessOptionsCommitOutcome::kNotCommitted, std::nullopt,
+-                                 std::move(snapshot.value), "profile_runtime_in_use"});
++                                 std::move(snapshot.value),
++                                 switches_profile
++                                     ? "active_profile_switch_requires_deactivation"
++                                     : "profile_runtime_in_use"});
+       },
+-      expected_revision, std::move(callback)));
++      expected_revision, switches_profile, std::move(callback)));
+ }
+ 
+ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
+@@ -518,7 +524,9 @@ void AccessOptionsService::SaveTestNodeProfile(const std::string& editor,
+   if (test_profile_core_ ||
+       (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
+        test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
+-    RejectRuntimeInUseAfterRevisionCheck(expected_revision, std::move(callback));
++    // A newly imported node is another Profile to activate.
++    RejectRuntimeInUseAfterRevisionCheck(expected_revision, /*switches_profile=*/true,
++                                         std::move(callback));
+     return;
+   }
+   if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
+@@ -560,7 +568,8 @@ void AccessOptionsService::SaveTestNodePreferences(const std::string& editor,
+   if (test_profile_core_ ||
+       (test_profile_runtime_state_ != AccessTestProfileRuntimeState::kIdle &&
+        test_profile_runtime_state_ != AccessTestProfileRuntimeState::kUnavailable)) {
+-    RejectRuntimeInUseAfterRevisionCheck(expected_revision, std::move(callback));
++    RejectRuntimeInUseAfterRevisionCheck(expected_revision, /*switches_profile=*/false,
++                                         std::move(callback));
+     return;
+   }
+   if (!test_profile_save_operation_.empty() || found->second.pending || found->second.saving) {
+diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
+index 66d4c0a7fbeadf9cf597bc454b0780629ff23c8f..93dbc053e782015a95a74cdceb5abf22f213ff58 100644
+--- a/chrome/browser/aegis/access/access_options_service.h
++++ b/chrome/browser/aegis/access/access_options_service.h
+@@ -156,9 +156,10 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+       base::OnceCallback<void(TestNodePreviewResult)> callback,
+       TestNodePreviewResult preview);
+   // Reports a stale draft as a revision conflict before reporting that the
+-  // current test Profile runtime blocks the save.
++  // current test Profile runtime blocks the save. |switches_profile| marks a
++  // request to activate another Profile, which Alpha rejects while one runs.
+   void RejectRuntimeInUseAfterRevisionCheck(
+-      uint64_t expected_revision,
++      uint64_t expected_revision, bool switches_profile,
+       base::OnceCallback<void(AccessTestProfileSaveResult)> callback);
+   void OnTestProfileSaveRead(std::string editor, uint64_t generation,
+       uint64_t expected_revision, std::string operation_id, std::string name,
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+index 4fb2e43c18d97f9dea2c183d607e42975b5779b7..3b84bab9acb38cdbe87fe75206c401d8715d1521 100644
+--- a/chrome/browser/aegis/access/access_options_service_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -325,7 +325,7 @@ TEST(AccessOptionsServiceTest, PreparingFencesSecondWindowSaveBeforeAsynchronous
+   // The rejection first confirms the revision, so read it only after the
+   // revocation has fenced the preparation's own read.
+   EXPECT_EQ(blocked.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+-  EXPECT_EQ(blocked.Get().detail, "profile_runtime_in_use");
++  EXPECT_EQ(blocked.Get().detail, "active_profile_switch_requires_deactivation");
+   EXPECT_TRUE(revoked.Get());
+   EXPECT_FALSE(prepare.Get().ready);
+   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 29ec78e765e233d2b6d33db5a519bff6f9fac656..c0a55ba22f402717ccee412a7fd98576ec81816c 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1434,6 +1434,10 @@ TEST_F(AccessSavedTestProfileProductTest,
+   ASSERT_TRUE(restored.Get());
+   const auto active = bubble_->AcknowledgedTestProfileListener();
+   ASSERT_TRUE(active);
++  const auto endpoints_before = transport_->PrivateEndpoints(owner_);
++  const auto committed_before =
++      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(committed_before.value);
+   base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> latest;
+   options->Read(latest.GetCallback());
+   ASSERT_EQ(latest.Get().status, StoreStatus::kValid);
+@@ -1465,7 +1469,10 @@ TEST_F(AccessSavedTestProfileProductTest,
+                                base::Uuid::GenerateRandomV4().AsLowercaseString(), "B",
+                                inbound, in_use.GetCallback());
+   EXPECT_EQ(in_use.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
+-  EXPECT_EQ(in_use.Get().detail, "profile_runtime_in_use");
++  // Alpha rejects activating another Profile while A runs (fail closed).
++  EXPECT_EQ(in_use.Get().detail, "active_profile_switch_requires_deactivation");
++  ASSERT_TRUE(in_use.Get().snapshot);
++  EXPECT_EQ(in_use.Get().snapshot->revision, current);
+ 
+   base::test::TestFuture<AccessTestProfileSaveResult> stale_preferences;
+   options->EndTestNodeEditor(*editor);
+@@ -1482,6 +1489,33 @@ TEST_F(AccessSavedTestProfileProductTest,
+   ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+   EXPECT_EQ(bubble_->AcknowledgedTestProfileListener()->registration_id,
+             active->registration_id);
++  // A's registration, durable commit and site routes are unchanged.
++  const auto endpoints_after = transport_->PrivateEndpoints(owner_);
++  ASSERT_EQ(endpoints_after.size(), endpoints_before.size());
++  for (size_t i = 0; i < endpoints_after.size(); ++i) {
++    EXPECT_EQ(endpoints_after[i].registration, endpoints_before[i].registration);
++    EXPECT_EQ(endpoints_after[i].listener_binding, endpoints_before[i].listener_binding);
++  }
++  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> after;
++  options->Read(after.GetCallback());
++  ASSERT_EQ(after.Get().status, StoreStatus::kValid);
++  EXPECT_EQ(after.Get().value->revision, current);
++  EXPECT_EQ(after.Get().value->test_profile->configuration.id,
++            latest.Get().value->test_profile->configuration.id);
++  EXPECT_EQ(after.Get().value->test_profile->version,
++            latest.Get().value->test_profile->version);
++  const auto committed_after =
++      coordinator_->ReadCommittedSnapshot(owner_.storage_partition_token);
++  ASSERT_TRUE(committed_after.value);
++  EXPECT_EQ(committed_after.value->policy_generation,
++            committed_before.value->policy_generation);
++  ASSERT_EQ(committed_after.value->site_groups.size(),
++            committed_before.value->site_groups.size());
++  for (const auto& site : committed_after.value->site_groups) {
++    ASSERT_FALSE(site.members.empty());
++    EXPECT_EQ(site.members.front().policy.proxy_group_id, group_);
++  }
++  EXPECT_EQ(Snapshot().connection, AccessSiteConnectionState::kReady);
+ }
+ 
+ TEST_F(AccessSavedTestProfileProductTest,
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index 0572d8e0378a9452c7e095b41a7d65571a253751..defe6e88a919444aabdfa8badf8cae495e2c5230 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -402,6 +402,9 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
+     status.textContent = 'Another window saved changes. Review the saved settings before applying this draft.';
+   } else if (result.reason === 'profile_runtime_in_use') {
+     status.textContent = 'Revoke the current test connection before replacing its settings.';
++  } else if (result.reason === 'active_profile_switch_requires_deactivation') {
++    status.textContent =
++        'Deactivate the current Profile before activating another. The current connection was not changed.';
+   } else {
+     status.textContent = 'The draft was not saved. Check the preview and listener preferences.';
+   }
+-- 
+2.54.0 (Apple Git-157)
+

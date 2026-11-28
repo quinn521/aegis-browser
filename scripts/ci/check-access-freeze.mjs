@@ -16,15 +16,23 @@ const freezeDirectory = 'docs/plans/access-service-v1.0';
 const freezePath = `${freezeDirectory}/freeze.json`;
 const trustedFallback = 'd60b5952b40e511d6f98f3f33be926dbe7ab1eb7';
 const trustedFallbackManifestSha256 = 'ea90c1005787121924897d1dc0f7d5dcf573982e3ba499c26f48c8078983d4e0';
+const revision5ManifestSha256 = 'b5e8586e6ca346bca2cdf02824de5765908fa9e2a88f09da4ae8f50cc61549e7';
+const currentManifestSha256 = '127d2f63cf7622b63388726ad592d7754ecd3fc649263762bfc897cf97b5f228';
 const revisionMigrations = Object.freeze([
   Object.freeze({
     fromRevision: 4,
     fromManifestSha256: trustedFallbackManifestSha256,
     toRevision: 5,
-    toManifestSha256: 'b5e8586e6ca346bca2cdf02824de5765908fa9e2a88f09da4ae8f50cc61549e7',
+    toManifestSha256: revision5ManifestSha256,
+  }),
+  Object.freeze({
+    fromRevision: 5,
+    fromManifestSha256: revision5ManifestSha256,
+    toRevision: 6,
+    toManifestSha256: currentManifestSha256,
   }),
 ]);
-const embeddedManifestDigests = new Set(revisionMigrations.map(({toManifestSha256}) => toManifestSha256));
+const supportedRevisions = new Set(revisionMigrations.map(({toRevision}) => toRevision));
 
 function gitFile(ref, path, cwd) {
   try {
@@ -50,12 +58,14 @@ function hasGitFile(ref, path, cwd) {
 function validateManifest(manifest) {
   const expected = {
     specVersion: 'V1.0',
-    specRevision: 5,
     specificationStatus: 'FROZEN',
     authority: 'spec.zh-CN.md',
   };
   for (const [key, value] of Object.entries(expected)) {
     if (manifest[key] !== value) fail(`Frozen manifest ${key} must be ${value}`);
+  }
+  if (!supportedRevisions.has(manifest.specRevision)) {
+    fail('Frozen manifest has an unsupported specification revision');
   }
   const counts = manifest.counts ?? {};
   if (
@@ -63,7 +73,7 @@ function validateManifest(manifest) {
     counts.performanceMetrics !== 13 ||
     counts.deliveryGates !== 4
   ) {
-    fail('Frozen manifest counts do not match revision 5');
+    fail('Frozen manifest case, metric or gate counts changed');
   }
   if (manifest.documentChecks?.previewScenarioCount !== 13) {
     fail('Frozen preview scenario count must be 13');
@@ -100,7 +110,7 @@ try {
       if (!migration) fail(`freeze.json differs from trusted baseline ${baseline}`);
     }
     baselineManifest = JSON.parse(baselineBytes.toString('utf8'));
-  } else if (!embeddedManifestDigests.has(candidateDigest)) {
+  } else if (candidateDigest !== currentManifestSha256) {
     fail(`freeze.json differs from embedded digest for trusted baseline ${trustedFallback}`);
   }
   const manifest = JSON.parse(candidateBytes.toString('utf8'));

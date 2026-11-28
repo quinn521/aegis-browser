@@ -257,9 +257,48 @@ struct AccessGeoSiteStorage: Sendable {
 
 @MainActor
 final class AccessGeoSiteCache {
+    enum Region: String, Codable, CaseIterable, Sendable {
+        case mainland, outsideMainland
+    }
+
     struct Selection: Codable, Equatable, Sendable {
         var mode: AccessWebsiteAccelerationMode = .manual
         var categories: Set<AccessGeoSiteCategory> = [.debian]
+        var region: Region?
+        // Missing on old ledgers. Keep both independent grants until the owner applies a region.
+        var automaticScope: AccessOverseasSelection.Mode?
+        var mainlandEnabled: Bool?
+
+        var isValid: Bool {
+            if automaticScope == nil { return region == nil && mainlandEnabled == nil }
+            return mode == .manual || region != nil
+        }
+
+        static let mainlandCategories: Set<AccessGeoSiteCategory> = [.douban, .meituan]
+
+        var activeCategories: Set<AccessGeoSiteCategory> {
+            guard mode == .smart else { return [] }
+            guard automaticScope != nil else { return categories }
+            // Debian is an undirected legacy choice, never a new regional default.
+            let legacy = categories.intersection([.debian])
+            guard region == .outsideMainland else { return legacy }
+            return selectedMainlandCategories.union(legacy)
+        }
+
+        var regionalCategoryDraft: Set<AccessGeoSiteCategory> {
+            guard automaticScope == nil, mode == .manual else { return categories }
+            // Debian was the historical default row even when Smart was never enabled.
+            return categories == [.debian] ? Self.mainlandCategories : categories.subtracting([.debian])
+        }
+
+        var selectedMainlandCategories: Set<AccessGeoSiteCategory> {
+            guard mainlandEnabled != false else { return [] }
+            return automaticScope == .all ? Self.mainlandCategories : categories.intersection(Self.mainlandCategories)
+        }
+
+        var usesOverseasRules: Bool {
+            automaticScope == nil || (mode == .smart && region == .mainland)
+        }
     }
 
     struct TimeSource: Sendable {
@@ -340,6 +379,7 @@ final class AccessGeoSiteCache {
         }
 
         var selection = AccessOverseasSelection()
+        var hasSavedSelection = false
         var policy: AccessOverseasCatalogue.Policy?
         var pendingPolicy: AccessOverseasCatalogue.Policy?
         var ceiling: Ceiling?
@@ -412,10 +452,10 @@ final class AccessGeoSiteCache {
         func match(_ url: URL) -> Match {
             guard let host = AccessWebsiteRoutePolicy.websiteHost(url)?.rawValue else { return .original }
             guard let selection, status != .unsaved else { return .indeterminate }
-            guard selection.mode == .smart, !selection.categories.isEmpty else { return .original }
+            guard !selection.activeCategories.isEmpty else { return .original }
             guard status == .ready else { return .indeterminate }
             var unresolved = false
-            for category in selection.categories {
+            for category in selection.activeCategories {
                 switch groups[category] {
                 case .available(let group, _):
                     if group.rules.contains(where: { $0.matches(host) }) { return .managed }
@@ -550,7 +590,7 @@ final class AccessGeoSiteCache {
     private var bundledOverseas: AccessOverseasCacheSnapshot?
     private var cachedOverseasFallback: (reference: AccessOverseasCacheSnapshot.Reference, policy: AccessOverseasCatalogue.Policy?)?
     private let session = UUID()
-    private var revision: UInt64 = 0
+    private(set) var revision: UInt64 = 0
     private var current: Snapshot?
     private var observed: (date: Date, uptime: TimeInterval)?
     private var restoring = false
@@ -580,7 +620,7 @@ final class AccessGeoSiteCache {
         if let checkedAt = refresh.checkedAt ?? (legacySuccess ? refresh.lastRequest : nil) {
             let policy = refreshPolicy(current.ledger, at: effectiveTime)
             let versions = current.ledger.selection.mode == .smart
-                ? current.ledger.selection.categories.compactMap { current.ledger.decisions[$0.rawValue]?.version } : []
+                ? current.ledger.selection.activeCategories.compactMap { current.ledger.decisions[$0.rawValue]?.version } : []
             let rules = current.ledger.remotePolicy?.rules
             var expiries = versions.filter { rules?.blocks($0.release.tag) != true }.map(\.expiry)
             if current.ledger.overseasSelection?.enabled == true, let active = current.overseasActive,
@@ -602,7 +642,7 @@ final class AccessGeoSiteCache {
     var effectiveTime: Date { readClock().date }
     var wantsOverseasRules: Bool {
         if requestedOverseasPreview { return true }
-        guard let selection = current?.ledger.overseasSelection, selection.enabled else { return false }
+        guard current?.ledger.selection.usesOverseasRules == true, let selection = current?.ledger.overseasSelection, selection.enabled else { return false }
         return selection.mode == .all || !selection.categories.isEmpty
     }
 
@@ -649,10 +689,30 @@ final class AccessGeoSiteCache {
     }
 
     func setSelection(_ selection: Selection) throws {
-        guard var next = current else { throw Failure.unavailable }
-        guard selection != next.ledger.selection else { return }
+        guard let current else { throw Failure.unavailable }
+        try saveSelection(selection, overseas: current.ledger.overseasSelection)
+    }
+
+    func saveRegionalSelection(_ selection: Selection, overseas: AccessOverseasSelection,
+                               expectedRevision: UInt64) throws {
+        guard let current, revision == expectedRevision, !writing, selection.isValid, selection.mode == .smart,
+              selection.automaticScope == overseas.mode else { throw Failure.stale }
+        let prior = current.ledger.overseasSelection
+        if overseas.enabled {
+            guard prior?.enabled == true, prior?.scope == overseas.scope else { throw Failure.ineligible }
+        } else if prior?.enabled == true {
+            try disableOverseas(website: selection, choice: overseas)
+            return
+        }
+        try saveSelection(selection, overseas: overseas)
+    }
+
+    private func saveSelection(_ selection: Selection, overseas: AccessOverseasSelection?) throws {
+        guard selection.isValid, var next = current else { throw Failure.unavailable }
+        guard selectionUnsaved || selection != next.ledger.selection || overseas != next.ledger.overseasSelection else { return }
         let clock = readClock()
         next.ledger.selection = selection
+        next.ledger.overseasSelection = overseas
         markTime(clock.date, in: &next.ledger)
         do {
             selectionUnsaved = false
@@ -667,9 +727,9 @@ final class AccessGeoSiteCache {
     }
 
     func updateContext() -> Context? {
-        // Overseas rules refresh independently of the domestic website mode.
+        // The enabled cross-region source or an explicit preview can request updates.
         guard !selectionUnsaved, let record = current?.ledger, status == .ready, !readClock().rollback,
-              (record.selection.mode == .smart && !record.selection.categories.isEmpty) || wantsOverseasRules
+              (record.selection.mode == .smart && !record.selection.activeCategories.isEmpty) || wantsOverseasRules
         else { return nil }
         return Context(owner: record.owner, revision: revision, session: session)
     }
@@ -857,9 +917,13 @@ final class AccessGeoSiteCache {
         return input.prior
     }
 
-    func confirmOverseas(_ confirmation: OverseasConfirmation,
+    func confirmOverseas(_ confirmation: OverseasConfirmation, website: Selection? = nil,
                          whileValid: @MainActor () -> Bool) async throws {
         guard whileValid(), !writing else { throw Failure.stale }
+        if let website {
+            guard website.isValid, website.mode == .smart, website.automaticScope == confirmation.selection.mode
+            else { throw Failure.ineligible }
+        }
         let owner = try verifiedOverseasConfirmation(confirmation).ledger.owner
         let approved = confirmation.approved
         writing = true
@@ -876,21 +940,29 @@ final class AccessGeoSiteCache {
         next.overseasActive = approved
         next.ledger.overseasActive = reference
         next.ledger.overseasApprovedFromBundle = confirmation.bundled ? true : nil
+        if let website { next.ledger.selection = website }
         next.ledger.overseasSelection = confirmation.selection
         next.ledger.overseasExpansionPending = false
         next.ledger.overseasIntersectionUnavailable = false
-        requestedOverseasPreview = false
         markTime(readClock().date, in: &next.ledger)
-        try commit(next, status: .ready, clearsOverseasUnsaved: true)
+        let previewWasRequested = requestedOverseasPreview
+        requestedOverseasPreview = false
+        do {
+            try commit(next, status: .ready, clearsOverseasUnsaved: true)
+        } catch {
+            requestedOverseasPreview = previewWasRequested
+            throw error
+        }
         storage.prune(keep: next.ledger.files)
     }
 
-    func disableOverseas() throws {
+    func disableOverseas(website: Selection? = nil, choice: AccessOverseasSelection? = nil) throws {
         guard var next = current, var selection = next.ledger.overseasSelection, selection.enabled else { return }
         var ownedFlight: UUID?
         defer { endOverseasRefresh(ownedFlight) }
         selection.enabled = false
-        next.ledger.overseasSelection = selection
+        if let website { next.ledger.selection = website }
+        next.ledger.overseasSelection = choice ?? selection
         next.ledger.overseasIntersectionUnavailable = false
         requestedOverseasPreview = false
         overseasSelectionUnsaved = true
@@ -1124,7 +1196,7 @@ final class AccessGeoSiteCache {
 
     func proposal(for category: AccessGeoSiteCategory) -> Proposal? {
         guard let current, current.ledger.selection.mode == .smart, let context = updateContext(),
-              current.ledger.selection.categories.contains(category) else { return nil }
+              current.ledger.selection.activeCategories.contains(category) else { return nil }
         let now = readClock().date
         let old = Self.scope(category, in: current, at: now)
         guard let staged = Self.stagedScope(category, in: current, over: old, at: now),
@@ -1230,7 +1302,7 @@ final class AccessGeoSiteCache {
         let now = readClock().date
         guard (try? receipt.expiry(at: now)) != nil else { return false }
         // Manual mode keeps domestic categories but neither routes nor refreshes them.
-        let domestic = snapshot.ledger.selection.mode == .smart ? snapshot.ledger.selection.categories : []
+        let domestic = snapshot.ledger.selection.activeCategories
         let selected = domestic.map { Self.scope($0, in: snapshot, at: now) }
         // An enabled, unexpired overseas snapshot proves the stored release too,
         // including when every domestic category is bundled or awaiting approval.
@@ -1395,7 +1467,7 @@ final class AccessGeoSiteCache {
         }
         let offer = status == .ready && includeStaged ? offeredOverseas(current, at: date) : nil
         view.refreshDays = refreshPolicy(current.ledger, at: date).days
-        view.overseas = OverseasView(selection: overseas, policy: fallback ?? approved?.policy, pendingPolicy: pending, ceiling: ceiling,
+        view.overseas = OverseasView(selection: overseas, hasSavedSelection: current.ledger.overseasSelection != nil, policy: fallback ?? approved?.policy, pendingPolicy: pending, ceiling: ceiling,
             verifiedScopeWhileHeld: verifiedWhileHeld,
             ready: status == .ready && !overseasSelectionUnsaved && !current.overseasRecoveryHeld
                 && (current.overseasWithdrawal == nil || pending != nil || ceiling != nil)
@@ -1613,7 +1685,7 @@ final class AccessGeoSiteCache {
 
     private nonisolated static func validRecord(_ record: Ledger) -> Bool {
         let categories = Set(AccessGeoSiteCategory.allCases.map(\.rawValue))
-        guard record.schema == 1, Set(record.decisions.keys) == categories,
+        guard record.schema == 1, record.selection.isValid, Set(record.decisions.keys) == categories,
               record.clockFloor.timeIntervalSinceReferenceDate.isFinite,
               validRefreshState(record.refresh),
               record.remotePolicy.map({ $0.rules.valid && AccessGeoSiteAdmission.isSHA256($0.digest) }) != false,

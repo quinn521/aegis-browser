@@ -43,7 +43,7 @@ env:
   BUNDLE_FROZEN: "true"
 jobs:
   impact:
-    if: ${{ inputs.exercise != 'cloud-poc' && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
+    if: ${{ (inputs.exercise != 'cloud-poc' && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false')) && (github.repository != 'quinn521/aegis-browser' || github.event_name == 'workflow_dispatch' || github.base_ref == 'develop' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

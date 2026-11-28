@@ -156,7 +156,7 @@ final class WebsiteEnhancementUITests: XCTestCase {
     app.buttons["site-details"].tap()
   }
 
-  func testAccessIntentIsolatedBetweenOrdinaryAndPrivateStores() {
+  func testLocalPagesKeepLocationProtectionOffInBothProfiles() {
     let app = launch()
     navigate(app, "http://127.0.0.1:8768/enhancements/page")
     XCTAssertTrue(app.webViews.staticTexts["网站增强验收文章"].firstMatch.waitForExistence(timeout: 12))
@@ -164,8 +164,8 @@ final class WebsiteEnhancementUITests: XCTestCase {
     app.buttons["site-details"].tap()
     let toggle = app.switches["access-site-proxy-toggle"]
     XCTAssertTrue(toggle.waitForExistence(timeout: 5))
-    toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
-    XCTAssertEqual(toggle.value as? String, "1")
+    XCTAssertFalse(toggle.isEnabled)
+    XCTAssertEqual(toggle.value as? String, "0")
     app.navigationBars["当前网站"].buttons["完成"].tap()
     app.buttons["browser-more"].tap()
     let modeMenu = app.descendants(matching: .any).matching(
@@ -181,7 +181,8 @@ final class WebsiteEnhancementUITests: XCTestCase {
     let privateToggle = app.switches["access-site-proxy-toggle"]
     XCTAssertTrue(privateToggle.waitForExistence(timeout: 5))
     XCTAssertEqual(privateToggle.value as? String, "0")
-    capture("私密代理意图没有继承")
+    XCTAssertFalse(privateToggle.isEnabled)
+    capture("普通和私密本机页面的位置保护不可用")
   }
   func testUnavailableAccountDownloadStaysHiddenWhenWebsiteRecoveryChanges() {
     let app = launch(accountOrigin: "http://127.0.0.1:8768")

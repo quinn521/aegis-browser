@@ -23,7 +23,7 @@ concurrency:
 jobs:
   shell-coverage:
     name: shell-coverage
-    if: ${{ (inputs.lane == '' || inputs.lane == 'linux') && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
+    if: ${{ ((inputs.lane == '' || inputs.lane == 'linux') && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false')) && (github.repository != 'quinn521/aegis-browser' || github.event_name == 'workflow_dispatch' || github.base_ref == 'develop' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -68,7 +68,7 @@ jobs:
 
   powershell-coverage:
     name: powershell-coverage
-    if: ${{ (inputs.lane == '' || inputs.lane == 'windows') && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false') }}
+    if: ${{ ((inputs.lane == '' || inputs.lane == 'windows') && (github.event_name != 'pull_request' || toJSON(github.event.pull_request.draft) == 'false')) && (github.repository != 'quinn521/aegis-browser' || github.event_name == 'workflow_dispatch' || github.base_ref == 'develop' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')) }}
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -146,7 +146,7 @@ jobs:
           retention-days: 14
 
   lane-result:
-    if: ${{ always() && inputs.lane != '' }}
+    if: ${{ (always() && inputs.lane != '') && (github.repository != 'quinn521/aegis-browser' || github.event_name == 'workflow_dispatch' || github.base_ref == 'develop' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')) }}
     needs: [shell-coverage, powershell-coverage]
     runs-on: ubuntu-24.04
     timeout-minutes: 5

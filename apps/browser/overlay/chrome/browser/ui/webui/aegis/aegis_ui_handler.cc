@@ -3,6 +3,8 @@
 
 #include "chrome/browser/ui/webui/aegis/aegis_ui_handler.h"
 
+#include "content/public/browser/navigation_handle.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -25,6 +27,7 @@
 // Access 选项桥仅在 macOS 构建，依赖在 BUILD.gn 的 is_mac 分支声明。
 #include "chrome/browser/aegis/access/access_build_channel.h"  // nogncheck
 #include "chrome/browser/aegis/access/access_options_service.h"  // nogncheck
+#include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
 #include "chrome/browser/aegis/aegis_torrent_client.h"
 #endif
 #include "chrome/browser/aegis/agent/aegis_agent_service.h"
@@ -71,6 +74,34 @@ constexpr base::TimeDelta kTorrentRequestTtl = base::Minutes(1);
 constexpr size_t kMaxTorrentBytes = 4 * 1024 * 1024;
 constexpr size_t kMaxMagnetBytes = 16 * 1024;
 constexpr size_t kMaxTorrentFiles = 2048;
+
+const char* AccessTestNodePreviewState(
+    aegis::access::TestNodePreviewStatus status) {
+  using Status = aegis::access::TestNodePreviewStatus;
+  switch (status) {
+    case Status::kPreview:
+      return "preview";
+    case Status::kNotAdmitted:
+      return "notAdmitted";
+    case Status::kInvalidShare:
+      return "invalidShare";
+    case Status::kUnsupportedOutbound:
+      return "unsupportedOutbound";
+    case Status::kInvalidImage:
+      return "invalidImage";
+    case Status::kNoQrCode:
+      return "noQrCode";
+    case Status::kMultipleQrCodes:
+      return "multipleQrCodes";
+    case Status::kCanceled:
+      return "canceled";
+    case Status::kBusy:
+      return "busy";
+    case Status::kSecureStorageUnavailable:
+      return "secureStorageUnavailable";
+  }
+}
+
 #endif
 constexpr size_t kMaxCaptureUrlBytes = 8192;
 constexpr size_t kMaxCaptureTitleBytes = 4096;
@@ -364,10 +395,36 @@ void AegisUIHandler::RegisterMessages() {
       "getStatus", base::BindRepeating(&AegisUIHandler::HandleGetStatus,
                                        base::Unretained(this)));
 #if BUILDFLAG(IS_MAC)
+  Observe(web_ui()->GetWebContents());
   web_ui()->RegisterMessageCallback("getAccessOptionsCapabilities",
       base::BindRepeating(&AegisUIHandler::HandleGetAccessOptionsCapabilities, base::Unretained(this)));
   web_ui()->RegisterMessageCallback("readAccessOptions",
       base::BindRepeating(&AegisUIHandler::HandleReadAccessOptions, base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "previewAccessTestNode",
+      base::BindRepeating(&AegisUIHandler::HandlePreviewAccessTestNode,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "cancelAccessTestNodePreview",
+      base::BindRepeating(&AegisUIHandler::HandleCancelAccessTestNodePreview,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "discardAccessTestNodeDraft",
+      base::BindRepeating(&AegisUIHandler::HandleDiscardAccessTestNodeDraft,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("applyAccessTestNode",
+      base::BindRepeating(&AegisUIHandler::HandleApplyAccessTestNode,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("applyAccessTestNodePreferences",
+      base::BindRepeating(&AegisUIHandler::HandleApplyAccessTestNodePreferences,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("queryAccessTestNodeApply",
+      base::BindRepeating(&AegisUIHandler::HandleQueryAccessTestNodeApply,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("revokeAccessTestNode",
+      base::BindRepeating(&AegisUIHandler::HandleRevokeAccessTestNode,
+                          base::Unretained(this)));
+
 #endif
 
   web_ui()->RegisterMessageCallback(
@@ -603,6 +660,15 @@ void AegisUIHandler::HandleGetStatus(const base::ListValue& args) {
 }
 
 #if BUILDFLAG(IS_MAC)
+namespace {
+// Activation launches the DEV-only internal core; saving is a separate grant.
+bool CanActivateAccessTestNode() {
+  const auto identity = aegis::access::AccessBuildIdentityForCurrentBuild();
+  return identity.product == aegis_access::AccessProductChannel::kDebug &&
+      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kActivate);
+}
+}  // namespace
+
 void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& args) {
   if (args.size() != 1 || !args[0].is_string()) return;
   AllowJavascript();
@@ -611,6 +677,20 @@ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& a
   result.Set("enabled", aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kPage));
   result.Set("identityConflict", identity.conflict);
   result.Set("private", Profile::FromWebUI(web_ui())->IsOffTheRecord());
+  result.Set("testExtendedVless", IsAccessOptionsDocument() &&
+      !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
+      identity.product == aegis_access::AccessProductChannel::kDebug &&
+      aegis_access::CanUseAccessOptions(
+          identity, aegis_access::AccessOptionsOperation::kImport));
+  result.Set("testApply", IsAccessOptionsDocument() &&
+      !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
+      aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kWrite));
+  const bool can_activate = IsAccessOptionsDocument() &&
+      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode();
+  result.Set("testActivate", can_activate);
+  result.Set("testAutoProtocol", can_activate &&
+      aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
+          aegis_access::AccessInboundProtocolPreference::kAuto));
   ResolveJavascriptCallback(args[0], result);
 }
 
@@ -622,21 +702,477 @@ void AegisUIHandler::HandleReadAccessOptions(const base::ListValue& args) {
     ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "channelNotAdmitted"));
     return;
   }
+  if (IsAccessOptionsDocument() && service->HasUncertainTestNodeApply()) {
+    service->ReconcileUncertainTestNodeApply(base::BindOnce(
+        [](base::WeakPtr<AegisUIHandler> self,
+           base::WeakPtr<aegis::access::AccessOptionsService> service,
+           content::WeakDocumentPtr document, std::string callback) {
+          if (!self || !service || !self->IsJavascriptAllowed() ||
+              !document.AsRenderFrameHostIfValid() ||
+              document.AsRenderFrameHostIfValid() !=
+                  self->access_options_document_.AsRenderFrameHostIfValid()) {
+            return;
+          }
+          service->Read(base::BindOnce(&AegisUIHandler::OnAccessOptionsRead,
+                                      self, document, std::move(callback)));
+        }, account_weak_factory_.GetWeakPtr(), service->GetWeakPtr(),
+        access_options_document_, args[0].GetString()));
+    return;
+  }
+  auto* frame = web_ui()->GetWebContents()->GetPrimaryMainFrame();
   service->Read(base::BindOnce(&AegisUIHandler::OnAccessOptionsRead,
-      account_weak_factory_.GetWeakPtr(), args[0].GetString()));
+      account_weak_factory_.GetWeakPtr(), frame->GetWeakDocumentPtr(), args[0].GetString()));
 }
-void AegisUIHandler::OnAccessOptionsRead(std::string callback_id,
+void AegisUIHandler::OnAccessOptionsRead(
+    content::WeakDocumentPtr document, std::string callback_id,
     aegis::access::StoreResult<aegis::access::AccessOptionsSnapshot> result) {
-  if (!IsJavascriptAllowed()) return;
+  if (!IsJavascriptAllowed() ||
+      document.AsRenderFrameHostIfValid() != web_ui()->GetWebContents()->GetPrimaryMainFrame()) {
+    return;
+  }
   base::DictValue response;
   response.Set("state", result.status == aegis::access::StoreStatus::kValid ? "ready" : "unavailable");
   response.Set("storeStatus", static_cast<int>(result.status));
   if (result.value) {
     response.Set("formatVersion", result.value->schema_version);
     response.Set("revision", std::to_string(result.value->revision));
-    response.Set("configuration", result.value->configuration);
+    if (IsAccessOptionsDocument()) {
+      auto* options = aegis::access::AccessOptionsService::GetOrCreate(
+          Profile::FromWebUI(web_ui()));
+      if (options && options->HasUncertainTestNodeApply())
+        response.Set("pendingApplyRecovery", true);
+    }
+    if (IsAccessOptionsDocument() && result.value->test_profile) {
+      const auto& profile = *result.value->test_profile;
+      const auto& inbound = profile.configuration.inbound;
+      using Protocol = aegis_access::AccessInboundProtocolPreference;
+      using PortMode = aegis_access::AccessInboundPortMode;
+      const char* protocol = inbound.protocol == Protocol::kAuto
+                                 ? "auto"
+                                 : inbound.protocol == Protocol::kHttp ? "http"
+                                                                      : "socks5";
+      response.Set("testProfile", base::DictValue()
+          .Set("version", std::to_string(profile.version))
+          .Set("protocol", protocol)
+          .Set("portMode", inbound.port_mode == PortMode::kSystemAllocated
+                               ? "random" : "fixed")
+          .Set("requestedPort", static_cast<int>(inbound.requested_port)));
+      auto* browser_profile = Profile::FromWebUI(web_ui());
+      auto* options = aegis::access::AccessOptionsService::GetOrCreate(browser_profile);
+      if (options) {
+        auto* controller = aegis::access::AccessSiteProxyBubbleController::Get(browser_profile);
+        const auto revoke_token = options->TestNodeRevocationTokenAtRevision(result.value->revision);
+        const auto active = !revoke_token.empty() && controller
+            ? controller->AcknowledgedTestProfileListener() : std::nullopt;
+        const auto prepared = options->PreparedTestNode();
+        const auto* listener = active ? &*active
+            : prepared && prepared->first == result.value->revision ? &prepared->second : nullptr;
+        using Runtime = aegis::access::AccessTestProfileRuntimeState;
+        const auto runtime = options->test_profile_runtime_state();
+        base::DictValue connection;
+        if (!revoke_token.empty()) {
+          connection.Set("revision", std::to_string(result.value->revision));
+          connection.Set("revokeToken", revoke_token);
+        }
+        connection.Set("state", active ? "active" : listener ? "prepared"
+            : runtime == Runtime::kUncertain ? "uncertain"
+            : runtime == Runtime::kRevoking ? "revoking"
+            : runtime == Runtime::kPublishing ? "publishing"
+            : runtime == Runtime::kPreparing ? "pending"
+            : runtime == Runtime::kActive || runtime == Runtime::kUnavailable
+                  ? "unavailable" : "inactive");
+        if (listener) {
+          connection.Set("port", static_cast<int>(listener->port));
+          connection.Set("protocol",
+              listener->transport == aegis_access::RegisteredProxyTransport::kSocks5
+                  ? "SOCKS5" : "HTTP");
+        }
+        response.Set("connection", std::move(connection));
+      }
+    }
   }
   ResolveJavascriptCallback(base::Value(callback_id), response);
+}
+void AegisUIHandler::DidFinishNavigation(content::NavigationHandle* navigation) {
+  if (!navigation->HasCommitted() || !navigation->IsInPrimaryMainFrame() ||
+      navigation->IsSameDocument()) {
+    return;
+  }
+  access_options_document_ = content::WeakDocumentPtr();
+  CloseAccessTestNodeEditor();
+  ++access_test_node_preview_generation_;
+  if (!navigation->IsErrorPage() &&
+      !navigation->IsServedFromBackForwardCache() &&
+      navigation->GetURL() == GURL("chrome://aegis/access-options")) {
+    access_options_document_ =
+        navigation->GetRenderFrameHost()->GetWeakDocumentPtr();
+  }
+}
+
+bool AegisUIHandler::IsAccessOptionsDocument() const {
+  auto* frame = access_options_document_.AsRenderFrameHostIfValid();
+  return frame && web_contents() && frame == web_contents()->GetPrimaryMainFrame();
+}
+
+aegis::access::AccessOptionsService* AegisUIHandler::EnsureAccessTestNodeEditor() {
+  if (!IsAccessOptionsDocument()) return nullptr;
+  if (access_test_node_service_ && !access_test_node_editor_.empty())
+    return access_test_node_service_.get();
+  auto* service = aegis::access::AccessOptionsService::GetOrCreate(
+      Profile::FromWebUI(web_ui()));
+  if (!service) return nullptr;
+  auto editor = service->BeginTestNodeEditor();
+  if (!editor) return nullptr;
+  access_test_node_editor_ = std::move(*editor);
+  access_test_node_service_ = service->GetWeakPtr();
+  return service;
+}
+
+void AegisUIHandler::CloseAccessTestNodeEditor() {
+  if (access_test_node_service_ && !access_test_node_editor_.empty())
+    access_test_node_service_->EndTestNodeEditor(access_test_node_editor_);
+  access_test_node_editor_.clear();
+  access_test_node_service_.reset();
+  access_test_node_draft_.reset();
+}
+
+void AegisUIHandler::HandlePreviewAccessTestNode(const base::ListValue& args) {
+  if (args.size() != 3 || !args[0].is_string() || !args[1].is_string() ||
+      !args[2].is_string()) {
+    return;
+  }
+  AllowJavascript();
+  const uint64_t generation = ++access_test_node_preview_generation_;
+  access_test_node_draft_.reset();
+  const std::string& callback_id = args[0].GetString();
+  if (!IsAccessOptionsDocument()) {
+    OnAccessTestNodePreview(callback_id, generation, {},
+                            {aegis::access::TestNodePreviewStatus::kNotAdmitted});
+    return;
+  }
+  auto* service = EnsureAccessTestNodeEditor();
+  if (!service) {
+    OnAccessTestNodePreview(callback_id, generation, {},
+                            {aegis::access::TestNodePreviewStatus::kNotAdmitted});
+    return;
+  }
+  const auto& input = args[2].GetString();
+  const auto& source = args[1].GetString();
+  const auto editor = access_test_node_editor_;
+  auto completion = base::BindOnce(&AegisUIHandler::OnAccessTestNodePreview,
+      account_weak_factory_.GetWeakPtr(), callback_id, generation, editor);
+  if (source == "text") {
+    service->PreviewTestNodeText(editor, input, std::move(completion));
+    return;
+  }
+  if (source == "image") {
+    service->PreviewTestNodeQr(editor, input, std::move(completion));
+    return;
+  }
+  service->CancelTestNodePreview(editor);
+  OnAccessTestNodePreview(callback_id, generation, editor,
+                          {aegis::access::TestNodePreviewStatus::kInvalidShare});
+}
+
+void AegisUIHandler::HandleCancelAccessTestNodePreview(
+    const base::ListValue& args) {
+  if (args.empty()) {
+    ++access_test_node_preview_generation_;
+    if (access_test_node_service_)
+      access_test_node_service_->CancelTestNodePreview(access_test_node_editor_);
+    access_test_node_draft_.reset();
+  }
+}
+
+void AegisUIHandler::OnAccessTestNodePreview(
+    std::string callback_id,
+    uint64_t generation,
+    std::string editor,
+    aegis::access::TestNodePreviewResult preview) {
+  if (!IsJavascriptAllowed()) {
+    if (preview.reference && access_test_node_service_)
+      access_test_node_service_->DiscardTestNodeReference(editor, *preview.reference);
+    return;
+  }
+  auto status = preview.status;
+  if (!IsAccessOptionsDocument()) {
+    status = aegis::access::TestNodePreviewStatus::kNotAdmitted;
+  }
+  if (generation != access_test_node_preview_generation_ ||
+      editor != access_test_node_editor_) {
+    status = aegis::access::TestNodePreviewStatus::kCanceled;
+  } else if (status == aegis::access::TestNodePreviewStatus::kPreview &&
+             !preview.reference) {
+    status = aegis::access::TestNodePreviewStatus::kSecureStorageUnavailable;
+  }
+  if (status == aegis::access::TestNodePreviewStatus::kPreview) {
+    access_test_node_draft_ =
+        std::make_unique<aegis::access::AccessTestNodeSecretReference>(
+            std::move(*preview.reference));
+  } else if (preview.reference && access_test_node_service_) {
+    access_test_node_service_->DiscardTestNodeReference(editor, *preview.reference);
+  }
+  base::DictValue result;
+  result.Set("state", AccessTestNodePreviewState(status));
+  if (status == aegis::access::TestNodePreviewStatus::kPreview) {
+    using Protocol = aegis::access::TestNodePreviewProtocol;
+    switch (preview.protocol) {
+      case Protocol::kTcpRealityVision:
+        result.Set("protocol", "VLESS · TCP · REALITY · Vision");
+        break;
+      case Protocol::kWebSocketTls:
+        result.Set("protocol", "VLESS · WebSocket · TLS");
+        break;
+      case Protocol::kTcpTlsVision:
+        result.Set("protocol", "VLESS · TCP · TLS · Vision");
+        break;
+      case Protocol::kGrpcReality:
+        result.Set("protocol", "VLESS · gRPC · REALITY");
+        break;
+    }
+  }
+  ResolveJavascriptCallback(base::Value(callback_id), result);
+}
+
+void AegisUIHandler::HandleDiscardAccessTestNodeDraft(const base::ListValue& args) {
+  if (args.size() != 1 || !args[0].is_string()) return;
+  AllowJavascript();
+  const auto generation = ++access_test_node_preview_generation_;
+  access_test_node_draft_.reset();
+  const auto editor = access_test_node_editor_;
+  const auto* profile = Profile::FromWebUI(web_ui());
+  if (!IsAccessOptionsDocument() || profile->IsOffTheRecord() ||
+      !aegis::access::CanUseAccessOptionsForCurrentBuild(
+          aegis_access::AccessOptionsOperation::kImport)) {
+    OnAccessTestNodeDiscarded(args[0].GetString(), generation, editor,
+                              aegis::access::TestNodePreviewStatus::kNotAdmitted);
+    return;
+  }
+  if (!access_test_node_service_ || editor.empty()) {
+    OnAccessTestNodeDiscarded(args[0].GetString(), generation, editor,
+                              aegis::access::TestNodePreviewStatus::kCanceled);
+    return;
+  }
+  access_test_node_service_->DiscardTestNodeDraft(editor, base::BindOnce(
+      &AegisUIHandler::OnAccessTestNodeDiscarded,
+      account_weak_factory_.GetWeakPtr(), args[0].GetString(), generation, editor));
+}
+
+void AegisUIHandler::OnAccessTestNodeDiscarded(std::string callback_id,
+    uint64_t generation, std::string editor,
+    aegis::access::TestNodePreviewStatus status) {
+  OnAccessTestNodePreview(std::move(callback_id), generation, std::move(editor),
+                          {status});
+}
+
+namespace {
+std::optional<aegis_access::AccessInboundPreferences> ParseAccessTestNodeInbound(
+    const base::ListValue& args) {
+  using Mode = aegis_access::AccessInboundPortMode;
+  const auto protocol = aegis_access::ParseAccessInboundProtocolPreference(args[3].GetString());
+  const auto mode = aegis_access::ParseAccessInboundPortMode(args[4].GetString());
+  const auto port = mode == Mode::kSystemAllocated && args[5].GetString().empty()
+      ? std::optional<uint16_t>(0)
+      : aegis_access::ParseAccessInboundFixedPort(args[5].GetString());
+  if (!port) return std::nullopt;
+  const aegis_access::AccessInboundPreferences inbound{protocol, mode, *port};
+  if (aegis_access::ValidateAccessInboundPreferences(inbound) !=
+      aegis_access::AccessInboundPreferenceError::kNone) {
+    return std::nullopt;
+  }
+  return inbound;
+}
+}  // namespace
+
+void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
+  if (args.size() != 6 ||
+      !std::ranges::all_of(args, [](const auto& value) { return value.is_string(); })) {
+    return;
+  }
+  AllowJavascript();
+  auto reject = [&](std::string_view state) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", state));
+  };
+  auto* service = access_test_node_service_.get();
+  if (!IsAccessOptionsDocument() || !service ||
+      !service->Admitted(aegis_access::AccessOptionsOperation::kWrite)) {
+    reject("notAdmitted");
+    return;
+  }
+  if (!access_test_node_draft_) {
+    reject("noPreview");
+    return;
+  }
+  const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
+  const auto inbound = ParseAccessTestNodeInbound(args);
+  if (!revision || !inbound) {
+    reject("invalidPreferences");
+    return;
+  }
+  if (CanActivateAccessTestNode() &&
+      !aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
+          inbound->protocol)) {
+    reject("automaticProtocolNotAdmitted");
+    return;
+  }
+  service->SaveTestNodeProfile(access_test_node_editor_, *revision, args[2].GetString(),
+      "Test node", *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+          account_weak_factory_.GetWeakPtr(), access_options_document_,
+          args[0].GetString(), access_test_node_editor_,
+          access_test_node_preview_generation_));
+}
+
+void AegisUIHandler::HandleApplyAccessTestNodePreferences(const base::ListValue& args) {
+  if (args.size() != 6 ||
+      !std::ranges::all_of(args, [](const auto& value) { return value.is_string(); })) {
+    return;
+  }
+  AllowJavascript();
+  auto reject = [&](std::string_view state) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", state));
+  };
+  auto* service = EnsureAccessTestNodeEditor();
+  if (!service || !service->Admitted(aegis_access::AccessOptionsOperation::kWrite)) {
+    reject("notAdmitted");
+    return;
+  }
+  if (access_test_node_draft_) {
+    reject("previewPending");
+    return;
+  }
+  const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
+  const auto inbound = ParseAccessTestNodeInbound(args);
+  if (!revision || !inbound) {
+    reject("invalidPreferences");
+    return;
+  }
+  if (CanActivateAccessTestNode() &&
+      !aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
+          inbound->protocol)) {
+    reject("automaticProtocolNotAdmitted");
+    return;
+  }
+  service->SaveTestNodePreferences(access_test_node_editor_, *revision, args[2].GetString(),
+      *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+          account_weak_factory_.GetWeakPtr(), access_options_document_,
+          args[0].GetString(), access_test_node_editor_,
+          access_test_node_preview_generation_));
+}
+
+void AegisUIHandler::HandleQueryAccessTestNodeApply(const base::ListValue& args) {
+  if (args.size() != 2 || !args[0].is_string() || !args[1].is_string()) return;
+  AllowJavascript();
+  auto* service = EnsureAccessTestNodeEditor();
+  if (!service) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "notAdmitted"));
+    return;
+  }
+  service->QueryTestNodeProfileOperation(args[1].GetString(), base::BindOnce(
+      &AegisUIHandler::OnAccessTestNodeSaved, account_weak_factory_.GetWeakPtr(),
+      access_options_document_, args[0].GetString(), std::string(), uint64_t{0}));
+}
+
+void AegisUIHandler::OnAccessTestNodeSaved(
+    content::WeakDocumentPtr document, std::string callback_id,
+    std::string editor, uint64_t generation,
+    aegis::access::AccessTestProfileSaveResult result) {
+  if (!IsJavascriptAllowed() || !IsAccessOptionsDocument() ||
+      !document.AsRenderFrameHostIfValid() ||
+      document.AsRenderFrameHostIfValid() != access_options_document_.AsRenderFrameHostIfValid()) {
+    return;
+  }
+  using Outcome = aegis::access::AccessOptionsCommitOutcome;
+  const bool committed = result.outcome == Outcome::kCommitted && result.snapshot;
+  const bool same_draft = !editor.empty() && editor == access_test_node_editor_ &&
+      generation == access_test_node_preview_generation_;
+  base::DictValue response;
+  if (result.snapshot)
+    response.Set("revision", std::to_string(result.snapshot->revision));
+  if (!committed) {
+    response.Set("state", result.outcome == Outcome::kUnknown ? "uncertain" : "notSaved");
+    response.Set("reason", result.detail);
+  } else if (same_draft && access_test_node_service_ && !CanActivateAccessTestNode()) {
+    // Saving is admitted separately from launching a core in this build.
+    access_test_node_draft_.reset();
+    response.Set("state", "savedUnavailable");
+    response.Set("reason", "Connections are not available in this build.");
+  } else if (same_draft && access_test_node_service_) {
+    access_test_node_draft_.reset();
+    access_test_node_service_->PrepareTestNodeProfile(result.snapshot->revision,
+        base::BindOnce(&AegisUIHandler::OnAccessTestNodePrepared,
+            account_weak_factory_.GetWeakPtr(), std::move(document), std::move(callback_id),
+            std::to_string(result.snapshot->revision)));
+    return;
+  } else {
+    // An operation query never prepares a listener. The receipt identifies the
+    // draft consumed by that operation even after another editor saves.
+    if (editor.empty() && access_test_node_draft_ && result.operation &&
+        result.operation->secret_reference == access_test_node_draft_->id) {
+      access_test_node_draft_.reset();
+    }
+    response.Set("state", "saved");
+  }
+  ResolveJavascriptCallback(base::Value(callback_id), response);
+}
+
+void AegisUIHandler::OnAccessTestNodePrepared(
+    content::WeakDocumentPtr document, std::string callback_id,
+    std::string revision, aegis::access::AccessLocalCoreReady result) {
+  if (!IsJavascriptAllowed() || !IsAccessOptionsDocument() ||
+      !document.AsRenderFrameHostIfValid() ||
+      document.AsRenderFrameHostIfValid() != access_options_document_.AsRenderFrameHostIfValid()) {
+    return;
+  }
+  base::DictValue response;
+  response.Set("revision", revision);
+  response.Set("state", result.ready ? "prepared" : "savedUnavailable");
+  if (result.ready) {
+    const auto revision_number = aegis::access::ParseAccessOptionsRevision(revision);
+    if (revision_number && access_test_node_service_) {
+      response.Set("revokeToken",
+          access_test_node_service_->TestNodeRevocationTokenAtRevision(*revision_number));
+    }
+    response.Set("port", static_cast<int>(result.port));
+    response.Set("protocol", result.transport == aegis_access::RegisteredProxyTransport::kSocks5
+                                 ? "SOCKS5" : "HTTP");
+  } else {
+    response.Set("reason", std::move(result.error));
+  }
+  ResolveJavascriptCallback(base::Value(callback_id), response);
+}
+
+void AegisUIHandler::HandleRevokeAccessTestNode(const base::ListValue& args) {
+  if (args.size() != 3 || !args[0].is_string() || !args[1].is_string() ||
+      !args[2].is_string()) return;
+  AllowJavascript();
+  auto* profile = Profile::FromWebUI(web_ui());
+  auto* service = IsAccessOptionsDocument() && profile && !profile->IsOffTheRecord()
+      ? aegis::access::AccessOptionsService::GetOrCreate(profile) : nullptr;
+  if (!service || !service->Admitted(aegis_access::AccessOptionsOperation::kImport) ||
+      !service->Admitted(aegis_access::AccessOptionsOperation::kActivate)) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "notAdmitted"));
+    return;
+  }
+  const auto revision = aegis::access::ParseAccessOptionsRevision(args[1].GetString());
+  if (!revision || !*revision) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "invalidRevision"));
+    return;
+  }
+  const bool requested = service->RevokeTestNodeProfileAtRevision(
+      *revision, args[2].GetString(), base::BindOnce(
+      [](base::WeakPtr<AegisUIHandler> self, content::WeakDocumentPtr document,
+         std::string callback_id, bool confirmed) {
+        if (self && self->IsJavascriptAllowed() && self->IsAccessOptionsDocument() &&
+            document.AsRenderFrameHostIfValid() &&
+            document.AsRenderFrameHostIfValid() ==
+                self->access_options_document_.AsRenderFrameHostIfValid()) {
+          self->ResolveJavascriptCallback(base::Value(callback_id),
+              base::DictValue().Set("state", confirmed ? "revoked" : "uncertain"));
+        }
+      }, account_weak_factory_.GetWeakPtr(), access_options_document_, args[0].GetString()));
+  if (!requested) {
+    ResolveJavascriptCallback(args[0], base::DictValue().Set("state", "connectionChanged"));
+  }
 }
 #endif
 
@@ -716,6 +1252,10 @@ void AegisUIHandler::OnAccessAccountStatus(std::string callback_id, base::DictVa
 }
 
 void AegisUIHandler::OnJavascriptDisallowed() {
+#if BUILDFLAG(IS_MAC)
+  ++access_test_node_preview_generation_;
+  CloseAccessTestNodeEditor();
+#endif
   access_usage_visibility_.RunAndReset();
   account_weak_factory_.InvalidateWeakPtrs();
 }

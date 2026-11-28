@@ -4,6 +4,7 @@
 #include <set>
 #include <utility>
 
+#include "base/containers/span.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "net/base/access_route_isolation_key.h"
@@ -16,8 +17,12 @@
 #include "net/base/privacy_mode.h"
 #include "net/base/proxy_chain.h"
 #include "net/base/session_usage.h"
+#include "net/dns/mock_host_resolver.h"
 #include "net/http/access_proxy_route.h"
 #include "net/http/http_network_session.h"
+#include "net/http/http_request_info.h"
+#include "net/http/http_response_info.h"
+#include "net/http/http_transaction.h"
 #include "net/http/http_transaction_factory.h"
 #include "net/log/net_log_source.h"
 #include "net/log/net_log_with_source.h"
@@ -27,6 +32,7 @@
 #include "net/proxy_resolution/proxy_info.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/socket/socket_tag.h"
+#include "net/socket/socket_test_util.h"
 #include "net/socket/stream_socket.h"
 #include "net/socket/tcp_server_socket.h"
 #include "net/spdy/spdy_session_key.h"
@@ -294,6 +300,59 @@ TEST(AccessRoutePoolIsolationTest, ManagedHttpPoolDispatchKeepsRouteIsolation) {
             net::ERR_BLOCKED_BY_CLIENT);
   EXPECT_FALSE(blocked.socket());
   EXPECT_FALSE(completion.IsReady());
+}
+
+TEST(AccessRoutePoolIsolationTest, ManagedSocks5RequestUsesNoAuthAndSingleProxy) {
+  base::test::TaskEnvironment tasks(
+      base::test::TaskEnvironment::MainThreadType::IO);
+  auto notifier = net::NetworkChangeNotifier::CreateMockIfNeeded();
+  constexpr char kConnect[] = {
+      0x05, 0x01, 0x00, 0x03, 15,
+      'w', 'w', 'w', '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.',
+      'o', 'r', 'g', 0x00, 0x50,
+  };
+  net::MockWrite writes[] = {
+      net::MockWrite(net::ASYNC, net::kSOCKS5GreetRequest),
+      net::MockWrite(net::ASYNC, base::as_byte_span(kConnect)),
+      net::MockWrite("GET / HTTP/1.1\r\n"
+                     "Host: www.example.org\r\n"
+                     "Connection: keep-alive\r\n\r\n"),
+  };
+  net::MockRead reads[] = {
+      net::MockRead(net::ASYNC, net::kSOCKS5GreetResponse),
+      net::MockRead(net::ASYNC, net::kSOCKS5OkResponse),
+      net::MockRead("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"),
+  };
+  net::StaticSocketDataProvider data(reads, writes);
+  net::MockClientSocketFactory sockets;
+  sockets.AddSocketDataProvider(&data);
+  net::URLRequestContextBuilder builder;
+  builder.DisableHttpCache();
+  builder.set_client_socket_factory_for_testing(&sockets);
+  builder.set_host_resolver(std::make_unique<net::MockHostResolver>());
+  auto context = builder.Build();
+
+  const auto proxy = net::ProxyChain::FromSchemeHostAndPort(
+      net::ProxyServer::SCHEME_SOCKS5, "127.0.0.1", 10806);
+  net::HttpRequestInfo request;
+  request.method = "GET";
+  request.url = GURL("http://www.example.org/");
+  request.traffic_annotation =
+      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS);
+  request.access_proxy_route = net::AccessProxyRoute::Create(Key(), proxy);
+  ASSERT_TRUE(request.access_proxy_route);
+  auto transaction =
+      context->http_transaction_factory()->CreateTransaction(net::DEFAULT_PRIORITY);
+  base::test::TestFuture<int> started;
+  int status = transaction->Start(
+      &request, started.GetCallback(), net::NetLogWithSource());
+  if (status == net::ERR_IO_PENDING) status = started.Get();
+
+  ASSERT_EQ(status, net::OK);
+  ASSERT_TRUE(transaction->GetResponseInfo());
+  EXPECT_EQ(transaction->GetResponseInfo()->proxy_chain, proxy);
+  EXPECT_TRUE(data.AllReadDataConsumed());
+  EXPECT_TRUE(data.AllWriteDataConsumed());
 }
 
 }  // namespace

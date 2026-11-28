@@ -12,6 +12,8 @@
 
 namespace net {
 
+class HttpAuthController;
+
 // Network-sequence transport state for one installed Access route. The private
 // Network Service registry must authorize owner, incarnation, policy and
 // endpoint before attaching this object to a request. This value constructor
@@ -48,6 +50,12 @@ class NET_EXPORT AccessProxyRoute : public base::RefCounted<AccessProxyRoute> {
   HttpAuthCache proxy_auth_cache_;
   SEQUENCE_CHECKER(sequence_checker_);
 };
+
+// Only the legacy local HTTP adapter has a native-seeded fixed Basic identity.
+// No-auth listeners must reject a 407 before consulting authentication handlers.
+NET_EXPORT bool AccessProxyRouteAllowsLegacyAuthentication(AccessProxyRoute& route);
+NET_EXPORT void RestrictAccessProxyAuthentication(AccessProxyRoute& route,
+                                                HttpAuthController& controller);
 
 }  // namespace net
 

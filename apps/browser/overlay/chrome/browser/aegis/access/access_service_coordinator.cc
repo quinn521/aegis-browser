@@ -418,7 +418,8 @@ std::optional<uint64_t> AccessServiceCoordinator::SelectionGeneration(
   }
   auto* transport = AccessNetworkContextTransport::Get(profile_);
   const auto& group = pending.candidate.members.front().policy.proxy_group_id;
-  const auto endpoint = transport->CurrentEndpoint(pending.owner);
+  const auto endpoint = transport
+      ? transport->PreparedProxyForGroup(pending.owner, group) : std::nullopt;
   auto* source = AccessProxySelectionGenerationSource::Get(profile_);
   if (!endpoint || endpoint->owner != pending.owner ||
       endpoint->proxy_group_id != group || !source ||

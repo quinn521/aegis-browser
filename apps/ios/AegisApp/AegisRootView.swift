@@ -415,10 +415,11 @@ private struct BrowserPane: View {
                 hostStores.setSiteProxyEnabled(!snapshot.toggleOn, for: tab, displayedHost: host, forLocationControl: true)
             } label: {
                 Image(systemName: snapshot.toggleOn ? "location.slash.fill" : "location")
-                    .foregroundStyle(snapshot.toggleOn && snapshot.attachment == .ready ? Color.accentColor : .secondary)
+                    .foregroundStyle(snapshot.locationProtected ? Color.accentColor : .secondary)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
+            .disabled(!snapshot.toggleEnabled)
             .accessibilityLabel("隐藏地理位置")
             .accessibilityValue(Text(LocalizedStringKey(AccessSiteProxyToggleModel.siteStatusLine(snapshot))))
             .accessibilityAddTraits(snapshot.toggleOn ? .isSelected : [])
@@ -613,10 +614,9 @@ struct ProxyRetryButton: UIViewRepresentable {
         button.titleLabel?.numberOfLines = 0
         button.accessibilityIdentifier = "page-load-proxy-retry"
         var configuration = UIButton.Configuration.tinted()
-        configuration.cornerStyle = .medium
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
+        configuration.cornerStyle = .capsule
+        configuration.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
         button.configuration = configuration
-        button.contentHorizontalAlignment = .leading
         button.addAction(UIAction { [weak coordinator = context.coordinator] _ in coordinator?.action() }, for: .touchUpInside)
         return button
     }
@@ -641,7 +641,10 @@ struct ProxyRetryButton: UIViewRepresentable {
 
 struct PageLoadFailureBanner: View {
     @Environment(\.locale) private var localizationLocale
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var detailsExpanded = false
     @ObservedObject var tab: BrowserTab
+    var showsManualPrompt = true
     var locationPrivacyOn = false
     var offersLocationService = true
     var failureProxyRetry: AccessHostStoreCoordinator.FailureProxyRetry? = nil
@@ -662,69 +665,62 @@ struct PageLoadFailureBanner: View {
 
     var body: some View {
         let _ = localizationLocale
-        if let error = tab.loadingError {
+        if showsManualPrompt, let error = tab.loadingError {
             let failure = tab.lastMainFrameFailure
             let retry = availableProxyRetry
-            VStack(alignment: .leading, spacing: 8) {
-                if let failure {
-                    Text(verbatim: AccessSiteDisplayName.title(failure.url.host(percentEncoded: true)))
-                        .font(.callout.weight(.semibold))
-                        .accessibilityIdentifier("page-load-failed-host")
-                }
-                Label("页面暂时无法打开", systemImage: "exclamationmark.circle")
-                    .font(.headline)
-                if retry != .unavailable {
-                    ProxyRetryButton(title: AegisLocalization.string(retry == .required ? "重试" : "隐藏位置并重试")) {
-                        guard tab.loadingErrorAllowsProxyRetry, tab.lastMainFrameFailure == failure else { return }
-                        proxyRetry(tab)
+            let originalRequest = originalRetryRequest(failure: failure, retry: retry)
+            let inlineRetry = retry == .unavailable && originalRequest != nil && !dynamicTypeSize.isAccessibilitySize
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    failureTitle(failure)
+                    Spacer(minLength: 0)
+                    if inlineRetry, let originalRequest {
+                        originalRetryButton(failure: failure, request: originalRequest)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    Button {
+                        detailsExpanded.toggle()
+                    } label: {
+                        Label("错误详情", systemImage: detailsExpanded ? "info.circle.fill" : "info.circle")
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(detailsExpanded ? .isSelected : [])
+                    .accessibilityIdentifier("page-load-error-details")
                 }
-                if retry != .required {
-                    if let request = tab.safeRouteReloadRequest,
-                       failure == nil || (request.url == failure?.url && request.httpMethod == failure?.method) {
-                        Button("重试") {
-                            guard !tab.isLoading, tab.loadingError != nil, tab.lastMainFrameFailure == failure,
-                                  tab.safeRouteReloadRequest == request else { return }
-                            tab.reload()
+                if !inlineRetry, originalRequest != nil || retry != .unavailable {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 8) {
+                            retryButtons(failure: failure, request: originalRequest, retry: retry)
                         }
-                        .frame(minHeight: 44)
-                        .accessibilityIdentifier("page-load-retry")
-                    } else {
-                        resubmissionActions
+                        .fixedSize(horizontal: true, vertical: false)
+                        VStack(alignment: .leading, spacing: 6) {
+                            retryButtons(failure: failure, request: originalRequest, retry: retry)
+                        }
                     }
                 }
-                if let autoRecoveryLine {
-                    Text(LocalizedStringKey(autoRecoveryLine))
-                        .font(.caption).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("page-load-auto-recovery-status")
+                if retry != .required, originalRequest == nil {
+                    resubmissionActions
                 }
-                DisclosureGroup("错误详情") {
-                    if let host = tab.lastMainFrameFailure?.url.host,
-                       AccessSiteDisplayName.localLabel(for: host) != nil {
-                        Text("请检查本地服务是否可用。").font(.caption)
-                    } else {
-                        Text("页面加载失败：\(error)").font(.caption).textSelection(.enabled)
-                    }
-                    if setAutoRecovery != nil {
-                        Toggle(LocalizedStringKey(AccessAutoRecoveryCopy.toggleTitle), isOn: Binding(
-                            get: { autoRecoveryOn },
-                            set: { setAutoRecovery?(tab, $0) }
-                        ))
-                        .accessibilityIdentifier("page-load-auto-recovery")
-                        Text(LocalizedStringKey(AccessAutoRecoveryCopy.explanation)).font(.caption)
-                        Text(LocalizedStringKey(AccessAutoRecoveryCopy.scopeWarning)).font(.caption)
-                    }
+                if detailsExpanded {
+                    Divider()
+                    failureDetails(error, failure: failure)
                 }
-
             }
-            .padding(12)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
-            .padding(.horizontal, 12)
+            .padding(.leading, 12)
+            .padding(.trailing, 6)
             .padding(.vertical, 8)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.quaternary, lineWidth: 1).allowsHitTesting(false))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-load-error")
+            .onChange(of: failure?.failureID) { detailsExpanded = false }
+            .onDisappear { detailsExpanded = false }
         } else if tab.reloadRequiresResubmission {
             VStack(alignment: .leading, spacing: 8) {
                 resubmissionActions
@@ -732,7 +728,7 @@ struct PageLoadFailureBanner: View {
             .padding(12)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("page-reload-refused")
-        } else if let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending),
+        } else if showsManualPrompt, let pending = tab.pendingAddressNavigation, tab.matchesPendingAddressNavigation(pending),
                   let openAddressViaProxy {
             let state = pendingAddressProxyState?(tab, pending) ?? (offersLocationService ? .available : .unavailable)
             if offersLocationService || state == .preparing {
@@ -744,7 +740,7 @@ struct PageLoadFailureBanner: View {
                         .font(.caption)
                         .accessibilityIdentifier("page-load-pending-status")
                     if state == .available {
-                        ProxyRetryButton(title: AegisLocalization.string("隐藏位置并打开")) { openAddressViaProxy(tab, pending) }
+                        ProxyRetryButton(title: AegisLocalization.string("加速打开")) { openAddressViaProxy(tab, pending) }
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }
@@ -754,6 +750,89 @@ struct PageLoadFailureBanner: View {
                 .accessibilityIdentifier("page-load-pending-proxy")
             }
         }
+    }
+
+    private func failureTitle(_ failure: BrowserMainFrameFailure?) -> some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("页面暂时无法打开").font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                if let failure {
+                    Text(verbatim: AccessSiteDisplayName.title(failure.url.host(percentEncoded: true)))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .accessibilityIdentifier("page-load-failed-host")
+                }
+            }
+        } icon: {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.title3)
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func originalRetryRequest(failure: BrowserMainFrameFailure?,
+                                      retry: AccessHostStoreCoordinator.FailureProxyRetry) -> URLRequest? {
+        guard retry != .required, let request = tab.safeRouteReloadRequest,
+              failure == nil || (request.url == failure?.url && request.httpMethod == failure?.method) else { return nil }
+        return request
+    }
+
+    private func originalRetryButton(failure: BrowserMainFrameFailure?, request: URLRequest) -> some View {
+        Button {
+            guard !tab.isLoading, tab.loadingError != nil, tab.lastMainFrameFailure == failure,
+                  tab.safeRouteReloadRequest == request else { return }
+            tab.reload()
+        } label: {
+            Text("重试")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 8)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityIdentifier("page-load-retry")
+    }
+
+    @ViewBuilder
+    private func retryButtons(failure: BrowserMainFrameFailure?, request: URLRequest?,
+                              retry: AccessHostStoreCoordinator.FailureProxyRetry) -> some View {
+        if let request { originalRetryButton(failure: failure, request: request) }
+        if retry != .unavailable {
+            ProxyRetryButton(title: AegisLocalization.string(retry == .required ? "重试" : "加速重试")) {
+                guard tab.loadingErrorAllowsProxyRetry, tab.lastMainFrameFailure == failure else { return }
+                proxyRetry(tab)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func failureDetails(_ error: String, failure: BrowserMainFrameFailure?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let host = failure?.url.host, AccessSiteDisplayName.localLabel(for: host) != nil {
+                Text("请检查本地服务是否可用。")
+            } else {
+                Text(verbatim: error).textSelection(.enabled)
+            }
+            if let autoRecoveryLine {
+                Text(LocalizedStringKey(autoRecoveryLine))
+                    .accessibilityIdentifier("page-load-auto-recovery-status")
+            }
+            if let setAutoRecovery {
+                Toggle(LocalizedStringKey(AccessAutoRecoveryCopy.toggleTitle), isOn: Binding(
+                    get: { autoRecoveryOn },
+                    set: { setAutoRecovery(tab, $0) }
+                ))
+                .font(.callout)
+                .accessibilityIdentifier("page-load-auto-recovery")
+                Text(LocalizedStringKey(AccessAutoRecoveryCopy.explanation))
+                Text(LocalizedStringKey(AccessAutoRecoveryCopy.scopeWarning))
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
     }
 
     private var resubmissionActions: some View {
@@ -801,6 +880,7 @@ struct ActiveTabView: View {
         VStack(spacing: 0) {
             PageLoadFailureBanner(
                 tab: tab,
+                showsManualPrompt: hostStores.showsManualConnectionPrompt(for: tab),
                 offersLocationService: hostStores.offersLocationService,
                 failureProxyRetry: hostStores.failureProxyRetry(for: tab),
                 autoRecoveryOn: site.autoRecoveryEnabled,

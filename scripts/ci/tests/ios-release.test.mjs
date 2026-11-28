@@ -621,7 +621,7 @@ test('Full explicitly forwards named secrets while protected jobs resolve enviro
   const expected = ['AEGIS_ASC_KEY_ID', 'AEGIS_ASC_ISSUER_ID', 'AEGIS_ASC_KEY_BASE64'];
   const signing = ['AEGIS_IOS_DISTRIBUTION_P12_BASE64', 'AEGIS_IOS_DISTRIBUTION_P12_PASSWORD',
     'AEGIS_IOS_APP_PROFILE_BASE64', 'AEGIS_IOS_SAFARI_PROFILE_BASE64', 'AEGIS_IOS_SHARE_PROFILE_BASE64'];
-  const privateBeta = ['AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64'];
+  const privateBeta = ['AEGIS_IOS_TEST_NODE_BASE64', 'AEGIS_IOS_TEST_SUBSCRIPTION_BASE64', 'AEGIS_IOS_BETA_CATALOGUE_BASE64'];
   assert.deepEqual(Object.keys(simple.on.workflow_call.secrets),
     ['AEGIS_IOS_ALPHA_NODES_BASE64', ...privateBeta, ...expected, ...signing]);
   assert.equal(simple.on.workflow_call.secrets.AEGIS_IOS_ALPHA_NODES_BASE64.required, false);

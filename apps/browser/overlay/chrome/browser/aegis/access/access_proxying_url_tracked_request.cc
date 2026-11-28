@@ -8,6 +8,7 @@
 
 #include "base/functional/bind.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/aegis/access/access_proxying_url_loader_factory.h"
 #include "chrome/browser/aegis/access/access_request_dispatch_state.h"
 #include "content/public/browser/browser_thread.h"
@@ -101,7 +102,7 @@ void AccessProxyingURLTrackedRequest::Start(
         &AccessProxyingURLTrackedRequest::OnTargetLoaderDisconnected,
         weak_factory_.GetWeakPtr()));
   }
-  factory_->StartTargetRequest(
+  dispatched_registration_id_ = factory_->StartTargetRequest(
       target_loader_.BindNewPipeAndPassReceiver(), request_id, options, request,
       std::move(proxy_client), traffic_annotation, ownership_record_, std::move(control));
   target_loader_.set_disconnect_handler(base::BindOnce(
@@ -176,6 +177,7 @@ void AccessProxyingURLTrackedRequest::OnRedirectPrepared(
       FailClosed(/*complete_registry=*/true);
       return;
     }
+    dispatched_registration_id_ = envelope->registration_id;
     private_control_->FollowRedirectWithRoute(std::move(headers), new_url,
                                                std::move(envelope));
   } else {
@@ -254,6 +256,14 @@ void AccessProxyingURLTrackedRequest::OnTransferSizeUpdated(
 void AccessProxyingURLTrackedRequest::OnComplete(
     const network::URLLoaderCompletionStatus& status) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+#if BUILDFLAG(IS_MAC)
+  if (private_route_ && status.error_code == net::ERR_PROXY_AUTH_UNSUPPORTED &&
+      !dispatched_registration_id_.empty()) {
+    auto alive = GetWeakPtr();
+    factory_->OnPreparedListenerAuthFault(ownership_record_, dispatched_registration_id_);
+    if (!alive) return;
+  }
+#endif
   if (target_client_.is_bound()) {
     target_client_->OnComplete(status);
   }

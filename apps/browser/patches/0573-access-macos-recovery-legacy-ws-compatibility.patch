@@ -1,0 +1,650 @@
+From 80f962431b3f542806f507da4264da99ba2fc139 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 08:13:28 +0800
+Subject: [PATCH] fix(access): preserve superseded Apply and legacy WS records
+
+---
+ .../access/access_options_browsertest.cc      | 57 +++++++++++++++++
+ .../aegis/access/access_options_store.cc      |  8 ++-
+ .../aegis/access/access_options_store.h       |  2 +
+ .../access/access_options_store_unittest.cc   | 17 +++++
+ .../access/access_test_node_native_config.cc  | 25 +++++---
+ ...access_test_node_native_config_unittest.cc | 35 ++++++++++
+ .../access/access_test_node_qr_mac_test.mm    |  9 ++-
+ .../access/access_test_node_vault_mac.mm      |  9 ++-
+ .../access_test_node_vault_mac_unittest.cc    | 18 ++++--
+ .../ui/webui/aegis/aegis_ui_handler.cc        | 10 +--
+ components/aegis_access/access_test_node.cc   | 64 ++++++++++++++-----
+ components/aegis_access/access_test_node.h    |  3 +
+ .../aegis_access/access_test_node_test.cc     | 44 ++++++++++++-
+ .../access_test_node_test_fixture.h           |  6 ++
+ 14 files changed, 263 insertions(+), 44 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
+index 34fb6a48d5658030aaf098225dbe2fe71996fc16..27f405d03e80390b0f27ddd85dd76e4199626210 100644
+--- a/chrome/browser/aegis/access/access_options_browsertest.cc
++++ b/chrome/browser/aegis/access/access_options_browsertest.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "base/test/run_until.h"
+ #include "base/test/test_future.h"
++#include "base/uuid.h"
+ #include "chrome/browser/aegis/access/access_build_channel.h"
+ #include "chrome/browser/aegis/access/access_buildflags.h"
+ #include "chrome/browser/aegis/access/access_options_service.h"
+@@ -20,6 +21,7 @@
+ #include "content/public/test/browser_test.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/test/browser_test_utils.h"
++#include "ui/base/window_open_disposition.h"
+ 
+ namespace aegis::access {
+ namespace {
+@@ -289,6 +291,61 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+   )JS", aegis_access::test::kSyntheticTestNodeShare)));
+ }
+ 
++IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
++                       CommittedApplyQueryClearsDraftAfterAnotherTabSaves) {
++  if (!CanUseAccessOptionsForCurrentBuild(
++          aegis_access::AccessOptionsOperation::kWrite)) {
++    GTEST_SKIP() << "The test requires an admitted internal build";
++  }
++  const GURL url("chrome://aegis/access-options");
++  auto* first = ui_test_utils::NavigateToURL(browser(), url);
++  ASSERT_TRUE(first);
++  auto* options = AccessOptionsService::GetOrCreate(browser()->GetProfile());
++  ASSERT_TRUE(options);
++  options->SetSaveFailureForTesting(
++      AccessOptionsStore::SaveFailurePointForTesting::kAfterCommit);
++  constexpr char kApply[] = R"JS(
++    (async () => {
++      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
++      const initial = await send('readAccessOptions');
++      if (initial.pendingApplyRecovery) return 'previousApplyPending';
++      const preview = await send('previewAccessTestNode', 'text', $1);
++      if (preview.state !== 'preview') return preview.state;
++      return (await send('applyAccessTestNode', initial.revision, $2,
++          'socks5', 'random', '')).state;
++    })()
++  )JS";
++  const auto operation = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  const auto other_operation =
++      base::Uuid::GenerateRandomV4().AsLowercaseString();
++  constexpr auto share = aegis_access::test::kSyntheticTestNodeShare;
++  ASSERT_EQ("uncertain", content::EvalJs(
++      first, content::JsReplace(kApply, share, operation)));
++
++  auto* second = ui_test_utils::NavigateToURLWithDisposition(
++      browser(), url, WindowOpenDisposition::kNewForegroundTab,
++      ui_test_utils::BROWSER_TEST_WAIT_FOR_LOAD_STOP);
++  ASSERT_TRUE(second);
++  ASSERT_EQ("uncertain", content::EvalJs(
++      second, content::JsReplace(kApply, share, other_operation)));
++  ASSERT_EQ("saved", content::EvalJs(second, content::JsReplace(R"JS(
++    (async () => {
++      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
++      return (await send('queryAccessTestNodeApply', $1)).state;
++    })()
++  )JS", other_operation)));
++
++  EXPECT_EQ("saved,uncertain", content::EvalJs(first, content::JsReplace(R"JS(
++    (async () => {
++      const {sendWithPromise: send} = await import('chrome://resources/js/cr.js');
++      const recovered = await send('queryAccessTestNodeApply', $1);
++      const next = await send('applyAccessTestNodePreferences', recovered.revision,
++          crypto.randomUUID(), 'http', 'random', '');
++      return [recovered.state, next.state].join(',');
++    })()
++  )JS", operation)));
++}
++
+ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+                        TestNodePreviewRejectsOffTheRecordProfile) {
+   if (!CanUseAccessOptionsForCurrentBuild(
+diff --git a/chrome/browser/aegis/access/access_options_store.cc b/chrome/browser/aegis/access/access_options_store.cc
+index b649eb81b6c1fb53cc4c9698ff23dcde39dd1ff5..39788fdc786792d9524f2d9957859cf1bbca3ce0 100644
+--- a/chrome/browser/aegis/access/access_options_store.cc
++++ b/chrome/browser/aegis/access/access_options_store.cc
+@@ -98,7 +98,8 @@ StoreResult<StoredOperation> ReadOperation(sql::Database& database,
+   return {StoreStatus::kValid,
+       StoredOperation{AccessOptionsOperationReceipt{operation_id,
+           static_cast<uint64_t>(expected), static_cast<uint64_t>(committed),
+-          static_cast<uint64_t>(version), row.ColumnString(3)}, std::move(*profile)}, {}};
++          static_cast<uint64_t>(version), row.ColumnString(3), false,
++          profile->configuration.secret_reference}, std::move(*profile)}, {}};
+ }
+ 
+ AccessTestProfileSaveResult SaveError(StoreStatus status, const char* detail,
+@@ -506,7 +507,8 @@ AccessTestProfileSaveResult AccessOptionsStore::GetTestProfileOperation(
+     const auto& profile = *current.value->test_profile;
+     receipt = AccessOptionsOperationReceipt{operation_id, profile.committed_revision - 1,
+         profile.committed_revision, profile.version,
+-        ProfileFingerprint(profile.committed_revision - 1, profile.configuration), true};
++        ProfileFingerprint(profile.committed_revision - 1, profile.configuration),
++        true, profile.configuration.secret_reference};
+   }
+   if (!receipt)
+     return {StoreStatus::kMissing, AccessOptionsCommitOutcome::kUnknown, std::nullopt,
+@@ -610,7 +612,7 @@ AccessTestProfileSaveResult AccessOptionsStore::SaveTestProfile(
+     return SaveError(StoreStatus::kIoError, "injected_reply_lost", AccessOptionsCommitOutcome::kUnknown);
+   return {StoreStatus::kValid, AccessOptionsCommitOutcome::kCommitted,
+       AccessOptionsOperationReceipt{operation_id, expected_revision, expected_revision + 1,
+-                                    version, fingerprint},
++                                    version, fingerprint, false, draft.secret_reference},
+       AccessOptionsSnapshot{expected_revision + 1, std::move(configuration), kVersion,
+                             std::move(stored)}, {}};
+ }
+diff --git a/chrome/browser/aegis/access/access_options_store.h b/chrome/browser/aegis/access/access_options_store.h
+index 7f1e9164925cbe89db116e6fe7f82a53921bc9f9..8e76bd10f364592114336d5c4d4f8782793deb74 100644
+--- a/chrome/browser/aegis/access/access_options_store.h
++++ b/chrome/browser/aegis/access/access_options_store.h
+@@ -41,6 +41,8 @@ struct AccessOptionsOperationReceipt {
+   uint64_t profile_version = 0;
+   std::string payload_fingerprint;
+   bool recovered_from_snapshot = false;
++  // Opaque native draft reference for this operation, even after a later save.
++  std::string secret_reference;
+ };
+ struct AccessTestProfileSaveResult {
+   StoreStatus status = StoreStatus::kIoError;
+diff --git a/chrome/browser/aegis/access/access_options_store_unittest.cc b/chrome/browser/aegis/access/access_options_store_unittest.cc
+index dd3074edcfe25a7abbbf36f1046e8b78c31a9612..847708b98e57fae873de6a311064534d0a03c3e3 100644
+--- a/chrome/browser/aegis/access/access_options_store_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_store_unittest.cc
+@@ -119,9 +119,24 @@ TEST(AccessOptionsProfileStoreTest, LostCommitReplyQueriesSameOperationAfterReop
+   const auto queried = reopened.GetTestProfileOperation(operation);
+   ASSERT_EQ(queried.status, StoreStatus::kValid);
+   EXPECT_EQ(queried.outcome, AccessOptionsCommitOutcome::kCommitted);
++  ASSERT_TRUE(queried.operation);
+   EXPECT_EQ(queried.operation->committed_revision, 1u);
++  EXPECT_EQ(queried.operation->secret_reference,
++            SyntheticDraft().secret_reference);
+   EXPECT_EQ(reopened.SaveTestProfile(0, operation, SyntheticDraft()).status, StoreStatus::kValid);
+   EXPECT_EQ(reopened.Read().value->revision, 1u);
++  auto replacement = SyntheticDraft();
++  replacement.secret_reference = NewOperation();
++  ASSERT_EQ(reopened.SaveTestProfile(1, NewOperation(), replacement).status,
++            StoreStatus::kValid);
++  const auto historical = reopened.GetTestProfileOperation(operation);
++  ASSERT_EQ(historical.outcome, AccessOptionsCommitOutcome::kCommitted);
++  ASSERT_TRUE(historical.operation);
++  ASSERT_TRUE(historical.snapshot && historical.snapshot->test_profile);
++  EXPECT_EQ(historical.operation->secret_reference,
++            SyntheticDraft().secret_reference);
++  EXPECT_EQ(historical.snapshot->test_profile->configuration.secret_reference,
++            replacement.secret_reference);
+ }
+ 
+ TEST(AccessOptionsProfileStoreTest, GenericWritesCannotForgeReplaceOrDeleteTypedProfile) {
+@@ -218,6 +233,8 @@ TEST(AccessOptionsProfileStoreTest, CurrentMetadataResolvesPrunedJournalWithoutR
+   const auto current = reopened.GetTestProfileOperation(operation);
+   ASSERT_EQ(current.status, StoreStatus::kValid);
+   EXPECT_TRUE(current.operation->recovered_from_snapshot);
++  EXPECT_EQ(current.operation->secret_reference,
++            SyntheticDraft().secret_reference);
+   EXPECT_EQ(reopened.SaveTestProfile(0, operation, SyntheticDraft()).status, StoreStatus::kValid);
+   EXPECT_EQ(reopened.Read().value->revision, 1u);
+ }
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.cc b/chrome/browser/aegis/access/access_test_node_native_config.cc
+index 947189b7c740c8f96299da9bbbec6bec8d19b9b1..c0c5f8604df776f4707e2d52efe11b5e8ee0d274 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config.cc
+@@ -34,19 +34,21 @@ std::string EscapeNativeQueryValue(std::string_view value) {
+ 
+ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+     const aegis_access::AccessTestNode& node) {
++  using Mode = aegis_access::AccessTestNodeImportMode;
++  const auto& ws = node.web_socket_tls;
++  const bool legacy_ws = ws && ws->restored_from_v2;
+   const std::string address = node.address.find(':') == std::string::npos
+       ? node.address : "[" + node.address + "]";
+   auto share = "vless://" + node.user_id + "@" + address + ":" +
+                base::NumberToString(node.port) +
+                "?sni=" + EscapeNativeQueryValue(node.server_name);
+-  const std::string_view default_fingerprint =
+-      node.web_socket_tls ? "" : "chrome";
++  const std::string_view default_fingerprint = ws && !legacy_ws ? "" : "chrome";
+   if (node.fingerprint != default_fingerprint) {
+     share += "&fp=" + EscapeNativeQueryValue(node.fingerprint);
+   }
+-  if (const auto& ws = node.web_socket_tls) {
++  if (ws) {
+     share += "&type=ws&security=tls";
+-    if (ws->host != node.server_name) {
++    if (legacy_ws || ws->host != node.server_name) {
+       share += "&host=" + EscapeNativeQueryValue(ws->host);
+     }
+     if (ws->path != "/") {
+@@ -71,7 +73,10 @@ std::optional<aegis_access::AccessTestNode> ValidateAccessTestNodeNative(
+         (node.advertises_x25519_mlkem768 ? "&support-x25519mlkem768=true" : "");
+   }
+   auto parsed = aegis_access::ParseAccessTestNodeShare(
+-      share, aegis_access::AccessTestNodeImportMode::kAllowExtendedVless);
++      share, legacy_ws ? Mode::kAllowWebSocketTls : Mode::kAllowExtendedVless);
++  if (legacy_ws && parsed.node && parsed.node->web_socket_tls) {
++    parsed.node->web_socket_tls->restored_from_v2 = true;
++  }
+   return parsed.node == node ? std::move(parsed.node) : std::nullopt;
+ }
+ 
+@@ -106,11 +111,15 @@ std::optional<std::string> BuildAccessTestNodeCoreConfiguration(
+     transport.Set("fingerprint", node.fingerprint);
+   }
+   base::DictValue stream;
+-  if (node.web_socket_tls || node.tcp_tls_vision) {
++  const auto& ws = node.web_socket_tls;
++  if (ws || node.tcp_tls_vision) {
+     transport.Set("allowInsecure", false);
+-    transport.Set("useSystemCA", true);
++    // Version-2 records use their original trust-root selection.
++    if (!ws || !ws->restored_from_v2) {
++      transport.Set("useSystemCA", true);
++    }
+     stream.Set("security", "tls");
+-    if (const auto& ws = node.web_socket_tls) {
++    if (ws) {
+       if (!ws->alpn.empty()) {
+         transport.Set("alpn", base::ListValue().Append(ws->alpn));
+       }
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+index 427014990327c4ed39cc19a42ee7ddf872081d60..d07e0f81390a1cc3bfe9757bc803cfdf4644baa7 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+@@ -159,6 +159,41 @@ TEST(AccessTestNodeNativeConfigTest, WebSocketKeepsExplicitAlpnAndWireQuery) {
+   EXPECT_EQ(encoded->find("vless://"), std::string::npos);
+ }
+ 
++TEST(AccessTestNodeNativeConfigTest, RestoredV2WebSocketKeepsLegacyConfig) {
++  auto parsed = aegis_access::ParseAccessTestNodeShare(
++      aegis_access::test::kSyntheticWebSocketTlsShare, kExtended);
++  ASSERT_TRUE(parsed.node && parsed.node->web_socket_tls);
++  auto& node = *parsed.node;
++  node.server_name = "Localhost";
++  node.fingerprint = "Legacy_FP-1";
++  node.web_socket_tls->host = "Edge.";
++  node.web_socket_tls->path = "//path";
++  EXPECT_FALSE(
++      BuildAccessTestNodeCoreConfiguration(node, {}, Transport::kHttp));
++  node.web_socket_tls->restored_from_v2 = true;
++  const auto encoded =
++      BuildAccessTestNodeCoreConfiguration(node, {}, Transport::kHttp);
++  ASSERT_TRUE(encoded);
++  const auto root = base::JSONReader::ReadDict(*encoded, base::JSON_PARSE_RFC);
++  ASSERT_TRUE(root);
++  const auto* outbounds = root->FindList("outbounds");
++  ASSERT_TRUE(outbounds);
++  ASSERT_EQ(outbounds->size(), 1u);
++  const auto& outbound = outbounds->front().GetDict();
++  const auto* tls = outbound.FindDictByDottedPath("streamSettings.tlsSettings");
++  ASSERT_TRUE(tls && tls->FindString("serverName") &&
++              tls->FindString("fingerprint"));
++  EXPECT_EQ(*tls->FindString("serverName"), "Localhost");
++  EXPECT_EQ(*tls->FindString("fingerprint"), "Legacy_FP-1");
++  EXPECT_EQ(tls->FindBool("allowInsecure"), false);
++  EXPECT_FALSE(tls->contains("alpn"));
++  EXPECT_FALSE(tls->contains("useSystemCA"));
++  const auto* ws = outbound.FindDictByDottedPath("streamSettings.wsSettings");
++  ASSERT_TRUE(ws && ws->FindString("host") && ws->FindString("path"));
++  EXPECT_EQ(*ws->FindString("host"), "Edge.");
++  EXPECT_EQ(*ws->FindString("path"), "//path");
++}
++
+ TEST(AccessTestNodeNativeConfigTest, WebSocketRevalidatesLongRequestTarget) {
+   const std::string path = "/ws" + std::string(2045, '/');
+   const auto parsed = aegis_access::ParseAccessTestNodeShare(
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+index b16cf66cc77cb47a4b4f1ee755d36b4db4766697..6dec844d0b3948af3dd0d111a459ba9502b13256 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+@@ -60,8 +60,11 @@
+       mode);
+ }
+ 
+-void ExpectStatus(NSData* image, AccessTestNodeQrStatus status) {
+-  auto result = Decode(image);
++void ExpectStatus(
++    NSData* image,
++    AccessTestNodeQrStatus status,
++    AccessTestNodeImportMode mode = AccessTestNodeImportMode::kRealityOnly) {
++  auto result = Decode(image, mode);
+   assert(result.status == status);
+   assert(!result.node);
+ }
+@@ -102,6 +105,8 @@ int main() {
+       assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
+       assert(qr.status == AccessTestNodeQrStatus::kUnsupportedOutbound && !qr.node);
+     }
++    ExpectStatus(DrawCodes(MakeCode(kSyntheticWebSocketTlsUnknownFingerprintShare)),
++                 AccessTestNodeQrStatus::kInvalidShare, extended);
+     std::string exporter_share(share);
+     exporter_share.insert(exporter_share.find('#'), "&pcks=");
+     const auto scanned_exporter = Decode(DrawCodes(MakeCode(exporter_share)));
+diff --git a/chrome/browser/aegis/access/access_test_node_vault_mac.mm b/chrome/browser/aegis/access/access_test_node_vault_mac.mm
+index 94f517cb010ae923ed563c7d06c03d246c491079..a606990f6a33d3dea25c95be96d82ff6c067ba25 100644
+--- a/chrome/browser/aegis/access/access_test_node_vault_mac.mm
++++ b/chrome/browser/aegis/access/access_test_node_vault_mac.mm
+@@ -185,6 +185,11 @@ bool RequiresDevChannel(const Node& node) {
+ }
+ 
+ std::optional<std::string> Encode(const Node& node) {
++  // Compatibility applies to restored references. Staging always writes a
++  // fresh record that must satisfy the current import grammar.
++  if (node.web_socket_tls && node.web_socket_tls->restored_from_v2) {
++    return std::nullopt;
++  }
+   if (!ValidateAccessTestNodeNative(node)) return std::nullopt;
+   auto value = base::DictValue()
+       .Set("address", node.address).Set("port", node.port)
+@@ -239,8 +244,8 @@ bool RequiresDevChannel(const Node& node) {
+     const auto* host = value->FindString("wsHost");
+     const auto* path = value->FindString("wsPath");
+     if (!host || !path) return std::nullopt;
+-    node.web_socket_tls =
+-        aegis_access::AccessTestNodeWebSocketTls{*host, *path};
++    node.web_socket_tls = aegis_access::AccessTestNodeWebSocketTls{
++        *host, *path, {}, /*restored_from_v2=*/true};
+     return ValidateAccessTestNodeNative(node);
+   }
+   if (version == 3 && allows_extended_vless) {
+diff --git a/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc b/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc
+index a1b5523b976ac274af4f9af152af7c82e463a6fb..36933a23f34145a6c60ba955a04cd5c0322c6cc8 100644
+--- a/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_vault_mac_unittest.cc
+@@ -124,7 +124,7 @@ TEST(AccessTestNodeVaultMacTest,
+   }
+ }
+ 
+-TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketRecordWithoutAlpn) {
++TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketUsingV2Grammar) {
+   auto rows = std::make_shared<Rows>();
+   const std::string scope(64, 'a');
+   AccessTestNodeVaultMac dev("debug", scope, Backend(rows));
+@@ -134,13 +134,21 @@ TEST(AccessTestNodeVaultMacTest, RestoresLegacyWebSocketRecordWithoutAlpn) {
+                      saved.id),
+       R"({"schemaVersion":2,"address":"192.0.2.8","port":8443,)"
+       R"("userId":"550e8400-e29b-41d4-a716-446655440000",)"
+-      R"("serverName":"tls.example.test","fingerprint":"chrome",)"
+-      R"("wsHost":"edge.example.test","wsPath":"/test"})");
++      R"("serverName":"Localhost","fingerprint":"Legacy_FP-1",)"
++      R"("wsHost":"Edge.","wsPath":"//path"})");
+   const auto restored = dev.Read(saved);
+   ASSERT_TRUE(restored && restored->web_socket_tls);
+-  EXPECT_EQ(restored->web_socket_tls->host, "edge.example.test");
+-  EXPECT_EQ(restored->web_socket_tls->path, "/test");
++  EXPECT_EQ(restored->server_name, "Localhost");
++  EXPECT_EQ(restored->fingerprint, "Legacy_FP-1");
++  EXPECT_EQ(restored->web_socket_tls->host, "Edge.");
++  EXPECT_EQ(restored->web_socket_tls->path, "//path");
+   EXPECT_TRUE(restored->web_socket_tls->alpn.empty());
++  EXPECT_TRUE(restored->web_socket_tls->restored_from_v2);
++  EXPECT_EQ(dev.Stage(Id(), *restored).status, Status::kInvalidNode);
++  auto invalid_import = *restored;
++  invalid_import.web_socket_tls->restored_from_v2 = false;
++  EXPECT_EQ(dev.Stage(Id(), invalid_import).status, Status::kInvalidNode);
++  EXPECT_EQ(rows->values.size(), 1u);
+ }
+ 
+ TEST(AccessTestNodeVaultMacTest, RejectsMixedAndUnknownExtendedRecordShapes) {
+diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+index 3ee0a1fb52b5b1b85a4bed12ff186c34feb3177d..ff5b07d5e8e4121c08334f08b90dfd3dfa9bc85e 100644
+--- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
++++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+@@ -1085,14 +1085,10 @@ void AegisUIHandler::OnAccessTestNodeSaved(
+             std::to_string(result.snapshot->revision)));
+     return;
+   } else {
+-    // An operation query never prepares a listener. Its receipt and current
+-    // row can still prove that this editor's exact native draft was consumed.
++    // An operation query never prepares a listener. The receipt identifies the
++    // draft consumed by that operation even after another editor saves.
+     if (editor.empty() && access_test_node_draft_ && result.operation &&
+-        result.snapshot->test_profile &&
+-        result.snapshot->test_profile->operation_id ==
+-            result.operation->operation_id &&
+-        result.snapshot->test_profile->configuration.secret_reference ==
+-            access_test_node_draft_->id) {
++        result.operation->secret_reference == access_test_node_draft_->id) {
+       access_test_node_draft_.reset();
+     }
+     response.Set("state", "saved");
+diff --git a/components/aegis_access/access_test_node.cc b/components/aegis_access/access_test_node.cc
+index f6d143219bea7d6588335a2a668fc9f19f468299..536b25178afe54e4a6c0a38c08e443ceb2c71672 100644
+--- a/components/aegis_access/access_test_node.cc
++++ b/components/aegis_access/access_test_node.cc
+@@ -120,6 +120,26 @@ bool IsAddress(std::string_view text) {
+   return IsDnsName(text);
+ }
+ 
++bool IsExtendedServerName(std::string_view name,
++                          bool allows_root_label = false) {
++  if (allows_root_label && name.ends_with('.')) {
++    name.remove_suffix(1);
++  }
++  const auto dot = name.rfind('.');
++  return IsDnsName(name) && dot != std::string_view::npos &&
++         std::ranges::any_of(name.substr(dot + 1), [](char c) {
++           return LowerAscii(c) >= 'a' && LowerAscii(c) <= 'z';
++         });
++}
++
++bool IsExtendedAddress(std::string_view address) {
++  if (address.starts_with('[') && address.ends_with(']')) {
++    return IsIpAddress(address.substr(1, address.size() - 2), AF_INET6);
++  }
++  return IsExtendedServerName(address, /*allows_root_label=*/true) ||
++         IsIpAddress(address, AF_INET);
++}
++
+ bool IsHttpAuthority(std::string_view authority) {
+   auto host_end = authority.find(':');
+   if (authority.starts_with('[')) {
+@@ -129,8 +149,7 @@ bool IsHttpAuthority(std::string_view authority) {
+     }
+     host_end = close + 1;
+   }
+-  const auto host = authority.substr(0, host_end);
+-  if (!IsDnsName(host) && !IsAddress(host)) {
++  if (!IsExtendedAddress(authority.substr(0, host_end))) {
+     return false;
+   }
+   if (host_end == std::string_view::npos || host_end == authority.size()) {
+@@ -146,14 +165,6 @@ bool IsHttpAuthority(std::string_view authority) {
+   return parsed.ec == std::errc() && parsed.ptr == end && port != 0;
+ }
+ 
+-bool IsExtendedServerName(std::string_view name) {
+-  const auto dot = name.rfind('.');
+-  return IsDnsName(name) && dot != std::string_view::npos &&
+-         std::ranges::any_of(name.substr(dot + 1), [](char c) {
+-           return LowerAscii(c) >= 'a' && LowerAscii(c) <= 'z';
+-         });
+-}
+-
+ bool IsFingerprint(std::string_view name) {
+   return !name.empty() && name.size() <= 32 &&
+          std::ranges::all_of(name, [](char c) {
+@@ -161,6 +172,13 @@ bool IsFingerprint(std::string_view name) {
+          });
+ }
+ 
++bool IsWebSocketFingerprint(std::string_view name) {
++  // AccessVLESSWebSocketTLSParameters in the pinned iOS source.
++  constexpr std::string_view kNames[]{"",    "chrome",  "firefox", "safari",
++                                      "ios", "android", "edge"};
++  return std::ranges::find(kNames, name) != std::end(kNames);
++}
++
+ bool IsExtendedFingerprint(std::string_view name) {
+   // Match the fingerprint names from the pinned iOS Xray registry. The iOS
+   // bridge also excludes unsafe and hellogolang for these profiles.
+@@ -281,6 +299,15 @@ bool ContainsNonWebScheme(std::string_view text) {
+   return false;
+ }
+ 
++bool IsLegacyWebSocketPath(std::string_view path) {
++  return path.starts_with('/') && path.size() <= 1024 &&
++         std::ranges::all_of(path, [](char c) {
++           return IsAlphanumeric(c) ||
++                  std::string_view("/-._~!$'()*+,;=:@").find(c) !=
++                      std::string_view::npos;
++         });
++}
++
+ bool IsWebSocketRequestTarget(std::string_view path) {
+   if (!path.starts_with('/') || path.starts_with("//") || path.size() > 2048 ||
+       !std::ranges::all_of(path, [](char c) {
+@@ -454,7 +481,7 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+   const bool tcp_tls =
+       extended && type == "tcp" && security == "tls" && query->contains("type");
+   const bool grpc = extended && type == "grpc" && security == "reality";
+-  if ((ws || tcp_tls || grpc) &&
++  if (((ws && extended) || tcp_tls || grpc) &&
+       fragment.find("://") != std::string_view::npos) {
+     return {kInvalid, std::nullopt};
+   }
+@@ -471,16 +498,23 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+         "alpn", "encryption", "fp", "host", "path", "security", "sni", "type"};
+     auto alpn = ValueOr(*query, "alpn");
+     if (!HasOnlyKeys(*query, kWebSocketKeys) ||
+-        (!alpn.empty() && alpn != "http/1.1")) {
++        (!alpn.empty() && (!extended || alpn != "http/1.1"))) {
+       return {kUnsupported, std::nullopt};
+     }
+     const std::string_view default_host =
+         extended ? std::string_view(node.server_name) : std::string_view();
+     auto request_host = ValueOr(*query, "host", default_host);
+     auto path = ValueOr(*query, "path", "/");
+-    if (!IsDnsName(node.server_name) || !IsHttpAuthority(request_host) ||
+-        !IsWebSocketRequestTarget(path) ||
+-        (!node.fingerprint.empty() && !IsFingerprint(node.fingerprint))) {
++    const bool valid = extended ? IsExtendedAddress(address) &&
++                                      IsExtendedServerName(node.server_name) &&
++                                      IsHttpAuthority(request_host) &&
++                                      IsWebSocketRequestTarget(path) &&
++                                      IsWebSocketFingerprint(node.fingerprint)
++                                : IsDnsName(node.server_name) &&
++                                      IsDnsName(request_host) &&
++                                      IsLegacyWebSocketPath(path) &&
++                                      IsFingerprint(node.fingerprint);
++    if (!valid) {
+       return {kInvalid, std::nullopt};
+     }
+     node.web_socket_tls = AccessTestNodeWebSocketTls{
+diff --git a/components/aegis_access/access_test_node.h b/components/aegis_access/access_test_node.h
+index 6d170769e84ae981e9aedd48fa73335996ed9205..dba3af7b61455e3c87ff03da6db579535a1798f6 100644
+--- a/components/aegis_access/access_test_node.h
++++ b/components/aegis_access/access_test_node.h
+@@ -20,6 +20,7 @@ enum class AccessTestNodeError {
+ 
+ enum class AccessTestNodeImportMode {
+   kRealityOnly,
++  // The pre-v3 WebSocket grammar. New imports use kAllowExtendedVless.
+   kAllowWebSocketTls,
+   kAllowExtendedVless,
+ };
+@@ -28,6 +29,8 @@ struct AccessTestNodeWebSocketTls {
+   std::string host;
+   std::string path;
+   std::string alpn = {};
++  // Set only when decoding a version-2 Keychain record.
++  bool restored_from_v2 = false;
+ 
+   bool operator==(const AccessTestNodeWebSocketTls&) const = default;
+ };
+diff --git a/components/aegis_access/access_test_node_test.cc b/components/aegis_access/access_test_node_test.cc
+index fe92d45297bb5bad3eb87e705a23aed51e51ebd7..6bd98842c12d458573805200a17970ed550973df 100644
+--- a/components/aegis_access/access_test_node_test.cc
++++ b/components/aegis_access/access_test_node_test.cc
+@@ -17,6 +17,7 @@ using aegis_access::test::kSyntheticTcpTlsVisionShare;
+ using aegis_access::test::kSyntheticTestNodeShare;
+ using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
+ using aegis_access::test::kSyntheticWebSocketTlsShare;
++using aegis_access::test::kSyntheticWebSocketTlsUnknownFingerprintShare;
+ 
+ std::string ReplaceIn(std::string_view input,
+                       std::string_view old_value,
+@@ -151,6 +152,7 @@ int main() {
+   ExpectRejection(Replace("headerType=none", "headerType=http"), kUnsupported);
+   ExpectRejection(kSyntheticWebSocketTlsShare, kUnsupported);
+   constexpr auto kDev = AccessTestNodeImportMode::kAllowWebSocketTls;
++  constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
+   const auto ws = ParseAccessTestNodeShare(kSyntheticWebSocketTlsShare, kDev);
+   assert(ws.node && ws.node->web_socket_tls && ws.node->port == 8443);
+   assert(ws.node->web_socket_tls->host == "edge.example.test");
+@@ -158,7 +160,7 @@ int main() {
+   assert(ws.node->server_name == "tls.example.test");
+   assert(ws.node->public_key.empty() && ws.node->short_id.empty());
+   const auto ws_query_alpn =
+-      ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kDev);
++      ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended);
+   assert(ws_query_alpn.node && ws_query_alpn.node->web_socket_tls);
+   assert(ws_query_alpn.node->web_socket_tls->path ==
+          "/ws?token=%74est-value&opaque=%E9");
+@@ -177,7 +179,45 @@ int main() {
+   injected_path.replace(injected_path.find("%2Ftest"), 7, "%2Ftest%0d%0a");
+   assert(ParseAccessTestNodeShare(injected_path, kDev).error == kInvalid);
+ 
+-  constexpr auto kExtended = AccessTestNodeImportMode::kAllowExtendedVless;
++  const auto unknown_ws_fingerprint = ParseAccessTestNodeShare(
++      kSyntheticWebSocketTlsUnknownFingerprintShare, kExtended);
++  assert(unknown_ws_fingerprint.error == kInvalid &&
++         !unknown_ws_fingerprint.node);
++  assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsUnknownFingerprintShare,
++                                  kDev)
++             .node);
++  const auto legacy_path = ReplaceIn(ws_query, "%2Ftest", "%2F%2Fpath");
++  const auto legacy_share = ReplaceIn(
++      ReplaceIn(ReplaceIn(legacy_path, "host=edge.example.test", "host=Edge."),
++                "sni=tls.example.test", "sni=Localhost"),
++      "fp=chrome", "fp=Legacy_FP-1");
++  const auto legacy = ParseAccessTestNodeShare(legacy_share, kDev);
++  assert(legacy.node && legacy.node->web_socket_tls &&
++         legacy.node->web_socket_tls->path == "//path");
++  assert(legacy.node->server_name == "Localhost" &&
++         legacy.node->web_socket_tls->host == "Edge." &&
++         legacy.node->fingerprint == "Legacy_FP-1");
++  assert(!ParseAccessTestNodeShare(legacy_path, kExtended).node);
++  for (const auto* name :
++       {"", "chrome", "firefox", "safari", "ios", "android", "edge"}) {
++    const auto supported = ParseAccessTestNodeShare(
++        ReplaceIn(ws_query, "fp=chrome", std::string("fp=") + name), kExtended);
++    assert(supported.node && supported.node->fingerprint == name);
++  }
++  assert(!ParseAccessTestNodeShare(
++              ReplaceIn(ws_query, "fp=chrome", "fp=Chrome"), kExtended)
++              .node);
++  for (const auto* host : {"edge", "123.123", "edge.example.test:0"}) {
++    assert(
++        !ParseAccessTestNodeShare(ReplaceIn(ws_query, "host=edge.example.test",
++                                            std::string("host=") + host),
++                                  kExtended)
++             .node);
++  }
++  assert(
++      !ParseAccessTestNodeShare(
++           ReplaceIn(ws_query, "sni=tls.example.test", "sni=single"), kExtended)
++           .node);
+   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
+          result.node);
+   assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsQueryShare, kExtended)
+diff --git a/components/aegis_access/access_test_node_test_fixture.h b/components/aegis_access/access_test_node_test_fixture.h
+index 2f0e7d4a8ce02eb19bf5c0b4f6d0e885223eceaf..24d18e70ad9fb7e4239496f39f7ece28156591c6 100644
+--- a/components/aegis_access/access_test_node_test_fixture.h
++++ b/components/aegis_access/access_test_node_test_fixture.h
+@@ -33,6 +33,12 @@ inline constexpr std::string_view kSyntheticWebSocketTlsQueryShare =
+     "&path=%2Fws%3Ftoken%3D%2574est-value%26opaque%3D%25E9"
+     "&encryption=none&alpn=http%2F1.1#synthetic-ws";
+ 
++inline constexpr std::string_view
++    kSyntheticWebSocketTlsUnknownFingerprintShare =
++        "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
++        "?type=ws&security=tls&host=ws.example.com&fp=synthetic_unknown"
++        "&sni=cert.example.com&path=%2Fws&encryption=none";
++
+ inline constexpr std::string_view kSyntheticTcpTlsVisionShare =
+     "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443"
+     "?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none"
+-- 
+2.54.0 (Apple Git-157)
+

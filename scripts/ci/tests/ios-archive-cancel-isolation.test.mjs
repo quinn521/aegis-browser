@@ -766,6 +766,53 @@ for failure in (None, "census", "identity"):
 `, supervisorScript], {encoding: 'utf8'});
 });
 
+test('slow process snapshots permit startup and two confirmed empty scans after helper escalation', () => {
+  execFileSync('python3', ['-B', '-c', String.raw`
+import importlib.util, os, signal, subprocess, sys
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("supervisor", sys.argv[1])
+supervisor = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(supervisor)
+now = 0
+alive = True
+empty_scans = 0
+
+def sleep(seconds):
+    global now
+    now += seconds
+
+def snapshot(*args, timeout, **kwargs):
+    # The startup scan is slower than the old two-second deadline. An active
+    # session needs one scan to find the helper and two to confirm its exit.
+    duration = 2.5 if now == 0 else 1.5
+    sleep(min(duration, timeout))
+    if timeout < duration:
+        raise subprocess.TimeoutExpired("ps", timeout)
+    global empty_scans
+    if alive:
+        return "202 S\n"
+    empty_scans += 1
+    return ""
+
+def signal_worker(pid, session, signum):
+    global alive
+    assert (pid, session, signum) == (202, 101, signal.SIGKILL)
+    alive = False
+
+with patch.object(subprocess, "check_output", snapshot), patch.object(supervisor, "in_session", lambda *_: True), \
+     patch.object(supervisor.time, "monotonic", lambda: now), patch.object(supervisor.time, "sleep", sleep), \
+     patch.object(os, "getpgid", return_value=202), patch.object(os, "killpg") as primary, \
+     patch.object(os, "waitpid", return_value=(101, 0)) as reap:
+    assert supervisor.process_states() == [(202, "S")]
+    start = now
+    assert supervisor.stop_and_reap(101, signal_worker) == 0
+    assert empty_scans == 2 and now - start < 7.5
+    primary.assert_any_call(101, signal.SIGKILL)
+    reap.assert_called_once_with(101, os.WNOHANG)
+`, supervisorScript], {encoding: 'utf8'});
+});
+
 test('workflow keeps unsigned archive compilation behind the cancel-safe wrapper', () => {
   const workflow = readFileSync('.github/workflows/ios-release-validation.yml', 'utf8');
   assert.match(workflow, /exec bash "\$IOS_CI_SOURCE\/scripts\/ci\/run-ios-unsigned-archive\.sh"/u);
