@@ -77,8 +77,8 @@ const messages = {
   busy: 'Wait for the previous preview to finish, then try again.',
   secureStorageUnavailable: 'Secure storage is unavailable. Unlock the keychain and try again.',
 };
-const messagesByState: Readonly<Record<string, string>> = messages;
-const extendedImportMessages: Record<string, string> = {
+const messagesByState: Readonly<Partial<Record<string, string>>> = messages;
+const extendedImportMessages: Partial<Record<string, string>> = {
   invalidShare: 'Enter one complete node share link.',
   unsupportedOutbound:
       'Use a supported VLESS node with TLS or REALITY.',
@@ -207,10 +207,8 @@ function cancel() {
   chrome.send('cancelAccessTestNodePreview');
 }
 
-async function preview(source: 'text'|'image', data: string, request: number) {
-  try {
-    const result = await sendWithPromise<Preview>(
-        'previewAccessTestNode', source, data);
+function preview(source: 'text'|'image', data: string, request: number) {
+  return sendWithPromise<Preview>('previewAccessTestNode', source, data).then(result => {
     if (request !== generation) {
       return;
     }
@@ -227,12 +225,12 @@ async function preview(source: 'text'|'image', data: string, request: number) {
         extendedImportMessages[result.state] : undefined;
     status.textContent =
         importMessage ?? messagesByState[result.state] ?? 'Preview unavailable.';
-  } catch {
+  }).catch(() => {
     if (request === generation) {
       status.textContent = 'Preview unavailable.';
       status.dataset['error'] = 'true';
     }
-  }
+  });
 }
 
 form.addEventListener('submit', event => {
@@ -291,7 +289,16 @@ image.addEventListener('change', () => {
   current.readAsDataURL(selected);
 });
 
-discard.addEventListener('click', async () => {
+function onActionClick(button: HTMLButtonElement, action: () => Promise<void>) {
+  button.addEventListener('click', () => {
+    void action().catch(() => {
+      status.dataset['error'] = 'true';
+      status.textContent = 'Access Options is unavailable.';
+    });
+  });
+}
+
+onActionClick(discard, async () => {
   cancel();
   hasDraft = false;
   nodeDraft = false;
@@ -309,13 +316,7 @@ discard.addEventListener('click', async () => {
     if (request !== generation) {
       return;
     }
-    const cleared = result.state === 'canceled';
-    const edited = hasDraft;
-    status.textContent = messagesByState[result.state] ?? 'Discard unavailable.';
-    status.dataset['error'] = String(!cleared);
-    discard.disabled = cleared && !edited;
-    hasDraft = edited || !cleared;
-    if (cleared && canApply && !edited) await reloadCommitted(request);
+    await finishDiscard(result, request);
   } catch {
     if (request === generation) {
       status.textContent = messages.secureStorageUnavailable;
@@ -325,6 +326,16 @@ discard.addEventListener('click', async () => {
     }
   }
 });
+
+async function finishDiscard(result: Preview, request: number) {
+  const cleared = result.state === 'canceled';
+  const edited = hasDraft;
+  status.textContent = messagesByState[result.state] ?? 'Discard unavailable.';
+  status.dataset['error'] = String(!cleared);
+  discard.disabled = cleared && !edited;
+  hasDraft = edited || !cleared;
+  if (cleared && canApply && !edited) await reloadCommitted(request);
+}
 
 async function reloadCommitted(request: number) {
   try {
@@ -434,7 +445,7 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
   }
 }
 
-apply.addEventListener('click', async () => {
+onActionClick(apply, async () => {
   if (apply.disabled || !revision) return;
   const message = previewReady ? 'applyAccessTestNode' : 'applyAccessTestNodePreferences';
   const operation = crypto.randomUUID();
@@ -456,7 +467,7 @@ apply.addEventListener('click', async () => {
   }
 });
 
-checkApply.addEventListener('click', async () => {
+onActionClick(checkApply, async () => {
   if (!uncertainOperation || working) return;
   const operation = uncertainOperation;
   working = true;
@@ -473,7 +484,7 @@ checkApply.addEventListener('click', async () => {
   }
 });
 
-review.addEventListener('click', async () => {
+onActionClick(review, async () => {
   if (working) return;
   try {
     await readOptions(false, true);
@@ -491,10 +502,12 @@ review.addEventListener('click', async () => {
 
 refresh.addEventListener('click', () => {
   if (refresh.disabled) return;
-  void readOptions(false).catch(() => showConnection({state: 'unavailable'}));
+  void readOptions(false).catch(() => {
+    showConnection({state: 'unavailable'});
+  });
 });
 
-revoke.addEventListener('click', async () => {
+onActionClick(revoke, async () => {
   const {revision: connectionRevision, revokeToken} = lastConnection;
   if (revoke.disabled || !connectionRevision || !revokeToken) return;
   working = true;
