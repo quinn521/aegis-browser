@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -26,6 +27,11 @@ func proxyConfig(raw []byte) ([]byte, error) {
 
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &document); err != nil || len(document) != 1 {
+		return nil, errConfig
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if !uniqueJSONFields(decoder) {
 		return nil, errConfig
 	}
 	var outbounds []map[string]json.RawMessage
@@ -61,6 +67,43 @@ func proxyConfig(raw []byte) ([]byte, error) {
 	return json.Marshal(document)
 }
 
+// Xray decodes nested objects into structs, where duplicate object fields
+// can merge. Reject them before validating and forwarding the raw values.
+func uniqueJSONFields(decoder *json.Decoder) bool {
+	token, err := decoder.Token()
+	if err != nil {
+		return false
+	}
+	switch token {
+	case json.Delim('{'):
+		fields := make(map[string]struct{})
+		for decoder.More() {
+			key, err := decoder.Token()
+			name, isString := key.(string)
+			if err != nil || !isString {
+				return false
+			}
+			if _, duplicate := fields[name]; duplicate {
+				return false
+			}
+			fields[name] = struct{}{}
+			if !uniqueJSONFields(decoder) {
+				return false
+			}
+		}
+	case json.Delim('['):
+		for decoder.More() {
+			if !uniqueJSONFields(decoder) {
+				return false
+			}
+		}
+	default:
+		return true
+	}
+	_, err = decoder.Token()
+	return err == nil
+}
+
 // Only pass transport fields emitted by the Access configuration generators.
 // Xray's general TLS configuration accepts certificate files and assumes
 // certificate array entries are non-nil.
@@ -84,7 +127,7 @@ func validStreamSettings(raw json.RawMessage) bool {
 				return false
 			}
 		case "realitySettings":
-			if !hasOnlyFields(value, "serverName", "fingerprint", "publicKey", "shortId", "spiderX") {
+			if !validRealitySettings(value) {
 				return false
 			}
 		case "wsSettings", "httpupgradeSettings":
@@ -110,6 +153,18 @@ func validStreamSettings(raw json.RawMessage) bool {
 		}
 	}
 	return true
+}
+
+func validRealitySettings(raw json.RawMessage) bool {
+	if !hasOnlyFields(raw, "serverName", "fingerprint", "publicKey", "shortId", "spiderX") {
+		return false
+	}
+	var client struct {
+		Fingerprint string `json:"fingerprint"`
+		SpiderX     string `json:"spiderX"`
+	}
+	return json.Unmarshal(raw, &client) == nil &&
+		embeddedcore.ValidateRealityClientFields(client.Fingerprint, client.SpiderX) == ""
 }
 
 func hasOnlyFields(raw json.RawMessage, allowed ...string) bool {

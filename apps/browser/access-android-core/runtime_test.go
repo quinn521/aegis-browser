@@ -62,11 +62,15 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 
 var testConfig = []byte(`{"outbounds":[{"tag":"fixture","protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":9,"users":[{"id":"12345678-1234-1234-1234-123456789abc","encryption":"none"}]}]}}]}`)
 
+func withStreamSettings(stream string) []byte {
+	base := strings.TrimSuffix(string(testConfig), "}]}")
+	return []byte(base + `,"streamSettings":` + stream + `}]}`)
+}
+
 func TestStartRequiresAccessTransportFields(t *testing.T) {
 	withTLS := func(settings string) []byte {
-		base := strings.TrimSuffix(string(testConfig), "}]}")
-		return []byte(base + `,"streamSettings":{"network":"ws","security":"tls","tlsSettings":` +
-			settings + `,"wsSettings":{"host":"node.example","path":"/test?key=value"}}}]}`)
+		return withStreamSettings(`{"network":"ws","security":"tls","tlsSettings":` +
+			settings + `,"wsSettings":{"host":"node.example","path":"/test?key=value"}}`)
 	}
 	var registry coreRegistry
 	id := registry.create()
@@ -88,6 +92,49 @@ func TestStartRequiresAccessTransportFields(t *testing.T) {
 	config := withTLS(`{"serverName":"node.example","useSystemCA":true,"alpn":["http/1.1"]}`)
 	if status := instance.start(config); status != statusOK {
 		t.Fatalf("starting WS/TLS with system CAs and a query path returned %d", status)
+	}
+}
+
+func TestStartRejectsMalformedRealityAndDuplicateFields(t *testing.T) {
+	realityStream := func(fingerprint, path string) string {
+		settings := map[string]string{
+			"serverName":  "node.example",
+			"publicKey":   "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+			"shortId":     "ab",
+			"fingerprint": fingerprint,
+			"spiderX":     path,
+		}
+		fields, err := json.Marshal(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return `{"network":"tcp","security":"reality","realitySettings":` + string(fields) + `}`
+	}
+	var registry coreRegistry
+	id := registry.create()
+	instance := registry.lookup(id)
+	t.Cleanup(func() { registry.close(id) })
+	for name, stream := range map[string]string{
+		"invalid REALITY path":        realityStream("chrome", "/bad%escape"),
+		"invalid REALITY fingerprint": realityStream("hellogolang", "/"),
+		"REALITY spider tuning":       realityStream("chrome", "/?p=1-2"),
+		"duplicate TLS settings": `{"network":"ws","security":"tls",
+			"tlsSettings":{"certificates":[null]},"tlsSettings":{"useSystemCA":true}}`,
+		"duplicate nested TLS field": `{"network":"ws","security":"tls",
+			"tlsSettings":{"useSystemCA":false,"useSystemCA":true}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if status := instance.start(withStreamSettings(stream)); status != statusInvalid {
+				t.Fatalf("start returned %d", status)
+			}
+			if instance.runtime.IsRunning() {
+				t.Fatal("rejected configuration left the core running")
+			}
+		})
+	}
+	validReality := withStreamSettings(realityStream("chrome", "/path?fixture=two%20words"))
+	if status := instance.start(validReality); status != statusOK {
+		t.Fatalf("starting REALITY with an ordinary path and query returned %d", status)
 	}
 }
 

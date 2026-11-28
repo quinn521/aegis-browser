@@ -108,6 +108,19 @@ jobs:
         env:
           GOTOOLCHAIN: local
         run: go test -mod=readonly -race ./...
+      - name: Link the Android arm64 Access library
+        working-directory: apps/browser/access-android-core
+        env:
+          GOTOOLCHAIN: local
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: '1'
+        run: |
+          # Match the NDK release pinned by the Android browser's DEPS.
+          ndk_version=30.0.16248370
+          sdkmanager --sdk_root="${ANDROID_HOME:?}" --install "ndk;$ndk_version"
+          export CC="$ANDROID_HOME/ndk/$ndk_version/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          go build -mod=readonly -trimpath -buildmode=c-shared -o "$RUNNER_TEMP/libaegis_android_access_core.so" .
 
   ios:
     needs: plan
