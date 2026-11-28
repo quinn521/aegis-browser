@@ -38,13 +38,13 @@ public struct AccessGeoSiteCatalogue: Equatable, Sendable {
         self.groups = groups
     }
 
-    // Standard geosite.dat from XTLS/Xray-rules-dat release 20261127013728
-    // (460067232), GeoSite source 71449413dd268821143695c5bf3720545f392e63.
+    // Standard geosite.dat from XTLS/Xray-rules-dat release 20261128011702
+    // (461209706), GeoSite source 71449413dd268821143695c5bf3720545f392e63.
     // The three complete groups are signed with the app and have no expiry.
     public static let bundled = Self(
-        tag: "20261127013728",
-        publishedAt: "2026-11-27T01:38:41Z",
-        rawSHA256: "919a4b32cc9e6619e5bc17831cd388f89df77d9bf9817dab98b489d479162047",
+        tag: "20261128011702",
+        publishedAt: "2026-11-28T01:18:08Z",
+        rawSHA256: "ff32ecaf4a8c1d010fe89e1228fdd77f5f4d8e540ee0160b853cb13d6c2423a2",
         groups: originalConsentGroups.merging([
             .debian: domainGroup(
                 typedSHA256: "06c514bb68567fdf422969927719a7e6c19442509cb2c69eb43cb02efbc83aeb",

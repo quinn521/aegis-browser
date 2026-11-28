@@ -100,7 +100,7 @@ def render(platform, root=ROOT):
             "GeoSite standard data — sources and licenses",
             "scripts/licenses/geosite/xtls-gpl-3.0.txt",
             "The unmodified standard geosite.dat is shipped in the iOS app. It provides the domestic and overseas rule inputs.\n"
-            "Distribution: https://github.com/XTLS/Xray-rules-dat/releases/tag/20261127013728\n"
+            "Distribution: https://github.com/XTLS/Xray-rules-dat/releases/tag/20261128011702\n"
             "Encoding, conversion scripts, and input inventory: "
             "https://github.com/XTLS/Xray-rules-dat/tree/71449413dd268821143695c5bf3720545f392e63\n"
             "The GeoSite tools have their own MIT terms. The data comes from the following sources.\n"
@@ -112,7 +112,7 @@ def render(platform, root=ROOT):
             "Iran sanctioned domains — https://github.com/armanlife/iran-sanctioned-domains\n"
             "RunetFreedom domains — https://github.com/runetfreedom/russia-domains-list\n"
             "Antifilter.Download community list — https://community.antifilter.download/list/domains.lst\n\n"
-            "XTLS project license — GPL-3.0 — https://github.com/XTLS/Xray-rules-dat/blob/20261127013728/LICENSE\n\n",
+            "XTLS project license — GPL-3.0 — https://github.com/XTLS/Xray-rules-dat/blob/20261128011702/LICENSE\n\n",
         )
         include("V2Fly Domain List Community and inherited GeoSite tools — MIT",
                 f"{ACCESS}/v2fly-domain-list-community.txt",
