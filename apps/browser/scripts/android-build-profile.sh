@@ -75,13 +75,18 @@ aegis_android_gn_args_match() {
 # 用法：aegis_android_gn_args <args-file> default|internal-alpha|internal-debug
 aegis_android_gn_args() {
   local args_file="$1"
-  local profile="$2"
+  local profile="$2" host_arch="${3:-}"
   local args tokens channel product
   args="$(cat "$args_file")" || return 1
   tokens="$(aegis_android_gn_scan "" <<< "$args")" || return 1
   if grep -Exq 'aegis_android_(internal_access_options|access_product_channel)' <<< "$tokens"; then
     echo "Android 基础参数不得开启内部 Access Options。" >&2
     return 1
+  fi
+  # The pinned Linux Rust and Clang host tools are x86-64 even when
+  # they execute through QEMU on Linux ARM64.
+  if [[ "$host_arch" == aarch64 || "$host_arch" == arm64 ]]; then
+    args+=$'\nhost_cpu = "x64"'
   fi
   case "$profile" in
     default)

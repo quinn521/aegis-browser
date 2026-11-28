@@ -304,6 +304,8 @@ def build(name, evidence):
                         evidence / 'gn-profile-template.log', src, minimum)
                 gn_args = template.read_text()
                 gn_args = re.sub(r'^use_siso\s*=.*$', '', gn_args, flags=re.M)
+                if name == 'android' and host_arch in {'aarch64', 'arm64'}:
+                    gn_args += '\nhost_cpu = "x64"\n'
                 args_file.write_text(gn_args + '\nuse_siso = false\nv8_enable_memory_corruption_api = false\n', encoding='utf-8')
                 gn = src / 'buildtools' / {'mac': 'mac', 'windows': 'win', 'android': 'linux64'}[name] / ('gn.exe' if name == 'windows' else 'gn')
                 ninja = src / 'third_party/ninja' / ('ninja.exe' if name == 'windows' else 'ninja')

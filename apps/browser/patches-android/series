@@ -357,7 +357,8 @@
 0357-restore-independent-access-rules.patch
 0358-assert-scoped-request-cancellation.patch
 0359-preserve-access-routing-and-platform-coverage.patch
-0360-open-android-access-options-from-trusted-tab.patch
-0361-revoke-access-options-on-document-replacement.patch
-0362-preserve-access-options-restore-hint.patch
-0363-bind-access-options-editor-to-its-window.patch
+0360-bump-product-build-345.patch
+0361-open-android-access-options-from-trusted-tab.patch
+0362-revoke-access-options-on-document-replacement.patch
+0363-preserve-access-options-restore-hint.patch
+0364-bind-access-options-editor-to-its-window.patch

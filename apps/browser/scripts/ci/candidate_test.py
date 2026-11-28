@@ -319,7 +319,7 @@ class CandidateTests(unittest.TestCase):
                      'current': {'value': '"alpha"'}, 'default': {'value': '"unknown"'}},
                 ]))
                 gn.write_text('#!/bin/sh\n'
-                              'if [ "$1" = gen ]; then exit 0; fi\n'
+                              'if [ "$1" = gen ]; then cp "$2/args.gn" generated-args.gn; exit $?; fi\n'
                               '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] &&\n'
                               '[ "$5" = --json ] && [ "$6" = -q ] &&\n'
                               "grep -Fxq 'import(\"//internal.gni\")' \"$2/args.gn\" && cat effective-args.json\n")
@@ -351,6 +351,8 @@ class CandidateTests(unittest.TestCase):
                 self.assertFalse((source / 'ninja-invoked').exists())
                 self.assertIn(diagnostic, (evidence / log).read_text())
                 self.assertEqual((evidence / 'gn.log').exists(), log == 'gn-profile.log')
+                if host_arch == 'aarch64':
+                    self.assertIn('host_cpu = "x64"', (source / 'generated-args.gn').read_text().splitlines())
                 result = json.loads((evidence / 'result.json').read_text())
                 self.assertEqual(result['status'], 'failed')
                 self.assertEqual(result['hostArchitecture'], host_arch)

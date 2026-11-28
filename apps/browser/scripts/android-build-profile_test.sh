@@ -43,7 +43,8 @@ assert_assignment "$production_alpha" android_channel '"canary"'
 
 ARGS_FILE="$TEST_ROOT/base.gn"
 printf '%s\n' 'android_channel = "default"' 'chrome_public_manifest_package = "com.gcsa.aegis"' \
-  'target_cpu = "arm64"' > "$ARGS_FILE"
+  'target_cpu = "arm64"' 'android_override_version_name = "Ver 7.5 (345)"' \
+  'android_override_version_code = "2007000345"' > "$ARGS_FILE"
 
 default_args="$(aegis_android_gn_args "$ARGS_FILE" default)"
 [[ "$default_args" == "$(cat "$ARGS_FILE")" ]] || fail "default 配置改动了基础参数"
@@ -281,9 +282,14 @@ check_default_build_rejects_enabled_args
   rm "$fixture_out/build.ninja"
   check_build_rejects_args "$default_error"
   AEGIS_TEST_UNAME_MACHINE=aarch64 AEGIS_ANDROID_EXPERIMENTAL_ARM64=true \
+    AEGIS_ANDROID_VERSION_NAME=0.8.0 AEGIS_ANDROID_VERSION_CODE=1 \
     GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567 \
     OUT_DIR="$CHROMIUM_ROOT/src/out/AegisAndroidDelivery-42-1" \
     check_build_rejects_args "$default_error" --app-bundle alpha
+  bundle_args="$CHROMIUM_ROOT/src/out/AegisAndroidDelivery-42-1/args.gn"
+  grep -Fxq 'host_cpu = "x64"' "$bundle_args" || fail "ARM64 AAB 未设置 x64 宿主工具链"
+  grep -Fxq 'android_override_version_name = "0.8.0"' "$bundle_args" || fail "AAB 未使用提交的版本名"
+  grep -Fxq 'android_override_version_code = "1"' "$bundle_args" || fail "AAB 未使用提交的版本号"
   GN_PROFILE_DIAGNOSTICS=1 check_build_rejects_args "$default_error"
   GN_PROFILE_MALFORMED=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
   GN_PROFILE_DUPLICATE=1 check_build_rejects_args '生效 GN 参数的 JSON 输出无效'
@@ -310,6 +316,7 @@ check_default_build_rejects_enabled_args
   # describes the current profile, while Ninja must use a freshly generated graph.
   sed 's/^android_channel = "default"$/android_channel="default" # cached comment/' \
     "$fixture/args/aegis-android.gn" > "$fixture_out/args.gn"
+  printf '%s\n' 'host_cpu = "x64"' >> "$fixture_out/args.gn"
   printf '%s\n' stale-internal-profile > "$fixture_out/build.ninja"
   if AEGIS_TEST_UNAME_MACHINE=aarch64 AEGIS_ANDROID_ALLOW_ARM64_HOST=1 \
       bash "$fixture/scripts/build-android.sh" > /dev/null 2>&1; then
@@ -317,16 +324,18 @@ check_default_build_rejects_enabled_args
   fi
   [[ -e "$CHROMIUM_ROOT/ninja-invoked" ]] || fail "只改注释和排版时没有进入构建"
   grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "普通 APK 使用了旧构建图"
+  grep -Fxq 'host_cpu = "x64"' "$fixture_out/args.gn" || fail "ARM64 普通 APK 未设置 x64 宿主工具链"
   [[ "$(cat "$CHROMIUM_ROOT/ninja-targets")" == chrome_public_apk ]] || fail "ARM64 默认 APK 构建目标错误"
 
   rm "$CHROMIUM_ROOT/ninja-graph"
-  aegis_android_gn_args "$fixture/args/aegis-android.gn" internal-alpha > "$internal_out/args.gn"
+  aegis_android_gn_args "$fixture/args/aegis-android.gn" internal-alpha arm64 > "$internal_out/args.gn"
   printf '%s\n' stale-default-profile > "$internal_out/build.ninja"
   if AEGIS_TEST_UNAME_MACHINE=arm64 AEGIS_ANDROID_ALLOW_ARM64_HOST=1 \
       bash "$fixture/scripts/build-android.sh" --internal-access-options alpha > /dev/null 2>&1; then
     fail "模拟 autoninja 应以失败状态结束"
   fi
   grep -Fxq generated-profile "$CHROMIUM_ROOT/ninja-graph" || fail "内部 APK 使用了旧构建图"
+  grep -Fxq 'host_cpu = "x64"' "$internal_out/args.gn" || fail "ARM64 内部 APK 未设置 x64 宿主工具链"
   [[ "$(cat "$CHROMIUM_ROOT/ninja-targets")" == $'chrome_public_apk\naegis_access_options_test_apk' ]] ||
     fail "ARM64 内部 Alpha 构建缺少产品 APK 或专用测试 APK"
 

@@ -21,8 +21,9 @@ if [[ "$#" -ne 0 ]]; then
   fi
 fi
 
+host_arch="$(uname -m)"
 if [[ -z "$internal_profile" ]]; then
-  default_args="$(aegis_android_gn_args "$ARGS_FILE" default)"
+  default_args="$(aegis_android_gn_args "$ARGS_FILE" default "$host_arch")"
 fi
 
 need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-80}"
@@ -47,7 +48,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   fail_host
 fi
 
-case "$(uname -m)" in
+case "$host_arch" in
   x86_64) ;;
   aarch64|arm64)
     if [[ "${AEGIS_ANDROID_ALLOW_ARM64_HOST:-}" != 1 &&
@@ -98,6 +99,13 @@ if [[ -n "$bundle_profile" ]]; then
   mkdir "$OUT"
   printf '%s\n%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > "$OUT/.aegis-producer"
   args="$default_args"
+  if [[ ! "${AEGIS_ANDROID_VERSION_NAME:-}" =~ ^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}$ ||
+        ! "${AEGIS_ANDROID_VERSION_CODE:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Android App Bundle requires committed versionName and versionCode." >&2
+    exit 1
+  fi
+  args="$(sed -E "s/^android_override_version_name = .*/android_override_version_name = \"$AEGIS_ANDROID_VERSION_NAME\"/;
+    s/^android_override_version_code = .*/android_override_version_code = \"$AEGIS_ANDROID_VERSION_CODE\"/" <<< "$args")"
   if [[ "$bundle_profile" == release ]]; then
     args="$(sed -E 's/^symbol_level = [0-9]+$/symbol_level = 1/' <<< "$args")"
     if ! grep -qx 'symbol_level = 1' <<< "$args"; then
@@ -120,7 +128,7 @@ if [[ -n "$internal_profile" ]]; then
     echo "内部 Access Options 构建只使用固定的实际输出目录：$OUT" >&2
     exit 1
   fi
-  internal_args="$(aegis_android_gn_args "$ARGS_FILE" "internal-$internal_profile")"
+  internal_args="$(aegis_android_gn_args "$ARGS_FILE" "internal-$internal_profile" "$host_arch")"
   ensure_depot_tools_on_path
   cd "$SRC"
   internal_args="$(gn format --stdin <<< "$internal_args")"
