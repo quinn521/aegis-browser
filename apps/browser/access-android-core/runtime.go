@@ -123,7 +123,7 @@ func validStreamSettings(raw json.RawMessage) bool {
 				return false
 			}
 		case "tlsSettings":
-			if !hasOnlyFields(value, "serverName", "useSystemCA", "fingerprint", "alpn") {
+			if !validTLSSettings(value) {
 				return false
 			}
 		case "realitySettings":
@@ -153,6 +153,18 @@ func validStreamSettings(raw json.RawMessage) bool {
 		}
 	}
 	return true
+}
+
+func validTLSSettings(raw json.RawMessage) bool {
+	if !hasOnlyFields(raw, "serverName", "useSystemCA", "fingerprint", "alpn", "allowInsecure") {
+		return false
+	}
+	// Browser-native TLS outbounds explicitly disable insecure verification.
+	var settings struct {
+		AllowInsecure json.RawMessage `json:"allowInsecure"`
+	}
+	return json.Unmarshal(raw, &settings) == nil &&
+		(settings.AllowInsecure == nil || string(settings.AllowInsecure) == "false")
 }
 
 func validRealitySettings(raw json.RawMessage) bool {

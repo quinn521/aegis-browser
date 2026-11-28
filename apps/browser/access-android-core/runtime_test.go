@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -62,15 +63,15 @@ func TestProxyConfigRequiresOneProxyOutbound(t *testing.T) {
 
 var testConfig = []byte(`{"outbounds":[{"tag":"fixture","protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":9,"users":[{"id":"12345678-1234-1234-1234-123456789abc","encryption":"none"}]}]}}]}`)
 
-func withStreamSettings(stream string) []byte {
-	base := strings.TrimSuffix(string(testConfig), "}]}")
+func withStreamSettings(config []byte, stream string) []byte {
+	base := strings.TrimSuffix(string(config), "}]}")
 	return []byte(base + `,"streamSettings":` + stream + `}]}`)
 }
 
 func TestStartRequiresAccessTransportFields(t *testing.T) {
 	withTLS := func(settings string) []byte {
-		return withStreamSettings(`{"network":"ws","security":"tls","tlsSettings":` +
-			settings + `,"wsSettings":{"host":"node.example","path":"/test?key=value"}}`)
+		return withStreamSettings(testConfig, `{"network":"ws","security":"tls","tlsSettings":`+
+			settings+`,"wsSettings":{"host":"node.example","path":"/test?key=value"}}`)
 	}
 	var registry coreRegistry
 	id := registry.create()
@@ -80,6 +81,8 @@ func TestStartRequiresAccessTransportFields(t *testing.T) {
 		`{"certificates":[null]}`,
 		`{"Certificates":[]}`,
 		`{"allowInsecure":true}`,
+		`{"allowInsecure":null}`,
+		`{"allowInsecure":"false"}`,
 		`null`,
 	} {
 		if status := instance.start(withTLS(settings)); status != statusInvalid {
@@ -89,9 +92,22 @@ func TestStartRequiresAccessTransportFields(t *testing.T) {
 	if instance.runtime.IsRunning() {
 		t.Fatal("rejected TLS settings left the core running")
 	}
-	config := withTLS(`{"serverName":"node.example","useSystemCA":true,"alpn":["http/1.1"]}`)
-	if status := instance.start(config); status != statusOK {
-		t.Fatalf("starting WS/TLS with system CAs and a query path returned %d", status)
+	visionConfig := bytes.Replace(testConfig, []byte(`"encryption":"none"`),
+		[]byte(`"encryption":"none","flow":"xtls-rprx-vision"`), 1)
+	for name, config := range map[string][]byte{
+		"iOS WS/TLS": withTLS(`{"serverName":"node.example","useSystemCA":true,"alpn":["http/1.1"]}`),
+		"browser WS/TLS": withTLS(`{"serverName":"node.example","useSystemCA":true,
+			"allowInsecure":false,"alpn":["http/1.1"]}`),
+		"browser TCP/TLS Vision": withStreamSettings(visionConfig, `{"network":"tcp","security":"tls",
+			"tlsSettings":{"serverName":"node.example","useSystemCA":true,"allowInsecure":false}}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			id := registry.create()
+			t.Cleanup(func() { registry.close(id) })
+			if status := registry.lookup(id).start(config); status != statusOK {
+				t.Fatalf("starting verified TLS returned %d", status)
+			}
+		})
 	}
 }
 
@@ -124,7 +140,7 @@ func TestStartRejectsMalformedRealityAndDuplicateFields(t *testing.T) {
 			"tlsSettings":{"useSystemCA":false,"useSystemCA":true}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if status := instance.start(withStreamSettings(stream)); status != statusInvalid {
+			if status := instance.start(withStreamSettings(testConfig, stream)); status != statusInvalid {
 				t.Fatalf("start returned %d", status)
 			}
 			if instance.runtime.IsRunning() {
@@ -132,7 +148,7 @@ func TestStartRejectsMalformedRealityAndDuplicateFields(t *testing.T) {
 			}
 		})
 	}
-	validReality := withStreamSettings(realityStream("chrome", "/path?fixture=two%20words"))
+	validReality := withStreamSettings(testConfig, realityStream("chrome", "/path?fixture=two%20words"))
 	if status := instance.start(validReality); status != statusOK {
 		t.Fatalf("starting REALITY with an ordinary path and query returned %d", status)
 	}

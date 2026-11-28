@@ -118,8 +118,10 @@ jobs:
         run: |
           # Match the NDK release pinned by the Android browser's DEPS.
           ndk_version=30.0.16248370
-          sdkmanager --sdk_root="${ANDROID_HOME:?}" --install "ndk;$ndk_version"
-          export CC="$ANDROID_HOME/ndk/$ndk_version/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          export CC="${ANDROID_HOME:?}/ndk/$ndk_version/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          if [[ ! -x "$CC" ]]; then
+            sdkmanager --sdk_root="$ANDROID_HOME" --install "ndk;$ndk_version"
+          fi
           go build -mod=readonly -trimpath -buildmode=c-shared -o "$RUNNER_TEMP/libaegis_android_access_core.so" .
 
   ios:
