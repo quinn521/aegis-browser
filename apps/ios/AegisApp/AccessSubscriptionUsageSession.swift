@@ -163,6 +163,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
     private var selectedNode: AccessRealityVisionParameters?
     private let fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])?
     private let alphaRoutes: [AccessInternalTestNode]
+    private let privateBetaAnchor: AccessRealityVisionParameters?
     private var selectedAlphaNode: AccessInternalTestNode?
     @Published private(set) var availableAlphaRouteIDs: Set<Int> = []
     @Published private(set) var availableConnectionCount = 0
@@ -195,6 +196,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
          fetchNodes: @escaping @Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessRealityVisionParameters] = { try await AccessSubscriptionClient.nodes($0, userID: $1) },
          fetchAlphaNodes: (@Sendable (AccessSubscriptionConfiguration, String) async throws -> [AccessInternalTestNode])? = nil,
          alphaRoutes: [AccessInternalTestNode] = [],
+         privateBetaAnchor: AccessRealityVisionParameters? = nil,
          fetch: @escaping @Sendable (AccessSubscriptionConfiguration) async throws -> AccessSubscriptionUsage = { try await AccessSubscriptionClient.read($0) }) {
         self.isSelected = isSelected
         self.configuration = configuration
@@ -203,6 +205,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         self.fetchNodes = fetchNodes
         self.fetchAlphaNodes = fetchAlphaNodes
         self.alphaRoutes = alphaRoutes
+        self.privateBetaAnchor = privateBetaAnchor
         self.fetch = fetch
     }
 
@@ -221,6 +224,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         }
         let config: AccessSubscriptionConfiguration?
         var userID: String?
+        var privateBetaAnchor: AccessRealityVisionParameters?
         do {
             guard let resource = bundle.url(forResource: "AegisPrivateTestSubscription", withExtension: "json") else {
                 throw AccessSubscriptionQueryError.invalid
@@ -229,12 +233,19 @@ final class AccessSubscriptionUsageSession: ObservableObject {
             guard data.count <= 8192 else { throw AccessSubscriptionQueryError.invalid }
             let decoded = try JSONDecoder().decode(AccessSubscriptionConfiguration.self, from: data)
             try decoded.validate(node: Data(contentsOf: URL(fileURLWithPath: path)))
-            userID = try AccessLocalV2RayConfigLoader.load(path: path).parameters.userID
+            let parameters = try AccessLocalV2RayConfigLoader.load(path: path).parameters
+            userID = parameters.userID
+            if usesAlphaNodes, channel == "beta", bundle.bundleIdentifier == "com.gcsa.aegis",
+               bundle.object(forInfoDictionaryKey: "AegisReleaseProfile") as? String == "beta",
+               bundle.object(forInfoDictionaryKey: "TFInternalTestingOnly") as? Bool == true,
+               bundle.url(forResource: "AegisPrivateBetaTestNodes", withExtension: "json") != nil {
+                privateBetaAnchor = parameters
+            }
             config = decoded
         } catch { config = nil }
         return .init(isSelected: true, configuration: config, managesConnections: true, nodeUserID: userID,
                      fetchAlphaNodes: usesAlphaNodes ? AccessSubscriptionClient.alphaNodes : nil,
-                     alphaRoutes: alphaRoutes)
+                     alphaRoutes: alphaRoutes, privateBetaAnchor: privateBetaAnchor)
     }
 
     /// No static-node fallback: the account's current allowance and subscription must both succeed.
@@ -253,6 +264,19 @@ final class AccessSubscriptionUsageSession: ObservableObject {
 
     private func isAvailableAlphaRoute(_ route: AccessInternalTestNode) -> Bool {
         availableAlphaRouteIDs.contains { alphaRoutes[$0].isWireIdentical(to: route) }
+    }
+
+    private static func matchesPublishedRoute(_ node: AccessInternalTestNode, signed: AccessInternalTestNode,
+                                              privateBetaAnchor: AccessRealityVisionParameters?) -> Bool {
+        if node.isWireIdentical(to: signed) { return true }
+        guard let anchor = privateBetaAnchor, signed.isWireIdentical(to: .realityVision(anchor)),
+              case .realityVision(let live) = node else { return false }
+        // 3X-UI may choose a new fingerprint and spider path on every export.
+        // This checks the signed relay's entitlement; dialing still uses the signed options.
+        return live.port == anchor.port && live.userID == anchor.userID && live.shortID == anchor.shortID
+            && live.address.utf8.elementsEqual(anchor.address.utf8)
+            && live.serverName.utf8.elementsEqual(anchor.serverName.utf8)
+            && live.publicKey.utf8.elementsEqual(anchor.publicKey.utf8)
     }
 
     /// A bundled route may be shown as enabled or saved only while the current allowance still permits it.
@@ -322,6 +346,7 @@ final class AccessSubscriptionUsageSession: ObservableObject {
         let token = UUID(); generation = token
         let fetch = fetch
         let alphaRoutes = alphaRoutes
+        let privateBetaAnchor = privateBetaAnchor
         isRefreshing = true
         task = Task { [weak self] in
             do {
@@ -332,10 +357,12 @@ final class AccessSubscriptionUsageSession: ObservableObject {
                 if self?.managesConnections == true, value.permitsConnection, let userID = self?.nodeUserID {
                     // Node failure leaves valid counters visible but never reuses an old connection list.
                     if let fetchAlphaNodes = self?.fetchAlphaNodes {
-                        // Only bundled choices the live subscription publishes byte-for-byte are usable.
                         let published = (try? await fetchAlphaNodes(configuration, userID)) ?? []
                         alphaRouteIDs = Set(alphaRoutes.indices.filter { index in
-                            published.contains { $0.isWireIdentical(to: alphaRoutes[index]) }
+                            published.contains {
+                                Self.matchesPublishedRoute($0, signed: alphaRoutes[index],
+                                                           privateBetaAnchor: index == 0 ? privateBetaAnchor : nil)
+                            }
                         })
                     } else {
                         candidates = (try? await self?.fetchNodes(configuration, userID)) ?? []

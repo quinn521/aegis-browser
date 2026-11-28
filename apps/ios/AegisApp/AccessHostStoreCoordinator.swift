@@ -994,7 +994,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         }
         if let id = tab.activeRecoveryOperationID, let operation = operations[id],
            operation.oneShot, operation.state == .sent, operation.key == key,
-           operation.tabID == tab.instanceID.uuidString, operation.ticket?.url == url,
+           operation.tabID == tab.instanceID.uuidString, tab.authorizesOneShotRequest(to: url),
            authorizationStillValid(operation, tab: tab) { return .service }
         if explicitDirect.contains(key) || intents[key] == .off {
             // Legacy .off still permits an independently authorized recovery group.
@@ -1433,11 +1433,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         let id = tab.instanceID.uuidString
         // Subresources retain the committed document's store. The next top-level
         // request has to qualify under its own authorization.
-        if let operation = tab.activeRecoveryOperationID,
-           operations[operation]?.oneShot == true, operations[operation]?.tabID == id {
-            operations.removeValue(forKey: operation)
-            phases[id] = nil
-        }
+        finishOneShotRecovery(tab: tab, operationID: tab.activeRecoveryOperationID)
         let previous = committedOverseasGrants.removeValue(forKey: id)
         if let receipt = approvedOverseasGrants[id], receipt.sequence == sequence {
             approvedOverseasGrants.removeValue(forKey: id)
@@ -1697,6 +1693,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
 
     func mainFrameFailed(tab: BrowserTab, failure: BrowserMainFrameFailure, error: NSError) {
         guard !tab.isDisposed, hasValidRouteOwner(for: tab) else { return }
+        finishOneShotRecovery(tab: tab, operationID: failure.recoveryOperationID)
         guard BrowserNavigationFailure.isRecoverableNetworkFailure(error) else { return }
         guard failure.recoveryOperationID == nil else { return }
         guard !failure.hasReplayableBody else { return }
@@ -2597,8 +2594,17 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         _ = tab.retryFailedNavigation(
             request,
             expectedNavigationID: ticket.navigationID,
-            recoveryOperationID: ticket.operationID
+            recoveryOperationID: ticket.operationID,
+            oneShot: operations[ticket.operationID]?.oneShot == true
         )
+    }
+
+    private func finishOneShotRecovery(tab: BrowserTab, operationID: UUID?) {
+        guard let operationID, let operation = operations[operationID], operation.oneShot,
+              operation.tabID == tab.instanceID.uuidString else { return }
+        operations.removeValue(forKey: operationID)
+        phases[operation.tabID] = nil
+        revision &+= 1
     }
 
     private struct RecoveryOperation {

@@ -568,6 +568,78 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: url))
     }
 
+    func testManualRetryRenewsTheGrantAndFollowsSameHostRedirectsUntilCommit() async throws {
+        let host = "www.douban.com"
+        let first = try XCTUnwrap(URL(string: "https://\(host)/retry-entry"))
+        let middle = try XCTUnwrap(URL(string: "https://\(host)/retry-redirect?step=2"))
+        let last = try XCTUnwrap(URL(string: "https://\(host)/retry-final?step=3"))
+        let independent = try XCTUnwrap(URL(string: "https://\(host)/independent"))
+        let (managedTLS, certificate) = try fixtureTLSIdentity()
+        let (originalTLS, _) = try fixtureTLSIdentity()
+        let managed = OriginReceipt(port: 0, body: "<title>Managed</title>", tls: managedTLS,
+                                    redirects: [first.path: middle, middle.path + "?step=2": last], responseDelay: 0.6)
+        let original = OriginReceipt(port: 0, body: "<title>Original</title>", tls: originalTLS, responseDelay: 0.6)
+        try await managed.start()
+        defer { managed.stop() }
+        try await original.start()
+        defer { original.stop() }
+        let managedPort: UInt16 = 18_756
+        let originalPort: UInt16 = 18_757
+        let managedListener = try await makeListener(port: managedPort, tunnels: FixtureOriginTunnels(port: managed.port, hosts: [host]))
+        let originalListener = try await makeListener(port: originalPort, tunnels: FixtureOriginTunnels(port: original.port, hosts: [host]))
+        try await managedListener.start()
+        defer { try? managedListener.stop() }
+        try await originalListener.start()
+        defer { try? originalListener.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let restoreOriginal = try observeOriginalStore(of: tab, port: originalPort)
+        defer { restoreOriginal() }
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let navigation = PinnedFixtureNavigation(tab: tab, hosts: [host], certificate: certificate)
+        func attachCurrent() {
+            if tab.webView.navigationDelegate !== navigation { tab.webView.navigationDelegate = navigation }
+            attach(tab.webView, to: window)
+        }
+        attachCurrent()
+        try await waitUntil { tab.liveCommittedDocumentURL?.absoluteString == "aegis://start" && !tab.isLoading }
+        tab.load(first)
+        try await waitUntil { original.transcript.contains("GET /retry-entry ") && tab.currentNavigationForTests != nil }
+        deliverFailure(tab)
+        tab.webView.stopLoading()
+        let firstOperation = try XCTUnwrap(coordinator.retryViaProxy(tab: tab))
+        try await waitUntil {
+            attachCurrent()
+            return managed.transcript.contains("GET /retry-entry ") && tab.currentNavigationForTests != nil
+        }
+        deliverFailure(tab)
+        tab.webView.stopLoading()
+        XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
+        XCTAssertNotEqual(try XCTUnwrap(coordinator.retryViaProxy(tab: tab)), firstOperation)
+        try await waitUntil(seconds: 15, {
+            attachCurrent()
+            return tab.liveCommittedDocumentURL == last && !tab.isLoading
+        }, message: "The second retry must follow both same-host redirects in the managed store")
+        XCTAssertEqual(tab.recoveryLoadCount, 2)
+        XCTAssertEqual(managed.transcript.components(separatedBy: "GET /retry-entry ").count - 1, 2)
+        XCTAssertEqual(managed.transcript.components(separatedBy: "GET /retry-redirect?step=2 ").count - 1, 1)
+        XCTAssertEqual(managed.transcript.components(separatedBy: "GET /retry-final?step=3 ").count - 1, 1)
+        XCTAssertFalse(original.transcript.contains("GET /retry-redirect"))
+        XCTAssertFalse(original.transcript.contains("GET /retry-final"))
+        XCTAssertFalse(coordinator.requiresProxy(tab: tab, url: independent))
+        tab.load(independent)
+        try await waitUntil {
+            attachCurrent()
+            return tab.liveCommittedDocumentURL == independent && !tab.isLoading
+        }
+        XCTAssertTrue(original.transcript.contains("GET /independent "))
+        XCTAssertFalse(managed.transcript.contains("GET /independent "))
+    }
+
     func testUnreadyTabKeepsTheOriginalStore() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_244, tunnels: opener)

@@ -150,6 +150,65 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertFalse(publisher.validateReady(ready))
     }
 
+    func testPrivateBetaDefaultKeepsSignedRealityOptionsWhenSubscriptionRotatesThem() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let signedURI = "vless://\(userID)@first.example:443?type=tcp&security=reality&flow=xtls-rprx-vision"
+            + "&sni=first.example&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=abcd&fp=chrome&spx=%2Fsigned"
+        let alternateURI = signedURI.replacingOccurrences(of: "first.example", with: "alternate.example")
+        let data = try JSONEncoder().encode([
+            ["source": "3x-ui", "uri": signedURI],
+            ["source": "3x-ui", "uri": alternateURI],
+        ])
+        let catalogue = AccessAlphaNodeCatalogue(channel: "beta", profile: "beta", bundleID: "com.gcsa.aegis",
+            data: nil, privateBetaData: data, internalTesting: true, defaults: defaults)
+        guard case .realityVision(let anchor) = try XCTUnwrap(catalogue.routes.first) else { return XCTFail("Missing anchor") }
+        let rotated = signedURI.replacingOccurrences(of: "fp=chrome&spx=%2Fsigned", with: "fp=firefox&spx=%2Flive")
+        let rotatedAlternate = rotated.replacingOccurrences(of: "first.example", with: "alternate.example")
+        let published = Mutex(try [rotated, rotatedAlternate].map(AccessInternalTestNode.parseSingleShareURI))
+        let fixture = ThreeXUIEntryFixture(userID: userID)
+        func session(anchor: AccessRealityVisionParameters?) -> AccessSubscriptionUsageSession {
+            AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+                nodeUserID: userID, fetchAlphaNodes: { _, _ in published.withLock { $0 } }, alphaRoutes: catalogue.routes,
+                privateBetaAnchor: anchor, fetch: { config in try await fixture.usage(config) })
+        }
+
+        let strict = session(anchor: nil)
+        strict.setActive(true)
+        await strict.refresh()?.value
+        XCTAssertTrue(strict.availableAlphaRouteIDs.isEmpty)
+        strict.setActive(false)
+
+        let usage = session(anchor: anchor)
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        await usage.refresh()?.value
+        XCTAssertEqual(usage.availableAlphaRouteIDs, [0])
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: catalogue)
+        let operationID = UUID()
+        defer { publisher.cancel(operationID: operationID) }
+        let ready = try await publisher.prepare(.init(operationID: operationID, deadline: .seconds(5)))
+        let config = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(core.startedConfiguration)) as? [String: Any])
+        let outbound = try XCTUnwrap((config["outbounds"] as? [[String: Any]])?.first)
+        let stream = try XCTUnwrap(outbound["streamSettings"] as? [String: Any])
+        let reality = try XCTUnwrap(stream["realitySettings"] as? [String: Any])
+        XCTAssertEqual(reality["fingerprint"] as? String, "chrome")
+        XCTAssertEqual(reality["spiderX"] as? String, "/signed")
+        XCTAssertTrue(publisher.validateReady(ready))
+
+        for (original, replacement) in [("first.example:443", "first.example:444"), ("@first.example", "@other.example"),
+             ("sni=first.example", "sni=other.example"), ("pbk=A", "pbk=B"), ("sid=abcd", "sid=abce"),
+             (userID, "550e8400-e29b-41d4-a716-446655440001")] {
+            let changed = try AccessInternalTestNode.parseSingleShareURI(rotated.replacingOccurrences(of: original, with: replacement))
+            published.withLock { $0 = [changed] }
+            await usage.refresh()?.value
+            XCTAssertTrue(usage.availableAlphaRouteIDs.isEmpty, original)
+            XCTAssertFalse(usage.permitsExistingConnection)
+        }
+        XCTAssertFalse(publisher.validateReady(ready))
+    }
+
     func testAlphaSelectionRoutesProductOnlyAfterQuotaAndRevokesOnChange() async throws {
         let (defaults, suite) = try isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }
