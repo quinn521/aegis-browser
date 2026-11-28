@@ -52,7 +52,7 @@ struct AccessUsagePage: View {
                 AccessSubscriptionUsageView(session: subscription, usesAlphaNodeSelection: alphaNodes.isConfigured)
             }
         }
-        .localizedNavigationTitle("隐藏地理位置服务")
+        .localizedNavigationTitle("流量管理")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("access-usage-page")
     }

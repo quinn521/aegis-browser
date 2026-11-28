@@ -59,6 +59,53 @@ final class AccessGeoSiteCacheTests: XCTestCase {
         XCTAssertNil(overseas)
     }
 
+    func testRegionalConfirmationCommitsBothScopesAndRetainsEmptyCategories() async throws {
+        let fixture = Fixture()
+        defer { fixture.clean() }
+        let cache = fixture.cache(useProductBaseline: true)
+        let manual = Cache.Selection(categories: Cache.Selection.mainlandCategories, automaticScope: .all)
+        await cache.restore(migrating: manual)
+        let domestic = try XCTUnwrap(URL(string: "https://www.douban.com/"))
+        let overseas = try XCTUnwrap(URL(string: "https://www.youtube.com/"))
+        XCTAssertEqual(cache.match(domestic), .original)
+        XCTAssertEqual(cache.view.selection, manual)
+        XCTAssertFalse(cache.view.overseas.hasSavedSelection)
+
+        let all = try await cache.overseasConfirmation(for: .init(enabled: true, mode: .all))
+        let mainland = Cache.Selection(mode: .smart, categories: [], region: .mainland, automaticScope: .all)
+        await expectFailure { try await cache.confirmOverseas(all, website: mainland) { false } }
+        fixture.fault.withLock { $0 = .writeLedger }
+        await expectFailure { try await cache.confirmOverseas(all, website: mainland) { true } }
+        fixture.fault.withLock { $0 = nil }
+        let uncommitted = fixture.cache(useProductBaseline: true)
+        await uncommitted.restore()
+        XCTAssertEqual(uncommitted.selection, manual)
+        XCTAssertFalse(uncommitted.view.overseas.selection.enabled)
+
+        try await cache.confirmOverseas(all, website: mainland) { true }
+        XCTAssertTrue(try XCTUnwrap(cache.selection).usesOverseasRules)
+        XCTAssertEqual(cache.match(domestic), .original)
+        XCTAssertEqual(cache.view.overseas.route(for: overseas).match, .managed)
+
+        var outside = mainland
+        outside.region = .outsideMainland
+        try cache.saveRegionalSelection(outside, overseas: all.selection, expectedRevision: cache.revision)
+        XCTAssertEqual(cache.match(domestic), .managed)
+        XCTAssertFalse(try XCTUnwrap(cache.selection).usesOverseasRules)
+        XCTAssertEqual(cache.match(try XCTUnwrap(URL(string: "https://www.debian.org/"))), .original)
+
+        outside.automaticScope = .categories
+        let empty = try await cache.overseasConfirmation(for: .init(enabled: true, mode: .categories))
+        try await cache.confirmOverseas(empty, website: outside) { true }
+        let recovered = fixture.cache(useProductBaseline: true)
+        await recovered.restore()
+        XCTAssertEqual(recovered.selection, outside)
+        XCTAssertTrue(recovered.view.overseas.hasSavedSelection)
+        XCTAssertTrue(recovered.view.overseas.selection.enabled)
+        XCTAssertTrue(recovered.view.overseas.selection.categories.isEmpty)
+        XCTAssertEqual(recovered.match(domestic), .original)
+    }
+
     func testOldBundledConsentDoesNotIncludeNewDebianHost() async throws {
         let fixture = Fixture()
         defer { fixture.clean() }

@@ -63,22 +63,39 @@ struct BrowserSettingsView: View {
                 Section("浏览") {
                     NavigationLink("搜索、主页与浏览方式") { BrowserGeneralSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("general-browser-settings")
-                    if let tab = browser.activeTab, hostStores.offersWebsiteAcceleration(for: tab) {
-                        NavigationLink("网站加速") {
-                            if let current = browser.activeTab { DomesticAccelerationSettingsView(tab: current) }
-                        }
-                        .accessibilityIdentifier("domestic-acceleration-link")
-                    }
                     Button("打开系统 App 设置") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                     }
                 }
-                Section("隐私保护") {
+                Section("网络加速") {
+                    if let tab = browser.activeTab, hostStores.offersWebsiteAcceleration(for: tab) {
+                        NavigationLink {
+                            if hostStores.automaticSelected {
+                                RegionalAccelerationSettingsView(tab: tab, openedFromRegion: true)
+                            } else {
+                                AccessRegionSettingsView(tab: tab)
+                            }
+                        } label: {
+                            LabeledContent("当前上网地区") {
+                                if let region = hostStores.websiteSelection?.region { Text(region.localizedTitle) }
+                                else { Text("未选择") }
+                            }
+                        }
+                        .accessibilityIdentifier("access-region-link")
+                        NavigationLink("网站加速") { WebsiteAccelerationSettingsView(tab: tab) }
+                            .accessibilityIdentifier("domestic-acceleration-link")
+                    }
                     NavigationLink {
                         AccessUsagePage(isPrivate: browser.profile.isPrivate)
-                    } label: { Label("隐藏地理位置服务", systemImage: "location.slash") }
+                    } label: { Label("流量管理", systemImage: "chart.bar") }
                         .accessibilityIdentifier("access-usage-link")
                     AccessTestNodeOptionsLink(isPrivate: browser.profile.isPrivate)
+                }
+                Section("隐私保护") {
+                    NavigationLink {
+                        if let tab = browser.activeTab { SiteLocationPrivacySettingsView(tab: tab) }
+                    } label: { Label("隐藏地理位置", systemImage: "location.slash") }
+                        .accessibilityIdentifier("site-location-privacy-link")
                     NavigationLink("网站设置与权限") { WebsiteSettingsView(preferences: browser.preferences) }
                         .accessibilityIdentifier("website-settings")
                     NavigationLink("网站数据管理") { WebsiteDataSettingsView() }
@@ -146,53 +163,48 @@ struct BrowserSettingsView: View {
 }
 
 
-// 「访问中国大陆网站」与「海外加速」相互独立；使用 iOS 的导航、触控尺寸和动态字号。
-private struct DomesticAccelerationSettingsView: View {
+private struct WebsiteAccelerationSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @ObservedObject var tab: BrowserTab
     @State private var refreshSaveFailed = false
+    @State private var modeSaveFailed = false
+    @State private var confirmsOriginal = false
 
     var body: some View {
         Form {
             if browser.activeTab === tab, hostStores.offersWebsiteAcceleration(for: tab) {
                 Section {
-                    modeButton(.manual, title: "手动", id: "website-acceleration-manual")
-                    modeButton(.smart, title: "智能", id: "website-acceleration-smart")
-                    if let categories = hostStores.websiteCategories(for: tab) {
-                        WebsiteCategoriesLink(tab: tab, selected: categories.selected)
+                    choiceButton("手动", selected: !hostStores.automaticSelected) {
+                        do {
+                            try hostStores.selectManual(for: tab)
+                            modeSaveFailed = false
+                        } catch { modeSaveFailed = true }
                     }
-                } header: {
-                    Text("访问中国大陆网站")
-                        .accessibilityIdentifier("website-acceleration-section")
+                    .accessibilityIdentifier("website-acceleration-manual")
+                    NavigationLink {
+                        RegionalAccelerationSettingsView(tab: tab)
+                    } label: {
+                        HStack {
+                            Text("自动")
+                            Spacer()
+                            if hostStores.automaticSelected { Image(systemName: "checkmark").accessibilityHidden(true) }
+                        }
+                    }
+                    .accessibilityAddTraits(hostStores.automaticSelected ? .isSelected : [])
+                    .accessibilityIdentifier("website-acceleration-automatic")
                 } footer: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        switch hostStores.websiteAccelerationMode {
-                        case .manual:
-                            Text("自行选择要加速的网站。")
-                        case .smart:
-                            if hostStores.websiteCategories(for: tab)?.selected.isEmpty == true {
-                                Text("未选择加速分类。")
-                            } else {
-                                Text("按所选分类加速网站。")
-                            }
-                            if hostStores.smartModeReplacesDefaultLocationPrivacy {
-                                Text("选择智能后，其他网站首次打开时不再默认隐藏位置。")
-                                    .accessibilityIdentifier("website-acceleration-smart-location-privacy")
-                            }
-                        }
-                        if !hostStores.offersLocationService {
-                            Text("加速服务未配置。")
-                                .accessibilityIdentifier("website-acceleration-service-unavailable")
-                        }
-                        switch hostStores.geoSiteStatus {
-                        case .unsaved:
-                            Text("设置未保存，请重试。")
-                        case .unavailable, .clockRollback:
-                            Text("连接暂不可用")
-                        default:
-                            EmptyView()
-                        }
+                    if !hostStores.automaticSelected {
+                        Text("默认使用原有连接。加载失败时可选择加速重试。")
+                    } else if hostStores.websiteSelection?.region == nil {
+                        Text("请选择当前上网地区以应用地区规则。")
+                    }
+                    if !hostStores.offersLocationService {
+                        Text("加速服务未配置。")
+                            .accessibilityIdentifier("website-acceleration-service-unavailable")
+                    }
+                    if modeSaveFailed || hostStores.geoSiteStatus == .unsaved {
+                        Text("设置未保存，请重试。")
                     }
                 }
                 if hostStores.geoSiteCache != nil {
@@ -218,13 +230,6 @@ private struct DomesticAccelerationSettingsView: View {
                         if refreshSaveFailed { Text("设置未保存，请重试。") }
                         if hostStores.geoSiteRefreshDays == 7 { Text("为保证规则有效，可能会提前更新。") }
                     }
-                    Section {
-                        NavigationLink("海外加速（针对大陆地区）") { OverseasAccelerationSettingsView(tab: tab) }
-                            .accessibilityIdentifier("overseas-acceleration-link")
-                    } header: {
-                        Text("访问海外网站")
-                            .accessibilityIdentifier("overseas-acceleration-section")
-                    }
                 }
                 if let host = hostStores.websiteAccelerationHost(for: tab) {
                     Section {
@@ -247,6 +252,13 @@ private struct DomesticAccelerationSettingsView: View {
                     } footer: {
                         Text("站点选择用于此域名的主页面。清除后恢复所选模式和已有隐私设置。")
                     }
+                    .alert("关闭本站的位置保护？", isPresented: $confirmsOriginal) {
+                        Button("取消", role: .cancel) {}
+                        Button("使用原有连接", role: .destructive) {
+                            guard browser.activeTab === tab else { return }
+                            hostStores.setWebsiteRouteChoice(.original, for: tab, displayedHost: host)
+                        }
+                    }
                 }
             }
         }
@@ -261,18 +273,14 @@ private struct DomesticAccelerationSettingsView: View {
         }
     }
 
-    private func modeButton(_ mode: AccessWebsiteAccelerationMode, title: LocalizedStringKey, id: String) -> some View {
-        choiceButton(title, selected: hostStores.websiteAccelerationMode == mode) {
-            guard browser.activeTab === tab else { return }
-            hostStores.setWebsiteAccelerationMode(mode, for: tab)
-        }
-        .accessibilityIdentifier(id)
-    }
-
     private func siteButton(_ choice: AccessWebsiteRouteChoice?, title: LocalizedStringKey, host: AccessSiteHost) -> some View {
         choiceButton(title, selected: hostStores.websiteRouteChoice(for: tab) == choice) {
             guard browser.activeTab === tab else { return }
-            hostStores.setWebsiteRouteChoice(choice, for: tab, displayedHost: host)
+            if choice == .original, hostStores.requiresLocationPrivacy(tab: tab, host: host.rawValue) {
+                confirmsOriginal = true
+            } else {
+                hostStores.setWebsiteRouteChoice(choice, for: tab, displayedHost: host)
+            }
         }
     }
 
@@ -290,7 +298,25 @@ private struct DomesticAccelerationSettingsView: View {
     }
 }
 
-private extension AccessGeoSiteCategory {
+private struct SiteLocationPrivacySettingsView: View {
+    @EnvironmentObject private var browser: BrowserSession
+    @EnvironmentObject private var siteStores: AccessSiteProxyStoreRegistry
+    @ObservedObject var tab: BrowserTab
+
+    var body: some View {
+        Form {
+            if browser.activeTab === tab {
+                AccessSiteProxyToggleView(store: siteStores.store(for: tab.websiteDataStore, isPrivate: tab.profile.isPrivate),
+                                          url: tab.url, tab: tab, showsConnectionOptions: false)
+            } else {
+                Text("请先打开网站。")
+            }
+        }
+        .localizedNavigationTitle("隐藏地理位置")
+    }
+}
+
+extension AccessGeoSiteCategory {
     var displayName: LocalizedStringResource {
         switch self {
         case .debian: "Debian"
@@ -300,49 +326,7 @@ private extension AccessGeoSiteCategory {
     }
 }
 
-private struct WebsiteCategoriesLink: View {
-    @Environment(\.locale) private var locale
-    @Environment(\.dynamicTypeSize) private var textSize
-    let tab: BrowserTab
-    let selected: Set<AccessGeoSiteCategory>
-
-    var body: some View {
-        let title = AegisLocalization.string("加速分类")
-        let names = AccessGeoSiteCategory.allCases.filter { selected.contains($0) }
-            .map { AegisLocalization.string($0.displayName) }
-        let summary = names.isEmpty ? AegisLocalization.string("未选择")
-            : names.formatted(.list(type: .and).locale(locale))
-        let layout = textSize.isAccessibilitySize
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-            : AnyLayout(HStackLayout(spacing: 10))
-        NavigationLink {
-            WebsiteCategoriesView(tab: tab)
-        } label: {
-            layout {
-                Text(titleWithBeta(title))
-                    .fixedSize(horizontal: false, vertical: true)
-                if !textSize.isAccessibilitySize { Spacer(minLength: 0) }
-                Text(verbatim: summary)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .accessibilityLabel(Text(verbatim: title + " Beta"))
-        .accessibilityValue(Text(verbatim: summary))
-        .accessibilityIdentifier("website-acceleration-categories")
-    }
-
-    private func titleWithBeta(_ name: String) -> AttributedString {
-        var title = AttributedString(name + " ")
-        var beta = AttributedString("Beta")
-        beta.font = .caption.weight(.semibold)
-        beta.foregroundColor = .secondary
-        title.append(beta)
-        return title
-    }
-}
-
-private struct WebsiteCategoriesView: View {
+struct WebsiteCategoriesView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
     @Environment(\.locale) private var locale
@@ -354,16 +338,9 @@ private struct WebsiteCategoriesView: View {
     var body: some View {
         Form {
             if browser.activeTab === tab, let categories = hostStores.websiteCategories(for: tab) {
-                Section {
-                    ForEach(AccessGeoSiteCategory.allCases, id: \.self) { category in
-                        if categories.scopes != nil || categories.catalogue.groups[category] != nil {
-                            categoryButton(category, categories: categories)
-                        }
-                    }
-                }
                 Section("分类范围") {
                     ForEach(AccessGeoSiteCategory.allCases, id: \.self) { category in
-                        if categories.scopes != nil || categories.catalogue.groups[category] != nil {
+                        if category != .debian || categories.selected.contains(.debian) {
                             DisclosureGroup {
                                 scopeDetails(category, categories: categories)
                             } label: {
@@ -380,35 +357,6 @@ private struct WebsiteCategoriesView: View {
         .onDisappear { approval?.cancel() }
         .onChange(of: browser.tabSelectionRevision) { _, _ in approval?.cancel() }
         .onChange(of: scenePhase) { _, phase in if phase != .active { approval?.cancel() } }
-    }
-
-    private func categoryButton(_ category: AccessGeoSiteCategory,
-                                categories: AccessHostStoreCoordinator.WebsiteCategories) -> some View {
-        let selected = categories.selected.contains(category)
-        let pending = selected && categories.staged[category] != nil
-        let includesDianping = category == .meituan
-        let details = [includesDianping ? AegisLocalization.string("含大众点评") : nil,
-                       pending ? AegisLocalization.string("等待确认") : nil].compactMap { $0 }
-        return Button {
-            guard browser.activeTab === tab else { return }
-            hostStores.setWebsiteCategory(category, selected: !selected, from: categories, for: tab)
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(verbatim: AegisLocalization.string(category.displayName))
-                    if includesDianping { Text("含大众点评").font(.footnote).foregroundStyle(.secondary) }
-                    if pending { Text("等待确认").font(.footnote).foregroundStyle(.secondary) }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                Spacer()
-                if selected { Image(systemName: "checkmark").accessibilityHidden(true) }
-            }
-            .contentShape(Rectangle())
-        }
-        .accessibilityLabel(Text(verbatim: AegisLocalization.string(category.displayName)))
-        .accessibilityValue(Text(verbatim: ListFormatter.localizedString(byJoining: details)))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("website-acceleration-category-\(category.rawValue)")
     }
 
     @ViewBuilder

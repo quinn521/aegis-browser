@@ -132,7 +132,6 @@ struct AegisApp: App {
             publisher: publisher,
             channel: channel,
             alphaWebsiteAcceleration: alphaAcceleration,
-            defaultLocationPrivacy: !(publisher is AccessFailClosedProxyEntryPublisher),
             locationPreferences: defaults,
             geoSiteCache: geoSiteCache,
             geoSiteTransport: refreshGeoSite ? AccessGeoSiteUpdateTransport() : nil,
@@ -160,10 +159,9 @@ struct AegisApp: App {
                 return AccessGeoSiteCache(storage: storage)
             }
 #endif
-            guard arguments.contains("--ui-testing-geosite-cache"),
-                  let storage = try? AccessGeoSiteStorage.uiTest(keep: arguments.contains("--ui-testing-geosite-cache-keep"))
+            guard let storage = try? AccessGeoSiteStorage.uiTest(keep: arguments.contains("--ui-testing-geosite-cache-keep"))
             else { return nil }
-            return AccessGeoSiteCache(storage: storage)
+            return AccessGeoSiteCache(storage: storage, useProductBaseline: true)
         }
 #endif
         return AccessGeoSiteCache(storage: .product(), useProductBaseline: true)

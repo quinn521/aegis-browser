@@ -75,6 +75,9 @@ enum AccessSiteProxyConnectionStatusId: String, Equatable, Sendable {
 
 /// Presentation snapshot for the current-page site-proxy toggle (P-iOS-3).
 struct AccessSiteProxyToggleSnapshot: Equatable, Sendable {
+    var locationStatus: String?
+    var locationProtected = false
+    var locationBlockingActive = false
     var hasTrustedSite: Bool = false
     var host: AccessSiteHost?
     var intent: AccessSiteIntent = .off
@@ -223,6 +226,7 @@ enum AccessSiteProxyToggleModel {
     }
 
     static func siteStatusLine(_ snapshot: AccessSiteProxyToggleSnapshot) -> String {
+        if let status = snapshot.locationStatus { return status }
         if snapshot.attachment == .attachedUnavailable {
             return "连接失败，未切回原连接"
         }

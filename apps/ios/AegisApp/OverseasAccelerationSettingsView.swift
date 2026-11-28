@@ -2,18 +2,79 @@ import AccessKit
 import BrowserKit
 import SwiftUI
 
-struct OverseasAccelerationSettingsView: View {
+extension AccessGeoSiteCache.Region {
+    var localizedTitle: LocalizedStringKey {
+        switch self {
+        case .mainland: "中国大陆"
+        case .outsideMainland: "中国大陆以外"
+        }
+    }
+}
+
+private struct AccessRegionChoices: View {
+    let selected: AccessGeoSiteCache.Region?
+    let choose: (AccessGeoSiteCache.Region) -> Void
+
+    var body: some View {
+        ForEach(AccessGeoSiteCache.Region.allCases, id: \.self) { region in
+            Button {
+                choose(region)
+            } label: {
+                HStack {
+                    Text(region.localizedTitle)
+                    Spacer()
+                    if selected == region { Image(systemName: "checkmark").accessibilityHidden(true) }
+                }
+                .contentShape(Rectangle())
+            }
+            .accessibilityAddTraits(selected == region ? .isSelected : [])
+            .accessibilityIdentifier("access-region-" + region.rawValue)
+        }
+    }
+}
+
+struct AccessRegionSettingsView: View {
     @EnvironmentObject private var browser: BrowserSession
     @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
+    @ObservedObject var tab: BrowserTab
+    @State private var saveFailed = false
+
+    var body: some View {
+        Form {
+            if browser.activeTab === tab, let selection = hostStores.websiteSelection {
+                Section {
+                    AccessRegionChoices(selected: selection.region) { region in
+                        do {
+                            try hostStores.chooseRegion(region, for: tab)
+                            saveFailed = false
+                        } catch { saveFailed = true }
+                    }
+                } footer: {
+                    Text("港澳台请选择中国大陆以外。")
+                }
+            }
+            if saveFailed { Text("设置未保存，请重试。") }
+        }
+        .localizedNavigationTitle("当前上网地区")
+    }
+}
+
+struct RegionalAccelerationSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var mode: AccessOverseasSelection.Mode = .categories
-    @State private var categories: Set<AccessOverseasCategory> = []
-    @State private var confirmation: AccessHostStoreCoordinator.OverseasSettingsConfirmation?
-    @State private var preparing: Task<Void, Never>?
-    @State private var saving: Task<Void, Never>?
+    @EnvironmentObject private var browser: BrowserSession
+    @EnvironmentObject private var hostStores: AccessHostStoreCoordinator
+    @ObservedObject var tab: BrowserTab
+    var openedFromRegion = false
+    @State private var region: AccessGeoSiteCache.Region?
+    @State private var scope: AccessOverseasSelection.Mode = .all
+    @State private var overseasEnabled = true
+    @State private var mainlandEnabled = true
+    @State private var overseas: Set<AccessOverseasCategory> = []
+    @State private var mainland: Set<AccessGeoSiteCategory> = []
+    @State private var confirmation: AccessHostStoreCoordinator.RegionalConfirmation?
+    @State private var operation: Task<Void, Never>?
     @State private var message: LocalizedStringKey?
-    @State private var isWaitingForRules = false
-    let tab: BrowserTab
 
     private var canEdit: Bool {
         browser.activeTab === tab && hostStores.offersWebsiteAcceleration(for: tab)
@@ -21,174 +82,167 @@ struct OverseasAccelerationSettingsView: View {
 
     var body: some View {
         Form {
-            if canEdit {
-                let state = hostStores.overseasSettings
+            if canEdit, hostStores.websiteSelection != nil {
                 Section {
-                    if state.selection.enabled {
-                        Text(state.remotelyPaused ? "海外加速已暂停。" : (state.ready ? "已启用" : "连接暂不可用"))
-                        if state.ready, state.ceiling == nil,
-                           let policy = state.pendingPolicy ?? state.policy, let tag = state.pendingTag ?? state.activeTag {
-                            NavigationLink("当前保护范围") {
-                                OverseasScopeDetails(version: state.bundledTag ?? tag, policy: policy,
-                                                     bundled: state.usingBundledRules)
-                                    .localizedNavigationTitle("当前保护范围")
-                            }
-                        }
-                        Button("关闭", role: .destructive, action: disable)
-                            .accessibilityIdentifier("overseas-disable")
-                    } else {
-                        Text("未启用")
-                            .accessibilityIdentifier("overseas-disabled")
-                    }
-                    if state.awaitingExpansion { Text("等待确认") }
-                    if state.usingBundledRules { Text("已使用内置规则。") }
-                    if state.unsaved { Text("设置未保存，请重试。") }
+                    AccessRegionChoices(selected: region) { region = $0 }
+                } header: {
+                    Text("当前上网地区")
                 } footer: {
-                    Text("按网站主机选择连接。页面内资源可能共用该连接。本站选择优先。")
+                    Text("港澳台请选择中国大陆以外。")
                 }
-                if let preview = hostStores.overseasPreview {
-                    selectionControls(preview)
-                    if preview.bundled { onlineRulesSection(state) }
-                } else if !state.remotelyPaused {
-                    onlineRulesSection(state)
+                Section {
+                    scopeChoice(.all, title: "全量")
+                    scopeChoice(.categories, title: "按分类")
+                } header: {
+                    Text("加速范围")
+                } footer: {
+                    Text("跨地区命中规则时加速，同地区优先使用原有连接。")
                 }
-                if let message { Section { Text(message).foregroundStyle(.secondary) } }
-                if !hostStores.offersLocationService { Section { Text("加速服务未配置。") } }
-            }
-        }
-        .localizedNavigationTitle("海外加速（针对大陆地区）")
-        .onChange(of: hostStores.overseasSettings.selection, initial: true) { _, persisted in
-            mode = persisted.mode
-            categories = Set(persisted.categories)
-        }
-        .onChange(of: hostStores.overseasSettings.previewTag) { _, version in
-            if version != nil { isWaitingForRules = false }
-        }
-        .onChange(of: browser.tabSelectionRevision) { _, _ in invalidateConfirmation() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active { invalidateConfirmation() }
-        }
-        .onDisappear(perform: invalidateConfirmation)
-        .sheet(item: $confirmation, onDismiss: { saving?.cancel() }) { confirmation in
-            let offer = confirmation.offer
-            NavigationStack {
-                OverseasScopeDetails(version: offer.release, policy: offer.policy,
-                                     bundled: offer.bundled,
-                                     addedRules: offer.newRules, removedExclusions: offer.removedExclusions)
-                    .localizedNavigationTitle(offer.selection.mode == .all ? "全部名单" : "分类范围")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("取消", action: invalidateConfirmation)
-                        }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("确认启用") { save(confirmation) }
-                                .disabled(saving != nil)
-                                .accessibilityIdentifier("overseas-confirm")
-                        }
+                overseasSection
+                mainlandSection
+                if hostStores.websiteSelection?.regionalCategoryDraft.contains(.debian) == true {
+                    Section {
+                        Toggle("Debian", isOn: Binding(get: { mainland.contains(.debian) },
+                                                      set: { if $0 { mainland.insert(.debian) } else { mainland.remove(.debian) } }))
                     }
-            }
-        }
-    }
-
-    private func onlineRulesSection(_ state: AccessGeoSiteCache.OverseasView) -> some View {
-        Section {
-            Button("获取官方规则", action: requestRules)
-                .disabled(!hostStores.canFetchOverseasPreview || state.previewRequested)
-                .accessibilityIdentifier("overseas-fetch-rules")
-            if isWaitingForRules {
-                Text(state.refreshFailed ? "下载失败" : "正在更新规则…")
-            }
-            if state.previewRequested && !state.selection.enabled {
-                Button("取消") {
-                    hostStores.cancelOverseasPreview(for: tab)
-                    isWaitingForRules = false
+                }
+                Section {
+                    Button("检查并应用", action: prepare)
+                        .disabled(region == nil || operation != nil || scenePhase != .active)
+                        .accessibilityIdentifier("regional-review-choice")
+                    if let message { Text(message).foregroundStyle(.secondary) }
                 }
             }
         }
+        .localizedNavigationTitle(openedFromRegion ? "当前上网地区" : "自动")
+        .onChange(of: hostStores.websiteSelection, initial: true) { _, selection in populate(selection) }
+        .onChange(of: hostStores.overseasSettings.selection) { _, _ in populate(hostStores.websiteSelection) }
+        .onChange(of: browser.tabSelectionRevision) { _, _ in invalidateConfirmation() }
+        .onChange(of: scenePhase) { _, phase in if phase != .active { invalidateConfirmation() } }
+        .onDisappear(perform: invalidateConfirmation)
+        .sheet(item: $confirmation, onDismiss: { operation?.cancel() }) { confirmation in
+            confirmationDetails(confirmation)
+        }
     }
 
-    private func selectionControls(_ preview: AccessGeoSiteCache.OverseasPreview) -> some View {
-        Section {
-            if preview.bundled { Text("内置规则") }
-            Picker("加速范围", selection: $mode) {
-                Text("按分类").tag(AccessOverseasSelection.Mode.categories)
-                Text("全部名单").tag(AccessOverseasSelection.Mode.all)
+    private func scopeChoice(_ choice: AccessOverseasSelection.Mode, title: LocalizedStringKey) -> some View {
+        Button {
+            scope = choice
+        } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                if scope == choice { Image(systemName: "checkmark").accessibilityHidden(true) }
             }
-            if mode == .categories {
+            .contentShape(Rectangle())
+        }
+        .accessibilityAddTraits(scope == choice ? .isSelected : [])
+        .accessibilityIdentifier("regional-scope-" + choice.rawValue)
+    }
+
+    private var overseasSection: some View {
+        Section {
+            Toggle("大陆以外网站", isOn: $overseasEnabled)
+                .accessibilityIdentifier("regional-overseas-enabled")
+            if scope == .categories && overseasEnabled {
                 ForEach(AccessOverseasCategory.allCases, id: \.self) { category in
-                    categoryButton(category, hosts: preview.catalogue.hosts[category] ?? [])
+                    Toggle(category.localizedTitle, isOn: Binding(
+                        get: { overseas.contains(category) },
+                        set: { if $0 { overseas.insert(category) } else { overseas.remove(category) } }
+                    ))
+                    .accessibilityIdentifier("overseas-category-" + category.rawValue)
                 }
-            } else {
-                Text("使用本版本已通过校验的网站规则，含未归类网站。")
             }
-            NavigationLink {
-                OverseasScopeDetails(version: preview.release, policy: preview.fullPolicy,
-                                     bundled: preview.bundled,
-                                     counts: preview.catalogue.counts, projections: preview.catalogue.hosts,
-                                     unused: preview.catalogue.unusedRules)
-                    .localizedNavigationTitle("全部名单")
-            } label: {
-                Text("分类范围")
+            if hostStores.overseasSettings.remotelyPaused { Text("海外加速已暂停。") }
+            if hostStores.overseasSettings.awaitingExpansion { Text("等待确认") }
+            if let preview = hostStores.overseasPreview {
+                NavigationLink("分类范围") {
+                    OverseasScopeDetails(version: preview.release, policy: preview.fullPolicy, bundled: preview.bundled,
+                                         counts: preview.catalogue.counts, projections: preview.catalogue.hosts,
+                                         unused: preview.catalogue.unusedRules)
+                        .localizedNavigationTitle("分类范围")
+                }
             }
-            Button("检查并应用", action: prepareConfirmation)
-                .disabled(preparing != nil)
-                .accessibilityIdentifier("overseas-review-choice")
-        }
-    }
-
-    private func categoryButton(_ category: AccessOverseasCategory, hosts: Set<String>) -> some View {
-        Toggle(isOn: Binding(get: { categories.contains(category) }, set: { selected in
-            if selected { categories.insert(category) } else { categories.remove(category) }
-        })) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(category.localizedTitle)
-                if !hosts.isEmpty {
-                    Text(verbatim: hosts.sorted().joined(separator: " · "))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+            if hostStores.canFetchOverseasPreview {
+                if hostStores.overseasSettings.previewRequested {
+                    Button("取消") { hostStores.cancelOverseasPreview(for: tab) }
+                    Text(hostStores.overseasSettings.refreshFailed ? "下载失败" : "正在更新规则…")
+                } else {
+                    Button("获取官方规则") {
+                        do { try hostStores.requestOverseasPreview(for: tab) }
+                        catch { message = "连接暂不可用" }
+                    }
                 }
             }
         }
-        .accessibilityIdentifier("overseas-category-" + category.rawValue)
     }
 
-    private func requestRules() {
-        guard canEdit else { return }
-        do {
-            try hostStores.requestOverseasPreview(for: tab)
-            isWaitingForRules = true
-            message = nil
-        } catch { message = "连接暂不可用" }
+    private var mainlandSection: some View {
+        Section {
+            Toggle("中国大陆网站", isOn: $mainlandEnabled)
+                .accessibilityIdentifier("regional-mainland-enabled")
+            if scope == .categories && mainlandEnabled {
+                ForEach(AccessGeoSiteCategory.allCases.filter { AccessGeoSiteCache.Selection.mainlandCategories.contains($0) }, id: \.self) { category in
+                    Toggle(String(localized: category.displayName), isOn: Binding(
+                        get: { mainland.contains(category) },
+                        set: { if $0 { mainland.insert(category) } else { mainland.remove(category) } }
+                    ))
+                    .accessibilityIdentifier("website-acceleration-category-" + category.rawValue)
+                }
+            }
+            NavigationLink("分类范围") { WebsiteCategoriesView(tab: tab) }
+                .accessibilityIdentifier("website-acceleration-categories")
+        }
     }
 
-    private func prepareConfirmation() {
-        guard canEdit, preparing == nil, scenePhase == .active else { return }
-        let choice = AccessOverseasSelection(enabled: true, mode: mode, categories: categories)
-        preparing = Task { @MainActor in
-            defer { preparing = nil }
+    private func populate(_ selection: AccessGeoSiteCache.Selection?) {
+        guard let selection else { return }
+        invalidateConfirmation()
+        let state = hostStores.overseasSettings
+        region = selection.region
+        scope = selection.automaticScope
+            ?? (state.hasSavedSelection ? state.selection.mode : (selection.mode == .smart ? .categories : .all))
+        overseasEnabled = !state.hasSavedSelection || state.selection.enabled
+        overseas = state.hasSavedSelection ? Set(state.selection.categories) : Set(AccessOverseasCategory.allCases)
+        mainlandEnabled = selection.mainlandEnabled ?? true
+        mainland = selection.regionalCategoryDraft
+    }
+
+    private func prepare() {
+        guard let region, canEdit, operation == nil, scenePhase == .active else { return }
+        let website = AccessGeoSiteCache.Selection(mode: .smart, categories: mainland, region: region,
+                                                   automaticScope: scope, mainlandEnabled: mainlandEnabled)
+        let choice = AccessOverseasSelection(enabled: overseasEnabled, mode: scope, categories: overseas)
+        operation = Task { @MainActor in
+            defer { operation = nil }
             do {
-                let prepared = try await hostStores.overseasConfirmation(choice, for: browser)
+                let result = try await hostStores.regionalConfirmation(website, overseas: choice, for: browser)
                 try Task.checkCancellation()
-                guard canEdit, scenePhase == .active, choice.mode == mode, Set(choice.categories) == categories else { return }
-                confirmation = prepared
+                guard self.region == region, scope == choice.mode, overseasEnabled == choice.enabled,
+                      overseas == Set(choice.categories), mainland == website.categories, mainlandEnabled == website.mainlandEnabled
+                else { return }
+                confirmation = result
                 message = nil
             } catch is CancellationError {
                 return
             } catch AccessGeoSiteCache.Failure.expansionTooLarge {
                 message = "新增范围过大，无法批准。"
-            } catch { message = "连接暂不可用" }
+            } catch {
+                message = "连接暂不可用"
+            }
         }
     }
 
-    private func save(_ offer: AccessHostStoreCoordinator.OverseasSettingsConfirmation) {
-        guard saving == nil, canEdit, scenePhase == .active else { return }
-        saving = Task { @MainActor in
-            defer { saving = nil }
+    private func save(_ offer: AccessHostStoreCoordinator.RegionalConfirmation) {
+        guard operation == nil, canEdit, scenePhase == .active else { return }
+        operation = Task { @MainActor in
+            defer { operation = nil }
             do {
-                try await hostStores.confirmOverseas(offer, for: browser) {
+                try await hostStores.confirmRegional(offer, for: browser) {
                     canEdit && scenePhase == .active && confirmation?.id == offer.id
                 }
                 confirmation = nil
+                dismiss()
             } catch is CancellationError {
                 return
             } catch {
@@ -198,18 +252,62 @@ struct OverseasAccelerationSettingsView: View {
         }
     }
 
-    private func disable() {
-        guard canEdit else { return }
-        do {
-            try hostStores.disableOverseas(for: tab)
-            message = nil
-        } catch { message = "设置未保存，请重试。" }
+    private func invalidateConfirmation() {
+        operation?.cancel()
+        confirmation = nil
     }
 
-    private func invalidateConfirmation() {
-        preparing?.cancel()
-        saving?.cancel()
-        confirmation = nil
+    private func confirmationDetails(_ confirmation: AccessHostStoreCoordinator.RegionalConfirmation) -> some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if let region = confirmation.website.region {
+                        LabeledContent("当前上网地区") { Text(region.localizedTitle) }
+                    }
+                    LabeledContent("加速范围") { Text(confirmation.overseas.mode == .all ? "全量" : "按分类") }
+                }
+                Section("大陆以外网站") {
+                    if confirmation.overseas.enabled {
+                        if let version = confirmation.overseasVersion {
+                            LabeledContent("版本", value: version)
+                        } else {
+                            Text("暂不可用")
+                        }
+                        if confirmation.overseas.mode == .categories {
+                            if confirmation.overseas.categories.isEmpty { Text("未选择") }
+                            ForEach(confirmation.overseas.categories, id: \.self) { Text($0.localizedTitle) }
+                        }
+                        if let offer = confirmation.offer {
+                            NavigationLink("分类范围") {
+                                OverseasScopeDetails(version: offer.release, policy: offer.policy, bundled: offer.bundled,
+                                                     addedRules: offer.newRules, removedExclusions: offer.removedExclusions)
+                                    .localizedNavigationTitle("分类范围")
+                            }
+                        }
+                    } else { Text("未启用") }
+                }
+                Section("中国大陆网站") {
+                    if confirmation.website.mainlandEnabled != false {
+                        if confirmation.website.selectedMainlandCategories.isEmpty { Text("未选择") }
+                        ForEach(AccessGeoSiteCategory.allCases.filter { confirmation.website.selectedMainlandCategories.contains($0) }, id: \.self) { category in
+                            LabeledContent {
+                                if let version = confirmation.domesticVersions[category] { Text(verbatim: version) }
+                                else { Text("暂不可用") }
+                            } label: { Text(String(localized: category.displayName)) }
+                        }
+                    } else { Text("未启用") }
+                }
+            }
+            .localizedNavigationTitle("确认启用")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消", action: invalidateConfirmation) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("确认") { save(confirmation) }
+                        .disabled(operation != nil)
+                        .accessibilityIdentifier("regional-confirm")
+                }
+            }
+        }
     }
 }
 

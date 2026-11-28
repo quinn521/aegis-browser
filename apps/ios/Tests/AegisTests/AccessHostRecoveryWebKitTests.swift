@@ -23,7 +23,13 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         defer { try? listener.stop() }
         try await managedListener.start(at: now)
         defer { try? managedListener.stop() }
-        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_432), channel: .dev)
+        let suite = UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set(["chosen-route.example.invalid": AccessWebsiteRouteChoice.original.rawValue],
+                        forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: 18_432), channel: .dev,
+                                                     locationPreferences: preferences)
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil))
         browser.hostCoordinator = coordinator
         defer { browser.closeWindow() }
@@ -36,14 +42,8 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         store.proxyConfigurations = [observer]
         defer { store.proxyConfigurations = previousProxy }
 
-        let originalHost = try AccessSiteHost("chosen-route.example.invalid")
         let chosen = try XCTUnwrap(URL(string: "https://chosen-route.example.invalid/explicit"))
         let unrestricted = try XCTUnwrap(URL(string: "https://optional-route.example.invalid/control"))
-        tab.load(chosen)
-        tab.webView(tab.webView, didFailProvisionalNavigation: tab.currentNavigationForTests,
-                    withError: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
-        coordinator.setWebsiteRouteChoice(.original, for: tab, displayedHost: originalHost)
-        XCTAssertEqual(coordinator.websiteRouteSelection(for: tab), .original)
 
         let contents = ActiveTabView(tab: tab, address: .constant(""), addressIsEditing: false,
                                      onEditAddress: {}, onFind: {}, onScroll: { _ in }, onImage: { _ in })
@@ -535,6 +535,39 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertTrue(opener.transcript.contains("cdn.invalid"), opener.transcript)
     }
 
+    func testFailedHeadIsRetriedOnceWithoutAHostGrant() async throws {
+        let opener = AnsweringOpener(body: "")
+        let port: UInt16 = 18_755
+        let listener = try await makeListener(port: port, tunnels: opener)
+        try await listener.start()
+        defer { try? listener.stop() }
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: port))
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+        let url = try XCTUnwrap(URL(string: "http://example.invalid/head-once"))
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        let sink = NavigationSink()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        tab.load(request)
+        tab.webView.navigationDelegate = sink
+        tab.webView.stopLoading()
+        deliverFailure(tab)
+        let operation = try XCTUnwrap(coordinator.retryViaProxy(tab: tab))
+        XCTAssertEqual(coordinator.retryViaProxy(tab: tab), operation)
+        try await waitUntil(seconds: 15, {
+            attach(tab.webView, to: window)
+            return opener.transcript.contains("HEAD /head-once ")
+        }, message: "The managed listener must receive the original HEAD method")
+        XCTAssertEqual(opener.transcript.components(separatedBy: "HEAD /head-once ").count, 2)
+        XCTAssertFalse(opener.transcript.contains("GET /head-once "))
+        XCTAssertEqual(tab.recoveryLoadCount, 1)
+        let sibling = browser.newTab()
+        XCTAssertFalse(coordinator.requiresProxy(tab: sibling, url: url))
+    }
+
     func testUnreadyTabKeepsTheOriginalStore() async throws {
         let opener = AnsweringOpener()
         let listener = try await makeListener(port: 18_244, tunnels: opener)
@@ -567,12 +600,8 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertEqual(tab.recoveryLoadCount, 0)
         XCTAssertFalse(opener.transcript.contains("example.invalid"))
         let snapshot = coordinator.snapshot(for: tab)
-        XCTAssertTrue(snapshot.toggleOn)
+        XCTAssertFalse(snapshot.toggleOn)
         XCTAssertEqual(snapshot.attachment, .notAttached)
-        XCTAssertEqual(
-            AccessSiteProxyToggleModel.attachmentLine(for: snapshot.attachment, intent: snapshot.intent),
-            "当前页面仍使用原连接"
-        )
         XCTAssertNil(snapshot.failureReason)
     }
 
@@ -655,7 +684,7 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         tab.webView.stopLoading()
         deliverFailure(tab)
         XCTAssertTrue(tab.loadingErrorAllowsProxyRetry)
-        _ = coordinator.retryViaProxy(tab: tab)
+        coordinator.setProxyEnabled(true, for: tab)
         try await waitUntil({
             if tab.webView.superview == nil {
                 tab.webView.frame = window.bounds
@@ -1407,6 +1436,20 @@ final class AccessHostRecoveryWebKitTests: XCTestCase {
         XCTAssertTrue(condition(), message(), file: file, line: line)
     }
 }
+
+#if compiler(>=6.4) && targetEnvironment(simulator)
+@available(iOS 27, *)
+@MainActor
+private final class FixtureGrantedGeolocation: NSObject, WKUIDelegate {
+    private(set) var observed = false
+
+    func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void) {
+        observed = true
+        decisionHandler(.grant)
+    }
+}
+#endif
 
 private final class NavigationSink: NSObject, WKNavigationDelegate {}
 
@@ -2224,6 +2267,325 @@ extension AccessHostRecoveryWebKitTests {
         XCTAssertEqual(pulses(), pulseCount)
         XCTAssertFalse(original.authorities.contains("debian.org:443"))
         if cancelDebian { XCTAssertFalse(managed.authorities.contains("debian.org:443")) }
+    }
+
+    private struct RegionalSmokeSite {
+        let host: String
+        let region: AccessGeoSiteCache.Region
+        let category: String
+        let pageTitle: String
+        let selectedInCategoryMode: Bool
+    }
+
+    private static let regionalSmokeSites: [RegionalSmokeSite] = [
+        .init(host: "www.douban.com", region: .mainland, category: "DOUBAN", pageTitle: "豆瓣", selectedInCategoryMode: true),
+        .init(host: "www.meituan.com", region: .mainland, category: "MEITUAN", pageTitle: "美团", selectedInCategoryMode: false),
+        .init(host: "www.youtube.com", region: .outsideMainland, category: "VIDEO", pageTitle: "YouTube", selectedInCategoryMode: true),
+        .init(host: "www.google.com", region: .outsideMainland, category: "WEB", pageTitle: "Google", selectedInCategoryMode: false)
+    ]
+
+    func testRegionalAutomaticChoosesCrossRegionExits() async throws {
+        let fixture = AccessGeoSiteCacheTests.Fixture()
+        defer { fixture.clean() }
+        let cache = fixture.cache(useProductBaseline: true)
+        let categories = AccessGeoSiteCache.Selection.mainlandCategories
+        await cache.restore(migrating: .init(categories: categories, automaticScope: .all))
+        let (managedTLS, certificate) = try fixtureTLSIdentity()
+        let (originalTLS, _) = try fixtureTLSIdentity()
+        let managed = OriginReceipt(port: 0, body: "<title>Service exit</title>", tls: managedTLS)
+        let original = OriginReceipt(port: 0, body: "<title>Original exit</title>", tls: originalTLS)
+        try await managed.start()
+        defer { managed.stop() }
+        try await original.start()
+        defer { original.stop() }
+        let unknownHost = "beta-hold-control.invalid"
+        let hosts = Set(Self.regionalSmokeSites.map(\.host)).union([unknownHost])
+        let managedPort: UInt16 = 18_752
+        let originalPort: UInt16 = 18_753
+        let service = try await makeListener(port: managedPort, tunnels: FixtureOriginTunnels(port: managed.port, hosts: hosts))
+        let direct = try await makeListener(port: originalPort, tunnels: FixtureOriginTunnels(port: original.port, hosts: hosts))
+        try await service.start()
+        defer { try? service.stop() }
+        try await direct.start()
+        defer { try? direct.stop() }
+        let publisher = readyPublisher(port: managedPort)
+        let coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .dev, geoSiteCache: cache)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        browser.setWindowForeground(true)
+        let tab = try XCTUnwrap(browser.activeTab)
+        let restore = try observeOriginalStore(of: tab, port: originalPort)
+        defer { restore() }
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let navigation = PinnedFixtureNavigation(tab: tab, hosts: hosts, certificate: certificate)
+
+        var receipts = ["region\tmode\tsite\tcategory\texpected\toriginal GETs\tmanaged GETs"]
+        defer {
+            let attachment = XCTAttachment(string: receipts.joined(separator: "\n"))
+            attachment.name = "Regional routing smoke receipts"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        func visit(_ host: String, region: AccessGeoSiteCache.Region, mode: String, category: String,
+                   service: Bool) async throws {
+            let path = "\(region.rawValue)/\(mode)/\(host)"
+            let target = try XCTUnwrap(URL(string: "https://\(host)/\(path)"))
+            tab.loadFromAddressBar(target)
+            try await waitUntil(seconds: 20, {
+                let view = tab.webView
+                if view.navigationDelegate !== navigation { view.navigationDelegate = navigation }
+                attach(view, to: window)
+                return tab.liveCommittedDocumentURL == target && !tab.isLoading
+            }, message: "Expected \(target) to commit")
+            let marker = "GET /\(path) "
+            let originalCount = original.transcript.components(separatedBy: marker).count - 1
+            let managedCount = managed.transcript.components(separatedBy: marker).count - 1
+            XCTAssertEqual(originalCount, service ? 0 : 1, path)
+            XCTAssertEqual(managedCount, service ? 1 : 0, path)
+            XCTAssertEqual(tab.websiteDataStore !== tab.originalWebsiteDataStore, service, path)
+            receipts.append([region.rawValue, mode, host, category, service ? "managed" : "original",
+                             String(originalCount), String(managedCount)].joined(separator: "\t"))
+        }
+
+        for region in AccessGeoSiteCache.Region.allCases {
+            try coordinator.chooseRegion(region, for: tab)
+            for site in Self.regionalSmokeSites {
+                try await visit(site.host, region: region, mode: "manual", category: site.category, service: false)
+            }
+        }
+        XCTAssertEqual(publisher.provisionCount, 0)
+
+        let all = AccessOverseasSelection(enabled: true, mode: .all, categories: Set(AccessOverseasCategory.allCases))
+        let video = AccessOverseasSelection(enabled: true, mode: .categories, categories: [.video])
+        for (scope, mainlandCategories, overseas) in [("automatic-all", categories, all),
+                                                      ("automatic-categories", [.douban], video)] {
+            for region in AccessGeoSiteCache.Region.allCases {
+                let selection = AccessGeoSiteCache.Selection(mode: .smart, categories: mainlandCategories,
+                                                             region: region, automaticScope: overseas.mode)
+                let offer = try await coordinator.regionalConfirmation(selection, overseas: overseas, for: browser)
+                try await coordinator.confirmRegional(offer, for: browser) { true }
+                for site in Self.regionalSmokeSites {
+                    let eligible = overseas.mode == .all || site.selectedInCategoryMode
+                    try await visit(site.host, region: region, mode: scope, category: site.category,
+                                    service: region != site.region && eligible)
+                }
+                if overseas.mode == .all && region == .mainland {
+                    try await visit(unknownHost, region: region, mode: scope, category: "unmatched", service: false)
+                }
+            }
+        }
+    }
+
+#if targetEnvironment(simulator)
+    func testPublicRegionalSitesLoadOnOriginalConnection() async throws {
+        guard ProcessInfo.processInfo.environment["AEGIS_REGIONAL_PUBLIC_SMOKE"] == "1" else {
+            throw XCTSkip("Public-site smoke runs only on explicit local opt-in")
+        }
+        let fixture = AccessGeoSiteCacheTests.Fixture()
+        defer { fixture.clean() }
+        let cache = fixture.cache(useProductBaseline: true)
+        let categories = AccessGeoSiteCache.Selection.mainlandCategories
+        await cache.restore(migrating: .init(categories: categories, automaticScope: .all))
+        let coordinator = AccessHostStoreCoordinator(channel: .dev, geoSiteCache: cache)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        browser.setWindowForeground(true)
+        let tab = try XCTUnwrap(browser.activeTab)
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        var receipts = ["mode\trequested site\tcommitted host\ttitle\tvisible text characters"]
+        defer {
+            let attachment = XCTAttachment(string: receipts.joined(separator: "\n"))
+            attachment.name = "Public site smoke receipts"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+
+        func visit(_ site: RegionalSmokeSite, mode: String) async throws {
+            let target = try XCTUnwrap(URL(string: "https://\(site.host)/"))
+            let previousDocument = tab.liveCommittedDocumentSequence
+            tab.loadFromAddressBar(target)
+            try await waitUntil(seconds: 35, {
+                attach(tab.webView, to: window)
+                return !tab.isLoading && (tab.liveCommittedDocumentSequence != previousDocument || tab.loadingError != nil)
+            }, message: "Public load timed out for \(site.host) in \(mode)")
+            let host = tab.liveCommittedDocumentURL?.host ?? ""
+            guard tab.liveCommittedDocumentSequence != previousDocument, tab.loadingError == nil,
+                  host == site.host || host.hasSuffix("." + site.host.dropFirst(4)) else {
+                receipts.append([mode, site.host, host, tab.loadingError ?? "Unexpected document", "0"].joined(separator: "\t"))
+                XCTFail("\(site.host) did not load its public homepage in \(mode)")
+                return
+            }
+            let title = tab.webView.title ?? ""
+            let visibleCharacters = try await tab.webView.evaluateJavaScript("document.body?.innerText.trim().length ?? 0") as? Int ?? 0
+            XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore, site.host)
+            XCTAssertTrue(title.localizedCaseInsensitiveContains(site.pageTitle), "Unexpected title for \(site.host) in \(mode): \(title)")
+            XCTAssertGreaterThan(visibleCharacters, 10, site.host)
+            receipts.append([mode, site.host, host, title, String(visibleCharacters)].joined(separator: "\t"))
+        }
+
+        for site in Self.regionalSmokeSites { try await visit(site, mode: "manual") }
+        let overseas = AccessOverseasSelection(enabled: true, mode: .all, categories: Set(AccessOverseasCategory.allCases))
+        for region in AccessGeoSiteCache.Region.allCases {
+            let selection = AccessGeoSiteCache.Selection(mode: .smart, categories: categories, region: region, automaticScope: .all)
+            let offer = try await coordinator.regionalConfirmation(selection, overseas: overseas, for: browser)
+            try await coordinator.confirmRegional(offer, for: browser) { true }
+            for site in Self.regionalSmokeSites where site.region == region { try await visit(site, mode: "automatic-\(region.rawValue)") }
+        }
+    }
+#endif
+
+    func testLocationPrivacyRetiresAlreadyManagedRealmAndDeniesWebGeolocation() async throws {
+        guard BrowserTab.supportsSiteLocationPrivacy else { throw XCTSkip("Requires the public WebKit geolocation delegate") }
+        let (tls, certificate) = try fixtureTLSIdentity()
+        let host = try AccessSiteHost("www.douban.com")
+        let secondary = "www.youtube.com"
+        let hosts = Set([host.rawValue, secondary])
+        let managed = OriginReceipt(port: 0, body: """
+            <title>Location privacy fixture</title>
+            <script>
+                if (location.pathname === '/cross-origin-frame') {
+                    navigator.geolocation.getCurrentPosition(
+                        () => parent.postMessage(0, 'https://www.douban.com'),
+                        error => parent.postMessage(error.code, 'https://www.douban.com'));
+                }
+            </script>
+            """, tls: tls)
+        try await managed.start()
+        defer { managed.stop() }
+        let managedPort: UInt16 = 18_754
+        let proxy = try await makeListener(port: managedPort, tunnels: FixtureOriginTunnels(port: managed.port, hosts: hosts))
+        try await proxy.start()
+        defer { try? proxy.stop() }
+        let suite = UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        preferences.set([host.rawValue: "service"], forKey: "browser.websiteAcceleration.siteChoices.v1")
+        let coordinator = AccessHostStoreCoordinator(publisher: readyPublisher(port: managedPort), channel: .dev,
+                                                     locationPreferences: preferences)
+        let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
+        defer { browser.closeWindow() }
+        let tab = try XCTUnwrap(browser.activeTab)
+#if compiler(>=6.4)
+        if #available(iOS 27, *) {
+            XCTAssertTrue(tab.responds(to: #selector(WKUIDelegate.webView(
+                _:requestGeolocationPermissionFor:initiatedByFrame:decisionHandler:))))
+        }
+#endif
+        try await tab.prepareContentRulesForTests()
+        let window = show(tab.webView)
+        defer { window.isHidden = true }
+        let navigation = PinnedFixtureNavigation(tab: tab, hosts: hosts, certificate: certificate)
+        func attachCurrent() {
+            let view = tab.webView
+            if view.navigationDelegate !== navigation { view.navigationDelegate = navigation }
+            attach(view, to: window)
+        }
+
+        let url = try XCTUnwrap(URL(string: "https://\(host.rawValue)/coordinates"))
+        tab.load(url)
+        try await waitUntil(seconds: 20, {
+            attachCurrent()
+            return tab.liveCommittedDocumentURL == url && !tab.isLoading
+        }, message: "Acceleration must commit before location protection is enabled")
+        let old = tab.webView
+        _ = try await old.evaluateJavaScript("window.previousRealm = true")
+#if compiler(>=6.4) && targetEnvironment(simulator)
+        if #available(iOS 27, *), ProcessInfo.processInfo.environment["AEGIS_TEST_GRANTED_SIM_LOCATION"] == "1" {
+            let granted = FixtureGrantedGeolocation()
+            old.uiDelegate = granted
+            defer { old.uiDelegate = tab }
+            let location = try await old.callAsyncJavaScript("""
+                return await new Promise(resolve => {
+                    window.fixtureWatch = navigator.geolocation.watchPosition(
+                        ({coords}) => resolve(coords.latitude), error => resolve(-1000 - error.code));
+                    setTimeout(() => resolve(-1000), 8000);
+                });
+                """, arguments: [:], in: nil, contentWorld: .page) as? Double
+            XCTAssertGreaterThan(try XCTUnwrap(location), 0, "The unprotected control must receive the simulated location")
+            XCTAssertTrue(granted.observed)
+        }
+#endif
+        XCTAssertFalse(tab.hasCommittedLocationProtection)
+        let tabCount = browser.standardTabs.count
+        coordinator.setSiteProxyEnabled(true, for: tab, displayedHost: host, forLocationControl: true)
+        try await waitUntil(seconds: 20, {
+            attachCurrent()
+            return tab.hasCommittedLocationProtection && !tab.isLoading
+        }, message: "Enabling location protection must replace the already-managed WebKit document")
+        XCTAssertFalse(tab.webView === old)
+        XCTAssertNil(old.superview)
+        XCTAssertNil(old.reload())
+        let newRealm = try await tab.webView.evaluateJavaScript("typeof window.previousRealm") as? String
+        XCTAssertEqual(newRealm, "undefined")
+        XCTAssertFalse(try XCTUnwrap(tab.websiteDataStore.proxyConfigurations.first).allowFailover)
+        XCTAssertTrue(coordinator.snapshot(for: tab, forLocationControl: true).locationProtected)
+        let entry = try XCTUnwrap(coordinator.registry.endpoint(scopeID: tab.browsingScopeID, host: host, isPrivate: false))
+        var failedEntry = entry
+        failedEntry.state = .failed
+        coordinator.registry.setEndpoint(failedEntry, scopeID: tab.browsingScopeID, host: host, isPrivate: false)
+        XCTAssertTrue(coordinator.requiresProxy(tab: tab, url: url))
+        XCTAssertFalse(coordinator.canSendMainFrame(tab: tab, url: url))
+        XCTAssertEqual(coordinator.snapshot(for: tab, forLocationControl: true).locationStatus, "位置保护已中断")
+        coordinator.registry.setEndpoint(entry, scopeID: tab.browsingScopeID, host: host, isPrivate: false)
+
+        let capabilities = try await tab.webView.evaluateJavaScript("""
+            [isSecureContext, typeof RTCPeerConnection, typeof WebTransport].join(',')
+            """) as? String
+        XCTAssertEqual(capabilities, "true,undefined,undefined")
+        let geolocation = try await tab.webView.callAsyncJavaScript("""
+            const locate = (target, watch) => new Promise(resolve => {
+                const done = error => resolve(error.code);
+                const success = () => resolve(0);
+                const id = watch ? target.navigator.geolocation.watchPosition(success, done)
+                                 : target.navigator.geolocation.getCurrentPosition(success, done);
+                setTimeout(() => {
+                    if (watch) target.navigator.geolocation.clearWatch(id);
+                    resolve(-1);
+                }, 4000);
+            });
+            const frame = document.createElement('iframe');
+            frame.src = '/same-origin-frame';
+            await new Promise(resolve => { frame.onload = resolve; document.body.append(frame); });
+            return [await locate(window, false), await locate(window, true),
+                    await locate(frame.contentWindow, false)];
+            """, arguments: [:], in: nil, contentWorld: .page) as? [Int]
+        XCTAssertEqual(geolocation, [1, 1, 1])
+        XCTAssertTrue(managed.transcript.contains("GET /same-origin-frame "))
+        let crossOrigin = try await tab.webView.callAsyncJavaScript("""
+            const frame = document.createElement('iframe');
+            frame.allow = 'geolocation *';
+            frame.src = host + '/cross-origin-frame';
+            return await new Promise(resolve => {
+                window.addEventListener('message', event => {
+                    if (event.origin === host && event.source === frame.contentWindow) resolve(event.data);
+                });
+                document.body.append(frame);
+                setTimeout(() => resolve(-1), 4000);
+            });
+            """, arguments: ["host": "https://\(secondary)"], in: nil, contentWorld: .page) as? Int
+        XCTAssertEqual(crossOrigin, 1)
+        XCTAssertTrue(managed.transcript.contains("GET /cross-origin-frame "))
+
+        _ = try await tab.webView.evaluateJavaScript("window.open('https://\(secondary)/third-party-popup')")
+        _ = try await tab.webView.evaluateJavaScript("location.href = 'https://\(secondary)/third-party-navigation'")
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(managed.transcript.contains("GET /third-party-"))
+        XCTAssertEqual(browser.standardTabs.count, tabCount)
+        XCTAssertEqual(tab.liveCommittedDocumentURL, url)
+
+        coordinator.setSiteProxyEnabled(false, for: tab, displayedHost: host, forLocationControl: true)
+        try await waitUntil(seconds: 20, {
+            attachCurrent()
+            return tab.liveCommittedDocumentURL == url && !tab.isLoading
+        }, message: "Disabling location protection must keep the independent service choice")
+        XCTAssertEqual(tab.boundHostName, host.rawValue)
+        XCTAssertFalse(tab.hasCommittedLocationProtection)
+        XCTAssertFalse(coordinator.snapshot(for: tab, forLocationControl: true).toggleOn)
     }
 
     func testGeoSiteSelectedOfficialDoubanUsesManagedWebKitStore() async throws {
