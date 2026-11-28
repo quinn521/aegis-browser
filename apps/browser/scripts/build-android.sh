@@ -23,7 +23,11 @@ fi
 
 host_arch="$(uname -m)"
 if [[ -z "$internal_profile" ]]; then
-  default_args="$(aegis_android_gn_args "$ARGS_FILE" default "$host_arch")"
+  gn_host_arch="$host_arch"
+  if [[ -n "$bundle_profile" && "${AEGIS_ANDROID_EXPERIMENTAL_ARM64:-}" != true ]]; then
+    gn_host_arch=""
+  fi
+  default_args="$(aegis_android_gn_args "$ARGS_FILE" default "$gn_host_arch")"
 fi
 
 need_gb="${AEGIS_ANDROID_MIN_FREE_GB:-80}"

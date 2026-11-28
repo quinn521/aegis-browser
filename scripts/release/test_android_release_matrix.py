@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from threading import Thread
 import unittest
@@ -538,14 +539,26 @@ class DeliveryCommandMatrix(unittest.TestCase):
             depot.mkdir()
             commands = {
                 'uname': '#!/bin/bash\nif [[ "$1" == "-s" ]]; then echo Linux; else echo "$TEST_HOST_ARCH"; fi\n',
-                'python3': '#!/bin/bash\nexit 0\n',
-                'gn': '#!/bin/bash\nprintf "%s\n" "$3" > "$TEST_GN_ARGS"\n',
+                'python3': '#!/bin/bash\n'
+                           'if [[ "$1" == */verify-build-source.py ]]; then exit 0; fi\n'
+                           'exec "$TEST_REAL_PYTHON" "$@"\n',
+                'gn': '#!/bin/bash\n'
+                      'case "$1" in\n'
+                      '  format) test "$2" = --stdin && cat ;;\n'
+                      '  gen) printf "%s\n" "${3#--args=}" > "$TEST_GN_ARGS" ;;\n'
+                      '  args) printf "%s\n" "$TEST_GN_EFFECTIVE_ARGS" ;;\n'
+                      '  *) exit 2 ;;\n'
+                      'esac\n',
                 'autoninja': '#!/bin/bash\nexit 0\n',
             }
             for name, contents in commands.items():
                 path = depot / name
                 path.write_text(contents)
                 path.chmod(0o755)
+            effective_args = json.dumps([
+                {'name': 'aegis_android_internal_access_options', 'default': {'value': 'false'}},
+                {'name': 'aegis_android_access_product_channel', 'default': {'value': '"unknown"'}},
+            ])
             for run_id, arch, experimental, allowed, expected in (
                     ('41', 'aarch64', 'true', '', True),
                     ('42', 'arm64', 'true', '', True),
@@ -555,7 +568,8 @@ class DeliveryCommandMatrix(unittest.TestCase):
                     captured = root / f'gn-{run_id}.txt'
                     env = {**os.environ, 'CHROMIUM_ROOT': str(chromium), 'DEPOT_TOOLS_DIR': str(depot),
                            'PATH': str(depot) + os.pathsep + os.environ['PATH'], 'TEST_HOST_ARCH': arch,
-                           'TEST_GN_ARGS': str(captured), 'AEGIS_ANDROID_EXPERIMENTAL_ARM64': experimental,
+                           'TEST_GN_ARGS': str(captured), 'TEST_GN_EFFECTIVE_ARGS': effective_args,
+                           'TEST_REAL_PYTHON': sys.executable, 'AEGIS_ANDROID_EXPERIMENTAL_ARM64': experimental,
                            'AEGIS_ANDROID_ALLOW_ARM64_HOST': allowed, 'AEGIS_ANDROID_MIN_FREE_GB': '0',
                            'AEGIS_ANDROID_VERSION_NAME': '0.8.0', 'AEGIS_ANDROID_VERSION_CODE': '1',
                            'GITHUB_RUN_ID': run_id, 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_SHA': SHA,
