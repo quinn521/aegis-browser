@@ -13,9 +13,9 @@ final class AccessGeoSiteSelectionTests: XCTestCase {
 
     func testBundledCatalogueContainsTheCompleteOfficialGroups() throws {
         let catalogue = AccessGeoSiteCatalogue.bundled
-        XCTAssertEqual(catalogue.tag, "20261127013728")
-        XCTAssertEqual(catalogue.publishedAt, "2026-11-27T01:38:41Z")
-        XCTAssertEqual(catalogue.rawSHA256, "919a4b32cc9e6619e5bc17831cd388f89df77d9bf9817dab98b489d479162047")
+        XCTAssertEqual(catalogue.tag, "20261128011702")
+        XCTAssertEqual(catalogue.publishedAt, "2026-11-28T01:18:08Z")
+        XCTAssertEqual(catalogue.rawSHA256, "ff32ecaf4a8c1d010fe89e1228fdd77f5f4d8e540ee0160b853cb13d6c2423a2")
         XCTAssertEqual(Set(catalogue.groups.keys), Set(AccessGeoSiteCategory.allCases))
         let expected: [(AccessGeoSiteCategory, Int, String)] = [
             (.debian, 3, "06c514bb68567fdf422969927719a7e6c19442509cb2c69eb43cb02efbc83aeb"),

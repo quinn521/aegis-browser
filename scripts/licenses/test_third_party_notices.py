@@ -133,7 +133,7 @@ precondition(presented.contains { $0.title.contains("libXray") && $0.body.contai
 precondition(presented.contains {
     $0.title == "GeoSite standard data — sources and licenses"
         && $0.body.contains("The unmodified standard geosite.dat is shipped in the iOS app.")
-        && $0.body.contains("https://github.com/XTLS/Xray-rules-dat/releases/tag/20261127013728")
+        && $0.body.contains("https://github.com/XTLS/Xray-rules-dat/releases/tag/20261128011702")
         && $0.body.contains("GFWList data — LGPL-2.1")
 })
 precondition(presented.contains {
