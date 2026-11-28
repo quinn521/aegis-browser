@@ -96,11 +96,20 @@ enum PageProtection {
         configuration.upgradeKnownHostsToHTTPS = true
         applySystem(configuration.defaultWebpagePreferences, hardened: hardened)
     }
-    @MainActor static func applySystem(_ preferences: WKWebpagePreferences, hardened: Bool) {
-        preferences.preferredHTTPSNavigationPolicy = .userMediatedFallbackToHTTP
+    @MainActor static func applySystem(_ preferences: WKWebpagePreferences, hardened: Bool, url: URL? = nil) {
+        preferences.preferredHTTPSNavigationPolicy = httpsNavigationPolicy(for: url)
         // 从不将系统的 Lockdown 偏好设为 false。
         if #available(iOS 26.5, *), !preferences.isLockdownModeEnabled, preferences.securityRestrictionMode != .lockdown {
             preferences.securityRestrictionMode = hardened ? .maximizeCompatibility : .none
         }
+    }
+
+    static func httpsNavigationPolicy(for url: URL?) -> WKWebpagePreferences.UpgradeToHTTPSPolicy {
+        guard let url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")),
+              host == "google.com.hk" || host == "www.google.com.hk"
+        else { return .userMediatedFallbackToHTTP }
+        // Keep the regional Google entry on HTTPS even when its chosen connection fails.
+        return .errorOnFailure
     }
 }
