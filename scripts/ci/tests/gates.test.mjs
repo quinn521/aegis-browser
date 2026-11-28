@@ -180,57 +180,75 @@ test('freeze gate uses the trusted base and rejects file or self-consistent mani
 });
 
 const revision4Commit = 'd60b5952b40e511d6f98f3f33be926dbe7ab1eb7';
-const revision4Available = spawnSync('git', ['cat-file', '-e', `${revision4Commit}^{commit}`], {cwd: root}).status === 0;
+const revision5Commit = '8c403d26b93c2c8b96678fa7bb8475566738a186';
+const freezeDirectory = 'docs/plans/access-service-v1.0';
 
-test('freeze gate admits only the pinned revision 4 to 5 migration', {skip: revision4Available ? false : 'revision 4 commit is absent from this shallow checkout'}, () => {
-  const freezeDirectory = 'docs/plans/access-service-v1.0';
-  const showRevision4 = (path) => {
-    const result = spawnSync('git', ['show', `${revision4Commit}:${path}`], {cwd: root, maxBuffer: 16 * 1024 * 1024});
+function readFrozenFile(name, commit) {
+  const path = `${freezeDirectory}/${name}`;
+  if (commit) {
+    const result = spawnSync('git', ['show', `${commit}:${path}`], {cwd: root, maxBuffer: 16 * 1024 * 1024});
     assert.equal(result.status, 0, String(result.stderr));
     return result.stdout;
-  };
-  const cwd = initRepo();
-  const directory = join(cwd, freezeDirectory);
-  mkdirSync(directory, {recursive: true});
-  const revision4Manifest = showRevision4(`${freezeDirectory}/freeze.json`);
-  writeFileSync(join(directory, 'freeze.json'), revision4Manifest);
-  for (const name of Object.keys(JSON.parse(revision4Manifest.toString('utf8')).files)) {
-    writeFileSync(join(directory, name), showRevision4(`${freezeDirectory}/${name}`));
   }
-  const base = commitAll(cwd, 'revision 4 freeze');
-  const revision5Manifest = readFileSync(join(root, freezeDirectory, 'freeze.json'));
-  const revision5Names = Object.keys(JSON.parse(revision5Manifest.toString('utf8')).files);
-  const installRevision5 = () => {
-    writeFileSync(join(directory, 'freeze.json'), revision5Manifest);
-    for (const name of revision5Names) cpSync(join(root, freezeDirectory, name), join(directory, name));
-  };
-  const check = () => run(process.execPath, [join(scripts, 'check-access-freeze.mjs'), '--base', base, '--repo', cwd]);
-  const appendByte = (name) => writeFileSync(join(directory, name), Buffer.concat([readFileSync(join(directory, name)), Buffer.from('\n')]));
+  return readFileSync(join(root, path));
+}
 
-  installRevision5();
-  let result = check();
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).migration, '4->5');
+function installFreeze(directory, commit) {
+  const manifest = readFrozenFile('freeze.json', commit);
+  writeFileSync(join(directory, 'freeze.json'), manifest);
+  for (const name of Object.keys(JSON.parse(manifest.toString('utf8')).files)) {
+    writeFileSync(join(directory, name), readFrozenFile(name, commit));
+  }
+}
 
-  appendByte('interaction-example.html');
-  result = check();
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /interaction-example\.html differs from trusted baseline/u);
+for (const [from, fromCommit, toCommit] of [[4, revision4Commit, revision5Commit], [5, revision5Commit]]) {
+  const to = from + 1;
+  const hasHistory = [fromCommit, toCommit].filter(Boolean).every(
+    commit => spawnSync('git', ['cat-file', '-e', `${commit}^{commit}`], {cwd: root}).status === 0,
+  );
+  test(`freeze gate admits only the pinned revision ${from} to ${to} migration`, {
+    skip: hasHistory ? false : 'a frozen revision commit is absent from this shallow checkout',
+  }, () => {
+    const cwd = initRepo();
+    const directory = join(cwd, freezeDirectory);
+    mkdirSync(directory, {recursive: true});
+    installFreeze(directory, fromCommit);
+    const base = commitAll(cwd, `revision ${from} freeze`);
+    const check = () => run(process.execPath, [join(scripts, 'check-access-freeze.mjs'), '--base', base, '--repo', cwd]);
+    const appendByte = (name) => writeFileSync(join(directory, name), Buffer.concat([readFileSync(join(directory, name)), Buffer.from('\n')]));
 
-  installRevision5();
-  appendByte('spec.zh-CN.md');
-  result = check();
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /spec\.zh-CN\.md/u);
+    installFreeze(directory, toCommit);
+    let result = check();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).migration, `${from}->${to}`);
 
-  installRevision5();
-  const altered = JSON.parse(revision5Manifest.toString('utf8'));
-  altered.recordedAt = '2026-11-24T00:00:00+00:00';
-  writeFileSync(join(directory, 'freeze.json'), `${JSON.stringify(altered, null, 2)}\n`);
-  result = check();
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /freeze\.json differs from trusted baseline/u);
-});
+    appendByte('interaction-example.html');
+    result = check();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /interaction-example\.html differs from trusted baseline/u);
+
+    installFreeze(directory, toCommit);
+    appendByte('spec.zh-CN.md');
+    result = check();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /spec\.zh-CN\.md/u);
+
+    installFreeze(directory, toCommit);
+    const altered = JSON.parse(readFileSync(join(directory, 'freeze.json'), 'utf8'));
+    altered.recordedAt = '2000-01-01T00:00:00+00:00';
+    writeFileSync(join(directory, 'freeze.json'), `${JSON.stringify(altered, null, 2)}\n`);
+    result = check();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /freeze\.json differs from trusted baseline/u);
+
+    if (from === 4) {
+      installFreeze(directory);
+      result = check();
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /freeze\.json differs from trusted baseline/u);
+    }
+  });
+}
 
 test('public export preserves existing upstream instructions and rejects case variants and hidden history', () => {
   const cwd = initRepo();

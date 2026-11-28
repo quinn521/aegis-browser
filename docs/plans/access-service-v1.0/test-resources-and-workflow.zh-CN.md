@@ -4,7 +4,7 @@
 
 2026-09-14 开发续接：用户现已授权继续产品开发，实施范围与证据见 [P0 实现记录](p0-implementation.zh-CN.md)。本文的“本轮未启动实现”等表述是此前资源登记轮次的历史记录；资源登录、部署与真实链路状态仍按实际测试更新，不因启动代码实现而自动通过。
 
-本文补充[当前设计总览](overview.zh-CN.md)，行为与验收继续以[V1.0 修订 4 规范](spec.zh-CN.md)及[冻结清单](freeze.json)为准。
+本文补充[当前设计总览](overview.zh-CN.md)，行为与验收继续以[V1.0 冻结规范](spec.zh-CN.md)及[冻结清单](freeze.json)为准。
 资源登记和工作分工不修改冻结合同，不增加 G0–G3 门槛；本轮只落实文档与独立 review，不启动产品实现。
 
 **1. 状态与证据口径**
@@ -54,7 +54,7 @@
 |---|---|
 | 主出站 | 保持 VLESS + RAW(TCP) + REALITY + XTLS Vision；当前材料不证明 R1/R2/R3 提供主链路 |
 | 兼容出站 | 保持 VLESS + WebSocket + TLS；管理页样本只是兼容格式线索 |
-| 托管授权 | `allowedEgressProfiles` 默认仅 `reality_vision`；`ws_tls_compat` 须由运营明确授权，并按该环境独立验证 |
+| 托管授权 | `allowedEgressProfiles` 缺省仅 `reality_vision`。新增允许值须符合[规范第 7 节](spec.zh-CN.md)，由签名策略逐项启用，并按该渠道及环境独立验证 |
 | 调试来源 | 按规范选择 `dev_subscription` 或 `managed_test`，不暗中互相回退；仅解析支持的节点字段 |
 | 身份与渠道 | 绑定 principal、issuer/audience/realm/scope 及渠道/Profile；不串用测试、Beta、Release 或生产凭据 |
 | 管理入口 | 管理网站不自动成为 REALITY target/SNI、数据出口或默认 bootstrap；这些角色分别核验和绑定 |

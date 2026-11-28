@@ -1,10 +1,10 @@
 {
   "specVersion": "V1.0",
-  "specRevision": 5,
-  "recordedAt": "2026-11-24T06:45:19+00:00",
+  "specRevision": 6,
+  "recordedAt": "2026-11-28T10:13:28+00:00",
   "specificationStatus": "FROZEN",
   "authority": "spec.zh-CN.md",
-  "designSourceBaseline": "4407cbe1bf8ba353bd22fbc9600f9b2eb5645e6c",
+  "designSourceBaseline": "e5260df6355d2965228c990c00bf885e0b3fc150",
   "counts": {
     "functionalAndDeliveryCases": 118,
     "performanceMetrics": 13,
@@ -13,12 +13,12 @@
   "productRuntimeAcceptance": "NOT_RUN",
   "performanceMeasurements": "NOT_RUN",
   "deploymentBindings": "PENDING: specification section 13",
-  "sourceDocumentSha256": "c570d9c68ff4e74f6e2737cfd1503a51ad9d2352191d5dac89b5887edd80e1d6",
-  "repositoryAdaptation": "Revision 5 adopts the app-level unauthenticated loopback inbound contract (#400). HTTP and SOCKS5 local inbounds carry no local credentials; isolation relies on trusted registration, owner and generation, and revocation terminates old streams. A78 keeps its number and history and is split into A78-HTTP and A78-SOCKS; P0, P3 and G0 replace the local authentication prototype with independent runtime verification of both inbounds; A89 records inbound, upstream authentication and egress evidence separately. Case, metric and gate counts, the preview, the DPI assessment and product code are unchanged.",
+  "sourceDocumentSha256": "a58bba77911a5c2f946be9eb71034960caaf13f3a153f47d38406d80cdc00fdf",
+  "repositoryAdaptation": "Revision 6 records the R1 egress profile admission matrix from upstream #244. Existing profile aliases, the primary default, the A89 four-combination baseline and all prior gates remain defined. New combinations require evidence for each channel, platform and inbound before signed rollout. W5 and A89 record incremental combinations without changing case or metric counts.",
   "files": {
     "spec.zh-CN.md": {
-      "sha256": "c570d9c68ff4e74f6e2737cfd1503a51ad9d2352191d5dac89b5887edd80e1d6",
-      "bytes": 120846
+      "sha256": "a58bba77911a5c2f946be9eb71034960caaf13f3a153f47d38406d80cdc00fdf",
+      "bytes": 123353
     },
     "interaction-example.html": {
       "sha256": "3c0b83aa055aea9a552b66aa33da8752f519e937b2fafe3c33f819873a67bf3a",
@@ -38,9 +38,9 @@
     }
   },
   "previousRevision": {
-    "specRevision": 4,
-    "commit": "d60b5952b40e511d6f98f3f33be926dbe7ab1eb7",
-    "specificationSha256": "0c44ef6a3c0ebaa42e5fde9f05cbca215135bced79f514a94ee2bc11612b3492"
+    "specRevision": 5,
+    "commit": "8c403d26b93c2c8b96678fa7bb8475566738a186",
+    "specificationSha256": "c570d9c68ff4e74f6e2737cfd1503a51ad9d2352191d5dac89b5887edd80e1d6"
   },
   "documentChecks": {
     "status": "PASS",
@@ -49,7 +49,8 @@
     "previewScript": "verify-preview.cjs",
     "previewResults": "preview-checks.json",
     "previewScenarioCount": 13,
-    "revision5": "Specification text only; interaction-example.html, verify-preview.cjs, preview-checks.json and egress-dpi-assessment.zh-CN.md keep their revision 4 bytes. Revision 5 verification evidence is recorded in its pull request."
+    "revision5": "Specification text only; interaction-example.html, verify-preview.cjs, preview-checks.json and egress-dpi-assessment.zh-CN.md keep their revision 4 bytes. Revision 5 verification evidence is recorded in its pull request.",
+    "revision6": "The specification records channel admission and A89 evidence for each combination. All other protected files keep their revision 5 bytes. Runtime rollout requires separate evidence."
   },
   "revisionHistory": [
     {
@@ -66,10 +67,15 @@
       "specRevision": 3,
       "commit": "3a76e926ad48681c547db5f7ab984c6678dd1ded",
       "specificationSha256": "5257b0e611cd73180554166c6a4c1caa65e059a3e6dc36fa2ca417905304d0ce"
+    },
+    {
+      "specRevision": 4,
+      "commit": "d60b5952b40e511d6f98f3f33be926dbe7ab1eb7",
+      "specificationSha256": "0c44ef6a3c0ebaa42e5fde9f05cbca215135bced79f514a94ee2bc11612b3492"
     }
   ],
-  "implementationSourceBaseline": "ccbbaf371bad0626fb0fce3db166d5c2d0f675b0",
-  "sourceDocumentNote": "Revision 5 has no separate local reading copy; sourceDocumentSha256 equals files[spec.zh-CN.md]. Revision 4 used a local reading copy with absolute links.",
+  "implementationSourceBaseline": "c20d0645a1b1284922b2028e1bee8b9ab50bf2ca",
+  "sourceDocumentNote": "Revision 6 uses the repository specification as the reading copy. sourceDocumentSha256 equals files[spec.zh-CN.md].",
   "dpiAssessment": {
     "protocolSelection": "REALITY_VISION_PRIMARY; WS_TLS_COMPATIBILITY_ONLY",
     "sourceReviewDate": "2026-09-13",
