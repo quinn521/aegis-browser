@@ -480,6 +480,32 @@ with ExitStack() as stack:
         self.assertEqual(command[command.index('--repository')+1], 'owner/repo')
         self.assertNotIn('upload', command)
 
+    def test_private_beta_retry_requires_matching_no_start_receipt_and_absent_permanent_records(self):
+        record = dict(id=10, repository={'id': action.durable.REPOSITORY_ID},
+                      head_repository={'id': action.durable.REPOSITORY_ID}, event='workflow_dispatch',
+                      head_branch='main', path='.github/workflows/ios-delivery.yml', head_sha='a'*40)
+        job = dict(name='private-beta-store', status='completed', conclusion='failure', steps=[
+            dict(name=name, conclusion='success') for name in (
+                'Read permanent upload state for private Beta', 'Preserve private Beta upload receipt')])
+        receipt = dict(profile='beta', version='1.1.0', build='30', runId=10, attempt=1,
+                       source=dict(sha='a'*40, dirty=False), manifestSha256='b'*64, uploadState='not_started')
+
+        def download(*args):
+            (Path(args[-1]) / 'aegis-private-beta-10-1.json').write_text(json.dumps(receipt))
+
+        with patch.dict(os.environ, RELEASE_VERSION='1.1.0', RELEASE_BUILD='30'), \
+                patch.object(action, 'run', side_effect=download), patch.object(action.durable, 'records') as records:
+            store = records.return_value
+            store.read.return_value = None
+            self.assertTrue(action.private_beta_stopped_before_upload(record, job, 1))
+            for key, value in [('runId', 11), ('build', '29'), ('attempt', 2),
+                               ('uploadState', 'unknown_reconcile_with_apple')]:
+                with self.subTest(key=key), patch.dict(receipt, {key: value}):
+                    self.assertFalse(action.private_beta_stopped_before_upload(record, job, 1))
+            for intent in ['upload-start', 'upload-result']:
+                store.read.side_effect = lambda kind, key: {} if kind == intent else None
+                self.assertFalse(action.private_beta_stopped_before_upload(record, job, 1))
+
     def test_cancelled_upload_with_no_steps_is_unstarted(self):
         row = dict(id=10, run_attempt=1, head_sha='b'*40, path='.github/workflows/ios-delivery.yml', status='completed', conclusion='cancelled')
         job = dict(name='upload-new', status='completed', conclusion='cancelled', steps=[], run_id=10, run_attempt=1, head_sha='b'*40)

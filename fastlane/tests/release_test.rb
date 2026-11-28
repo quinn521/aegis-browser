@@ -171,6 +171,27 @@ class ReleaseTest < ReleaseFixture
     previous&.each { |key, value| value ? ENV[key] = value : ENV.delete(key) }
   end
 
+  def test_both_upload_verifiers_use_the_receipted_private_beta_audience
+    [true, false].each do |private_beta|
+      req = request(profile: 'beta', destination: 'testflight', run_id: "verify-#{private_beta}")
+      FileUtils.mkdir_p(req.directory)
+      ipa = File.join(req.directory, 'fixture.ipa')
+      File.write(ipa, 'local verifier fixture')
+      details = { 'privateBetaTestNode' => private_beta, 'signingMode' => 'manual',
+                  'appleTeamId' => 'ABCDEFGHIJ', 'certificateSha1' => 'A' * 40, 'provisioningProfiles' => {} }
+      digest = AegisRelease::Receipt.create(req, [ipa], AegisRelease.source(@root), details)
+      flow = AegisRelease::Pipeline.new(req, Object.new)
+      calls = {}
+      flow.define_singleton_method(:preflight_upload) {}
+      flow.define_singleton_method(:run) { |*args| calls[File.basename(args[1])] = args }
+      flow.define_singleton_method(:store) { throw :verified }
+      catch(:verified) { flow.upload(digest) }
+      %w[verify-ipa.py verify-signed-ios.py].each do |verifier|
+        assert_equal private_beta, calls.fetch(verifier).include?('--private-beta')
+      end
+    end
+  end
+
   def test_signing_mode_defaults_to_cloud_and_manual_requires_explicit_selection
     assert_equal 'cloud', request.signing_mode
     assert_equal 'manual', request(signing_mode: 'manual').plan.fetch('signingMode')

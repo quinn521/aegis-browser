@@ -520,14 +520,16 @@ module AegisRelease
       else
         asset = receipt.fetch('assets').find { |a| a['name'].end_with?('.ipa') }
         path = File.join(request.directory, asset.fetch('name'))
-        run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), path, request.version, request.build, request.profile)
         details = receipt.fetch('details')
+        audience = details['privateBetaTestNode'] == true ? ['--private-beta'] : []
+        run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), path, request.version, request.build,
+            request.profile, *audience)
         verification_args = ['--team', details.fetch('appleTeamId'), '--source-root', request.root]
         if details.fetch('signingMode', 'manual') == 'cloud'
           verification_args += ['--signing-mode', 'cloud', '--expected-verification', File.join(request.directory, details.fetch('cloudVerification'))]
         else
           verification_args += ['--certificate-sha1', details.fetch('certificateSha1'), '--profiles-json', JSON.generate(details.fetch('provisioningProfiles'))]
-          verification_args << '--private-beta' if details['privateBetaTestNode']
+          verification_args.concat(audience)
         end
         run('python3', File.join(request.root, 'scripts/release/verify-signed-ios.py'), path, request.version, request.build, request.profile, *verification_args)
         client = store

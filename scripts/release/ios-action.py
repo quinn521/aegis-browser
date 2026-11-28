@@ -449,8 +449,42 @@ def check_new_upload_runs():
             raise ValueError('Cannot prove complete new-package upload inventory')
 
 
+def private_beta_stopped_before_upload(record, job, attempt):
+    """Reconcile a failed canonical store job against its receipt and immutable journal."""
+    if (record.get('repository', {}).get('id') != durable.REPOSITORY_ID
+            or record.get('head_repository', {}).get('id') != durable.REPOSITORY_ID
+            or record.get('event') != 'workflow_dispatch' or record.get('head_branch') != 'main'
+            or record.get('path') != '.github/workflows/ios-delivery.yml'
+            or job.get('name') != 'private-beta-store' or job.get('status') != 'completed'
+            or job.get('conclusion') != 'failure'):
+        return False
+    steps = {step.get('name'): step.get('conclusion') for step in job.get('steps', [])}
+    if (steps.get('Read permanent upload state for private Beta') != 'success'
+            or steps.get('Preserve private Beta upload receipt') != 'success'):
+        return False
+    run_id = record['id']
+    version, build = os.environ['RELEASE_VERSION'], os.environ['RELEASE_BUILD']
+    with tempfile.TemporaryDirectory() as tmp:
+        run('gh', 'run', 'download', str(run_id), '--repo', durable.REPOSITORY,
+            '--name', f'ios-private-beta-receipt-{run_id}-{attempt}', '--dir', tmp)
+        path = Path(tmp) / f'aegis-private-beta-{run_id}-{attempt}.json'
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 4096:
+            return False
+        receipt = json.loads(path.read_bytes())
+    if (receipt.get('uploadState') != 'not_started' or receipt.get('profile') != 'beta'
+            or receipt.get('version') != version or receipt.get('build') != build
+            or receipt.get('runId') != run_id or receipt.get('attempt') != attempt
+            or receipt.get('source', {}).get('sha') != record['head_sha']
+            or receipt.get('source', {}).get('dirty') is not False
+            or not re.fullmatch(r'[0-9a-f]{64}', str(receipt.get('manifestSha256')))):
+        return False
+    store = durable.records()
+    allocation = durable.key(version, build)
+    return all(store.read(kind, allocation) is None for kind in ('upload-start', 'upload-result'))
+
+
 def unstarted_store_run(row):
-    """All attempts must conclusively lack any executed store job, not just the last."""
+    """Require proof that Apple transport never started in any prior attempt."""
     record = api(f'actions/runs/{row["id"]}')
     attempts = record.get('run_attempt')
     if (record.get('id') != row['id'] or record.get('path') not in {'.github/workflows/ios-delivery.yml', '.github/workflows/ios-delivery-full.yml'} or
@@ -468,6 +502,8 @@ def unstarted_store_run(row):
             name = str(job.get('name', '')).rsplit(' / ', 1)[-1]
             if name in {'store', 'upload-new', 'private-beta-store', 'private-alpha',
                         'private-alpha-package', 'private-alpha-store'}:
+                if name == 'private-beta-store' and private_beta_stopped_before_upload(record, job, attempt):
+                    continue
                 cancelled_upload = name in {'store', 'upload-new'} and job.get('conclusion') == 'cancelled'
                 if job.get('status') != 'completed' or job.get('steps') != [] or not (job.get('conclusion') == 'skipped' or cancelled_upload):
                     return False
