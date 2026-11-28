@@ -101,6 +101,7 @@ public protocol BrowserHostStoreCoordinating: AnyObject {
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool
     func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool
+    func pendingRoutePolicyLoad(tab: BrowserTab, url: URL) -> Task<Void, Never>?
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool
     func wouldSwitchStore(tab: BrowserTab, url: URL) -> Bool
@@ -122,6 +123,7 @@ public extension BrowserHostStoreCoordinating {
     func requiresProxy(tab: BrowserTab, url: URL) -> Bool { false }
     func requiresProxyPreparation(tab: BrowserTab, url: URL) -> Bool { false }
     func isMainFrameRouteIndeterminate(tab: BrowserTab, url: URL) -> Bool { false }
+    func pendingRoutePolicyLoad(tab: BrowserTab, url: URL) -> Task<Void, Never>? { nil }
     func canSendMainFrame(tab: BrowserTab, url: URL) -> Bool { true }
     func prepareProxyNavigation(tab: BrowserTab, request: URLRequest) -> Bool { false }
     func willRestoreOriginalStore(tab: BrowserTab) {}
@@ -196,6 +198,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private var retiringStoreReleases: [@MainActor () -> Void] = []
     private var deferredDocumentNavigationID: String?
     private var restoreNavigationAwaitingRoute: String?
+    private var routePolicyWait: Task<Void, Never>?
+    public var isWaitingForRoutePolicy: Bool { routePolicyWait != nil }
     @Published public private(set) var lastMainFrameFailure: BrowserMainFrameFailure?
     @Published public private(set) var loadingErrorAllowsProxyRetry = false
     @Published public private(set) var pendingAddressNavigation: BrowserPendingAddressNavigation?
@@ -622,6 +626,8 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     /// Cancels a deferred `WKWebView.load` that has not been issued yet (Stop, revoke, tab close).
     public func invalidateDeferredDocumentLoad() {
+        routePolicyWait?.cancel()
+        routePolicyWait = nil
         loadGeneration = UUID()
         pendingAttachedLoad = nil
         needsWindowBeforeLoad = false
@@ -711,6 +717,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             navigationState.continueLoad(url: url, method: method, unsafeReplay: unsafeReplay)
         }
         deferredDocumentNavigationID = attempt.navigationID
+        if deferUntilRoutePolicyLoads(request) { return }
         if hostCoordinator?.prepareProxyNavigation(tab: self, request: request) == true { return }
         guard alignStore(for: url, previous: requestedURL,
                          safeToReplay: Self.canReplayForRoute(request) && !attempt.hasReplayableBody) else {
@@ -788,10 +795,6 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
 
     private func performLoad(_ request: URLRequest) {
         guard !isDisposed else { return }
-        if attempt.recoveryOperationID != nil, request.url?.scheme?.lowercased() == "http" {
-            configuration.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = .keepAsRequested
-            loadedWebView?.configuration.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = .keepAsRequested
-        }
         issueDocumentLoad(request)
     }
 
@@ -802,7 +805,12 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
     private func issueDocumentLoad(_ request: URLRequest) {
         guard !isDisposed else { return }
         deferredDocumentNavigationID = attempt.navigationID
-        preserveExplicitHTTP(request.url)
+        let httpsPolicy = PageProtection.httpsNavigationPolicy(for: request.url)
+        let preservesHTTP = isLoopbackHTTP(request.url) || (attempt.recoveryOperationID != nil
+            && request.url?.scheme?.lowercased() == "http" && httpsPolicy != .errorOnFailure)
+        let policy: WKWebpagePreferences.UpgradeToHTTPSPolicy = preservesHTTP ? .keepAsRequested : httpsPolicy
+        configuration.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = policy
+        loadedWebView?.configuration.defaultWebpagePreferences.preferredHTTPSNavigationPolicy = policy
         if loadedWebView?.window == nil, isLoopbackHTTP(request.url) || needsWindowBeforeLoad {
             parkUntilWindow(request)
             return
@@ -1304,7 +1312,7 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         if !value { cancelJavaScriptDialog() }
         guard value else { return }
         lastActivatedAt = Date()
-        if loadedWebView == nil, protectionIncident == nil, loadingError == nil {
+        if loadedWebView == nil, !isWaitingForRoutePolicy, protectionIncident == nil, loadingError == nil {
             load(requestedURL ?? url ?? URL(string: "aegis://start")!, preservingScroll: true)
         }
     }
@@ -1434,7 +1442,9 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
         requestedURL = url
         attempt.url = url
         attempt.method = "GET"
-        if hostCoordinator?.prepareProxyNavigation(tab: self, request: URLRequest(url: url, timeoutInterval: 30)) == true { return }
+        let request = URLRequest(url: url, timeoutInterval: 30)
+        if deferUntilRoutePolicyLoads(request) { return }
+        if hostCoordinator?.prepareProxyNavigation(tab: self, request: request) == true { return }
         guard alignStore(for: url, previous: previous, safeToReplay: true) else {
             invalidateDeferredDocumentLoad()
             isLoading = false
@@ -1471,6 +1481,26 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             configureTrackingProtection(for: url)
             issueDocumentLoad(URLRequest(url: url, cachePolicy: .reloadRevalidatingCacheData, timeoutInterval: 30))
         }
+    }
+
+    /// A still-unsent request can wait for the persisted route policy to be read.
+    private func deferUntilRoutePolicyLoads(_ request: URLRequest) -> Bool {
+        guard let url = request.url, Self.safeProxyURL(url), Self.canReplayForRoute(request),
+              !attempt.hasReplayableBody, let coordinator = hostCoordinator,
+              let preparation = coordinator.pendingRoutePolicyLoad(tab: self, url: url) else { return false }
+        requestedURL = url
+        isLoading = true
+        routePolicyWait = Task { @MainActor [weak self, weak coordinator] in
+            await preparation.value
+            guard !Task.isCancelled, let self else { return }
+            self.routePolicyWait = nil
+            guard let coordinator, self.hostCoordinator === coordinator else {
+                self.stop()
+                return
+            }
+            self.commitPreservingMethod(request, continuesAttempt: true)
+        }
+        return true
     }
 
     /// Keep the original request and navigation identity while WebKit's initial rules load.
@@ -1677,10 +1707,11 @@ public final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavig
             // Lockdown disables WebRTC and WebTransport, including in subframes.
             webPreferences.isLockdownModeEnabled = true
         }
-        PageProtection.applySystem(webPreferences, hardened: activeHardenedSecurity)
+        PageProtection.applySystem(webPreferences, hardened: activeHardenedSecurity, url: requestURL)
         // 本机服务没有公网 HTTPS 身份；明确保留用户输入的本机 HTTP。
         // 失败页重放保持原来的 http，避免升级成 TLS 后隧道里不再是那次请求。
-        if localOrInternal || (attempt.recoveryOperationID != nil && requestURL.scheme == "http") {
+        if localOrInternal || (attempt.recoveryOperationID != nil && requestURL.scheme == "http"
+            && webPreferences.preferredHTTPSNavigationPolicy != .errorOnFailure) {
             webPreferences.preferredHTTPSNavigationPolicy = .keepAsRequested
         }
 #if DEBUG && targetEnvironment(simulator)
