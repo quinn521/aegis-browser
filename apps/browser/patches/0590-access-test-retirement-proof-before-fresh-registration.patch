@@ -1,0 +1,36 @@
+From 866d792a9820a73b8c653887f90230ac7ae6508f Mon Sep 17 00:00:00 2001
+From: Aegis Chromium verification <aegis@gcsa.local>
+Date: Fri, 27 Nov 2026 03:28:52 +0800
+Subject: [PATCH] test(access): wait for proof of the old Context retirement
+
+---
+ .../aegis/access/access_site_proxy_product_unittest.cc   | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 7a26bd8ca261cf0305eedcfba6f05756bfa09e5b..b58c7a9a66736a82d204c6fb44a2fd426fc19bbe 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1421,8 +1421,8 @@ TEST_F(AccessSavedTestProfileProductTest,
+       options->TestNodeRevocationTokenAtRevision(options_before_.revision);
+   ASSERT_FALSE(stale_token.empty());
+ 
+-  // The Network Service restarts without a network epoch change.
+-  context_.DisconnectRetiredContext();
++  // The control pipe closes before the old Context's retirement is proven.
++  context_.Disconnect();
+   environment_.RunUntilIdle();
+   EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+   EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
+@@ -1450,6 +1450,11 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_FALSE(replacement.HoldsRegistration(active->registration_id));
+   EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
+   replacement.Reply(true);
++  environment_.RunUntilIdle();
++  EXPECT_EQ(options->test_profile_runtime_state(),
++            AccessTestProfileRuntimeState::kRevoking);
++  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
++  context_.NotifyRetired();
+   ASSERT_TRUE(base::test::RunUntil([&] {
+     return options->test_profile_runtime_state() == AccessTestProfileRuntimeState::kIdle;
+   })) << SavedProfileState(options);

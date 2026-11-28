@@ -1,0 +1,188 @@
+// Copyright 2026 GCSA
+#ifndef COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_
+#define COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_
+
+#include <string_view>
+
+namespace aegis_access::test {
+
+// TEST-NET node with an iOS-compatible synthetic 32-byte public key.
+inline constexpr std::string_view kSyntheticTestNodeShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+    "&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none#demo-reality-vision";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.8:8443"
+    "?security=tls&type=ws&host=edge.example.test&fp=chrome"
+    "&sni=tls.example.test&path=%2Ftest&encryption=none&alpn=#ignored";
+
+// Matches the iOS vless.raw.reality fixture with a core-valid key size.
+inline constexpr std::string_view kSyntheticPinnedRealityVisionShare =
+    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443?type=tcp&s"
+    "ecurity=reality&flow=xtls-rprx-vision&sni=cert.example.com&pbk=AAECAwQ"
+    "FBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=01020304&spx=%2Ftest#syntheti"
+    "c-reality";
+
+// Matches the iOS vless.ws.tls fixture, including opaque escaped bytes.
+inline constexpr std::string_view kSyntheticWebSocketTlsQueryShare =
+    "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
+    "?type=ws&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
+    "&path=%2Fws%3Ftoken%3D%2574est-value%26opaque%3D%25E9"
+    "&encryption=none&alpn=http%2F1.1#synthetic-ws";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsUnknownFingerprintShare =
+        "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443"
+        "?type=ws&security=tls&host=ws.example.com&fp=synthetic_unknown"
+        "&sni=cert.example.com&path=%2Fws&encryption=none";
+
+inline constexpr std::string_view kSyntheticTcpTlsVisionShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443"
+    "?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none"
+    "&host=metadata.example&security=tls&sni=tls.example&type=tcp#synthetic-"
+    "tcp";
+
+// The public-key field encodes 32 repetitions of 0x42, as in the iOS test.
+inline constexpr std::string_view kSyntheticGrpcRealityShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443"
+    "?encryption=none&fp=chrome&path=%2Fsample%2FTun"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI"
+    "&security=reality&serviceName=%2Fsample%2FTun&sid=a1b2c3d4"
+    "&sni=grpc.example&type=grpc#synthetic-grpc";
+
+// Each RAW/REALITY negative has a single invalid field for text and QR.
+inline constexpr std::string_view
+    kSyntheticTcpRealityVisionInvalidFingerprintShare =
+        "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+        "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+        "&fp=synthetic_unknown"
+        "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123";
+
+inline constexpr std::string_view
+    kSyntheticTcpRealityVisionInvalidPublicKeyShare =
+        "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+        "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+        "&fp=chrome"
+        "&pbk=synthetic_short_key&sid=0123";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionOddShortIdShare =
+    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+    "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+    "&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=123";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionUnsafeSpiderXShare =
+    "vless://00000000-0000-4000-8000-000000000001@192.0.2.10:443"
+    "?type=tcp&security=reality&flow=xtls-rprx-vision&sni=cert.example.com"
+    "&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=0123"
+    "&spx=%2Ftest%3Fx%3D1%26%2570%3D2";
+
+inline constexpr std::string_view
+    kSyntheticTcpTlsVisionInvalidDialAddressShare =
+        "vless://550e8400-e29b-41d4-a716-446655440000@single-label:443"
+        "?flow=xtls-rprx-vision&security=tls&sni=tls.example&type=tcp";
+
+inline constexpr std::string_view kSyntheticGrpcRealityInvalidDialAddressShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@single-label:8443"
+    "?type=grpc&security=reality&sni=grpc.example&serviceName=sample&sid=0123"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
+
+inline constexpr std::string_view
+    kSyntheticTcpRealityVisionSlashAndAliasesShare =
+        "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443/"
+        "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+        "&serverName=www.example.com&fingerprint=chrome"
+        "&public_key=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&shortId="
+        "abcd1234"
+        "&headerType=none#demo-reality-vision";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsSlashShare =
+    "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443/?type=ws"
+    "&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
+    "&path=%2Fws%3Ftoken%3D%2574est-value%26opaque%3D%25E9&encryption=none"
+    "&alpn=http%2F1.1#synthetic-ws";
+
+inline constexpr std::string_view kSyntheticTcpTlsVisionSlashShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443/"
+    "?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none"
+    "&host=metadata.example&security=tls&sni=tls.example&type=tcp"
+    "#synthetic-tcp";
+
+inline constexpr std::string_view kSyntheticGrpcRealitySlashShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443/"
+    "?encryption=none&fp=chrome&path=%2Fsample%2FTun"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality"
+    "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
+    "#synthetic-grpc";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionMissingFlowShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?security=reality&encryption=none&type=tcp&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none#demo-reality-vision";
+
+inline constexpr std::string_view kSyntheticTcpRealityVisionConcatenatedShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+    "&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none"
+    "#demo-reality-visionvless://"
+    "550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
+    "&sni=www.example.com&fp=chrome"
+    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
+    "&headerType=none";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsFingerprintAliasShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.8:8443?security=tls"
+    "&type=ws&host=edge.example.test&fingerprint=chrome&sni=tls.example.test"
+    "&path=%2Ftest&encryption=none&alpn=#ignored";
+
+inline constexpr std::string_view kSyntheticTcpTlsVisionFingerprintAliasShare =
+    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443"
+    "?encryption=none&flow=xtls-rprx-vision&fingerprint=chrome"
+    "&headerType=none&host=metadata.example&security=tls&sni=tls.example"
+    "&type=tcp#synthetic-tcp";
+
+inline constexpr std::string_view kSyntheticGrpcRealityFingerprintAliasShare =
+    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443"
+    "?encryption=none&fingerprint=chrome&path=%2Fsample%2FTun"
+    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality"
+    "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
+    "#synthetic-grpc";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsEscapedDialHostShare =
+    "vless://00000000-0000-4000-8000-000000000002@r%6Fute.example.:8443"
+    "?type=ws&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
+    "&path=%2Fupgrade%3Ftag%3D%25E9";
+
+inline constexpr std::string_view kSyntheticWebSocketTlsIdnaDialHostShare =
+    "vless://00000000-0000-4000-8000-000000000002@b%C3%BCcher.example:8443"
+    "?type=ws&security=tls&host=ws.example.com.%3A8443&fp=chrome"
+    "&sni=cert.example.com&path=%2Fupgrade%3Fnext%3D%2568ttps://"
+    "assets.example/";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsEncodedAuthorityDelimiterShare =
+        "vless://"
+        "00000000-0000-4000-8000-000000000002@route%40other.example:8443"
+        "?type=ws&security=tls&sni=cert.example.com";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsDoubleEncodedDialHostShare =
+        "vless://00000000-0000-4000-8000-000000000002@r%256Fute.example.:8443"
+        "?type=ws&security=tls&sni=cert.example.com";
+
+inline constexpr std::string_view
+    kSyntheticWebSocketTlsInvalidUtf8DialHostShare =
+        "vless://00000000-0000-4000-8000-000000000002@b%C3cher.example:8443"
+        "?type=ws&security=tls&sni=cert.example.com";
+
+}  // namespace aegis_access::test
+
+#endif  // COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_

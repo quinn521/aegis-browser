@@ -42,7 +42,7 @@ mojom::AegisAccessSnapshotPtr WireSnapshot() {
   rule->row_revision = 1;
   rule->last_operation_sequence = 1;
   s->rules.push_back(std::move(rule));
-  auto endpoint = mojom::AegisAccessHttpEndpoint::New();
+  auto endpoint = mojom::AegisAccessProxyEndpoint::New();
   endpoint->proxy_group_id = "group";
   endpoint->registration_id = "registration";
   endpoint->selection_generation = 1;
@@ -158,6 +158,9 @@ class AccessNetworkContextStateTest : public testing::Test {
     auto snapshot = WireSnapshot();
     snapshot->endpoints[0]->port = server_.port();
     snapshot->endpoints[0]->credentials.reset();
+    snapshot->endpoints[0]->listener_binding =
+        mojom::AegisAccessPreparedListenerBinding::New(
+            1, "11111111-2222-4333-8444-555555555555", 1, 1, 1);
     return snapshot;
   }
   base::test::TaskEnvironment environment_{base::test::TaskEnvironment::MainThreadType::IO};
@@ -356,6 +359,7 @@ TEST_F(AccessNetworkContextStateTest, AuthenticatedSnapshotDrivesPreflightAndAct
   require_auth_ = true;
   auto snapshot = Snapshot();
   snapshot->sequence = 2;
+  snapshot->endpoints[0]->listener_binding.reset();
   snapshot->endpoints[0]->credentials = net::AuthCredentials(u"local-user", u"local-secret");
   snapshot->endpoints[0]->registration_id = "authenticated-registration";
   snapshot->endpoints[0]->selection_generation = 2;
@@ -373,6 +377,7 @@ TEST_F(AccessNetworkContextStateTest, WrongLocalCredentialsNeverSendActualReques
   require_auth_ = true;
   auto snapshot = Snapshot();
   snapshot->sequence = 2;
+  snapshot->endpoints[0]->listener_binding.reset();
   snapshot->endpoints[0]->credentials = net::AuthCredentials(u"local-user", u"wrong");
   snapshot->endpoints[0]->registration_id = "wrong-auth-registration";
   snapshot->endpoints[0]->selection_generation = 2;

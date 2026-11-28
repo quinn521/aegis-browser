@@ -34,6 +34,47 @@ action("generate_policy_matcher_vectors") {
   ]
 }
 
+source_set("access_test_node") {
+  sources = [
+    "access_test_node.cc",
+    "access_test_node.h",
+  ]
+  if (is_win) {
+    libs = [ "ws2_32.lib" ]
+  }
+}
+
+source_set("access_inbound_preferences") {
+  sources = [
+    "access_inbound_preferences.cc",
+    "access_inbound_preferences.h",
+  ]
+}
+
+source_set("access_prepared_listener") {
+  sources = [ "access_prepared_listener.cc", "access_prepared_listener.h" ]
+  deps = [ "//base" ]
+}
+source_set("access_prepared_listener_test_support") {
+  testonly = true
+  sources = [ "access_prepared_listener_test_fixture.h" ]
+  public_deps = [ ":access_prepared_listener" ]
+}
+
+test("access_prepared_listener_unittests") {
+  sources = [ "access_prepared_listener_unittest.cc" ]
+  deps = [ ":access_prepared_listener", "//base/test:run_all_unittests", "//testing/gtest" ]
+}
+
+test("access_inbound_preferences_unittests") {
+  sources = [ "access_inbound_preferences_unittest.cc" ]
+  deps = [
+    ":access_inbound_preferences",
+    "//base/test:run_all_unittests",
+    "//testing/gtest",
+  ]
+}
+
 source_set("access_route_types") {
   sources = access_core_sources.access_route_types
 }
@@ -273,6 +314,7 @@ test("access_route_pool_isolation_unittests") {
     "//base/test:run_all_unittests",
     "//base/test:test_support",
     "//net",
+    "//net:test_support",
     "//net/traffic_annotation:test_support",
     "//testing/gtest",
     "//url",
@@ -360,6 +402,7 @@ test("access_network_route_registry_unittests") {
   ]
   include_dirs = [ "$target_gen_dir" ]
   deps = [
+    ":access_prepared_listener_test_support",
     ":generate_policy_matcher_vectors",
     "//base/test:run_all_unittests",
     "//base/test:test_support",
@@ -375,6 +418,7 @@ test("access_network_url_loader_unittests") {
     "access_network_url_loader_unittest.cc",
   ]
   deps = [
+    ":access_prepared_listener_test_support",
     "//base",
     "//base/test:test_support",
     "//mojo/core/embedder",
@@ -393,6 +437,7 @@ test("access_cors_route_unittests") {
     "access_cors_route_unittest.cc",
   ]
   deps = [
+    ":access_prepared_listener_test_support",
     "//base",
     "//base/test:test_support",
     "//mojo/core/embedder",
@@ -412,6 +457,7 @@ test("access_private_factory_unittests") {
     "access_private_factory_unittest.cc",
   ]
   deps = [
+    ":access_prepared_listener_test_support",
     "//base",
     "//base/test:test_support",
     "//mojo/core/embedder",
@@ -434,6 +480,7 @@ test("access_route_wire_unittests") {
     "//base",
     "//base/test:test_support",
     "//mojo/core/embedder",
+    "//mojo/public/cpp/test_support:test_utils",
     "//net",
     "//services/network/aegis:access_route_registry",
     "//testing/gtest",
@@ -485,6 +532,7 @@ test("access_private_context_client_unittests") {
     "access_private_context_client_unittest.cc",
   ]
   deps = [
+    ":access_prepared_listener_test_support",
     "//base",
     "//base/test:test_support",
     "//chrome/browser/aegis/access:access_private_context_client",

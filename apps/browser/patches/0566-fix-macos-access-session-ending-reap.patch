@@ -1,0 +1,262 @@
+From 1d549381031672290cb10fd07e961b862cdc090b Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 04:44:29 +0800
+Subject: [PATCH] fix(access): complete session-ending stop once a published
+ core is reaped
+
+StopAllForSessionEnding no longer waits for its 10 s timeout when an internal core has published Ready. The session-ending path completes after forwarding stops and the owned child is reaped, while the held listener and network_lease_pending_ stay in place until the Network fence or process exit. Adds a test-only canary bypass (CHECK_IS_TEST) to reach Ready in the integration test.
+---
+ ...cess_internal_core_manager_mac_unittest.cc | 63 +++++++++++++++++++
+ .../aegis/access/access_local_core_manager.cc | 42 +++++++++++--
+ .../aegis/access/access_local_core_manager.h  |  7 ++-
+ 3 files changed, 107 insertions(+), 5 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc b/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc
+index a21a67c1ca55fe3f6a0202aed833e12fc0c9862a..8b1efedb3f38a3bda0b7d9ea2cb13379b80c07ab 100644
+--- a/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc
++++ b/chrome/browser/aegis/access/access_internal_core_manager_mac_unittest.cc
+@@ -1,15 +1,24 @@
+ // Copyright 2026 GCSA
+ #include "chrome/browser/aegis/access/access_local_core_manager.h"
+ 
++#include <netinet/in.h>
++#include <signal.h>
++#include <sys/socket.h>
++
+ #include <atomic>
++#include <cerrno>
+ 
+ #include "base/command_line.h"
+ #include "base/files/file_util.h"
++#include "base/files/scoped_file.h"
+ #include "base/json/json_writer.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/synchronization/waitable_event.h"
+ #include "base/test/scoped_run_loop_timeout.h"
+ #include "base/test/task_environment.h"
+ #include "base/test/test_future.h"
++#include "base/threading/thread_restrictions.h"
++#include "base/timer/elapsed_timer.h"
+ #include "base/uuid.h"
+ #include "chrome/browser/aegis/access/access_build_channel.h"
+ #include "components/aegis_access/access_test_node_test_fixture.h"
+@@ -29,6 +38,20 @@ AccessOwnedChildRetirementMac RetirementFault(const AccessOwnedChildMac& child,
+                                 : RetireAccessOwnedChildMac(child, wait);
+ }
+ std::string Id() { return base::Uuid::GenerateRandomV4().AsLowercaseString(); }
++// True while some socket still listens on 127.0.0.1:port. SO_REUSEADDR keeps
++// a released address in TIME_WAIT from reading as held.
++bool LoopbackPortHeld(uint16_t port) {
++  base::ScopedFD probe(socket(AF_INET, SOCK_STREAM, 0));
++  if (!probe.is_valid()) return true;
++  const int enable = 1;
++  setsockopt(probe.get(), SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
++  sockaddr_in address = {};
++  address.sin_len = sizeof(address);
++  address.sin_family = AF_INET;
++  address.sin_port = htons(port);
++  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
++  return bind(probe.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0;
++}
+ 
+ class AccessInternalCoreManagerMacTest : public testing::Test {
+  protected:
+@@ -197,5 +220,45 @@ TEST_F(AccessInternalCoreManagerMacTest, ExpiredOriginalDeadlineCannotLaunchOrRe
+   EXPECT_EQ(retirement_pid.load(), 0);
+   EXPECT_FALSE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
+ }
++TEST_F(AccessInternalCoreManagerMacTest, SessionEndingCompletesAfterReapWhilePublishedListenerStaysHeld) {
++  block_retirement.store(false);
++  input_.skip_internal_canary_for_testing = true;
++  manager_ = std::make_unique<AccessLocalCoreManager>(input_);
++  base::test::TestFuture<AccessLocalCoreReady> prepared;
++  manager_->Prepare(prepared.GetCallback());
++  ASSERT_TRUE(prepared.Get().ready) << prepared.Get().error;
++  ASSERT_TRUE(prepared.Get().parent_listener_lease_held);
++  const uint16_t port = prepared.Get().port;
++  ASSERT_GT(port, 0);
++  ASSERT_TRUE(LoopbackPortHeld(port));
++  ASSERT_EQ(retirement_pid.load(), 0);
++  {
++    // Without the fix the barrier never runs and EndSession waits its full 10 s.
++    base::ElapsedTimer elapsed;
++    auto stopped = std::make_shared<base::WaitableEvent>();
++    AccessLocalCoreManager::StopAllForSessionEnding(base::BindOnce(
++        [](std::shared_ptr<base::WaitableEvent> event) { event->Signal(); }, stopped));
++    base::ScopedAllowBaseSyncPrimitivesForTesting allow_wait;
++    ASSERT_TRUE(stopped->TimedWait(base::Seconds(5)));
++    EXPECT_LT(elapsed.Elapsed(), base::Seconds(5));
++  }
++  // Session ending retired and reaped the exact owned child.
++  const pid_t pid = retirement_pid.load();
++  ASSERT_GT(pid, 0);
++  errno = 0;
++  EXPECT_EQ(kill(pid, 0), -1);
++  EXPECT_EQ(errno, ESRCH);
++  // The published address stays reserved until the Network fence confirms.
++  EXPECT_TRUE(LoopbackPortHeld(port));
++  EXPECT_TRUE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
++  base::test::TestFuture<AccessLocalCoreReady> reprepared;
++  manager_->Prepare(reprepared.GetCallback());
++  EXPECT_FALSE(reprepared.Get().ready);
++  base::test::TestFuture<bool> retired;
++  manager_->StopConfirmed(retired.GetCallback());
++  EXPECT_TRUE(retired.Get());
++  EXPECT_FALSE(LoopbackPortHeld(port));
++  EXPECT_FALSE(vault_->IsRuntimeReferenced(input_.internal_test_profile->reference));
++}
+ }  // namespace
+ }  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_local_core_manager.cc b/chrome/browser/aegis/access/access_local_core_manager.cc
+index 3318967ec6862d603a1eaa0dad2f67feaf7721fa..4dad6325eba63634e9811aa1563e5cdf4783a3bc 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager.cc
++++ b/chrome/browser/aegis/access/access_local_core_manager.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/barrier_closure.h"
+ #include "base/base64.h"
++#include "base/check_is_test.h"
+ #include "base/strings/string_util.h"
+ #include "base/command_line.h"
+ #include "base/containers/span.h"
+@@ -240,9 +241,13 @@ class AccessLocalCoreManager::ShutdownHandle
+     return *handles;
+   }
+   bool stop_requested() const { return stop_requested_.load(); }
++  bool session_ending() const { return session_ending_.load(); }
+   void SetWorker(Worker* worker) { worker_ = worker; }  // Core thread only.
+ 
+-  void RequestStop(base::OnceClosure completion) {
++  // A session-ending stop completes once forwarding has stopped and the child
++  // is reaped, even while a published Ready address must stay held.
++  void RequestStop(base::OnceClosure completion, bool session_ending = false) {
++    if (session_ending) session_ending_.store(true);
+     stop_requested_.store(true);
+     bool stopped;
+     {
+@@ -276,6 +281,7 @@ class AccessLocalCoreManager::ShutdownHandle
+   scoped_refptr<base::SequencedTaskRunner> runner_;
+   raw_ptr<Worker> worker_ = nullptr;  // Accessed only on the core thread.
+   std::atomic_bool stop_requested_{false};
++  std::atomic_bool session_ending_{false};
+   base::Lock lock_;
+   bool stopped_ GUARDED_BY(lock_) = false;
+   std::vector<base::OnceClosure> completions_ GUARDED_BY(lock_);
+@@ -300,7 +306,8 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     if (!retired) QuarantineInternalCore();
+ #endif
+     shutdown_->SetWorker(nullptr);
+-    if (retired) shutdown_->CompleteStop();
++    if (retired || (reaped_with_listener_held_ && shutdown_->session_ending()))
++      shutdown_->CompleteStop();
+   }
+ 
+   void Prepare(base::OnceCallback<void(AccessLocalCoreReady)> completion) {
+@@ -425,6 +432,17 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     if (retired && shutdown_->stop_requested()) shutdown_->CompleteStop();
+     std::move(completion).Run(retired);
+   }
++  // EndSession waits only until forwarding stops and the child is reaped. The
++  // held listener and network_lease_pending_ stay in place, so the address is
++  // released only by the Network fence or by process exit.
++  void StopForSessionEnding() {
++    StopWithResult(base::BindOnce(
++        [](Worker* worker, bool retired) {
++          if (retired || worker->reaped_with_listener_held_)
++            worker->shutdown_->CompleteStop();
++        },
++        base::Unretained(this)));
++  }
+   void SetStoppedCallback(base::RepeatingCallback<void(std::string)> callback) {
+     stopped_callback_ = std::move(callback);
+   }
+@@ -714,6 +732,11 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+         Complete(false, "The owned listener changed before validation.");
+         return;
+       }
++      if (input_.skip_internal_canary_for_testing) {
++        CHECK_IS_TEST();
++        Complete(true, std::string());
++        return;
++      }
+     }
+ #endif
+     request_.reset();
+@@ -974,6 +997,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+   }
+ #endif
+   bool StopChild(bool release_reference = true, bool consumers_revoked = false) {
++    reaped_with_listener_held_ = false;
+     if (IsInternal()) retirement_pending_ = true;
+ #if BUILDFLAG(IS_MAC)
+     if (IsInternal() && release_reference) internal_binding_spent_ = true;
+@@ -1012,7 +1036,11 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+     credentials_.reset();
+     authenticated_ = false;
+ #if BUILDFLAG(IS_MAC)
+-    if (IsInternal() && network_lease_pending_ && !consumers_revoked) return false;
++    if (IsInternal() && network_lease_pending_ && !consumers_revoked) {
++      // The child is reaped; only the published address remains held.
++      reaped_with_listener_held_ = true;
++      return false;
++    }
+     if (consumers_revoked) network_lease_pending_ = false;
+     held_listener_lease_.reset();
+     listener_lease_channel_.reset();
+@@ -1054,6 +1082,7 @@ class AccessLocalCoreManager::Worker : public net::URLRequest::Delegate {
+   std::optional<net::AuthCredentials> credentials_;
+   bool authenticated_ = false;
+   bool retirement_pending_ = false;
++  bool reaped_with_listener_held_ = false;
+   int auth_attempts_ = 0;
+   base::TimeTicks started_;
+   base::TimeTicks probe_deadline_;
+@@ -1082,6 +1111,10 @@ void AccessLocalCoreManager::ShutdownHandle::StopOnCoreThread() {
+     CompleteStop();
+     return;
+   }
++  if (session_ending_.load()) {
++    worker_->StopForSessionEnding();
++    return;
++  }
+   worker_->StopWithResult(base::BindOnce([](std::shared_ptr<ShutdownHandle> handle, bool retired) {
+     if (retired) handle->CompleteStop();
+   }, shared_from_this()));
+@@ -1160,7 +1193,8 @@ void AccessLocalCoreManager::StopAllForSessionEnding(base::OnceClosure completio
+       base::BindOnce(&AccessCoreLogStore::FlushAllForSessionEnding,
+                      std::move(completion)));
+   CoreLogShareSession::StopAllForSessionEnding(base::OnceClosure(stopped));
+-  for (auto& handle : handles) handle->RequestStop(base::OnceClosure(stopped));
++  for (auto& handle : handles)
++    handle->RequestStop(base::OnceClosure(stopped), /*session_ending=*/true);
+ }
+ void AccessLocalCoreManager::SetStoppedCallback(
+     base::RepeatingCallback<void(std::string)> callback) {
+diff --git a/chrome/browser/aegis/access/access_local_core_manager.h b/chrome/browser/aegis/access/access_local_core_manager.h
+index 2ea3d504e01f8f9179e1664a0b404e8df2169811..495358d2ac1be8c091c4e83e965767fe7d17daf5 100644
+--- a/chrome/browser/aegis/access/access_local_core_manager.h
++++ b/chrome/browser/aegis/access/access_local_core_manager.h
+@@ -40,6 +40,9 @@ struct AccessLocalCoreInput {
+   base::TimeTicks internal_preparation_deadline;
+   AccessOwnedChildRetirementMac (*retire_owned_child_for_testing)(
+       const AccessOwnedChildMac&, uint32_t) = nullptr;
++  // Tests only: after the owned listener and its parent-held lease are
++  // verified, accept readiness without the controlled HTTPS canary.
++  bool skip_internal_canary_for_testing = false;
+ #endif
+ };
+ // Resolves paths only. File parsing, pins, process launch and readiness remain
+@@ -104,7 +107,9 @@ class AccessLocalCoreManager {
+   // Called on the owning Browser sequence before the session-ending rundown
+   // wait. Completion runs after child cleanup on core threads, without needing
+   // the blocked Browser sequence to pump replies. Pending worker destruction
+-  // remains covered after its owning service has gone away.
++  // remains covered after its owning service has gone away. A published
++  // internal listener counts as cleaned up once forwarding stops and its child
++  // is reaped; its address stays held until the Network fence or process exit.
+   static void StopAllForSessionEnding(base::OnceClosure completion);
+   // Reports an unexpected exit of this manager's prepared child. The private
+   // registration ID lets the Browser ignore a late notification after rebind.
+-- 
+2.54.0 (Apple Git-157)
+

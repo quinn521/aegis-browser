@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/XTLS/Xray-core",
+    "tag": "v26.11.9",
+    "commit": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9",
+    "tree": "717e944e218f098a8448f1f2f925bb7a8fa02559",
+    "license": "MPL-2.0"
+  },
+  "patches": [
+    {
+      "path": "patches/0001-aegis-owned-listener-macos.patch",
+      "sha256": "570c437d6df8b1eb7492504c731c6379b3421df2397092da620e4013f7e18d63"
+    }
+  ],
+  "patchedTree": "3cbc4aa6f9776ace3edf80bf5b8fec7b564a96c0",
+  "goModules": {
+    "go.mod": "05b5ec4430acb5898c9c95e3886a41b4399a4e05d605165833498432baa4ade9",
+    "go.sum": "d36f2d9ff1786fd06aa382b718375a4d50336d4d50ebcb4573110a4c1eae25fc"
+  },
+  "toolchain": {
+    "go": "1.27.3"
+  },
+  "build": {
+    "goos": "darwin",
+    "goarch": "arm64",
+    "tags": "aegis_owned",
+    "ldflags": "-X github.com/xtls/xray-core/core.build=676eaf6-aegis-owned -s -w -buildid=",
+    "gofips140": "off"
+  },
+  "artifact": {
+    "sha256": "d703c48a16598859db13e05f5d2cc42ee579669c8f05703f6b955064134bab56",
+    "bytes": 29902466
+  }
+}

@@ -1,0 +1,261 @@
+From 69084582248da993bea35a279536ea2446fd1ca6 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 21:07:16 -0800
+Subject: [PATCH] fix(access): bound rebind and settle last control loss
+
+---
+ .../access_network_context_transport.cc       | 13 ++-
+ .../access/access_private_context_client.cc   | 22 +++--
+ .../access/access_private_context_client.h    |  3 +-
+ .../access_site_proxy_product_unittest.cc     | 85 ++++++++++++++++++-
+ 4 files changed, 108 insertions(+), 15 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+index 0a8c144ac92939ac36715ee15fa982aec2afd0a5..4b971edb578fd1b45243e405eef5258d15f8f3b5 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
+@@ -685,7 +685,8 @@ void AccessNetworkContextTransport::BindPrivateContext(
+ void AccessNetworkContextTransport::AdmitPrivateContext(
+     aegis_access::OwnershipKey owner, PrivateContext client,
+     base::OnceCallback<void(PrivateContext)> completion) {
+-  if (!OwnsConfiguredPartition(owner) || !client->is_connected()) {
++  if (!OwnsConfiguredPartition(owner) || !client->is_connected() ||
++      base::TimeTicks::Now() >= client->bind_deadline()) {
+     std::move(completion).Run(nullptr);
+     return;
+   }
+@@ -702,7 +703,9 @@ void AccessNetworkContextTransport::AdmitPrivateContext(
+   // being erased, so complete the bind in a later task.
+   const auto& previous_client = previous->second.client;
+   const auto previous_control = previous_client->control_id();
+-  previous_client->CheckConnected(base::BindPostTaskToCurrentDefault(base::BindOnce(
++  const auto deadline = client->bind_deadline();
++  previous_client->CheckConnected(
++      deadline, base::BindPostTaskToCurrentDefault(base::BindOnce(
+       [](base::WeakPtr<AccessNetworkContextTransport> self,
+          aegis_access::OwnershipKey owner, PrivateContext client,
+          base::UnguessableToken previous_control,
+@@ -840,7 +843,11 @@ void AccessNetworkContextTransport::OnPrivateContextDisconnected(
+     return;
+   }
+   ForgetPrivateControl(owner, incarnation);
+-  if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
++  if (HasReadyPrivateContext(owner)) {
++    SettlePrivatePublication(state, true);
++  } else if (state.private_contexts.empty()) {
++    SettleTestListenerRetirements(state, true);
++  }
+ }
+ 
+ void AccessNetworkContextTransport::ForgetPrivateControl(
+diff --git a/chrome/browser/aegis/access/access_private_context_client.cc b/chrome/browser/aegis/access/access_private_context_client.cc
+index 2323615219dbeea919e29e8586bf3746bb4ee9cc..d891869a39bba1b525d792165a36ce7edef4e3b8 100644
+--- a/chrome/browser/aegis/access/access_private_context_client.cc
++++ b/chrome/browser/aegis/access/access_private_context_client.cc
+@@ -1,6 +1,7 @@
+ // Copyright 2026 GCSA
+ #include "chrome/browser/aegis/access/access_private_context_client.h"
+ 
++#include <algorithm>
+ #include <memory>
+ #include <utility>
+ #include <type_traits>
+@@ -25,7 +26,8 @@ constexpr auto kPrivateContextSetupTimeout = base::Seconds(30);
+ template <typename Reply>
+ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
+     base::OnceCallback<void(Reply)> completion,
+-    base::OnceClosure* reject = nullptr) {
++    base::OnceClosure* reject = nullptr,
++    base::TimeTicks deadline = {}) {
+   struct PendingReply {
+     void Finish(Reply reply) {
+       if (!completion) return;
+@@ -46,9 +48,13 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
+     if (auto pending = weak.lock()) pending->Finish(std::remove_cvref_t<Reply>{});
+   };
+   if (reject) *reject = base::BindOnce(fail, std::weak_ptr(pending));
+-  if (BUILDFLAG(IS_MAC)) {
+-    pending->deadline = base::TimeTicks::Now() + kPrivateContextSetupTimeout;
+-    pending->timer.Start(FROM_HERE, kPrivateContextSetupTimeout,
++  const auto now = base::TimeTicks::Now();
++  if (deadline.is_null() && BUILDFLAG(IS_MAC)) {
++    deadline = now + kPrivateContextSetupTimeout;
++  }
++  if (!deadline.is_null()) {
++    pending->deadline = deadline;
++    pending->timer.Start(FROM_HERE, std::max(deadline - now, base::TimeDelta()),
+                          base::BindOnce(fail, std::weak_ptr(pending)));
+   }
+   return base::BindOnce(
+@@ -181,7 +187,7 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
+             }
+             std::move(completion).Run(accepted);
+           }, weak_factory_.GetWeakPtr(), operation, std::move(completion)),
+-          &reject_initialize_);
++          &reject_initialize_, bind_deadline_);
+   context->BindAegisAccessContext(
+       std::move(receiver), lifetime_.BindNewPipeAndPassRemote(),
+       mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+@@ -189,13 +195,13 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
+ }
+ 
+ void AccessPrivateContextClient::CheckConnected(
+-    base::OnceCallback<void(bool)> completion) {
++    base::TimeTicks deadline, base::OnceCallback<void(bool)> completion) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  if (!is_connected()) {
++  if (!is_connected() || base::TimeTicks::Now() >= deadline) {
+     std::move(completion).Run(false);
+     return;
+   }
+-  auto reply = BoundFactorySetupReply(std::move(completion));
++  auto reply = BoundFactorySetupReply(std::move(completion), nullptr, deadline);
+   context_.QueryVersion(base::BindOnce(
+       [](base::OnceCallback<void(bool)> reply, uint32_t) {
+         std::move(reply).Run(true);
+diff --git a/chrome/browser/aegis/access/access_private_context_client.h b/chrome/browser/aegis/access/access_private_context_client.h
+index d37f47e76385b8d8f4ec8a27f115084f9e23acec..6bb6d1f660c01cba8b453f21da814c7c733f8cc5 100644
+--- a/chrome/browser/aegis/access/access_private_context_client.h
++++ b/chrome/browser/aegis/access/access_private_context_client.h
+@@ -40,7 +40,8 @@ class AccessPrivateContextClient
+                   base::OnceCallback<void(bool)> completion);
+   void SetDisconnectHandler(base::OnceCallback<void(bool)> handler);
+   void SetRetirementHandler(base::OnceClosure handler);
+-  void CheckConnected(base::OnceCallback<void(bool)> completion);
++  void CheckConnected(base::TimeTicks deadline,
++                      base::OnceCallback<void(bool)> completion);
+   void PublishSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
+                        base::OnceCallback<void(bool)> completion);
+   // Encodes the whole validated Browser policy and all registered groups.
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 4819748080c756a6343dbd4a35a1f3101ed98a97..279afe08abd6202bcbdff014df5a2f61d75f27ac 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -384,10 +384,18 @@ class ProductAckContext final : public network::TestNetworkContext,
+       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
+       mojo::PendingRemote<network::mojom::AegisAccessContextLifetime> lifetime,
+       BindAegisAccessContextCallback callback) override {
+-    receivers_.Add(this, std::move(receiver));
++    if (stall_control) {
++      stalled_control_ = std::move(receiver);
++    } else {
++      receivers_.Add(this, std::move(receiver));
++    }
+     lifetimes_.Add(std::move(lifetime));
+-    std::move(callback).Run(network::mojom::AegisAccessContextIdentity::New(
+-        incarnation, process_id));
++    held_bind_reply_ = std::move(callback);
++    if (!hold_bind_reply) ReplyToBind();
++  }
++  void ReplyToBind() {
++    std::move(held_bind_reply_).Run(
++        network::mojom::AegisAccessContextIdentity::New(incarnation, process_id));
+   }
+   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
+                        InstallSnapshotCallback callback) override {
+@@ -445,6 +453,8 @@ class ProductAckContext final : public network::TestNetworkContext,
+     std::move(callback).Run(true);
+   }
+   bool hold_next = false;
++  bool stall_control = false;
++  bool hold_bind_reply = false;
+   std::string hold_next_registration;
+   std::string incarnation = "product-test-context";
+   uint64_t process_id = base::GetCurrentProcId();
+@@ -462,6 +472,8 @@ class ProductAckContext final : public network::TestNetworkContext,
+   }
+ 
+  private:
++  BindAegisAccessContextCallback held_bind_reply_;
++  mojo::PendingReceiver<network::mojom::AegisAccessContext> stalled_control_;
+   network::mojom::AegisAccessSnapshotAckPtr held_ack_;
+   InstallSnapshotCallback held_reply_;
+   mojo::ReceiverSet<network::mojom::AegisAccessContext> receivers_;
+@@ -470,6 +482,11 @@ class ProductAckContext final : public network::TestNetworkContext,
+ 
+ class AccessSiteProxyProductTest : public testing::Test {
+  protected:
++  using TimeSource = base::test::TaskEnvironment::TimeSource;
++  explicit AccessSiteProxyProductTest(
++      TimeSource time_source = TimeSource::SYSTEM_TIME)
++      : environment_(time_source) {}
++
+   void SetUp() override {
+ #if !BUILDFLAG(AEGIS_PRIVATE_TEST_NODE_ENABLED)
+     const auto* command = base::CommandLine::ForCurrentProcess();
+@@ -1549,6 +1566,35 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_FALSE(bound.Get());
+ }
+ 
++class AccessPrivateContextRebindDeadlineTest : public AccessSiteProxyProductTest {
++ public:
++  AccessPrivateContextRebindDeadlineTest()
++      : AccessSiteProxyProductTest(TimeSource::MOCK_TIME) {}
++};
++
++TEST_F(AccessPrivateContextRebindDeadlineTest,
++       LateBindReplyDoesNotRestartSetupDeadline) {
++  ProductAckContext old_context;
++  old_context.incarnation = "unresponsive-old-control";
++  old_context.stall_control = true;
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> initial;
++  transport_->BindPrivateContext(owner_, &old_context, initial.GetCallback());
++  ASSERT_TRUE(initial.Get());
++
++  ProductAckContext replacement;
++  replacement.incarnation = old_context.incarnation;
++  replacement.hold_bind_reply = true;
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> rebound;
++  transport_->BindPrivateContext(owner_, &replacement, rebound.GetCallback());
++  environment_.FastForwardBy(base::Seconds(29));
++  replacement.ReplyToBind();
++  environment_.RunUntilIdle();
++  EXPECT_FALSE(rebound.IsReady());
++  environment_.FastForwardBy(base::Seconds(1));
++  ASSERT_TRUE(rebound.IsReady());
++  EXPECT_FALSE(rebound.Get());
++}
++
+ TEST_F(AccessSavedTestProfileProductTest,
+        RebindBeforeOldDisconnectIsDispatchedUsesNewControl) {
+   base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> first;
+@@ -1588,6 +1634,39 @@ TEST_F(AccessSavedTestProfileProductTest,
+             AccessTestProfileRuntimeState::kIdle);
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       LastControlDisconnectSettlesRetirementWhenItNeverHeldListener) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
++
++  ProductAckContext unconsumed;
++  unconsumed.incarnation = "context-without-listener";
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &unconsumed, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
++
++  context_.hold_next = unconsumed.hold_next = true;
++  base::test::TestFuture<bool> revoked;
++  options->RevokeTestNodeProfile(revoked.GetCallback());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return context_.has_reply() && unconsumed.has_reply();
++  }));
++  EXPECT_TRUE(unconsumed.held_ack().registrations.empty());
++  context_.DisconnectRetiredContext();
++  environment_.RunUntilIdle();
++  EXPECT_FALSE(revoked.IsReady());
++
++  unconsumed.Disconnect();
++  environment_.RunUntilIdle();
++  ASSERT_TRUE(revoked.IsReady());
++  EXPECT_TRUE(revoked.Get());
++  EXPECT_EQ(options->test_profile_runtime_state(),
++            AccessTestProfileRuntimeState::kIdle);
++}
++
+ TEST_F(AccessSavedTestProfileProductTest,
+        DisconnectedControlStillReceivesContextLifetimeProof) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());

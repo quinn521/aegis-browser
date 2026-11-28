@@ -93,8 +93,25 @@ std::optional<DecodedAccessRouteSnapshot> DecodeAccessRouteSnapshot(
         endpoint->registration_id, wire.incarnation, g.policy_generation,
         g.identity_generation, endpoint->selection_generation, g.network_epoch,
         g.base_proxy_config_generation};
+    net::ProxyServer::Scheme scheme;
+    switch (endpoint->transport) {
+      case mojom::AegisAccessProxyTransport::kHttp: scheme = net::ProxyServer::SCHEME_HTTP; break;
+      case mojom::AegisAccessProxyTransport::kSocks5: scheme = net::ProxyServer::SCHEME_SOCKS5; break;
+      default: return std::nullopt;
+    }
+    if (endpoint->listener_binding) {
+      const auto& b = *endpoint->listener_binding;
+      AccessPreparedListenerBinding binding{b.wire_version, b.connection_profile_id,
+          b.profile_version, b.upstream_authorization_generation, b.listener_generation};
+      if (endpoint->credentials || !IsValidAccessPreparedListenerBinding(binding) ||
+          !snapshot.listener_bindings.emplace(endpoint->proxy_group_id, std::move(binding)).second)
+        return std::nullopt;
+    } else if (scheme != net::ProxyServer::SCHEME_HTTP || !endpoint->credentials) {
+      // Old host/port-only records cannot become new no-auth registrations.
+      return std::nullopt;
+    }
     auto proxy = net::ProxyServer::FromSchemeHostAndPort(
-        net::ProxyServer::SCHEME_HTTP, endpoint->numeric_loopback_host, endpoint->port);
+        scheme, endpoint->numeric_loopback_host, endpoint->port);
     auto route = net::AccessProxyRoute::Create(std::move(key), net::ProxyChain(proxy));
     if (!route) return std::nullopt;
     if (endpoint->credentials) {

@@ -1,0 +1,913 @@
+From 1dd587173969f2bd9ba5b5cef10b697a4486f1a5 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Wed, 25 Nov 2026 20:41:30 -0800
+Subject: [PATCH] fix(access): verify exact private Context retirement
+
+---
+ .../access_network_context_transport.cc       | 223 ++++++++++++++----
+ .../access/access_network_context_transport.h |  23 +-
+ .../access/access_private_context_client.cc   |  50 +++-
+ .../access/access_private_context_client.h    |  21 +-
+ .../access_private_publication_unittest.cc    |  20 +-
+ .../access_site_proxy_product_unittest.cc     |  79 ++++++-
+ services/network/network_context.cc           |  13 +-
+ services/network/network_context.h            |   2 +
+ .../mojom/aegis_access_route_types.mojom      |   7 +
+ .../public/mojom/network_context.mojom        |  11 +-
+ services/network/test/test_network_context.cc |   3 +-
+ services/network/test/test_network_context.h  |   1 +
+ 12 files changed, 376 insertions(+), 77 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+index dd6658eb2d43336ca917b52dcad31ac390c6da26..abb855cb52164f2d7f979879a2ab56626953865a 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
+@@ -9,8 +9,10 @@
+ #include <utility>
+ 
+ #include "base/barrier_closure.h"
++#include "base/task/bind_post_task.h"
+ #include "base/functional/bind.h"
+ #include "base/no_destructor.h"
++#include "base/process/process_handle.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/uuid.h"
+ #include "base/task/sequenced_task_runner.h"
+@@ -21,6 +23,7 @@
+ #include "net/proxy_resolution/proxy_config.h"
+ #include "net/proxy_resolution/proxy_info.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
++#include "services/network/public/mojom/network_service.mojom.h"
+ #include "url/gurl.h"
+ 
+ namespace aegis::access {
+@@ -31,6 +34,23 @@ constexpr size_t kMaxExactHosts = 256;
+ constexpr size_t kMaxPartitionKeyBytes = 1024;
+ constexpr base::TimeDelta kPrivateInstallTimeout = base::Seconds(30);
+ 
++std::optional<content::ServiceProcessId> NetworkServiceProcessFor(
++    uint64_t pid) {
++  if (pid == static_cast<uint64_t>(base::GetCurrentProcId())) {
++    return content::ServiceProcessId();
++  }
++  std::optional<content::ServiceProcessId> found;
++  for (const auto& info : content::ServiceProcessHost::GetRunningProcessInfo()) {
++    if (!info.IsService<network::mojom::NetworkService>() ||
++        pid != static_cast<uint64_t>(info.GetProcess().Pid())) {
++      continue;
++    }
++    if (found) return std::nullopt;
++    found = info.service_process_id();
++  }
++  return found;
++}
++
+ bool IsCanonicalExactHost(const std::string& host) {
+   if (host.empty() || host.back() == '.') {
+     return false;
+@@ -110,36 +130,35 @@ AccessNetworkContextTransport::AccessNetworkContextTransport()
+     : runtime_profile_token_(
+           base::Uuid::GenerateRandomV4().AsLowercaseString()) {
+   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
+-  content::AddNetworkServiceProcessObserver(this);
++  content::ServiceProcessHost::AddObserver(this);
+ }
+ 
+ AccessNetworkContextTransport::~AccessNetworkContextTransport() {
+-  content::RemoveNetworkServiceProcessObserver(this);
++  content::ServiceProcessHost::RemoveObserver(this);
+   net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
+ }
+ 
+-void AccessNetworkContextTransport::OnServiceLaunched(
+-    const content::ServiceProcessInfo& info) {
+-  network_service_process_ = info.service_process_id();
+-}
+-
+-void AccessNetworkContextTransport::OnServiceTerminatedNormally(
++void AccessNetworkContextTransport::OnServiceProcessTerminatedNormally(
+     const content::ServiceProcessInfo& info) {
+-  OnNetworkServiceExited(info.service_process_id());
++  if (info.IsService<network::mojom::NetworkService>()) {
++    OnNetworkServiceExited(info.service_process_id());
++  }
+ }
+ 
+-void AccessNetworkContextTransport::OnServiceCrashed(
++void AccessNetworkContextTransport::OnServiceProcessCrashed(
+     const content::ServiceProcessInfo& info) {
+-  OnNetworkServiceExited(info.service_process_id());
++  if (info.IsService<network::mojom::NetworkService>()) {
++    OnNetworkServiceExited(info.service_process_id());
++  }
+ }
+ 
+ void AccessNetworkContextTransport::OnNetworkServiceExited(
+     content::ServiceProcessId service_process) {
+-  if (network_service_process_ == service_process) network_service_process_ = {};
+   for (auto& [partition, state] : partitions_) {
+-    std::erase_if(state.disconnected_private_contexts, [&](const auto& item) {
+-      return item.second.service_process == service_process;
+-    });
++    const auto retired = std::erase_if(
++        state.disconnected_private_contexts, [&](const auto& item) {
++          return item.second.service_process == service_process;
++        });
+     if (!state.private_publication) continue;
+     const auto owner = state.private_publication->policy.owner;
+     std::vector<std::string> exited_contexts;
+@@ -149,9 +168,13 @@ void AccessNetworkContextTransport::OnNetworkServiceExited(
+       }
+     }
+     for (const auto& incarnation : exited_contexts) {
+-      OnPrivateContextDisconnected(owner, incarnation, true);
++      OnPrivateContextRetired(owner, incarnation);
++    }
++    if (retired && HasReadyPrivateContext(owner)) {
++      SettlePrivatePublication(state, true);
++    } else if (retired && state.private_contexts.empty()) {
++      SettleTestListenerRetirements(state, true);
+     }
+-    if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
+   }
+ }
+ 
+@@ -629,58 +652,156 @@ void AccessNetworkContextTransport::BindPrivateContext(
+   client->Initialize(context, base::BindOnce(
+       [](base::WeakPtr<AccessNetworkContextTransport> self,
+          aegis_access::OwnershipKey owner, PrivateContext client,
+-         content::ServiceProcessId service_process,
+          base::OnceCallback<void(PrivateContext)> completion, bool initialized) {
+-        if (!self || !initialized || !self->OwnsConfiguredPartition(owner)) {
++        if (!self || !initialized) {
+           std::move(completion).Run(nullptr);
+           return;
+         }
+-        auto& state = self->partitions_.at(owner.storage_partition_token);
+-        const auto incarnation = client->incarnation();
+-        auto [entry, inserted] = state.private_contexts.try_emplace(
+-            incarnation, client);
+-        if (inserted) {
+-          if (service_process == self->network_service_process_)
+-            entry->second.service_process = service_process;
+-          if (const auto lost = state.disconnected_private_contexts.find(incarnation);
+-              lost != state.disconnected_private_contexts.end()) {
+-            entry->second.sequence = lost->second.sequence;
+-            entry->second.possible_listeners = lost->second.possible_listeners;
+-          }
+-          client->SetDisconnectHandler(base::BindOnce(
+-              &AccessNetworkContextTransport::OnPrivateContextDisconnected,
+-              self, owner, incarnation));
+-          if (std::ranges::any_of(state.retiring_test_listeners,
+-                  [](const auto& item) { return !!item.second.completion; })) {
+-            self->PublishPrivateContext(owner, incarnation);
+-          }
++        self->AdmitPrivateContext(std::move(owner), std::move(client),
++                                  std::move(completion));
++      }, weak_factory_.GetWeakPtr(), owner, client, std::move(completion)));
++}
++
++void AccessNetworkContextTransport::AdmitPrivateContext(
++    aegis_access::OwnershipKey owner, PrivateContext client,
++    base::OnceCallback<void(PrivateContext)> completion) {
++  if (!OwnsConfiguredPartition(owner) || !client->is_connected()) {
++    std::move(completion).Run(nullptr);
++    return;
++  }
++  auto& state = partitions_.at(owner.storage_partition_token);
++  const auto previous = state.private_contexts.find(client->incarnation());
++  if (previous == state.private_contexts.end()) {
++    FinishPrivateContextBind(std::move(owner), std::move(client), {},
++                             std::move(completion), false);
++    return;
++  }
++  // The old control disconnect and the new bind use distinct pipes. Ask the
++  // existing control for a response issued after the new handshake before
++  // reusing it. Dropping the old pipe may settle the query while its entry is
++  // being erased, so complete the bind in a later task.
++  const auto& previous_client = previous->second.client;
++  const auto previous_control = previous_client->control_id();
++  previous_client->CheckConnected(base::BindPostTaskToCurrentDefault(base::BindOnce(
++      [](base::WeakPtr<AccessNetworkContextTransport> self,
++         aegis_access::OwnershipKey owner, PrivateContext client,
++         base::UnguessableToken previous_control,
++         base::OnceCallback<void(PrivateContext)> completion, bool alive) {
++        if (!self) {
++          std::move(completion).Run(nullptr);
++          return;
+         }
+-        // All factories for the same actual Context share one sequence owner.
+-        std::move(completion).Run(entry->second.client);
+-      }, weak_factory_.GetWeakPtr(), owner, client, network_service_process_,
+-      std::move(completion)));
++        self->FinishPrivateContextBind(std::move(owner), std::move(client),
++            previous_control, std::move(completion), alive);
++      }, weak_factory_.GetWeakPtr(), std::move(owner), std::move(client),
++      previous_control, std::move(completion))));
++}
++
++void AccessNetworkContextTransport::FinishPrivateContextBind(
++    aegis_access::OwnershipKey owner, PrivateContext client,
++    base::UnguessableToken previous_control,
++    base::OnceCallback<void(PrivateContext)> completion, bool previous_alive) {
++  if (!OwnsConfiguredPartition(owner) || !client->is_connected()) {
++    std::move(completion).Run(nullptr);
++    return;
++  }
++  const auto service_process = NetworkServiceProcessFor(client->process_id());
++  if (!service_process) {
++    std::move(completion).Run(nullptr);
++    return;
++  }
++  auto& state = partitions_.at(owner.storage_partition_token);
++  const auto incarnation = client->incarnation();
++  const auto previous = state.private_contexts.find(incarnation);
++  if (previous != state.private_contexts.end()) {
++    if (previous->second.service_process != *service_process) {
++      std::move(completion).Run(nullptr);
++      return;
++    }
++    if (previous->second.client->control_id() != previous_control) {
++      AdmitPrivateContext(std::move(owner), std::move(client), std::move(completion));
++      return;
++    }
++    if (previous_alive && previous->second.client->is_connected()) {
++      std::move(completion).Run(previous->second.client);
++      return;
++    }
++    ForgetPrivateControl(owner, incarnation);
++  }
++  auto [entry, inserted] = state.private_contexts.try_emplace(incarnation, client);
++  CHECK(inserted);
++  entry->second.service_process = *service_process;
++  if (const auto lost = state.disconnected_private_contexts.find(incarnation);
++      lost != state.disconnected_private_contexts.end()) {
++    entry->second.sequence = lost->second.sequence;
++    entry->second.possible_listeners = lost->second.possible_listeners;
++  }
++  client->SetDisconnectHandler(base::BindOnce(
++      &AccessNetworkContextTransport::OnPrivateContextDisconnected,
++      weak_factory_.GetWeakPtr(), owner, incarnation, client->control_id()));
++  client->SetRetirementHandler(base::BindOnce(
++      &AccessNetworkContextTransport::OnPrivateContextRetired,
++      weak_factory_.GetWeakPtr(), owner, incarnation));
++  if (std::ranges::any_of(state.retiring_test_listeners,
++          [](const auto& item) { return !!item.second.completion; })) {
++    PublishPrivateContext(owner, incarnation);
++  }
++  std::move(completion).Run(std::move(client));
+ }
+ 
+ void AccessNetworkContextTransport::OnPrivateContextDisconnected(
+-    aegis_access::OwnershipKey owner, std::string incarnation, bool retired) {
++    aegis_access::OwnershipKey owner, std::string incarnation,
++    base::UnguessableToken control, bool retired) {
++  if (retired) {
++    OnPrivateContextRetired(std::move(owner), std::move(incarnation));
++    return;
++  }
+   if (!OwnsConfiguredPartition(owner)) return;
+   auto& state = partitions_.at(owner.storage_partition_token);
+   const auto context = state.private_contexts.find(incarnation);
+-  if (context == state.private_contexts.end()) return;
+-  if (retired) {
+-    state.disconnected_private_contexts.erase(incarnation);
+-  } else if (context->second.sequence) {
++  if (context == state.private_contexts.end() ||
++      context->second.client->control_id() != control) {
++    return;
++  }
++  ForgetPrivateControl(owner, incarnation);
++  if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
++}
++
++void AccessNetworkContextTransport::ForgetPrivateControl(
++    const aegis_access::OwnershipKey& owner, const std::string& incarnation) {
++  auto& state = partitions_.at(owner.storage_partition_token);
++  const auto context = state.private_contexts.find(incarnation);
++  CHECK(context != state.private_contexts.end());
++  if (context->second.sequence) {
+     state.disconnected_private_contexts.insert_or_assign(
+         incarnation, PartitionState::DisconnectedContext{
+-                         context->second.sequence,
+-                         context->second.service_process,
+-                         std::move(context->second.possible_listeners)});
++                         context->second.sequence, context->second.service_process,
++                         std::move(context->second.possible_listeners),
++                         context->second.client});
+   }
+   state.private_contexts.erase(context);
+   SettlePrivatePublication(state, false);
+   InvalidateTestListenersAfterContextLoss(owner, state);
+-  if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
+ }
++
++void AccessNetworkContextTransport::OnPrivateContextRetired(
++    aegis_access::OwnershipKey owner, std::string incarnation) {
++  if (!OwnsConfiguredPartition(owner)) return;
++  auto& state = partitions_.at(owner.storage_partition_token);
++  const bool connected = state.private_contexts.erase(incarnation) != 0;
++  const bool disconnected = state.disconnected_private_contexts.erase(incarnation) != 0;
++  if (!connected && !disconnected) return;
++  if (connected) {
++    SettlePrivatePublication(state, false);
++    InvalidateTestListenersAfterContextLoss(owner, state);
++  }
++  if (HasReadyPrivateContext(owner)) {
++    SettlePrivatePublication(state, true);
++  } else if (state.private_contexts.empty()) {
++    SettleTestListenerRetirements(state, true);
++  }
++}
++
+ bool AccessNetworkContextTransport::SamePrivatePublication(
+     const PrivatePublication& a, const PrivatePublication& b) {
+   if (a.policy != b.policy || a.common != b.common || a.unavailable != b.unavailable ||
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/chrome/browser/aegis/access/access_network_context_transport.h
+index b415e7b027a4ea47b7fa32c7d1f7ef6b17ccde35..449f292bc5013dc4586bf167c2df398c892ed6c7 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.h
++++ b/chrome/browser/aegis/access/access_network_context_transport.h
+@@ -24,7 +24,7 @@
+ #include "components/aegis_access/policy_publication_ack_tracker.h"
+ #include "components/aegis_access/access_route_types.h"
+ #include "chrome/browser/aegis/access/access_private_context_client.h"
+-#include "content/public/browser/network_service_instance.h"
++#include "content/public/browser/service_process_host.h"
+ #include "mojo/public/cpp/bindings/remote_set.h"
+ #include "net/base/network_change_notifier.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
+@@ -66,7 +66,7 @@ struct AccessTransportSelection {
+ class AccessNetworkContextTransport
+     : public base::SupportsUserData::Data,
+       public net::NetworkChangeNotifier::NetworkChangeObserver,
+-      public content::NetworkServiceProcessObserver {
++      public content::ServiceProcessHost::Observer {
+  public:
+   static AccessNetworkContextTransport* Get(Profile* profile);
+   static AccessNetworkContextTransport* GetOrCreate(Profile* profile);
+@@ -249,6 +249,8 @@ class AccessNetworkContextTransport
+       uint64_t sequence;
+       content::ServiceProcessId service_process;
+       std::set<std::string> possible_listeners;
++      // The independent lifecycle pipe still carries the Context's retirement.
++      PrivateContext lifetime_client;
+     };
+     std::map<std::string, DisconnectedContext> disconnected_private_contexts;
+     std::optional<PrivatePublication> private_publication;
+@@ -270,9 +272,8 @@ class AccessNetworkContextTransport
+ 
+   void OnNetworkChanged(
+       net::NetworkChangeNotifier::ConnectionType type) override;
+-  void OnServiceLaunched(const content::ServiceProcessInfo& info) override;
+-  void OnServiceTerminatedNormally(const content::ServiceProcessInfo& info) override;
+-  void OnServiceCrashed(const content::ServiceProcessInfo& info) override;
++  void OnServiceProcessTerminatedNormally(const content::ServiceProcessInfo& info) override;
++  void OnServiceProcessCrashed(const content::ServiceProcessInfo& info) override;
+   void OnNetworkServiceExited(content::ServiceProcessId service_process);
+ 
+   static std::optional<std::string> PartitionKey(
+@@ -306,8 +307,17 @@ class AccessNetworkContextTransport
+   void Broadcast(PartitionState& state);
+   void PublishPrivateContext(const aegis_access::OwnershipKey& owner,
+                              const std::string& incarnation);
++  void AdmitPrivateContext(aegis_access::OwnershipKey owner, PrivateContext client,
++                           base::OnceCallback<void(PrivateContext)> completion);
++  void FinishPrivateContextBind(aegis_access::OwnershipKey owner,
++      PrivateContext client, base::UnguessableToken previous_control,
++      base::OnceCallback<void(PrivateContext)> completion, bool previous_alive);
+   void OnPrivateContextDisconnected(aegis_access::OwnershipKey owner,
+-                                    std::string incarnation, bool retired);
++      std::string incarnation, base::UnguessableToken control, bool retired);
++  void OnPrivateContextRetired(aegis_access::OwnershipKey owner,
++                               std::string incarnation);
++  void ForgetPrivateControl(const aegis_access::OwnershipKey& owner,
++                            const std::string& incarnation);
+ #if BUILDFLAG(IS_MAC)
+   bool HasAcknowledgedPrivateProxy(
+       const aegis_access::OwnershipKey& owner,
+@@ -330,7 +340,6 @@ class AccessNetworkContextTransport
+   std::string runtime_profile_token_;
+   uint64_t network_epoch_ = 1;
+   uint64_t private_install_attempt_ = 0;
+-  content::ServiceProcessId network_service_process_;
+   TestListenerLostCallback test_listener_lost_;
+   std::map<std::string, PartitionState> partitions_;
+   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};
+diff --git a/chrome/browser/aegis/access/access_private_context_client.cc b/chrome/browser/aegis/access/access_private_context_client.cc
+index de657761d8ff4711db99ee97661b2c726978d9d4..34370300d9fe0d08437d655055ff86401fd5efb9 100644
+--- a/chrome/browser/aegis/access/access_private_context_client.cc
++++ b/chrome/browser/aegis/access/access_private_context_client.cc
+@@ -2,6 +2,7 @@
+ #include "chrome/browser/aegis/access/access_private_context_client.h"
+ 
+ #include <memory>
++#include <utility>
+ #include <type_traits>
+ 
+ #include "base/check.h"
+@@ -31,7 +32,7 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
+         std::move(completion).Run(std::remove_cvref_t<Reply>{});
+         return;
+       }
+-      std::move(completion).Run(reply);
++      std::move(completion).Run(std::forward<Reply>(reply));
+     }
+     base::TimeTicks deadline;
+     base::OneShotTimer timer;
+@@ -51,7 +52,7 @@ base::OnceCallback<void(Reply)> BoundFactorySetupReply(
+   }
+   return base::BindOnce(
+       [](std::shared_ptr<PendingReply> pending, Reply reply) {
+-        pending->Finish(reply);
++        pending->Finish(std::forward<Reply>(reply));
+       }, std::move(pending));
+ }
+ 
+@@ -162,13 +163,15 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
+   auto reply = BoundFactorySetupReply(base::BindOnce(
+           [](base::WeakPtr<AccessPrivateContextClient> self, uint64_t operation,
+              base::OnceCallback<void(bool)> completion,
+-             const std::string& incarnation) {
++             mojom::AegisAccessContextIdentityPtr identity) {
+             const bool current = self && operation == self->operation_;
+-            const bool accepted = current && !incarnation.empty();
++            const bool accepted = current && !self->retired_ && identity &&
++                !identity->incarnation.empty() && identity->process_id;
+             if (current) {
+               self->reject_initialize_.Reset();
+               if (accepted) {
+-                self->incarnation_ = incarnation;
++                self->incarnation_ = identity->incarnation;
++                self->process_id_ = identity->process_id;
+                 self->connected_ = true;
+               } else {
+                 self->context_.reset();
+@@ -177,9 +180,26 @@ void AccessPrivateContextClient::Initialize(network::mojom::NetworkContext* cont
+             std::move(completion).Run(accepted);
+           }, weak_factory_.GetWeakPtr(), operation, std::move(completion)),
+           &reject_initialize_);
+-  context->BindAegisAccessContext(std::move(receiver),
+-      mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(reply), std::string()));
++  context->BindAegisAccessContext(
++      std::move(receiver), lifetime_.BindNewPipeAndPassRemote(),
++      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
++          std::move(reply), mojom::AegisAccessContextIdentityPtr()));
+ }
++
++void AccessPrivateContextClient::CheckConnected(
++    base::OnceCallback<void(bool)> completion) {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (!is_connected()) {
++    std::move(completion).Run(false);
++    return;
++  }
++  auto reply = BoundFactorySetupReply(std::move(completion));
++  context_.QueryVersion(base::BindOnce(
++      [](base::OnceCallback<void(bool)> reply, uint32_t) {
++        std::move(reply).Run(true);
++      }, mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(reply), false)));
++}
++
+ void AccessPrivateContextClient::PublishSnapshot(
+     network::mojom::AegisAccessSnapshotPtr snapshot,
+     base::OnceCallback<void(bool)> completion) {
+@@ -366,6 +386,22 @@ void AccessPrivateContextClient::SetDisconnectHandler(
+   on_disconnect_ = std::move(handler);
+ }
+ 
++void AccessPrivateContextClient::SetRetirementHandler(base::OnceClosure handler) {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  CHECK(!retired_ && !on_retired_);
++  on_retired_ = std::move(handler);
++}
++
++void AccessPrivateContextClient::OnContextRetired() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  retired_ = true;
++  connected_ = ready_ = publication_pending_ = false;
++  ++operation_;
++  auto notify = std::move(on_retired_);
++  if (reject_initialize_) std::move(reject_initialize_).Run();
++  if (notify) std::move(notify).Run();
++}
++
+ void AccessPrivateContextClient::OnDisconnect(uint32_t reason, const std::string&) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   connected_ = ready_ = publication_pending_ = false;
+diff --git a/chrome/browser/aegis/access/access_private_context_client.h b/chrome/browser/aegis/access/access_private_context_client.h
+index fa2bcf4487b9e64089d070d0cf5a2238deca05a7..45c3dd5ab325cc77dd405a995dbe69c1c8ffa709 100644
+--- a/chrome/browser/aegis/access/access_private_context_client.h
++++ b/chrome/browser/aegis/access/access_private_context_client.h
+@@ -9,11 +9,13 @@
+ #include "base/functional/callback.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/sequence_checker.h"
++#include "base/unguessable_token.h"
+ #include "components/aegis_access/access_route_types.h"
+ #include "components/aegis_access/access_policy_evaluator.h"
+ #include "components/aegis_access/access_proxy_route_adapter.h"
+ #include "components/aegis_access/access_prepared_listener.h"
+ #include "net/base/auth.h"
++#include "mojo/public/cpp/bindings/receiver.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
+ #include "services/network/public/mojom/aegis_access_route_types.mojom.h"
+@@ -28,13 +30,16 @@ struct AccessPrivateEndpoint {
+ // Browser-owned capability for the exact terminal NetworkContext. The raw
+ // NetworkContext proxy is used only during Initialize, never retained across
+ // a deferred document commit or Network Service restart.
+-class AccessPrivateContextClient {
++class AccessPrivateContextClient
++    : public network::mojom::AegisAccessContextLifetime {
+  public:
+   explicit AccessPrivateContextClient(aegis_access::OwnershipKey owner);
+-  ~AccessPrivateContextClient();
++  ~AccessPrivateContextClient() override;
+   void Initialize(network::mojom::NetworkContext* context,
+                   base::OnceCallback<void(bool)> completion);
+   void SetDisconnectHandler(base::OnceCallback<void(bool)> handler);
++  void SetRetirementHandler(base::OnceClosure handler);
++  void CheckConnected(base::OnceCallback<void(bool)> completion);
+   void PublishSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
+                        base::OnceCallback<void(bool)> completion);
+   // Encodes the whole validated Browser policy and all registered groups.
+@@ -56,18 +61,28 @@ class AccessPrivateContextClient {
+       mojo::PendingReceiver<network::mojom::AegisAccessURLLoaderFactory> receiver,
+       base::OnceCallback<void(bool)> completion);
+   bool is_ready() const { return ready_; }
+-  bool is_connected() const { return connected_ && context_.is_connected(); }
++  bool is_connected() const {
++    return connected_ && !retired_ && context_.is_connected();
++  }
++  const base::UnguessableToken& control_id() const { return control_id_; }
++  uint64_t process_id() const { return process_id_; }
+   network::mojom::AegisAccessOwnerPtr owner_for_binding() const { return owner_.Clone(); }
+   const std::string& incarnation() const { return incarnation_; }
+   uint64_t published_sequence() const { return published_sequence_; }
+ 
+  private:
+   void OnDisconnect(uint32_t reason, const std::string& description);
++  void OnContextRetired() override;
++  const base::UnguessableToken control_id_ = base::UnguessableToken::Create();
++  uint64_t process_id_ = 0;
+   network::mojom::AegisAccessOwnerPtr owner_;
+   std::string incarnation_;
+   mojo::Remote<network::mojom::AegisAccessContext> context_;
++  mojo::Receiver<network::mojom::AegisAccessContextLifetime> lifetime_{this};
+   base::OnceClosure reject_initialize_;
+   base::OnceCallback<void(bool)> on_disconnect_;
++  base::OnceClosure on_retired_;
++  bool retired_ = false;
+   bool connected_ = false;
+   bool ready_ = false;
+   bool publication_pending_ = false;
+diff --git a/chrome/browser/aegis/access/access_private_publication_unittest.cc b/chrome/browser/aegis/access/access_private_publication_unittest.cc
+index b0efc4b19243b233d4889d71761d9f6e7812a7d1..38836b8922427bf89c94d3fcade2f06c9158724b 100644
+--- a/chrome/browser/aegis/access/access_private_publication_unittest.cc
++++ b/chrome/browser/aegis/access/access_private_publication_unittest.cc
+@@ -6,12 +6,14 @@
+ #include <vector>
+ 
+ #include "base/test/task_environment.h"
++#include "base/process/process_handle.h"
+ #include "base/test/test_future.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/aegis/access/access_private_context_client.h"
+ #include "chrome/test/base/testing_profile.h"
+ #include "content/public/test/browser_task_environment.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
++#include "mojo/public/cpp/bindings/remote_set.h"
+ #include "net/base/network_anonymization_key.h"
+ #include "net/base/schemeful_site.h"
+ #include "net/proxy_resolution/proxy_info.h"
+@@ -43,8 +45,10 @@ class HeldPrivateContext final : public network::TestNetworkContext,
+  public:
+   void BindAegisAccessContext(
+       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
++      mojo::PendingRemote<network::mojom::AegisAccessContextLifetime> lifetime,
+       BindAegisAccessContextCallback callback) override {
+     receivers.Add(this, std::move(receiver));
++    lifetime_remotes.Add(std::move(lifetime));
+ #if BUILDFLAG(IS_MAC)
+     if (hold_bind) {
+       CHECK(!bind_reply);
+@@ -52,7 +56,8 @@ class HeldPrivateContext final : public network::TestNetworkContext,
+       return;
+     }
+ #endif
+-    std::move(callback).Run(incarnation);
++    std::move(callback).Run(network::mojom::AegisAccessContextIdentity::New(
++        incarnation, base::GetCurrentProcId()));
+   }
+   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr value,
+                        InstallSnapshotCallback callback) override {
+@@ -123,6 +128,7 @@ class HeldPrivateContext final : public network::TestNetworkContext,
+   network::mojom::AegisAccessSnapshotPtr snapshot;
+   InstallSnapshotCallback reply;
+   mojo::ReceiverSet<network::mojom::AegisAccessContext> receivers;
++  mojo::RemoteSet<network::mojom::AegisAccessContextLifetime> lifetime_remotes;
+ };
+ 
+ class AccessPrivatePublicationTest : public testing::Test {
+@@ -398,7 +404,9 @@ TEST_F(AccessPrivatePublicationDeadlineTest, BindReplyAtDeadlineBeforeTimerIsRej
+   ASSERT_TRUE(context.bind_reply);
+   environment_.AdvanceClock(base::Seconds(30));
+   ASSERT_FALSE(bound.IsReady());
+-  std::move(context.bind_reply).Run(context.incarnation);
++  std::move(context.bind_reply).Run(
++      network::mojom::AegisAccessContextIdentity::New(
++          context.incarnation, base::GetCurrentProcId()));
+   ASSERT_TRUE(bound.IsReady());
+   EXPECT_FALSE(bound.Get());
+   environment_.RunUntilIdle();
+@@ -478,7 +486,9 @@ TEST_F(AccessPrivateFactoryDeadlineTest, HeldBindClosesFactoryWithoutRetiringSta
+   EXPECT_EQ(context_.receivers.size(), 1u);
+   EXPECT_FALSE(transport_->HasReadyPrivateContext(owner_));
+ 
+-  std::move(context_.bind_reply).Run(context_.incarnation);
++  std::move(context_.bind_reply).Run(
++      network::mojom::AegisAccessContextIdentity::New(
++          context_.incarnation, base::GetCurrentProcId()));
+   environment_.RunUntilIdle();
+   EXPECT_FALSE(waiting.is_connected());
+   EXPECT_EQ(context_.install_count, 1u);
+@@ -527,7 +537,9 @@ TEST_F(AccessPrivateFactoryDeadlineTest, PrivatePipeClosureBeforeBindReplyCloses
+   EXPECT_TRUE(disconnected.IsReady());
+   EXPECT_FALSE(waiting.is_connected());
+   EXPECT_TRUE(network_.is_connected());
+-  std::move(context_.bind_reply).Run(context_.incarnation);
++  std::move(context_.bind_reply).Run(
++      network::mojom::AegisAccessContextIdentity::New(
++          context_.incarnation, base::GetCurrentProcId()));
+   environment_.RunUntilIdle();
+   EXPECT_FALSE(waiting.is_connected());
+   EXPECT_EQ(context_.install_count, 0u);
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index 32b9c1a0be8ca923e0f9325c107f79c606def84b..591bb53529e2a2b03b2c1e552c81aeca8590d2bb 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1,6 +1,8 @@
+ // Copyright 2026 GCSA
+ 
+ #include "chrome/browser/aegis/access/access_site_proxy_bubble_controller.h"
++
++#include <limits>
+ #include "chrome/browser/aegis/access/access_async_rule_store.h"
+ #include "chrome/browser/aegis/access/access_browser_request_adapter.h"
+ #include "chrome/browser/aegis/access/access_build_channel.h"
+@@ -12,6 +14,7 @@
+ #include <string_view>
+ 
+ #include "base/command_line.h"
++#include "base/process/process_handle.h"
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+@@ -42,6 +45,7 @@
+ #include "net/url_request/redirect_info.h"
+ #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
++#include "mojo/public/cpp/bindings/remote_set.h"
+ #include "services/network/public/cpp/url_loader_completion_status.h"
+ #include "services/network/public/mojom/url_response_head.mojom.h"
+ #include "services/network/test/test_network_context.h"
+@@ -376,9 +380,12 @@ class ProductAckContext final : public network::TestNetworkContext,
+  public:
+   void BindAegisAccessContext(
+       mojo::PendingReceiver<network::mojom::AegisAccessContext> receiver,
++      mojo::PendingRemote<network::mojom::AegisAccessContextLifetime> lifetime,
+       BindAegisAccessContextCallback callback) override {
+     receivers_.Add(this, std::move(receiver));
+-    std::move(callback).Run(incarnation);
++    lifetimes_.Add(std::move(lifetime));
++    std::move(callback).Run(network::mojom::AegisAccessContextIdentity::New(
++        incarnation, process_id));
+   }
+   void InstallSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
+                        InstallSnapshotCallback callback) override {
+@@ -438,8 +445,16 @@ class ProductAckContext final : public network::TestNetworkContext,
+   bool hold_next = false;
+   std::string hold_next_registration;
+   std::string incarnation = "product-test-context";
++  uint64_t process_id = base::GetCurrentProcId();
+   void Disconnect() { receivers_.Clear(); }
++  void NotifyRetired() {
++    for (const auto& observer : lifetimes_) {
++      observer->OnContextRetired();
++    }
++    lifetimes_.Clear();
++  }
+   void DisconnectRetiredContext() {
++    NotifyRetired();
+     receivers_.ClearWithReason(network::mojom::kAegisAccessContextRetired,
+                                "Access context retired");
+   }
+@@ -448,6 +463,7 @@ class ProductAckContext final : public network::TestNetworkContext,
+   network::mojom::AegisAccessSnapshotAckPtr held_ack_;
+   InstallSnapshotCallback held_reply_;
+   mojo::ReceiverSet<network::mojom::AegisAccessContext> receivers_;
++  mojo::RemoteSet<network::mojom::AegisAccessContextLifetime> lifetimes_;
+ };
+ 
+ class AccessSiteProxyProductTest : public testing::Test {
+@@ -1483,6 +1499,67 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       UntrackedNetworkProcessIdentityRejectsBinding) {
++  ProductAckContext untracked;
++  untracked.incarnation = "untracked-process-context";
++  untracked.process_id = std::numeric_limits<uint64_t>::max();
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &untracked, bound.GetCallback());
++  EXPECT_FALSE(bound.Get());
++}
++
++TEST_F(AccessSavedTestProfileProductTest,
++       RebindBeforeOldDisconnectIsDispatchedUsesNewControl) {
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> first;
++  transport_->BindPrivateContext(owner_, &context_, first.GetCallback());
++  const auto previous = first.Get();
++  ASSERT_TRUE(previous);
++
++  ProductAckContext rebound;
++  rebound.incarnation = context_.incarnation;
++  context_.Disconnect();
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> next;
++  transport_->BindPrivateContext(owner_, &rebound, next.GetCallback());
++  const auto current = next.Get();
++  ASSERT_TRUE(current);
++  environment_.RunUntilIdle();
++  EXPECT_FALSE(previous->is_connected());
++  EXPECT_TRUE(current->is_connected());
++  EXPECT_NE(current->control_id(), previous->control_id());
++}
++
++TEST_F(AccessSavedTestProfileProductTest,
++       DisconnectedControlStillReceivesContextLifetimeProof) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  ProductAckContext survivor;
++  survivor.incarnation = "surviving-context";
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &survivor, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
++
++  context_.hold_next = survivor.hold_next = true;
++  base::test::TestFuture<bool> revoked;
++  options->RevokeTestNodeProfile(revoked.GetCallback());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return context_.has_reply() && survivor.has_reply();
++  }));
++  context_.Disconnect();
++  survivor.Reply(true);
++  environment_.RunUntilIdle();
++  EXPECT_FALSE(revoked.IsReady());
++  EXPECT_TRUE(options->test_profile_runtime().parent_listener_lease_held);
++
++  context_.NotifyRetired();
++  EXPECT_TRUE(revoked.Get());
++  EXPECT_EQ(options->test_profile_runtime_state(),
++            AccessTestProfileRuntimeState::kIdle);
++}
++
+ TEST_F(AccessSavedTestProfileProductTest,
+        ExplicitRevokeAfterNetworkServiceLossKeepsRestoreClosed) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+diff --git a/services/network/network_context.cc b/services/network/network_context.cc
+index f0da408e0f7817d698cd6c09ca9c5a02cb2e0e3b..e13838fddd8760beed0183e2345eccee2176515e 100644
+--- a/services/network/network_context.cc
++++ b/services/network/network_context.cc
+@@ -16,6 +16,7 @@
+ #include <vector>
+ 
+ #include "base/barrier_closure.h"
++#include "base/process/process_handle.h"
+ #include "base/build_time.h"
+ #include "base/byte_size.h"
+ #include "base/callback_list.h"
+@@ -995,6 +996,9 @@ void NetworkContext::CreateNetLogEntriesForActiveWebSockets(
+ NetworkContext::~NetworkContext() {
+   is_destructing_ = true;
+   aegis_access_state_.reset();
++  for (const auto& observer : aegis_access_lifetime_remotes_) {
++    observer->OnContextRetired();
++  }
+   aegis_access_context_receivers_.ClearWithReason(
+       mojom::kAegisAccessContextRetired, "Access context retired");
+ 
+@@ -1155,9 +1159,16 @@ void NetworkContext::CreateURLLoaderFactory(
+ 
+ void NetworkContext::BindAegisAccessContext(
+     mojo::PendingReceiver<mojom::AegisAccessContext> receiver,
++    mojo::PendingRemote<mojom::AegisAccessContextLifetime> lifetime,
+     BindAegisAccessContextCallback callback) {
++  if (!lifetime.is_valid()) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++  aegis_access_lifetime_remotes_.Add(std::move(lifetime));
+   aegis_access_context_receivers_.Add(this, std::move(receiver));
+-  std::move(callback).Run(aegis_access_incarnation_);
++  std::move(callback).Run(mojom::AegisAccessContextIdentity::New(
++      aegis_access_incarnation_, base::GetCurrentProcId()));
+ }
+ void NetworkContext::InstallSnapshot(mojom::AegisAccessSnapshotPtr snapshot,
+                                     InstallSnapshotCallback callback) {
+diff --git a/services/network/network_context.h b/services/network/network_context.h
+index 8ff831abfbc3cb68600e51b1cbd57c3557f2f0df..454035b1a7b600515b7fad11fae0a5b54f2eb786 100644
+--- a/services/network/network_context.h
++++ b/services/network/network_context.h
+@@ -277,6 +277,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+       mojom::URLLoaderFactoryParamsPtr params) override;
+   void BindAegisAccessContext(
+       mojo::PendingReceiver<mojom::AegisAccessContext> receiver,
++      mojo::PendingRemote<mojom::AegisAccessContextLifetime> lifetime,
+       BindAegisAccessContextCallback callback) override;
+   void InstallSnapshot(mojom::AegisAccessSnapshotPtr snapshot,
+       InstallSnapshotCallback callback) override;
+@@ -1237,6 +1238,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+   const std::string aegis_access_incarnation_ =
+       base::UnguessableToken::Create().ToString();
+   mojo::ReceiverSet<mojom::AegisAccessContext> aegis_access_context_receivers_;
++  mojo::RemoteSet<mojom::AegisAccessContextLifetime> aegis_access_lifetime_remotes_;
+   std::unique_ptr<AccessNetworkContextState> aegis_access_state_;
+ 
+   // Keep track of the existing `ConnectionChangeNotifiers`. These will be later
+diff --git a/services/network/public/mojom/aegis_access_route_types.mojom b/services/network/public/mojom/aegis_access_route_types.mojom
+index 47a92581250bad7ed996c5273589554951b64d28..5593c284e08f7e4433420711279fa78e2dd55644 100644
+--- a/services/network/public/mojom/aegis_access_route_types.mojom
++++ b/services/network/public/mojom/aegis_access_route_types.mojom
+@@ -7,6 +7,13 @@ import "services/network/public/mojom/url_request.mojom";
+ 
+ const uint32 kAegisAccessContextRetired = 1;
+ 
++// Issued by the actual NetworkContext, never inferred from a Browser-side
++// launch observer sampled before an asynchronous bind.
++struct AegisAccessContextIdentity {
++  string incarnation;
++  uint64 process_id;
++};
++
+ // These interfaces are issued only through the Browser-owned NetworkContext.
+ // They must never be exposed to a renderer or embedded in ResourceRequest.
+ enum AegisAccessChannel { kDev, kAlpha, kBeta, kRelease };
+diff --git a/services/network/public/mojom/network_context.mojom b/services/network/public/mojom/network_context.mojom
+index 7b985a7cd00677843550aa006269c38b7f877829..898000ad06dbc0d5c8a502bbc921a816a3f54c43 100644
+--- a/services/network/public/mojom/network_context.mojom
++++ b/services/network/public/mojom/network_context.mojom
+@@ -2051,11 +2051,18 @@ interface NetworkContext {
+   // Retains this exact Context for delayed Browser document binding, without
+   // retaining a raw client-side NetworkContext proxy across service resets.
+   [AllowedContext=sandbox.mojom.Context.kBrowser]
+-  BindAegisAccessContext(pending_receiver<AegisAccessContext> receiver)
+-      => (string incarnation);
++  BindAegisAccessContext(
++      pending_receiver<AegisAccessContext> receiver,
++      pending_remote<AegisAccessContextLifetime> lifetime)
++      => (AegisAccessContextIdentity? identity);
+ 
+ };
+ 
++// A separate, browser-owned pipe survives loss of the snapshot-control pipe.
++interface AegisAccessContextLifetime {
++  OnContextRetired();
++};
++
+ // Browser retains this private capability; a Context reset closes every pipe.
+ interface AegisAccessContext {
+   InstallSnapshot(AegisAccessSnapshot snapshot) => (AegisAccessSnapshotAck ack);
+diff --git a/services/network/test/test_network_context.cc b/services/network/test/test_network_context.cc
+index 60fa0fa83bccf70e49874d28d8c5388eff105b55..a0be7f5172095d35e6a5e2de049330dd7bdfbf47 100644
+--- a/services/network/test/test_network_context.cc
++++ b/services/network/test/test_network_context.cc
+@@ -4,8 +4,9 @@
+ namespace network {
+ void TestNetworkContext::BindAegisAccessContext(
+     mojo::PendingReceiver<mojom::AegisAccessContext>,
++    mojo::PendingRemote<mojom::AegisAccessContextLifetime>,
+     BindAegisAccessContextCallback callback) {
+-  std::move(callback).Run(std::string());
++  std::move(callback).Run(nullptr);
+ }
+ 
+ void TestNetworkContext::InstallAegisAccessSnapshot(mojom::AegisAccessSnapshotPtr snapshot,
+diff --git a/services/network/test/test_network_context.h b/services/network/test/test_network_context.h
+index 2292943761dd960dd027f582a19a8330acd1b02d..250ad040246ea04b7399e03cc6903e12e70efe56 100644
+--- a/services/network/test/test_network_context.h
++++ b/services/network/test/test_network_context.h
+@@ -341,6 +341,7 @@ class TestNetworkContext : public mojom::NetworkContext {
+   }
+   void BindAegisAccessContext(
+       mojo::PendingReceiver<mojom::AegisAccessContext>,
++      mojo::PendingRemote<mojom::AegisAccessContextLifetime>,
+       BindAegisAccessContextCallback callback) override;
+   void InstallAegisAccessSnapshot(mojom::AegisAccessSnapshotPtr snapshot,
+       InstallAegisAccessSnapshotCallback callback) override;
+-- 
+2.54.0 (Apple Git-157)
+

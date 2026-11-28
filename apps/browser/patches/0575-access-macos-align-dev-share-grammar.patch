@@ -1,0 +1,405 @@
+From c1d5c86c6d26475722a286f73d1a11ee582c22d6 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 08:42:27 +0800
+Subject: [PATCH] fix(access): align DEV share authority and transport fields
+
+---
+ .../access/access_test_node_native_config.cc  |  9 ++-
+ ...access_test_node_native_config_unittest.cc |  9 +++
+ .../access/access_test_node_qr_mac_test.mm    | 21 +++++
+ components/aegis_access/access_test_node.cc   | 57 +++++++++-----
+ .../aegis_access/access_test_node_test.cc     | 77 +++++++++++++++++++
+ .../access_test_node_test_fixture.h           | 65 ++++++++++++++++
+ 6 files changed, 215 insertions(+), 23 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.cc b/chrome/browser/aegis/access/access_test_node_native_config.cc
+index 0774d7d085a9972581e355c92aa721d4c98f970a..dbb0e9413db89832544251bc2f6c58378bb997bc 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config.cc
+@@ -12,14 +12,15 @@ namespace {
+ 
+ std::string EscapeNativeQueryValue(std::string_view value) {
+   // The share decoder splits on '&' and '#' and decodes '%' exactly once.
+-  // Preserve every other printable character to avoid expanding the request
+-  // target or gRPC service name beyond the parser's share budget.
++  // Escape URI delimiters in field data so they cannot look like a second
++  // share. Preserve other printable bytes to stay within the share budget.
+   constexpr char kHex[] = "0123456789ABCDEF";
+   std::string result;
+   result.reserve(value.size());
+-  for (unsigned char byte : value) {
++  for (; !value.empty(); value.remove_prefix(1)) {
++    const auto byte = static_cast<unsigned char>(value.front());
+     if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
+-        byte == '%') {
++        byte == '%' || value.starts_with("://")) {
+       result.push_back('%');
+       result.push_back(kHex[byte >> 4]);
+       result.push_back(kHex[byte & 15]);
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+index 4ce7a9bc1fba58400747200d1211960749bcf355..8fc2978eb7e9223b9ab99dfb033d17c85f3f0c6c 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config_unittest.cc
+@@ -232,6 +232,15 @@ TEST(AccessTestNodeNativeConfigTest, StoredRealityRetainsV1Grammar) {
+   }
+ }
+ 
++TEST(AccessTestNodeNativeConfigTest,
++     DevRealityRevalidationEscapesNestedFieldUri) {
++  auto node = Node();
++  node.spider_x = "/manual?next=https://callback.example";
++  EXPECT_EQ(ValidateAccessTestNodeNative(
++                node, AccessTestNodeNativeValidation::kFreshDevImport),
++            node);
++}
++
+ TEST(AccessTestNodeNativeConfigTest,
+      RejectsExtendedModelsWithInvalidDialAddress) {
+   for (const auto share : {aegis_access::test::kSyntheticTcpTlsVisionShare,
+diff --git a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+index 31c45da92072e02b0cd4834ca3b05c4a336716a9..d096e2cfda1d3d2cb9016eea1b1918ce6e8a6907 100644
+--- a/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
++++ b/chrome/browser/aegis/access/access_test_node_qr_mac_test.mm
+@@ -107,6 +107,7 @@ int main() {
+     }
+     for (const auto vector :
+          {kSyntheticWebSocketTlsUnknownFingerprintShare,
++          kSyntheticTcpRealityVisionConcatenatedShare,
+           kSyntheticTcpRealityVisionInvalidFingerprintShare,
+           kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+           kSyntheticTcpRealityVisionOddShortIdShare,
+@@ -118,6 +119,26 @@ int main() {
+       ExpectStatus(DrawCodes(MakeCode(vector)),
+                    AccessTestNodeQrStatus::kInvalidShare, extended);
+     }
++    for (const auto vector :
++         {kSyntheticTcpRealityVisionSlashAndAliasesShare,
++          kSyntheticWebSocketTlsSlashShare,
++          kSyntheticTcpTlsVisionSlashShare,
++          kSyntheticGrpcRealitySlashShare}) {
++      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      const auto qr = Decode(DrawCodes(MakeCode(vector)), extended);
++      assert(text.node && qr.status == AccessTestNodeQrStatus::kDecoded);
++      assert(text.node == qr.node);
++    }
++    for (const auto vector :
++         {kSyntheticTcpRealityVisionMissingFlowShare,
++          kSyntheticWebSocketTlsFingerprintAliasShare,
++          kSyntheticTcpTlsVisionFingerprintAliasShare,
++          kSyntheticGrpcRealityFingerprintAliasShare}) {
++      const auto text = aegis_access::ParseAccessTestNodeShare(vector, extended);
++      assert(text.error == aegis_access::AccessTestNodeError::kUnsupportedOutbound);
++      ExpectStatus(DrawCodes(MakeCode(vector)),
++                   AccessTestNodeQrStatus::kUnsupportedOutbound, extended);
++    }
+     std::string exporter_share(share);
+     exporter_share.insert(exporter_share.find('#'), "&pcks=");
+     const auto scanned_exporter = Decode(DrawCodes(MakeCode(exporter_share)));
+diff --git a/components/aegis_access/access_test_node.cc b/components/aegis_access/access_test_node.cc
+index fefcfe24db14bfcd1a924231e3d670d6872ed55e..23e599c74a937a4437b822c729aea364e4878b16 100644
+--- a/components/aegis_access/access_test_node.cc
++++ b/components/aegis_access/access_test_node.cc
+@@ -409,7 +409,7 @@ bool HasOnlyKeys(const Query& query, const std::string_view (&keys)[N]) {
+   });
+ }
+ 
+-std::optional<Query> ParseQuery(std::string_view query) {
++std::optional<Query> ParseQuery(std::string_view query, bool& has_alias) {
+   Query result;
+   for (;;) {
+     const auto next = query.find('&');
+@@ -420,8 +420,12 @@ std::optional<Query> ParseQuery(std::string_view query) {
+     }
+     const auto key = Unescape(item.substr(0, equal));
+     auto value = Unescape(item.substr(equal + 1));
+-    if (!key || !value ||
+-        !result.emplace(CanonicalQueryKey(*key), std::move(*value)).second) {
++    if (!key || !value) {
++      return std::nullopt;
++    }
++    const auto canonical = CanonicalQueryKey(*key);
++    has_alias |= canonical != *key;
++    if (!result.emplace(canonical, std::move(*value)).second) {
+       return std::nullopt;
+     }
+     if (next == std::string_view::npos) {
+@@ -473,6 +477,9 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+     return {kUnsupported, std::nullopt};
+   }
+   share.remove_prefix(kScheme.size());
++  const bool extended = mode == AccessTestNodeImportMode::kAllowExtendedVless;
++  const bool has_nested_uri =
++      extended && share.find("://") != std::string_view::npos;
+   const auto fragment_start = share.find('#');
+   const auto fragment = share.substr(std::min(fragment_start, share.size()));
+   share = share.substr(0, fragment_start);
+@@ -481,7 +488,10 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+     return {kInvalid, std::nullopt};
+   }
+ 
+-  const auto authority = share.substr(0, query_start);
++  auto authority = share.substr(0, query_start);
++  if (extended && authority.ends_with('/')) {
++    authority.remove_suffix(1);
++  }
+   const auto at = authority.find('@');
+   const auto colon = authority.rfind(':');
+   if (at == std::string_view::npos || colon == std::string_view::npos ||
+@@ -499,7 +509,8 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+     return {kInvalid, std::nullopt};
+   }
+ 
+-  const auto query = ParseQuery(share.substr(query_start + 1));
++  bool has_alias = false;
++  const auto query = ParseQuery(share.substr(query_start + 1), has_alias);
+   if (!query) {
+     return {kInvalid, std::nullopt};
+   }
+@@ -515,16 +526,23 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+   }
+   const auto type = ValueOr(*query, "type", "tcp");
+   const auto security = ValueOr(*query, "security");
+-  const bool extended = mode == AccessTestNodeImportMode::kAllowExtendedVless;
+   const bool can_use_ws =
+       extended || mode == AccessTestNodeImportMode::kAllowWebSocketTls;
+   const bool ws = can_use_ws && type == "ws" && security == "tls";
+   const bool tcp_tls =
+       extended && type == "tcp" && security == "tls" && query->contains("type");
+   const bool grpc = extended && type == "grpc" && security == "reality";
+-  if (extended && (ws || tcp_tls || grpc) &&
+-      (!IsExtendedAddress(address) ||
+-       fragment.find("://") != std::string_view::npos)) {
++  if (extended && (ws || tcp_tls || grpc)) {
++    if (!IsExtendedAddress(address) ||
++        fragment.find("://") != std::string_view::npos) {
++      return {kInvalid, std::nullopt};
++    }
++    // Only the original RAW/REALITY import accepts the exporter aliases.
++    if (has_alias) {
++      return {kUnsupported, std::nullopt};
++    }
++  }
++  if (has_nested_uri && type == "tcp" && security == "reality") {
+     return {kInvalid, std::nullopt};
+   }
+   AccessTestNode node{std::move(host),
+@@ -602,16 +620,17 @@ AccessTestNodeParseResult ParseAccessTestNodeShare(
+   }
+   // Preserve the legacy RAW/REALITY query grammar, including empty pcks and
+   // the optional affirmative exporter capability.
+-  if (!grpc &&
+-      (!std::ranges::all_of(
+-           *query,
+-           [](const auto& entry) { return IsRealityQueryKey(entry.first); }) ||
+-       type != "tcp" || security != "reality" ||
+-       ValueOr(*query, "flow", "xtls-rprx-vision") != "xtls-rprx-vision" ||
+-       ValueOr(*query, "headerType", "none") != "none" ||
+-       !ValueOr(*query, "pcks").empty() ||
+-       (query->contains("support-x25519mlkem768") &&
+-        ValueOr(*query, "support-x25519mlkem768") != "true"))) {
++  if (!grpc && (!std::ranges::all_of(*query,
++                                     [](const auto& entry) {
++                                       return IsRealityQueryKey(entry.first);
++                                     }) ||
++                type != "tcp" || security != "reality" ||
++                ValueOr(*query, "flow", extended ? "" : "xtls-rprx-vision") !=
++                    "xtls-rprx-vision" ||
++                ValueOr(*query, "headerType", "none") != "none" ||
++                !ValueOr(*query, "pcks").empty() ||
++                (query->contains("support-x25519mlkem768") &&
++                 ValueOr(*query, "support-x25519mlkem768") != "true"))) {
+     return {kUnsupported, std::nullopt};
+   }
+ 
+diff --git a/components/aegis_access/access_test_node_test.cc b/components/aegis_access/access_test_node_test.cc
+index a658b16ae8137ea2e5bc301359bd6f300b029fe8..59c54842bf0257ae7ba54e6eaa614ec24886a087 100644
+--- a/components/aegis_access/access_test_node_test.cc
++++ b/components/aegis_access/access_test_node_test.cc
+@@ -4,6 +4,7 @@
+ #include <cassert>
+ #include <iostream>
+ #include <string>
++#include <utility>
+ 
+ #include "components/aegis_access/access_test_node_test_fixture.h"
+ 
+@@ -12,17 +13,26 @@ namespace {
+ using aegis_access::AccessTestNodeError;
+ using aegis_access::AccessTestNodeImportMode;
+ using aegis_access::ParseAccessTestNodeShare;
++using aegis_access::test::kSyntheticGrpcRealityFingerprintAliasShare;
+ using aegis_access::test::kSyntheticGrpcRealityInvalidDialAddressShare;
+ using aegis_access::test::kSyntheticGrpcRealityShare;
++using aegis_access::test::kSyntheticGrpcRealitySlashShare;
++using aegis_access::test::kSyntheticTcpRealityVisionConcatenatedShare;
+ using aegis_access::test::kSyntheticTcpRealityVisionInvalidFingerprintShare;
+ using aegis_access::test::kSyntheticTcpRealityVisionInvalidPublicKeyShare;
++using aegis_access::test::kSyntheticTcpRealityVisionMissingFlowShare;
+ using aegis_access::test::kSyntheticTcpRealityVisionOddShortIdShare;
++using aegis_access::test::kSyntheticTcpRealityVisionSlashAndAliasesShare;
+ using aegis_access::test::kSyntheticTcpRealityVisionUnsafeSpiderXShare;
++using aegis_access::test::kSyntheticTcpTlsVisionFingerprintAliasShare;
+ using aegis_access::test::kSyntheticTcpTlsVisionInvalidDialAddressShare;
+ using aegis_access::test::kSyntheticTcpTlsVisionShare;
++using aegis_access::test::kSyntheticTcpTlsVisionSlashShare;
+ using aegis_access::test::kSyntheticTestNodeShare;
++using aegis_access::test::kSyntheticWebSocketTlsFingerprintAliasShare;
+ using aegis_access::test::kSyntheticWebSocketTlsQueryShare;
+ using aegis_access::test::kSyntheticWebSocketTlsShare;
++using aegis_access::test::kSyntheticWebSocketTlsSlashShare;
+ using aegis_access::test::kSyntheticWebSocketTlsUnknownFingerprintShare;
+ 
+ std::string ReplaceIn(std::string_view input,
+@@ -227,6 +237,73 @@ int main() {
+            .node);
+   assert(ParseAccessTestNodeShare(kSyntheticTestNodeShare, kExtended).node ==
+          result.node);
++  const auto missing_vision = ParseAccessTestNodeShare(
++      kSyntheticTcpRealityVisionMissingFlowShare, kExtended);
++  assert(missing_vision.error == kUnsupported && !missing_vision.node);
++  const auto concatenated = ParseAccessTestNodeShare(
++      kSyntheticTcpRealityVisionConcatenatedShare, kExtended);
++  assert(concatenated.error == kInvalid && !concatenated.node);
++  assert(ParseAccessTestNodeShare(kSyntheticTcpRealityVisionMissingFlowShare)
++             .node == result.node);
++  assert(ParseAccessTestNodeShare(kSyntheticTcpRealityVisionConcatenatedShare)
++             .node == result.node);
++  const auto escaped_spider_uri = ParseAccessTestNodeShare(
++      Replace(
++          "fp=chrome",
++          "fp=chrome&spx=%2Fmanual%3Fnext%3Dhttps%3A%2F%2Fcallback.example"),
++      kExtended);
++  assert(escaped_spider_uri.node &&
++         escaped_spider_uri.node->spider_x ==
++             "/manual?next=https://callback.example");
++  assert(ParseAccessTestNodeShare(
++             Replace("fp=chrome",
++                     "fp=chrome&spx=/manual?next=https://callback.example"),
++             kExtended)
++             .error == kInvalid);
++  for (const auto& [with_slash, plain] : {
++           std::pair{kSyntheticTcpRealityVisionSlashAndAliasesShare,
++                     kSyntheticTestNodeShare},
++           std::pair{kSyntheticWebSocketTlsSlashShare,
++                     kSyntheticWebSocketTlsQueryShare},
++           std::pair{kSyntheticTcpTlsVisionSlashShare,
++                     kSyntheticTcpTlsVisionShare},
++           std::pair{kSyntheticGrpcRealitySlashShare,
++                     kSyntheticGrpcRealityShare},
++       }) {
++    const auto parsed = ParseAccessTestNodeShare(with_slash, kExtended);
++    assert(parsed.node &&
++           parsed.node == ParseAccessTestNodeShare(plain, kExtended).node);
++    for (const auto* path : {"//?", "/extra?", "%2F?"}) {
++      assert(
++          ParseAccessTestNodeShare(ReplaceIn(with_slash, "/?", path), kExtended)
++              .error == kInvalid);
++    }
++  }
++  assert(
++      ParseAccessTestNodeShare(kSyntheticTcpRealityVisionSlashAndAliasesShare)
++          .error == kInvalid);
++  assert(ParseAccessTestNodeShare(kSyntheticWebSocketTlsFingerprintAliasShare,
++                                  kDev)
++             .node == ws.node);
++  for (const auto alias : {
++           kSyntheticWebSocketTlsFingerprintAliasShare,
++           kSyntheticTcpTlsVisionFingerprintAliasShare,
++           kSyntheticGrpcRealityFingerprintAliasShare,
++       }) {
++    const auto invalid = ParseAccessTestNodeShare(alias, kExtended);
++    assert(invalid.error == kUnsupported && !invalid.node);
++    assert(!ParseAccessTestNodeShare(
++                ReplaceIn(alias, "&fingerprint=", "&%66ingerprint="), kExtended)
++                .node);
++  }
++  assert(ParseAccessTestNodeShare(
++             ReplaceIn(kSyntheticWebSocketTlsShare, "&sni=", "&server_name="),
++             kExtended)
++             .error == kUnsupported);
++  assert(ParseAccessTestNodeShare(
++             ReplaceIn(kSyntheticGrpcRealityShare, "&pbk=", "&publicKey="),
++             kExtended)
++             .error == kUnsupported);
+   for (const auto share : {kSyntheticTcpRealityVisionInvalidFingerprintShare,
+                            kSyntheticTcpRealityVisionInvalidPublicKeyShare,
+                            kSyntheticTcpRealityVisionOddShortIdShare,
+diff --git a/components/aegis_access/access_test_node_test_fixture.h b/components/aegis_access/access_test_node_test_fixture.h
+index 6b2b0d85bfa8b531341cd92b98bba4099c953fdb..5bd3c13a206ac3d542eec745dc2a1aea360d6701 100644
+--- a/components/aegis_access/access_test_node_test_fixture.h
++++ b/components/aegis_access/access_test_node_test_fixture.h
+@@ -91,6 +91,71 @@ inline constexpr std::string_view kSyntheticGrpcRealityInvalidDialAddressShare =
+     "?type=grpc&security=reality&sni=grpc.example&serviceName=sample&sid=0123"
+     "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
+ 
++inline constexpr std::string_view
++    kSyntheticTcpRealityVisionSlashAndAliasesShare =
++        "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443/"
++        "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
++        "&serverName=www.example.com&fingerprint=chrome"
++        "&public_key=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&shortId="
++        "abcd1234"
++        "&headerType=none#demo-reality-vision";
++
++inline constexpr std::string_view kSyntheticWebSocketTlsSlashShare =
++    "vless://00000000-0000-4000-8000-000000000002@192.0.2.20:8443/?type=ws"
++    "&security=tls&host=ws.example.com&fp=chrome&sni=cert.example.com"
++    "&path=%2Fws%3Ftoken%3D%2574est-value%26opaque%3D%25E9&encryption=none"
++    "&alpn=http%2F1.1#synthetic-ws";
++
++inline constexpr std::string_view kSyntheticTcpTlsVisionSlashShare =
++    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443/"
++    "?encryption=none&flow=xtls-rprx-vision&fp=chrome&headerType=none"
++    "&host=metadata.example&security=tls&sni=tls.example&type=tcp"
++    "#synthetic-tcp";
++
++inline constexpr std::string_view kSyntheticGrpcRealitySlashShare =
++    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443/"
++    "?encryption=none&fp=chrome&path=%2Fsample%2FTun"
++    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality"
++    "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
++    "#synthetic-grpc";
++
++inline constexpr std::string_view kSyntheticTcpRealityVisionMissingFlowShare =
++    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
++    "?security=reality&encryption=none&type=tcp&sni=www.example.com&fp=chrome"
++    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
++    "&headerType=none#demo-reality-vision";
++
++inline constexpr std::string_view kSyntheticTcpRealityVisionConcatenatedShare =
++    "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
++    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
++    "&sni=www.example.com&fp=chrome"
++    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
++    "&headerType=none"
++    "#demo-reality-visionvless://"
++    "550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
++    "?flow=xtls-rprx-vision&security=reality&encryption=none&type=tcp"
++    "&sni=www.example.com&fp=chrome"
++    "&pbk=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&sid=abcd1234"
++    "&headerType=none";
++
++inline constexpr std::string_view kSyntheticWebSocketTlsFingerprintAliasShare =
++    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.8:8443?security=tls"
++    "&type=ws&host=edge.example.test&fingerprint=chrome&sni=tls.example.test"
++    "&path=%2Ftest&encryption=none&alpn=#ignored";
++
++inline constexpr std::string_view kSyntheticTcpTlsVisionFingerprintAliasShare =
++    "vless://550e8400-e29b-41d4-a716-446655440000@192.0.2.30:443"
++    "?encryption=none&flow=xtls-rprx-vision&fingerprint=chrome"
++    "&headerType=none&host=metadata.example&security=tls&sni=tls.example"
++    "&type=tcp#synthetic-tcp";
++
++inline constexpr std::string_view kSyntheticGrpcRealityFingerprintAliasShare =
++    "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443"
++    "?encryption=none&fingerprint=chrome&path=%2Fsample%2FTun"
++    "&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality"
++    "&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc"
++    "#synthetic-grpc";
++
+ }  // namespace aegis_access::test
+ 
+ #endif  // COMPONENTS_AEGIS_ACCESS_ACCESS_TEST_NODE_TEST_FIXTURE_H_
+-- 
+2.54.0 (Apple Git-157)
+

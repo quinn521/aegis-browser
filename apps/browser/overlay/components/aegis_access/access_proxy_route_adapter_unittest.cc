@@ -274,5 +274,19 @@ TEST(AccessProxyRouteAdapterTest, Socks5NonLoopbackFailsClosed) {
                                    &endpoint);
 }
 
+TEST(AccessProxyRouteAdapterTest, Socks1080IsBlockedWithoutChangingHttpPorts) {
+  auto endpoint = TestEndpoint();
+  endpoint.port = 1080;
+  endpoint.transport = RegisteredProxyTransport::kSocks5;
+  ExpectInvalidEndpointFailsClosed(TestPlan(RouteAction::kUseRegisteredProxy),
+                                   &endpoint);
+  endpoint.transport = RegisteredProxyTransport::kHttp;
+  net::ProxyInfo info;
+  EXPECT_EQ(ApplyRoutePlanToProxyInfo(TestPlan(RouteAction::kUseRegisteredProxy),
+                                      &endpoint, &info),
+            ProxyRouteApplyStatus::kAppliedProxy);
+  EXPECT_EQ(info.proxy_chain().First().GetPort(), 1080u);
+}
+
 }  // namespace
 }  // namespace aegis_access

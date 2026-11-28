@@ -11,6 +11,7 @@ source_set("access_route_registry") {
   public_deps = [
     "//base",
     "//components/aegis_access:aegis_access",
+    "//components/aegis_access:access_prepared_listener",
     "//net",
     "//services/network/public/mojom:url_loader_base",
   ]

@@ -90,7 +90,9 @@ bool IsPlanCompatibleWithEndpoint(const RoutePlan& plan,
   if (!IsNumericLoopback(endpoint->host)) {
     return false;
   }
-  return endpoint->port != 0;
+  return endpoint->port != 0 &&
+         !(endpoint->transport == RegisteredProxyTransport::kSocks5 &&
+           endpoint->port == 1080);
 }
 
 std::optional<net::ProxyServer> BuildLoopbackProxyServer(

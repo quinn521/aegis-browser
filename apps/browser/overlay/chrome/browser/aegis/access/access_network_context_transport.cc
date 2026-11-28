@@ -9,8 +9,10 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
+#include "base/task/bind_post_task.h"
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "base/process/process_handle.h"
 #include "base/functional/callback_helpers.h"
 #include "base/uuid.h"
 #include "base/task/sequenced_task_runner.h"
@@ -21,6 +23,7 @@
 #include "net/proxy_resolution/proxy_config.h"
 #include "net/proxy_resolution/proxy_info.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/mojom/network_service.mojom.h"
 #include "url/gurl.h"
 
 namespace aegis::access {
@@ -29,6 +32,24 @@ namespace {
 const void* const kTransportUserDataKey = &kTransportUserDataKey;
 constexpr size_t kMaxExactHosts = 256;
 constexpr size_t kMaxPartitionKeyBytes = 1024;
+constexpr base::TimeDelta kPrivateInstallTimeout = base::Seconds(30);
+
+std::optional<content::ServiceProcessId> NetworkServiceProcessFor(
+    uint64_t pid) {
+  if (pid == static_cast<uint64_t>(base::GetCurrentProcId())) {
+    return content::ServiceProcessId();
+  }
+  std::optional<content::ServiceProcessId> found;
+  for (const auto& info : content::ServiceProcessHost::GetRunningProcessInfo()) {
+    if (!info.IsService<network::mojom::NetworkService>() ||
+        pid != static_cast<uint64_t>(info.GetProcess().Pid())) {
+      continue;
+    }
+    if (found) return std::nullopt;
+    found = info.service_process_id();
+  }
+  return found;
+}
 
 bool IsCanonicalExactHost(const std::string& host) {
   if (host.empty() || host.back() == '.') {
@@ -109,10 +130,67 @@ AccessNetworkContextTransport::AccessNetworkContextTransport()
     : runtime_profile_token_(
           base::Uuid::GenerateRandomV4().AsLowercaseString()) {
   net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
+  content::ServiceProcessHost::AddObserver(this);
 }
 
 AccessNetworkContextTransport::~AccessNetworkContextTransport() {
+  content::ServiceProcessHost::RemoveObserver(this);
   net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
+}
+
+void AccessNetworkContextTransport::OnServiceProcessLaunched(
+    const content::ServiceProcessInfo& info) {
+  if (!info.IsService<network::mojom::NetworkService>()) return;
+  const auto pid = static_cast<uint64_t>(info.GetProcess().Pid());
+  std::vector<base::UnguessableToken> ready;
+  for (const auto& [control, waiting] : pending_private_binds_) {
+    if (waiting.pid == pid) ready.push_back(control);
+  }
+  const auto self = weak_factory_.GetWeakPtr();
+  for (const auto& control : ready) {
+    if (!self) return;
+    self->FinishWaitingPrivateContext(control, true);
+  }
+}
+
+void AccessNetworkContextTransport::OnServiceProcessTerminatedNormally(
+    const content::ServiceProcessInfo& info) {
+  if (info.IsService<network::mojom::NetworkService>()) {
+    OnNetworkServiceExited(info.service_process_id());
+  }
+}
+
+void AccessNetworkContextTransport::OnServiceProcessCrashed(
+    const content::ServiceProcessInfo& info) {
+  if (info.IsService<network::mojom::NetworkService>()) {
+    OnNetworkServiceExited(info.service_process_id());
+  }
+}
+
+void AccessNetworkContextTransport::OnNetworkServiceExited(
+    content::ServiceProcessId service_process) {
+  for (auto& [partition, state] : partitions_) {
+    const auto retired = std::erase_if(
+        state.disconnected_private_contexts, [&](const auto& item) {
+          return item.second.service_process == service_process;
+        });
+    if (!state.private_publication) continue;
+    const auto owner = state.private_publication->policy.owner;
+    std::vector<std::string> exited_contexts;
+    for (const auto& [incarnation, context] : state.private_contexts) {
+      if (context.service_process == service_process) {
+        exited_contexts.push_back(incarnation);
+      }
+    }
+    for (const auto& incarnation : exited_contexts) {
+      OnPrivateContextRetired(owner, incarnation);
+    }
+    if (retired && HasReadyPrivateContext(owner)) {
+      SettlePrivatePublication(state, true);
+    } else if (retired && state.private_contexts.empty()) {
+      SettleTestListenerRetirements(state, true);
+    }
+  }
 }
 
 void AccessNetworkContextTransport::OnNetworkChanged(
@@ -343,24 +421,49 @@ bool AccessNetworkContextTransport::RegisterPreparedProxy(
     const AccessPrivateEndpoint& entry) {
   const auto& endpoint = entry.registration;
   const auto& g = endpoint.generations;
+  const bool no_auth = entry.listener_binding &&
+      aegis_access::IsValidAccessPreparedListenerBinding(*entry.listener_binding) &&
+      !entry.local_credentials;
+  const bool legacy_http = !entry.listener_binding &&
+      endpoint.transport == aegis_access::RegisteredProxyTransport::kHttp &&
+      entry.local_credentials && !entry.local_credentials->username().empty() &&
+      !entry.local_credentials->password().empty();
   if (!OwnsConfiguredPartition(endpoint.owner) ||
-      endpoint.transport != aegis_access::RegisteredProxyTransport::kHttp ||
+      (endpoint.transport != aegis_access::RegisteredProxyTransport::kHttp &&
+       endpoint.transport != aegis_access::RegisteredProxyTransport::kSocks5) ||
+      (endpoint.transport == aegis_access::RegisteredProxyTransport::kSocks5 && endpoint.port == 1080) ||
       (endpoint.host != "127.0.0.1" && endpoint.host != "::1") || !endpoint.port ||
       endpoint.proxy_group_id.empty() || endpoint.registration_id.empty() ||
       !g.policy_generation || !g.identity_generation || !g.selection_generation ||
       g.network_epoch != network_epoch_ || !g.base_proxy_config_generation ||
-      !entry.local_credentials || entry.local_credentials->username().empty() ||
-      entry.local_credentials->password().empty()) return false;
+      (!no_auth && !legacy_http)) return false;
   auto& state = partitions_.at(endpoint.owner.storage_partition_token);
+  if (no_auth) {
+    if (!state.private_routing) return false;
+    const auto live = state.private_endpoints.find(endpoint.proxy_group_id);
+    if (live != state.private_endpoints.end() &&
+        live->second.registration.registration_id != endpoint.registration_id) {
+      return false;
+    }
+    const auto retiring = state.retiring_test_listeners.find(endpoint.proxy_group_id);
+    if (retiring != state.retiring_test_listeners.end() &&
+        (!retiring->second.acknowledged ||
+         retiring->second.registration_id == endpoint.registration_id)) {
+      return false;
+    }
+  }
   for (const auto& [group, old] : state.private_endpoints) {
     if (old.registration.registration_id == endpoint.registration_id &&
         (group != endpoint.proxy_group_id || old.registration.host != endpoint.host ||
          old.registration.port != endpoint.port ||
-         !old.local_credentials->Equals(*entry.local_credentials))) return false;
+         old.registration.transport != endpoint.transport ||
+         old.listener_binding != entry.listener_binding ||
+         old.local_credentials.has_value() != entry.local_credentials.has_value() ||
+         (old.local_credentials && !old.local_credentials->Equals(*entry.local_credentials)))) return false;
   }
   state.private_endpoints.insert_or_assign(endpoint.proxy_group_id, entry);
   state.private_unavailable_generations.erase(endpoint.proxy_group_id);
-  state.endpoint = endpoint;
+  if (!no_auth) state.endpoint = endpoint;
   return true;
 }
 std::vector<AccessPrivateEndpoint> AccessNetworkContextTransport::PrivateEndpoints(
@@ -387,14 +490,114 @@ bool AccessNetworkContextTransport::ForgetPreparedProxy(
     state.endpoint.reset();
   return true;
 }
+
+void AccessNetworkContextTransport::SetTestListenerLostCallback(
+    TestListenerLostCallback callback) {
+  test_listener_lost_ = std::move(callback);
+}
+
+void AccessNetworkContextTransport::InvalidateTestListenersAfterContextLoss(
+    const aegis_access::OwnershipKey& owner, PartitionState& state) {
+  std::vector<std::pair<std::string, std::string>> lost;
+  for (const auto& [group, entry] : state.private_endpoints) {
+    if (entry.listener_binding && entry.registration.owner == owner)
+      lost.emplace_back(group, entry.registration.registration_id);
+  }
+  if (lost.empty()) return;
+  for (const auto& [group, registration_id] : lost) {
+    const auto selection =
+        state.private_endpoints.at(group).registration.generations.selection_generation;
+    ForgetPreparedProxy(owner, group, registration_id);
+    // The listener keeps its address until its owner confirms retirement.
+    // Until then no registration for this group can be installed again.
+    state.retiring_test_listeners.insert_or_assign(
+        group, PartitionState::RetiringListener{registration_id});
+    if (state.private_publication) {
+      auto& publication = *state.private_publication;
+      std::erase_if(publication.endpoints, [&](const auto& published) {
+        return published.registration.registration_id == registration_id;
+      });
+      publication.unavailable.insert_or_assign(group, selection);
+    }
+  }
+  if (state.private_publication) ++state.private_revision;
+  for (const auto& [incarnation, entry] : state.private_contexts)
+    PublishPrivateContext(owner, incarnation);
+  if (!test_listener_lost_) return;
+  for (const auto& [group, registration_id] : lost) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(test_listener_lost_, owner, group, registration_id));
+  }
+}
+
+std::optional<aegis_access::RegisteredProxyEndpoint>
+AccessNetworkContextTransport::PreparedProxyForGroup(
+    const aegis_access::OwnershipKey& owner, const std::string& group) const {
+  if (!OwnsConfiguredPartition(owner)) return std::nullopt;
+  const auto& state = partitions_.at(owner.storage_partition_token);
+  const auto found = state.private_endpoints.find(group);
+  if (found != state.private_endpoints.end() &&
+      found->second.registration.owner == owner) {
+    return found->second.registration;
+  }
+  if (!state.private_routing && state.endpoint &&
+      state.endpoint->owner == owner && state.endpoint->proxy_group_id == group) {
+    return state.endpoint;
+  }
+  return std::nullopt;
+}
+
+void AccessNetworkContextTransport::RetirePreparedTestListener(
+    const aegis_access::PublishedAccessPolicySnapshot& policy,
+    const aegis_access::GenerationTuple& common,
+    const std::string& group, const std::string& registration_id,
+    base::OnceCallback<void(bool)> completion) {
+  if (!OwnsConfiguredPartition(policy.owner)) {
+    std::move(completion).Run(false);
+    return;
+  }
+  auto& state = partitions_.at(policy.owner.storage_partition_token);
+  const auto endpoint = state.private_endpoints.find(group);
+  auto retiring = state.retiring_test_listeners.find(group);
+  if (endpoint != state.private_endpoints.end()) {
+    if (!endpoint->second.listener_binding ||
+        !ForgetPreparedProxy(policy.owner, group, registration_id)) {
+      std::move(completion).Run(false);
+      return;
+    }
+    retiring = state.retiring_test_listeners.insert_or_assign(
+        group, PartitionState::RetiringListener{registration_id}).first;
+  }
+  if (retiring == state.retiring_test_listeners.end() ||
+      retiring->second.registration_id != registration_id) {
+    std::move(completion).Run(false);
+    return;
+  }
+  if (retiring->second.acknowledged) {
+    std::move(completion).Run(true);
+    return;
+  }
+  retiring->second.completion = std::move(completion);
+  const auto publication =
+      PublishPrivatePolicy(policy, common, base::DoNothing());
+  if (publication.status == AccessNetworkConfigAckStatus::kInvalidPublication) {
+    std::move(retiring->second.completion).Run(false);
+  } else if (publication.status == AccessNetworkConfigAckStatus::kNoClients) {
+    // Retirement proof can precede this request. The updated publication and
+    // disconnected-consumer records still fence any unproven listener lease.
+    SettleTestListenerRetirements(state, true);
+  }
+}
 bool AccessNetworkContextTransport::HasReadyPrivateContext(
     const aegis_access::OwnershipKey& owner) const {
   if (!OwnsConfiguredPartition(owner)) return false;
-  const auto& contexts = partitions_.at(owner.storage_partition_token).private_contexts;
   const auto& state = partitions_.at(owner.storage_partition_token);
+  const auto& contexts = state.private_contexts;
   return !contexts.empty() && std::ranges::all_of(contexts,
-      [&](const auto& entry) { return entry.second.client->is_ready() &&
-          entry.second.applied_revision == state.private_revision; });
+      [&](const auto& entry) {
+        return !entry.second.install_attempt && entry.second.client->is_ready() &&
+            entry.second.applied_revision == state.private_revision;
+      });
 }
 
 bool AccessNetworkContextTransport::HasCurrentPrivatePolicy(
@@ -405,6 +608,51 @@ bool AccessNetworkContextTransport::HasCurrentPrivatePolicy(
       partitions_.at(owner.storage_partition_token).private_publication;
   return publication && publication->common == common;
 }
+
+#if BUILDFLAG(IS_MAC)
+bool AccessNetworkContextTransport::HasAcknowledgedTestListener(
+    const aegis_access::OwnershipKey& owner,
+    const aegis_access::GenerationTuple& common, const std::string& group,
+    const std::string& registration_id) const {
+  return HasAcknowledgedPrivateProxy(owner, common, group, registration_id,
+                                     /*test_listener=*/true);
+}
+
+bool AccessNetworkContextTransport::HasAcknowledgedLegacyProxy(
+    const aegis_access::OwnershipKey& owner,
+    const aegis_access::GenerationTuple& common, const std::string& group,
+    const std::string& registration_id) const {
+  return HasAcknowledgedPrivateProxy(owner, common, group, registration_id,
+                                     /*test_listener=*/false);
+}
+
+bool AccessNetworkContextTransport::HasAcknowledgedPrivateProxy(
+    const aegis_access::OwnershipKey& owner,
+    const aegis_access::GenerationTuple& common, const std::string& group,
+    const std::string& registration_id, bool test_listener) const {
+  if (!HasCurrentPrivatePolicy(owner, common) ||
+      common.network_epoch != network_epoch_) {
+    return false;
+  }
+  const auto& state = partitions_.at(owner.storage_partition_token);
+  const auto live = state.private_endpoints.find(group);
+  if (live == state.private_endpoints.end() ||
+      live->second.listener_binding.has_value() != test_listener ||
+      live->second.registration.owner != owner ||
+      live->second.registration.registration_id != registration_id) {
+    return false;
+  }
+  return std::ranges::any_of(state.private_publication->endpoints,
+      [&](const auto& published) {
+        return published.registration == live->second.registration &&
+               published.listener_binding == live->second.listener_binding;
+      });
+}
+#endif
+
+AccessNetworkContextTransport::PrivateContextEntry::PrivateContextEntry(
+    PrivateContext client) : client(std::move(client)) {}
+AccessNetworkContextTransport::PrivateContextEntry::~PrivateContextEntry() = default;
 
 void AccessNetworkContextTransport::BindPrivateContext(
     const aegis_access::OwnershipKey& owner, network::mojom::NetworkContext* context,
@@ -425,25 +673,218 @@ void AccessNetworkContextTransport::BindPrivateContext(
       [](base::WeakPtr<AccessNetworkContextTransport> self,
          aegis_access::OwnershipKey owner, PrivateContext client,
          base::OnceCallback<void(PrivateContext)> completion, bool initialized) {
-        if (!self || !initialized || !self->OwnsConfiguredPartition(owner)) {
+        if (!self || !initialized) {
           std::move(completion).Run(nullptr);
           return;
         }
-        auto& state = self->partitions_.at(owner.storage_partition_token);
-        bool lost = false;
-        std::erase_if(state.private_contexts, [&](const auto& entry) {
-          const bool disconnected = entry.second.client->incarnation().empty();
-          lost |= disconnected;
-          return disconnected;
-        });
-        if (lost) self->SettlePrivatePublication(state, false);
-        const auto incarnation = client->incarnation();
-        auto [entry, inserted] = state.private_contexts.try_emplace(
-            incarnation, PrivateContextEntry{client});
-        // All factories for the same actual Context share one sequence owner.
-        std::move(completion).Run(entry->second.client);
+        self->AdmitPrivateContext(std::move(owner), std::move(client),
+                                  std::move(completion));
       }, weak_factory_.GetWeakPtr(), owner, client, std::move(completion)));
 }
+
+void AccessNetworkContextTransport::AdmitPrivateContext(
+    aegis_access::OwnershipKey owner, PrivateContext client,
+    base::OnceCallback<void(PrivateContext)> completion) {
+  if (!OwnsConfiguredPartition(owner) || !client->is_connected() ||
+      base::TimeTicks::Now() >= client->bind_deadline()) {
+    std::move(completion).Run(nullptr);
+    return;
+  }
+  auto& state = partitions_.at(owner.storage_partition_token);
+  const auto previous = state.private_contexts.find(client->incarnation());
+  if (previous == state.private_contexts.end()) {
+    FinishPrivateContextBind(std::move(owner), std::move(client), {},
+                             std::move(completion), false);
+    return;
+  }
+  // The old control disconnect and the new bind use distinct pipes. Ask the
+  // existing control for a response issued after the new handshake before
+  // reusing it. Dropping the old pipe may settle the query while its entry is
+  // being erased, so complete the bind in a later task.
+  const auto& previous_client = previous->second.client;
+  const auto previous_control = previous_client->control_id();
+  const auto deadline = client->bind_deadline();
+  previous_client->CheckConnected(
+      deadline, base::BindPostTaskToCurrentDefault(base::BindOnce(
+      [](base::WeakPtr<AccessNetworkContextTransport> self,
+         aegis_access::OwnershipKey owner, PrivateContext client,
+         base::UnguessableToken previous_control,
+         base::OnceCallback<void(PrivateContext)> completion, bool alive) {
+        if (!self) {
+          std::move(completion).Run(nullptr);
+          return;
+        }
+        self->FinishPrivateContextBind(std::move(owner), std::move(client),
+            previous_control, std::move(completion), alive);
+      }, weak_factory_.GetWeakPtr(), std::move(owner), std::move(client),
+      previous_control, std::move(completion))));
+}
+
+void AccessNetworkContextTransport::FinishPrivateContextBind(
+    aegis_access::OwnershipKey owner, PrivateContext client,
+    base::UnguessableToken previous_control,
+    base::OnceCallback<void(PrivateContext)> completion, bool previous_alive) {
+  if (!OwnsConfiguredPartition(owner) || !client->is_connected()) {
+    std::move(completion).Run(nullptr);
+    return;
+  }
+  if (base::TimeTicks::Now() >= client->bind_deadline()) {
+    std::move(completion).Run(nullptr);
+    return;
+  }
+  const auto service_process = FindNetworkService(client->process_id());
+  if (!service_process) {
+    WaitForNetworkService(std::move(owner), std::move(client),
+                          std::move(completion));
+    return;
+  }
+  auto& state = partitions_.at(owner.storage_partition_token);
+  const auto incarnation = client->incarnation();
+  const auto previous = state.private_contexts.find(incarnation);
+  if (previous != state.private_contexts.end()) {
+    if (previous->second.service_process != *service_process) {
+      std::move(completion).Run(nullptr);
+      return;
+    }
+    if (previous->second.client->control_id() != previous_control) {
+      AdmitPrivateContext(std::move(owner), std::move(client), std::move(completion));
+      return;
+    }
+    if (previous_alive && previous->second.client->is_connected()) {
+      std::move(completion).Run(previous->second.client);
+      return;
+    }
+    ForgetPrivateControl(owner, incarnation);
+  }
+  auto [entry, inserted] = state.private_contexts.try_emplace(incarnation, client);
+  CHECK(inserted);
+  entry->second.service_process = *service_process;
+  if (const auto lost = state.disconnected_private_contexts.find(incarnation);
+      lost != state.disconnected_private_contexts.end()) {
+    entry->second.sequence = lost->second.sequence;
+    entry->second.possible_listeners = lost->second.possible_listeners;
+  }
+  client->SetDisconnectHandler(base::BindOnce(
+      &AccessNetworkContextTransport::OnPrivateContextDisconnected,
+      weak_factory_.GetWeakPtr(), owner, incarnation, client->control_id()));
+  client->SetRetirementHandler(base::BindOnce(
+      &AccessNetworkContextTransport::OnPrivateContextRetired,
+      weak_factory_.GetWeakPtr(), owner, incarnation));
+  if (std::ranges::any_of(state.retiring_test_listeners,
+          [](const auto& item) { return !!item.second.completion; })) {
+    PublishPrivateContext(owner, incarnation);
+  }
+  std::move(completion).Run(std::move(client));
+}
+
+std::optional<content::ServiceProcessId>
+AccessNetworkContextTransport::FindNetworkService(uint64_t pid) const {
+  if (network_service_lookup_for_testing_) {
+    return network_service_lookup_for_testing_.Run(pid);
+  }
+  return NetworkServiceProcessFor(pid);
+}
+
+void AccessNetworkContextTransport::WaitForNetworkService(
+    aegis_access::OwnershipKey owner, PrivateContext client,
+    base::OnceCallback<void(PrivateContext)> completion) {
+  const auto pid = client->process_id();
+  const auto remaining = client->bind_deadline() - base::TimeTicks::Now();
+  if (pid > static_cast<uint64_t>(std::numeric_limits<base::ProcessId>::max()) ||
+      !remaining.is_positive()) {
+    std::move(completion).Run(nullptr);
+    return;
+  }
+  const auto control = client->control_id();
+  auto [entry, inserted] = pending_private_binds_.try_emplace(control);
+  CHECK(inserted);
+  auto& pending = entry->second;
+  pending.pid = pid;
+  pending.done = base::BindOnce(
+      [](base::WeakPtr<AccessNetworkContextTransport> self,
+         aegis_access::OwnershipKey owner, PrivateContext client,
+         base::OnceCallback<void(PrivateContext)> completion, bool launched) {
+        if (!self || !launched) {
+          std::move(completion).Run(nullptr);
+          return;
+        }
+        self->AdmitPrivateContext(std::move(owner), std::move(client),
+                                  std::move(completion));
+      }, weak_factory_.GetWeakPtr(), std::move(owner), std::move(client),
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindPostTaskToCurrentDefault(std::move(completion)),
+          PrivateContext()));
+  pending.deadline.Start(FROM_HERE, remaining, base::BindOnce(
+      &AccessNetworkContextTransport::FinishWaitingPrivateContext,
+      weak_factory_.GetWeakPtr(), control, false));
+}
+
+void AccessNetworkContextTransport::FinishWaitingPrivateContext(
+    const base::UnguessableToken& control, bool launched) {
+  const auto entry = pending_private_binds_.find(control);
+  if (entry == pending_private_binds_.end()) return;
+  auto done = std::move(entry->second.done);
+  pending_private_binds_.erase(entry);
+  std::move(done).Run(launched);
+}
+
+void AccessNetworkContextTransport::OnPrivateContextDisconnected(
+    aegis_access::OwnershipKey owner, std::string incarnation,
+    base::UnguessableToken control, bool retired) {
+  if (retired) {
+    OnPrivateContextRetired(std::move(owner), std::move(incarnation));
+    return;
+  }
+  if (!OwnsConfiguredPartition(owner)) return;
+  auto& state = partitions_.at(owner.storage_partition_token);
+  const auto context = state.private_contexts.find(incarnation);
+  if (context == state.private_contexts.end() ||
+      context->second.client->control_id() != control) {
+    return;
+  }
+  ForgetPrivateControl(owner, incarnation);
+  if (HasReadyPrivateContext(owner)) {
+    SettlePrivatePublication(state, true);
+  } else if (state.private_contexts.empty()) {
+    SettleTestListenerRetirements(state, true);
+  }
+}
+
+void AccessNetworkContextTransport::ForgetPrivateControl(
+    const aegis_access::OwnershipKey& owner, const std::string& incarnation) {
+  auto& state = partitions_.at(owner.storage_partition_token);
+  const auto context = state.private_contexts.find(incarnation);
+  CHECK(context != state.private_contexts.end());
+  if (context->second.sequence) {
+    state.disconnected_private_contexts.insert_or_assign(
+        incarnation, PartitionState::DisconnectedContext{
+                         context->second.sequence, context->second.service_process,
+                         std::move(context->second.possible_listeners),
+                         context->second.client});
+  }
+  state.private_contexts.erase(context);
+  SettlePrivatePublication(state, false);
+  InvalidateTestListenersAfterContextLoss(owner, state);
+}
+
+void AccessNetworkContextTransport::OnPrivateContextRetired(
+    aegis_access::OwnershipKey owner, std::string incarnation) {
+  if (!OwnsConfiguredPartition(owner)) return;
+  auto& state = partitions_.at(owner.storage_partition_token);
+  const bool connected = state.private_contexts.erase(incarnation) != 0;
+  const bool disconnected = state.disconnected_private_contexts.erase(incarnation) != 0;
+  if (!connected && !disconnected) return;
+  if (connected) {
+    SettlePrivatePublication(state, false);
+    InvalidateTestListenersAfterContextLoss(owner, state);
+  }
+  if (HasReadyPrivateContext(owner)) {
+    SettlePrivatePublication(state, true);
+  } else if (state.private_contexts.empty()) {
+    SettleTestListenerRetirements(state, true);
+  }
+}
+
 bool AccessNetworkContextTransport::SamePrivatePublication(
     const PrivatePublication& a, const PrivatePublication& b) {
   if (a.policy != b.policy || a.common != b.common || a.unavailable != b.unavailable ||
@@ -451,7 +892,7 @@ bool AccessNetworkContextTransport::SamePrivatePublication(
   for (size_t i = 0; i < a.endpoints.size(); ++i) {
     const auto& left = a.endpoints[i];
     const auto& right = b.endpoints[i];
-    if (left.registration != right.registration ||
+    if (left.registration != right.registration || left.listener_binding != right.listener_binding ||
         left.local_credentials.has_value() != right.local_credentials.has_value() ||
         (left.local_credentials && !left.local_credentials->Equals(*right.local_credentials)))
       return false;
@@ -501,10 +942,23 @@ AccessNetworkConfigAckResult AccessNetworkContextTransport::PublishPrivatePolicy
     state.private_publication = std::move(candidate);
     ++state.private_revision;
   }
-  state.private_publication_waiters.push_back(std::move(completion));
   if (state.private_contexts.empty()) {
+    state.private_publication_waiters.push_back(std::move(completion));
     SettlePrivatePublication(state, false);
     return {AccessNetworkConfigAckStatus::kNoClients, 0};
+  }
+  if (BUILDFLAG(IS_MAC) && std::ranges::any_of(state.private_contexts,
+      [now = base::TimeTicks::Now()](const auto& item) {
+        return item.second.InstallExpired(now);
+      })) {
+    // Keep the desired snapshot for catch-up, but fail callers while a live
+    // Context still holds an expired install. Other Contexts can still catch up.
+    SettlePrivatePublication(state, false);
+    SettleTestListenerRetirements(state, false);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(completion), false));
+  } else {
+    state.private_publication_waiters.push_back(std::move(completion));
   }
   const size_t required = state.private_contexts.size();
   for (const auto& [incarnation, entry] : state.private_contexts)
@@ -516,31 +970,75 @@ void AccessNetworkContextTransport::PublishPrivateContext(
     const aegis_access::OwnershipKey& owner, const std::string& incarnation) {
   auto& state = partitions_.at(owner.storage_partition_token);
   auto& entry = state.private_contexts.at(incarnation);
-  if (entry.publishing || !state.private_publication ||
+  if (entry.install_attempt || !state.private_publication ||
       (entry.applied_revision == state.private_revision && entry.client->is_ready())) return;
   const auto& publication = *state.private_publication;
-  entry.publishing = true;
+  for (const auto& endpoint : publication.endpoints) {
+    if (endpoint.listener_binding)
+      entry.possible_listeners.insert(endpoint.registration.registration_id);
+  }
+  entry.install_attempt = ++private_install_attempt_;
+  if (BUILDFLAG(IS_MAC)) {
+    entry.install_deadline = base::TimeTicks::Now() + kPrivateInstallTimeout;
+    entry.install_timer.Start(FROM_HERE, kPrivateInstallTimeout, base::BindOnce(
+        &AccessNetworkContextTransport::OnPrivateContextInstallTimeout,
+        weak_factory_.GetWeakPtr(), owner, incarnation, entry.install_attempt));
+  }
   entry.client->PublishPolicy(publication.policy, publication.common, ++entry.sequence,
       publication.endpoints, publication.unavailable,
       base::BindOnce(&AccessNetworkContextTransport::OnPrivateContextPublished,
-          weak_factory_.GetWeakPtr(), owner, incarnation, state.private_revision));
+          weak_factory_.GetWeakPtr(), owner, incarnation, entry.install_attempt,
+          state.private_revision));
+}
+void AccessNetworkContextTransport::OnPrivateContextInstallTimeout(
+    aegis_access::OwnershipKey owner, std::string incarnation, uint64_t attempt) {
+  auto found = partitions_.find(owner.storage_partition_token);
+  if (found == partitions_.end()) return;
+  auto& state = found->second;
+  const auto entry = state.private_contexts.find(incarnation);
+  if (entry == state.private_contexts.end() || entry->second.install_attempt != attempt)
+    return;
+  SettlePrivatePublication(state, false);
+  SettleTestListenerRetirements(state, false);
 }
 void AccessNetworkContextTransport::OnPrivateContextPublished(
     aegis_access::OwnershipKey owner, std::string incarnation,
-    uint64_t revision, bool accepted) {
+    uint64_t attempt, uint64_t revision, bool accepted) {
   auto found = partitions_.find(owner.storage_partition_token);
   if (found == partitions_.end()) return;
   auto& state = found->second;
   auto entry = state.private_contexts.find(incarnation);
-  if (entry == state.private_contexts.end()) return;
-  entry->second.publishing = false;
-  if (revision != state.private_revision) {
+  if (entry == state.private_contexts.end() || entry->second.install_attempt != attempt)
+    return;
+  auto& install = entry->second;
+  const bool expired = BUILDFLAG(IS_MAC) &&
+      install.InstallExpired(base::TimeTicks::Now());
+  install.install_timer.Stop();
+  install.install_attempt = 0;
+  install.install_deadline = {};
+  if (expired) {
+    install.applied_revision = 0;
+    SettlePrivatePublication(state, false);
+    SettleTestListenerRetirements(state, false);
+    if (install.client->incarnation() != incarnation ||
+        state.private_publication->common.network_epoch != network_epoch_) return;
+  }
+  if (expired || revision != state.private_revision) {
+    // The old reply only clears the in-flight install. Even an unchanged
+    // desired revision needs a fresh sequence and ACK after a timeout.
     PublishPrivateContext(owner, incarnation);
     return;
   }
   if (!accepted) {
     SettlePrivatePublication(state, false);
+    if (install.client->is_connected()) SettleTestListenerRetirements(state, false);
     return;
+  }
+  state.disconnected_private_contexts.erase(incarnation);
+  install.possible_listeners.clear();
+  for (const auto& endpoint : state.private_publication->endpoints) {
+    if (endpoint.listener_binding)
+      install.possible_listeners.insert(endpoint.registration.registration_id);
   }
   entry->second.applied_revision = revision;
   if (HasReadyPrivateContext(owner)) SettlePrivatePublication(state, true);
@@ -551,6 +1049,32 @@ void AccessNetworkContextTransport::SettlePrivatePublication(PartitionState& sta
   state.private_publication_waiters.clear();
   for (auto& callback : callbacks) base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), accepted));
+  if (accepted) SettleTestListenerRetirements(state, true);
+}
+
+void AccessNetworkContextTransport::SettleTestListenerRetirements(
+    PartitionState& state, bool accepted) {
+  for (auto& [group, listener] : state.retiring_test_listeners) {
+    if (!listener.completion) continue;
+    if (accepted) {
+      if (!state.private_publication ||
+          std::ranges::any_of(state.disconnected_private_contexts,
+              [&](const auto& entry) {
+                return entry.second.possible_listeners.contains(listener.registration_id);
+              }) ||
+          state.private_publication->common.network_epoch != network_epoch_ ||
+          state.private_endpoints.contains(group) ||
+          std::ranges::any_of(state.private_publication->endpoints,
+              [&](const auto& endpoint) {
+                return endpoint.registration.registration_id == listener.registration_id;
+              })) {
+        continue;
+      }
+      listener.acknowledged = true;
+    }
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(listener.completion), accepted));
+  }
 }
 
 std::optional<aegis_access::RegisteredProxyEndpoint>

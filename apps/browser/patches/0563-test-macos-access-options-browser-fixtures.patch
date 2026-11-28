@@ -1,0 +1,133 @@
+From 964e00566560efae9df5973033e6a12e81f29f61 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Mon, 23 Nov 2026 23:00:58 +0800
+Subject: [PATCH] test(access): stabilize macOS Options browser fixtures
+
+---
+ .../access/access_options_browsertest.cc      | 58 ++++++++++++++-----
+ 1 file changed, 42 insertions(+), 16 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_options_browsertest.cc b/chrome/browser/aegis/access/access_options_browsertest.cc
+index 265daa0bd2752212b62d7185cdfda94308d1c334..030eb5a843f926bb8a34e1e9431aa8361f49b357 100644
+--- a/chrome/browser/aegis/access/access_options_browsertest.cc
++++ b/chrome/browser/aegis/access/access_options_browsertest.cc
+@@ -2,6 +2,8 @@
+ #include <string>
+ #include <vector>
+ 
++#include "base/test/run_until.h"
++#include "base/test/test_future.h"
+ #include "chrome/browser/aegis/access/access_build_channel.h"
+ #include "chrome/browser/aegis/access/access_buildflags.h"
+ #include "chrome/browser/aegis/access/access_options_service.h"
+@@ -19,6 +21,23 @@
+ #include "content/public/test/browser_test_utils.h"
+ 
+ namespace aegis::access {
++namespace {
++
++void NavigateAndRewriteSiblingAsOptions(BrowserWindowInterface* browser) {
++  // The bare Aegis page redirects to chrome://settings on desktop.
++  const GURL sibling("chrome://aegis/?workspace=protection");
++  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, sibling));
++  auto* contents = browser->GetTabStripModel()->GetActiveWebContents();
++  ASSERT_EQ(sibling, contents->GetLastCommittedURL());
++  ASSERT_TRUE(content::ExecJs(
++      contents, "history.replaceState(null, '', '/access-options')"));
++  const GURL expected("chrome://aegis/access-options");
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return contents->GetLastCommittedURL() == expected; }));
++}
++
++}  // namespace
++
+ using AccessOptionsBrowserTest = InProcessBrowserTest;
+ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest, DirectNavigationUsesNativeAdmission) {
+   const bool admitted = CanUseAccessOptionsForCurrentBuild(
+@@ -106,10 +125,8 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+ 
+ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+                        ApplyRejectsSiblingDocumentDespiteRewrittenUrl) {
+-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://aegis")));
++  ASSERT_NO_FATAL_FAILURE(NavigateAndRewriteSiblingAsOptions(browser()));
+   auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
+-  ASSERT_TRUE(content::ExecJs(contents,
+-      "history.replaceState(null, '', '/access-options')"));
+   EXPECT_EQ("notAdmitted", content::EvalJs(contents, R"JS(
+     new Promise(resolve => {
+       window.cr = {webUIResponse: (_, __, result) => resolve(result.state)};
+@@ -146,9 +163,7 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+   auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
+   EXPECT_EQ("connectionChanged", content::EvalJs(contents, kRevoke));
+ 
+-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://aegis")));
+-  ASSERT_TRUE(content::ExecJs(contents,
+-      "history.replaceState(null, '', '/access-options')"));
++  ASSERT_NO_FATAL_FAILURE(NavigateAndRewriteSiblingAsOptions(browser()));
+   EXPECT_EQ("notAdmitted", content::EvalJs(contents, kRevoke));
+   for (const auto& editor : editors) options->EndTestNodeEditor(editor);
+ }
+@@ -167,11 +182,8 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+ 
+ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+                        TestNodePreviewRejectsRewrittenSiblingDocument) {
+-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://aegis")));
++  ASSERT_NO_FATAL_FAILURE(NavigateAndRewriteSiblingAsOptions(browser()));
+   auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
+-  ASSERT_TRUE(content::ExecJs(contents,
+-      "history.replaceState(null, '', '/access-options')"));
+-  EXPECT_EQ(GURL("chrome://aegis/access-options"), contents->GetLastCommittedURL());
+   EXPECT_EQ("notAdmitted", content::EvalJs(contents, R"JS(
+     new Promise(resolve => {
+       window.cr = {webUIResponse: (_, __, result) => resolve(result.state)};
+@@ -182,10 +194,8 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+ 
+ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+                        TestNodeDiscardRejectsRewrittenSiblingDocument) {
+-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL("chrome://aegis")));
++  ASSERT_NO_FATAL_FAILURE(NavigateAndRewriteSiblingAsOptions(browser()));
+   auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
+-  ASSERT_TRUE(content::ExecJs(contents,
+-      "history.replaceState(null, '', '/access-options')"));
+   EXPECT_EQ("notAdmitted", content::EvalJs(contents, R"JS(
+     new Promise(resolve => {
+       window.cr = {webUIResponse: (_, __, result) => resolve(result.state)};
+@@ -203,6 +213,17 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+   ASSERT_TRUE(ui_test_utils::NavigateToURL(
+       browser(), GURL("chrome://aegis/access-options")));
+   auto* contents = browser()->GetTabStripModel()->GetActiveWebContents();
++  // Initial page reads can create the empty store. Compare the persisted
++  // configuration before and after preview.
++  auto* options = AccessOptionsService::GetOrCreate(browser()->GetProfile());
++  ASSERT_TRUE(options);
++  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> before;
++  options->Read(before.GetCallback());
++  const auto& initial = before.Get();
++  ASSERT_EQ(StoreStatus::kValid, initial.status);
++  ASSERT_TRUE(initial.value);
++  ASSERT_FALSE(initial.value->test_profile);
++
+   EXPECT_EQ("preview,protocol,state", content::EvalJs(contents, content::JsReplace(
+       R"JS(
+         (async () => {
+@@ -214,9 +235,14 @@ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+       "vless://550e8400-e29b-41d4-a716-446655440000@198.51.100.10:443"
+       "?security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.example.com"
+       "&pbk=abcdefghijklmnopqrstuvwxyzABCDEFG&sid=abcd1234#demo-reality-vision")));
+-  base::ScopedAllowBlockingForTesting allow_blocking;
+-  EXPECT_FALSE(base::PathExists(
+-      browser()->GetProfile()->GetPath().AppendASCII("AccessOptions")));
++  base::test::TestFuture<StoreResult<AccessOptionsSnapshot>> after;
++  options->Read(after.GetCallback());
++  const auto& saved = after.Get();
++  ASSERT_EQ(StoreStatus::kValid, saved.status);
++  ASSERT_TRUE(saved.value);
++  EXPECT_EQ(initial.value->revision, saved.value->revision);
++  EXPECT_EQ(initial.value->configuration, saved.value->configuration);
++  EXPECT_FALSE(saved.value->test_profile);
+ }
+ 
+ IN_PROC_BROWSER_TEST_F(AccessOptionsBrowserTest,
+-- 
+2.54.0 (Apple Git-157)
+

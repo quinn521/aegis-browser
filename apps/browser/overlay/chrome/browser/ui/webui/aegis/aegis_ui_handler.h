@@ -5,6 +5,7 @@
 #define CHROME_BROWSER_UI_WEBUI_AEGIS_AEGIS_UI_HANDLER_H_
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,11 +20,19 @@
 #include "chrome/services/aegis_torrent/public/mojom/aegis_torrent_service.mojom.h"
 namespace aegis::access {
 struct AccessOptionsSnapshot;
+struct AccessLocalCoreReady;
+struct AccessTestProfileSaveResult;
+enum class TestNodePreviewStatus;
+struct TestNodePreviewResult;
+struct AccessTestNodeSecretReference;
+class AccessOptionsService;
 template <typename T> struct StoreResult;
 }
 #endif
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_ui_message_handler.h"
+#include "content/public/browser/weak_document_ptr.h"
 
 class TabListInterface;
 
@@ -42,6 +51,7 @@ content::WebContents* FindSummarySourceTabInList(
 }  // namespace aegis
 
 class AegisUIHandler : public content::WebUIMessageHandler,
+                       public content::WebContentsObserver,
                        public aegis::AegisServiceObserver {
  public:
   AegisUIHandler();
@@ -73,6 +83,8 @@ class AegisUIHandler : public content::WebUIMessageHandler,
   void HandleParseMetalink(const base::ListValue& args);
   void HandleStartMetalinkDownload(const base::ListValue& args);
 #if BUILDFLAG(IS_MAC)
+  void DidFinishNavigation(content::NavigationHandle* navigation) override;
+  bool IsAccessOptionsDocument() const;
   void HandleParseTorrent(const base::ListValue& args);
   void HandleParseMagnet(const base::ListValue& args);
   void HandleStartTorrent(const base::ListValue& args);
@@ -104,7 +116,31 @@ class AegisUIHandler : public content::WebUIMessageHandler,
 #if BUILDFLAG(IS_MAC)
   void HandleGetAccessOptionsCapabilities(const base::ListValue& args);
   void HandleReadAccessOptions(const base::ListValue& args);
-  void OnAccessOptionsRead(std::string callback_id, aegis::access::StoreResult<aegis::access::AccessOptionsSnapshot> result);
+  void HandlePreviewAccessTestNode(const base::ListValue& args);
+  void HandleCancelAccessTestNodePreview(const base::ListValue& args);
+  void HandleDiscardAccessTestNodeDraft(const base::ListValue& args);
+  void HandleApplyAccessTestNode(const base::ListValue& args);
+  void HandleApplyAccessTestNodePreferences(const base::ListValue& args);
+  void HandleQueryAccessTestNodeApply(const base::ListValue& args);
+  void HandleRevokeAccessTestNode(const base::ListValue& args);
+  void OnAccessTestNodeSaved(content::WeakDocumentPtr document,
+      std::string callback_id, std::string editor, uint64_t generation,
+      aegis::access::AccessTestProfileSaveResult result);
+  void OnAccessTestNodePrepared(content::WeakDocumentPtr document,
+      std::string callback_id, std::string revision,
+      aegis::access::AccessLocalCoreReady result);
+  void OnAccessTestNodeDiscarded(std::string callback_id, uint64_t generation,
+      std::string editor, aegis::access::TestNodePreviewStatus status);
+  aegis::access::AccessOptionsService* EnsureAccessTestNodeEditor();
+  void CloseAccessTestNodeEditor();
+  void OnAccessTestNodePreview(std::string callback_id,
+                               uint64_t generation,
+                               std::string editor,
+                               aegis::access::TestNodePreviewResult preview);
+
+  void OnAccessOptionsRead(content::WeakDocumentPtr document,
+      std::string callback_id,
+      aegis::access::StoreResult<aegis::access::AccessOptionsSnapshot> result);
 #endif
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   void HandleGetCurrentAccessAccount(const base::ListValue& args);
@@ -161,6 +197,12 @@ class AegisUIHandler : public content::WebUIMessageHandler,
   std::optional<PendingMetalink> pending_metalink_;
 #if BUILDFLAG(IS_MAC)
   std::optional<PendingTorrent> pending_torrent_;
+  content::WeakDocumentPtr access_options_document_;
+  base::WeakPtr<aegis::access::AccessOptionsService> access_test_node_service_;
+  std::string access_test_node_editor_;
+  std::unique_ptr<aegis::access::AccessTestNodeSecretReference>
+      access_test_node_draft_;
+  uint64_t access_test_node_preview_generation_ = 0;
 #endif
   base::ScopedObservation<aegis::AegisService, aegis::AegisServiceObserver>
       service_observation_{this};

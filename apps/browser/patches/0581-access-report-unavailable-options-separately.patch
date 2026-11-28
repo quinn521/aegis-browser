@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:30:43 +0800
+Subject: [PATCH] fix(access): distinguish unavailable Options from a revision conflict
+
+---
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index eb4c7f46d1cc6d18ef628c5339525d51aabdee86..eaf45b7f5e4279a5ed1560b872a14bc718f8aee9 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -43,6 +43,23 @@ std::string VaultScope(Profile* profile) {
+       "\naccess-test-node-v1\n" + profile->GetPath().AsUTF8Unsafe();
+   return base::HexEncodeLower(crypto::hash::Sha256(base::as_byte_span(scope)));
+ }
++
++std::optional<AccessTestProfileSaveResult> CheckOptionsRevision(
++    const StoreResult<AccessOptionsSnapshot>& snapshot, uint64_t expected_revision) {
++  if (snapshot.status != StoreStatus::kValid || !snapshot.value) {
++    const auto status = snapshot.status == StoreStatus::kValid
++        ? StoreStatus::kIoError : snapshot.status;
++    return AccessTestProfileSaveResult{
++        status, AccessOptionsCommitOutcome::kNotCommitted,
++        std::nullopt, std::nullopt, "options_unavailable"};
++  }
++  if (snapshot.value->revision != expected_revision) {
++    return AccessTestProfileSaveResult{
++        StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
++        std::nullopt, snapshot.value, "configuration_revision_conflict"};
++  }
++  return std::nullopt;
++}
+ #endif
+ 
+ }  // namespace
+@@ -96,12 +113,8 @@ class AccessOptionsWorker {
+       return {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+               std::nullopt, std::nullopt, "previous_operation_uncertain"};
+     const auto before = store_.OpenAndRead();
+-    if (before.status != StoreStatus::kValid)
+-      return {before.status, AccessOptionsCommitOutcome::kNotCommitted,
+-              std::nullopt, std::nullopt, "options_unavailable"};
+-    if (before.value->revision != expected_revision)
+-      return {StoreStatus::kConflict, AccessOptionsCommitOutcome::kNotCommitted,
+-              std::nullopt, before.value, "configuration_revision_conflict"};
++    if (auto error = CheckOptionsRevision(before, expected_revision))
++      return std::move(*error);
+     // This store currently has one typed test Profile. Retain a scope-wide
+     // barrier even when an abandoned older instance references a prior row.
+     if (vault_.HasRuntimeReferences())
+@@ -495,13 +508,8 @@ void AccessOptionsService::RejectRuntimeInUseAfterRevisionCheck(
+       [](uint64_t expected_revision, bool switches_profile,
+          base::OnceCallback<void(AccessTestProfileSaveResult)> callback,
+          StoreResult<AccessOptionsSnapshot> snapshot) {
+-        if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
+-            snapshot.value->revision != expected_revision) {
+-          std::move(callback).Run(
+-              {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict
+-                                                      : snapshot.status,
+-               AccessOptionsCommitOutcome::kNotCommitted, std::nullopt,
+-               std::move(snapshot.value), "configuration_revision_conflict"});
++        if (auto error = CheckOptionsRevision(snapshot, expected_revision)) {
++          std::move(callback).Run(std::move(*error));
+           return;
+         }
+         // Alpha does not replace a running Profile in place. Fail closed: no
+@@ -1006,12 +1014,9 @@ void AccessOptionsService::OnTestProfileSaveRead(std::string editor, uint64_t ge
+          std::nullopt, std::nullopt, "draft_canceled_before_commit"});
+     return;
+   }
+-  if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
+-      snapshot.value->revision != expected_revision) {
++  if (auto error = CheckOptionsRevision(snapshot, expected_revision)) {
+     OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
+-        {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict : snapshot.status,
+-         AccessOptionsCommitOutcome::kNotCommitted, std::nullopt, std::move(snapshot.value),
+-         "configuration_revision_conflict"});
++                              std::move(*error));
+     return;
+   }
+   const auto id = snapshot.value->test_profile
+@@ -1037,12 +1042,9 @@ void AccessOptionsService::OnTestProfilePreferencesRead(std::string editor,
+          std::nullopt, std::nullopt, "draft_canceled_before_commit"});
+     return;
+   }
+-  if (snapshot.status != StoreStatus::kValid || !snapshot.value ||
+-      snapshot.value->revision != expected_revision) {
++  if (auto error = CheckOptionsRevision(snapshot, expected_revision)) {
+     OnTestProfileSaveComplete(editor, operation_id, std::move(callback),
+-        {snapshot.status == StoreStatus::kValid ? StoreStatus::kConflict : snapshot.status,
+-         AccessOptionsCommitOutcome::kNotCommitted, std::nullopt, std::move(snapshot.value),
+-         "configuration_revision_conflict"});
++                              std::move(*error));
+     return;
+   }
+   if (!snapshot.value->test_profile) {
+diff --git a/chrome/browser/aegis/access/access_options_service_unittest.cc b/chrome/browser/aegis/access/access_options_service_unittest.cc
+index 59205b1eacfb291c277c61a005ced58714c76e93..c29e873777c7cf1ef8af21c8a62e6dbea9217cb7 100644
+--- a/chrome/browser/aegis/access/access_options_service_unittest.cc
++++ b/chrome/browser/aegis/access/access_options_service_unittest.cc
+@@ -53,6 +53,45 @@ class SyntheticVaultBackend final : public AccessTestNodeVaultMac::Backend {
+ };
+ }  // namespace
+ 
++TEST(AccessOptionsServiceTest, UnreadableOptionsDoNotReportRevisionConflict) {
++  content::BrowserTaskEnvironment environment;
++  if (!CanUseAccessOptionsForCurrentBuild(
++          aegis_access::AccessOptionsOperation::kImport)) {
++    GTEST_SKIP() << "Requires an admitted internal build";
++  }
++  base::ScopedTempDir dir;
++  ASSERT_TRUE(dir.CreateUniqueTempDir());
++  auto profile = TestingProfile::Builder().SetPath(dir.GetPath()).Build();
++  network::mojom::NetworkContextParams params;
++  ASSERT_TRUE(AccessNetworkContextTransport::ConfigureNetworkContext(
++      profile.get(), {}, &params));
++  ASSERT_TRUE(base::WriteFile(dir.GetPath().AppendASCII("AccessOptions"), ""));
++  auto state = std::make_shared<SyntheticVaultState>();
++  auto options = AccessOptionsService::CreateForTesting(
++      profile.get(), std::make_unique<SyntheticVaultBackend>(state));
++  const auto preference_editor = options->BeginTestNodeEditor();
++  const auto node_editor = options->BeginTestNodeEditor();
++  ASSERT_TRUE(preference_editor);
++  ASSERT_TRUE(node_editor);
++
++  base::test::TestFuture<AccessTestProfileSaveResult> preferences;
++  options->SaveTestNodePreferences(*preference_editor, 0,
++      base::Uuid::GenerateRandomV4().AsLowercaseString(), {}, preferences.GetCallback());
++  EXPECT_EQ(preferences.Get().status, StoreStatus::kIoError);
++  EXPECT_EQ(preferences.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(preferences.Get().detail, "options_unavailable");
++
++  base::test::TestFuture<TestNodePreviewResult> preview;
++  options->PreviewTestNodeText(*node_editor, kSyntheticShare, preview.GetCallback());
++  ASSERT_EQ(preview.Get().status, TestNodePreviewStatus::kPreview);
++  base::test::TestFuture<AccessTestProfileSaveResult> node;
++  options->SaveTestNodeProfile(*node_editor, 0,
++      base::Uuid::GenerateRandomV4().AsLowercaseString(), "TEST01", {}, node.GetCallback());
++  EXPECT_EQ(node.Get().status, StoreStatus::kIoError);
++  EXPECT_EQ(node.Get().outcome, AccessOptionsCommitOutcome::kNotCommitted);
++  EXPECT_EQ(node.Get().detail, "options_unavailable");
++}
++
+ TEST(AccessOptionsServiceTest, NativeEditorsCompeteWithoutDeletingCommittedReference) {
+   content::BrowserTaskEnvironment environment;
+   if (!CanUseAccessOptionsForCurrentBuild(aegis_access::AccessOptionsOperation::kImport))
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index 4f1faba64e7b1c475322feb18025d0b70719a4cf..85a1353aa2909c3c22368455c7c47439125f5793 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -413,6 +413,8 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
+   } else if (result.reason === 'configuration_revision_conflict') {
+     requiresReview = true;
+     status.textContent = 'Another window saved changes. Review the saved settings before applying this draft.';
++  } else if (result.reason === 'options_unavailable') {
++    status.textContent = 'Saved settings could not be read. Try applying this draft again.';
+   } else if (result.reason === 'profile_runtime_in_use') {
+     status.textContent = 'Revoke the current test connection before replacing its settings.';
+   } else if (result.reason === 'active_profile_switch_requires_deactivation') {

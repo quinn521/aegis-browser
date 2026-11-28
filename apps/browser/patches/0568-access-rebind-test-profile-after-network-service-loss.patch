@@ -1,0 +1,352 @@
+From 40683d085c4f47ed0037fd751c98a19de3ee9a72 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Wed, 25 Nov 2026 05:21:08 +0800
+Subject: [PATCH] fix(access): require a fresh Test Profile registration after
+ Network Service loss
+
+When a private Context is lost, retire every unauthenticated test listener registration instead of letting the replacement Context install it. The controller revokes the old core and, only after confirmed retirement, admits one cold restore from the saved Profile binding. Adding a factory to a live Context keeps the registration. Explicit revocation keeps restore closed.
+---
+ .../access_network_context_transport.cc       | 46 +++++++++-
+ .../access/access_network_context_transport.h | 12 +++
+ .../aegis/access/access_options_service.cc    | 23 +++++
+ .../aegis/access/access_options_service.h     |  7 ++
+ .../access_site_proxy_bubble_controller.cc    | 23 +++++
+ .../access_site_proxy_bubble_controller.h     |  4 +
+ .../access_site_proxy_product_unittest.cc     | 91 +++++++++++++++++++
+ 7 files changed, 205 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+index d93365ce004ae60ad9a7058bcce1472d282d3803..63a55dd5b6279f50d2bac4e09e60ffe937b5f9d0 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
+@@ -414,6 +414,45 @@ bool AccessNetworkContextTransport::ForgetPreparedProxy(
+   return true;
+ }
+ 
++void AccessNetworkContextTransport::SetTestListenerLostCallback(
++    TestListenerLostCallback callback) {
++  test_listener_lost_ = std::move(callback);
++}
++
++void AccessNetworkContextTransport::InvalidateTestListenersAfterContextLoss(
++    const aegis_access::OwnershipKey& owner, PartitionState& state) {
++  std::vector<std::pair<std::string, std::string>> lost;
++  for (const auto& [group, entry] : state.private_endpoints) {
++    if (entry.listener_binding && entry.registration.owner == owner)
++      lost.emplace_back(group, entry.registration.registration_id);
++  }
++  if (lost.empty()) return;
++  for (const auto& [group, registration_id] : lost) {
++    const auto selection =
++        state.private_endpoints.at(group).registration.generations.selection_generation;
++    ForgetPreparedProxy(owner, group, registration_id);
++    // The listener keeps its address until its owner confirms retirement.
++    // Until then no registration for this group can be installed again.
++    state.retiring_test_listeners.insert_or_assign(
++        group, PartitionState::RetiringListener{registration_id});
++    if (state.private_publication) {
++      auto& publication = *state.private_publication;
++      std::erase_if(publication.endpoints, [&](const auto& published) {
++        return published.registration.registration_id == registration_id;
++      });
++      publication.unavailable.insert_or_assign(group, selection);
++    }
++  }
++  if (state.private_publication) ++state.private_revision;
++  for (const auto& [incarnation, entry] : state.private_contexts)
++    PublishPrivateContext(owner, incarnation);
++  if (!test_listener_lost_) return;
++  for (const auto& [group, registration_id] : lost) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, base::BindOnce(test_listener_lost_, owner, group, registration_id));
++  }
++}
++
+ std::optional<aegis_access::RegisteredProxyEndpoint>
+ AccessNetworkContextTransport::PreparedProxyForGroup(
+     const aegis_access::OwnershipKey& owner, const std::string& group) const {
+@@ -582,7 +621,12 @@ void AccessNetworkContextTransport::BindPrivateContext(
+           lost |= disconnected;
+           return disconnected;
+         });
+-        if (lost) self->SettlePrivatePublication(state, false);
++        if (lost) {
++          // The old Network Service is gone. Adding a factory to a live
++          // Context never reaches this branch.
++          self->InvalidateTestListenersAfterContextLoss(owner, state);
++          self->SettlePrivatePublication(state, false);
++        }
+         const auto incarnation = client->incarnation();
+         auto [entry, inserted] = state.private_contexts.try_emplace(
+             incarnation, client);
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/chrome/browser/aegis/access/access_network_context_transport.h
+index b06c6783a07cfdebe7ed6445aded5cd4c5700610..1a225f0917af6a94305e596512d6e9438048d194 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.h
++++ b/chrome/browser/aegis/access/access_network_context_transport.h
+@@ -115,6 +115,13 @@ class AccessNetworkContextTransport
+       const std::string& group, const std::string& registration_id);
+   std::optional<aegis_access::RegisteredProxyEndpoint> PreparedProxyForGroup(
+       const aegis_access::OwnershipKey& owner, const std::string& group) const;
++  // Runs after the loss of a private Context removed an unauthenticated test
++  // listener registration. A replacement Context never inherits it; the owner
++  // must retire the listener and register again from its Profile.
++  using TestListenerLostCallback = base::RepeatingCallback<void(
++      const aegis_access::OwnershipKey& owner, const std::string& group,
++      const std::string& registration_id)>;
++  void SetTestListenerLostCallback(TestListenerLostCallback callback);
+   // Removes the exact no-auth registration and waits for the policy snapshot
+   // without it to be installed in each owning private Context.
+   void RetirePreparedTestListener(
+@@ -300,12 +307,17 @@ class AccessNetworkContextTransport
+   void OnPrivateContextPublished(aegis_access::OwnershipKey owner,
+       std::string incarnation, uint64_t attempt, uint64_t revision, bool accepted);
+   void SettlePrivatePublication(PartitionState& state, bool accepted);
++  // Invalidates every unauthenticated test listener registration after a
++  // private Context was lost, so a replacement Context cannot install it.
++  void InvalidateTestListenersAfterContextLoss(
++      const aegis_access::OwnershipKey& owner, PartitionState& state);
+   static bool SamePrivatePublication(const PrivatePublication& a,
+                                      const PrivatePublication& b);
+ 
+   std::string runtime_profile_token_;
+   uint64_t network_epoch_ = 1;
+   uint64_t private_install_attempt_ = 0;
++  TestListenerLostCallback test_listener_lost_;
+   std::map<std::string, PartitionState> partitions_;
+   base::WeakPtrFactory<AccessNetworkContextTransport> weak_factory_{this};
+ };
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index cd39addc9ef163d7a2556124d126aa1191521ff5..a7d9d5525972098e5ac456ed88b75682c0123f94 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -807,6 +807,24 @@ void AccessOptionsService::RevokePreparedTestNodeIfCurrent(
+     RevokeTestNodeProfile(base::DoNothing());
+   }
+ }
++bool AccessOptionsService::RevokeTestNodeProfileAfterNetworkLoss(
++    const std::string& registration_id) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (registration_id.empty() || registration_id != test_profile_ready_.registration_id ||
++      test_profile_runtime_state_ != AccessTestProfileRuntimeState::kActive ||
++      !profile_->IsRegularProfile()) {
++    return false;
++  }
++  RevokeTestNodeProfile(base::DoNothing());
++  // Set after the shared revocation entry, which clears it for every other
++  // caller. Retirement normally completes asynchronously and reads it then.
++  if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kRevoking) {
++    test_profile_network_loss_restore_ = true;
++  } else if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kIdle) {
++    test_profile_cold_preparation_consumed_ = false;
++  }
++  return true;
++}
+ bool AccessOptionsService::SetTestNodeConsumerRevoker(base::RepeatingCallback<void(
+     AccessLocalCoreReady, base::OnceCallback<void(bool)>)> revoker) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+@@ -825,6 +843,7 @@ void AccessOptionsService::RevokeTestNodeProfile(base::OnceCallback<void(bool)>
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   test_profile_publication_attempt_.reset();
+   test_profile_cold_preparation_consumed_ = true;
++  test_profile_network_loss_restore_ = false;
+   test_profile_revoke_waiters_.push_back(std::move(callback));
+   if (test_profile_runtime_state_ == AccessTestProfileRuntimeState::kRevoking) return;
+   if (test_profile_core_) test_profile_core_->StopForwarding();
+@@ -905,7 +924,11 @@ void AccessOptionsService::OnTestProfileCoreRetired(uint64_t epoch, bool confirm
+     test_profile_ready_ = {};
+     test_profile_runtime_revision_ = 0;
+     test_profile_consumers_possible_ = false;
++    // Only a confirmed retirement after Network Service loss reopens the
++    // single cold restore from the persisted Profile binding.
++    if (test_profile_network_loss_restore_) test_profile_cold_preparation_consumed_ = false;
+   }
++  test_profile_network_loss_restore_ = false;
+   auto callbacks = std::move(test_profile_revoke_waiters_);
+   test_profile_revoke_waiters_.clear();
+   for (auto& pending : callbacks) std::move(pending).Run(confirmed);
+diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
+index a0cb510fbdcd3d6c9975ee6c5bc1a76dca5c8c20..c2b06f44bb16d70d5d1616543b7f169d53da5856 100644
+--- a/chrome/browser/aegis/access/access_options_service.h
++++ b/chrome/browser/aegis/access/access_options_service.h
+@@ -135,6 +135,10 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+       base::OnceCallback<void(bool)> callback);
+   void RevokePreparedTestNodeIfCurrent(uint64_t revision,
+                                       const AccessLocalCoreReady& ready);
++  // The private Context that acknowledged |registration_id| was lost. Revokes
++  // that listener and, once retirement is confirmed, admits exactly one fresh
++  // registration from the saved Profile binding.
++  bool RevokeTestNodeProfileAfterNetworkLoss(const std::string& registration_id);
+   AccessTestProfileRuntimeState test_profile_runtime_state() const;
+   AccessLocalCoreReady test_profile_runtime() const;
+   std::optional<std::pair<uint64_t, AccessLocalCoreReady>> PreparedTestNode() const;
+@@ -218,6 +222,9 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+   scoped_refptr<TestProfilePublicationAttempt> test_profile_publication_attempt_;
+   // A stale saved binding advances the epoch without consuming cold recovery.
+   bool test_profile_cold_preparation_consumed_ = false;
++  // Set only while a Network Service loss revocation is in flight. Explicit
++  // revocation clears it, so the user's choice is never undone.
++  bool test_profile_network_loss_restore_ = false;
+   uint64_t test_profile_runtime_epoch_ = 0;
+   uint64_t test_profile_runtime_revision_ = 0;
+   uint64_t test_profile_authorization_generation_ = 0;
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+index 09c34f3ef6a7424c0615ebcb32ef5027bbe4db43..d934005dccf53e6a8857839ec44b1f2b30504bc8 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.cc
+@@ -1025,6 +1025,9 @@ bool AccessSiteProxyBubbleController::RegisterTestProfileForPublication(
+         base::BindRepeating(&AccessSiteProxyBubbleController::RetireTestProfileConsumer,
+                            weak_factory_.GetWeakPtr()));
+     if (!test_profile_revoker_installed_) return false;
++    transport->SetTestListenerLostCallback(base::BindRepeating(
++        &AccessSiteProxyBubbleController::OnTestProfileListenerLost,
++        weak_factory_.GetWeakPtr()));
+   }
+   const std::string group = TestProfileGroup(ready);
+   auto* selections = AccessProxySelectionGenerationSource::GetOrCreate(profile_);
+@@ -1229,6 +1232,26 @@ void AccessSiteProxyBubbleController::OnTestProfileListenerAuthFault(
+   ++state_revision_;
+   options->RevokeTestNodeProfile(base::DoNothing());
+ }
++
++void AccessSiteProxyBubbleController::OnTestProfileListenerLost(
++    const OwnershipKey& owner, const std::string& group,
++    const std::string& registration_id) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_);
++  if (!options || registration_id.empty()) return;
++  const auto current = options->test_profile_runtime();
++  if (current.registration_id != registration_id || TestProfileGroup(current) != group)
++    return;
++  for (const auto& [host, selection] : test_profile_sites_) {
++    if (selection == group) {
++      host_states_[host] = {AccessSiteConnectionState::kUnavailable,
++                            "The network process restarted. Reconnecting the test Profile."};
++    }
++  }
++  ++state_revision_;
++  // The next protected request re-reads the saved Profile binding and starts
++  // from a new listener registration.
++  options->RevokeTestNodeProfileAfterNetworkLoss(registration_id);
++}
+ #endif
+ bool AccessSiteProxyBubbleController::CanViewCoreLogs() const {
+   return core_logs_ != nullptr;
+diff --git a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+index abc1d8ed64bf4fc1534e2f40533a49cedb871adb..916a80c09b579e3fd822462c9969c2ee8e2c0e27 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
++++ b/chrome/browser/aegis/access/access_site_proxy_bubble_controller.h
+@@ -103,6 +103,10 @@ class AccessSiteProxyBubbleController : public base::SupportsUserData::Data {
+   void OnTestProfileListenerAuthFault(
+       const OwnershipKey& owner, const aegis_access::GenerationTuple& observed,
+       const std::string& registration_id);
++  // The private Context holding this listener registration was lost.
++  void OnTestProfileListenerLost(const OwnershipKey& owner,
++                                 const std::string& group,
++                                 const std::string& registration_id);
+ #endif
+   // Called only after Browser-owned policy evaluation selects this local
+   // group. Restores its runtime binding without mutating persisted intent.
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index ca5cfa348cb1f94b966980c2515ade0dbe58494c..fb38fcc7d1ea79f17e29df5bf31732e0432367b2 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1355,6 +1355,97 @@ TEST_F(AccessSavedTestProfileProductTest,
+   EXPECT_TRUE(transport_->PreparedProxyForGroup(owner_, group_));
+ }
+ 
++TEST_F(AccessSavedTestProfileProductTest,
++       NetworkServiceLossRequiresFreshTestProfileRegistration) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  const auto active = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(active);
++
++  // The Network Service restarts without a network epoch change.
++  context_.Disconnect();
++  environment_.RunUntilIdle();
++  ProductAckContext replacement;
++  replacement.incarnation = "replacement-context";
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
++  // The replacement Context never inherits the old registration, and a fresh
++  // ACK alone cannot make the old listener current again.
++  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
++  EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return options->test_profile_runtime_state() == AccessTestProfileRuntimeState::kIdle;
++  })) << SavedProfileState(options);
++  EXPECT_TRUE(std::ranges::none_of(transport_->PrivateEndpoints(owner_), [&](const auto& entry) {
++    return entry.registration.registration_id == active->registration_id;
++  }));
++  EXPECT_NE(Snapshot().connection, AccessSiteConnectionState::kReady);
++
++  // The next protected request reads the saved Profile and registers again.
++  EXPECT_TRUE(options->CanRestoreSavedTestNodeProfile());
++  base::test::TestFuture<bool> again;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, again.GetCallback());
++  ASSERT_TRUE(again.Get()) << SavedProfileState(options);
++  const auto fresh = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(fresh);
++  EXPECT_NE(fresh->registration_id, active->registration_id);
++  EXPECT_GT(fresh->authorization_generation, active->authorization_generation);
++  EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
++}
++
++TEST_F(AccessSavedTestProfileProductTest,
++       ExplicitRevokeAfterNetworkServiceLossKeepsRestoreClosed) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
++
++  context_.Disconnect();
++  environment_.RunUntilIdle();
++  ProductAckContext replacement;
++  replacement.incarnation = "replacement-context";
++  replacement.hold_next = true;
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return options->test_profile_runtime_state() ==
++           AccessTestProfileRuntimeState::kRevoking;
++  })) << SavedProfileState(options);
++  // The user revokes while the loss retirement is still in flight.
++  base::test::TestFuture<bool> revoked;
++  options->RevokeTestNodeProfile(revoked.GetCallback());
++  ASSERT_TRUE(base::test::RunUntil([&] { return replacement.has_reply(); }));
++  replacement.Reply(true);
++  ASSERT_TRUE(revoked.Get()) << SavedProfileState(options);
++  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
++  EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
++}
++
++TEST_F(AccessSavedTestProfileProductTest,
++       AdditionalFactoryForLiveContextKeepsTestProfileRegistration) {
++  auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  base::test::TestFuture<bool> restored;
++  bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
++  ASSERT_TRUE(restored.Get());
++  const auto active = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(active);
++
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &context_, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
++  environment_.RunUntilIdle();
++  const auto after = bubble_->AcknowledgedTestProfileListener();
++  ASSERT_TRUE(after);
++  EXPECT_EQ(after->registration_id, active->registration_id);
++  EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kActive);
++  EXPECT_TRUE(transport_->PreparedProxyForGroup(owner_, group_));
++}
++
+ TEST_F(AccessSavedTestProfileProductTest, RevokingHeldExplicitPublicationSettlesOriginalSite) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
+   ASSERT_NO_FATAL_FAILURE(PrepareExplicitly(options));
+-- 
+2.54.0 (Apple Git-157)
+

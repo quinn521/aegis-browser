@@ -1,0 +1,483 @@
+From 7b22ef638d0a89d4edc1eedac12342f94f83c4af Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:16:42 +0800
+Subject: [PATCH] Add opt-in macOS Aegis owned-core listener contract
+
+---
+ internal/aegisowned/launch.go               |  17 +++
+ internal/aegisowned/owned_darwin.go         | 137 ++++++++++++++++++++
+ internal/aegisowned/owned_default.go        |  23 ++++
+ main/aegis_owned.go                         |  88 +++++++++++++
+ main/run.go                                 |  42 +++++-
+ transport/internet/browser_dialer/dialer.go |   6 +-
+ transport/internet/tcp/hub.go               |  11 +-
+ transport/internet/tcp_hub.go               |   3 +-
+ 8 files changed, 315 insertions(+), 12 deletions(-)
+ create mode 100644 internal/aegisowned/launch.go
+ create mode 100644 internal/aegisowned/owned_darwin.go
+ create mode 100644 internal/aegisowned/owned_default.go
+ create mode 100644 main/aegis_owned.go
+
+diff --git a/internal/aegisowned/launch.go b/internal/aegisowned/launch.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..f03393e1c7c5de5486d79da73c5cac04b5c13861
+--- /dev/null
++++ b/internal/aegisowned/launch.go
+@@ -0,0 +1,17 @@
++package aegisowned
++
++import "os"
++
++const (
++	parentEnv = "AEGIS_OWNED_PARENT_PID"
++	leaseEnv  = "AEGIS_OWNED_LISTENER_LEASE_FD"
++)
++
++var requested = func() bool {
++	_, parent := os.LookupEnv(parentEnv)
++	_, lease := os.LookupEnv(leaseEnv)
++	return parent || lease
++}()
++
++// Requested reports launch intent even before the parent and lease are validated.
++func Requested() bool { return requested }
+diff --git a/internal/aegisowned/owned_darwin.go b/internal/aegisowned/owned_darwin.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..98be6f2ffe11992c02c87c3b03c7e46d82c7b9a2
+--- /dev/null
++++ b/internal/aegisowned/owned_darwin.go
+@@ -0,0 +1,137 @@
++//go:build darwin && aegis_owned
++
++// Package aegisowned implements the local macOS Aegis parent/listener contract.
++package aegisowned
++
++import (
++	"context"
++	"fmt"
++	"net"
++	"os"
++	"strconv"
++	"sync/atomic"
++
++	"golang.org/x/sys/unix"
++)
++
++const (
++	leaseFD  = 3
++	loopback = "127.0.0.1"
++)
++
++var (
++	enabled bool
++	bound   atomic.Bool
++	leased  atomic.Bool
++)
++
++func Enabled() bool { return enabled }
++func Ready() bool   { return leased.Load() }
++
++// Start must run before configuration loading and starting any workers.
++func Start() error {
++	if !Requested() {
++		return nil
++	}
++	parent, err := strconv.Atoi(os.Getenv(parentEnv))
++	if err != nil || parent <= 1 || parent != os.Getppid() || os.Getenv(leaseEnv) != "3" {
++		return fmt.Errorf("invalid Aegis parent identity or lease descriptor")
++	}
++	peer, err := unix.Getpeername(leaseFD)
++	if _, ok := peer.(*unix.SockaddrUnix); err != nil || !ok {
++		return fmt.Errorf("Aegis lease descriptor is not a connected Unix socket")
++	}
++	socketType, err := unix.GetsockoptInt(leaseFD, unix.SOL_SOCKET, unix.SO_TYPE)
++	if err != nil || socketType != unix.SOCK_STREAM {
++		return fmt.Errorf("Aegis lease descriptor is not a stream socket")
++	}
++	peerPID, err := unix.GetsockoptInt(leaseFD, unix.SOL_LOCAL, unix.LOCAL_PEERPID)
++	if err != nil || peerPID != parent {
++		return fmt.Errorf("Aegis lease peer does not match the parent")
++	}
++	unix.CloseOnExec(leaseFD)
++	if err := unix.SetsockoptInt(leaseFD, unix.SOL_SOCKET, unix.SO_NOSIGPIPE, 1); err != nil {
++		return fmt.Errorf("set Aegis lease socket options: %w", err)
++	}
++	queue, err := unix.Kqueue()
++	if err != nil {
++		return fmt.Errorf("create Aegis parent watcher: %w", err)
++	}
++	unix.CloseOnExec(queue)
++	change := []unix.Kevent_t{{
++		Ident: uint64(parent), Filter: unix.EVFILT_PROC,
++		Flags: unix.EV_ADD | unix.EV_ONESHOT, Fflags: unix.NOTE_EXIT,
++	}}
++	_, err = unix.Kevent(queue, change, nil, nil)
++	if err != nil || os.Getppid() != parent {
++		unix.Close(queue)
++		return fmt.Errorf("cannot watch the Aegis parent")
++	}
++	enabled = true
++	go watchParent(queue)
++	return nil
++}
++
++func watchParent(queue int) {
++	var events [1]unix.Kevent_t
++	for {
++		count, err := unix.Kevent(queue, nil, events[:], nil)
++		if err == unix.EINTR {
++			continue
++		}
++		if err != nil || count != 1 || events[0].Flags&unix.EV_ERROR != 0 {
++			os.Exit(23)
++		}
++		os.Exit(0)
++	}
++}
++
++// Listen creates exactly one exclusive IPv4 loopback socket and sends the
++// parent a duplicate of that listening FD. Port zero is allocated by macOS.
++func Listen(ctx context.Context, ip net.IP, port uint16) (net.Listener, error) {
++	if !enabled || !ip.Equal(net.IPv4(127, 0, 0, 1)) || !bound.CompareAndSwap(false, true) {
++		return nil, fmt.Errorf("Aegis owned mode requires one IPv4 loopback TCP listener")
++	}
++	defer unix.Close(leaseFD)
++	config := net.ListenConfig{KeepAlive: -1}
++	config.SetMultipathTCP(false)
++	listener, err := config.Listen(ctx, "tcp4", net.JoinHostPort(loopback, strconv.Itoa(int(port))))
++	if err != nil {
++		return nil, err
++	}
++	tcp, ok := listener.(*net.TCPListener)
++	if !ok {
++		listener.Close()
++		return nil, fmt.Errorf("unexpected Aegis listener type")
++	}
++	if err := publish(tcp); err != nil {
++		listener.Close()
++		return nil, err
++	}
++	leased.Store(true)
++	return tcp, nil
++}
++
++func publish(listener *net.TCPListener) error {
++	raw, err := listener.SyscallConn()
++	if err != nil {
++		return err
++	}
++	var sendError error
++	if err := raw.Control(func(fd uintptr) {
++		reuse, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT)
++		if err != nil || reuse != 0 {
++			sendError = fmt.Errorf("Aegis listener is not exclusive")
++			return
++		}
++		count, err := unix.SendmsgN(leaseFD, []byte{1}, unix.UnixRights(int(fd)), nil, unix.MSG_DONTWAIT)
++		if err != nil {
++			sendError = fmt.Errorf("send Aegis listener lease: %w", err)
++		} else if count != 1 {
++			sendError = fmt.Errorf("incomplete Aegis listener lease")
++		}
++	}); err != nil {
++		return err
++	}
++	return sendError
++}
+diff --git a/internal/aegisowned/owned_default.go b/internal/aegisowned/owned_default.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..73da6c41fbced34b4a70510e0998aba2b86d3542
+--- /dev/null
++++ b/internal/aegisowned/owned_default.go
+@@ -0,0 +1,23 @@
++//go:build !darwin || !aegis_owned
++
++package aegisowned
++
++import (
++	"context"
++	"fmt"
++	"net"
++)
++
++func Enabled() bool { return false }
++func Ready() bool   { return false }
++
++func Start() error {
++	if Requested() {
++		return fmt.Errorf("Aegis owned mode is unavailable in this build")
++	}
++	return nil
++}
++
++func Listen(context.Context, net.IP, uint16) (net.Listener, error) {
++	return nil, fmt.Errorf("Aegis owned mode is unavailable in this build")
++}
+diff --git a/main/aegis_owned.go b/main/aegis_owned.go
+new file mode 100644
+index 0000000000000000000000000000000000000000..de651c88e496dcf00f5baec16495f3fa596f205c
+--- /dev/null
++++ b/main/aegis_owned.go
+@@ -0,0 +1,88 @@
++package main
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++	"os"
++
++	"github.com/xtls/xray-core/app/proxyman"
++	"github.com/xtls/xray-core/core"
++	"github.com/xtls/xray-core/infra/conf"
++	xhttp "github.com/xtls/xray-core/proxy/http"
++	"github.com/xtls/xray-core/proxy/socks"
++)
++
++// Accept only the JSON document that the browser writes on stdin.
++func loadAegisOwnedConfig() (*core.Config, error) {
++	if len(configFiles) != 1 || configFiles[0] != "stdin:" || configDir != "" ||
++		(*format != "auto" && *format != "json") {
++		return nil, fmt.Errorf("Aegis owned mode requires one explicit JSON stdin config")
++	}
++	const maxConfigBytes = 8192
++	input := &io.LimitedReader{R: os.Stdin, N: maxConfigBytes + 1}
++	decoder := json.NewDecoder(input)
++	decoder.DisallowUnknownFields()
++	var spec struct {
++		Log       *conf.LogConfig             `json:"log"`
++		Inbounds  []conf.InboundDetourConfig  `json:"inbounds"`
++		Outbounds []conf.OutboundDetourConfig `json:"outbounds"`
++	}
++	if err := decoder.Decode(&spec); err != nil {
++		return nil, fmt.Errorf("invalid Aegis owned config: %w", err)
++	}
++	if decoder.Decode(new(json.RawMessage)) != io.EOF || input.N == 0 {
++		return nil, fmt.Errorf("Aegis owned mode requires one bounded JSON document")
++	}
++	if len(spec.Outbounds) != 1 {
++		return nil, fmt.Errorf("Aegis owned mode requires one selected outbound")
++	}
++	c, err := (&conf.Config{
++		LogConfig: spec.Log, InboundConfigs: spec.Inbounds, OutboundConfigs: spec.Outbounds,
++	}).Build()
++	if err != nil {
++		return nil, err
++	}
++	if err := validateAegisOwnedInbound(c); err != nil {
++		return nil, err
++	}
++	return c, nil
++}
++
++func validateAegisOwnedInbound(config *core.Config) error {
++	if config == nil || len(config.Inbound) != 1 || config.Inbound[0] == nil ||
++		config.Inbound[0].ReceiverSettings == nil ||
++		config.Inbound[0].ProxySettings == nil {
++		return fmt.Errorf("Aegis owned mode requires exactly one configured inbound")
++	}
++	inbound := config.Inbound[0]
++	rawReceiver, err := inbound.ReceiverSettings.GetInstance()
++	if err != nil {
++		return err
++	}
++	receiver, ok := rawReceiver.(*proxyman.ReceiverConfig)
++	if !ok || receiver.Listen == nil || receiver.Listen.AsAddress() == nil ||
++		receiver.Listen.AsAddress().String() != "127.0.0.1" ||
++		receiver.StreamSettings != nil || receiver.ReceiveOriginalDestination {
++		return fmt.Errorf("Aegis owned mode requires a plain IPv4 loopback TCP inbound")
++	}
++	ports := receiver.GetPortList().GetRange()
++	if len(ports) != 1 || ports[0] == nil || ports[0].From != ports[0].To || ports[0].From > 65535 {
++		return fmt.Errorf("Aegis owned mode requires a single port")
++	}
++	settings, err := inbound.ProxySettings.GetInstance()
++	if err != nil {
++		return err
++	}
++	switch proxy := settings.(type) {
++	case *xhttp.ServerConfig:
++		if len(proxy.Accounts) == 0 {
++			return nil
++		}
++	case *socks.ServerConfig:
++		if proxy.AuthType == socks.AuthType_NO_AUTH && !proxy.UdpEnabled && len(proxy.Accounts) == 0 {
++			return nil
++		}
++	}
++	return fmt.Errorf("Aegis owned mode requires no-auth HTTP or TCP-only no-auth SOCKS5")
++}
+diff --git a/main/run.go b/main/run.go
+index 6ca9afbc5085f72f6b4145b417d0b85c0ffc7876..81f3a068fff3110d7a52e8c61b1519be0b093b69 100644
+--- a/main/run.go
++++ b/main/run.go
+@@ -19,6 +19,7 @@ import (
+ 	clog "github.com/xtls/xray-core/common/log"
+ 	"github.com/xtls/xray-core/common/platform"
+ 	"github.com/xtls/xray-core/core"
++	"github.com/xtls/xray-core/internal/aegisowned"
+ 	"github.com/xtls/xray-core/main/commands/base"
+ )
+ 
+@@ -73,7 +74,15 @@ var (
+ )
+ 
+ func executeRun(cmd *base.Command, args []string) {
++	if err := aegisowned.Start(); err != nil {
++		fmt.Println("Failed to start:", err)
++		os.Exit(23)
++	}
+ 	if *dump {
++		if aegisowned.Enabled() {
++			fmt.Println("Failed to start: Aegis owned mode does not dump configuration")
++			os.Exit(23)
++		}
+ 		clog.ReplaceWithSeverityLogger(clog.Severity_Warning)
+ 		errCode := dumpConfig()
+ 		os.Exit(errCode)
+@@ -92,21 +101,30 @@ func executeRun(cmd *base.Command, args []string) {
+ 		os.Exit(0)
+ 	}
+ 
++	osSignals := make(chan os.Signal, 1)
++	owned := aegisowned.Enabled()
++	if owned {
++		// The browser can request shutdown as soon as Start publishes the lease.
++		signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
++	}
+ 	if err := server.Start(); err != nil {
+ 		fmt.Println("Failed to start:", err)
+ 		os.Exit(-1)
+ 	}
+ 	defer server.Close()
++	if owned && !aegisowned.Ready() {
++		fmt.Println("Failed to start: Aegis listener lease was not published")
++		os.Exit(23)
++	}
+ 
+ 	// Explicitly triggering GC to remove garbage from config loading.
+ 	runtime.GC()
+ 	debug.FreeOSMemory()
+ 
+-	{
+-		osSignals := make(chan os.Signal, 1)
++	if !owned {
+ 		signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
+-		<-osSignals
+ 	}
++	<-osSignals
+ }
+ 
+ func dumpConfig() int {
+@@ -220,11 +238,9 @@ func startXray() (core.Server, error) {
+ 	// 	return nil, errors.New("failed to configure Lua privileged authorization").Base(err)
+ 	// }
+ 
+-	configFiles := getConfigFilePath(true)
+-
+-	c, err := core.LoadConfig(getConfigFormat(), configFiles)
++	c, err := loadXrayConfig()
+ 	if err != nil {
+-		return nil, errors.New("failed to load config files: [", configFiles.String(), "]").Base(err)
++		return nil, err
+ 	}
+ 
+ 	server, err := core.New(c)
+@@ -234,3 +250,15 @@ func startXray() (core.Server, error) {
+ 
+ 	return server, nil
+ }
++
++func loadXrayConfig() (*core.Config, error) {
++	if aegisowned.Enabled() {
++		return loadAegisOwnedConfig()
++	}
++	files := getConfigFilePath(true)
++	c, err := core.LoadConfig(getConfigFormat(), files)
++	if err != nil {
++		return nil, errors.New("failed to load config files: [", files.String(), "]").Base(err)
++	}
++	return c, nil
++}
+diff --git a/transport/internet/browser_dialer/dialer.go b/transport/internet/browser_dialer/dialer.go
+index ee3828020b23afd777cd7a9e71fe2fa4e1dcb180..f533392227851621a9644305bf362b0d1a100c41 100644
+--- a/transport/internet/browser_dialer/dialer.go
++++ b/transport/internet/browser_dialer/dialer.go
+@@ -14,6 +14,7 @@ import (
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/platform"
+ 	"github.com/xtls/xray-core/common/uuid"
++	"github.com/xtls/xray-core/internal/aegisowned"
+ )
+ 
+ //go:embed dialer.html
+@@ -44,7 +45,10 @@ var upgrader = &websocket.Upgrader{
+ 
+ // Used by external projects when using xray as a go module
+ func Reload() {
+-	addr := platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
++	addr := ""
++	if !aegisowned.Requested() {
++		addr = platform.NewEnvFlag(platform.BrowserDialerAddress).GetValue(func() string { return "" })
++	}
+ 	mu.Lock()
+ 	defer mu.Unlock()
+ 
+diff --git a/transport/internet/tcp/hub.go b/transport/internet/tcp/hub.go
+index 92eb6e63f411b2cf30976e45257b9df4feaccae3..8b0ff3698e073363d2c59e78c8b8eeaf073b6060 100644
+--- a/transport/internet/tcp/hub.go
++++ b/transport/internet/tcp/hub.go
+@@ -10,6 +10,7 @@ import (
+ 	"github.com/xtls/xray-core/common"
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/net"
++	"github.com/xtls/xray-core/internal/aegisowned"
+ 	"github.com/xtls/xray-core/transport/internet"
+ 	"github.com/xtls/xray-core/transport/internet/reality"
+ 	"github.com/xtls/xray-core/transport/internet/stat"
+@@ -42,14 +43,18 @@ func ListenTCP(ctx context.Context, address net.Address, port net.Port, streamSe
+ 	var listener net.Listener
+ 	var err error
+ 	var addr net.Addr
+-	if port == net.Port(0) { // unix
++	owned := aegisowned.Enabled()
++	if port == net.Port(0) && !owned { // unix
+ 		addr = &net.UnixAddr{Name: address.Domain(), Net: "unix"}
+ 	} else { // tcp
+ 		addr = &net.TCPAddr{IP: address.IP(), Port: int(port)}
+ 	}
+-	if streamSettings.FinalMask != nil {
++	switch {
++	case owned:
++		listener, err = aegisowned.Listen(ctx, address.IP(), uint16(port))
++	case streamSettings.FinalMask != nil:
+ 		listener, err = streamSettings.FinalMask.Listen(ctx, addr)
+-	} else {
++	default:
+ 		listener, err = internet.ListenSystem(ctx, addr, streamSettings.SocketSettings)
+ 	}
+ 	if err != nil {
+diff --git a/transport/internet/tcp_hub.go b/transport/internet/tcp_hub.go
+index 1f613d0e56608ae3d1d8eb71ee21f3ecdfd2f91a..f6e54b4a3fcd9e2d7d940c904d4526fa7761bc2b 100644
+--- a/transport/internet/tcp_hub.go
++++ b/transport/internet/tcp_hub.go
+@@ -5,6 +5,7 @@ import (
+ 
+ 	"github.com/xtls/xray-core/common/errors"
+ 	"github.com/xtls/xray-core/common/net"
++	"github.com/xtls/xray-core/internal/aegisowned"
+ 	"github.com/xtls/xray-core/transport/internet/stat"
+ )
+ 
+@@ -65,7 +66,7 @@ func ListenTCP(ctx context.Context, address net.Address, port net.Port, settings
+ 	if address.Family().IsDomain() {
+ 		return nil, errors.New("domain address is not allowed for listening: ", address.Domain())
+ 	}
+-	if port == 0 {
++	if port == 0 && !aegisowned.Enabled() {
+ 		return nil, errors.New("port 0 is not allowed for listening on TCP")
+ 	}
+ 
+-- 
+2.54.0 (Apple Git-157)
+

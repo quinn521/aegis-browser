@@ -1,0 +1,31 @@
+From f743ef9d0db555d8910145e4625f7d36b4645f17 Mon Sep 17 00:00:00 2001
+From: Quinn <coderquinn@gmail.com>
+Date: Thu, 26 Nov 2026 22:35:57 +0800
+Subject: [PATCH] fix(access): encode native query bytes safely
+
+---
+ chrome/browser/aegis/access/access_test_node_native_config.cc | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/chrome/browser/aegis/access/access_test_node_native_config.cc b/chrome/browser/aegis/access/access_test_node_native_config.cc
+index 65db4bda9f6d99d36bee8367fcc938cc38b50ab8..c5cfe526d6b2aefd91b8de9b16564892703d0eb6 100644
+--- a/chrome/browser/aegis/access/access_test_node_native_config.cc
++++ b/chrome/browser/aegis/access/access_test_node_native_config.cc
+@@ -13,7 +13,6 @@ namespace {
+ std::string EscapeNativeQueryValue(std::string_view value,
+                                    bool escape_nested_uri = false) {
+   // The share decoder splits on '&' and '#' and decodes '%' exactly once.
+-  constexpr char kHex[] = "0123456789ABCDEF";
+   std::string result;
+   result.reserve(value.size());
+   for (; !value.empty(); value.remove_prefix(1)) {
+@@ -21,8 +20,7 @@ std::string EscapeNativeQueryValue(std::string_view value,
+     if (byte <= 0x20 || byte == 0x7f || byte == '&' || byte == '#' ||
+         byte == '%' || (escape_nested_uri && value.starts_with("://"))) {
+       result.push_back('%');
+-      result.push_back(kHex[byte >> 4]);
+-      result.push_back(kHex[byte & 15]);
++      base::AppendHexEncodedByte(byte, result);
+     } else {
+       result.push_back(static_cast<char>(byte));
+     }

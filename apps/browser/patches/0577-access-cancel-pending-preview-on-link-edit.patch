@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:23:18 +0800
+Subject: [PATCH] fix(access): cancel pending node preview when the link changes
+
+---
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index f35ab2d4da9dd0a19d020b15044b6df1195f820b..adeb79c20a512ce82715a9182dfdc9dd563ff513 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -234,7 +234,7 @@ form.addEventListener('submit', event => {
+ });
+ 
+ link.addEventListener('input', () => {
+-  if (!previewReady) return;
++  if (!nodeDraft || working) return;
+   cancel();
+   status.dataset['error'] = 'false';
+   status.textContent = 'Preview the edited link before applying.';

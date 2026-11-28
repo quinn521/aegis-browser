@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:28:16 +0800
+Subject: [PATCH] fix(access): explain when automatic activation is unavailable before Apply
+
+---
+diff --git a/chrome/browser/aegis/access/access_options_service.cc b/chrome/browser/aegis/access/access_options_service.cc
+index 25081e9d870fab12193f1d2a72bb791717568912..eb4c7f46d1cc6d18ef628c5339525d51aabdee86 100644
+--- a/chrome/browser/aegis/access/access_options_service.cc
++++ b/chrome/browser/aegis/access/access_options_service.cc
+@@ -686,6 +686,12 @@ void AccessOptionsService::StartTestProfilePreparation(
+   Read(base::BindOnce(&AccessOptionsService::OnTestProfileRuntimeRead,
+       weak_factory_.GetWeakPtr(), epoch, std::move(expectation)));
+ }
++bool AccessOptionsService::SupportsTestNodeActivationProtocol(
++    aegis_access::AccessInboundProtocolPreference protocol) {
++  using Protocol = aegis_access::AccessInboundProtocolPreference;
++  return protocol == Protocol::kHttp || protocol == Protocol::kSocks5;
++}
++
+ void AccessOptionsService::OnTestProfileRuntimeRead(uint64_t epoch, TestProfileExpectation expectation,
+     StoreResult<AccessOptionsSnapshot> snapshot) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+@@ -720,8 +726,7 @@ void AccessOptionsService::OnTestProfileRuntimeRead(uint64_t epoch, TestProfileE
+   }
+   using Protocol = aegis_access::AccessInboundProtocolPreference;
+   using Transport = aegis_access::RegisteredProxyTransport;
+-  if (stored.configuration.inbound.protocol != Protocol::kHttp &&
+-      stored.configuration.inbound.protocol != Protocol::kSocks5) {
++  if (!SupportsTestNodeActivationProtocol(stored.configuration.inbound.protocol)) {
+     fail("Automatic protocol selection is not admitted in this candidate. Choose an explicit internal protocol.");
+     return;
+   }
+diff --git a/chrome/browser/aegis/access/access_options_service.h b/chrome/browser/aegis/access/access_options_service.h
+index df8bd91b95d2830cff976c0218b9bc0c116ef14f..1b5ac606e51e3a0aa6ccd8a4885f6936554b100f 100644
+--- a/chrome/browser/aegis/access/access_options_service.h
++++ b/chrome/browser/aegis/access/access_options_service.h
+@@ -119,6 +119,8 @@ class AccessOptionsService : public base::SupportsUserData::Data {
+   bool HasUncertainTestNodeApply() const;
+   void ReconcileUncertainTestNodeApply(base::OnceClosure completion);
+   void SetSaveFailureForTesting(AccessOptionsStore::SaveFailurePointForTesting point);
++  static bool SupportsTestNodeActivationProtocol(
++      aegis_access::AccessInboundProtocolPreference protocol);
+   // Native consumer API. No renderer supplies a node reference, probe, manifest
+   // path, endpoint or authorization generation. Prepare fences Save before IO.
+   void PrepareTestNodeProfile(uint64_t expected_revision,
+diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
+index 8e67e5e70bc68387399046c7e4b6b42718133a33..4f1faba64e7b1c475322feb18025d0b70719a4cf 100644
+--- a/chrome/browser/resources/aegis/access_options.ts
++++ b/chrome/browser/resources/aegis/access_options.ts
+@@ -81,6 +81,7 @@ let generation = 0;
+ let reader: FileReader|null = null;
+ let canApply = false;
+ let canActivate = false;
++let canActivateAutomatically = false;
+ let canImportExtendedVless = false;
+ let working = false;
+ let previewReady = false;
+@@ -108,8 +109,10 @@ function preferencesOnlyDraft() {
+ 
+ function syncActions() {
+   const preferencesOnly = preferencesOnlyDraft();
++  const autoBlocked = canActivate && !canActivateAutomatically && protocol.value === 'auto';
+   apply.disabled = !canApply || !(previewReady || preferencesOnly) || !revision || working ||
+-      requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden;
++      requiresReview || pendingApplyRecovery || !!uncertainOperation || !portError.hidden ||
++      autoBlocked;
+   discard.disabled = !hasDraft || working || !!uncertainOperation;
+   revoke.disabled = !canApply || working || !lastConnection.revision ||
+       !lastConnection.revokeToken ||
+@@ -120,7 +123,9 @@ function syncActions() {
+   checkApply.disabled = working;
+   refresh.disabled = !canApply || working;
+   if (canApply) {
+-    availability.textContent = previewReady ?
++    availability.textContent = autoBlocked ?
++        'Automatic activation is unavailable. Choose HTTP or SOCKS5 to apply.' :
++        previewReady ?
+         (canActivate ? 'Apply saves this draft and prepares the listener.' :
+                        'Apply saves this draft. Connections are not available in this build.') :
+         preferencesOnly ?
+@@ -403,7 +408,9 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
+     return;
+   }
+   status.dataset['error'] = 'true';
+-  if (result.reason === 'configuration_revision_conflict') {
++  if (result.state === 'automaticProtocolNotAdmitted') {
++    status.textContent = 'Automatic activation is unavailable. Choose HTTP or SOCKS5 to apply.';
++  } else if (result.reason === 'configuration_revision_conflict') {
+     requiresReview = true;
+     status.textContent = 'Another window saved changes. Review the saved settings before applying this draft.';
+   } else if (result.reason === 'profile_runtime_in_use') {
+@@ -509,6 +516,7 @@ void sendWithPromise<{
+   private: boolean,
+   testApply?: boolean,
+   testActivate?: boolean,
++  testAutoProtocol?: boolean,
+   testExtendedVless?: boolean,
+ }>(
+     'getAccessOptionsCapabilities').then(async result => {
+@@ -518,6 +526,7 @@ void sendWithPromise<{
+   }
+   canApply = result.testApply === true;
+   canActivate = canApply && result.testActivate === true;
++  canActivateAutomatically = canActivate && result.testAutoProtocol === true;
+   canImportExtendedVless = result.testExtendedVless === true;
+   if (canImportExtendedVless) {
+     document.querySelector('#share-label')!.textContent = 'Node share link';
+diff --git a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+index 8e82d8546af7696a3296c74e9aa1962834656382..26705cf2e9423d46ffe421b464b8167d4722dcd4 100644
+--- a/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
++++ b/chrome/browser/ui/webui/aegis/aegis_ui_handler.cc
+@@ -685,8 +685,12 @@ void AegisUIHandler::HandleGetAccessOptionsCapabilities(const base::ListValue& a
+   result.Set("testApply", IsAccessOptionsDocument() &&
+       !Profile::FromWebUI(web_ui())->IsOffTheRecord() &&
+       aegis_access::CanUseAccessOptions(identity, aegis_access::AccessOptionsOperation::kWrite));
+-  result.Set("testActivate", IsAccessOptionsDocument() &&
+-      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode());
++  const bool can_activate = IsAccessOptionsDocument() &&
++      !Profile::FromWebUI(web_ui())->IsOffTheRecord() && CanActivateAccessTestNode();
++  result.Set("testActivate", can_activate);
++  result.Set("testAutoProtocol", can_activate &&
++      aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
++          aegis_access::AccessInboundProtocolPreference::kAuto));
+   ResolveJavascriptCallback(args[0], result);
+ }
+ 
+@@ -1005,6 +1009,12 @@ void AegisUIHandler::HandleApplyAccessTestNode(const base::ListValue& args) {
+     reject("invalidPreferences");
+     return;
+   }
++  if (CanActivateAccessTestNode() &&
++      !aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
++          inbound->protocol)) {
++    reject("automaticProtocolNotAdmitted");
++    return;
++  }
+   service->SaveTestNodeProfile(access_test_node_editor_, *revision, args[2].GetString(),
+       "Test node", *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+           account_weak_factory_.GetWeakPtr(), access_options_document_,
+@@ -1036,6 +1046,12 @@ void AegisUIHandler::HandleApplyAccessTestNodePreferences(const base::ListValue&
+     reject("invalidPreferences");
+     return;
+   }
++  if (CanActivateAccessTestNode() &&
++      !aegis::access::AccessOptionsService::SupportsTestNodeActivationProtocol(
++          inbound->protocol)) {
++    reject("automaticProtocolNotAdmitted");
++    return;
++  }
+   service->SaveTestNodePreferences(access_test_node_editor_, *revision, args[2].GetString(),
+       *inbound, base::BindOnce(&AegisUIHandler::OnAccessTestNodeSaved,
+           account_weak_factory_.GetWeakPtr(), access_options_document_,

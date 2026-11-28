@@ -381,7 +381,10 @@ if (!is_android) {
       "webpage_capture_browsertest.cc",
     ]
     if (is_mac) {
-      sources += [ "access/access_options_browsertest.cc" ]
+      sources += [
+        "access/access_options_browsertest.cc",
+        "//components/aegis_access/access_test_node_test_fixture.h",
+      ]
     }
     deps = [
       "//chrome/browser/aegis/access:access_buildflags",
@@ -463,6 +466,9 @@ if (!is_android) {
       "//ui/message_center/public/cpp",
       "//url",
     ]
+    if (is_mac) {
+      deps += [ "//chrome/browser/aegis/access:access_options_service" ]
+    }
   }
 
   source_set("interactive_ui_tests") {

@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: GCSA Aegis <aegis@gcsa.local>
+Date: Thu, 26 Nov 2026 11:24:11 +0800
+Subject: [PATCH] fix(access): retire test listeners when their private context disconnects
+
+---
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.cc b/chrome/browser/aegis/access/access_network_context_transport.cc
+index 63a55dd5b6279f50d2bac4e09e60ffe937b5f9d0..c876be9c097feef732d0bf814b86b2db592f5cd6 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.cc
++++ b/chrome/browser/aegis/access/access_network_context_transport.cc
+@@ -615,25 +615,31 @@ void AccessNetworkContextTransport::BindPrivateContext(
+           return;
+         }
+         auto& state = self->partitions_.at(owner.storage_partition_token);
+-        bool lost = false;
+-        std::erase_if(state.private_contexts, [&](const auto& entry) {
+-          const bool disconnected = entry.second.client->incarnation().empty();
+-          lost |= disconnected;
+-          return disconnected;
+-        });
+-        if (lost) {
+-          // The old Network Service is gone. Adding a factory to a live
+-          // Context never reaches this branch.
+-          self->InvalidateTestListenersAfterContextLoss(owner, state);
+-          self->SettlePrivatePublication(state, false);
+-        }
+         const auto incarnation = client->incarnation();
+         auto [entry, inserted] = state.private_contexts.try_emplace(
+             incarnation, client);
++        if (inserted) {
++          client->SetDisconnectHandler(base::BindOnce(
++              &AccessNetworkContextTransport::OnPrivateContextDisconnected,
++              self, owner, incarnation));
++        }
+         // All factories for the same actual Context share one sequence owner.
+         std::move(completion).Run(entry->second.client);
+       }, weak_factory_.GetWeakPtr(), owner, client, std::move(completion)));
+ }
++
++void AccessNetworkContextTransport::OnPrivateContextDisconnected(
++    aegis_access::OwnershipKey owner, std::string incarnation) {
++  if (!OwnsConfiguredPartition(owner)) return;
++  auto& state = partitions_.at(owner.storage_partition_token);
++  if (!state.private_contexts.erase(incarnation)) return;
++  SettlePrivatePublication(state, false);
++  InvalidateTestListenersAfterContextLoss(owner, state);
++  if (state.private_contexts.empty()) {
++    for (auto& [group, listener] : state.retiring_test_listeners)
++      listener.acknowledged = true;
++  }
++}
+ bool AccessNetworkContextTransport::SamePrivatePublication(
+     const PrivatePublication& a, const PrivatePublication& b) {
+   if (a.policy != b.policy || a.common != b.common || a.unavailable != b.unavailable ||
+diff --git a/chrome/browser/aegis/access/access_network_context_transport.h b/chrome/browser/aegis/access/access_network_context_transport.h
+index 1a225f0917af6a94305e596512d6e9438048d194..ffa08f53dcef0bd0e37947ed99165b58a74230cf 100644
+--- a/chrome/browser/aegis/access/access_network_context_transport.h
++++ b/chrome/browser/aegis/access/access_network_context_transport.h
+@@ -296,6 +296,8 @@ class AccessNetworkContextTransport
+   void Broadcast(PartitionState& state);
+   void PublishPrivateContext(const aegis_access::OwnershipKey& owner,
+                              const std::string& incarnation);
++  void OnPrivateContextDisconnected(aegis_access::OwnershipKey owner,
++                                    std::string incarnation);
+ #if BUILDFLAG(IS_MAC)
+   bool HasAcknowledgedPrivateProxy(
+       const aegis_access::OwnershipKey& owner,
+diff --git a/chrome/browser/aegis/access/access_private_context_client.cc b/chrome/browser/aegis/access/access_private_context_client.cc
+index edc3d3e2bd81cecc479ea010cca242502c1bc8c2..b2a965ac4b2ffdd08742d41b4562124b543c2b91 100644
+--- a/chrome/browser/aegis/access/access_private_context_client.cc
++++ b/chrome/browser/aegis/access/access_private_context_client.cc
+@@ -359,11 +359,19 @@ void AccessPrivateContextClient::CreateFactory(
+   context_->CreateFactory(std::move(receiver), std::move(params), std::move(binding),
+       mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(reply), false));
+ }
++void AccessPrivateContextClient::SetDisconnectHandler(base::OnceClosure handler) {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  CHECK(connected_ && !on_disconnect_);
++  on_disconnect_ = std::move(handler);
++}
++
+ void AccessPrivateContextClient::OnDisconnect() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   connected_ = ready_ = publication_pending_ = false;
+   incarnation_.clear();
+   ++operation_;
++  auto notify = std::move(on_disconnect_);
+   if (reject_initialize_) std::move(reject_initialize_).Run();
++  if (notify) std::move(notify).Run();
+ }
+ }  // namespace aegis::access
+diff --git a/chrome/browser/aegis/access/access_private_context_client.h b/chrome/browser/aegis/access/access_private_context_client.h
+index 73a793d73bea327724ac5fa8a8c47f76773cdb46..5e4829aae2d1aa22713754940acb93c5a1457d6b 100644
+--- a/chrome/browser/aegis/access/access_private_context_client.h
++++ b/chrome/browser/aegis/access/access_private_context_client.h
+@@ -34,6 +34,7 @@ class AccessPrivateContextClient {
+   ~AccessPrivateContextClient();
+   void Initialize(network::mojom::NetworkContext* context,
+                   base::OnceCallback<void(bool)> completion);
++  void SetDisconnectHandler(base::OnceClosure handler);
+   void PublishSnapshot(network::mojom::AegisAccessSnapshotPtr snapshot,
+                        base::OnceCallback<void(bool)> completion);
+   // Encodes the whole validated Browser policy and all registered groups.
+@@ -65,6 +66,7 @@ class AccessPrivateContextClient {
+   std::string incarnation_;
+   mojo::Remote<network::mojom::AegisAccessContext> context_;
+   base::OnceClosure reject_initialize_;
++  base::OnceClosure on_disconnect_;
+   bool connected_ = false;
+   bool ready_ = false;
+   bool publication_pending_ = false;
+diff --git a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+index c0a55ba22f402717ccee412a7fd98576ec81816c..e63fb9b46e02068806d7508b628d0d262e97042e 100644
+--- a/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
++++ b/chrome/browser/aegis/access/access_site_proxy_product_unittest.cc
+@@ -1367,6 +1367,15 @@ TEST_F(AccessSavedTestProfileProductTest,
+   // The Network Service restarts without a network epoch change.
+   context_.Disconnect();
+   environment_.RunUntilIdle();
++  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
++  EXPECT_FALSE(bubble_->AcknowledgedTestProfileListener());
++  EXPECT_NE(Snapshot().connection, AccessSiteConnectionState::kReady);
++  ProductAckContext failed_replacement;
++  failed_replacement.incarnation.clear();
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> failed;
++  transport_->BindPrivateContext(owner_, &failed_replacement, failed.GetCallback());
++  EXPECT_FALSE(failed.Get());
++  EXPECT_FALSE(transport_->PreparedProxyForGroup(owner_, group_));
+   ProductAckContext replacement;
+   replacement.incarnation = "replacement-context";
+   base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+@@ -1399,19 +1408,18 @@ TEST_F(AccessSavedTestProfileProductTest,
+ TEST_F(AccessSavedTestProfileProductTest,
+        ExplicitRevokeAfterNetworkServiceLossKeepsRestoreClosed) {
+   auto* options = AccessOptionsService::GetOrCreate(profile_.get());
++  ProductAckContext survivor;
++  survivor.incarnation = "surviving-context";
++  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
++  transport_->BindPrivateContext(owner_, &survivor, bound.GetCallback());
++  ASSERT_TRUE(bound.Get());
+   base::test::TestFuture<bool> restored;
+   bubble_->EnsureLocalCoreForRequest(owner_, group_, restored.GetCallback());
+   ASSERT_TRUE(restored.Get());
+   ASSERT_TRUE(bubble_->AcknowledgedTestProfileListener());
+ 
++  survivor.hold_next = true;
+   context_.Disconnect();
+-  environment_.RunUntilIdle();
+-  ProductAckContext replacement;
+-  replacement.incarnation = "replacement-context";
+-  replacement.hold_next = true;
+-  base::test::TestFuture<AccessNetworkContextTransport::PrivateContext> bound;
+-  transport_->BindPrivateContext(owner_, &replacement, bound.GetCallback());
+-  ASSERT_TRUE(bound.Get());
+   ASSERT_TRUE(base::test::RunUntil([&] {
+     return options->test_profile_runtime_state() ==
+            AccessTestProfileRuntimeState::kRevoking;
+@@ -1419,8 +1427,8 @@ TEST_F(AccessSavedTestProfileProductTest,
+   // The user revokes while the loss retirement is still in flight.
+   base::test::TestFuture<bool> revoked;
+   options->RevokeTestNodeProfile(revoked.GetCallback());
+-  ASSERT_TRUE(base::test::RunUntil([&] { return replacement.has_reply(); }));
+-  replacement.Reply(true);
++  ASSERT_TRUE(base::test::RunUntil([&] { return survivor.has_reply(); }));
++  survivor.Reply(true);
+   ASSERT_TRUE(revoked.Get()) << SavedProfileState(options);
+   EXPECT_EQ(options->test_profile_runtime_state(), AccessTestProfileRuntimeState::kIdle);
+   EXPECT_FALSE(options->CanRestoreSavedTestNodeProfile());
