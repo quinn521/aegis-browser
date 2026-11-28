@@ -7,8 +7,10 @@ import vm from 'node:vm';
 const requireWorkspace = createRequire(new URL('../../../package.json', import.meta.url));
 const {JSDOM} = requireWorkspace('jsdom');
 const ts = requireWorkspace('typescript');
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed fixture relative to this module
 const page = readFileSync(new URL('../overlay/chrome/browser/resources/aegis/access_options.html', import.meta.url), 'utf8');
 const {outputText} = ts.transpileModule(
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed fixture relative to this module
     readFileSync(new URL('../overlay/chrome/browser/resources/aegis/access_options.ts', import.meta.url), 'utf8'), {
       compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS},
     });

@@ -316,7 +316,7 @@ onActionClick(discard, async () => {
     if (request !== generation) {
       return;
     }
-    await finishDiscard(result, request);
+    if (finishDiscard(result)) await reloadCommitted(request);
   } catch {
     if (request === generation) {
       status.textContent = messages.secureStorageUnavailable;
@@ -327,19 +327,18 @@ onActionClick(discard, async () => {
   }
 });
 
-async function finishDiscard(result: Preview, request: number) {
+function finishDiscard(result: Preview): boolean {
   const cleared = result.state === 'canceled';
   const edited = hasDraft;
   status.textContent = messagesByState[result.state] ?? 'Discard unavailable.';
   status.dataset['error'] = String(!cleared);
   discard.disabled = cleared && !edited;
   hasDraft = edited || !cleared;
-  if (cleared && canApply && !edited) await reloadCommitted(request);
+  return cleared && canApply && !edited;
 }
 
-async function reloadCommitted(request: number) {
-  try {
-    const latest = await sendWithPromise<OptionsState>('readAccessOptions');
+function reloadCommitted(request: number) {
+  return sendWithPromise<OptionsState>('readAccessOptions').then(latest => {
     if (request !== generation || hasDraft) return;
     if (latest.state !== 'ready' || !latest.revision) throw new Error('Options unavailable');
     pendingApplyRecovery = latest.pendingApplyRecovery === true;
@@ -349,12 +348,12 @@ async function reloadCommitted(request: number) {
     restorePreferences();
     draftState.textContent = saved ? 'Saved preferences' : 'No changes saved';
     showConnection(latest.connection ?? {state: 'inactive'});
-  } catch {
+  }).catch(() => {
     if (request === generation) {
       status.textContent = 'Saved settings are unavailable. Try again.';
       status.dataset['error'] = 'true';
     }
-  }
+  });
 }
 
 function refreshListenerFields() {

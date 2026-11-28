@@ -1,15 +1,15 @@
-From 489891471fdaf14d1b9d4a8d1b25996acaa1db03 Mon Sep 17 00:00:00 2001
+From 8a602ad670b06462c2b442870e6a5923ad38cdd4 Mon Sep 17 00:00:00 2001
 From: Quinn <coderquinn@gmail.com>
 Date: Sun, 29 Nov 2026 00:21:37 +0800
 Subject: [PATCH] fix(macos): validate Access Options elements and handle
  asynchronous UI actions
 
 ---
- .../browser/resources/aegis/access_options.ts | 140 ++++++++++--------
- 1 file changed, 81 insertions(+), 59 deletions(-)
+ .../browser/resources/aegis/access_options.ts | 149 ++++++++++--------
+ 1 file changed, 85 insertions(+), 64 deletions(-)
 
 diff --git a/chrome/browser/resources/aegis/access_options.ts b/chrome/browser/resources/aegis/access_options.ts
-index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7c1c4223c 100644
+index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..ba115212ab17afd99cdc0c4a55fda7b2fe49c7df 100644
 --- a/chrome/browser/resources/aegis/access_options.ts
 +++ b/chrome/browser/resources/aegis/access_options.ts
 @@ -28,38 +28,44 @@ interface ApplyResult extends Connection {
@@ -209,7 +209,7 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
 -    discard.disabled = cleared && !edited;
 -    hasDraft = edited || !cleared;
 -    if (cleared && canApply && !edited) await reloadCommitted(request);
-+    await finishDiscard(result, request);
++    if (finishDiscard(result)) await reloadCommitted(request);
    } catch {
      if (request === generation) {
 -      status.textContent = messages['secureStorageUnavailable']!;
@@ -217,24 +217,44 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
        status.dataset['error'] = 'true';
        discard.disabled = false;
        hasDraft = true;
-@@ -317,6 +327,16 @@ discard.addEventListener('click', async () => {
+@@ -317,9 +327,18 @@ discard.addEventListener('click', async () => {
    }
  });
  
-+async function finishDiscard(result: Preview, request: number) {
+-async function reloadCommitted(request: number) {
+-  try {
+-    const latest = await sendWithPromise<OptionsState>('readAccessOptions');
++function finishDiscard(result: Preview): boolean {
 +  const cleared = result.state === 'canceled';
 +  const edited = hasDraft;
 +  status.textContent = messagesByState[result.state] ?? 'Discard unavailable.';
 +  status.dataset['error'] = String(!cleared);
 +  discard.disabled = cleared && !edited;
 +  hasDraft = edited || !cleared;
-+  if (cleared && canApply && !edited) await reloadCommitted(request);
++  return cleared && canApply && !edited;
 +}
 +
- async function reloadCommitted(request: number) {
-   try {
-     const latest = await sendWithPromise<OptionsState>('readAccessOptions');
-@@ -425,7 +445,7 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
++function reloadCommitted(request: number) {
++  return sendWithPromise<OptionsState>('readAccessOptions').then(latest => {
+     if (request !== generation || hasDraft) return;
+     if (latest.state !== 'ready' || !latest.revision) throw new Error('Options unavailable');
+     pendingApplyRecovery = latest.pendingApplyRecovery === true;
+@@ -329,12 +348,12 @@ async function reloadCommitted(request: number) {
+     restorePreferences();
+     draftState.textContent = saved ? 'Saved preferences' : 'No changes saved';
+     showConnection(latest.connection ?? {state: 'inactive'});
+-  } catch {
++  }).catch(() => {
+     if (request === generation) {
+       status.textContent = 'Saved settings are unavailable. Try again.';
+       status.dataset['error'] = 'true';
+     }
+-  }
++  });
+ }
+ 
+ function refreshListenerFields() {
+@@ -425,7 +444,7 @@ async function handleApplyResult(result: ApplyResult, operation: string) {
    }
  }
  
@@ -243,7 +263,7 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
    if (apply.disabled || !revision) return;
    const message = previewReady ? 'applyAccessTestNode' : 'applyAccessTestNodePreferences';
    const operation = crypto.randomUUID();
-@@ -447,7 +467,7 @@ apply.addEventListener('click', async () => {
+@@ -447,7 +466,7 @@ apply.addEventListener('click', async () => {
    }
  });
  
@@ -252,7 +272,7 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
    if (!uncertainOperation || working) return;
    const operation = uncertainOperation;
    working = true;
-@@ -464,7 +484,7 @@ checkApply.addEventListener('click', async () => {
+@@ -464,7 +483,7 @@ checkApply.addEventListener('click', async () => {
    }
  });
  
@@ -261,7 +281,7 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
    if (working) return;
    try {
      await readOptions(false, true);
-@@ -482,10 +502,12 @@ review.addEventListener('click', async () => {
+@@ -482,10 +501,12 @@ review.addEventListener('click', async () => {
  
  refresh.addEventListener('click', () => {
    if (refresh.disabled) return;
@@ -276,7 +296,7 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
    const {revision: connectionRevision, revokeToken} = lastConnection;
    if (revoke.disabled || !connectionRevision || !revokeToken) return;
    working = true;
-@@ -527,7 +549,7 @@ void sendWithPromise<{
+@@ -527,7 +548,7 @@ void sendWithPromise<{
  }>(
      'getAccessOptionsCapabilities').then(async result => {
    if (!result.enabled || result.private) {
@@ -285,7 +305,7 @@ index 5ae45d60cc7679ebcc569a4b32c2b966be80b3ca..1e7814d2e85dc985a35a5d8693e7cbb7
      return;
    }
    canApply = result.testApply === true;
-@@ -535,8 +557,8 @@ void sendWithPromise<{
+@@ -535,8 +556,8 @@ void sendWithPromise<{
    canActivateAutomatically = canActivate && result.testAutoProtocol === true;
    canImportExtendedVless = result.testExtendedVless === true;
    if (canImportExtendedVless) {
