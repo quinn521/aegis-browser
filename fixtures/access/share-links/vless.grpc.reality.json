@@ -1,0 +1,5 @@
+{
+  "profileKey": "vless.grpc.reality",
+  "share": "vless://6ba7b810-9dad-41d1-80b4-00c04fd430c8@[2001:db8::30]:8443?encryption=none&fp=chrome&path=%2Fsample%2FTun&pbk=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI&security=reality&serviceName=%2Fsample%2FTun&sid=a1b2c3d4&sni=grpc.example&type=grpc#synthetic-grpc",
+  "rejectedQuerySuffixes": ["&allowInsecure=0", "&flow=xtls-rprx-vision", "&serviceName=other", "&unknown=1"]
+}

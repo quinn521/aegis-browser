@@ -179,10 +179,14 @@ int main() {
   for (const auto& [profile, share] : aegis_access::test::kSharedShareLinks) {
     const auto parsed = ParseAccessTestNodeShare(share, kExtended);
     const bool expected_ws = profile == "vless.ws.tls";
+    const bool expected_tcp_tls = profile == "vless.raw.tls";
+    const bool expected_grpc = profile == "vless.grpc.reality";
     if (!parsed.node ||
-        (profile != "vless.raw.reality" && !expected_ws) ||
+        (profile != "vless.raw.reality" && !expected_ws && !expected_tcp_tls &&
+         !expected_grpc) ||
         parsed.node->web_socket_tls.has_value() != expected_ws ||
-        parsed.node->tcp_tls_vision || parsed.node->grpc_reality_service_name) {
+        parsed.node->tcp_tls_vision != expected_tcp_tls ||
+        parsed.node->grpc_reality_service_name.has_value() != expected_grpc) {
       std::cerr << "Shared fixture did not produce its expected profile: "
                 << profile << '\n';
       return 1;
