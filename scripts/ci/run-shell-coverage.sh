@@ -175,6 +175,7 @@ tests=(
   apply-patches_test.sh
   build-package-guards_test.sh
   package-android-guards_test.sh
+  android-build-profile_test.sh
   sign-chromium-app_test.sh
 )
 coverage_inputs=()

@@ -81,7 +81,7 @@ HTTP(S) 下載仍由 Chromium `DownloadItem` 執行。Metalink、Torrent 和 Mag
 
 non-component macOS Release build-tree 是發布資格的輸入，不是發布結果。完整的診斷補丁涵蓋不會使其成為 RC。正式發布還需兩套補丁序列對應的乾淨已提交 root 身分和可信建置證據、受影響的原生與執行測試、產品身分、簽署、公證、封裝、安裝驗收和已通過的發布門禁。
 
-Android 接線存在於原始碼中，但目前沒有由目前原始碼產生的 APK 或 AAB。受支援的 x86-64 Linux 建置、真機驗收、Android 頁面摘要行為和 Play 合規仍是開放門禁。
+開發前期，S1 APK 可在 `aegis-android-linux-arm64` 上使用 QEMU 建置。目前原始碼的產物、實機驗收、Android 頁面摘要行為與 Play 合規仍待驗證。
 
 ## 開發內部參考
 

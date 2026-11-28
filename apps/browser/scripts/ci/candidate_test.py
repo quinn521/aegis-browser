@@ -20,6 +20,15 @@ class CandidateTests(unittest.TestCase):
         workflow = (ci.ROOT / '.github/workflows/chromium-candidate.yml').read_text()
         routes = dict(re.findall(r"- platform: (\w+)\s+labels: '([^']+)'", workflow))
         self.assertEqual(set(routes), set(ci.PLATFORMS))
+        self.assertEqual(set(json.loads(routes['android'])),
+                         {'self-hosted', 'Linux', 'ARM64', 'aegis-upstream', 'aegis-android-linux-arm64'})
+        self.assertRegex(workflow, r"android_native_x64:\n[^\n]*\n\s+type: boolean\n\s+default: false")
+        android_route = workflow.split('- platform: android\n', 1)[1].split('    steps:', 1)[0]
+        native_labels = re.search(r"native_x64_labels: '([^']+)'", android_route)
+        self.assertEqual(set(json.loads(native_labels[1])), {'self-hosted', 'Linux', 'X64', 'aegis-upstream'})
+        self.assertIn("fromJSON(matrix.platform == 'android' && (inputs.android_native_x64 || "
+                      "vars.AEGIS_ANDROID_CANDIDATE_NATIVE_X64 == 'true') && matrix.native_x64_labels || matrix.labels)",
+                      ' '.join(android_route.split()))
         label_architectures = {'X64': {'amd64', 'x86_64'},
                                'ARM64': {'arm64', 'aarch64'}}
         for platform, route in routes.items():
@@ -277,6 +286,78 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(result['status'], 'failed')
             self.assertFalse(result['releaseReady'])
             self.assertEqual(result['runtimeAcceptance'], 'pending')
+
+    @unittest.skipIf(ci.os.name == 'nt', 'Android 候选使用 Linux 工具')
+    def test_android_candidate_rejects_unsupported_profiles_before_ninja(self):
+        cases = (
+            ('aarch64', 'import("//internal.gni")\n', 'gn-profile.log', 'aegis_android_internal_access_options = false'),
+            ('x86_64', 'aegis_android_internal_access_options = false\n', 'gn-profile-template.log',
+             'Android 基础参数不得开启内部 Access Options'),
+        )
+        for host_arch, template, log, diagnostic in cases:
+            with self.subTest(host=host_arch, log=log), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, browser, evidence = root / 'source', root / 'browser', root / 'evidence'
+                gn = source / 'buildtools/linux64/gn'
+                ninja = source / 'third_party/ninja/ninja'
+                gn.parent.mkdir(parents=True)
+                ninja.parent.mkdir(parents=True)
+                (source / 'BUILD.gn').touch()
+                (root / '.gclient').touch()
+                (browser / 'args').mkdir(parents=True)
+                (browser / 'scripts').mkdir()
+                verifier = ci.BROWSER / 'scripts/android-build-profile.sh'
+                (browser / 'scripts' / verifier.name).write_bytes(verifier.read_bytes())
+                (browser / 'args/aegis-android.gn').write_text(template)
+                (source / 'internal.gni').write_text(
+                    'aegis_android_internal_access_options = true\n'
+                    'aegis_android_access_product_channel = "alpha"\n')
+                (source / 'effective-args.json').write_text(json.dumps([
+                    {'name': 'aegis_android_internal_access_options',
+                     'current': {'value': 'true'}, 'default': {'value': 'false'}},
+                    {'name': 'aegis_android_access_product_channel',
+                     'current': {'value': '"alpha"'}, 'default': {'value': '"unknown"'}},
+                ]))
+                gn.write_text('#!/bin/sh\n'
+                              'if [ "$1" = gen ]; then cp "$2/args.gn" generated-args.gn; exit $?; fi\n'
+                              '[ "$1" = args ] && [ "$3" = --list ] && [ "$4" = --short ] &&\n'
+                              '[ "$5" = --json ] && [ "$6" = -q ] &&\n'
+                              "grep -Fxq 'import(\"//internal.gni\")' \"$2/args.gn\" && cat effective-args.json\n")
+                ninja.write_text('#!/bin/sh\ntouch ninja-invoked\nexit 19\n')
+                for tool in (gn, ninja):
+                    tool.chmod(0o755)
+                (evidence / 'upstream').mkdir(parents=True)
+                (evidence / 'upstream/latest.json').write_text('{}')
+                config = root / 'config.json'
+                config.write_text(json.dumps({'sourceRoot': str(source)}))
+                commit = '1' * 40
+                pin = {'commit': commit, 'version': '158.0.8127.92'}
+                runner_arch = 'ARM64' if host_arch == 'aarch64' else 'X64'
+                with (patch.dict(ci.os.environ, {'AEGIS_CI_CONFIG': str(config), 'GITHUB_SHA': commit,
+                                                 'RUNNER_NAME': 'test-android', 'RUNNER_ARCH': runner_arch}),
+                      patch.object(ci, 'BROWSER', browser), patch.object(ci, 'product_status', return_value=''),
+                      patch.object(ci, 'git', return_value=commit),
+                      patch.object(ci.contract, 'load', return_value=({'features': []}, 'contract')),
+                      patch.object(ci.contract, 'validate_version', return_value=('2.0.0.1', 1)),
+                      patch.object(ci.platform, 'system', return_value='Linux'),
+                      patch.object(ci.platform, 'machine', return_value=host_arch),
+                      patch.object(ci, 'candidate_pin', return_value=(pin, browser / 'patches')),
+                      patch.object(ci.shutil, 'disk_usage') as usage,
+                      patch.object(ci, 'apply_if_base'), patch.object(ci, 'verify_tree', return_value='tree')):
+                    usage.return_value.free = 200 * 1024**3
+                    with self.assertRaisesRegex(RuntimeError, re.escape(log)):
+                        ci.build('android', evidence)
+
+                self.assertFalse((source / 'ninja-invoked').exists())
+                self.assertIn(diagnostic, (evidence / log).read_text())
+                self.assertEqual((evidence / 'gn.log').exists(), log == 'gn-profile.log')
+                if host_arch == 'aarch64':
+                    self.assertIn('host_cpu = "x64"', (source / 'generated-args.gn').read_text().splitlines())
+                result = json.loads((evidence / 'result.json').read_text())
+                self.assertEqual(result['status'], 'failed')
+                self.assertEqual(result['hostArchitecture'], host_arch)
+                self.assertEqual(result['runnerArchitecture'], runner_arch)
+                self.assertEqual(result['runnerName'], 'test-android')
 
     def test_summary_keeps_missing_installation_explicit(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(ci.os.environ, {}, clear=True):

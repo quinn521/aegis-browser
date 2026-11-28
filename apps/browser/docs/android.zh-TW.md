@@ -8,7 +8,7 @@
 
 ## 目前證據邊界
 
-- Android 使用正式 Stable `155.0.8059.39`，桌面使用 `155.0.8059.40`。Android 保留獨立的 `ci-pins/android.json` 與 `patches-android/` 輸入。
+- Android 目前的核心版本與提交見 `ci-pins/android.json`，補丁輸入見 `patches-android/`。
 - 預留 application ID 為 `com.gcsa.aegis`；預留不證明已經形成有效套件或 Play 身分。
 - 2026-10-09 原始碼候選為 Ver 2.2 (144)，versionCode `2002000144`，含276個Chromium補丁與3個V8補丁。完整Chromium重放通過，與已驗證桌面原始碼僅有官方 `chrome/VERSION` 差異；共享Agent修復和桌面手勢的平台限制均保留，不會在Android開啟桌面手勢。APK建置、簽章、套件身分及實機驗收仍待完成。
 - 目前沒有綁定身分的 APK 或 AAB。即使存在 `$HOME/Desktop/GCSA-aegis.apk` 之類的歷史檔案，也不能對應到目前原始碼，更不是 RC。
@@ -19,43 +19,42 @@
 
 ## 受支援的建置環境
 
-Chromium Android client 不能直接在 macOS 或 Windows 上建置。本專案需要獨立、受支援的 **x86-64 Linux** checkout，並符合：
+S1 開發前期，Android APK 使用上游 `aegis-android-linux-arm64` runner 建置。QEMU 執行候選版本固定的 Linux x86-64 工具鏈，目標 ABI 為 `arm64-v8a`。這是過渡建置方式，產出的 APK 可直接進入裝置驗收。後續使用原生 x86-64 Linux 試建同一候選，核對產物與裝置結果後切換預設建置機。[runner 遷移](https://github.com/quinn521/aegis-browser/issues/383)
+
+獨立 Linux 原始碼目錄需要符合以下條件。
 
 - 至少 200 GB 可用磁碟空間；
 - 足夠完成 Chromium 建置的記憶體；
 - 精確固定的 Chromium 基線與補丁輸入；以及
 - 不把現有 macOS checkout 重複用作 Android 建置樹。
 
-歷史 ARM64 Linux 和 QEMU 實驗不屬於目前可重現建置門禁。
+## 建置 S1 的三個 APK
 
-## 未來建置入口
-
-以下命令會擷取或同步網路內容。只能在獲准的 Linux 環境中執行，並先固定精確原始碼身分。
+在 runner 上將 `CHROMIUM_ROOT` 指向已備妥的 Android 原始碼目錄，其中包含 `src/` 與 `.gclient`。依照 `apps/browser/ci-pins/android.json` 同步依賴並套用其 Android 與 V8 補丁序列，接著在產品儲存庫執行下列命令。
 
 ```bash
-export PATH="$HOME/depot_tools:$PATH"
+set -e
+export CHROMIUM_ROOT="${CHROMIUM_ROOT:?Set the dedicated Android checkout path}"
+export AEGIS_ANDROID_ALLOW_ARM64_HOST=1
+bash apps/browser/scripts/build-android.sh
+bash apps/browser/scripts/build-android.sh --internal-access-options alpha
 
-pnpm --filter @gcsa-aegis/browser fetch
-bash apps/browser/scripts/enable-android-gclient.sh
-pnpm --filter @gcsa-aegis/browser apply-patches
-pnpm --filter @gcsa-aegis/browser sync
-pnpm --filter @gcsa-aegis/browser build:android
-pnpm --filter @gcsa-aegis/browser package:android
+out="$CHROMIUM_ROOT/src/out"
+sha256sum "$out/AegisAndroid/apks/ChromePublic.apk" \
+  "$out/AegisAndroidInternalAlpha/apks/ChromePublic.apk" \
+  "$out/AegisAndroidInternalAlpha/apks/AegisAccessOptionsTest.apk"
 ```
 
-預期候選路徑如下，但它們**目前不是已驗收輸出**：
+一般 APK 與 App Bundle 關閉 Access Options。內部 Alpha 設定同時建置產品 APK 與專用測試 APK。內部 DEV 使用 `bash apps/browser/scripts/build-android.sh --internal-access-options debug`。
 
-- `$CHROMIUM_ROOT/src/out/AegisAndroid/apks/ChromePublic.apk`
-- `apps/browser/dist/GCSA-aegis.apk`
-- application ID：`com.gcsa.aegis`
-- 啟動器名稱：`GCSA-aegis`
+預設產品用 `pnpm --filter @gcsa-aegis/browser package:android` 產生側載套件 `apps/browser/dist/GCSA-aegis.apk`，啟動器名稱為 `GCSA-aegis`。內部設定使用 `out/AegisAndroidInternalAlpha` 或 `out/AegisAndroidInternalDebug`。
 
-進行商店工作前，還必須定義並驗證 AAB 路徑和 Play 簽署身分。
+`AegisAccessOptionsTest.apk` 會取代已安裝的 `com.gcsa.aegis`，因此在專用裝置上執行 instrumentation。隨後用對應的產品 APK 在 arm64 實機驗證 A210-01/02，每份結果都記錄裝置、系統與 APK 摘要。
 
 ## 驗收條件
 
-1. 在乾淨的x86-64 Linux原始碼目錄，從Android獨立固定基線精確重放276個Chromium補丁與3個V8補丁，核對完整原始碼樹和產品版本。
-2. 建置成功，並由清單綁定根儲存庫 commit、Chromium commit、兩套補丁序列身分、GN 參數和 APK/AAB SHA-256。
+1. 依 Android pin 與對應補丁目錄中的兩套序列核對完整原始碼樹及產品版本。
+2. 為三個 APK 各自記錄儲存庫提交、核心 pin、補丁樹、runner 架構、QEMU 與編譯器版本、GN profile、應用程式 ID、版本、ABI 及 SHA-256。
 3. 驗證最終套件名稱、版本、啟動器名稱、圖示、權限、原生程式庫和簽署結構。
 4. 在專用實機保留舊版資料，以原套件名稱和簽章安裝升級套件，核對資料相容、正常網頁、`chrome://aegis`與核心保護。首次安裝另用隔離裝置驗證，不透過解除安裝舊版規避升級相容問題。
 5. 在實機驗證頁面擷取、文件綁定、去識別化、確認、導覽失效和結果處理。
@@ -64,7 +63,7 @@ pnpm --filter @gcsa-aegis/browser package:android
 
 ## Play Store 邊界
 
-請參閱 [Play Store 準備情況](./play-store.zh-TW.md)。專案目前沒有生產 upload key、Play Console 應用程式、已上傳產物或獲准的 Data Safety 聲明。
+Play 交付使用獨立的 AAB 工作流程。恢復 CD 後以 `0.8.0` 驗證 `internal`，開發結束後以 `1.0.0` 發布到 `production`。簽署、上傳與安裝各自記錄實際結果。[Android CD 工單](https://github.com/gcsagroup/aegis-browser/issues/276) · [Play Store 準備情況](./play-store.zh-TW.md)
 
 ## 刻意不做
 

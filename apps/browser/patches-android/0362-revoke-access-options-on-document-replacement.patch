@@ -1,0 +1,501 @@
+From 4192119b037de08e78cb24d04077b4130814e05e Mon Sep 17 00:00:00 2001
+From: Aegis Development <development@example.invalid>
+Date: Mon, 23 Nov 2026 18:32:53 +0800
+Subject: [PATCH] fix(android): revoke Access Options on primary document
+ replacement
+
+DevTools Page.setDocumentContent replaces the primary document through
+Document::SetContent and the parameterless Document::open(). That path emits
+neither DidOpenDocumentInputStream nor DidCommitDocumentReplacement. Notify
+the browser from the explicit open so the existing editor is revoked. Ordinary
+DOM edits do not reopen the document and stay readable.
+
+Ordinary builds do not send that notification. The renderer IPC is compiled
+only when internal Access Options are enabled. Blink and Chrome share one
+declare_args in a Blink-visible gni, so the flag is not declared twice.
+
+Both build profiles flush the LocalFrameHost receiver before checking the
+notification count. Internal builds require one callback and ordinary builds
+require zero. The javascript: replacement test remains unconditional.
+---
+ .../chrome/browser/ChromeTabbedActivity.java  |  4 +
+ .../settings/AegisAccessOptionsFragment.java  | 22 +++++
+ chrome/browser/android/BUILD.gn               |  2 +-
+ .../android/aegis_access_options_bridge.cc    |  1 +
+ .../render_frame_host_delegate.h              |  3 +
+ .../renderer_host/render_frame_host_impl.cc   | 10 ++
+ .../renderer_host/render_frame_host_impl.h    |  1 +
+ .../browser/web_contents/web_contents_impl.cc |  8 ++
+ .../browser/web_contents/web_contents_impl.h  |  1 +
+ .../web_contents_impl_browsertest.cc          | 94 +++++++++++++++++++
+ .../public/browser/web_contents_observer.h    |  5 +
+ content/test/BUILD.gn                         |  1 +
+ third_party/blink/public/common/BUILD.gn      |  8 ++
+ .../public/common/aegis_android_access.gni    | 10 ++
+ .../blink/public/mojom/frame/frame.mojom      |  6 ++
+ third_party/blink/renderer/core/BUILD.gn      |  1 +
+ .../renderer/core/loader/frame_loader.cc      | 12 +++
+ .../core/testing/fake_local_frame_host.cc     |  2 +
+ .../core/testing/fake_local_frame_host.h      |  1 +
+ 19 files changed, 191 insertions(+), 1 deletion(-)
+ create mode 100644 third_party/blink/public/common/aegis_android_access.gni
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+index 1074503a4c4956c565857e00294a6cc3179d57c0..ab7d55f791cdd07e2e396446202635b5426da142 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -1770,6 +1770,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+         }
+ 
+         super.onResumeWithNative();
++        AegisAccessOptionsFragment.restoreUnavailableIfRequested(
++                getSupportFragmentManager(), getSavedInstanceState());
+ 
+         DefaultBrowserPromoUtils.getInstance().maybeRecordDeepLinkOutcome();
+ 
+@@ -5561,6 +5563,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     public void onSaveInstanceState(Bundle outState) {
+         try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.onSaveInstanceState")) {
+             super.onSaveInstanceState(outState);
++            AegisAccessOptionsFragment.saveUnavailableHint(
++                    getSupportFragmentManager(), outState, getSavedInstanceState());
+             CipherLazyHolder.sCipherInstance.saveToBundle(outState);
+             saveToBaseBundle(outState);
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
+index cd83a8afd39c9db726b115c61d23c650c48b15ce..ce854333a2e79595cfdee1550cb169364f955bc1 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/AegisAccessOptionsFragment.java
+@@ -28,6 +28,7 @@ import org.chromium.content_public.browser.WebContents;
+ @NullMarked
+ public final class AegisAccessOptionsFragment extends DialogFragment {
+     private static final String TAG = "aegis_access_options";
++    private static final String RESTORE_UNAVAILABLE = "aegis_access_options_restore_unavailable";
+ 
+     private final Callback<TabModel> mModelChanged = this::onModelChanged;
+     private @Nullable MonotonicObservableSupplier<TabModel> mModels;
+@@ -62,6 +63,27 @@ public final class AegisAccessOptionsFragment extends DialogFragment {
+         fragment.showNow(manager, TAG);
+     }
+ 
++    /** Retains a presentation hint in Activity state, without persisting an editor. */
++    public static void saveUnavailableHint(
++            FragmentManager manager, Bundle outState, @Nullable Bundle previousState) {
++        boolean awaitingRestore =
++                previousState != null && previousState.getBoolean(RESTORE_UNAVAILABLE);
++        if (awaitingRestore || manager.findFragmentByTag(TAG) != null) {
++            outState.putBoolean(RESTORE_UNAVAILABLE, true);
++        }
++    }
++
++    public static void restoreUnavailableIfRequested(
++            FragmentManager manager, @Nullable Bundle state) {
++        if (state == null || !state.getBoolean(RESTORE_UNAVAILABLE) || manager.isStateSaved()) {
++            return;
++        }
++        state.remove(RESTORE_UNAVAILABLE);
++        if (manager.findFragmentByTag(TAG) == null) {
++            new AegisAccessOptionsFragment().showNow(manager, TAG);
++        }
++    }
++
+     @Override
+     public Dialog onCreateDialog(@Nullable Bundle state) {
+         boolean canRead =
+diff --git a/chrome/browser/android/BUILD.gn b/chrome/browser/android/BUILD.gn
+index 04b9c7f6ba94372e29fed95b04871219155f600f..74b1640c22b0ab8b541640e05dc826800c324b20 100644
+--- a/chrome/browser/android/BUILD.gn
++++ b/chrome/browser/android/BUILD.gn
+@@ -10,6 +10,7 @@ import("//chrome/common/features.gni")
+ import("//device/vr/buildflags/buildflags.gni")
+ import("//extensions/buildflags/buildflags.gni")
+ import("//printing/buildflags/buildflags.gni")
++import("//third_party/blink/public/common/aegis_android_access.gni")
+ import("//third_party/protobuf/proto_library.gni")
+ import("//ui/webui/webui_features.gni")
+ 
+@@ -386,7 +387,6 @@ if (is_android) {
+ 
+   declare_args() {
+     aegis_android_access_product_channel = "unknown"
+-    aegis_android_internal_access_options = false
+   }
+ 
+   assert(!aegis_android_internal_access_options ||
+diff --git a/chrome/browser/android/aegis_access_options_bridge.cc b/chrome/browser/android/aegis_access_options_bridge.cc
+index b9be522d93ac240ecf47ed0581a5e9ee1d4cdc71..05218a3f3e2ce39650ff6aa7b1e7d19bdedad06b 100644
+--- a/chrome/browser/android/aegis_access_options_bridge.cc
++++ b/chrome/browser/android/aegis_access_options_bridge.cc
+@@ -105,6 +105,7 @@ class EditorSession final : public content::WebContentsObserver {
+ 
+  private:
+   void PrimaryPageChanged(content::Page&) override { Revoke(); }
++  void PrimaryMainFrameDocumentReplaced() override { Revoke(); }
+   void DidFinishNavigation(content::NavigationHandle* navigation) override {
+     // Hash changes and history.pushState keep the authorized document.
+     if (navigation->HasCommitted() && navigation->IsInPrimaryMainFrame() &&
+diff --git a/content/browser/renderer_host/render_frame_host_delegate.h b/content/browser/renderer_host/render_frame_host_delegate.h
+index d30f1f5e08c5f66a0c1d585c526f946eb06fa979..2840160e5316dce12363687417155ede355f951c 100644
+--- a/content/browser/renderer_host/render_frame_host_delegate.h
++++ b/content/browser/renderer_host/render_frame_host_delegate.h
+@@ -229,6 +229,9 @@ class CONTENT_EXPORT RenderFrameHostDelegate {
+       const std::vector<blink::mojom::FaviconURLPtr>& candidates,
+       blink::mojom::FaviconUpdateReason reason) {}
+ 
++  // The frame replaced its document without an ordinary navigation commit.
++  virtual void DidReplaceDocument(RenderFrameHostImpl* render_frame_host) {}
++
+   // The frame changed its window.name property.
+   virtual void DidChangeName(RenderFrameHostImpl* render_frame_host,
+                              const std::string& name) {}
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+index c0d35e8d4bb8a6b67b74be3ce4735b608672d8c4..7bce36826ad55cfff344f7134eb606090a0abf7f 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -6942,6 +6942,7 @@ void RenderFrameHostImpl::DidCommitDocumentReplacement() {
+   if (ModelContextUserData::GetForCurrentDocument(this)) {
+     ModelContextUserData::DeleteForCurrentDocument(this);
+   }
++  delegate_->DidReplaceDocument(this);
+ }
+ 
+ RenderWidgetHostImpl* RenderFrameHostImpl::GetRenderWidgetHost() {
+@@ -9961,6 +9962,15 @@ bool RenderFrameHostImpl::GetSuddenTerminationDisablerState(
+   }
+ }
+ 
++void RenderFrameHostImpl::DidExplicitlyOpenDocument() {
++  // The Document object is unchanged, so document-scoped user data stays.
++  // Observers still drop handles bound to the replaced contents.
++  if (!owner_) {
++    return;
++  }
++  delegate_->DidReplaceDocument(this);
++}
++
+ void RenderFrameHostImpl::DidDispatchDOMContentLoadedEvent() {
+   document_associated_data_->MarkDomContentLoaded();
+ 
+diff --git a/content/browser/renderer_host/render_frame_host_impl.h b/content/browser/renderer_host/render_frame_host_impl.h
+index 4ad7d383bd00b957ebafbd782f4fb0ccbf6c6a2b..14f8550eef0b30225648f19a828002c03fdc6c0d 100644
+--- a/content/browser/renderer_host/render_frame_host_impl.h
++++ b/content/browser/renderer_host/render_frame_host_impl.h
+@@ -2421,6 +2421,7 @@ class CONTENT_EXPORT RenderFrameHostImpl
+   void ForwardResourceTimingToParent(
+       blink::mojom::ResourceTimingInfoPtr timing) override;
+   void DidDispatchDOMContentLoadedEvent() override;
++  void DidExplicitlyOpenDocument() override;
+   void RunModalAlertDialog(const std::u16string& alert_message,
+                            bool disable_third_party_subframe_suppresion,
+                            RunModalAlertDialogCallback callback) override;
+diff --git a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+index a2638c29d409ebe008a9c3487aa6dfb093c36500..2def4d196ec40e8949df6751203fc8e3b48f82d1 100644
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -10863,6 +10863,14 @@ void WebContentsImpl::SetSupportsForwardTransitionAnimation(bool supports) {
+ }
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++void WebContentsImpl::DidReplaceDocument(
++    RenderFrameHostImpl* render_frame_host) {
++  if (render_frame_host == GetPrimaryMainFrame()) {
++    observers_.NotifyObservers(
++        &WebContentsObserver::PrimaryMainFrameDocumentReplaced);
++  }
++}
++
+ void WebContentsImpl::DidChangeName(RenderFrameHostImpl* render_frame_host,
+                                     const std::string& name) {
+   OPTIONAL_TRACE_EVENT2("content", "WebContentsImpl::DidChangeName",
+diff --git a/content/browser/web_contents/web_contents_impl.h b/content/browser/web_contents/web_contents_impl.h
+index 928d746f122ef71ab26f31881aabb55c5fa72307..6dd8087516d4cafcf77bd20993c78e0b9d60af95 100644
+--- a/content/browser/web_contents/web_contents_impl.h
++++ b/content/browser/web_contents/web_contents_impl.h
+@@ -743,6 +743,7 @@ class CONTENT_EXPORT WebContentsImpl
+       RenderFrameHostImpl* render_frame_host,
+       bool is_reload,
+       JavaScriptDialogCallback response_callback) override;
++  void DidReplaceDocument(RenderFrameHostImpl* render_frame_host) override;
+   void DidChangeName(RenderFrameHostImpl* render_frame_host,
+                      const std::string& name) override;
+   void DidReceiveUserActivation(
+diff --git a/content/browser/web_contents/web_contents_impl_browsertest.cc b/content/browser/web_contents/web_contents_impl_browsertest.cc
+index 23ae692aa98f39882d5e3186dc4b148c8cca5537..6817345780afeacb3f14e2e457dede6ae5a59ba1 100644
+--- a/content/browser/web_contents/web_contents_impl_browsertest.cc
++++ b/content/browser/web_contents/web_contents_impl_browsertest.cc
+@@ -39,6 +39,7 @@
+ #include "base/time/time.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
++#include "build/buildflag.h"
+ #include "components/input/render_widget_host_input_event_router.h"
+ #include "components/ukm/test_ukm_recorder.h"
+ #include "components/url_formatter/url_formatter.h"
+@@ -108,6 +109,7 @@
+ #include "content/public/test/prerender_test_util.h"
+ #include "content/public/test/resource_load_observer.h"
+ #include "content/public/test/test_content_browser_client.h"
++#include "content/public/test/test_devtools_protocol_client.h"
+ #include "content/public/test/test_navigation_observer.h"
+ #include "content/public/test/test_utils.h"
+ #include "content/public/test/text_input_test_utils.h"
+@@ -134,6 +136,7 @@
+ #include "testing/gmock/include/gmock/gmock.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
++#include "third_party/blink/public/common/aegis_android_access_buildflags.h"
+ #include "third_party/blink/public/common/client_hints/client_hints.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/page/page_zoom.h"
+@@ -201,6 +204,97 @@ class WebContentsImplBrowserTest : public ContentBrowserTest {
+   base::test::ScopedFeatureList scoped_feature_list_;
+ };
+ 
++class PrimaryDocumentReplacementObserver : public WebContentsObserver {
++ public:
++  explicit PrimaryDocumentReplacementObserver(WebContents* contents)
++      : WebContentsObserver(contents) {}
++  void PrimaryMainFrameDocumentReplaced() override { run_loop_.Quit(); }
++  void Wait() { run_loop_.Run(); }
++
++ private:
++  base::RunLoop run_loop_;
++};
++
++class PrimaryDocumentReplacementCounter : public WebContentsObserver {
++ public:
++  explicit PrimaryDocumentReplacementCounter(WebContents* contents)
++      : WebContentsObserver(contents) {}
++  void PrimaryMainFrameDocumentReplaced() override { ++count_; }
++  int count() const { return count_; }
++
++  int CountAfterFrameHostFlush() const {
++    // Script completion and DevTools replies do not drain LocalFrameHost.
++    static_cast<RenderFrameHostImpl*>(web_contents()->GetPrimaryMainFrame())
++        ->local_frame_host_receiver_for_testing()
++        .FlushForTesting();
++    return count_;
++  }
++
++ private:
++  int count_ = 0;
++};
++
++IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
++                       NotifiesPrimaryDocumentReplacement) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(
++      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++
++  PrimaryDocumentReplacementObserver observer(shell()->web_contents());
++  ExecuteScriptAsync(shell()->web_contents(),
++                     "location.href = 'javascript:\"replacement\"';");
++  observer.Wait();
++  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
++}
++
++IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
++                       NotifiesPrimaryDocumentInputStreamReopened) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(
++      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++
++  PrimaryDocumentReplacementCounter counter(shell()->web_contents());
++  ASSERT_TRUE(ExecJs(shell(),
++                     "document.open(); document.write('replacement');"
++                     "document.close();"));
++#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
++  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
++#endif
++  EXPECT_EQ(BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS) ? 1 : 0,
++            counter.CountAfterFrameHostFlush());
++  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
++}
++
++IN_PROC_BROWSER_TEST_F(WebContentsImplBrowserTest,
++                       DevToolsSetDocumentContentReplacesPrimaryDocument) {
++  ASSERT_TRUE(embedded_test_server()->Start());
++  ASSERT_TRUE(
++      NavigateToURL(shell(), embedded_test_server()->GetURL("/title1.html")));
++
++  PrimaryDocumentReplacementCounter counter(shell()->web_contents());
++  ASSERT_TRUE(ExecJs(shell(), "document.body.textContent = 'edited';"));
++  EXPECT_EQ("edited", EvalJs(shell(), "document.body.textContent"));
++  EXPECT_EQ(0, counter.CountAfterFrameHostFlush());
++
++  TestDevToolsProtocolClient client;
++  client.AttachToWebContents(shell()->web_contents());
++  const base::DictValue* tree = client.SendCommandSync("Page.getFrameTree");
++  ASSERT_TRUE(tree);
++  const std::string* frame_id = tree->FindStringByDottedPath("frameTree.frame.id");
++  ASSERT_TRUE(frame_id);
++  base::DictValue params;
++  params.Set("frameId", *frame_id);
++  params.Set("html", "<html><body>replacement</body></html>");
++  ASSERT_TRUE(client.SendCommandSync("Page.setDocumentContent", std::move(params)));
++  client.DetachProtocolClient();
++#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
++  EXPECT_TRUE(base::test::RunUntil([&]() { return counter.count() >= 1; }));
++#endif
++  EXPECT_EQ(BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS) ? 1 : 0,
++            counter.CountAfterFrameHostFlush());
++  EXPECT_EQ("replacement", EvalJs(shell(), "document.body.textContent"));
++}
++
+ // Starts a new navigation as soon as the current one commits, but does not
+ // wait for it to complete.  This allows us to observe DidStopLoading while
+ // a pending entry is present.
+diff --git a/content/public/browser/web_contents_observer.h b/content/public/browser/web_contents_observer.h
+index 4a7e6555fd1e9af16c35b365f33df8185b84b81e..af273dc05fb95974de1c932bff2de412bb76b570 100644
+--- a/content/public/browser/web_contents_observer.h
++++ b/content/public/browser/web_contents_observer.h
+@@ -186,6 +186,11 @@ class CONTENT_EXPORT WebContentsObserver : public base::CheckedObserver {
+   // DidFinishNavigation is recommended).
+   virtual void PrimaryPageChanged(Page& page) {}
+ 
++  // The renderer replaced the primary main frame's document contents without
++  // a NavigationHandle, for example via a javascript: URL returning a string,
++  // document.open(), or DevTools setDocumentContent.
++  virtual void PrimaryMainFrameDocumentReplaced() {}
++
+   // This method is invoked when the primary page of a WebContents is about to
+   // be deactivated. This happens when the primary page is being replaced by
+   // another page (due to a commit of a navigation). Note that this will not be
+diff --git a/content/test/BUILD.gn b/content/test/BUILD.gn
+index 68b5fc8bd68280b497962151919c3b90e0678e45..5bf1f00f1b2da6e39cfc0222d70575691ffaf360 100644
+--- a/content/test/BUILD.gn
++++ b/content/test/BUILD.gn
+@@ -2027,6 +2027,7 @@ test("content_browsertests") {
+     "//testing/gmock",
+     "//testing/gtest",
+     "//third_party/angle:includes",
++    "//third_party/blink/public/common:aegis_android_access_buildflags",
+     "//third_party/blink/public:blink",
+     "//third_party/inspector_protocol:crdtp",
+     "//third_party/leveldatabase",
+diff --git a/third_party/blink/public/common/BUILD.gn b/third_party/blink/public/common/BUILD.gn
+index 7baef4adc0b2438797a550b0dbaaad63ba33edef..b5a00717cba49cd291823b26a4dbe9a34a12835d 100644
+--- a/third_party/blink/public/common/BUILD.gn
++++ b/third_party/blink/public/common/BUILD.gn
+@@ -9,6 +9,7 @@ import("//build/config/rust.gni")
+ import("//skia/features.gni")
+ import("//testing/test.gni")
+ import("//third_party/blink/public/public_features.gni")
++import("//third_party/blink/public/common/aegis_android_access.gni")
+ import("//third_party/blink/renderer/build/scripts/scripts.gni")
+ import("//third_party/blink/renderer/config.gni")
+ import("//third_party/protobuf/proto_library.gni")
+@@ -90,6 +91,13 @@ buildflag_header("buildflags") {
+   ]
+ }
+ 
++buildflag_header("aegis_android_access_buildflags") {
++  header = "aegis_android_access_buildflags.h"
++  flags = [
++    "AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS=$aegis_android_internal_access_options",
++  ]
++}
++
+ source_set("common_export") {
+   visibility = [
+     "//third_party/blink/common/*",
+diff --git a/third_party/blink/public/common/aegis_android_access.gni b/third_party/blink/public/common/aegis_android_access.gni
+new file mode 100644
+index 0000000000000000000000000000000000000000..d429d685f996bf73735e17a7ab9a2c5381f6900b
+--- /dev/null
++++ b/third_party/blink/public/common/aegis_android_access.gni
+@@ -0,0 +1,10 @@
++# Copyright 2026 GCSA
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++declare_args() {
++  # Explicit opt-in for internal DEV and Alpha Android builds. Ordinary
++  # builds keep Android Access Options disabled, including the renderer
++  # notification for an in-place document.open().
++  aegis_android_internal_access_options = false
++}
+diff --git a/third_party/blink/public/mojom/frame/frame.mojom b/third_party/blink/public/mojom/frame/frame.mojom
+index 3c4d724903f522ac5bb1478f9528cbb774d2f808..2f51dc6dd78563b6346f105d22d2050d867694e2 100644
+--- a/third_party/blink/public/mojom/frame/frame.mojom
++++ b/third_party/blink/public/mojom/frame/frame.mojom
+@@ -493,6 +493,12 @@ interface LocalFrameHost {
+   // for the document in this frame.
+   DidDispatchDOMContentLoadedEvent();
+ 
++  // The renderer reopened this document in place, without a navigation commit
++  // and without the URL update performed by document.open(). Document::SetContent,
++  // including DevTools Page.setDocumentContent, takes this path. Ordinary DOM
++  // mutations do not.
++  DidExplicitlyOpenDocument();
++
+   // A request to run a JavaScript dialog displaying |alert_message|.
+   [Sync]
+   RunModalAlertDialog(mojo_base.mojom.String16 alert_message,
+diff --git a/third_party/blink/renderer/core/BUILD.gn b/third_party/blink/renderer/core/BUILD.gn
+index 5408d5fdec9ffda1c2d555cdc92782b07d86eea3..f168281f5ff2e30f8985546f9cf115839c347768 100644
+--- a/third_party/blink/renderer/core/BUILD.gn
++++ b/third_party/blink/renderer/core/BUILD.gn
+@@ -437,6 +437,7 @@ component("core") {
+     "//third_party/blink/public:image_resources_grit",
+     "//third_party/blink/public:resources",
+     "//third_party/blink/public/common",
++    "//third_party/blink/public/common:aegis_android_access_buildflags",
+     "//third_party/blink/public/mojom:web_feature_mojo_bindings",
+     "//third_party/blink/public/strings",
+     "//third_party/blink/public/strings:generate_permission_element_strings_mono_grd",
+diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
+index 286d40b0ddf879efc1a95676db27f5ad1551cca7..b627b4d9357e28816da92ea05a05ddfbc56a3411 100644
+--- a/third_party/blink/renderer/core/loader/frame_loader.cc
++++ b/third_party/blink/renderer/core/loader/frame_loader.cc
+@@ -52,6 +52,7 @@
+ #include "services/network/public/cpp/features.h"
+ #include "services/network/public/cpp/web_sandbox_flags.h"
+ #include "services/network/public/mojom/web_sandbox_flags.mojom-blink.h"
++#include "third_party/blink/public/common/aegis_android_access_buildflags.h"
+ #include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/common/storage_key/storage_key.h"
+ #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
+@@ -449,6 +450,17 @@ void FrameLoader::DispatchUnloadEventAndFillOldDocumentInfoIfNeeded(
+ }
+ 
+ void FrameLoader::DidExplicitOpen() {
++  // Parameterless Document::open(), including Document::SetContent, reopens
++  // the document without DidOpenDocumentInputStream or a replacement commit.
++  // DevTools Page.setDocumentContent uses that path. Subframes cannot own the
++  // editor, so they do not send the IPC; the browser still ignores anything
++  // that is not the primary main frame. Ordinary builds have no editor, so
++  // the notification exists only for the internal feature.
++#if BUILDFLAG(AEGIS_ANDROID_INTERNAL_ACCESS_OPTIONS)
++  if (frame_->IsOutermostMainFrame()) {
++    frame_->GetLocalFrameHostRemote().DidExplicitlyOpenDocument();
++  }
++#endif
+   probe::DidOpenDocument(frame_.Get(), GetDocumentLoader());
+   if (initial_empty_document_status_ ==
+       InitialEmptyDocumentStatus::kInitialOrSynchronousAboutBlank) {
+diff --git a/third_party/blink/renderer/core/testing/fake_local_frame_host.cc b/third_party/blink/renderer/core/testing/fake_local_frame_host.cc
+index a34c5f3ba49afd247d5dd427a190b7c64d48fd41..73a07c80bfe7afe4ae60ed42fdb177cdaf7533d4 100644
+--- a/third_party/blink/renderer/core/testing/fake_local_frame_host.cc
++++ b/third_party/blink/renderer/core/testing/fake_local_frame_host.cc
+@@ -123,6 +123,8 @@ void FakeLocalFrameHost::ForwardResourceTimingToParent(
+ 
+ void FakeLocalFrameHost::DidDispatchDOMContentLoadedEvent() {}
+ 
++void FakeLocalFrameHost::DidExplicitlyOpenDocument() {}
++
+ void FakeLocalFrameHost::RunModalAlertDialog(
+     const String& alert_message,
+     bool disable_third_party_subframe_suppresion,
+diff --git a/third_party/blink/renderer/core/testing/fake_local_frame_host.h b/third_party/blink/renderer/core/testing/fake_local_frame_host.h
+index 8ad2e8846becb3b992d77e83997c3ef1ac0a8180..edf918c738a0e2d3ca8ef8f559d3ae8012b9d0af 100644
+--- a/third_party/blink/renderer/core/testing/fake_local_frame_host.h
++++ b/third_party/blink/renderer/core/testing/fake_local_frame_host.h
+@@ -98,6 +98,7 @@ class FakeLocalFrameHost : public mojom::blink::LocalFrameHost {
+   void ForwardResourceTimingToParent(
+       mojom::blink::ResourceTimingInfoPtr timing) override;
+   void DidDispatchDOMContentLoadedEvent() override;
++  void DidExplicitlyOpenDocument() override;
+   void RunModalAlertDialog(const String& alert_message,
+                            bool disable_third_party_subframe_suppresion,
+                            RunModalAlertDialogCallback callback) override;

@@ -2,6 +2,10 @@ name: Chromium 三平台候选构建
 on:
   workflow_dispatch:
     inputs:
+      android_native_x64:
+        description: '本次 Android 候选使用已配置的原生 Linux x64 构建机'
+        type: boolean
+        default: false
       windows_preflight_only:
         description: '仅在免费 Windows runner 验证，不启动付费机器'
         type: boolean
@@ -61,8 +65,12 @@ jobs:
           - platform: windows
             labels: '["self-hosted", "Windows", "X64", "aegis-upstream"]'
           - platform: android
-            labels: '["self-hosted", "Linux", "X64", "aegis-upstream"]'
-    runs-on: ${{ fromJSON(matrix.labels) }}
+            labels: '["self-hosted", "Linux", "ARM64", "aegis-upstream", "aegis-android-linux-arm64"]'
+            native_x64_labels: '["self-hosted", "Linux", "X64", "aegis-upstream"]'
+    runs-on: >-
+      ${{ fromJSON(matrix.platform == 'android' &&
+          (inputs.android_native_x64 || vars.AEGIS_ANDROID_CANDIDATE_NATIVE_X64 == 'true') &&
+          matrix.native_x64_labels || matrix.labels) }}
     steps:
       - uses: actions/checkout@v4
         with:

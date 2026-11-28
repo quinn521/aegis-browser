@@ -21,7 +21,7 @@ BROWSER = ROOT / 'apps/browser'
 PLATFORMS = {
     'mac': ('Mac', 'Darwin', {'arm64'}, 'aegis-release.gn', 'AegisRelease'),
     'windows': ('Windows', 'Windows', {'amd64', 'x86_64'}, 'aegis-windows.gn', 'AegisRelease'),
-    'android': ('Android', 'Linux', {'amd64', 'x86_64'}, 'aegis-android.gn', 'AegisAndroid'),
+    'android': ('Android', 'Linux', {'aarch64', 'arm64', 'amd64', 'x86_64'}, 'aegis-android.gn', 'AegisAndroid'),
 }
 REQUIRED_CHECKS = {'native_tests', 'browser_smoke', 'actor_permissions', 'v8_security_regressions'}
 
@@ -250,7 +250,11 @@ def build(name, evidence):
         features, feature_hash = contract.load(BROWSER, enforce_history=True)
         result.update(productCommit=product_commit, featureContractSha256=feature_hash)
         _, host, arch, args_name, out_name = PLATFORMS[name]
-        if platform.system() != host or platform.machine().lower() not in arch:
+        host_arch = platform.machine().lower()
+        if name == 'android':
+            result.update(hostArchitecture=host_arch, runnerName=os.environ.get('RUNNER_NAME'),
+                          runnerArchitecture=os.environ.get('RUNNER_ARCH'))
+        if platform.system() != host or host_arch not in arch:
             raise ValueError(f'{name} 构建机系统或架构不匹配')
         src = Path(config['sourceRoot']).resolve(strict=True)
         if not (src / 'BUILD.gn').is_file() or not (src.parent / '.gclient').is_file():
@@ -293,8 +297,15 @@ def build(name, evidence):
             args_file = out / 'args.gn'
             old_args = args_file.read_bytes() if args_file.exists() else None
             try:
-                gn_args = (BROWSER / 'args' / args_name).read_text()
+                template = BROWSER / 'args' / args_name
+                profile_script = BROWSER / 'scripts/android-build-profile.sh'
+                if name == 'android':
+                    run(['bash', profile_script, '--validate-template', template], src,
+                        evidence / 'gn-profile-template.log', src, minimum)
+                gn_args = template.read_text()
                 gn_args = re.sub(r'^use_siso\s*=.*$', '', gn_args, flags=re.M)
+                if name == 'android' and host_arch in {'aarch64', 'arm64'}:
+                    gn_args += '\nhost_cpu = "x64"\n'
                 args_file.write_text(gn_args + '\nuse_siso = false\nv8_enable_memory_corruption_api = false\n', encoding='utf-8')
                 gn = src / 'buildtools' / {'mac': 'mac', 'windows': 'win', 'android': 'linux64'}[name] / ('gn.exe' if name == 'windows' else 'gn')
                 ninja = src / 'third_party/ninja' / ('ninja.exe' if name == 'windows' else 'ninja')
@@ -304,6 +315,9 @@ def build(name, evidence):
                 if name == 'android':
                     targets = ['chrome_public_apk', 'aegis_agent_core_unittests']
                 run([gn, 'gen', out, '--check'], src, evidence / 'gn.log', src, minimum)
+                if name == 'android':
+                    run(['bash', profile_script, '--verify', out, 'default', gn],
+                        src, evidence / 'gn-profile.log', src, minimum)
                 run([ninja, '-C', out, '-j', str(max(1, int(config.get('jobs', 6)))), *targets], src, evidence / 'build.log', src, minimum)
                 result['build'] = 'passed'
                 if name != 'android':

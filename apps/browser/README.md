@@ -168,11 +168,12 @@ Before any desktop publication, the same candidate must have:
 
 ## Android
 
-Android shares the pinned Chromium base and is built from a clean x86-64 Linux checkout. A build becomes accepted only after the exact APK identity and physical-device runtime record are complete; macOS and Windows are not supported Chromium Android build hosts.
+Android uses its own pin in `ci-pins/android.json`. During development, the `aegis-android-linux-arm64` runner builds the APKs with the pinned Linux x86-64 toolchain under QEMU. Acceptance requires the exact APK identities and results from physical arm64 devices.
 
 See [Android build and acceptance status](./docs/android.md) and [Play Store readiness draft](./docs/play-store.md). These commands are build entry points, not acceptance evidence by themselves:
 
 ```bash
+export AEGIS_ANDROID_ALLOW_ARM64_HOST=1
 pnpm --filter @gcsa-aegis/browser build:android
 pnpm --filter @gcsa-aegis/browser package:android
 ```

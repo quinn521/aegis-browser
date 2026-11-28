@@ -44,9 +44,13 @@ Mac 大规格机器公布存储仍为 14 GB，完整 Mac 构建暂沿用现有�
 | --- | --- | --- | --- |
 | Mac ARM64 | `self-hosted`, `macOS`, `ARM64`, `aegis-upstream` | `src/out/AegisRelease` | ad-hoc 签名 App 的 ZIP |
 | Windows x64 | `self-hosted`, `Windows`, `X64`, `aegis-upstream` | `src/out/AegisRelease` | `mini_installer.exe`，非正式签名发行包 |
-| Android ARM64 | `self-hosted`, `Linux`, `X64`, `aegis-upstream` | `src/out/AegisAndroid` | `ChromePublic.apk`，非 Play 发布 |
+| Android ARM64 | `self-hosted`, `Linux`, `ARM64`, `aegis-upstream`, `aegis-android-linux-arm64` | `src/out/AegisAndroid` | `ChromePublic.apk`，非 Play 发布 |
 
-三台专用机器需预装 Python 3.12+、Git、对应 Chromium 工具链和系统依赖。Android 编译必须使用 Linux x64；实际验收另需连接专用 ARM64 测试设备。Mac 桌面、Windows UI 验收需要可交互的测试会话。不要将允许任意外部 PR 执行代码的通用 runner 用作这里的构建机。
+三台专用机器需预装 Python 3.12+、Git、对应 Chromium 工具链和系统依赖。Android runner 通过 QEMU 执行候选固定的 Linux x86-64 工具链。开发前期用这条 QEMU 路径构建和验收，后期切到原生 x86-64 Linux。三平台候选作业构建默认产品 APK，S1 的内部 Alpha 和专用测试 APK 使用显式构建配置。设备验收在专用 arm64 设备上进行。[Android 构建说明](../apps/browser/docs/android.zh-CN.md)
+
+在已准备好独立源码和 `AEGIS_CI_CONFIG` 的原生 x64 专用机上试编时，在三平台候选手动工作流勾选 `android_native_x64`。试编与对应设备验收通过后，将仓库变量 `AEGIS_ANDROID_CANDIDATE_NATIVE_X64` 设为 `true`，后续候选默认使用原生 x64。清除该变量可恢复 ARM64 默认路由。fork 的 GitHub-hosted x64 Larger Runner 需要先验证临时机器的依赖准备、存储和制品交接。Play 使用自己的交付配置。[迁移工单](https://github.com/quinn521/aegis-browser/issues/383)
+
+Mac 桌面、Windows UI 验收需要可交互的测试会话。不要将允许任意外部 PR 执行代码的通用 runner 用作这里的构建机。
 
 首次机器准备：在独立候选目录检出该平台官方 Chromium 基线，同步其 DEPS、V8、工具链和项目额外依赖（包括平台需要的 libtorrent/Boost）；不要借用正在编译的目录。脚本会应用项目补丁；已有适配后的源码也可以使用，但必须与本次候选完整补丁树一致。依赖的首次安装和机器注册尚未由此脚本自动完成。
 
@@ -123,9 +127,9 @@ Windows 使用相应 Windows 路径，Android 使用 Linux 路径。`minFreeGiB`
 ## 管理员首次注册操作
 
 1. 用组织所有者或仓库管理员账号打开仓库 `Settings → Actions → Runners → New self-hosted runner`。这是 GitHub 仓库权限，不是要求把所有构建进程以系统管理员运行。
-2. 按机器选择系统与架构：Mac 选 macOS/ARM64，Windows 选 Windows/x64，Android 构建机选 Linux/x64。Android 手机通过 ADB 接入 Linux 构建机，不注册为 runner。
+2. 按机器选择系统与架构：Mac 选 macOS/ARM64，Windows 选 Windows/x64，Android 构建机选 Linux/ARM64。Android 手机通过 ADB 接入 Linux 构建机，不注册为 runner。
 3. 在对应机器的独立 runner 目录，依次执行页面生成的 Download 和 Configure 命令。注册令牌一小时有效，直接在目标机器使用，不提交到仓库或粘贴到讨论中。
-4. runner 名称分别填写 `aegis-mac-arm64`、`aegis-windows-x64`、`aegis-android-linux-x64`；额外标签填写 `aegis-upstream`，保留自动生成的系统和架构标签。工作目录可使用默认 `_work`，不要填写现有 Chromium 源码目录。
+4. runner 名称分别填写 `aegis-mac-arm64`、`aegis-windows-x64`、`aegis-android-linux-arm64`。三台机器均添加 `aegis-upstream` 标签，Android 还要添加 `aegis-android-linux-arm64` 标签。保留 runner 自动生成的系统和架构标签。工作目录可使用默认 `_work`，不要填写现有 Chromium 源码目录。
 5. 首次验证在已登录的测试用户会话启动：Mac/Linux 执行 `./run.sh`，Windows 执行 `./run.cmd`。Windows 桌面 UI 验收先不要选择作为系统服务运行。
 6. 终端显示 `Listening for Jobs`，GitHub 页面显示 `Idle`，表示注册连接成功。记录机器名称及状态，随后由项目维护者配置独立源码、工具链、`AEGIS_CI_CONFIG` 和真实验收程序。注册成功不等于编译环境已经就绪。
 7. 三平台环境验收完成后再设置 `AEGIS_BUILD_RUNNERS_READY=true`；首次注册时不要提前启用。
@@ -150,6 +154,6 @@ Windows 使用相应 Windows 路径，Android 使用 Linux 路径。`minFreeGiB`
 
 正式发行资格文件同样保存顶层`featureContractSha256`，并在每个平台记录相同摘要和该平台全部`featureChecks`。发布预检、准备及公开阶段都会核验；功能清单变化后，旧验收不能复用。源码有任何变化时，产品提交及源码树绑定也要求更新验收。新增功能须提交功能ID、测试入口、实际日志及平台适用说明，升级执行器对比上次已验证基线，补齐回归后再发布。
 
-现有签名身份、仓库写权限、Windows安全阻断解除、Linux x64构建机与Android原签名/设备属于外部条件。应使用真实回读接入；开发证书、临时签名、ARM仿真或runner在线状态都不能代替正式发行资格。
+现有签名身份、仓库写权限、Windows安全阻断解除、Android工具链、原签名与设备属于外部条件。应使用真实回读接入；开发证书、临时签名、ARM仿真或runner在线状态都不能代替正式发行资格。
 
 功能清单的最近两次已提交版本会比较稳定ID和平台范围，自动流程拒绝删除旧行为。公开Release前还要求远端默认分支与本次被测产品提交完全一致；默认分支新增功能或任何提交后，应重新集成和验证，而非发布旧候选覆盖最新功能。
