@@ -98,6 +98,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         clock: (any AccessPreparationClock)? = nil,
         channel: AccessReleaseChannel = .release,
         alphaWebsiteAcceleration: Bool = false,
+        privateBetaWebsiteAcceleration: Bool = false,
         probeRunner: AccessSiteProbeRunner = AccessSiteProbeRunner(),
         defaultLocationPrivacy: Bool = false,
         locationPreferences: UserDefaults? = nil,
@@ -113,6 +114,7 @@ final class AccessHostStoreCoordinator: ObservableObject, BrowserHostStoreCoordi
         self.clock = clock ?? AccessContinuousPreparationClock()
         self.releaseChannel = channel == .unknown ? .release : channel
         self.supportsWebsiteAcceleration = channel == .dev || (channel == .alpha && alphaWebsiteAcceleration)
+            || (channel == .beta && privateBetaWebsiteAcceleration)
         self.probeRunner = probeRunner
         self.defaultLocationPrivacy = defaultLocationPrivacy
         self.locationPreferences = locationPreferences

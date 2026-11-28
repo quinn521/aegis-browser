@@ -121,17 +121,20 @@ struct AegisApp: App {
         }
         let channel = AccessProductChannel.resolve()
         let alphaAcceleration = alphaNodes.enablesWebsiteAcceleration
-        let geoSiteCache = Self.makeGeoSiteCache(channel: channel, alphaAcceleration: alphaAcceleration, isUITest: isTest)
+        let betaAcceleration = alphaNodes.isPrivateBeta && alphaAcceleration
+        let regionalAcceleration = channel == .dev || (channel == .alpha && alphaAcceleration) || betaAcceleration
+        let geoSiteCache = regionalAcceleration ? Self.makeGeoSiteCache(isUITest: isTest) : nil
 #if DEBUG && targetEnvironment(simulator)
         let isHostedTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 #else
         let isHostedTest = false
 #endif
-        let refreshGeoSite = (channel == .dev || (channel == .alpha && alphaAcceleration)) && !isTest && !isHostedTest
+        let refreshGeoSite = regionalAcceleration && !isTest && !isHostedTest
         let hostStores = AccessHostStoreCoordinator(
             publisher: publisher,
             channel: channel,
             alphaWebsiteAcceleration: alphaAcceleration,
+            privateBetaWebsiteAcceleration: betaAcceleration,
             locationPreferences: defaults,
             geoSiteCache: geoSiteCache,
             geoSiteTransport: refreshGeoSite ? AccessGeoSiteUpdateTransport() : nil,
@@ -145,8 +148,7 @@ struct AegisApp: App {
         _hostStores = StateObject(wrappedValue: hostStores)
     }
 
-    private static func makeGeoSiteCache(channel: AccessReleaseChannel, alphaAcceleration: Bool, isUITest: Bool) -> AccessGeoSiteCache? {
-        guard channel == .dev || (channel == .alpha && alphaAcceleration) else { return nil }
+    private static func makeGeoSiteCache(isUITest: Bool) -> AccessGeoSiteCache? {
 #if DEBUG
         if isUITest {
             let arguments = ProcessInfo.processInfo.arguments

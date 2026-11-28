@@ -98,6 +98,58 @@ final class AccessThreeXUIWebEntryTests: XCTestCase {
         XCTAssertNil(nodes.selectedIndex)
     }
 
+    func testPrivateBetaCatalogueRequiresInternalAudienceAndKeepsDefaultQuotaBound() async throws {
+        let (defaults, suite) = try isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaultURI = "vless://\(userID)@first.example:443?security=reality&type=tcp&flow=xtls-rprx-vision"
+            + "&sni=first.example&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=abcd"
+        let alternateURI = alphaWSNode(address: "alternate.example").replacingOccurrences(of: userID,
+            with: "550e8400-e29b-41d4-a716-446655440001")
+        let data = try JSONEncoder().encode([
+            ["source": "3x-ui", "uri": defaultURI],
+            ["source": "downloads", "uri": alternateURI],
+            ["source": "downloads", "uri": alphaWSNode(address: "not-published.example")],
+        ])
+        func catalogue(channel: String = "beta", internalTesting: Bool = true) -> AccessAlphaNodeCatalogue {
+            .init(channel: channel, profile: channel, bundleID: "com.gcsa.aegis", data: nil,
+                  privateBetaData: data, internalTesting: internalTesting, defaults: defaults)
+        }
+        for channel in ["release", "dev", "alpha"] {
+            XCTAssertFalse(catalogue(channel: channel).isConfigured)
+        }
+        XCTAssertFalse(catalogue(internalTesting: false).isConfigured)
+
+        let nodes = catalogue()
+        XCTAssertTrue(nodes.isPrivateBeta)
+        XCTAssertEqual(nodes.selectedIndex, 0)
+        XCTAssertEqual(nodes.entries.map(\.usesSubscription), [true, false, true])
+        XCTAssertEqual(nodes.entries.map(\.source), [.panel, .downloads, .downloads])
+        let fixture = ThreeXUIEntryFixture(userID: userID, mode: .unavailable)
+        let usage = AccessSubscriptionUsageSession(isSelected: true, configuration: configuration(), managesConnections: true,
+            nodeUserID: userID, fetchAlphaNodes: { config, id in try await fixture.alphaNodes(config, id: id) },
+            alphaRoutes: nodes.routes, fetch: { config in try await fixture.usage(config) })
+        usage.setActive(true)
+        defer { usage.setActive(false) }
+        let core = EntryRecordingCore()
+        let publisher = publisher(for: usage, core: core, alphaNodes: nodes)
+        let expectedSelection = [false, true, false]
+        XCTAssertEqual(nodes.entries.map { nodes.canSelect($0, subscription: usage) }, expectedSelection)
+        do {
+            _ = try await publisher.prepare(.init(operationID: UUID(), deadline: .seconds(5)))
+            XCTFail("The internal Beta default requires its live quota")
+        } catch { }
+        XCTAssertNil(core.startedConfiguration)
+        nodes.select(1)
+        let operation = UUID()
+        defer { publisher.cancel(operationID: operation) }
+        let ready = try await publisher.prepare(.init(operationID: operation, deadline: .seconds(5)))
+        XCTAssertTrue(publisher.validateReady(ready))
+        XCTAssertFalse(usage.permitsExistingConnection)
+        XCTAssertNotNil(core.startedConfiguration)
+        nodes.select(0)
+        XCTAssertFalse(publisher.validateReady(ready))
+    }
+
     func testAlphaSelectionRoutesProductOnlyAfterQuotaAndRevokesOnChange() async throws {
         let (defaults, suite) = try isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: suite) }

@@ -321,7 +321,7 @@ module AegisRelease
     def package_ios(archive_args = nil)
       # Consume private values before any build subprocess receives its environment.
       enabled = ENV.delete('AEGIS_IOS_BETA_TEST_NODE_ENABLED').to_s
-      secrets = %w[AEGIS_IOS_TEST_NODE_BASE64 AEGIS_IOS_TEST_SUBSCRIPTION_BASE64].to_h do |key|
+      secrets = %w[AEGIS_IOS_TEST_NODE_BASE64 AEGIS_IOS_TEST_SUBSCRIPTION_BASE64 AEGIS_IOS_BETA_CATALOGUE_BASE64].to_h do |key|
         [key, ENV.delete(key).to_s]
       end
       AegisRelease.require!(%w[true false].include?(enabled) || enabled.empty?, 'Invalid private Beta input switch')
@@ -336,12 +336,16 @@ module AegisRelease
       Dir.mktmpdir('private-beta-', request.directory) do |private_dir|
         helper = File.join(request.root, 'scripts/release/private-beta-inputs.py')
         run('python3', helper, 'stage', '--directory', private_dir, env: secrets)
-        @private_beta_xcargs = ['AEGIS_PRIVATE_TEST_NODE_FILE=' + File.join(private_dir, 'node.vless'),
-                               'AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE=' + File.join(private_dir, 'subscription.json')]
-                               .map { |value| Shellwords.escape(value) }.join(' ')
+        catalogue = File.join(private_dir, 'catalogue.json')
+        has_catalogue = File.file?(catalogue)
+        inputs = ['AEGIS_PRIVATE_TEST_NODE_FILE=' + File.join(private_dir, 'node.vless'),
+                  'AEGIS_PRIVATE_TEST_SUBSCRIPTION_FILE=' + File.join(private_dir, 'subscription.json')]
+        inputs << 'AEGIS_PRIVATE_BETA_NODES_FILE=' + catalogue if has_catalogue
+        @private_beta_xcargs = inputs.shelljoin
         paths, details = package_ios_impl(archive_args)
         run('python3', helper, 'verify', '--directory', private_dir, '--ipa', paths.first, '--live-quota')
-        [paths, details.merge('privateBetaTestNode' => true, 'privateBetaQuota' => true)]
+        [paths, details.merge('privateBetaTestNode' => true, 'privateBetaQuota' => true,
+                              'privateBetaTestCatalogue' => has_catalogue)]
       ensure
         @private_beta_xcargs = nil
       end
@@ -380,9 +384,10 @@ module AegisRelease
       verify_bundled_geosite(work)
       ipa = File.join(request.directory, name)
       run('python3', firebase_script, 'verify-ipa', *firebase_args, '--artifact', ipa)
-      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build, request.profile)
-      certificate = required('AEGIS_IOS_CERT_SHA1')
       audience_args = private_beta ? ['--private-beta'] : []
+      run('python3', File.join(request.root, 'scripts/release/verify-ipa.py'), ipa, request.version, request.build,
+          request.profile, *audience_args)
+      certificate = required('AEGIS_IOS_CERT_SHA1')
       run('python3', File.join(request.root, 'scripts/release/verify-signed-ios.py'), ipa, request.version, request.build, request.profile,
           '--team', team, '--certificate-sha1', certificate, '--profiles-json', JSON.generate(profiles),
           '--source-root', request.root, *audience_args)

@@ -25,14 +25,22 @@ struct AccessUsagePage: View {
                             Text("暂不可用")
                         }
                         ForEach(alphaNodes.entries) { entry in
-                            let available = subscription.isAlphaRouteSelectable(entry.id)
+                            let available = alphaNodes.canSelect(entry, subscription: subscription)
                             let selected = alphaNodes.selectedIndex == entry.id
                             Button {
-                                guard subscription.isAlphaRouteSelectable(entry.id) else { return }
+                                guard alphaNodes.canSelect(entry, subscription: subscription) else { return }
                                 alphaNodes.select(entry.id)
                             } label: {
                                 HStack {
-                                    Text(verbatim: entry.displayName)
+                                    VStack(alignment: .leading) {
+                                        Text(verbatim: entry.displayName)
+                                        if let source = entry.source {
+                                            switch source {
+                                            case .panel: Text(verbatim: "3X-UI").font(.footnote).foregroundStyle(.secondary)
+                                            case .downloads: Text("下载").font(.footnote).foregroundStyle(.secondary)
+                                            }
+                                        }
+                                    }
                                     Spacer()
                                     if !available {
                                         Text("暂不可用")
@@ -45,15 +53,24 @@ struct AccessUsagePage: View {
                             }
                             .disabled(!available)
                             .accessibilityValue(available ? (selected ? Text("已启用") : Text("未选择")) : Text("暂不可用"))
+                            .accessibilityAddTraits(selected ? .isSelected : [])
                             .accessibilityIdentifier("access-alpha-node-\(entry.id)")
                         }
                     }
                 }
-                AccessSubscriptionUsageView(session: subscription, usesAlphaNodeSelection: alphaNodes.isConfigured)
+                if alphaNodes.isPrivateBeta, alphaNodes.selectedEntry?.usesSubscription != true {
+                    Section("流量管理") {
+                        AccessUnavailableUsage()
+                    }
+                } else {
+                    AccessSubscriptionUsageView(session: subscription, usesAlphaNodeSelection: alphaNodes.isConfigured,
+                                                showsUnavailableAmount: alphaNodes.isPrivateBeta)
+                }
             }
         }
         .localizedNavigationTitle("流量管理")
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("access-usage-page")
     }
+
 }

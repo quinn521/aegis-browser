@@ -2384,12 +2384,54 @@ extension AccessHostRecoveryWebKitTests {
         guard ProcessInfo.processInfo.environment["AEGIS_REGIONAL_PUBLIC_SMOKE"] == "1" else {
             throw XCTSkip("Public-site smoke runs only on explicit local opt-in")
         }
+        try await exercisePublicRegionalSites(usesBetaCatalogue: false)
+    }
+
+    func testPrivateBetaDefaultNodeLoadsRegionalSites() async throws {
+        guard ProcessInfo.processInfo.environment["AEGIS_REGIONAL_BETA_SMOKE"] == "1" else {
+            throw XCTSkip("Requires an authorized internal Beta simulator package")
+        }
+        try await exercisePublicRegionalSites(usesBetaCatalogue: true)
+    }
+
+    private func exercisePublicRegionalSites(usesBetaCatalogue: Bool) async throws {
         let fixture = AccessGeoSiteCacheTests.Fixture()
         defer { fixture.clean() }
         let cache = fixture.cache(useProductBaseline: true)
         let categories = AccessGeoSiteCache.Selection.mainlandCategories
         await cache.restore(migrating: .init(categories: categories, automaticScope: .all))
-        let coordinator = AccessHostStoreCoordinator(channel: .dev, geoSiteCache: cache)
+        let coordinator: AccessHostStoreCoordinator
+        var usage: AccessSubscriptionUsageSession?
+        var core: AccessGoEmbeddedCore?
+        if usesBetaCatalogue {
+            let suite = "regional-beta-smoke-" + UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let catalogue = AccessAlphaNodeCatalogue.product(defaults: defaults)
+            XCTAssertTrue(catalogue.isPrivateBeta)
+            XCTAssertEqual(catalogue.selectedIndex, 0)
+            XCTAssertEqual(catalogue.selectedEntry?.source, .panel)
+            XCTAssertEqual(Set(catalogue.routes.map { $0.profileKey.rawValue }).count, 8)
+            let subscription = AccessSubscriptionUsageSession.product(usesAlphaNodes: catalogue.isConfigured,
+                                                                       alphaRoutes: catalogue.routes)
+            usage = subscription
+            subscription.setActive(true)
+            await subscription.refresh()?.value
+            XCTAssertTrue(subscription.isAlphaRouteSelectable(0))
+            let embedded = try AccessGoEmbeddedCore(isolated: true)
+            core = embedded
+            weak var owner: AccessHostStoreCoordinator?
+            let publisher = AccessThreeXUIWebEntry.makePublisher(for: subscription, alphaNodes: catalogue,
+                                                                  verifiedCore: embedded) { identity, finish in
+                if let owner { owner.retireManagedDocuments(identity: identity, finish: finish) }
+                else { finish() }
+            }
+            coordinator = AccessHostStoreCoordinator(publisher: publisher, channel: .beta,
+                                                     privateBetaWebsiteAcceleration: true, geoSiteCache: cache)
+            owner = coordinator
+        } else {
+            coordinator = AccessHostStoreCoordinator(channel: .dev, geoSiteCache: cache)
+        }
+        defer { usage?.setActive(false) }
         let browser = BrowserSession(dataStore: BrowserDataStore(persistenceURL: nil), hostCoordinator: coordinator)
         defer { browser.closeWindow() }
         browser.setWindowForeground(true)
@@ -2397,7 +2439,7 @@ extension AccessHostRecoveryWebKitTests {
         try await tab.prepareContentRulesForTests()
         let window = show(tab.webView)
         defer { window.isHidden = true }
-        var receipts = ["mode\trequested site\tcommitted host\ttitle\tvisible text characters"]
+        var receipts = ["mode\trequested site\tcommitted host\ttitle\tvisible text characters\tstill loading\tconnected via"]
         defer {
             let attachment = XCTAttachment(string: receipts.joined(separator: "\n"))
             attachment.name = "Public site smoke receipts"
@@ -2405,37 +2447,69 @@ extension AccessHostRecoveryWebKitTests {
             add(attachment)
         }
 
-        func visit(_ site: RegionalSmokeSite, mode: String) async throws {
+        func visit(_ site: RegionalSmokeSite, mode: String, managed: Bool = false) async throws {
             let target = try XCTUnwrap(URL(string: "https://\(site.host)/"))
             let previousDocument = tab.liveCommittedDocumentSequence
             tab.loadFromAddressBar(target)
-            try await waitUntil(seconds: 35, {
+            let domain = site.host.dropFirst(4)
+            let deadline = ContinuousClock.now + .seconds(35)
+            var host = ""
+            var title = ""
+            var visibleCharacters = 0
+            var homepageReady = false
+            while ContinuousClock.now < deadline, tab.loadingError == nil {
                 attach(tab.webView, to: window)
-                return !tab.isLoading && (tab.liveCommittedDocumentSequence != previousDocument || tab.loadingError != nil)
-            }, message: "Public load timed out for \(site.host) in \(mode)")
-            let host = tab.liveCommittedDocumentURL?.host ?? ""
-            guard tab.liveCommittedDocumentSequence != previousDocument, tab.loadingError == nil,
-                  host == site.host || host.hasSuffix("." + site.host.dropFirst(4)) else {
-                receipts.append([mode, site.host, host, tab.loadingError ?? "Unexpected document", "0"].joined(separator: "\t"))
-                XCTFail("\(site.host) did not load its public homepage in \(mode)")
-                return
+                if tab.liveCommittedDocumentSequence != previousDocument {
+                    host = tab.liveCommittedDocumentURL?.host ?? ""
+                    title = tab.webView.title ?? ""
+                    if (host == domain || host.hasSuffix("." + domain)), title.localizedCaseInsensitiveContains(site.pageTitle) {
+                        visibleCharacters = (try? await tab.webView.evaluateJavaScript("document.body?.innerText.trim().length ?? 0")) as? Int ?? 0
+                        if visibleCharacters > 10 {
+                            homepageReady = true
+                            break
+                        }
+                    }
+                }
+                try await Task.sleep(for: .milliseconds(200))
             }
-            let title = tab.webView.title ?? ""
-            let visibleCharacters = try await tab.webView.evaluateJavaScript("document.body?.innerText.trim().length ?? 0") as? Int ?? 0
-            XCTAssertTrue(tab.websiteDataStore === tab.originalWebsiteDataStore, site.host)
-            XCTAssertTrue(title.localizedCaseInsensitiveContains(site.pageTitle), "Unexpected title for \(site.host) in \(mode): \(title)")
-            XCTAssertGreaterThan(visibleCharacters, 10, site.host)
-            receipts.append([mode, site.host, host, title, String(visibleCharacters)].joined(separator: "\t"))
+            let stillLoading = tab.isLoading
+            let usesManagedStore = tab.websiteDataStore !== tab.originalWebsiteDataStore
+            receipts.append([mode, site.host, host, title, String(visibleCharacters), String(stillLoading),
+                             usesManagedStore ? "managed" : "original"].joined(separator: "\t"))
+            XCTAssertTrue(homepageReady && tab.loadingError == nil,
+                          "\(site.host) did not show its homepage in \(mode): \(tab.loadingError ?? "timed out")")
+            XCTAssertEqual(usesManagedStore, managed, site.host)
+            if managed { XCTAssertTrue(usage?.permitsExistingConnection == true, site.host) }
+            if stillLoading { tab.webView.stopLoading() }
         }
 
-        for site in Self.regionalSmokeSites { try await visit(site, mode: "manual") }
-        let overseas = AccessOverseasSelection(enabled: true, mode: .all, categories: Set(AccessOverseasCategory.allCases))
-        for region in AccessGeoSiteCache.Region.allCases {
-            let selection = AccessGeoSiteCache.Selection(mode: .smart, categories: categories, region: region, automaticScope: .all)
-            let offer = try await coordinator.regionalConfirmation(selection, overseas: overseas, for: browser)
-            try await coordinator.confirmRegional(offer, for: browser) { true }
-            for site in Self.regionalSmokeSites where site.region == region { try await visit(site, mode: "automatic-\(region.rawValue)") }
+        if usesBetaCatalogue {
+            for region in AccessGeoSiteCache.Region.allCases {
+                try coordinator.chooseRegion(region, for: tab)
+                for site in Self.regionalSmokeSites { try await visit(site, mode: "manual-\(region.rawValue)") }
+            }
+        } else {
+            for site in Self.regionalSmokeSites { try await visit(site, mode: "manual") }
         }
+        let overseas = AccessOverseasSelection(enabled: true, mode: .all, categories: Set(AccessOverseasCategory.allCases))
+        let video = AccessOverseasSelection(enabled: true, mode: .categories, categories: [.video])
+        let scopes: [(AccessOverseasSelection, Set<AccessGeoSiteCategory>)] = usesBetaCatalogue
+            ? [(overseas, categories), (video, Set([.douban]))] : [(overseas, categories)]
+        for (overseas, selectedCategories) in scopes {
+            for region in AccessGeoSiteCache.Region.allCases {
+                let selection = AccessGeoSiteCache.Selection(mode: .smart, categories: selectedCategories, region: region,
+                                                             automaticScope: overseas.mode)
+                let offer = try await coordinator.regionalConfirmation(selection, overseas: overseas, for: browser)
+                try await coordinator.confirmRegional(offer, for: browser) { true }
+                for site in Self.regionalSmokeSites where usesBetaCatalogue || site.region == region {
+                    let eligible = overseas.mode == .all || site.selectedInCategoryMode
+                    try await visit(site, mode: "automatic-\(overseas.mode.rawValue)-\(region.rawValue)",
+                                    managed: site.region != region && eligible)
+                }
+            }
+        }
+        browser.closeWindow()
+        if let core { _ = await core.stopAndConfirm() }
     }
 #endif
 

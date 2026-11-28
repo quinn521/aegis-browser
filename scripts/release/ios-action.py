@@ -275,8 +275,9 @@ def private_beta_preflight():
     if os.environ.get('RELEASE_STAGE') != 'upload':
         raise ValueError('Private Beta can only run the Apple upload stage')
     ipa = next(asset['name'] for asset in manifest['assets'] if asset['name'].endswith('.ipa'))
+    catalogue = ['--require-catalogue'] if manifest['details'].get('privateBetaTestCatalogue') is True else []
     run(sys.executable, Path(__file__).with_name('private-beta-inputs.py'), 'verify-live',
-        '--ipa', directory() / ipa, environment={})
+        '--ipa', directory() / ipa, *catalogue, environment={})
     output('manifest_sha256', digest)
 
 
