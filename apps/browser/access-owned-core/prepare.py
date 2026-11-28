@@ -6,7 +6,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
+import shutil
+import subprocess  # nosec B404 - only git and go are launched using argument lists.
 import sys
 import tempfile
 
@@ -25,8 +26,18 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def read_command(argv, **kwargs):
-    return subprocess.check_output(argv, text=True, **kwargs).strip()
+def run_tool(tool, *args, cwd=None, env=None, capture=False):
+    require(tool in {"git", "go"}, "Unsupported build tool")
+    search = os.pathsep.join(p for p in os.get_exec_path() if os.path.isabs(p))
+    executable = shutil.which(tool, path=search)
+    require(executable is not None, f"Cannot locate {tool} on the toolchain PATH")
+    # The build selects the tool and its flags. Paths are separate arguments.
+    # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+    result = subprocess.run([executable, *args], shell=False, check=True,  # nosec B603
+                            cwd=cwd, env=env, stdout=subprocess.PIPE if capture else None,
+                            text=True)
+    if capture:
+        return result.stdout.strip()
 
 
 def prepare(output, local_source):
@@ -42,7 +53,7 @@ def prepare(output, local_source):
                   GOEXPERIMENT="", GOWORK="off", GOOS=build["goos"], GOARCH=build["goarch"],
                   GOARM64="v8.0", GOFIPS140=build["gofips140"], CGO_ENABLED="0")
     go_env.pop("GOROOT", None)
-    version = read_command(["go", "env", "GOVERSION"], env=go_env)
+    version = run_tool("go", "env", "GOVERSION", env=go_env, capture=True)
     require(version == go_version, f"Expected {go_version}, got {version}")
 
     output.mkdir(parents=True)
@@ -50,28 +61,28 @@ def prepare(output, local_source):
     with tempfile.TemporaryDirectory(prefix="xray-build-", dir=output) as work:
         repo = Path(work) / "source"
         upstream = str(local_source) if local_source is not None else source["repository"]
-        subprocess.run(["git", "clone", "--no-local", "--depth", "1", "--branch",
-                        source["tag"], "--no-checkout", "--", upstream, repo], check=True)
+        run_tool("git", "clone", "--no-local", "--depth", "1", "--branch",
+                 source["tag"], "--no-checkout", "--", upstream, repo)
         ref = "refs/tags/" + source["tag"]
-        commit, tree = read_command(
-            ["git", "rev-parse", ref + "^{commit}", ref + "^{tree}"], cwd=repo
+        commit, tree = run_tool(
+            "git", "rev-parse", ref + "^{commit}", ref + "^{tree}", cwd=repo, capture=True
         ).splitlines()
         require(commit == source["commit"], f"Xray tag commit mismatch ({commit})")
         require(tree == source["tree"], f"Xray source tree mismatch ({tree})")
-        subprocess.run(["git", "-c", "advice.detachedHead=false", "checkout", "--detach",
-                        commit], cwd=repo, check=True)
+        run_tool("git", "-c", "advice.detachedHead=false", "checkout", "--detach",
+                 commit, cwd=repo)
         for patch in lock["patches"]:
-            subprocess.run(["git", "apply", "--index", "--whitespace=error",
-                            ROOT / patch["path"]], cwd=repo, check=True)
-        tree = read_command(["git", "write-tree"], cwd=repo)
+            run_tool("git", "apply", "--index", "--whitespace=error",
+                     ROOT / patch["path"], cwd=repo)
+        tree = run_tool("git", "write-tree", cwd=repo, capture=True)
         require(tree == lock["patchedTree"], f"Patched Xray tree mismatch ({tree})")
         for path, digest in lock["goModules"].items():
             verify_digest(repo / path, digest)
-        subprocess.run(["go", "mod", "verify"], cwd=repo, env=go_env, check=True)
+        run_tool("go", "mod", "verify", cwd=repo, env=go_env)
         built = Path(work) / "xray"
-        subprocess.run(["go", "build", "-mod=readonly", "-tags=" + build["tags"],
-                        "-trimpath", "-buildvcs=false", "-ldflags=" + build["ldflags"],
-                        "-o", built, "./main"], cwd=repo, env=go_env, check=True)
+        run_tool("go", "build", "-mod=readonly", "-tags=" + build["tags"],
+                 "-trimpath", "-buildvcs=false", "-ldflags=" + build["ldflags"],
+                 "-o", built, "./main", cwd=repo, env=go_env)
         verify_digest(built, lock["artifact"]["sha256"])
         require(built.stat().st_size == lock["artifact"]["bytes"], "Xray size mismatch")
         built.rename(binary)
