@@ -9,7 +9,8 @@ import secrets
 import select
 import socket
 import socketserver
-import subprocess
+# Only argv-based calls to fixed tools or the operator's Xray.
+import subprocess  # nosec B404
 import sys
 import tempfile
 import threading
@@ -18,7 +19,6 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 ROOT = Path(os.environ["AEGIS_PROBE_OUTPUT"]).resolve()
-XRAY = Path(os.environ["AEGIS_PROBE_XRAY"]).resolve()
 TARGETS = ("githubassets.com", "ytimg.com", "googlevideo.com", "www.githubcopilot.com", "nflxvideo.net")
 CSS_HOST = "github.githubassets.com"
 CSS_PATH = "/assets/light-3ee16b3ea60adc77.css"
@@ -161,9 +161,12 @@ class OriginWitness(socketserver.BaseRequestHandler):
             records = []
             for kind in ("A", "AAAA"):
                 try:
-                    response = subprocess.run(
-                        ["dig", "@" + self.server.origin_dns, host, kind,
+                    # The SOCKS host is allowlisted above; origin_dns is a parsed IPv4 address.
+                    response = subprocess.run(  # nosec B603
+                        ["/usr/bin/dig", "@" + self.server.origin_dns, host, kind,
                          "+time=2", "+tries=1", "+noall", "+comments", "+answer"],
+                        # Keep the witness independent of the operator's .digrc.
+                        env={"HOME": "/var/empty"},
                         capture_output=True, text=True, timeout=5,
                     ).stdout
                 except subprocess.TimeoutExpired:
@@ -172,7 +175,11 @@ class OriginWitness(socketserver.BaseRequestHandler):
                 addrs = re.findall(r"(?m)^\S+\s+\d+\s+IN\s+" + kind + r"\s+([0-9a-fA-F:.]+)$", response)
                 records.append({"type":kind,"rcode":status.group(1) if status else "NO_REPLY","answers":addrs})
                 if kind == "A":
-                    answers.extend(addrs)
+                    for address in addrs:
+                        try:
+                            answers.append(str(ipaddress.IPv4Address(address)))
+                        except ValueError:
+                            continue
             event("lan-dns-response", records=records)
             addresses = [(socket.AF_INET,socket.SOCK_STREAM,socket.IPPROTO_TCP,"",(ip,port)) for ip in answers]
         else:
@@ -295,7 +302,7 @@ def temporary_port(bind):
         temp.bind((bind, 0))
         return temp.getsockname()[1]
 
-def mac_control(temp, route, credentials, cases, expected_country):
+def mac_control(xray, temp, route, credentials, cases, expected_country):
     control = temporary_port("127.0.0.1")
     cfg = temp / "control.json"
     cfg.write_text(json.dumps({
@@ -309,10 +316,13 @@ def mac_control(temp, route, credentials, cases, expected_country):
           }}}]
     }))
     with (temp/"mac-control.log").open("w") as log:
-        with subprocess.Popen([XRAY,"run","-c",cfg],stdout=log,stderr=log) as client:
+        # The operator selects the executable; main validates it and creates this private config.
+        # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+        with subprocess.Popen([xray,"run","-c",cfg],stdout=log,stderr=log) as client:  # nosec B603
             try:
                 time.sleep(0.35)
-                result=subprocess.run(["curl","--proxy",f"socks5h://127.0.0.1:{control}","--noproxy","",
+                # The proxy port comes from the loopback socket; the URL is fixed.
+                result=subprocess.run(["/usr/bin/curl","--disable","--proxy",f"socks5h://127.0.0.1:{control}","--noproxy","",  # nosec B603
                                        "-fsS","--max-time","12","https://www.cloudflare.com/cdn-cgi/trace"],
                                       capture_output=True,text=True)
                 country=next((line[4:] for line in result.stdout.splitlines() if re.fullmatch(r"loc=[A-Z]{2}",line)),None)
@@ -325,7 +335,8 @@ def mac_control(temp, route, credentials, cases, expected_country):
                                        (IMAGE_HOST, IMAGE_PATH)]:
                         destination = str(temp / "resource") if host in {CSS_HOST, IMAGE_HOST} else "/dev/null"
                         record("mac-case-begin", host=host)
-                        r=subprocess.run(["curl","--proxy",f"socks5h://127.0.0.1:{control}","--noproxy","",
+                        # Cases use fixed hosts and paths; the output stays in the private temp directory.
+                        r=subprocess.run(["/usr/bin/curl","--disable","--proxy",f"socks5h://127.0.0.1:{control}","--noproxy","",  # nosec B603
                                           "-sS","--max-time","10","-o",destination,"-w","%{http_code}",
                                           "https://"+host+path],capture_output=True,text=True)
                         record("mac-case-end", host=host, curl_code=r.returncode, status=r.stdout.strip(),
@@ -338,7 +349,8 @@ def mac_control(temp, route, credentials, cases, expected_country):
                             record("mac-css-control", expected_rule="--button-primary-bgColor-active",
                                    present=b"--button-primary-bgColor-active:#197935" in Path(destination).read_bytes())
                         elif host == IMAGE_HOST and r.returncode == 0 and r.stdout == "200":
-                            image = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", destination],
+                            # sips receives the fixed filename in the private temp directory.
+                            image = subprocess.run(["/usr/bin/sips", "-g", "pixelWidth", "-g", "pixelHeight", destination],  # nosec B603
                                                    capture_output=True, text=True)
                             dimensions = re.findall(r"pixel(?:Width|Height): ([1-9][0-9]*)", image.stdout)
                             record("mac-thumbnail-control", decoded=image.returncode == 0 and len(dimensions) == 2)
@@ -349,14 +361,35 @@ def mac_control(temp, route, credentials, cases, expected_country):
         return True
 
 def local_address():
-    iface = next(line.split(":", 1)[1].strip() for line in subprocess.check_output(
-        ["route", "-n", "get", "default"], text=True).splitlines() if "interface:" in line)
-    ip = subprocess.check_output(["ipconfig", "getifaddr", iface], text=True).strip()
-    assert ipaddress.ip_address(ip).is_private
-    return ip
+    # Fixed argv.
+    route = subprocess.check_output(["/sbin/route", "-n", "get", "default"], text=True)  # nosec B603
+    interface = re.search(r"(?m)^[ \t]*interface:[ \t]+([A-Za-z][A-Za-z0-9]{0,14})[ \t]*$", route)
+    if not interface:
+        raise RuntimeError("Could not determine the default network interface")
+    # The interface name matches the token above.
+    ip = ipaddress.IPv4Address(subprocess.check_output(  # nosec B603
+        ["/usr/sbin/ipconfig", "getifaddr", interface.group(1)], text=True
+    ).strip())
+    if not ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_reserved:
+        raise RuntimeError("Comparison relay requires a private local address")
+    return str(ip)
 
-def keypair():
-    content = subprocess.check_output([XRAY, "x25519"], text=True)
+def xray_executable(value):
+    path = Path(value)
+    try:
+        if path.is_absolute():
+            path = path.resolve(strict=True)
+            if path.is_file() and os.access(path, os.X_OK):
+                return path
+    except (OSError, RuntimeError, ValueError):
+        pass
+    raise ValueError("AEGIS_PROBE_XRAY must point to an absolute path to a trusted executable")
+
+
+def keypair(xray):
+    # main passes the absolute executable selected by the operator; the subcommand is fixed.
+    # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+    content = subprocess.check_output([xray, "x25519"], text=True)  # nosec B603
     values = re.findall(r"(?m)^\s*[^:\n]+:\s*([A-Za-z0-9_-]{43})\s*$", content)
     if len(values) < 2:
         raise RuntimeError("Could not generate the temporary Reality key pair")
@@ -365,6 +398,10 @@ def keypair():
 def main():
     global EVENT_LOG
     os.umask(0o077)
+    try:
+        xray = xray_executable(os.environ.get("AEGIS_PROBE_XRAY", ""))
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
     bind = local_address()
     mac_only = "--mac-only" in sys.argv
     lan_origin = "--lan-origin" in sys.argv
@@ -377,15 +414,19 @@ def main():
     EVENT_LOG = run_dir / "origin-events.jsonl"
     account = str(uuid4())
     short_id = secrets.token_hex(4)
-    private, public = keypair()
+    private, public = keypair(xray)
     with Server(("127.0.0.1", 0), OriginWitness) as witness, Server((bind, 0), RealityIngress) as inbound, tempfile.TemporaryDirectory(
         prefix="aegis-reality-comparison-"
     ) as directory:
         witness.origin_iface = "en0" if lan_origin else None
         witness.origin_dns = None
         if lan_origin:
-            dhcp = subprocess.check_output(["ipconfig","getpacket",witness.origin_iface],text=True)
-            witness.origin_dns = re.search(r"(?m)^domain_name_server \(ip_mult\): \{([0-9.]+)",dhcp).group(1)
+            # Fixed argv.
+            dhcp = subprocess.check_output(["/usr/sbin/ipconfig","getpacket","en0"],text=True)  # nosec B603
+            resolver = re.search(r"(?m)^domain_name_server \(ip_mult\): \{([0-9.]+)(?:,|\})", dhcp)
+            if not resolver:
+                raise SystemExit("Could not determine the Ethernet DHCP resolver")
+            witness.origin_dns = str(ipaddress.IPv4Address(resolver.group(1)))
         relay_port = inbound.server_address[1]
         xray_port = temporary_port("127.0.0.1")
         inbound.xray_port = xray_port
@@ -413,26 +454,35 @@ def main():
         node.write_text(f"vless://{account}@{bind}:{relay_port}?{params}#Aegis-local-compare\n")
         source = private_dir/"server.json"
         source.write_text(json.dumps(config))
-        check = subprocess.run([XRAY,"run","-test","-c",source],capture_output=True)
+        # Xray is the validated operator-selected executable; source is the private config above.
+        # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+        check = subprocess.run([xray,"run","-test","-c",source],capture_output=True)  # nosec B603
         if check.returncode:
             raise SystemExit("Temporary Reality relay configuration failed validation")
         record("run-start", run=run, client=client, origin_interface=witness.origin_iface or "system-default",
                expected_proxy_country=expected_country)
         rawlog = private_dir/"xray.log"
         with rawlog.open("w") as output:
-            relay = subprocess.Popen([XRAY, "run", "-c", source], stdout=output, stderr=output,
+            # Start the same executable and private config that passed Xray's validation.
+            # nosemgrep: dangerous-subprocess-use-audit, dangerous-subprocess-use-tainted-env-args
+            relay = subprocess.Popen([xray, "run", "-c", source], stdout=output, stderr=output,  # nosec B603
                                      env={**os.environ, "TZ": "UTC"})
             try:
                 time.sleep(0.3)
                 if relay.poll() is not None:
                     raise SystemExit("Temporary Reality relay failed to listen")
-                valid = mac_control(private_dir, (bind, relay_port), (account, public, short_id), mac_only, expected_country)
+                valid = mac_control(xray, private_dir, (bind, relay_port), (account, public, short_id),
+                                    mac_only, expected_country)
                 code = 0 if valid else 1
                 if valid and not mac_only:
-                    command = [sys.executable, "-B", str(Path(__file__).with_name("run-targeted.py")), "--tls-only"]
                     env = {**os.environ, "AEGIS_COMPARISON_RUN":run, "AEGIS_COMPARISON_NODE_FILE":str(node),
                            "AEGIS_COMPARISON_PROXY_COUNTRY":expected_country}
-                    code = subprocess.run(command, env=env).returncode
+                    # Use the current interpreter and the fixed sibling script, with no shell.
+                    # nosemgrep: dangerous-subprocess-use-audit
+                    code = subprocess.run(  # nosec B603
+                        [sys.executable, "-B", str(Path(__file__).resolve().with_name("run-targeted.py")), "--tls-only"],
+                        env=env,
+                    ).returncode
             finally:
                 relay.terminate()
                 try:

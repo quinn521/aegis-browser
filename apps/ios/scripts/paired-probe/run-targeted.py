@@ -4,25 +4,20 @@ import json
 import os
 from pathlib import Path
 import plistlib
-from xctestrun import aegis_test_target
+from xctestrun import aegis_test_host, aegis_test_target, device_identifier
 import re
-import subprocess
+# Only fixed Xcode executables are invoked below.
+import subprocess  # nosec B404
 import sys
 import tempfile
 from uuid import uuid4
 from urllib.parse import parse_qs,urlsplit
 
+from certificate_san import dns_subject_alternative_names
 
-def bundled_test_uri(target, products):
+
+def bundled_test_uri(app, info):
     """Read only for output redaction. XCTest reads the signed resource itself."""
-    prefix = "__TESTROOT__/"
-    host_path = target.get("TestHostPath", "")
-    if not host_path.startswith(prefix):
-        raise ValueError("Expected an app test host relative to the XCTest products")
-    app = (products / host_path.removeprefix(prefix)).resolve()
-    if not app.is_relative_to(products) or app.name != "Aegis.app":
-        raise ValueError("Expected Aegis.app inside the XCTest products")
-    info = plistlib.loads((app / "Info.plist").read_bytes())
     channel = info.get("AegisAccessReleaseChannel")
     bundle_id = info.get("CFBundleIdentifier")
     if (channel not in ("dev", "alpha") or info.get("AegisReleaseProfile") != channel
@@ -47,7 +42,7 @@ def bundled_test_uri(target, products):
 out = Path(os.environ['AEGIS_PROBE_OUTPUT']).resolve()
 template = Path(os.environ['AEGIS_PROBE_XCTESTRUN']).resolve(strict=True)
 products = template.parent
-device = os.environ['AEGIS_PROBE_DEVICE']
+device = device_identifier(os.environ['AEGIS_PROBE_DEVICE'])
 os.umask(0o077)
 out.mkdir(mode=0o700, parents=True, exist_ok=True)
 assets_only="--assets-only" in sys.argv
@@ -60,8 +55,11 @@ comparison_node=os.environ.get("AEGIS_COMPARISON_NODE_FILE") if tls_only else No
 if use_bundled_node and comparison_node:
     raise SystemExit("Choose either the bundled test node or the comparison relay")
 if comparison_node:
-    out=out/os.environ["AEGIS_COMPARISON_RUN"]
-    if not out.is_dir() or (out/"device.log").exists():
+    comparison_run = os.environ.get("AEGIS_COMPARISON_RUN", "")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,127}", comparison_run):
+        raise SystemExit("Invalid comparison relay run name")
+    out = out / comparison_run
+    if out.is_symlink() or not out.is_dir() or (out / "device.log").exists():
         raise SystemExit("Expected a fresh comparison relay run directory")
 else:
     out = out / ('directed-' + str(uuid4()))
@@ -77,10 +75,14 @@ elif webkit_only:
     selectors=selectors[1:]
 descriptor = plistlib.loads(template.read_bytes())
 target = aegis_test_target(descriptor)
-host_bundle_id = "com.gcsa.aegis"
+try:
+    test_host, host_info = aegis_test_host(target, products)
+except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
+    raise SystemExit("Probe requires a valid Aegis app test host") from None
+host_bundle_id = host_info["CFBundleIdentifier"]
 if use_bundled_node:
     try:
-        bundled_channel, host_bundle_id, uri = bundled_test_uri(target, products)
+        bundled_channel, _, uri = bundled_test_uri(test_host, host_info)
     except (OSError, ValueError, TypeError, plistlib.InvalidFileException):
         raise SystemExit("Bundled probe requires a signed Dev or Alpha app with one Reality Vision node") from None
 else:
@@ -134,14 +136,14 @@ def extract_dns_sans(value):
         if not trust:
             continue
         certificate = trust.pop("leafDER", None)
-        if certificate:
-            parsed = subprocess.run(
-                ["openssl", "x509", "-inform", "DER", "-noout", "-ext", "subjectAltName"],
-                input=base64.b64decode(certificate, validate=True), capture_output=True, timeout=5,
-            )
-            trust["dnsSANs"] = re.findall(rb"DNS:(\*?[A-Za-z0-9.-]+)", parsed.stdout)
-            trust["dnsSANs"] = [name.decode("ascii") for name in trust["dnsSANs"]]
-            trust["certificateParsed"] = parsed.returncode == 0
+        if certificate is not None:
+            try:
+                trust["dnsSANs"] = dns_subject_alternative_names(base64.b64decode(certificate, validate=True))
+            except (TypeError, ValueError):
+                trust["dnsSANs"] = []
+                trust["certificateParsed"] = False
+            else:
+                trust["certificateParsed"] = True
 
 
 with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
@@ -152,11 +154,12 @@ with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
         with os.fdopen(fd,"wb") as f:
             plistlib.dump(descriptor,f)
         result=temp/"Directed.xcresult"
-        args=["xcodebuild","test-without-building","-xctestrun",str(transient),
-              "-destination",f"id={device}","-parallel-testing-enabled","NO",
-              *["-only-testing:"+s for s in selectors],"-resultBundlePath",str(result)]
         started_at = now()
-        with (out/"device.log").open("w") as log, subprocess.Popen(args,stdout=subprocess.PIPE,
+        # Xcode receives fixed selectors, a validated device ID and private absolute paths.
+        with (out/"device.log").open("x") as log, subprocess.Popen(  # nosec B603
+                ["/usr/bin/xcodebuild","test-without-building","-xctestrun",str(transient),
+                 "-destination",f"id={device}","-parallel-testing-enabled","NO",
+                 *["-only-testing:"+s for s in selectors],"-resultBundlePath",str(result)],stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,text=True,errors="replace") as proc:
             for line in proc.stdout:
                 m=safe_line.search(line) or common_failure.search(line)
@@ -172,7 +175,8 @@ with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
         node_source = f"bundled-{bundled_channel}" if use_bundled_node else "comparison-relay" if comparison_node else "node-file"
         summary={"exitCode":code, "startedAtUTC":started_at, "finishedAtUTC":now(), "nodeSource":node_source}
         if result.is_dir():
-            p=subprocess.run(["xcrun","xcresulttool","get","test-results","summary","--path",str(result)],capture_output=True)
+            # Private result path.
+            p=subprocess.run(["/usr/bin/xcrun","xcresulttool","get","test-results","summary","--path",str(result)],capture_output=True)  # nosec B603
             if p.returncode==0:
                 d=json.loads(p.stdout)
                 summary.update({k:d[k] for k in ("totalTestCount","passedTests","failedTests","skippedTests","result") if k in d})
@@ -186,7 +190,8 @@ with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
                     summary["failures"]=failures
         for name in (("tls",) if tls_only else (("webkit",) if webkit_only else ("webkit","tls"))):
             staged=temp/f"{name}.json"
-            result=subprocess.run(["xcrun","devicectl","--timeout","20","device","copy","from","--device",device,
+            # Device and app host were validated; comparison names pass the run-name guard above.
+            result=subprocess.run(["/usr/bin/xcrun","devicectl","--timeout","20","device","copy","from",f"--device={device}",  # nosec B603
                 "--domain-type","appDataContainer","--domain-identifier",host_bundle_id,
                 "--source",f"/Library/Caches/{comparison_result or (run_id + '-directed-' + name + '.json')}",
                 "--destination",str(staged)],capture_output=True)
@@ -201,13 +206,15 @@ with tempfile.TemporaryDirectory(prefix="aegis-directed-private-") as temp_dir:
             if comparison_result:
                 extract_dns_sans(value)
                 data = (json.dumps(value, indent=2) + "\n").encode()
-            (out/f"{name}.json").write_bytes(data)
+            with (out / f"{name}.json").open("xb") as artifact:
+                artifact.write(data)
             summary[name]=len(value if isinstance(value,list) else value["samples"])
             if comparison_result:
                 summary["preflight"] = value["preflight"]
                 summary["diagnosticSamplesCompleted"] = len(value["samples"])
                 summary["resourceChecks"] = value.get("resources")
-        (out/"summary.json").write_text(json.dumps(summary,indent=2)+"\n")
+        with (out / "summary.json").open("x") as artifact:
+            artifact.write(json.dumps(summary, indent=2) + "\n")
         print(json.dumps(summary),flush=True)
         raise SystemExit(code or int(any(summary.get(name) in ("not recovered", "redaction rejected result")
                                         for name in ("tls", "webkit"))))
